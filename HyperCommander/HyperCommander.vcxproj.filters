@@ -21,6 +21,21 @@
       <UniqueIdentifier>{639EADAA-A684-42e4-A9AD-28FC9BCB8F7C}</UniqueIdentifier>
       <Extensions>ts</Extensions>
     </Filter>
+    <Filter Include="CommonLibs">
+      <UniqueIdentifier>{d7f90754-16e1-4da4-8f30-aefca6811e25}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ExternalLibs">
+      <UniqueIdentifier>{b8dca86f-ebea-4ab5-9ff4-de3d7065bbe5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UniqueLibs">
+      <UniqueIdentifier>{e786301a-c1c7-4dac-aeed-d77fa9b79e2b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Modules">
+      <UniqueIdentifier>{94ff0aa3-3dc6-4d68-b73c-77ab567f8217}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CommonLibs\Qt">
+      <UniqueIdentifier>{445bd6a7-41d0-4242-a165-528a7005d442}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -29,6 +44,9 @@
     <ClCompile Include="HyperCommander.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <None Include="HyperCommander.ico">
+      <Filter>Resource Files</Filter>
+    </None>
     <ResourceCompile Include="HyperCommander.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
@@ -43,10 +61,113 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UIs\cmpPanel.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgMain.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\uniqueLibs\model_defs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\uniqueLibs\columnMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnDateTime.cpp">
+      <Filter>CommonLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnConcurrent.cpp">
+      <Filter>CommonLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnPath.cpp">
+      <Filter>CommonLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\commandMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp">
+      <Filter>CommonLibs\Qt</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgOpts.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="UIs\dlgMain.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\cmpPanel.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgOpts.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="UIs\cmpPanel.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
+    <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp">
+      <Filter>UniqueLibs</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgMain.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\builtInFsModel.hpp">
+      <Filter>UniqueLibs</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\shortcutMgr.hpp">
+      <Filter>UniqueLibs</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\commandMgr.hpp">
+      <Filter>UniqueLibs</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgOpts.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="HyperCommander.hpp">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\uniqueLibs\columnMgr.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnDateTime.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnConcurrent.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnPath.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\uniqueLibs\model_defs.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnCompilerDetection.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnSystemDetection.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp">
+      <Filter>CommonLibs\Qt</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

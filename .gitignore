@@ -37,6 +37,8 @@ _conan/generated
 *.qm
 *.rcc
 
+externalLibs/QtitanDataGrid/
+
 **/GeneratedFiles/
 **/*.user
 

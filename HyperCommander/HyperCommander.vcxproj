@@ -53,10 +53,12 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
+    <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
+    <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
@@ -73,8 +75,9 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -83,8 +86,9 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -126,18 +130,53 @@
     </QtMoc>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
+    <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
+    <ClCompile Include="..\commonLibs\cmnPath.cpp" />
+    <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
+    <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
+    <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
+    <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
+    <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
+    <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
+    <ClCompile Include="UIs\cmpPanel.cpp" />
+    <ClCompile Include="UIs\dlgMain.cpp" />
+    <ClCompile Include="UIs\dlgOpts.cpp" />
+    <QtMoc Include="UIs\dlgOpts.hpp" />
+    <QtMoc Include="UIs\dlgMain.hpp" />
+    <QtMoc Include="UIs\cmpPanel.hpp" />
     <QtRcc Include="HyperCommander.qrc" />
+    <QtMoc Include="..\UniqueLibs\builtInFsModel.hpp" />
+    <ClInclude Include="..\commonLibs\cmnCompilerDetection.hpp" />
+    <ClInclude Include="..\commonLibs\cmnConcurrent.hpp" />
+    <ClInclude Include="..\commonLibs\cmnDateTime.hpp" />
+    <ClInclude Include="..\commonLibs\cmnPath.hpp" />
+    <ClInclude Include="..\commonLibs\cmnSystemDetection.hpp" />
+    <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp" />
+    <ClInclude Include="..\uniqueLibs\columnMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\commandMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp" />
+    <ClInclude Include="..\uniqueLibs\globalCtx.hpp" />
+    <QtMoc Include="..\UniqueLibs\shortcutMgr.hpp" />
     <ClInclude Include="HyperCommander.hpp" />
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="cpp.hint" />
     <None Include="HyperCommander.ico" />
     <ResourceCompile Include="HyperCommander.rc" />
+    <ClInclude Include="..\uniqueLibs\model_defs.hpp" />
+    <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp" />
     <ClInclude Include="stdafx.h" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="UIs\cmpPanel.ui" />
+    <QtUic Include="UIs\dlgMain.ui" />
+    <QtUic Include="UIs\dlgOpts.ui" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
