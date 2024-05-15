@@ -76,7 +76,7 @@ void FSModel::Refresh()
 
     if( hFile != INVALID_HANDLE_VALUE )
     {
-        if( Root.isEmpty() == false  )
+        if( CurrentPath.length() != 1  )
         {
             Node Item;
 
@@ -178,6 +178,17 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
         if( Def.Content.compare( "[=HC.created]", Qt::CaseInsensitive ) == 0 )
         {
             return Item.Created;
+        }
+    }
+
+    if( role == Qt::DecorationRole )
+    {
+        if( Col == 0 )
+        {
+            const auto& Item = VecNode[ Row ];
+            static QFileIconProvider QFIP;
+            return QFIP.icon( QFileInfo( Item.Name ) );
+            
         }
     }
 

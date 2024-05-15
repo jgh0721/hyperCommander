@@ -100,6 +100,9 @@
     <ClCompile Include="UIs\dlgOpts.cpp">
       <Filter>Form Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -168,6 +171,12 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp">
       <Filter>CommonLibs\Qt</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp">
+      <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -3,7 +3,8 @@
 
 void CColumnMgr::Initialize()
 {
-    VecColumnViews.push_back( ColumnView { QObject::tr( "자세히" ), QVector< Column >() << Column {
+    VecColumnViews.push_back( ColumnView { QObject::tr( "자세히" ), QVector< Column >() 
+                              << Column {
                                     0, 0, QObject::tr("이름"), Qt::AlignLeft, "[=HC.name]"
                                   }
                               << Column {
@@ -12,8 +13,10 @@ void CColumnMgr::Initialize()
                               << Column {
                                     2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter, "[=HC.created]"
                                 }
+                              << Column {
+                                    3, 0, QObject::tr( "속성" ), Qt::AlignCenter, "[HC.attribText]"
+                                }
                               } );
-
 }
 
 ColumnView CColumnMgr::GetColumnView( int Index )

@@ -9,10 +9,24 @@
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    QCoreApplication::setOrganizationName( "MyHouse" );
+    QCoreApplication::setOrganizationDomain( "devtester.com" );
+    QCoreApplication::setApplicationName( "HyperCommander" );
 
-    auto q = new QSHChangeNotify;
+    QSettings::setDefaultFormat( QSettings::IniFormat );
+    QSettings::setPath( QSettings::IniFormat, QSettings::UserScope, applicationDirPath() );
 
-    q->StartWatching();
+    const auto StSettings = TyStSettings::GetInstance();
+    
+
+    QSettings f( QString("%1/111.ini").arg( applicationDirPath() ), QSettings::IniFormat );
+    f.beginGroup( "fsdfdsfds" );
+    f.setValue( "fsdfdsds1", "rew" );
+    f.endGroup();
+    const auto qw  = f.fileName();
+
+    shlChangeNotify = new QSHChangeNotify;
+    shlChangeNotify->StartWatching();
 
     auto ui = new QMainUI;
     ui->show();

@@ -2,6 +2,10 @@
 
 #include <QtWidgets/QDialog>
 
+#include "cmnConcurrent.hpp"
+
+class QSHChangeNotify;
+
 class HyperCommanderApp : public QApplication
 {
 public:
@@ -11,5 +15,7 @@ public:
 private:
 
 
+    QSHChangeNotify*                    shlChangeNotify = nullptr;
 };
 
+using TyStSettings = nsCmn::nsConcurrent::TSingleton< QSettings >;

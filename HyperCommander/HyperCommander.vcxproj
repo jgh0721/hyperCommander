@@ -135,6 +135,7 @@
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
+    <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp" />
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
@@ -154,6 +155,8 @@
     <ClInclude Include="..\commonLibs\cmnPath.hpp" />
     <ClInclude Include="..\commonLibs\cmnSystemDetection.hpp" />
     <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp" />
+    <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp" />
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp" />
     <ClInclude Include="..\uniqueLibs\columnMgr.hpp" />
     <QtMoc Include="..\UniqueLibs\commandMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp" />

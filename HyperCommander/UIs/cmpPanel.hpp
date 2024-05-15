@@ -24,14 +24,17 @@ public:
     CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     Q_INVOKABLE void                    AddTab();
+    Q_INVOKABLE void                    CloseTab();
     Q_INVOKABLE void                    RefreshVolumeList();
 
-    void                                InitializeGrid();
+    int                                 InitializeGrid();
+
 public slots:
 
     void                                oo_ChangedDirectory( const QString& CurrentPath );
 
     void                                on_cbxVolume_currentIndexChanged( int index );
+    void                                on_tabWidget_currentChanged( int Index );
     void                                oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args );
 
 signals:

@@ -26,7 +26,20 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
 void CmpPanel::AddTab()
 {
-    InitializeGrid();
+    const auto Index = InitializeGrid();
+    ui.tabWidget->setCurrentIndex( Index );
+}
+
+void CmpPanel::CloseTab()
+{
+    // 마지막 탭이라면 닫지 않는다.
+    if( ui.tabWidget->count() == 1 )
+        return;
+
+    auto Current = ui.tabWidget->currentIndex();
+    mapTabToStats.remove( Current );
+    delete ui.tabWidget->widget( Current );
+    ui.tabWidget->removeTab( Current );
 }
 
 void CmpPanel::RefreshVolumeList()
@@ -53,7 +66,7 @@ void CmpPanel::RefreshVolumeList()
     }
 }
 
-void CmpPanel::InitializeGrid()
+int CmpPanel::InitializeGrid()
 {
     const auto Page = new QWidget;
     const auto Vertical = new QVBoxLayout;
@@ -73,7 +86,8 @@ void CmpPanel::InitializeGrid()
     Grid->setContextMenuPolicy( Qt::CustomContextMenu );
 
     const auto View = Grid->view< GridBandedTableView >();
-    
+    Grid->viewport()->setFocusPolicy( Qt::StrongFocus );
+
     View->beginUpdate();
     auto& BaseOpts = View->options();
     auto& TableOpts = View->tableOptions();
@@ -121,7 +135,7 @@ void CmpPanel::InitializeGrid()
     const auto ColumnView = StColumnMgr->GetColumnView( 0 );
 
     const auto Model = new FSModel;
-    Model->SetRoot( "D:" );
+    Model->SetRoot( "C:" );
     Model->SetCurrentPath( "\\" );
     Model->SetColumnView( ColumnView );
     connect( Model, &FSModel::sigChangedDirectory, this, &CmpPanel::oo_ChangedDirectory );
@@ -156,6 +170,8 @@ void CmpPanel::InitializeGrid()
             GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.Align );
             GridColumn->setTextColor( "silver" );
+            GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
+            
             if( Column.Content.contains( "HC.name", Qt::CaseInsensitive ) == true )
             {
                 GridColumn->setSortOrder( Qtitan::SortAscending );
@@ -179,11 +195,13 @@ void CmpPanel::InitializeGrid()
 
     View->endUpdate();
 
+    TyTabState TabState{ currentIndex, View };
+    mapTabToStats[ currentIndex ] = TabState;
+
     Model->ChangeDirectory( "" );
     View->bestFit( FitToHeaderAndContent );
 
-    TyTabState TabState{ currentIndex, View };
-    mapTabToStats[ currentIndex ] = TabState;
+    return currentIndex;
 }
 
 void CmpPanel::oo_ChangedDirectory( const QString& CurrentPath )
@@ -214,6 +232,34 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
         Model->SetCurrentPath( "/" );
         Model->ChangeDirectory( "" );
     }
+}
+
+void CmpPanel::on_tabWidget_currentChanged( int Index )
+{   
+    if( mapTabToStats.contains( Index ) == false )
+        return;
+
+    const auto View = mapTabToStats.value( Index ).View;
+
+    QTimer::singleShot( 0, [View]() {
+        View->grid()->setFocus();
+        View->grid()->viewport()->setFocus();
+        View->grid()->viewport()->raise();
+        View->grid()->viewport()->activateWindow();
+                        } );
+
+
+    //Current = ui.tabWidget->currentIndex();
+    //if( mapTabToStats.contains( Current ) == true )
+    //{
+    //    QTimer::singleShot( 10, [this, Current]() { mapTabToStats.value( Current ).View->grid()->setFocus(); } );
+    //    ;
+    //}
+        //QTimer::singleShot( 10, [this, Index]() { 
+    //    mapTabToStats.value( Index ).View->grid()->setFocus(); 
+    //    mapTabToStats.value( Index ).View->grid()->viewport()->setFocus();
+    //                    } );
+
 }
 
 bool openShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow )
@@ -313,13 +359,22 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 {
     if( Event->type() == QEvent::KeyPress )
     {
+        const auto StCommandMgr = TyStCommandMgr::GetInstance();
+        const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
+        
         const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
         const auto KeyEvent = static_cast< QKeyEvent* >( Event );
-
+        
         if( KeyEvent->key() == Qt::Key_T && KeyEvent->modifiers() == Qt::ControlModifier )
         {
             AddTab();
-            return false;
+            return true;
+        }
+
+        if( KeyEvent->key() == Qt::Key_W && KeyEvent->modifiers() == Qt::ControlModifier  )
+        {
+            CloseTab();
+            return true;
         }
 
         if( Grid != nullptr )
@@ -327,16 +382,15 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
             const auto View = Grid->view< Qtitan::GridBandedTableView >();
             const auto Row = View->focusedRow();
 
-            const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
             const auto CmdText = StShortcutMgr->GetCMDFromShortcut( KeyEvent->keyCombination() );
 
             if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
             {
-                TyStCommandMgr::GetInstance()->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
             }
             else if( KeyEvent->key() == Qt::Key_Space )
             {
-                TyStCommandMgr::GetInstance()->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
             }
 
             QRect Rect;
@@ -362,7 +416,7 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
             //oo_grdLocal_contextMenu( &Args );
 
             // TODO: Tab 키 일 때 옆으로 포커스 이동
-            qDebug() << Object << Object->objectName() << Event << CmdText;
+            // qDebug() << Object << Object->objectName() << Event << CmdText;
             int a = 0;
         }
     }
