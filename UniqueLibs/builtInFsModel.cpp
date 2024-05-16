@@ -70,6 +70,8 @@ void FSModel::ChangeDirectory( const QString& Child )
 
 void FSModel::Refresh()
 {
+    OleInitialize( 0 );
+
     WIN32_FIND_DATA wfd = { 0 };
     const auto Filter = CurrentPath.length() == 1 ? Root + CurrentPath + "*.*" : Root + CurrentPath + "\\*.*";
     HANDLE hFile = FindFirstFileExW( Filter.toStdWString().c_str(),
@@ -105,55 +107,71 @@ void FSModel::Refresh()
             Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
             Item.Modified       = nsCmn::ConvertTo( wfd.ftLastWriteTime, false );
 
-            Nodes.push_back( Item );
-
-            if( wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+            if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
             {
-
+                if( QPixmapCache::find( "Directory", &Item.Icon ) == false )
+                {
+                    int a = 0;
+                }
             }
             else
             {
 
+                do
+                {
+                    SHFILEINFOW SHInfo = { 0, };
+                    SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
+                                    SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+                    Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+                    if( SHInfo.hIcon != Q_NULLPTR )
+                        DestroyIcon( SHInfo.hIcon );
+
+                } while( false );
+
             }
+            Nodes.push_back( Item );
 
         } while( FindNextFileW( hFile, &wfd ) != 0 );
 
         FindClose( hFile );
     }
-    
-    QtConcurrent::blockingMap( Nodes, []( Node& Item ) {
-        static QFileIconProvider QFIP;
 
-        if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 )
-            Item.Icon = QFIP.icon( QAbstractFileIconProvider::Folder ).pixmap( 24, 24 );
-        else if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-        {
-            Item.Icon = QFIP.icon( QAbstractFileIconProvider::Folder ).pixmap( 24, 24 );
-        }
-        else
-        {
-            OleInitialize( 0 );
 
-            do
-            {
-                //Item.Icon = 
-                //QFileIconProvider().icon( QFileInfo( Item.Name ) ).pixmap( 24, 24 );
-                SHFILEINFOW SHInfo = { 0, };
-                SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
-                                SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
-                Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-                if( SHInfo.hIcon != Q_NULLPTR )
-                    DestroyIcon( SHInfo.hIcon );
+    //QtConcurrent::blockingMap( Nodes, []( Node& Item ) {
 
-            } while( false );
+    //    if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+    //    {
+    //        if( QPixmapCache::find( "Directory", &Item.Icon ) == false )
+    //        {
+    //            int a = 0;
+    //        }
+    //    }
+    //    else
+    //    {
+    //        OleInitialize( 0 );
 
-            CoUninitialize();
-        }
-    } );
+    //        do
+    //        {
+    //            //Item.Icon = 
+    //            //QFileIconProvider().icon( QFileInfo( Item.Name ) ).pixmap( 24, 24 );
+    //            SHFILEINFOW SHInfo = { 0, };
+    //            SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
+    //                            SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+    //            Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+    //            if( SHInfo.hIcon != Q_NULLPTR )
+    //                DestroyIcon( SHInfo.hIcon );
+
+    //        } while( false );
+
+    //        CoUninitialize();
+    //    }
+    //} );
 
     beginResetModel();
     qSwap( Nodes, VecNode );
     endResetModel();
+
+    CoUninitialize();
 }
 
 

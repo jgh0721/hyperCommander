@@ -75,7 +75,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -86,7 +86,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -139,6 +139,12 @@
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
+    <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
+    </ClCompile>
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
     <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
@@ -162,6 +168,7 @@
     <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp" />
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp" />
     <QtMoc Include="..\UniqueLibs\shortcutMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\pixmapCacheEx.hpp" />
     <ClInclude Include="HyperCommander.hpp" />
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />

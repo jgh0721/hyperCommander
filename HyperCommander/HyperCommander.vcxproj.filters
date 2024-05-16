@@ -103,6 +103,9 @@
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -176,6 +179,9 @@
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\pixmapCacheEx.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>
