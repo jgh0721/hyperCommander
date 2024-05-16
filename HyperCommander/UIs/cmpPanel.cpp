@@ -66,6 +66,28 @@ void CmpPanel::RefreshVolumeList()
     }
 }
 
+int CmpPanel::CurrentTabIndex() const
+{
+    return ui.tabWidget->currentIndex();
+}
+
+void CmpPanel::SetFocusView( int TabIndex )
+{
+    if( mapTabToStats.contains( TabIndex ) == true )
+    {
+        const auto View = mapTabToStats[ TabIndex ].View;
+
+        View->grid()->setFocus( Qt::OtherFocusReason );
+        View->grid()->viewport()->setFocus(Qt::MouseFocusReason);
+
+        if( View->focusedRow().isValid() == false )
+        {
+            if( View->getRowCount() > 0 )
+                View->setFocusedRowIndex( 0 );
+        }
+    }
+}
+
 int CmpPanel::InitializeGrid()
 {
     const auto Page = new QWidget;
@@ -391,6 +413,11 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
             else if( KeyEvent->key() == Qt::Key_Space )
             {
                 StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
+            }
+            else if( KeyEvent->key() == Qt::Key_Tab )
+            {
+                StCommandMgr->CMD_TabSwitch( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                return true;
             }
 
             QRect Rect;

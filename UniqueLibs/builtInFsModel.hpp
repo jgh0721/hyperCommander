@@ -12,6 +12,11 @@ struct Node
 
     QDateTime                           Created;
     QDateTime                           Modified;
+
+    ///////////////////////////////////////////////////////////////////////////
+
+    QPixmap                             Icon;
+    QString                             Content;
 };
 
 class FSModel : public QAbstractItemModel

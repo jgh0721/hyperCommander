@@ -98,6 +98,7 @@ resharper_align_first_arg_by_paren = true
 resharper_align_multiline_binary_expressions_chain = true
 resharper_align_multiline_expression_braces = true
 resharper_anonymous_method_declaration_braces = end_of_line
+resharper_case_block_braces = end_of_line
 resharper_continuous_line_indent = double
 resharper_indent_switch_labels = true
 resharper_int_align_bitfield_sizes = true
@@ -107,8 +108,33 @@ resharper_int_align_enum_initializers = true
 resharper_int_align_eq = true
 resharper_new_line_before_while = false
 resharper_simple_embedded_statement_style = line_break
+resharper_space_after_keywords_in_control_flow_statements = false
+resharper_space_before_template_params = false
 resharper_space_before_type_parameter_constraint_colon = false
+resharper_space_between_method_call_parameter_list_parentheses = true
+resharper_space_between_method_declaration_parameter_list_parentheses = true
+resharper_space_between_parentheses_of_control_flow_statements = true
+resharper_space_between_square_brackets = true
+resharper_space_between_typecast_parentheses = true
 resharper_space_within_declaration_parentheses = true
+resharper_space_within_initializer_braces = true
+resharper_space_within_parentheses = true
+resharper_space_within_template_args = true
+resharper_space_within_template_params = true
 resharper_use_continuous_line_indent_in_method_pars = true
+resharper_use_indent_from_vs = false
 resharper_wrap_before_first_type_parameter_constraint = true
 resharper_wrap_braced_init_list_style = chop_if_long
+
+# ReSharper inspection severities
+resharper_comment_typo_highlighting = none
+resharper_cpp_clang_tidy_clang_diagnostic_misspelled_assumption_highlighting = none
+resharper_identifier_typo_highlighting = none
+resharper_markup_attribute_typo_highlighting = none
+resharper_markup_text_typo_highlighting = none
+resharper_string_literal_typo_highlighting = none
+
+[*.{appxmanifest,axaml,axml,build,c,c++,c++m,cc,ccm,cginc,compute,config,cp,cpp,cppm,csproj,cu,cuh,cxx,cxxm,dbml,discomap,dtd,fx,fxh,h,hh,hlsl,hlsli,hlslinc,hpp,hxx,inc,inl,ino,ipp,ixx,jsproj,lsproj,mpp,mq4,mq5,mqh,mxx,njsproj,nuspec,paml,proj,props,resw,resx,StyleCop,targets,tasks,tpp,usf,ush,vbproj,xaml,xamlx,xml,xoml,xsd}]
+indent_style = space
+indent_size = 4
+tab_width = 4

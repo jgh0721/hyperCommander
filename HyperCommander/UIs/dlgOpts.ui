@@ -98,6 +98,9 @@
       </item>
       <item>
        <widget class="QStackedWidget" name="stkOpts">
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
         <widget class="QWidget" name="pageColor">
          <layout class="QGridLayout" name="gridLayout">
           <item row="3" column="0">
@@ -177,7 +180,32 @@
           </item>
          </layout>
         </widget>
-        <widget class="QWidget" name="page"/>
+        <widget class="QWidget" name="pageShortcut">
+         <layout class="QVBoxLayout" name="verticalLayout_2">
+          <item>
+           <widget class="QFrame" name="frame_3">
+            <property name="frameShape">
+             <enum>QFrame::Shape::StyledPanel</enum>
+            </property>
+            <property name="frameShadow">
+             <enum>QFrame::Shadow::Raised</enum>
+            </property>
+            <layout class="QHBoxLayout" name="horizontalLayout_4">
+             <item>
+              <widget class="QKeySequenceEdit" name="keySequenceEdit_2">
+               <property name="clearButtonEnabled">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="tblShortCut"/>
+          </item>
+         </layout>
+        </widget>
        </widget>
       </item>
      </layout>

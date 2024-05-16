@@ -1,7 +1,11 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
 
+#include <ObjectArray.h>
+
 #include "commonLibs/cmnDateTime.hpp"
+
+#include <QtConcurrent>
 
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
@@ -116,6 +120,36 @@ void FSModel::Refresh()
 
         FindClose( hFile );
     }
+    
+    QtConcurrent::blockingMap( Nodes, []( Node& Item ) {
+        static QFileIconProvider QFIP;
+
+        if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 )
+            Item.Icon = QFIP.icon( QAbstractFileIconProvider::Folder ).pixmap( 24, 24 );
+        else if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+        {
+            Item.Icon = QFIP.icon( QAbstractFileIconProvider::Folder ).pixmap( 24, 24 );
+        }
+        else
+        {
+            OleInitialize( 0 );
+
+            do
+            {
+                //Item.Icon = 
+                //QFileIconProvider().icon( QFileInfo( Item.Name ) ).pixmap( 24, 24 );
+                SHFILEINFOW SHInfo = { 0, };
+                SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
+                                SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+                Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+                if( SHInfo.hIcon != Q_NULLPTR )
+                    DestroyIcon( SHInfo.hIcon );
+
+            } while( false );
+
+            CoUninitialize();
+        }
+    } );
 
     beginResetModel();
     qSwap( Nodes, VecNode );
@@ -184,12 +218,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     if( role == Qt::DecorationRole )
     {
         if( Col == 0 )
-        {
-            const auto& Item = VecNode[ Row ];
-            static QFileIconProvider QFIP;
-            return QFIP.icon( QFileInfo( Item.Name ) );
-            
-        }
+            return VecNode[ Row ].Icon;
     }
 
     if( role == Qt::ForegroundRole )

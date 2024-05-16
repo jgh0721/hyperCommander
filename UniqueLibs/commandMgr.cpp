@@ -29,3 +29,22 @@ void CCommandMgr::CMD_Space( Qtitan::GridViewBase* View, const QPoint& GlobalPos
     View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
     View->navigateDown( Qt::NoModifier );
 }
+
+void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+{
+    // TODO: 더 나은 방법 찾아보기
+
+    QString ObjName;
+
+    QObject* Parent = View;
+    while( Parent != nullptr && 
+           Parent->objectName().compare( "dlgMain" ) != 0 )
+    {
+        Parent = Parent->parent();
+    }
+
+    if( Parent != nullptr )
+    {
+        QMetaObject::invokeMethod( Parent, "Tab_SwitchToAnother" );
+    }
+}
