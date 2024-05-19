@@ -70,3 +70,55 @@ public:
 private:
     Q_DISABLE_COPY( CInvokeInfoWithResult )
 };
+
+namespace nsCmn
+{
+    namespace nsCmnQt
+    {
+        class QObjectPtr
+        {
+        public:
+            QObjectPtr( const QObjectPtr& objPtr )
+                : _obj( objPtr._obj )
+            {
+
+            }
+
+            QObjectPtr( QObject* obj )
+                : _obj( obj )
+            {
+                Q_ASSERT( obj != nullptr );
+            }
+
+            template< typename T >
+            QObjectPtr( QSharedPointer<T> spObj )
+                : _obj( Q_NULLPTR )
+            {
+                Q_ASSERT( spObj != nullptr );
+                _obj = spObj.data();
+            }
+
+            QObject* data() const
+            {
+                return _obj.data();
+            }
+
+        private:
+            QPointer<QObject>           _obj;
+        };
+
+        bool                            MarshalTo( QGenericArgument arg, QByteArray& ba );
+        // 성공하면 arg 에서 name 포인터를 반드시 free 해야한다. 
+        bool                            DemarshalFrom( const QString& sArgName, const QByteArray& ba, QGenericArgument& arg );
+
+        // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, QGenericReturnArgument ret, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericReturnArgument ret, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+
+    } // nsCmnQt
+} // nsCmn

@@ -140,6 +140,9 @@
     <QtMoc Include="UIs\dlgOpts.hpp">
       <Filter>Form Files</Filter>
     </QtMoc>
+    <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp">
+      <Filter>CommonLibs\Qt</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="HyperCommander.hpp">
@@ -183,6 +186,12 @@
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\pixmapCacheEx.hpp">
       <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnBase.hpp">
+      <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnIncludeLibrary.hpp">
+      <Filter>CommonLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

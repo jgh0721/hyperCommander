@@ -155,11 +155,14 @@
     <QtMoc Include="UIs\cmpPanel.hpp" />
     <QtRcc Include="HyperCommander.qrc" />
     <QtMoc Include="..\UniqueLibs\builtInFsModel.hpp" />
+    <ClInclude Include="..\commonLibs\cmnBase.hpp" />
     <ClInclude Include="..\commonLibs\cmnCompilerDetection.hpp" />
     <ClInclude Include="..\commonLibs\cmnConcurrent.hpp" />
     <ClInclude Include="..\commonLibs\cmnDateTime.hpp" />
+    <ClInclude Include="..\commonLibs\cmnIncludeLibrary.hpp" />
     <ClInclude Include="..\commonLibs\cmnPath.hpp" />
     <ClInclude Include="..\commonLibs\cmnSystemDetection.hpp" />
+    <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp" />
     <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp" />

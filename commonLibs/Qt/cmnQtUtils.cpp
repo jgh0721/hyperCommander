@@ -276,3 +276,115 @@ CInvokeInfoWithResult::CInvokeInfoWithResult( const QString& sMethodName, QObjec
 {
 
 }
+
+namespace nsCmn
+{
+    namespace nsCmnQt
+    {
+
+        //////////////////////////////////////////////////////////////////////////
+        /// QObject, MetaObject, Invoke...
+
+        bool MarshalTo( QGenericArgument arg, QByteArray& ba )
+        {
+            bool isSuccess = false;
+
+            do
+            {
+                const char* argName = arg.name();
+                Q_ASSERT( argName != Q_NULLPTR );
+                if( argName == Q_NULLPTR )
+                    break;
+
+                QDataStream in( &ba, QIODevice::WriteOnly );
+
+                int nArgTypeId = QMetaType::type( argName );
+                if( nArgTypeId == QMetaType::UnknownType )
+                {
+                    //Q_ASSERT_X( ( nArgTypeId == 0 ) || ( nArgTypeId == QMetaType::UnknownType ), __FUNCTION__,
+                    //            QString("Qt Meta-Object System 에 등록되지 않은 인자입니다|{}", argName ) );
+                    break;
+                }
+
+                isSuccess = QMetaType::save( in, nArgTypeId, arg.data() );
+
+            } while( false );
+
+            return isSuccess;
+        }
+
+        bool DemarshalFrom( const QString& sArgName, const QByteArray& ba, QGenericArgument& arg )
+        {
+            bool isSuccess = false;
+            int nArgType = 0;
+            void* data = Q_NULLPTR;
+
+            do
+            {
+                if( sArgName.isEmpty() == true || ba.isEmpty() == true )
+                {
+                    arg = QGenericArgument();
+                    return true;
+                }
+
+                nArgType = QMetaType::type( sArgName.toStdString().c_str() );
+                if( nArgType == QMetaType::UnknownType )
+                {
+                    Q_ASSERT_X( nArgType == QMetaType::UnknownType, __FUNCTION__, "Unknown Meta-Type" );
+                    break;
+                }
+
+                data = QMetaType::create( nArgType );
+                Q_ASSERT( data != Q_NULLPTR );
+                if( data == Q_NULLPTR )
+                    break;
+
+                QDataStream in( ba );
+                isSuccess = QMetaType::load( in, nArgType, data );
+
+            } while( false );
+
+            if( isSuccess == true )
+            {
+                // NOTE: 반드시 이름 부분의 포인터를 해제해야한다. qstrdup 는 delete[] 를 통해 해제해야한다.  
+                arg = QGenericArgument( qstrdup( sArgName.toStdString().c_str() ), data );
+            }
+            else
+            {
+                if( data != Q_NULLPTR )
+                    QMetaType::destroy( nArgType, data );
+            }
+
+            return isSuccess;
+        }
+
+        bool InvokeMethod( QObjectPtr obj, const char* member, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        {
+            return InvokeMethod( obj, member, Qt::AutoConnection, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
+        }
+
+        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        {
+            Q_ASSERT( obj.data() != Q_NULLPTR );
+            Q_ASSERT( member != Q_NULLPTR && qstrlen( member ) > 0 );
+            bool call = QMetaObject::invokeMethod( obj.data(), member, type, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
+            Q_ASSERT( call == true );
+            return call;
+        }
+
+        bool InvokeMethod( QObjectPtr obj, const char* member, QGenericReturnArgument ret, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        {
+            return InvokeMethod( obj, member, Qt::AutoConnection, ret, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
+        }
+
+        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericReturnArgument ret, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        {
+            Q_ASSERT( obj.data() != Q_NULLPTR );
+            Q_ASSERT( member != Q_NULLPTR && qstrlen( member ) > 0 );
+            bool call = QMetaObject::invokeMethod( obj.data(), member, type, ret, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
+            Q_ASSERT( call == true );
+            return call;
+        }
+
+    } // nsCmnQt
+} // nsCmn

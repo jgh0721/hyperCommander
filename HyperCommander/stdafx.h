@@ -10,6 +10,8 @@
 
 #include <QtWidgets>
 
+#include "cmnIncludeLibrary.hpp"
+
 #define USE_OS_NATIVE_IMPLEMENTATION
 #define USE_QT_SUPPORT
 
@@ -28,9 +30,6 @@
 #ifndef ClearFlag
 #define ClearFlag(_F,_SF)     ((_F) &= ~(_SF))
 #endif
-
-#include "commonLibs/cmnSystemDetection.hpp"
-#include "commonLibs/cmnCompilerDetection.hpp"
 
 #define FMT_HEADER_ONLY
 #include <fmt/format.h>
