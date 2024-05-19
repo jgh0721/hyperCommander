@@ -48,3 +48,8 @@ void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& Globa
         QMetaObject::invokeMethod( Parent, "Tab_SwitchToAnother" );
     }
 }
+
+void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+{
+    QMetaObject::invokeMethod( qApp, "ShowMultiRename" );
+}

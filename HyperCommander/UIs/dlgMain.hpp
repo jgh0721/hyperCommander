@@ -17,7 +17,9 @@ protected slots:
     void                                oo_notifyCurrentDirectory( const QString& CurrentPath );
 
 private:
+    Q_INVOKABLE void                    initialize();
 
+    CmpPanel*                           currentFocusPanel() const;
     int                                 currentPanelIndex = 0; // 0 = Left, 1 = Right
     Ui::dlgMain                         ui;
 }; 

@@ -106,6 +106,21 @@
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
+    <ClCompile Include="UIs\dlgCopyToAnother.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgMultiRename.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgMultiRename_Model.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -115,6 +130,15 @@
       <Filter>Form Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgOpts.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgCopyToAnother.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgMultiRename.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgDelete.ui">
       <Filter>Form Files</Filter>
     </QtUic>
   </ItemGroup>
@@ -143,11 +167,17 @@
     <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp">
       <Filter>CommonLibs\Qt</Filter>
     </QtMoc>
+    <QtMoc Include="UIs\dlgMultiRename.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
+    <QtMoc Include="HyperCommander.hpp">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgMultiRename_Model.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="HyperCommander.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
@@ -192,6 +222,18 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnIncludeLibrary.hpp">
       <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="UIs\dlgCopyToAnother.hpp">
+      <Filter>Form Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp">
+      <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

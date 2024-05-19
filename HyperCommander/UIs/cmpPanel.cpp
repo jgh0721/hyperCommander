@@ -406,6 +406,12 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 
             const auto CmdText = StShortcutMgr->GetCMDFromShortcut( KeyEvent->keyCombination() );
 
+            if( KeyEvent->key() == Qt::Key_R && KeyEvent->modifiers() == ( Qt::ControlModifier | Qt::AltModifier ) )
+            {
+                StCommandMgr->CMD_MultiRename( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                return true;
+            }
+
             if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
             {
                 StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );

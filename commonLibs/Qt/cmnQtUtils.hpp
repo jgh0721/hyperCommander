@@ -1,9 +1,5 @@
 ﻿#pragma once
 
-#if !defined(USE_QT_SUPPORT)
-#error This Feature Require USE_QT_SUPPORT!!
-#endif
-
 #include <QtCore>
 #include <memory>
 

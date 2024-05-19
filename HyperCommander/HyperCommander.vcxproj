@@ -75,10 +75,16 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <PostBuildEvent>
+      <Command>IF NOT EXIST "$(TargetDir)HyperCommander.ini" (
+    ECHO COPY HyperCommander.sample.ini
+    copy /y $(ProjectDir)HyperCommander.sample.ini $(TargetDir)HyperCommander.ini
+)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile />
@@ -86,10 +92,16 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <PostBuildEvent>
+      <Command>IF NOT EXIST "$(TargetDir)HyperCommander.ini" (
+    ECHO COPY HyperCommander.sample.ini
+    copy /y $(ProjectDir)HyperCommander.sample.ini $(TargetDir)HyperCommander.ini
+)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
     <ClCompile>
@@ -134,8 +146,10 @@
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
+    <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp" />
+    <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp" />
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
@@ -148,8 +162,17 @@
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
     <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
+    <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
     <ClCompile Include="UIs\dlgMain.cpp" />
+    <ClCompile Include="UIs\dlgMultiRename.cpp" />
+    <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
+    <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
+    <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
+    <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
+    <QtMoc Include="UIs\dlgMultiRename.hpp" />
     <QtMoc Include="UIs\dlgOpts.hpp" />
     <QtMoc Include="UIs\dlgMain.hpp" />
     <QtMoc Include="UIs\cmpPanel.hpp" />
@@ -172,7 +195,7 @@
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp" />
     <QtMoc Include="..\UniqueLibs\shortcutMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\pixmapCacheEx.hpp" />
-    <ClInclude Include="HyperCommander.hpp" />
+    <QtMoc Include="HyperCommander.hpp" />
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="cpp.hint" />
@@ -188,7 +211,10 @@
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\cmpPanel.ui" />
+    <QtUic Include="UIs\dlgCopyToAnother.ui" />
+    <QtUic Include="UIs\dlgDelete.ui" />
     <QtUic Include="UIs\dlgMain.ui" />
+    <QtUic Include="UIs\dlgMultiRename.ui" />
     <QtUic Include="UIs\dlgOpts.ui" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,22 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>dlgCopyToAnother</class>
- <widget class="QDialog" name="dlgCopyToAnother">
+ <class>dlgDelete</class>
+ <widget class="QDialog" name="dlgDelete">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>485</width>
-    <height>314</height>
+    <width>536</width>
+    <height>284</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>HyperCommander</string>
+   <string>Dialog</string>
   </property>
   <property name="sizeGripEnabled">
    <bool>true</bool>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
    <item>
     <widget class="QFrame" name="frmTitleBar">
      <property name="sizePolicy">
@@ -66,7 +81,7 @@
       <item>
        <widget class="QLabel" name="lblTitleBar">
         <property name="text">
-         <string>복사</string>
+         <string>삭제</string>
         </property>
        </widget>
       </item>
@@ -113,25 +128,6 @@
      <property name="frameShadow">
       <enum>QFrame::Shadow::Raised</enum>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <widget class="QFrame" name="frame">
-        <property name="frameShape">
-         <enum>QFrame::Shape::StyledPanel</enum>
-        </property>
-        <property name="frameShadow">
-         <enum>QFrame::Shadow::Raised</enum>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QGroupBox" name="groupBox">
-        <property name="title">
-         <string>고급 옵션</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
     </widget>
    </item>
    <item>

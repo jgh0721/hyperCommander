@@ -10,7 +10,19 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
 
     setWindowTitle( tr( "HyperCommander" ) );
 
+    QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
+
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+
+    // TODO: CmpPanel 에서 항목이 모두 새로고침이 끝났음을 알아내서 포커스를 부여해야 한다. 
+    // 최초 실행되었을 때 커서가 준비되도록 하여 편의성을 향상시킨다. 
+    QTimer::singleShot( 1000, [this]() {
+
+        ui.cmpLeftPanel->setFocus( Qt::MouseFocusReason );
+        QMetaObject::invokeMethod( ui.cmpLeftPanel, "SetFocusView", Q_ARG( int, ui.cmpLeftPanel->CurrentTabIndex() ) );
+
+                        } );
+
 }
 
 void QMainUI::Tab_SwitchToAnother()
@@ -45,4 +57,20 @@ void QMainUI::on_acShowMainOpts_triggered( bool checked )
 void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
 {
     ui.lblPrompt->setText( CurrentPath + ">" );
+}
+
+void QMainUI::initialize()
+{
+
+}
+
+CmpPanel* QMainUI::currentFocusPanel() const
+{
+    if( currentPanelIndex == 0 )
+        return ui.cmpLeftPanel;
+
+    if( currentPanelIndex == 1 )
+        return ui.cmpRightPanel;
+
+    return nullptr;
 }

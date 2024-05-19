@@ -27,7 +27,7 @@ public:
     Q_INVOKABLE void                    CloseTab();
     Q_INVOKABLE void                    RefreshVolumeList();
     int                                 CurrentTabIndex() const;
-    void                                SetFocusView( int TabIndex );
+    Q_INVOKABLE void                    SetFocusView( int TabIndex );
 
     int                                 InitializeGrid();
 

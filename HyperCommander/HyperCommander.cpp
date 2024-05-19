@@ -2,18 +2,27 @@
 #include "HyperCommander.hpp"
 
 #include "dlgMain.hpp"
+#include "dlgMultiRename.hpp"
+
 #include "../uniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/shortcutMgr.hpp"
 
+#include "cmnTypeDefs.hpp"
+#include "cmnTypeDefs_Name.hpp"
+
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    QApplication::setStyle( QStyleFactory::create( "windows11" ) );
     QPixmapCache::setCacheLimit( 65535 );
 
     QCoreApplication::setOrganizationName( "MyHouse" );
     QCoreApplication::setOrganizationDomain( "devtester.com" );
     QCoreApplication::setApplicationName( "HyperCommander" );
+
+
+    const auto ewq = StSettings->fileName();
 
     //QSettings::setDefaultFormat( QSettings::IniFormat );
     //QSettings::setPath( QSettings::IniFormat, QSettings::UserScope, applicationDirPath() );
@@ -26,7 +35,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     //f.setValue( "fsdfdsds1", "rew" );
     //f.endGroup();
     //const auto qw  = f.fileName();
-
+    
     do
     {
         SHFILEINFO SHInfo = { 0, };
@@ -61,15 +70,56 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     } while( false );
 
-    shlChangeNotify = new QSHChangeNotify;
-    shlChangeNotify->StartWatching();
-
     auto ui = new QMainUI;
     ui->show();
 
     TyStCommandMgr::GetInstance()->Refresh();
 
     TyStShortcutMgr::GetInstance()->SetShortcut( QKeySequence( "Shift+Return", QKeySequence::PortableText ), "ContextMenu" );
+
+
+}
+
+void HyperCommanderApp::ShowMultiRename()
+{
+    QMultiRenameUI MultiRename;
+
+    MultiRename.exec();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+void HyperCommanderApp::OnDriveAdd( const QString& Root )
+{
+
+}
+
+void HyperCommanderApp::OnDriveRemoved( const QString& Root )
+{
+
+}
+
+void HyperCommanderApp::OnMediaInserted( const QString& ItemIDDisplayName )
+{
+
+}
+
+void HyperCommanderApp::OnMediaRemoved( const QString& Root )
+{
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+void HyperCommanderApp::initialize()
+{
+    shlChangeNotify = new QSHChangeNotify;
+    shlChangeNotify->StartWatching();
+
+    connect( shlChangeNotify, &QSHChangeNotify::OnDriveAdd, this, &HyperCommanderApp::OnDriveAdd );
+    connect( shlChangeNotify, &QSHChangeNotify::OnDriveRemoved, this, &HyperCommanderApp::OnDriveRemoved );
+    connect( shlChangeNotify, &QSHChangeNotify::OnMediaInserted, this, &HyperCommanderApp::OnMediaInserted );
+    connect( shlChangeNotify, &QSHChangeNotify::OnMediaRemoved, this, &HyperCommanderApp::OnMediaRemoved );
 
 
 }

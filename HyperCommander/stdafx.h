@@ -10,26 +10,10 @@
 
 #include <QtWidgets>
 
-#include "cmnIncludeLibrary.hpp"
-
 #define USE_OS_NATIVE_IMPLEMENTATION
 #define USE_QT_SUPPORT
 
-#ifndef FlagOn
-#define FlagOn(_F,_SF)        ((_F) & (_SF))
-#endif
-
-#ifndef BooleanFlagOn
-#define BooleanFlagOn(F,SF)   ((BOOLEAN)(((F) & (SF)) != 0))
-#endif
-
-#ifndef SetFlag
-#define SetFlag(_F,_SF)       ((_F) |= (_SF))
-#endif
-
-#ifndef ClearFlag
-#define ClearFlag(_F,_SF)     ((_F) &= ~(_SF))
-#endif
+#include "cmnIncludeLibrary.hpp"
 
 #define FMT_HEADER_ONLY
 #include <fmt/format.h>
