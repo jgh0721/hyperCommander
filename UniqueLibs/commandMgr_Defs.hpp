@@ -20,6 +20,7 @@ const TyHC_COMMAND BuiltInCMD_CopyToAnother     = { QLatin1String( "cmd_CopyToAn
 const TyHC_COMMAND BuiltInCMD_Tab_New           = { QLatin1String( "cmd_NewTab" ) };
 const TyHC_COMMAND BuiltInCMD_Tab_Close         = { QLatin1String( "cmd_CloseTab" ), QObject::tr("탭 닫기"), QKeySequence( Qt::Key_Control | Qt::Key_W ) };
 const TyHC_COMMAND BuiltInCMD_File_MultiRename  = { QLatin1String( "cmd_MultiRename" ) };
+const TyHC_COMMAND BuiltInCMD_View_SwitchHidSys = { QLatin1String( "cmd_SwitchHidSys" ), QObject::tr("숨김/시스템 파일 표시"), QKeySequence( Qt::Key_Control | Qt::Key_H ) };
 
 const QVector< TyHC_COMMAND > Global = {
     BuiltInCMD_ContextMenu

@@ -51,5 +51,21 @@ void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& Globa
 
 void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
 {
-    QMetaObject::invokeMethod( qApp, "ShowMultiRename" );
+    const auto Selection = View->modelController()->selection();
+    if( Selection->isEmpty() == true )
+    {
+        QMessageBox::information( nullptr, tr( "HyperCommander" ), tr( "이름을 변경할 파일을 선택해 주세요." ) );
+        return;
+    }
+
+    QVector< QString > VecFiles;
+    const auto FsModel = static_cast< FSModel* >( View->model() );
+
+    for( const auto& Item : Selection->selectedRowIndexes() )
+    {
+        qDebug() << FsModel->GetFileFullPath( Item );
+        VecFiles.push_back( FsModel->GetFileFullPath( Item ) );
+    }
+    
+    QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
 }

@@ -24,6 +24,7 @@ void FSModel::SetCurrentPath( const QString& Path )
 {
     CurrentPath = Path;
 }
+
 QString FSModel::GetCurrentPath() const
 {
     return CurrentPath;

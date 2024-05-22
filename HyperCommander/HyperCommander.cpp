@@ -80,10 +80,10 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
 }
 
-void HyperCommanderApp::ShowMultiRename()
+void HyperCommanderApp::ShowMultiRename( const QVector< QString >& VecFiles )
 {
     QMultiRenameUI MultiRename;
-
+    MultiRename.SetSourceFiles( VecFiles );
     MultiRename.exec();
 }
 

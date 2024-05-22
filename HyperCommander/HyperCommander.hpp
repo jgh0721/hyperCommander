@@ -15,7 +15,7 @@ class HyperCommanderApp : public QApplication
 public:
     HyperCommanderApp( int& argc, char** argv );
 
-    Q_INVOKABLE void                    ShowMultiRename();
+    Q_INVOKABLE void                    ShowMultiRename( const QVector< QString >& VecFiles );
 
 protected slots:
 
