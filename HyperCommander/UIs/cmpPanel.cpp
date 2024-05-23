@@ -369,16 +369,17 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     {
         case GridHitInfo::Cell: {
 
-            // TODO: 현재 보이는 뷰의 내용에 따라 Model 클래스 변경
-            const auto Grid = Args->view()->grid();
-            const auto Pos = QCursor::pos() * Grid->screen()->devicePixelRatio();
+            // NOTE: Qt 5 에서 서로 다른 해상도를 가진 다중 모니터 환경에서 정확한 커서 위치를 얻어올 수 없음.
+            // 따라서, Win32 API 인 GetCursorPos 로 대체한다. 
+            POINT Pos = {};
+            GetCursorPos( &Pos );
 
             const auto ProxyModel = qobject_cast< FSProxyModel* >( Args->view()->model() );
             const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
 
-            openShellContextMenuForObject( FsModel->GetFileFullPath( ProxyModel->mapToSource( ModelIndex ) ).toStdWString(), Pos.x(), Pos.y(),
+            openShellContextMenuForObject( FsModel->GetFileFullPath( ProxyModel->mapToSource( ModelIndex ) ).toStdWString(), Pos.x, Pos.y,
                                            reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
-        };
+        } break;
     }
 
     Args->setHandled( true );
@@ -386,26 +387,6 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 {
-    //if( Event->type() == QEvent::MouseButtonPress )
-    //{
-    //    int a = 0;
-    //}
-    //if( Event->type() == QEvent::MouseButtonDblClick )
-    //{
-    //    const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
-    //    if( Grid != nullptr )
-    //    {
-    //        const auto StCommandMgr = TyStCommandMgr::GetInstance();
-
-    //        const auto View = Grid->view< Qtitan::GridBandedTableView >();
-    //        const auto Row = View->focusedRow();
-
-    //        StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
-    //        return true;
-
-    //    }
-    //}
-
     if( Event->type() == QEvent::KeyPress )
     {
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
