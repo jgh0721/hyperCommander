@@ -30,10 +30,39 @@ void QMultiRenameModel::SetSourceFiles( const QVector<QString>& VecFiles )
 
 }
 
+void QMultiRenameModel::SetRenamePattern( const QString& Name, const QString& Ext, const QString& Search, const QString& Replace )
+{
+    Pattern_Name = Name;
+    Pattern_Ext = Ext;
+    Pattern_Search = Search;
+    Pattern_Replace = Replace;
+}
+
 void QMultiRenameModel::ProcessPattern()
 {
     if( rowCount() == 0 )
         return;
+
+    for( int RowIdx = 0; RowIdx < rowCount(); ++RowIdx )
+    {
+        auto& Item = vecItems[ RowIdx ];
+        Item.Src_Name;
+    }
+
+    QChar* Tok = nullptr;
+
+    /// 이름 처리
+    Tok = Pattern_Name.data();
+    while( Tok && Tok->isNull() == false )
+    {
+
+    }
+    
+    /// 확장자 처리
+    
+    /// 카운터 처리
+    
+    /// 이름 및 확장자에서 찾아 바꾸기
 
     // NOTE: 대상 파일이름 / 확장자 데이터 변경 알림
     emit dataChanged( index( 0, 4 ), index( rowCount() - 1, 5 ), QList<int>() << Qt::DisplayRole );

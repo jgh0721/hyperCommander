@@ -37,13 +37,6 @@ private:
         QString                         Dst_Ext;
     };
 
-    // Pattern
-    // Name -> Ext -> Counter -> Search & Replace
-    QString                             Pattern_Name;
-    QString                             Pattern_Ext;
-    QString                             Pattern_Search;
-    QString                             Pattern_Replace;
-
     struct Counter
     {
         int                             Group;
@@ -51,6 +44,13 @@ private:
         int                             Step = 0;
         QChar                           Char;
     };
+
+    // Pattern
+    // Name -> Ext -> Counter -> Search & Replace
+    QString                             Pattern_Name;
+    QString                             Pattern_Ext;
+    QString                             Pattern_Search;
+    QString                             Pattern_Replace;
 
     // Rows
     QVector< Item >                     vecItems;
