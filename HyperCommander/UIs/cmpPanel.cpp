@@ -37,7 +37,8 @@ void CmpPanel::CloseTab()
         return;
 
     auto Current = ui.tabWidget->currentIndex();
-    mapTabToStats.remove( Current );
+    if( mapTabToStats.contains( Current ) == true )
+        mapTabToStats.remove( Current );
     delete ui.tabWidget->widget( Current );
     ui.tabWidget->removeTab( Current );
 }
@@ -157,16 +158,20 @@ int CmpPanel::InitializeGrid()
     const auto ColumnView = StColumnMgr->GetColumnView( 0 );
 
     const auto Model = new FSModel;
+    const auto ProxyModel = new FSProxyModel;
+
     Model->SetRoot( "C:" );
     Model->SetCurrentPath( "\\" );
     Model->SetColumnView( ColumnView );
     connect( Model, &FSModel::sigChangedDirectory, this, &CmpPanel::oo_ChangedDirectory );
 
+    ProxyModel->setSourceModel( Model );
+
     View->removeBands();
     View->addBand( tr( "FS" ) );
 
     // TODO: CColumnMgr 은 당연히 전역 싱글턴으로 분리되어야 한다. 
-    View->setModel( Model );
+    View->setModel( ProxyModel );
     
     BaseOpts.setBackgroundColor( "black" );
     
@@ -217,7 +222,7 @@ int CmpPanel::InitializeGrid()
 
     View->endUpdate();
 
-    TyTabState TabState{ currentIndex, View };
+    TyTabState TabState{ currentIndex, View, Model, ProxyModel };
     mapTabToStats[ currentIndex ] = TabState;
 
     Model->ChangeDirectory( "" );
@@ -249,7 +254,7 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
     if( mapTabToStats.contains( ui.tabWidget->currentIndex() ) == true )
     {
         const auto View = mapTabToStats.value( ui.tabWidget->currentIndex() ).View;
-        const auto Model = ( FSModel* )View->model();
+        const auto Model = (FSModel*)(( FSProxyModel* )View->model())->sourceModel();
         Model->SetRoot( ui.cbxVolume->currentText().left( 2 ) );
         Model->SetCurrentPath( "/" );
         Model->ChangeDirectory( "" );
@@ -368,8 +373,10 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
             const auto Grid = Args->view()->grid();
             const auto Pos = QCursor::pos() * Grid->screen()->devicePixelRatio();
 
-            auto Model = reinterpret_cast< FSModel* >( Args->view()->model() );
-            openShellContextMenuForObject( Model->GetFileFullPath( ModelIndex ).toStdWString(), Pos.x(), Pos.y(),
+            const auto ProxyModel = qobject_cast< FSProxyModel* >( Args->view()->model() );
+            const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
+
+            openShellContextMenuForObject( FsModel->GetFileFullPath( ProxyModel->mapToSource( ModelIndex ) ).toStdWString(), Pos.x(), Pos.y(),
                                            reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
         };
     }
@@ -379,6 +386,26 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 {
+    //if( Event->type() == QEvent::MouseButtonPress )
+    //{
+    //    int a = 0;
+    //}
+    //if( Event->type() == QEvent::MouseButtonDblClick )
+    //{
+    //    const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
+    //    if( Grid != nullptr )
+    //    {
+    //        const auto StCommandMgr = TyStCommandMgr::GetInstance();
+
+    //        const auto View = Grid->view< Qtitan::GridBandedTableView >();
+    //        const auto Row = View->focusedRow();
+
+    //        StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
+    //        return true;
+
+    //    }
+    //}
+
     if( Event->type() == QEvent::KeyPress )
     {
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
@@ -412,13 +439,24 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
                 return true;
             }
 
+            if( KeyEvent->key() == Qt::Key_H && KeyEvent->modifiers() == Qt::ControlModifier )
+            {
+                const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
+                ProxyModel->SetHiddenSystem( !ProxyModel->GetHiddenSystem() );
+                
+                StCommandMgr->CMD_HidSys( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                return true;
+            }
+
             if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
             {
                 StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                return true;
             }
             else if( KeyEvent->key() == Qt::Key_Space )
             {
                 StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
+                return true;
             }
             else if( KeyEvent->key() == Qt::Key_Tab )
             {

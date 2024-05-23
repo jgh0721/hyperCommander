@@ -12,8 +12,10 @@ void CCommandMgr::Refresh()
 
 void CCommandMgr::CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
 {
-    const auto FsModel   = static_cast< FSModel* >( View->model() );
-    const auto EntryInfo = FsModel->GetFileInfo( SrcIndex );
+    const auto ProxyModel   = qobject_cast< FSProxyModel* >( View->model() );
+    const auto FsModel      = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
+    
+    const auto EntryInfo = FsModel->GetFileInfo( ProxyModel->mapToSource( SrcIndex ) );
 
     if( EntryInfo.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
     {
@@ -49,6 +51,11 @@ void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& Globa
     }
 }
 
+void CCommandMgr::CMD_HidSys( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+{
+    QMetaObject::invokeMethod( qApp, "ToggleHiddenSystem" );
+}
+
 void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
 {
     const auto Selection = View->modelController()->selection();
@@ -59,12 +66,13 @@ void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& Glo
     }
 
     QVector< QString > VecFiles;
-    const auto FsModel = static_cast< FSModel* >( View->model() );
+    const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
+    const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
 
     for( const auto& Item : Selection->selectedRowIndexes() )
     {
-        qDebug() << FsModel->GetFileFullPath( Item );
-        VecFiles.push_back( FsModel->GetFileFullPath( Item ) );
+        qDebug() << FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) );
+        VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
     }
     
     QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );

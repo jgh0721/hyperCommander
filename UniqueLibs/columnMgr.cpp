@@ -14,7 +14,7 @@ void CColumnMgr::Initialize()
                                     2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter, "[=HC.created]"
                                 }
                               << Column {
-                                    3, 0, QObject::tr( "속성" ), Qt::AlignCenter, "[HC.attribText]"
+                                    3, 0, QObject::tr( "속성" ), Qt::AlignCenter, "[=HC.attribText]"
                                 }
                               } );
 }

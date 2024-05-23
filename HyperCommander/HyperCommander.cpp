@@ -70,13 +70,16 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     } while( false );
 
-    auto ui = new QMainUI;
-    ui->show();
-
     TyStCommandMgr::GetInstance()->Refresh();
 
     TyStShortcutMgr::GetInstance()->SetShortcut( QKeySequence( "Shift+Return", QKeySequence::PortableText ), "ContextMenu" );
 
+    mainUI = new QMainUI;
+    mainUI->show();
+}
+
+void HyperCommanderApp::ToggleHiddenSystem()
+{
 
 }
 

@@ -96,10 +96,10 @@ QString GetFormattedAttrText( quint32 Attributes, bool IsUpper )
 
     QString Ret( 4, '-' );
 
-    Ret[0] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_READONLY ) ? '-' : 'R' + Lower );
-    Ret[1] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_ARCHIVE ) ? '-' : 'A' + Lower );
-    Ret[2] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_HIDDEN ) ? '-' : 'H' + Lower );
-    Ret[3] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_SYSTEM ) ? '-' : 'S' + Lower );
+    Ret[0] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_READONLY ) ? 'R' + Lower : '-' );
+    Ret[1] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_ARCHIVE ) ? 'A' + Lower : '-' );
+    Ret[2] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_HIDDEN ) ? 'H' + Lower : '-' );
+    Ret[3] = QChar::fromLatin1( FlagOn( Attributes, FILE_ATTRIBUTE_SYSTEM ) ? 'S' + Lower : '-' );
 
     return Ret;
 }

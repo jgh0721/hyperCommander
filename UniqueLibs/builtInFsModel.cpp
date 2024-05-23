@@ -7,6 +7,8 @@
 
 #include <QtConcurrent>
 
+#include "cmnHCUtils.hpp"
+
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
     if( row < 0 || column < 0 || row >= rowCount( parent ) || column >= columnCount( parent ) )
@@ -46,7 +48,7 @@ QString FSModel::GetFileFullPath( const QModelIndex& Index ) const
 
 Node FSModel::GetFileInfo( const QModelIndex& Index ) const
 {
-    if( checkIndex( Index, CheckIndexOption::IndexIsValid ) == false )
+    if( checkIndex( Index, CheckIndexOption::IndexIsValid | CheckIndexOption::DoNotUseParent ) == false )
         return {};
 
     return VecNode.at( Index.row() );
@@ -73,6 +75,13 @@ void FSModel::Refresh()
 {
     OleInitialize( 0 );
 
+    if( Icon_Directory.isNull() == true )
+    {
+        SHFILEINFOW SHInfo = { 0, };
+        if( SHGetFileInfoW( L"룽슈멜", FILE_ATTRIBUTE_DIRECTORY, &SHInfo, sizeof( SHFILEINFOW ), SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES | SHGFI_TYPENAME ) != FALSE )
+            Icon_Directory = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+    }
+
     WIN32_FIND_DATA wfd = { 0 };
     const auto Filter = CurrentPath.length() == 1 ? Root + CurrentPath + "*.*" : Root + CurrentPath + "\\*.*";
     HANDLE hFile = FindFirstFileExW( Filter.toStdWString().c_str(),
@@ -90,6 +99,8 @@ void FSModel::Refresh()
             Item.Attiributes = FILE_ATTRIBUTE_DIRECTORY;
             Item.Name = "..";
             Item.Size = 0;
+            if( Icon_Directory.isNull() == false )
+                Item.Icon = Icon_Directory;
 
             Nodes.push_back( Item );
         }
@@ -108,12 +119,10 @@ void FSModel::Refresh()
             Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
             Item.Modified       = nsCmn::ConvertTo( wfd.ftLastWriteTime, false );
 
-            if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+            if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
             {
-                if( QPixmapCache::find( "Directory", &Item.Icon ) == false )
-                {
-                    int a = 0;
-                }
+                if( Icon_Directory.isNull() == false )
+                    Item.Icon = Icon_Directory;
             }
             else
             {
@@ -130,6 +139,7 @@ void FSModel::Refresh()
                 } while( false );
 
             }
+
             Nodes.push_back( Item );
 
         } while( FindNextFileW( hFile, &wfd ) != 0 );
@@ -223,7 +233,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
         if( Def.Content.compare( "[=HC.size]", Qt::CaseInsensitive ) == 0 )
         {
             if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-                return {};
+                return tr("<폴더>");
 
             return Item.Size;
         }
@@ -231,6 +241,11 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
         if( Def.Content.compare( "[=HC.created]", Qt::CaseInsensitive ) == 0 )
         {
             return Item.Created;
+        }
+
+        if( Def.Content.compare( "[=HC.attribText]", Qt::CaseInsensitive ) == 0 )
+        {
+            return GetFormattedAttrText( Item.Attiributes, false );
         }
     }
 
@@ -269,6 +284,11 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
         }
     }
 
+    if( role == USR_ROLE_ATTRIBUTE )
+    {
+        return static_cast< quint32 >( VecNode[ Row ].Attiributes );
+    }
+
     if( role == Qt::ForegroundRole )
     {
         return QColor( "white" );
@@ -298,4 +318,33 @@ QMap<int, QVariant> FSModel::itemData( const QModelIndex& index ) const
 Qt::ItemFlags FSModel::flags( const QModelIndex& index ) const
 {
     return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+///
+
+void FSProxyModel::SetHiddenSystem( bool IsShow )
+{
+    IsShowHiddenSystem_ = IsShow;
+    
+    invalidateFilter();
+}
+
+bool FSProxyModel::GetHiddenSystem() const
+{
+    return IsShowHiddenSystem_;
+}
+
+bool FSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const
+{
+    QModelIndex Index = sourceModel()->index( source_row, 0, source_parent );
+
+    if( Index.isValid() && !source_parent.isValid() )
+    {
+        const auto Attr = Index.data( FSModel::USR_ROLE_ATTRIBUTE ).toUInt();
+        if( ( FlagOn( Attr, FILE_ATTRIBUTE_HIDDEN ) ) || ( FlagOn( Attr, FILE_ATTRIBUTE_SYSTEM ) ) )
+            return IsShowHiddenSystem_;
+    }
+
+    return QSortFilterProxyModel::filterAcceptsRow( source_row, source_parent );
 }

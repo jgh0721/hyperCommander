@@ -2,6 +2,9 @@
 
 #include "ui_cmpPanel.h"
 
+class FSProxyModel;
+class FSModel;
+
 namespace Qtitan
 {
     class GridBandedTableView;
@@ -52,6 +55,8 @@ private:
     {
         int                             ViewMode = 0;   // Normal FS, Packer, VFS
         Qtitan::GridBandedTableView*    View = nullptr;
+        FSModel*                        Model = nullptr;
+        FSProxyModel*                   ProxyModel = nullptr;
     };
 
     // 현재 작업 중인 탭 색인 번호

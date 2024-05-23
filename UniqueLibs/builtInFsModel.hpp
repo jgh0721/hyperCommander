@@ -23,6 +23,7 @@ class FSModel : public QAbstractItemModel
 {
     Q_OBJECT
 public:
+    static const int USR_ROLE_ATTRIBUTE = Qt::UserRole + 1;
 
     Q_INVOKABLE void                    SetRoot( const QString& Root );
     Q_INVOKABLE void                    SetCurrentPath( const QString& Path );
@@ -56,7 +57,23 @@ private:
     // 경로 구분자로 시작하는 경로, Root + CurrentPath 를 더하면 완전 경로가 나온다. 경로 구분자는 \\ 사용
     QString                             CurrentPath;
     ColumnView                          CurrentView;
+    QPixmap                             Icon_Directory;
 
     QVector< Node >                     VecNode;
     QVector< int >                      VecSelectedRows;
+};
+
+class FSProxyModel : public QSortFilterProxyModel
+{
+    Q_OBJECT
+public:
+
+    void                                SetHiddenSystem( bool IsShow );
+    bool                                GetHiddenSystem() const;
+
+    bool                                filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override;
+
+private:
+
+    bool                                IsShowHiddenSystem_ = false;
 };
