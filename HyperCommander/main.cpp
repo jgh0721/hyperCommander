@@ -17,7 +17,6 @@ int main( int argc, char* argv[] )
 
     do
     {
-
         Ret = app.exec();
 
     } while( false );

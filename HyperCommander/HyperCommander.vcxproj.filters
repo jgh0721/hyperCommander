@@ -121,6 +121,9 @@
     <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnTextUtils.cpp">
+      <Filter>CommonLibs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -234,6 +237,9 @@
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp">
       <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnTextUtils.hpp">
+      <Filter>CommonLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -128,7 +128,7 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setModelItemsDragEnabled( true );
     BaseOpts.setRowStyle( Qtitan::GridViewOptions::RowStyleNormal );
     BaseOpts.setSelectedDecorationOpacity( 0.4f );
-    BaseOpts.setSelectionPolicy( Qtitan::GridViewOptions::IgnoreSelection );
+    BaseOpts.setSelectionPolicy( Qtitan::GridViewOptions::MultiRowSelection );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setRubberBandSelection( false );
     BaseOpts.setTransparentBackground( true );
@@ -138,13 +138,13 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setFocusFollowsMouse( false );
     BaseOpts.setFocusFrameEnabled( true );
     BaseOpts.setShowFocusDecoration( true );
-    BaseOpts.setKeepFocusedRow( false );
-
+    BaseOpts.setKeepFocusedRow( true );
+    
     BaseOpts.setDragEnabled( true );
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
-    
     BaseOpts.setGroupsHeaderTextColor( "white" );
+
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
     TableOpts.setColumnsQuickCustomization( false );

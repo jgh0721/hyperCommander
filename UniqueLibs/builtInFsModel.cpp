@@ -240,7 +240,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
 
         if( Def.Content.compare( "[=HC.created]", Qt::CaseInsensitive ) == 0 )
         {
-            return Item.Created;
+            return Item.Created.toString( "yyyy-MM-dd hh:mm:ss" );
         }
 
         if( Def.Content.compare( "[=HC.attribText]", Qt::CaseInsensitive ) == 0 )

@@ -27,7 +27,7 @@
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout_2">
       <item>
-       <widget class="QGroupBox" name="groupBox_3">
+       <widget class="QGroupBox" name="grpFileName">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
           <horstretch>0</horstretch>
@@ -37,42 +37,60 @@
         <property name="title">
          <string>파일이름 및 패턴</string>
         </property>
+        <property name="flat">
+         <bool>true</bool>
+        </property>
         <layout class="QGridLayout" name="gridLayout_4">
          <item row="0" column="0" colspan="2">
           <widget class="QLineEdit" name="edtFileNamePattern"/>
          </item>
          <item row="2" column="0">
-          <widget class="QPushButton" name="pushButton_7">
+          <widget class="QPushButton" name="btnFileNameRange">
            <property name="text">
-            <string>PushButton</string>
+            <string>[N#-#] 범위(&amp;R)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
          <item row="1" column="1">
-          <widget class="QPushButton" name="pushButton_6">
+          <widget class="QPushButton" name="btnFileNameDate">
            <property name="text">
-            <string>PushButton</string>
+            <string>[YMD] 날짜(&amp;D)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
          <item row="1" column="0">
-          <widget class="QPushButton" name="pushButton_5">
+          <widget class="QPushButton" name="btnFileName">
            <property name="text">
-            <string>PushButton</string>
+            <string>[N] 이름(&amp;N)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
          <item row="2" column="1">
-          <widget class="QPushButton" name="pushButton_8">
+          <widget class="QPushButton" name="btnFileNameTime">
            <property name="text">
-            <string>PushButton</string>
+            <string>[hms] 시간(&amp;T)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
          <item row="3" column="0">
-          <widget class="QPushButton" name="pushButton_9">
+          <widget class="QPushButton" name="btnFileNameCounter">
            <property name="text">
-            <string>PushButton</string>
+            <string>[C:#] 계수기(&amp;C)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
@@ -80,21 +98,33 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="groupBox_2">
+       <widget class="QGroupBox" name="grpFileExt">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
           <horstretch>0</horstretch>
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+        <property name="maximumSize">
+         <size>
+          <width>200</width>
+          <height>16777215</height>
+         </size>
+        </property>
         <property name="title">
          <string>확장자(&amp;E)</string>
         </property>
+        <property name="flat">
+         <bool>true</bool>
+        </property>
         <layout class="QGridLayout" name="gridLayout_2">
          <item row="1" column="0">
-          <widget class="QPushButton" name="pushButton_10">
+          <widget class="QPushButton" name="btnFileExt">
            <property name="text">
-            <string>PushButton</string>
+            <string>[E] 확장자(&amp;E)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
@@ -102,16 +132,22 @@
           <widget class="QLineEdit" name="edtFileExtPattern"/>
          </item>
          <item row="2" column="0">
-          <widget class="QPushButton" name="pushButton_11">
+          <widget class="QPushButton" name="btnFileExtRange">
            <property name="text">
-            <string>PushButton</string>
+            <string>[E#-#] 범위(&amp;A)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
          <item row="3" column="0">
-          <widget class="QPushButton" name="pushButton_12">
+          <widget class="QPushButton" name="btnFileExtCounter">
            <property name="text">
-            <string>PushButton</string>
+            <string>[C:#] 계수기(&amp;C)</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
            </property>
           </widget>
          </item>
@@ -119,7 +155,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="groupBox_4">
+       <widget class="QGroupBox" name="grpFindReplace">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
           <horstretch>0</horstretch>
@@ -129,6 +165,9 @@
         <property name="title">
          <string>찾아서 바꾸기(&amp;H)</string>
         </property>
+        <property name="flat">
+         <bool>true</bool>
+        </property>
         <layout class="QGridLayout" name="gridLayout_3">
          <item row="1" column="1">
           <widget class="QLineEdit" name="edtReplaceString"/>
@@ -136,7 +175,7 @@
          <item row="0" column="0">
           <widget class="QLabel" name="label_6">
            <property name="text">
-            <string>찾을 문자열(&amp;F):</string>
+            <string>찾을 문자열(F):</string>
            </property>
           </widget>
          </item>
@@ -151,19 +190,42 @@
           </widget>
          </item>
          <item row="2" column="0" colspan="2">
-          <widget class="QFrame" name="frame_3">
-           <property name="frameShape">
-            <enum>QFrame::Shape::StyledPanel</enum>
-           </property>
-           <property name="frameShadow">
-            <enum>QFrame::Shadow::Raised</enum>
+          <widget class="QGroupBox" name="groupBox_3">
+           <property name="flat">
+            <bool>true</bool>
            </property>
            <layout class="QHBoxLayout" name="horizontalLayout_3">
             <item>
-             <widget class="QCheckBox" name="checkBox">
+             <widget class="QCheckBox" name="chkIsCaseSensitive">
               <property name="text">
-               <string>확장자</string>
+               <string>대소문자 구분</string>
               </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="chkIsOnlyOnce">
+              <property name="text">
+               <string>한 번만 치환</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="cbxSRApplyRange">
+              <item>
+               <property name="text">
+                <string>모두</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>파일이름</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>확장자</string>
+               </property>
+              </item>
              </widget>
             </item>
            </layout>
@@ -173,15 +235,24 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="groupBox">
+       <widget class="QGroupBox" name="grpCounter">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Minimum" vsizetype="Preferred">
           <horstretch>0</horstretch>
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+        <property name="maximumSize">
+         <size>
+          <width>175</width>
+          <height>16777215</height>
+         </size>
+        </property>
         <property name="title">
          <string>계수기(&amp;C)</string>
+        </property>
+        <property name="flat">
+         <bool>true</bool>
         </property>
         <layout class="QGridLayout" name="gridLayout">
          <item row="4" column="0">
@@ -220,19 +291,35 @@
           </widget>
          </item>
          <item row="0" column="1">
-          <widget class="QComboBox" name="comboBox"/>
+          <widget class="QComboBox" name="cbxCounterGroup">
+           <property name="frame">
+            <bool>false</bool>
+           </property>
+          </widget>
          </item>
          <item row="1" column="1">
-          <widget class="QSpinBox" name="spinBox"/>
+          <widget class="QSpinBox" name="spbCounterStart">
+           <property name="alignment">
+            <set>Qt::AlignmentFlag::AlignCenter</set>
+           </property>
+          </widget>
          </item>
          <item row="2" column="1">
-          <widget class="QSpinBox" name="spinBox_2"/>
+          <widget class="QSpinBox" name="spbCounterStep">
+           <property name="alignment">
+            <set>Qt::AlignmentFlag::AlignCenter</set>
+           </property>
+          </widget>
          </item>
          <item row="3" column="1">
-          <widget class="QSpinBox" name="spinBox_3"/>
+          <widget class="QSpinBox" name="spbCounterPrecision">
+           <property name="alignment">
+            <set>Qt::AlignmentFlag::AlignCenter</set>
+           </property>
+          </widget>
          </item>
          <item row="4" column="1">
-          <widget class="QLineEdit" name="lineEdit_5">
+          <widget class="QLineEdit" name="edtCounterChar">
            <property name="sizePolicy">
             <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
              <horstretch>0</horstretch>
@@ -265,21 +352,14 @@
       <bool>true</bool>
      </property>
      <layout class="QGridLayout" name="gridLayout_5">
-      <item row="0" column="1">
+      <item row="0" column="2">
        <widget class="QLabel" name="label_10">
         <property name="text">
-         <string>TextLabel</string>
+         <string>현재 시간 :</string>
         </property>
        </widget>
       </item>
-      <item row="0" column="0">
-       <widget class="QLabel" name="label_9">
-        <property name="text">
-         <string>경로: </string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="2">
+      <item row="0" column="4">
        <spacer name="horizontalSpacer_2">
         <property name="orientation">
          <enum>Qt::Orientation::Horizontal</enum>
@@ -291,6 +371,27 @@
          </size>
         </property>
        </spacer>
+      </item>
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_9">
+        <property name="text">
+         <string>경로: </string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLabel" name="lblParent">
+        <property name="text">
+         <string/>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="3">
+       <widget class="QLabel" name="lblCurrentDateTime">
+        <property name="text">
+         <string/>
+        </property>
+       </widget>
       </item>
      </layout>
     </widget>
@@ -335,37 +436,55 @@
        </spacer>
       </item>
       <item>
-       <widget class="QPushButton" name="pushButton_13">
+       <widget class="QPushButton" name="btnRedo">
         <property name="text">
          <string>PushButton</string>
         </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="pushButton">
-        <property name="text">
-         <string>시작</string>
+        <property name="autoDefault">
+         <bool>false</bool>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QPushButton" name="pushButton_3">
+       <widget class="QPushButton" name="btnRun">
+        <property name="text">
+         <string>시작(&amp;S)</string>
+        </property>
+        <property name="autoDefault">
+         <bool>false</bool>
+        </property>
+        <property name="default">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnCancel">
         <property name="text">
          <string>실행 취소</string>
         </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="pushButton_4">
-        <property name="text">
-         <string>결과 목록</string>
+        <property name="autoDefault">
+         <bool>false</bool>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QPushButton" name="pushButton_2">
+       <widget class="QPushButton" name="btnResultList">
         <property name="text">
-         <string>취소</string>
+         <string>결과 목록</string>
+        </property>
+        <property name="autoDefault">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnClose">
+        <property name="text">
+         <string>닫기</string>
+        </property>
+        <property name="autoDefault">
+         <bool>false</bool>
         </property>
        </widget>
       </item>

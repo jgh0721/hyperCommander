@@ -28,6 +28,8 @@ void CCommandMgr::CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPo
 
 void CCommandMgr::CMD_Space( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
 {
+    // View->selection()->ranges();
+
     View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
     View->navigateDown( Qt::NoModifier );
 }

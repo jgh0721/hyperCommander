@@ -145,6 +145,7 @@
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
+    <ClCompile Include="..\commonLibs\cmnTextUtils.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
@@ -167,6 +168,7 @@
     <ClCompile Include="UIs\dlgMultiRename.cpp" />
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
+    <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
