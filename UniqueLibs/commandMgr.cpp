@@ -1,13 +1,37 @@
 ﻿#include "stdafx.h"
 #include "commandMgr.hpp"
 
+/// UIs
+#include "UIs/dlgMain.hpp"
+#include "UIs/cmpPanel.hpp"
+
+/// 외부 라이브러리
 #include <externalLibs/QtitanDataGrid/src/src/grid/QtnGridBase.h>
 
 #include "builtInFsModel.hpp"
 
+#include "ShlObj.h"
+
+#define GetMainUIPtr() ( ( QMainUI* )MainUI_ )
+
 void CCommandMgr::Refresh()
 {
 
+}
+
+QWidget* CCommandMgr::GetMainUI() const
+{
+    return MainUI_;
+}
+
+void CCommandMgr::SetMainUI( QWidget* MainUI )
+{
+    MainUI_ = MainUI;
+}
+
+bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent )
+{
+    return KeyEvent->isAccepted();
 }
 
 void CCommandMgr::CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
@@ -21,17 +45,32 @@ void CCommandMgr::CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPo
     {
         FsModel->ChangeDirectory( EntryInfo.Name );
     }
+    else
+    {
+        // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
 
-    // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
+        CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
+        std::wstring Src = FsModel->GetFileFullPath( ProxyModel->mapToSource( SrcIndex ) ).toStdWString();
+        
+        do
+        {
+            SHELLEXECUTEINFOW shinfo = { 0, };
+            shinfo.cbSize = sizeof( shinfo );
+            shinfo.nShow = SW_NORMAL;
+            shinfo.lpVerb = L"open";
+            shinfo.lpFile = Src.c_str();
 
+            ShellExecuteExW( &shinfo );
+
+        } while( false );
+
+        CoUninitialize();
+    }
 }
 
 void CCommandMgr::CMD_Space( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
 {
-    // View->selection()->ranges();
-
-    View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
-    View->navigateDown( Qt::NoModifier );
+    GetMainUIPtr()->SelectRowOnCurrentPane( SrcIndex, true );
 }
 
 void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )

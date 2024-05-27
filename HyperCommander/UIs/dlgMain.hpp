@@ -10,6 +10,8 @@ public:
 
     Q_INVOKABLE void                    Tab_SwitchToAnother();
 
+    Q_INVOKABLE void                    SelectRowOnCurrentPane( const QModelIndex& SrcIndex, bool IsMoveDown );
+    
 protected slots:
 
     void                                on_acShowMainOpts_triggered( bool checked = false );

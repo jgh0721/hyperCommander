@@ -15,3 +15,10 @@ constexpr long long GIBI_BYTE = MEBI_BYTE * KIBI_BYTE;
 constexpr long long TEBI_BYTE = GIBI_BYTE * KIBI_BYTE;
 
 Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp->applicationDirPath() ).arg( MAIN_CONFIG_FILENAME ), QSettings::IniFormat ));
+
+struct ColorScheme
+{
+    QColor              FileList_FGColor;
+    QColor              FileList_BGColor;
+
+};

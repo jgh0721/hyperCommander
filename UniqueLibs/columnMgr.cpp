@@ -5,10 +5,10 @@ void CColumnMgr::Initialize()
 {
     VecColumnViews.push_back( ColumnView { QObject::tr( "자세히" ), QVector< Column >() 
                               << Column {
-                                    0, 0, QObject::tr("이름"), Qt::AlignLeft, "[=HC.name]"
+                                    0, 0, QObject::tr( "이름" ), Qt::AlignLeft, "[=HC.name]"
                                   }
                               << Column {
-                                    1, 0, QObject::tr("크기"), Qt::AlignCenter, "[=HC.size]"
+                                    1, 0, QObject::tr( "크기" ), Qt::AlignCenter, "[=HC.size]"
                                 }
                               << Column {
                                     2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter, "[=HC.created]"

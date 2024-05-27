@@ -23,7 +23,8 @@ class FSModel : public QAbstractItemModel
 {
     Q_OBJECT
 public:
-    static const int USR_ROLE_ATTRIBUTE = Qt::UserRole + 1;
+    static const int USR_ROLE_ATTRIBUTE     = Qt::UserRole + 1;
+    static const int USR_ROLE_HIDDENOPACITY = Qt::UserRole + 2;
 
     Q_INVOKABLE void                    SetRoot( const QString& Root );
     Q_INVOKABLE void                    SetCurrentPath( const QString& Path );
@@ -36,13 +37,16 @@ public:
 
     void                                ChangeDirectory( const QString& Child );
 
+    int                                 GetFileCount() const;
+    int                                 GetDirectoryCount() const;
+    int64_t                             GetTotalSize() const;
+
     QModelIndex                         index( int row, int column, const QModelIndex& parent = QModelIndex() ) const override;
     QModelIndex                         parent( const QModelIndex& child ) const override;
     int                                 rowCount( const QModelIndex& parent = QModelIndex() ) const override;
     int                                 columnCount( const QModelIndex& parent = QModelIndex() ) const override;
     QVariant                            data( const QModelIndex& index, int role = Qt::DisplayRole ) const override;
     QVariant                            headerData( int section, Qt::Orientation orientation, int role = Qt::DisplayRole ) const override;
-    QMap< int, QVariant >               itemData( const QModelIndex& index ) const override;
     Qt::ItemFlags                       flags( const QModelIndex& index ) const override;
 
 signals:
@@ -58,6 +62,10 @@ private:
     QString                             CurrentPath;
     ColumnView                          CurrentView;
     QPixmap                             Icon_Directory;
+
+    int                                 FileCount = -1;
+    int                                 DirectoryCount = -1;
+    int64_t                             TotalSize = 0;
 
     QVector< Node >                     VecNode;
     QVector< int >                      VecSelectedRows;

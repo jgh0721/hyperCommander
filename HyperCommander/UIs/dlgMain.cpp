@@ -3,6 +3,8 @@
 
 #include "UIs/dlgOpts.hpp"
 
+#include "UniqueLibs/commandMgr.hpp"
+
 QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     : QMainWindow( parent, flags )
 {
@@ -13,6 +15,8 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+
+    TyStCommandMgr::GetInstance()->SetMainUI( this );
 
     // TODO: CmpPanel 에서 항목이 모두 새로고침이 끝났음을 알아내서 포커스를 부여해야 한다. 
     // 최초 실행되었을 때 커서가 준비되도록 하여 편의성을 향상시킨다. 
@@ -44,6 +48,15 @@ void QMainUI::Tab_SwitchToAnother()
     const auto s = ui.cmpRightPanel->hasFocus();
 
     int a = 0; 
+}
+
+void QMainUI::SelectRowOnCurrentPane( const QModelIndex& SrcIndex, bool IsMoveDown )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+    Pane->SelectRowOnCurrentTab( SrcIndex, IsMoveDown );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )

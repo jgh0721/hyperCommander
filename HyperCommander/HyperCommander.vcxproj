@@ -147,12 +147,189 @@
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle_win.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelper.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp" />
     <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp" />
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
       <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
@@ -164,20 +341,77 @@
     <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
+    <ClCompile Include="UIs\dlgGridStyle.cpp" />
     <ClCompile Include="UIs\dlgMain.cpp" />
     <ClCompile Include="UIs\dlgMultiRename.cpp" />
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />
+    <QtMoc Include="UIs\dlgGridStyle.hpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStylePrivate.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenuPrivate.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelperPrivate.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarPrivate.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnXML.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelControllerPrivate.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeViewPrivate.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.h" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.h" />
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
+    <ClInclude Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
     <QtMoc Include="UIs\dlgOpts.hpp" />
     <QtMoc Include="UIs\dlgMain.hpp" />
     <QtMoc Include="UIs\cmpPanel.hpp" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBaseResources.qrc" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridResources.qrc" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTranslations.qrc" />
     <QtRcc Include="HyperCommander.qrc" />
     <QtMoc Include="..\UniqueLibs\builtInFsModel.hpp" />
     <ClInclude Include="..\commonLibs\cmnBase.hpp" />
@@ -215,6 +449,7 @@
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\dlgCopyToAnother.ui" />
     <QtUic Include="UIs\dlgDelete.ui" />
+    <QtUic Include="UIs\dlgGridStyle.ui" />
     <QtUic Include="UIs\dlgMain.ui" />
     <QtUic Include="UIs\dlgMultiRename.ui" />
     <QtUic Include="UIs\dlgOpts.ui" />

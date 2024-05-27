@@ -71,9 +71,28 @@ void FSModel::ChangeDirectory( const QString& Child )
     emit sigChangedDirectory( QDir::toNativeSeparators( Root + GetCurrentPath() ) );
 }
 
+int FSModel::GetFileCount() const
+{
+    return FileCount;
+}
+
+int FSModel::GetDirectoryCount() const
+{
+    return DirectoryCount;
+}
+
+int64_t FSModel::GetTotalSize() const
+{
+    return TotalSize;
+}
+
 void FSModel::Refresh()
 {
     OleInitialize( 0 );
+
+    int FileCount_Refresh = 0;
+    int DirectoryCount_Refresh = 0;
+    int64_t TotalSize_Refresh = 0;
 
     if( Icon_Directory.isNull() == true )
     {
@@ -115,7 +134,8 @@ void FSModel::Refresh()
 
             Item.Attiributes    = wfd.dwFileAttributes;
             Item.Name           = QString::fromWCharArray( wfd.cFileName );
-            Item.Size           = ((int64_t)wfd.nFileSizeHigh << 32) | (wfd.nFileSizeLow);
+            Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
+            Item.Size           = (static_cast< int64_t >( wfd.nFileSizeHigh ) << 32) | (wfd.nFileSizeLow);
             Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
             Item.Modified       = nsCmn::ConvertTo( wfd.ftLastWriteTime, false );
 
@@ -123,6 +143,8 @@ void FSModel::Refresh()
             {
                 if( Icon_Directory.isNull() == false )
                     Item.Icon = Icon_Directory;
+
+                DirectoryCount_Refresh++;
             }
             else
             {
@@ -138,7 +160,14 @@ void FSModel::Refresh()
 
                 } while( false );
 
+                FileCount_Refresh++;
+                TotalSize_Refresh += Item.Size;
             }
+            
+            //if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) )
+            //{
+            //    ;
+            //}
 
             Nodes.push_back( Item );
 
@@ -147,39 +176,11 @@ void FSModel::Refresh()
         FindClose( hFile );
     }
 
-
-    //QtConcurrent::blockingMap( Nodes, []( Node& Item ) {
-
-    //    if( Item.Name.compare( "." ) == 0 || Item.Name.compare( ".." ) == 0 || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-    //    {
-    //        if( QPixmapCache::find( "Directory", &Item.Icon ) == false )
-    //        {
-    //            int a = 0;
-    //        }
-    //    }
-    //    else
-    //    {
-    //        OleInitialize( 0 );
-
-    //        do
-    //        {
-    //            //Item.Icon = 
-    //            //QFileIconProvider().icon( QFileInfo( Item.Name ) ).pixmap( 24, 24 );
-    //            SHFILEINFOW SHInfo = { 0, };
-    //            SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
-    //                            SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
-    //            Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-    //            if( SHInfo.hIcon != Q_NULLPTR )
-    //                DestroyIcon( SHInfo.hIcon );
-
-    //        } while( false );
-
-    //        CoUninitialize();
-    //    }
-    //} );
-
     beginResetModel();
     qSwap( Nodes, VecNode );
+    FileCount = FileCount_Refresh;
+    DirectoryCount = DirectoryCount_Refresh;
+    TotalSize = TotalSize_Refresh;
     endResetModel();
 
     CoUninitialize();
@@ -255,6 +256,9 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
             return VecNode[ Row ].Icon;
     }
 
+    if( role == Qt::BackgroundRole )
+        return QColor( "black" );
+
     if( role == Qt::ForegroundRole )
     {
         const auto& Item = VecNode[ Row ];
@@ -274,7 +278,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
         {
             const auto& Item = VecNode[ Row ];
 
-            if( Item.Name == ".." )
+            if( Item.Name == ".." || Item.Name == "." )
                 return "0" + Item.Name;
 
             if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
@@ -287,6 +291,15 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     if( role == USR_ROLE_ATTRIBUTE )
     {
         return static_cast< quint32 >( VecNode[ Row ].Attiributes );
+    }
+
+    if( role == USR_ROLE_HIDDENOPACITY )
+    {
+        const auto& Item = VecNode[ Row ];
+        if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_SYSTEM ) )
+            return 0.5f;
+
+        return 1.0f;
     }
 
     if( role == Qt::ForegroundRole )
@@ -308,11 +321,6 @@ QVariant FSModel::headerData( int section, Qt::Orientation orientation, int role
         return {};
 
     return CurrentView.VecColumns[ section ].Name;
-}
-
-QMap<int, QVariant> FSModel::itemData( const QModelIndex& index ) const
-{
-    return QMap<int, QVariant>();
 }
 
 Qt::ItemFlags FSModel::flags( const QModelIndex& index ) const

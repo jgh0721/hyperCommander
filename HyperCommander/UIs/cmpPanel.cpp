@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
 
+#include "dlgGridStyle.hpp"
+
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 
@@ -9,12 +11,15 @@
 #include <ShlObj.h>
 #include <ShObjIdl.h>
 
+#include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/shortcutMgr.hpp"
 
 CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 {
     ui.setupUi( this );
+
+    Qtitan::CommonStyle::ensureStyle();
 
     RefreshVolumeList();
 
@@ -78,15 +83,27 @@ void CmpPanel::SetFocusView( int TabIndex )
     {
         const auto View = mapTabToStats[ TabIndex ].View;
 
-        View->grid()->setFocus( Qt::OtherFocusReason );
+        View->grid()->setFocus( Qt::MouseFocusReason );
         View->grid()->viewport()->setFocus(Qt::MouseFocusReason);
 
-        if( View->focusedRow().isValid() == false )
+        if( View->getRowCount() > 0 )
         {
-            if( View->getRowCount() > 0 )
-                View->setFocusedRowIndex( 0 );
+            View->navigateDown();
+            View->navigateUp();
         }
     }
+}
+
+void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
+{
+    const auto View = retrieveFocusView();
+    Q_ASSERT( View != nullptr );
+    if( View == nullptr )
+        return;
+
+    View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
+    if( IsMoveDown == true )
+        View->navigateDown( Qt::NoModifier );
 }
 
 int CmpPanel::InitializeGrid()
@@ -115,6 +132,7 @@ int CmpPanel::InitializeGrid()
     auto& BaseOpts = View->options();
     auto& TableOpts = View->tableOptions();
     auto& BandedOpts = View->bandedOptions();
+
     BaseOpts.setShowWaitCursor( true );
     BaseOpts.setGroupsHeader( false );
     BaseOpts.setScrollBarsTransparent( true );
@@ -127,18 +145,25 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setModelDecoration( true );
     BaseOpts.setModelItemsDragEnabled( true );
     BaseOpts.setRowStyle( Qtitan::GridViewOptions::RowStyleNormal );
-    BaseOpts.setSelectedDecorationOpacity( 0.4f );
-    BaseOpts.setSelectionPolicy( Qtitan::GridViewOptions::MultiRowSelection );
+    BaseOpts.setSelectedDecorationOpacity( 0.2 );
+    BaseOpts.setSelectionPolicy( Qtitan::GridViewOptions::IgnoreSelection );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setRubberBandSelection( false );
     BaseOpts.setTransparentBackground( true );
+    BaseOpts.setBackgroundColor( QColor( "cyan" ) );
+    BaseOpts.setSelectedBackgroundColor( QColor( 255, 112, 43 ) );
+    BaseOpts.setSelectedInverseColor( true );
+    BaseOpts.setModelDecorationOpacityRole( FSModel::USR_ROLE_HIDDENOPACITY );
+
     BaseOpts.setGroupsHeaderText( "Fdsfds" );
     BaseOpts.setColumnHeaderHints( true );
-
+    
     BaseOpts.setFocusFollowsMouse( false );
-    BaseOpts.setFocusFrameEnabled( true );
+    BaseOpts.setFocusFrameEnabled( false );
     BaseOpts.setShowFocusDecoration( true );
     BaseOpts.setKeepFocusedRow( true );
+    BaseOpts.setRowFocusMode( true );
+    BaseOpts.setRowFocusColor( QColor( 51, 79, 102 ) );
     
     BaseOpts.setDragEnabled( true );
     BaseOpts.setDropEnabled( true );
@@ -194,7 +219,8 @@ int CmpPanel::InitializeGrid()
             GridColumn->setBandIndex( 0 );
             GridColumn->setAutoWidth( true );
             GridColumn->setRowIndex( Column.Row );
-            GridColumn->setWidth( 100 );
+            GridColumn->setMinWidth( 30 );
+            // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.Align );
             GridColumn->setTextColor( "silver" );
             GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
@@ -209,6 +235,16 @@ int CmpPanel::InitializeGrid()
     }
     
     connect( View, &Qtitan::GridViewBase::contextMenu, this, &CmpPanel::oo_grdLocal_contextMenu );
+    connect( View, &Qtitan::GridViewBase::cellClicked, this, [this]( CellClickEventArgs* Args ) {
+        if( currentIndex >= 0 )
+        {
+            if( GetAsyncKeyState( VK_CONTROL ) & 0x8000 )
+            {
+                SelectRowOnCurrentTab( Args->cell().modelIndex(), false );
+                Args->setHandled( true );
+            }
+        }
+    } );
     connect( View, &Qtitan::GridViewBase::columnClicked, this, [=]( ColumnClickEventArgs* Args ) {
         qDebug() << Args;
     } );
@@ -217,7 +253,6 @@ int CmpPanel::InitializeGrid()
 
         for( const auto& Row : selection->selectedRowIndexes() )
             qDebug() << Row;
-        
     } );
 
     View->endUpdate();
@@ -226,7 +261,7 @@ int CmpPanel::InitializeGrid()
     mapTabToStats[ currentIndex ] = TabState;
 
     Model->ChangeDirectory( "" );
-    View->bestFit( FitToHeaderAndContent );
+    View->bestFit( FitToHeaderPercent );
 
     return currentIndex;
 }
@@ -242,6 +277,8 @@ void CmpPanel::oo_ChangedDirectory( const QString& CurrentPath )
     {
         ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath );
     }
+
+    processPanelStatusText();
 
     emit sig_NotifyCurrentDirectory( CurrentPath );
 }
@@ -261,6 +298,22 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
     }
 }
 
+void CmpPanel::on_btnGridStyle_clicked( bool checked )
+{
+    if( currentIndex >= 0 )
+    {
+        QDlgGridStyle Styler;
+        //Styler.setStyleText( mapTabToStats[ currentIndex ].View->grid()->styleSheet() );
+        Styler.setStyleText( qApp->styleSheet() );
+        Styler.exec();
+
+        mapTabToStats[ currentIndex ].View->beginUpdate();
+        qApp->setStyleSheet( Styler.styleText() );
+        mapTabToStats[ currentIndex ].View->grid()->setStyleSheet( Styler.styleText() );
+        mapTabToStats[ currentIndex ].View->endUpdate();
+    }
+}
+
 void CmpPanel::on_tabWidget_currentChanged( int Index )
 {   
     if( mapTabToStats.contains( Index ) == false )
@@ -270,23 +323,16 @@ void CmpPanel::on_tabWidget_currentChanged( int Index )
 
     QTimer::singleShot( 0, [View]() {
         View->grid()->setFocus();
-        View->grid()->viewport()->setFocus();
+        View->grid()->viewport()->setFocus( Qt::MouseFocusReason );
         View->grid()->viewport()->raise();
         View->grid()->viewport()->activateWindow();
-                        } );
 
-
-    //Current = ui.tabWidget->currentIndex();
-    //if( mapTabToStats.contains( Current ) == true )
-    //{
-    //    QTimer::singleShot( 10, [this, Current]() { mapTabToStats.value( Current ).View->grid()->setFocus(); } );
-    //    ;
-    //}
-        //QTimer::singleShot( 10, [this, Index]() { 
-    //    mapTabToStats.value( Index ).View->grid()->setFocus(); 
-    //    mapTabToStats.value( Index ).View->grid()->viewport()->setFocus();
-    //                    } );
-
+        if( View->getRowCount() > 0 )
+        {
+            View->navigateDown();
+            View->navigateUp();
+        }
+    } );
 }
 
 bool openShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow )
@@ -476,20 +522,36 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
     return false;
 }
 
-void CmpPanel::focusInEvent( QFocusEvent* event )
+void CmpPanel::resizeEvent( QResizeEvent* event )
 {
-    QWidget::focusInEvent( event );
+    if( currentIndex >= 0 )
+    {
+        mapTabToStats[ currentIndex ].View->bestFit( FitToHeaderPercent );
+    }
+
+    QWidget::resizeEvent( event );
 }
 
-/*!
+CmpPanel::TyTabState& CmpPanel::retrieveFocusState()
+{
+    Q_ASSERT( currentIndex >= 0 );
 
-    QtitanDataGrid 
-        SetModel -> FSModel
-        CurrentView 에 따라 헤더 생성
+    return mapTabToStats[ currentIndex ];
+}
 
+Qtitan::GridBandedTableView* CmpPanel::retrieveFocusView() const
+{
+    if( currentIndex < 0 )
+        return {};
 
+    return mapTabToStats.value( currentIndex ).View;
+}
 
+void CmpPanel::processPanelStatusText()
+{
+    const auto& State = retrieveFocusState();
+    
 
+    ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" ).arg( 0).arg( State.Model->GetTotalSize() ).arg(0).arg( State.Model->GetFileCount()).arg(0).arg( State.Model->GetDirectoryCount()));
 
-
-*/
+}

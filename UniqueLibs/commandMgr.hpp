@@ -14,7 +14,12 @@ class CCommandMgr : public QObject
 {
     Q_OBJECT
 public:
-    void Refresh();
+    void                                Refresh();
+
+    QWidget*                            GetMainUI() const;
+    void                                SetMainUI( QWidget* MainUI );
+
+    bool                                ProcessKeyPressEvent( QKeyEvent* KeyEvent );
 
     void CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex );
     void CMD_Space( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex );
@@ -23,6 +28,10 @@ public:
     void CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex );
 
 private:
+
+    QHash< QKeyCombination, QString >   MapKeyToCMDText;
+
+    QWidget*                            MainUI_ = nullptr;
 };
 
 using TyStCommandMgr = nsCmn::nsConcurrent::TSingleton< CCommandMgr >;

@@ -36,6 +36,15 @@
     <Filter Include="CommonLibs\Qt">
       <UniqueIdentifier>{445bd6a7-41d0-4242-a165-528a7005d442}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ExternalLibs\QtitanDataGrid">
+      <UniqueIdentifier>{e6ebd350-1783-4d78-9685-db89d6aa1774}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ExternalLibs\QtitanDataGrid\Base">
+      <UniqueIdentifier>{8c0a5b37-370d-4be8-92d9-40bacc9353bb}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ExternalLibs\QtitanDataGrid\Grid">
+      <UniqueIdentifier>{614ea088-60c2-4d21-bfa9-324b18fc3d27}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -56,6 +65,15 @@
     <ClCompile Include="stdafx.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBaseResources.qrc">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtRcc>
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridResources.qrc">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtRcc>
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTranslations.qrc">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtRcc>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -124,6 +142,144 @@
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp">
       <Filter>CommonLibs</Filter>
     </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle_win.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelper.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.cpp">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgGridStyle.cpp">
+      <Filter>Form Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -142,6 +298,9 @@
       <Filter>Form Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgDelete.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgGridStyle.ui">
       <Filter>Form Files</Filter>
     </QtUic>
   </ItemGroup>
@@ -177,6 +336,111 @@
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp">
+      <Filter>Form Files</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStylePrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenuPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgGridStyle.hpp">
       <Filter>Form Files</Filter>
     </QtMoc>
   </ItemGroup>
@@ -240,6 +504,60 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp">
       <Filter>CommonLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelperPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnXML.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Base</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelControllerPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeViewPrivate.h">
+      <Filter>ExternalLibs\QtitanDataGrid\Grid</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\externalEditorMgr.hpp">
+      <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
