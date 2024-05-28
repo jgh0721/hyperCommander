@@ -16,7 +16,7 @@ struct Node
     ///////////////////////////////////////////////////////////////////////////
 
     QPixmap                             Icon;
-    QString                             Content;
+    QVector< QVariant >                 VecContent;
 };
 
 class FSModel : public QAbstractItemModel
