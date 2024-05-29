@@ -20,19 +20,50 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
     ui.setupUi( this );
 
     Qtitan::CommonStyle::ensureStyle();
+}
 
+void CmpPanel::Initialize()
+{
     RefreshVolumeList();
 
     while( ui.tabWidget->count() > 0 )
         ui.tabWidget->removeTab( 0 );
 
-    QTimer::singleShot( 1, [this]() { AddTab(); } );
+    AddTab();
 }
 
 void CmpPanel::AddTab()
 {
     const auto Index = InitializeGrid();
-    ui.tabWidget->setCurrentIndex( Index );
+    SetFocusView( Index );
+}
+
+void CmpPanel::PrevTab()
+{
+    // 탭이 하나라면 아무 것도 하지 않는다. 
+    if( ui.tabWidget->count() <= 1 )
+        return;
+
+    const auto Current = ui.tabWidget->currentIndex();
+    Q_ASSERT( Current >= 0 );
+    if( Current == 0 )
+        ui.tabWidget->setCurrentIndex( ui.tabWidget->count() - 1 );
+    else
+        ui.tabWidget->setCurrentIndex( Current - 1 );
+}
+
+void CmpPanel::NextTab()
+{
+    // 탭이 하나라면 아무 것도 하지 않는다. 
+    if( ui.tabWidget->count() <= 1 )
+        return;
+
+    const auto Current = ui.tabWidget->currentIndex();
+    Q_ASSERT( Current >= 0 );
+    if( Current == ui.tabWidget->count() - 1 )
+        ui.tabWidget->setCurrentIndex( 0 );
+    else
+        ui.tabWidget->setCurrentIndex( Current + 1 );
 }
 
 void CmpPanel::CloseTab()
@@ -41,11 +72,28 @@ void CmpPanel::CloseTab()
     if( ui.tabWidget->count() == 1 )
         return;
 
+    TySpTabState State;
     auto Current = ui.tabWidget->currentIndex();
-    if( mapTabToStats.contains( Current ) == true )
-        mapTabToStats.remove( Current );
-    delete ui.tabWidget->widget( Current );
+
+    State = retrieveFocusState();
+    if( State != nullptr )
+        vecTabStates.removeAt( Current );
+
+    int New = -1;
+    // 첫 번째 탭이라면 다음 탭으로
+    if( Current == 0 )
+        New = 1;
+    // 마지막 탭이라면 이전 탭으로
+    else if( Current == ui.tabWidget->count() - 1 )
+        New = Current - 1;
+    else
+        New = Current + 1;
+
+    ui.tabWidget->setCurrentIndex( New );
+    const auto w = ui.tabWidget->widget( Current );
     ui.tabWidget->removeTab( Current );
+    delete w;
+    SetFocusView( New );
 }
 
 void CmpPanel::RefreshVolumeList()
@@ -61,6 +109,7 @@ void CmpPanel::RefreshVolumeList()
     QFileIconProvider QFIP;
     const auto DriveIcon = QFIP.icon( QAbstractFileIconProvider::Drive );
 
+    QSignalBlocker Blocker( ui.cbxVolume );
     DWORD Drives = GetLogicalDrives();
     for( char idx = 0; idx < 26; ++idx )
     {
@@ -79,18 +128,18 @@ int CmpPanel::CurrentTabIndex() const
 
 void CmpPanel::SetFocusView( int TabIndex )
 {
-    if( mapTabToStats.contains( TabIndex ) == true )
+    auto View = retrieveFocusView();
+
+    if( View == nullptr )
+        return;
+
+    View->grid()->setFocus( Qt::MouseFocusReason );
+    View->grid()->viewport()->setFocus( Qt::MouseFocusReason );
+
+    if( View->getRowCount() > 0 )
     {
-        const auto View = mapTabToStats[ TabIndex ].View;
-
-        View->grid()->setFocus( Qt::MouseFocusReason );
-        View->grid()->viewport()->setFocus(Qt::MouseFocusReason);
-
-        if( View->getRowCount() > 0 )
-        {
-            View->navigateDown();
-            View->navigateUp();
-        }
+        View->navigateDown();
+        View->navigateUp();
     }
 }
 
@@ -104,6 +153,42 @@ void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDo
     View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
     if( IsMoveDown == true )
         View->navigateDown( Qt::NoModifier );
+}
+
+void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    auto State = retrieveFocusState();
+    if( State == nullptr )
+        return;
+
+    const auto ModelIndex = State->ProxyModel->mapToSource( SrcIndex );
+    const auto EntryInfo = State->Model->GetFileInfo( ModelIndex );
+
+    if( EntryInfo.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
+    {
+        State->Model->ChangeDirectory( EntryInfo.Name );
+    }
+    else
+    {
+        // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
+        // NOTE: 토탈 커맨더의 경우 .DLL 등 명시적인 실행파일이 아닌 경우 레지스트리를 뒤져 실행가능하지 않다면 ShellExecuteExW 를 호출하지 않고, 오류창을 표시한다. 
+        CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
+        std::wstring Src = State->Model->GetFileFullPath( ModelIndex ).toStdWString();
+
+        do
+        {
+            SHELLEXECUTEINFOW shinfo = { 0, };
+            shinfo.cbSize = sizeof( shinfo );
+            shinfo.nShow = SW_NORMAL;
+            shinfo.lpVerb = L"open";
+            shinfo.lpFile = Src.c_str();
+
+            ShellExecuteExW( &shinfo );
+
+        } while( false );
+
+        CoUninitialize();
+    }
 }
 
 int CmpPanel::InitializeGrid()
@@ -120,8 +205,9 @@ int CmpPanel::InitializeGrid()
     Vertical->addWidget( Grid );
 
     // TODO: 탭 이름 => 현재 디렉토리, 만약 루트 디렉토리라면 드라이브 문자 함께 표시
-    currentIndex = ui.tabWidget->addTab( Page, tr("D:/") );
-    
+    const auto currentIndex = ui.tabWidget->addTab( Page, tr("D:/") );
+    ui.tabWidget->setCurrentIndex( currentIndex );
+
     Grid->installEventFilter( this );
     Grid->setContextMenuPolicy( Qt::CustomContextMenu );
 
@@ -236,7 +322,7 @@ int CmpPanel::InitializeGrid()
     
     connect( View, &Qtitan::GridViewBase::contextMenu, this, &CmpPanel::oo_grdLocal_contextMenu );
     connect( View, &Qtitan::GridViewBase::cellClicked, this, [this]( CellClickEventArgs* Args ) {
-        if( currentIndex >= 0 )
+        if( retrieveCurrentIndex() >= 0 )
         {
             if( GetAsyncKeyState( VK_CONTROL ) & 0x8000 )
             {
@@ -256,9 +342,9 @@ int CmpPanel::InitializeGrid()
     } );
 
     View->endUpdate();
-
-    TyTabState TabState{ currentIndex, View, Model, ProxyModel };
-    mapTabToStats[ currentIndex ] = TabState;
+    
+    auto State = std::make_shared<TyTabState>( currentIndex, View, Model, ProxyModel );
+    vecTabStates.push_back( State );
 
     Model->ChangeDirectory( "" );
     View->bestFit( FitToHeaderPercent );
@@ -288,38 +374,44 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
     // TODO: 실제 파일시스템 외의 것들은 예외처리 필요함
     ;
 
-    if( mapTabToStats.contains( ui.tabWidget->currentIndex() ) == true )
-    {
-        const auto View = mapTabToStats.value( ui.tabWidget->currentIndex() ).View;
-        const auto Model = (FSModel*)(( FSProxyModel* )View->model())->sourceModel();
-        Model->SetRoot( ui.cbxVolume->currentText().left( 2 ) );
-        Model->SetCurrentPath( "/" );
-        Model->ChangeDirectory( "" );
-    }
+    auto State = retrieveFocusState();
+    if( State == nullptr )
+        return;
+    
+    State->Model->SetRoot( ui.cbxVolume->currentText().left( 2 ) );
+    State->Model->SetCurrentPath( "/" );
+    State->Model->ChangeDirectory( "" );
 }
 
 void CmpPanel::on_btnGridStyle_clicked( bool checked )
 {
-    if( currentIndex >= 0 )
-    {
-        QDlgGridStyle Styler;
-        //Styler.setStyleText( mapTabToStats[ currentIndex ].View->grid()->styleSheet() );
-        Styler.setStyleText( qApp->styleSheet() );
-        Styler.exec();
+    const auto View = retrieveFocusView();
+    if( View == nullptr )
+        return;
 
-        mapTabToStats[ currentIndex ].View->beginUpdate();
-        qApp->setStyleSheet( Styler.styleText() );
-        mapTabToStats[ currentIndex ].View->grid()->setStyleSheet( Styler.styleText() );
-        mapTabToStats[ currentIndex ].View->endUpdate();
-    }
+    QDlgGridStyle Styler;
+    //Styler.setStyleText( mapTabToStats[ currentIndex ].View->grid()->styleSheet() );
+    Styler.setStyleText( qApp->styleSheet() );
+    Styler.exec();
+
+    View->beginUpdate();
+    qApp->setStyleSheet( Styler.styleText() );
+    View->grid()->setStyleSheet( Styler.styleText() );
+    View->endUpdate();
 }
 
 void CmpPanel::on_tabWidget_currentChanged( int Index )
 {   
-    if( mapTabToStats.contains( Index ) == false )
+    if( Index < 0 )
+        return;
+    
+    if( vecTabStates.isEmpty() == true )
         return;
 
-    const auto View = mapTabToStats.value( Index ).View;
+    if( Index >= vecTabStates.size() )
+        return;
+
+    const auto View = vecTabStates.value( Index )->View;
 
     QTimer::singleShot( 0, [View]() {
         View->grid()->setFocus();
@@ -435,88 +527,81 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 {
     if( Event->type() == QEvent::KeyPress )
     {
+        const auto KeyEvent     = static_cast< QKeyEvent* >( Event );
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
-        const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
-        
-        const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
-        const auto KeyEvent = static_cast< QKeyEvent* >( Event );
-        
-        if( KeyEvent->key() == Qt::Key_T && KeyEvent->modifiers() == Qt::ControlModifier )
-        {
-            AddTab();
+        //const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
+
+        qDebug() << KeyEvent;
+
+        if( StCommandMgr->ProcessKeyPressEvent( KeyEvent, retrieveFocusViewCursorIndex() ) == true )
             return true;
-        }
 
-        if( KeyEvent->key() == Qt::Key_W && KeyEvent->modifiers() == Qt::ControlModifier  )
-        {
-            CloseTab();
-            return true;
-        }
+        //const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
 
-        if( Grid != nullptr )
-        {
-            const auto View = Grid->view< Qtitan::GridBandedTableView >();
-            const auto Row = View->focusedRow();
+        //if( Grid != nullptr )
+        //{
+        //    const auto View = Grid->view< Qtitan::GridBandedTableView >();
+        //    const auto Row = View->focusedRow();
 
-            const auto CmdText = StShortcutMgr->GetCMDFromShortcut( KeyEvent->keyCombination() );
+        //    const auto CmdText = StShortcutMgr->GetCMDFromShortcut( KeyEvent->keyCombination() );
 
-            if( KeyEvent->key() == Qt::Key_R && KeyEvent->modifiers() == ( Qt::ControlModifier | Qt::AltModifier ) )
-            {
-                StCommandMgr->CMD_MultiRename( View, QCursor::pos(), Row.modelIndex( 0 ) );
-                return true;
-            }
+        //    if( KeyEvent->key() == Qt::Key_R && KeyEvent->modifiers() == ( Qt::ControlModifier | Qt::AltModifier ) )
+        //    {
+        //        StCommandMgr->CMD_MultiRename( View, QCursor::pos(), Row.modelIndex( 0 ) );
+        //        return true;
+        //    }
 
-            if( KeyEvent->key() == Qt::Key_H && KeyEvent->modifiers() == Qt::ControlModifier )
-            {
-                const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
-                ProxyModel->SetHiddenSystem( !ProxyModel->GetHiddenSystem() );
-                
-                StCommandMgr->CMD_HidSys( View, QCursor::pos(), Row.modelIndex( 0 ) );
-                return true;
-            }
+        //    if( KeyEvent->key() == Qt::Key_H && KeyEvent->modifiers() == Qt::ControlModifier )
+        //    {
+        //        const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
+        //        ProxyModel->SetHiddenSystem( !ProxyModel->GetHiddenSystem() );
+        //        
+        //        StCommandMgr->CMD_HidSys( View, QCursor::pos(), Row.modelIndex( 0 ) );
+        //        return true;
+        //    }
 
-            if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
-            {
-                StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
-                return true;
-            }
-            else if( KeyEvent->key() == Qt::Key_Space )
-            {
-                StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
-                return true;
-            }
-            else if( KeyEvent->key() == Qt::Key_Tab )
-            {
-                StCommandMgr->CMD_TabSwitch( View, QCursor::pos(), Row.modelIndex( 0 ) );
-                return true;
-            }
+        //    if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
+        //    {
+        //        StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
+        //        return true;
+        //    }
+        //    else if( KeyEvent->key() == Qt::Key_Space )
+        //    {
+        //        StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
+        //        return true;
+        //    }
+        //    else if( KeyEvent->key() == Qt::Key_Tab )
+        //    {
+        //        StCommandMgr->CMD_TabSwitch( View, QCursor::pos(), Row.modelIndex( 0 ) );
+        //        return true;
+        //    }
 
-            QRect Rect;
-            PopupMenu menu( Grid );
+        //    QRect Rect;
+        //    PopupMenu menu( Grid );
 
-            //for( const auto Info : ui.grdLocal->hitInfoAll() )
-            //{
-            //    if( Info.info() != GridHitInfo::Cell )
-            //        continue;
+        //    //for( const auto Info : ui.grdLocal->hitInfoAll() )
+        //    //{
+        //    //    if( Info.info() != GridHitInfo::Cell )
+        //    //        continue;
 
-            //    if( Info.columnIndex() != TBL_LOCAL_HDX_MODIFIED.index )
-            //        continue;
+        //    //    if( Info.columnIndex() != TBL_LOCAL_HDX_MODIFIED.index )
+        //    //        continue;
 
-            //    if( Info.row().rowIndex() == Row.rowIndex() )
-            //    {
-            //        Rect = Info.rect();
-            //        break;
-            //    }
-            //}
+        //    //    if( Info.row().rowIndex() == Row.rowIndex() )
+        //    //    {
+        //    //        Rect = Info.rect();
+        //    //        break;
+        //    //    }
+        //    //}
 
-            //GridHitInfo HitInfo( GridHitInfo::Cell, spLocalView_, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
-            //ContextMenuEventArgs Args( spLocalView_, &menu, HitInfo );
-            //oo_grdLocal_contextMenu( &Args );
+        //    //GridHitInfo HitInfo( GridHitInfo::Cell, spLocalView_, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
+        //    //ContextMenuEventArgs Args( spLocalView_, &menu, HitInfo );
+        //    //oo_grdLocal_contextMenu( &Args );
 
-            // TODO: Tab 키 일 때 옆으로 포커스 이동
-            // qDebug() << Object << Object->objectName() << Event << CmdText;
-            int a = 0;
-        }
+        //    // TODO: Tab 키 일 때 옆으로 포커스 이동
+        //    // qDebug() << Object << Object->objectName() << Event << CmdText;
+        //    int a = 0;
+        //}
     }
 
     return false;
@@ -524,27 +609,46 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 
 void CmpPanel::resizeEvent( QResizeEvent* event )
 {
-    if( currentIndex >= 0 )
-    {
-        mapTabToStats[ currentIndex ].View->bestFit( FitToHeaderPercent );
-    }
-
+    const auto View = retrieveFocusView();
+    if( View != nullptr )
+        View->bestFit( FitToHeaderPercent );
+    
     QWidget::resizeEvent( event );
 }
 
-CmpPanel::TyTabState& CmpPanel::retrieveFocusState()
+int CmpPanel::retrieveCurrentIndex() const
 {
-    Q_ASSERT( currentIndex >= 0 );
+    return ui.tabWidget->currentIndex();
+}
 
-    return mapTabToStats[ currentIndex ];
+CmpPanel::TySpTabState CmpPanel::retrieveFocusState()
+{
+    const auto Index = ui.tabWidget->currentIndex();
+    Q_ASSERT( Index >= 0 );
+    
+    return vecTabStates[ Index ];
 }
 
 Qtitan::GridBandedTableView* CmpPanel::retrieveFocusView() const
 {
-    if( currentIndex < 0 )
+    const auto Current = retrieveCurrentIndex();
+    if( Current < 0 || vecTabStates.isEmpty() == true )
         return {};
 
-    return mapTabToStats.value( currentIndex ).View;
+    return vecTabStates.value( Current )->View;
+}
+
+QModelIndex CmpPanel::retrieveFocusViewCursorIndex() const
+{
+    const auto View = retrieveFocusView();
+    if( View == nullptr )
+        return {};
+
+    const auto& Row = View->focusedRow();
+    if( Row.isValid() == false )
+        return {};
+
+    return Row.modelIndex( 0 );
 }
 
 void CmpPanel::processPanelStatusText()
@@ -552,6 +656,6 @@ void CmpPanel::processPanelStatusText()
     const auto& State = retrieveFocusState();
     
 
-    ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" ).arg( 0).arg( State.Model->GetTotalSize() ).arg(0).arg( State.Model->GetFileCount()).arg(0).arg( State.Model->GetDirectoryCount()));
+    ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" ).arg( 0).arg( State->Model->GetTotalSize() ).arg(0).arg( State->Model->GetFileCount()).arg(0).arg( State->Model->GetDirectoryCount()));
 
 }

@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "UniqueLibs/commandMgr_Defs.hpp"
+
 #include "ui_dlgMain.h"
 
 class QMainUI : public QMainWindow
@@ -8,15 +10,31 @@ class QMainUI : public QMainWindow
 public:
     QMainUI( QWidget* parent = nullptr, Qt::WindowFlags flags = Qt::WindowFlags() );
 
-    Q_INVOKABLE void                    Tab_SwitchToAnother();
+public slots:
 
-    Q_INVOKABLE void                    SelectRowOnCurrentPane( const QModelIndex& SrcIndex, bool IsMoveDown );
+    ////////////////////////////////////////////////////////////////////////////
+    /// 명령 핸들러
+
+    DECLARE_HC_COMMAND( cm_NewTab );
+    DECLARE_HC_COMMAND( cm_PrevTab );
+    DECLARE_HC_COMMAND( cm_NextTab );
+    DECLARE_HC_COMMAND( cm_CloseTab );
+
+    DECLARE_HC_COMMAND( cm_Return );
+
+    DECLARE_HC_COMMAND( cm_SelInverse );
+    
+    DECLARE_HC_COMMAND( cm_SwitchPanel );
+    DECLARE_HC_COMMAND( cm_ContextMenu );
     
 protected slots:
 
     void                                on_acShowMainOpts_triggered( bool checked = false );
 
     void                                oo_notifyCurrentDirectory( const QString& CurrentPath );
+
+protected:
+    bool                                eventFilter( QObject* Object, QEvent* Event ) override;
 
 private:
     Q_INVOKABLE void                    initialize();

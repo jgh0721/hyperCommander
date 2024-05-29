@@ -358,12 +358,12 @@ namespace nsCmn
             return isSuccess;
         }
 
-        bool InvokeMethod( QObjectPtr obj, const char* member, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        bool InvokeMethod( QObjectPtr obj, const char* member, QT_METAMETHOD_ARGS )
         {
             return InvokeMethod( obj, member, Qt::AutoConnection, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
         }
 
-        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QT_METAMETHOD_ARGS )
         {
             Q_ASSERT( obj.data() != Q_NULLPTR );
             Q_ASSERT( member != Q_NULLPTR && qstrlen( member ) > 0 );
@@ -372,12 +372,12 @@ namespace nsCmn
             return call;
         }
 
-        bool InvokeMethod( QObjectPtr obj, const char* member, QGenericReturnArgument ret, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        bool InvokeMethod( QObjectPtr obj, const char* member, QMetaMethodReturnArgument ret, QT_METAMETHOD_ARGS )
         {
             return InvokeMethod( obj, member, Qt::AutoConnection, ret, val0, val1, val2, val3, val4, val5, val6, val7, val8, val9 );
         }
 
-        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericReturnArgument ret, QGenericArgument val0 /*= QGenericArgument( Q_NULLPTR )*/, QGenericArgument val1 /*= QGenericArgument()*/, QGenericArgument val2 /*= QGenericArgument()*/, QGenericArgument val3 /*= QGenericArgument()*/, QGenericArgument val4 /*= QGenericArgument()*/, QGenericArgument val5 /*= QGenericArgument()*/, QGenericArgument val6 /*= QGenericArgument()*/, QGenericArgument val7 /*= QGenericArgument()*/, QGenericArgument val8 /*= QGenericArgument()*/, QGenericArgument val9 /*= QGenericArgument() */ )
+        bool InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QMetaMethodReturnArgument ret, QT_METAMETHOD_ARGS )
         {
             Q_ASSERT( obj.data() != Q_NULLPTR );
             Q_ASSERT( member != Q_NULLPTR && qstrlen( member ) > 0 );

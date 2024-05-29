@@ -5,6 +5,9 @@
 #include "UIs/dlgMain.hpp"
 #include "UIs/cmpPanel.hpp"
 
+/// 공통 라이브러리
+#include "cmnBase.hpp"
+
 /// 외부 라이브러리
 #include <externalLibs/QtitanDataGrid/src/src/grid/QtnGridBase.h>
 
@@ -14,9 +17,23 @@
 
 #define GetMainUIPtr() ( ( QMainUI* )MainUI_ )
 
+using namespace nsCmn;
+using namespace nsCmn::nsCmnQt;
+
+////////////////////////////////////////////////////////////////////////////////
+
+CCommandMgr::CCommandMgr( QObject* parent )
+    : QObject( parent )
+{
+    SpMapKeyToCMDText = std::make_shared< TyMapShortcutToCMDStr >();
+}
+
 void CCommandMgr::Refresh()
 {
+    for( const auto& Key : GlobalBuiltInCMDs )
+        (*SpMapKeyToCMDText)[ Key.Default ] = Key.Name;
 
+    // TODO: 환경설정 부분이 완료되면 이 부분에 환경설정에서 값을 읽어서 채운다.
 }
 
 QWidget* CCommandMgr::GetMainUI() const
@@ -29,67 +46,61 @@ void CCommandMgr::SetMainUI( QWidget* MainUI )
     MainUI_ = MainUI;
 }
 
-bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent )
+bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex )
 {
+    auto KtoCMD = retrieve();
+    const auto KCombined = KeyEvent->keyCombination();
+    if( KtoCMD->contains( KCombined ) == false )
+        return false;
+
+    const auto CMD = KtoCMD->value( KCombined );
+    Q_ASSERT( CMD.isEmpty() == false );
+    KeyEvent->setAccepted( QMetaObject::invokeMethod( this, CMD.data(), Qt::QueuedConnection, CursorIndex ) );
+
     return KeyEvent->isAccepted();
 }
 
-void CCommandMgr::CMD_Return( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+////////////////////////////////////////////////////////////////////////////
+/// 명령 핸들러
+
+DEFINE_HC_COMMAND( CCommandMgr, cm_NewTab )
 {
-    const auto ProxyModel   = qobject_cast< FSProxyModel* >( View->model() );
-    const auto FsModel      = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
-    
-    const auto EntryInfo = FsModel->GetFileInfo( ProxyModel->mapToSource( SrcIndex ) );
-
-    if( EntryInfo.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-    {
-        FsModel->ChangeDirectory( EntryInfo.Name );
-    }
-    else
-    {
-        // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
-
-        CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
-        std::wstring Src = FsModel->GetFileFullPath( ProxyModel->mapToSource( SrcIndex ) ).toStdWString();
-        
-        do
-        {
-            SHELLEXECUTEINFOW shinfo = { 0, };
-            shinfo.cbSize = sizeof( shinfo );
-            shinfo.nShow = SW_NORMAL;
-            shinfo.lpVerb = L"open";
-            shinfo.lpFile = Src.c_str();
-
-            ShellExecuteExW( &shinfo );
-
-        } while( false );
-
-        CoUninitialize();
-    }
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
-void CCommandMgr::CMD_Space( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+DEFINE_HC_COMMAND( CCommandMgr, cm_PrevTab )
 {
-    GetMainUIPtr()->SelectRowOnCurrentPane( SrcIndex, true );
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
-void CCommandMgr::CMD_TabSwitch( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+DEFINE_HC_COMMAND( CCommandMgr, cm_NextTab )
 {
-    // TODO: 더 나은 방법 찾아보기
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
 
-    QString ObjName;
+DEFINE_HC_COMMAND( CCommandMgr, cm_CloseTab )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
 
-    QObject* Parent = View;
-    while( Parent != nullptr && 
-           Parent->objectName().compare( "dlgMain" ) != 0 )
-    {
-        Parent = Parent->parent();
-    }
+DEFINE_HC_COMMAND( CCommandMgr, cm_Return )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
 
-    if( Parent != nullptr )
-    {
-        QMetaObject::invokeMethod( Parent, "Tab_SwitchToAnother" );
-    }
+DEFINE_HC_COMMAND( CCommandMgr, cm_SelInverse )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchPanel )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND( CCommandMgr, cm_ContextMenu )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 void CCommandMgr::CMD_HidSys( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
@@ -117,4 +128,9 @@ void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& Glo
     }
     
     QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
+}
+
+CCommandMgr::TySpMapKeyToCMDStr CCommandMgr::retrieve()
+{
+    return SpMapKeyToCMDText;
 }

@@ -36,16 +36,23 @@ class CmpPanel : public QWidget
         QVector< QModelIndex >          SelectedIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다. 
     };
 
+    using TySpTabState = std::shared_ptr<TyTabState>;
+
 public:
     CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
+    void                                Initialize();
+
     Q_INVOKABLE void                    AddTab();
+    Q_INVOKABLE void                    PrevTab();
+    Q_INVOKABLE void                    NextTab();
     Q_INVOKABLE void                    CloseTab();
     Q_INVOKABLE void                    RefreshVolumeList();
     int                                 CurrentTabIndex() const;
     Q_INVOKABLE void                    SetFocusView( int TabIndex );
 
     Q_INVOKABLE void                    SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
+    void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
 
     int                                 InitializeGrid();
 
@@ -67,13 +74,15 @@ private:
     bool                                eventFilter( QObject* Object, QEvent* Event ) override;
     void                                resizeEvent( QResizeEvent* event ) override;
 
-    TyTabState&                         retrieveFocusState();
+    int                                 retrieveCurrentIndex() const;
+    TySpTabState                        retrieveFocusState();
     Qtitan::GridBandedTableView*        retrieveFocusView() const;
+    QModelIndex                         retrieveFocusViewCursorIndex() const;
+
     void                                processPanelStatusText();
 
-    // 현재 작업 중인 탭 색인 번호
-    int                                 currentIndex = -1;
-    QMap< int, TyTabState >             mapTabToStats;
+    // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
+    QVector< TySpTabState >             vecTabStates;
 
     Ui::cmpPanel                        ui;
 

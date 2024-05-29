@@ -7,6 +7,10 @@
 #define QT_GENERIC_ARGS_10 QGenericArgument val0, QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument()
 #define QT_GENERIC_ARGS_10_DEFAULT QGenericArgument val0 = QGenericArgument(), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument()
 
+#define QT_METAMETHOD_ARGS QMetaMethodArgument val0, QMetaMethodArgument val1, QMetaMethodArgument val2, QMetaMethodArgument val3, QMetaMethodArgument val4, QMetaMethodArgument val5, QMetaMethodArgument val6, QMetaMethodArgument val7, QMetaMethodArgument val8, QMetaMethodArgument val9
+#define QT_METAMETHOD_ARGS_10 QMetaMethodArgument val0, QMetaMethodArgument val1 = QMetaMethodArgument(), QMetaMethodArgument val2 = QMetaMethodArgument(), QMetaMethodArgument val3 = QMetaMethodArgument(), QMetaMethodArgument val4 = QMetaMethodArgument(), QMetaMethodArgument val5 = QMetaMethodArgument(), QMetaMethodArgument val6 = QMetaMethodArgument(), QMetaMethodArgument val7 = QMetaMethodArgument(), QMetaMethodArgument val8 = QMetaMethodArgument(), QMetaMethodArgument val9 = QMetaMethodArgument()
+#define QT_METAMETHOD_ARGS_10_DEFAULT QMetaMethodArgument val0 = QMetaMethodArgument(), QMetaMethodArgument val1 = QMetaMethodArgument(), QMetaMethodArgument val2 = QMetaMethodArgument(), QMetaMethodArgument val3 = QMetaMethodArgument(), QMetaMethodArgument val4 = QMetaMethodArgument(), QMetaMethodArgument val5 = QMetaMethodArgument(), QMetaMethodArgument val6 = QMetaMethodArgument(), QMetaMethodArgument val7 = QMetaMethodArgument(), QMetaMethodArgument val8 = QMetaMethodArgument(), QMetaMethodArgument val9 = QMetaMethodArgument()
+
 /// 비동기적으로 QT 의 메소드를 호출하기 위한 정보들을 보관하는 클래스
 /// 지정한 인자들은 모두 복사된다. 
 class CInvokeInfo
@@ -108,13 +112,13 @@ namespace nsCmn
         bool                            DemarshalFrom( const QString& sArgName, const QByteArray& ba, QGenericArgument& arg );
 
         // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
-        bool                            InvokeMethod( QObjectPtr obj, const char* member, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, QT_METAMETHOD_ARGS_10_DEFAULT );
         // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
-        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QT_METAMETHOD_ARGS_10_DEFAULT );
         // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
-        bool                            InvokeMethod( QObjectPtr obj, const char* member, QGenericReturnArgument ret, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, QMetaMethodReturnArgument ret, QT_METAMETHOD_ARGS_10_DEFAULT );
         // QMetaObject::invokeMethod 를 호출한다. 호출이 실패하면 로그 출력과 함께 Q_ASSERT 가 발동된다. 
-        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QGenericReturnArgument ret, QGenericArgument val0 = QGenericArgument( Q_NULLPTR ), QGenericArgument val1 = QGenericArgument(), QGenericArgument val2 = QGenericArgument(), QGenericArgument val3 = QGenericArgument(), QGenericArgument val4 = QGenericArgument(), QGenericArgument val5 = QGenericArgument(), QGenericArgument val6 = QGenericArgument(), QGenericArgument val7 = QGenericArgument(), QGenericArgument val8 = QGenericArgument(), QGenericArgument val9 = QGenericArgument() );
+        bool                            InvokeMethod( QObjectPtr obj, const char* member, Qt::ConnectionType type, QMetaMethodReturnArgument ret, QT_METAMETHOD_ARGS_10_DEFAULT );
 
     } // nsCmnQt
 } // nsCmn

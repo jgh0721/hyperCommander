@@ -13,23 +13,72 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     setWindowTitle( tr( "HyperCommander" ) );
 
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
-
-    connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
-
-    TyStCommandMgr::GetInstance()->SetMainUI( this );
-
-    // TODO: CmpPanel 에서 항목이 모두 새로고침이 끝났음을 알아내서 포커스를 부여해야 한다. 
-    // 최초 실행되었을 때 커서가 준비되도록 하여 편의성을 향상시킨다. 
-    QTimer::singleShot( 1000, [this]() {
-
-        ui.cmpLeftPanel->setFocus( Qt::MouseFocusReason );
-        QMetaObject::invokeMethod( ui.cmpLeftPanel, "SetFocusView", Q_ARG( int, ui.cmpLeftPanel->CurrentTabIndex() ) );
-
-                        } );
-
 }
 
-void QMainUI::Tab_SwitchToAnother()
+////////////////////////////////////////////////////////////////////////////
+/// 명령 핸들러
+
+DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->AddTab();
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->PrevTab();
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->NextTab();
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->CloseTab();
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_Return )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->ReturnOnCurrentTab( CursorIndex );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+    
+    Pane->SelectRowOnCurrentTab( CursorIndex, true );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
 {
     if( currentPanelIndex == 0 )
     {
@@ -43,20 +92,16 @@ void QMainUI::Tab_SwitchToAnother()
         ui.cmpLeftPanel->SetFocusView( ui.cmpLeftPanel->CurrentTabIndex() );
         currentPanelIndex = 0;
     }
-    
-    const auto q = ui.cmpLeftPanel->hasFocus();
-    const auto s = ui.cmpRightPanel->hasFocus();
-
-    int a = 0; 
 }
 
-void QMainUI::SelectRowOnCurrentPane( const QModelIndex& SrcIndex, bool IsMoveDown )
+DEFINE_HC_COMMAND( QMainUI, cm_ContextMenu )
 {
     const auto Pane = currentFocusPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
-    Pane->SelectRowOnCurrentTab( SrcIndex, IsMoveDown );
+
+    Pane->SelectRowOnCurrentTab( CursorIndex, true );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
@@ -72,9 +117,37 @@ void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
     ui.lblPrompt->setText( CurrentPath + ">" );
 }
 
+bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
+{
+    if( Event->type() != QEvent::FocusAboutToChange )
+        return false;
+
+    const auto FocusEvent = ( QFocusEvent* )Event;
+    if( FocusEvent->gotFocus() == false )
+        return false;
+
+    const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
+    if( Grid != nullptr )
+    {
+
+    }
+
+    return false;
+}
+
 void QMainUI::initialize()
 {
+    TyStCommandMgr::GetInstance()->SetMainUI( this );
 
+    connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+    connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+
+    ui.cmpLeftPanel->installEventFilter( this );
+    ui.cmpRightPanel->installEventFilter( this );
+
+    // NOTE: 시작하면 왼쪽에 커서가 위치할 수 있도록 오른쪽부터 초기화한다. 
+    ui.cmpRightPanel->Initialize();
+    ui.cmpLeftPanel->Initialize();
 }
 
 CmpPanel* QMainUI::currentFocusPanel() const
