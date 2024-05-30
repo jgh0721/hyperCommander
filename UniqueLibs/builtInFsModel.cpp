@@ -1,13 +1,13 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
 
-#include <ObjectArray.h>
-
 #include "commonLibs/cmnDateTime.hpp"
+#include "cmnHCUtils.hpp"
+#include "UniqueLibs/columnMgr.hpp"
 
 #include <QtConcurrent>
+#include <ObjectArray.h>
 
-#include "cmnHCUtils.hpp"
 
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
@@ -163,11 +163,28 @@ void FSModel::Refresh()
                 FileCount_Refresh++;
                 TotalSize_Refresh += Item.Size;
             }
-            
-            //if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) )
-            //{
-            //    ;
-            //}
+
+            // 컬럼에 대한 데이터 생성
+            for( const auto& Col : CurrentView.VecColumns )
+            {
+                const auto Def = Col.Content.toStdWString();
+
+                auto Fmt = const_cast< wchar_t* >( Def.c_str() );
+                bool IsParsed = false;
+                QString Content;
+
+                do
+                {
+                    ColumnParseResult Result;
+                    IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
+
+                    if( IsParsed == true )
+                        CColumnMgr::CreateColumnContent( Result, &Item, Content );
+
+                } while( IsParsed == true );
+
+                Item.VecContent.push_back( Content );
+            }
 
             Nodes.push_back( Item );
 
@@ -225,29 +242,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     if( role == Qt::DisplayRole )
     {
         const auto& Item = VecNode[ Row ];
-        const auto Def = CurrentView.VecColumns[ Col ];
-        if( Def.Content.compare( "[=HC.name]", Qt::CaseInsensitive ) == 0 )
-        {
-            return Item.Name;
-        }
-
-        if( Def.Content.compare( "[=HC.size]", Qt::CaseInsensitive ) == 0 )
-        {
-            if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-                return tr("<폴더>");
-
-            return Item.Size;
-        }
-
-        if( Def.Content.compare( "[=HC.created]", Qt::CaseInsensitive ) == 0 )
-        {
-            return Item.Created.toString( "yyyy-MM-dd hh:mm:ss" );
-        }
-
-        if( Def.Content.compare( "[=HC.attribText]", Qt::CaseInsensitive ) == 0 )
-        {
-            return GetFormattedAttrText( Item.Attiributes, false );
-        }
+        return Item.VecContent[ Col ];
     }
 
     if( role == Qt::DecorationRole )

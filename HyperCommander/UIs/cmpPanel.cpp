@@ -308,19 +308,6 @@ int CmpPanel::InitializeGrid()
     StColumnMgr->Initialize();
     const auto ColumnView = StColumnMgr->GetColumnView( 0 );
 
-    ColumnParseResult Result;
-    QString Content;
-    const auto Def = ColumnView.VecColumns[ 0 ].Content.toStdWString();
-    auto Fmt = const_cast< wchar_t*>( Def.c_str() );
-    bool IsParsed = false;
-
-    do
-    {
-        IsParsed = StColumnMgr->Parse( Fmt, Result, Content );
-
-    } while( IsParsed == true );
-
-
     const auto Model = new FSModel;
     const auto ProxyModel = new FSProxyModel;
 
@@ -364,7 +351,7 @@ int CmpPanel::InitializeGrid()
             GridColumn->setTextColor( "silver" );
             GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
             
-            if( Column.Content.contains( "HC.name", Qt::CaseInsensitive ) == true )
+            if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
             {
                 GridColumn->setSortOrder( Qtitan::SortAscending );
                 GridColumn->dataBinding()->setSortRole( Qt::UserRole );
