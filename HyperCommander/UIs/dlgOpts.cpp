@@ -12,7 +12,7 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
 
     initialize();
 
-    nsCmn::nsCmnQt::InvokeMethod( this, "LoadSettings", Qt::QueuedConnection );
+    QMetaObject::invokeMethod( this, "LoadSettings", Qt::QueuedConnection );
 }
 
 void QMainOpts::LoadSettings()

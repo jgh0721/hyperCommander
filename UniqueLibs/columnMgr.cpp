@@ -27,6 +27,46 @@ ColumnView CColumnMgr::GetColumnView( int Index )
     return VecColumnViews[ Index ];
 }
 
+bool CColumnMgr::Parse( wchar_t*& Fmt, ColumnParseResult& Result, QString& Content )
+{
+    bool IsContinue = false;
+
+    while( Fmt && *Fmt != L'\0' )
+    {
+        while( *Fmt && ( *Fmt != '[' && *Fmt != ']' ) )
+            Content.push_back( *Fmt++ );
+
+        do
+        {
+            if( *Fmt == L'\0' )
+                break;
+
+            if( ( Fmt[ 0 ] == '[' && Fmt[ 1 ] == '[' ) ||
+                ( Fmt[ 0 ] == ']' && Fmt[ 1 ] == ']' ) )
+            {
+                Content.push_back( Fmt[ 0 ] );
+                Fmt = Fmt + 2;
+                break;
+            }
+
+            ++Fmt;
+            // = 으로 시작하지 않으면 해당 [] 는 무시한다. 
+            if( Fmt[ 0 ] != L'=' )
+            {
+                while( *Fmt && *Fmt != L']' )
+                    ++Fmt;
+
+                break;
+            }
+            
+        } while( false );
+    }
+    
+
+
+    return IsContinue;
+}
+
 /*!
 
 

@@ -32,6 +32,7 @@ protected slots:
     void                                on_acShowMainOpts_triggered( bool checked = false );
 
     void                                oo_notifyCurrentDirectory( const QString& CurrentPath );
+    void                                oo_notifyPanelActivated();
 
 protected:
     bool                                eventFilter( QObject* Object, QEvent* Event ) override;

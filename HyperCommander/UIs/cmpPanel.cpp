@@ -34,8 +34,10 @@ void CmpPanel::Initialize()
 
 void CmpPanel::AddTab()
 {
+    qDebug() << this << "0";
     const auto Index = InitializeGrid();
     SetFocusView( Index );
+    qDebug() << this << "1";
 }
 
 void CmpPanel::PrevTab()
@@ -136,6 +138,18 @@ void CmpPanel::SetFocusView( int TabIndex )
     View->grid()->setFocus( Qt::MouseFocusReason );
     View->grid()->viewport()->setFocus( Qt::MouseFocusReason );
 
+    EnsureKeyboardFocusOnView( View );
+}
+
+Qtitan::GridBandedTableView* CmpPanel::GetFocusView() const
+{
+    return retrieveFocusView();
+}
+
+void CmpPanel::EnsureKeyboardFocusOnView( Qtitan::GridBandedTableView* View )
+{
+    Q_ASSERT( View != nullptr );
+
     if( View->getRowCount() > 0 )
     {
         View->navigateDown();
@@ -189,6 +203,32 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
 
         CoUninitialize();
     }
+}
+
+void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    const auto View = retrieveFocusView();
+    const auto Grid = View->grid();
+
+    QRect Rect;
+    PopupMenu menu( Grid );
+    const auto Row = View->getRow( SrcIndex );
+
+    for( const auto Info : Grid->hitInfoAll() )
+    {
+        if( Info.info() != GridHitInfo::Cell )
+            continue;
+
+        if( Info.row().rowIndex() == Row.rowIndex() )
+        {
+            Rect = Info.rect();
+            break;
+        }
+    }
+    
+    GridHitInfo HitInfo( GridHitInfo::Cell, View, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
+    ContextMenuEventArgs Args( View, &menu, HitInfo );
+    oo_grdLocal_contextMenu( &Args );
 }
 
 int CmpPanel::InitializeGrid()
@@ -267,6 +307,19 @@ int CmpPanel::InitializeGrid()
     const auto StColumnMgr = new CColumnMgr;
     StColumnMgr->Initialize();
     const auto ColumnView = StColumnMgr->GetColumnView( 0 );
+
+    ColumnParseResult Result;
+    QString Content;
+    const auto Def = ColumnView.VecColumns[ 0 ].Content.toStdWString();
+    auto Fmt = const_cast< wchar_t*>( Def.c_str() );
+    bool IsParsed = false;
+
+    do
+    {
+        IsParsed = StColumnMgr->Parse( Fmt, Result, Content );
+
+    } while( IsParsed == true );
+
 
     const auto Model = new FSModel;
     const auto ProxyModel = new FSProxyModel;
@@ -525,6 +578,13 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 {
+    if( Event->type() == QEvent::FocusIn )
+    {
+        const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
+        if( Grid != nullptr && static_cast< QFocusEvent* >( Event )->gotFocus() == true )
+            emit sig_NotifyPanelActivated();
+    }
+
     if( Event->type() == QEvent::KeyPress )
     {
         const auto KeyEvent     = static_cast< QKeyEvent* >( Event );

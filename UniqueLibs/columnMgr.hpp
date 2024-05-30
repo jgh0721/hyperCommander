@@ -1,5 +1,28 @@
 ﻿#pragma once
 
+/*!
+    컬럼 정의 규격
+
+    [=모듈.분류.이름.형식]
+
+
+
+
+    환경설정
+
+    [ColumnView]
+
+
+ */
+
+struct ColumnParseResult
+{
+    QStringView                         Module;
+    QStringView                         Cate;
+    QStringView                         Name;
+    QStringView                         Convert;
+};
+
 struct Column
 {
     int                                 Index = 0;
@@ -12,6 +35,7 @@ struct Column
 struct ColumnView
 {
     QString                             Name;
+    //bool                                IsBuiltIn = false;
 
     QVector< Column >                   VecColumns;
 };
@@ -24,6 +48,8 @@ public:
 
     ColumnView                          GetColumnView( int Index );
 
+    // true = 분석이 끝나지 않았음. 그대로 다시 호출해야 함. 
+    static bool                         Parse( wchar_t*& Def, ColumnParseResult& Result, QString& Content );
 
 private:
 

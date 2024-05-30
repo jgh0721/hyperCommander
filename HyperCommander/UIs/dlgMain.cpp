@@ -20,12 +20,15 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
 
 DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
 {
+    // 탭을 추가하면서 Qt 가 자동적으로 엉뚱한 곳으로 포커스를 옮기는 행동이 일어날 때가 있다. 이에 대해 보정한다. 
+    const auto Prev = currentPanelIndex;
     const auto Pane = currentFocusPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
 
     Pane->AddTab();
+    currentPanelIndex = Prev;
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
@@ -50,12 +53,14 @@ DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
 
 DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
 {
+    const auto Prev = currentPanelIndex;
     const auto Pane = currentFocusPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
 
     Pane->CloseTab();
+    currentPanelIndex = Prev;
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_Return )
@@ -101,7 +106,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_ContextMenu )
     if( Pane == nullptr )
         return;
 
-    Pane->SelectRowOnCurrentTab( CursorIndex, true );
+    Pane->ContextMenuOnCurrentTab( CursorIndex );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
@@ -115,6 +120,26 @@ void QMainUI::on_acShowMainOpts_triggered( bool checked )
 void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
 {
     ui.lblPrompt->setText( CurrentPath + ">" );
+}
+
+void QMainUI::oo_notifyPanelActivated()
+{
+    const auto Sender = qobject_cast< CmpPanel* >( sender() );
+
+    if( Sender == ui.cmpLeftPanel )
+    {
+        qDebug() << "왼쪽 패널 활성화";
+        ui.cmpLeftPanel->EnsureKeyboardFocusOnView( ui.cmpLeftPanel->GetFocusView() );
+
+        currentPanelIndex = 0;
+    }
+    else if( Sender == ui.cmpRightPanel )
+    {
+        qDebug() << "오른쪽 패널 활성화";
+        ui.cmpRightPanel->EnsureKeyboardFocusOnView( ui.cmpRightPanel->GetFocusView() );
+
+        currentPanelIndex = 1;
+    }
 }
 
 bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
@@ -141,6 +166,8 @@ void QMainUI::initialize()
 
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+    connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
+    connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
 
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );
@@ -152,6 +179,8 @@ void QMainUI::initialize()
 
 CmpPanel* QMainUI::currentFocusPanel() const
 {
+    qDebug() << "현재 패널 번호 " << currentPanelIndex;
+
     if( currentPanelIndex == 0 )
         return ui.cmpLeftPanel;
 

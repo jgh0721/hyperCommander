@@ -50,9 +50,13 @@ public:
     Q_INVOKABLE void                    RefreshVolumeList();
     int                                 CurrentTabIndex() const;
     Q_INVOKABLE void                    SetFocusView( int TabIndex );
+    Qtitan::GridBandedTableView*        GetFocusView() const;
+    void                                EnsureKeyboardFocusOnView( Qtitan::GridBandedTableView* View );
 
     Q_INVOKABLE void                    SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
+    
+    void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
 
     int                                 InitializeGrid();
 
@@ -68,6 +72,7 @@ public slots:
 signals:
 
     void                                sig_NotifyCurrentDirectory( const QString& CurrentPath );
+    void                                sig_NotifyPanelActivated();
 
 private:
 
