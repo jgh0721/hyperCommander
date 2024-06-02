@@ -5,6 +5,7 @@
 struct Node
 {
     QString                             Name;
+    BOOL                                IsNormalizedByNFD = FALSE;
     QString                             Ext;
 
     DWORD                               Attiributes = 0;
@@ -76,10 +77,10 @@ class FSProxyModel : public QSortFilterProxyModel
     Q_OBJECT
 public:
 
-    void                                SetHiddenSystem( bool IsShow );
-    bool                                GetHiddenSystem() const;
+    Q_INVOKABLE void                    SetHiddenSystem( bool IsShow );
+    Q_INVOKABLE bool                    GetHiddenSystem() const;
 
-    bool                                filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override;
+    bool                                filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const override;
 
 private:
 

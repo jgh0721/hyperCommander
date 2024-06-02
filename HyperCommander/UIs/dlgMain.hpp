@@ -23,10 +23,15 @@ public slots:
     DECLARE_HC_COMMAND( cm_Return );
 
     DECLARE_HC_COMMAND( cm_SelInverse );
-    
+
+    DECLARE_HC_COMMAND( cm_MultiRenameFiles );
+
+    DECLARE_HC_COMMAND( cm_SwitchHidSys );
+
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );
-    
+    DECLARE_HC_COMMAND( cm_ExternalEditorMenu );
+
 protected slots:
 
     void                                on_acShowMainOpts_triggered( bool checked = false );

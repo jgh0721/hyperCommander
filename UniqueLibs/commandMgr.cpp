@@ -93,6 +93,16 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_SelInverse )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
+DEFINE_HC_COMMAND( CCommandMgr, cm_MultiRenameFiles )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchHidSys )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
 DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchPanel )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
@@ -103,31 +113,9 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_ContextMenu )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
-void CCommandMgr::CMD_HidSys( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
+DEFINE_HC_COMMAND( CCommandMgr, cm_ExternalEditorMenu )
 {
-    QMetaObject::invokeMethod( qApp, "ToggleHiddenSystem" );
-}
-
-void CCommandMgr::CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex )
-{
-    const auto Selection = View->modelController()->selection();
-    if( Selection->isEmpty() == true )
-    {
-        QMessageBox::information( nullptr, tr( "HyperCommander" ), tr( "이름을 변경할 파일을 선택해 주세요." ) );
-        return;
-    }
-
-    QVector< QString > VecFiles;
-    const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
-    const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
-
-    for( const auto& Item : Selection->selectedRowIndexes() )
-    {
-        qDebug() << FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) );
-        VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
-    }
-    
-    QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 CCommandMgr::TySpMapKeyToCMDStr CCommandMgr::retrieve()

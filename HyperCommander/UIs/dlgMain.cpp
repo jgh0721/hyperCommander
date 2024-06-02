@@ -4,6 +4,10 @@
 #include "UIs/dlgOpts.hpp"
 
 #include "UniqueLibs/commandMgr.hpp"
+#include "UniqueLibs/cmnTypeDefs.hpp"
+#include "UniqueLibs/externalEditorMgr.hpp"
+
+#include "UniqueLibs/builtInFsModel.hpp"
 
 QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     : QMainWindow( parent, flags )
@@ -83,6 +87,49 @@ DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
     Pane->SelectRowOnCurrentTab( CursorIndex, true );
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_MultiRenameFiles )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    const auto View = Pane->retrieveFocusView();
+    const auto Selection = View->modelController()->selection();
+    if( Selection->isEmpty() == true )
+    {
+        QMessageBox::information( nullptr, tr( "HyperCommander" ), tr( "이름을 변경할 파일을 선택해 주세요." ) );
+        return;
+    }
+
+    QVector< QString > VecFiles;
+    const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
+    const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
+
+    for( const auto& Item : Selection->selectedRowIndexes() )
+    {
+        qDebug() << FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) );
+        VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
+    }
+
+    QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    const auto State = Pane->retrieveFocusState();
+    bool IsShow = false;
+
+    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
+    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
+
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
 {
     if( currentPanelIndex == 0 )
@@ -107,6 +154,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_ContextMenu )
         return;
 
     Pane->ContextMenuOnCurrentTab( CursorIndex );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_ExternalEditorMenu )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->ExternalEditorMenu( CursorIndex );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
@@ -163,6 +220,7 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 void QMainUI::initialize()
 {
     TyStCommandMgr::GetInstance()->SetMainUI( this );
+    TyStExternalEditorMgr::GetInstance()->Refresh();
 
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );

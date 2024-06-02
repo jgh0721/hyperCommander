@@ -38,11 +38,13 @@ public slots:
 
     DECLARE_HC_COMMAND( cm_SelInverse );
 
+    DECLARE_HC_COMMAND( cm_MultiRenameFiles );
+
+    DECLARE_HC_COMMAND( cm_SwitchHidSys );
+
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );
-
-    void                                CMD_HidSys( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex );
-    void                                CMD_MultiRename( Qtitan::GridViewBase* View, const QPoint& GlobalPos, const QModelIndex& SrcIndex );
+    DECLARE_HC_COMMAND( cm_ExternalEditorMenu );
 
 private:
     using TySpMapKeyToCMDStr = std::shared_ptr< TyMapShortcutToCMDStr >;

@@ -145,6 +145,7 @@
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
+    <ClCompile Include="..\commonLibs\cmnProcess.cpp" />
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
     <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.cpp">
@@ -341,14 +342,19 @@
     <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
+    <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
+    <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
     <ClCompile Include="UIs\dlgGridStyle.cpp" />
     <ClCompile Include="UIs\dlgMain.cpp" />
     <ClCompile Include="UIs\dlgMultiRename.cpp" />
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
+    <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />
+    <QtMoc Include="UIs\dlgExternalConfigure_Item.hpp" />
+    <QtMoc Include="UIs\dlgExternalConfigure.hpp" />
     <QtMoc Include="UIs\dlgGridStyle.hpp" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.h" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.h" />
@@ -402,7 +408,7 @@
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
-    <ClInclude Include="..\UniqueLibs\externalEditorMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
@@ -449,6 +455,8 @@
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\dlgCopyToAnother.ui" />
     <QtUic Include="UIs\dlgDelete.ui" />
+    <QtUic Include="UIs\dlgExternalConfigure.ui" />
+    <QtUic Include="UIs\dlgExternalConfigure_Item.ui" />
     <QtUic Include="UIs\dlgGridStyle.ui" />
     <QtUic Include="UIs\dlgMain.ui" />
     <QtUic Include="UIs\dlgMultiRename.ui" />

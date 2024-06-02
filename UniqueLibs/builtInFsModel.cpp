@@ -134,6 +134,7 @@ void FSModel::Refresh()
 
             Item.Attiributes    = wfd.dwFileAttributes;
             Item.Name           = QString::fromWCharArray( wfd.cFileName );
+            Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
             Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
             Item.Size           = (static_cast< int64_t >( wfd.nFileSizeHigh ) << 32) | (wfd.nFileSizeLow);
             Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
@@ -239,9 +240,14 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     if( Col < 0 || Col >= CurrentView.VecColumns.size() )
         return {};
 
+    // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
+
     if( role == Qt::DisplayRole )
     {
         const auto& Item = VecNode[ Row ];
+        if( Item.VecContent.isEmpty() == true || Col >= Item.VecContent.size() )
+            return Item.Name;
+
         return Item.VecContent[ Col ];
     }
 
@@ -300,6 +306,14 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     if( role == Qt::ForegroundRole )
     {
         return QColor( "white" );
+    }
+
+    if( role == Qt::FontRole )
+    {
+        if( Col == 0 )
+        {
+            
+        }
     }
 
     return QVariant();

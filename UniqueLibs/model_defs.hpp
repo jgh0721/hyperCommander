@@ -14,8 +14,3 @@ class ExternalEditorMgr
 {
     
 };
-class CCommandMgr
-{
-public:
-
-};

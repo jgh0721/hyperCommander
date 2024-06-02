@@ -22,3 +22,18 @@ struct ColorScheme
     QColor              FileList_BGColor;
 
 };
+
+struct TyExternalEditor
+{
+    QString             Name;
+    QIcon               Icon;
+    QString             IconPath;
+
+    QString             FilePath;
+    QString             CMDLine;
+
+    QString             Detect;             // force | ext= ...
+    QSet<QString>       SetExtensions;      // 확장자 목록, 소문자
+};
+
+Q_DECLARE_METATYPE( TyExternalEditor );

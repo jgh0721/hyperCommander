@@ -36,9 +36,17 @@ DECLARE_CMD( BuiltInCMD_Tab_Close,                  QObject::tr( "탭" ), "cm_Cl
 
 DECLARE_CMD( BuiltInCMD_OPs_Return,                 QObject::tr( "동작" ), "cm_Return",
              Qt::Key_Return,                        QObject::tr( "실행(엔터 키 입력)" ) );
+DECLARE_CMD( BuiltInCMD_OPs_Enter,                  QObject::tr( "동작" ), "cm_Return",
+             Qt::KeypadModifier | Qt::Key_Enter,    QObject::tr( "실행(엔터 키 입력)" ) );
 
 DECLARE_CMD( BuiltInCMD_Sel_Inverse,                QObject::tr( "선택" ), "cm_SelInverse",
              Qt::Key_Space,                         QObject::tr( "파일 선택을 반전하고 다음으로 이동" ) );
+
+DECLARE_CMD( BuiltInCMD_Tool_MultiRenameFiles,      QObject::tr( "보기" ), "cm_MultiRenameFiles",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_R,       QObject::tr( "일괄 이름변경" ) );
+
+DECLARE_CMD( BuiltInCMD_View_SwitchHidSys,          QObject::tr( "보기" ), "cm_SwitchHidSys",
+             Qt::ControlModifier | Qt::Key_H,       QObject::tr( "숨김/시스템 파일 표시 전환" ) );
 
 DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,            QObject::tr( "기타" ), "cm_SwitchPanel",
              Qt::Key_Tab,                           QObject::tr( "반대편 패널로 전환" ) );
@@ -46,10 +54,11 @@ DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,            QObject::tr( "기타" ), "cm
 DECLARE_CMD( BuiltInCMD_Etc_ContextMenu,            QObject::tr( "기타" ), "cm_ContextMenu",
              Qt::ShiftModifier | Qt::Key_Return,    QObject::tr( "상황메뉴" ) );
 
+DECLARE_CMD( BuiltInCMD_Etc_ExternalMenu,           QObject::tr( "기타" ), "cm_ExternalEditorMenu",
+             Qt::Key_F4,                            QObject::tr( "외부 편집기 메뉴" ) );
+
 //const TyHC_COMMAND BuiltInCMD_CopyToSame        = { QLatin1String( "cmd_CopyToSame" ) };
 //const TyHC_COMMAND BuiltInCMD_CopyToAnother     = { QLatin1String( "cmd_CopyToAnother" ) };
-//const TyHC_COMMAND BuiltInCMD_File_MultiRename  = { QLatin1String( "cmd_MultiRename" ) };
-//const TyHC_COMMAND BuiltInCMD_View_SwitchHidSys = { QLatin1String( "cmd_SwitchHidSys" ), QObject::tr("숨김/시스템 파일 표시"), QKeySequence( Qt::Key_Control | Qt::Key_H ) };
 
 // 해당 벡터를 순서대로 순회하며 환경설정 대화상자에 표시한다. 
 const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
@@ -59,9 +68,15 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_Close,
 
     BuiltInCMD_OPs_Return,
+    BuiltInCMD_OPs_Enter,
 
     BuiltInCMD_Sel_Inverse,
 
+    BuiltInCMD_Tool_MultiRenameFiles,
+
+    BuiltInCMD_View_SwitchHidSys,
+
     BuiltInCMD_Etc_SwitchPanel,
     BuiltInCMD_Etc_ContextMenu,
+    BuiltInCMD_Etc_ExternalMenu,
 };

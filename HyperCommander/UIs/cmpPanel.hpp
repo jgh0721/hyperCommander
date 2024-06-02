@@ -2,6 +2,7 @@
 
 #include "ui_cmpPanel.h"
 
+class QMainUI;
 class FSProxyModel;
 class FSModel;
 
@@ -57,6 +58,7 @@ public:
     void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
+    void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
 
     int                                 InitializeGrid();
 
@@ -75,6 +77,7 @@ signals:
     void                                sig_NotifyPanelActivated();
 
 private:
+    friend class QMainUI;
 
     bool                                eventFilter( QObject* Object, QEvent* Event ) override;
     void                                resizeEvent( QResizeEvent* event ) override;

@@ -5,6 +5,7 @@
 
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
+#include "UniqueLibs/externalEditorMgr.hpp"
 
 #include <QtitanGrid.h>
 #include <shtypes.h>
@@ -229,6 +230,36 @@ void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
     GridHitInfo HitInfo( GridHitInfo::Cell, View, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
     ContextMenuEventArgs Args( View, &menu, HitInfo );
     oo_grdLocal_contextMenu( &Args );
+}
+
+void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
+{
+    const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
+    const auto State = retrieveFocusState();
+    const auto View = State->View;
+
+    QMenu Menu;
+    Menu.setFont( QFont( "Sarasa Mono K Light", 14 ) );
+    const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
+    StExternalMgr->ConstructExternalMenu( &Menu, FileFullPath );
+
+    // TODO: 글로벌 위치를 획득한 후, 해당 위치가 항목(SrcIndex) 영역 내에 위치하는 지 확인한다. 
+    // 영역내에 위치한다면 해당 위치에 표시하고, 커서가 전혀 다른 곳에 위치한다면, 항목의 영역을 구하고 해당 위치내에서 표시한다. 
+
+    POINT Pos = {};
+    GetCursorPos( &Pos );
+    
+    //const auto ac = Menu.exec( QPoint( Pos.x, Pos.y ) );
+    const auto ac = Menu.exec( QCursor::pos() );
+
+    // 취소하거나 등등
+    if( ac == nullptr )
+        return;
+
+    const auto Editor = ac->data().value< TyExternalEditor >();
+    // 
+    Editor.FilePath;
+    // CreateProcessW()
 }
 
 int CmpPanel::InitializeGrid()
@@ -582,73 +613,6 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
 
         if( StCommandMgr->ProcessKeyPressEvent( KeyEvent, retrieveFocusViewCursorIndex() ) == true )
             return true;
-
-        //const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
-
-        //if( Grid != nullptr )
-        //{
-        //    const auto View = Grid->view< Qtitan::GridBandedTableView >();
-        //    const auto Row = View->focusedRow();
-
-        //    const auto CmdText = StShortcutMgr->GetCMDFromShortcut( KeyEvent->keyCombination() );
-
-        //    if( KeyEvent->key() == Qt::Key_R && KeyEvent->modifiers() == ( Qt::ControlModifier | Qt::AltModifier ) )
-        //    {
-        //        StCommandMgr->CMD_MultiRename( View, QCursor::pos(), Row.modelIndex( 0 ) );
-        //        return true;
-        //    }
-
-        //    if( KeyEvent->key() == Qt::Key_H && KeyEvent->modifiers() == Qt::ControlModifier )
-        //    {
-        //        const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
-        //        ProxyModel->SetHiddenSystem( !ProxyModel->GetHiddenSystem() );
-        //        
-        //        StCommandMgr->CMD_HidSys( View, QCursor::pos(), Row.modelIndex( 0 ) );
-        //        return true;
-        //    }
-
-        //    if( ( KeyEvent->key() == Qt::Key_Enter || KeyEvent->key() == Qt::Key_Return ) )
-        //    {
-        //        StCommandMgr->CMD_Return( View, QCursor::pos(), Row.modelIndex( 0 ) );
-        //        return true;
-        //    }
-        //    else if( KeyEvent->key() == Qt::Key_Space )
-        //    {
-        //        StCommandMgr->CMD_Space( View, QCursor::pos(), Row.modelIndex( 0 ) );
-        //        return true;
-        //    }
-        //    else if( KeyEvent->key() == Qt::Key_Tab )
-        //    {
-        //        StCommandMgr->CMD_TabSwitch( View, QCursor::pos(), Row.modelIndex( 0 ) );
-        //        return true;
-        //    }
-
-        //    QRect Rect;
-        //    PopupMenu menu( Grid );
-
-        //    //for( const auto Info : ui.grdLocal->hitInfoAll() )
-        //    //{
-        //    //    if( Info.info() != GridHitInfo::Cell )
-        //    //        continue;
-
-        //    //    if( Info.columnIndex() != TBL_LOCAL_HDX_MODIFIED.index )
-        //    //        continue;
-
-        //    //    if( Info.row().rowIndex() == Row.rowIndex() )
-        //    //    {
-        //    //        Rect = Info.rect();
-        //    //        break;
-        //    //    }
-        //    //}
-
-        //    //GridHitInfo HitInfo( GridHitInfo::Cell, spLocalView_, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
-        //    //ContextMenuEventArgs Args( spLocalView_, &menu, HitInfo );
-        //    //oo_grdLocal_contextMenu( &Args );
-
-        //    // TODO: Tab 키 일 때 옆으로 포커스 이동
-        //    // qDebug() << Object << Object->objectName() << Event << CmdText;
-        //    int a = 0;
-        //}
     }
 
     return false;

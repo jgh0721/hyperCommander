@@ -75,7 +75,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     TyStShortcutMgr::GetInstance()->SetShortcut( QKeySequence( "Shift+Return", QKeySequence::PortableText ), "ContextMenu" );
 
     mainUI = new QMainUI;
-    mainUI->show();
+    mainUI->showMaximized();
 }
 
 void HyperCommanderApp::ToggleHiddenSystem()
