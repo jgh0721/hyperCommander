@@ -41,6 +41,7 @@ const TyOpts OPT_COLORS_BACKCOLOR = { QObject::tr( "색상" ), QObject::tr( "배
                                       "Colors", "FileListBackColor", "Color(RGB)", "#1F1F1F", 
                                       1 };
 
+constexpr auto OPT_SEC_WINDOW = QLatin1String( "Window" );
 constexpr auto OPT_SEC_EDITOR = QLatin1String( "Editor" );
 
 QString                                 GetOPTValue( const TyOpts& Option );

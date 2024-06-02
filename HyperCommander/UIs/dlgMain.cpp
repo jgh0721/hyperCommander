@@ -217,6 +217,15 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
     return false;
 }
 
+void QMainUI::closeEvent( QCloseEvent* Event )
+{
+    StSettings->beginGroup( OPT_SEC_WINDOW );
+    StSettings->setValue( "geometry", saveGeometry() );
+    StSettings->endGroup();
+
+    QMainWindow::closeEvent( Event );
+}
+
 void QMainUI::initialize()
 {
     TyStCommandMgr::GetInstance()->SetMainUI( this );

@@ -12,6 +12,9 @@ constexpr int COL_CMDLINE   = 3;
 constexpr int COL_DETECT    = 4;
 constexpr int COL_EXTS      = 5;
 
+/// QTableWidget 의 RowIndex 는 실제 설정파일에 저장된 것과 순서가 일치해야한다. 
+/// RowIndex + 1 == ProgramN 과 같음
+
 class CExternalConfigure : public QDialog
 {
     Q_OBJECT

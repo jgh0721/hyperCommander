@@ -10,6 +10,7 @@
 
 #include "cmnTypeDefs.hpp"
 #include "cmnTypeDefs_Name.hpp"
+#include "cmnTypeDefs_Opts.hpp"
 
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
@@ -75,7 +76,10 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     TyStShortcutMgr::GetInstance()->SetShortcut( QKeySequence( "Shift+Return", QKeySequence::PortableText ), "ContextMenu" );
 
     mainUI = new QMainUI;
-    mainUI->showMaximized();
+    StSettings->beginGroup( OPT_SEC_WINDOW );
+    mainUI->restoreGeometry( StSettings->value( "geometry" ).toByteArray() );
+    StSettings->endGroup();
+    mainUI->show();
 }
 
 void HyperCommanderApp::ToggleHiddenSystem()

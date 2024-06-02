@@ -41,6 +41,7 @@ protected slots:
 
 protected:
     bool                                eventFilter( QObject* Object, QEvent* Event ) override;
+    void                                closeEvent( QCloseEvent* Event ) override;
 
 private:
     Q_INVOKABLE void                    initialize();
