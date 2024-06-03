@@ -42,8 +42,11 @@ void CExternalEditorMgr::Refresh()
 
         if( Item.Icon.isNull() == true )
         {
-            if( QFile::exists( Item.FilePath ) == true )
-                Item.Icon = QIcon( Item.FilePath );
+            if( QFile::exists( Item.IconPath ) == true )
+            {
+                QFileIconProvider IconProvider;
+                Item.Icon = IconProvider.icon( QFileInfo( Item.IconPath ) );
+            }
         }
 
         Item.CMDLine    = StSettings->value( QString( "CMDLine%1" ).arg( idx ) ).toString();
@@ -72,6 +75,7 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
 {
     const auto& Ext = FileFullPath.section( '.', -1, -1,  QString::SectionFlag::SectionDefault ).toLower();
 
+    int idx = 0;
     for( const auto& Item : vecExternalItems )
     {
         bool IsContains = false;
@@ -103,7 +107,11 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
         ac->setText( Item.Name );
         ac->setIcon( Item.Icon );
         ac->setData( QVariant::fromValue( Item ) );
-        
+        ac->setShortcut( Qt::ControlModifier | Qt::Key_1 | idx++ );
+        if( idx >= 9 )
+            idx = 0;
+        ac->setShortcutContext( Qt::WidgetWithChildrenShortcut );
+
         Menu->addAction( ac );
     }
 

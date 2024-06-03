@@ -27,6 +27,8 @@ protected slots:
     void                                    on_btnCancel_clicked( bool checked = false );
 
 private:
-    
+
+    bool                                    setProgramIcon( QLabel* lbl, const QString& IconPath );
+
     Ui::dlgExternalConfigureItem            ui;
 };

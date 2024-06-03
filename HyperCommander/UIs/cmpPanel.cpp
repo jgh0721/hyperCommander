@@ -246,12 +246,18 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
 
     // TODO: 글로벌 위치를 획득한 후, 해당 위치가 항목(SrcIndex) 영역 내에 위치하는 지 확인한다. 
     // 영역내에 위치한다면 해당 위치에 표시하고, 커서가 전혀 다른 곳에 위치한다면, 항목의 영역을 구하고 해당 위치내에서 표시한다. 
-    const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex));
+    POINT Pos = {};
+    GetCursorPos( &Pos );
+
+    qDebug() << QCursor::pos() << QPoint( Pos.x, Pos.y );
+
+    QMetaObject::invokeMethod( &Menu, "setFocus", Qt::QueuedConnection );
+    const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex) );
 
     // 취소하거나 등등
     if( ac == nullptr )
         return;
-
+    
     const auto Editor = ac->data().value< TyExternalEditor >();
     if( Editor.FilePath.isEmpty() == true )
         return;
@@ -670,31 +676,44 @@ QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcI
     const auto Grid = View->grid();
     const auto Row = View->getRow( SrcIndex );
 
-    for( const auto Info : Grid->hitInfoAll() )
+    if( SrcIndex.isValid() == false || Row.isValid() == false )
+        return Pos;
+
+    QRect GlobalRowRect;
+
+    for( const auto& Info : Grid->hitInfoAll() )
     {
         if( Info.info() != GridHitInfo::Cell )
             continue;
 
         if( Info.row().rowIndex() != Row.rowIndex() )
             continue;
-        if( Info.columnIndex() != 0 )
-            continue;
 
-        QRect GlobalRect( mapToGlobal( Info.rect().topLeft() ), Info.rect().size() );
-        qDebug() << GlobalCursor << Info.rect() << Info.rect().topLeft() << mapToGlobal( Info.rect().topLeft() );
+        if( Info.columnIndex() == 0 )
+        {
+            GlobalRowRect.setTopLeft( Grid->mapToGlobal( Info.rect().topLeft() ) );
+            GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
+        }
 
+        if( Info.columnIndex() == View->getColumnCount() - 1 )
+            GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
+    }
+
+    do
+    {
         if( Pos.isNull() == true )
         {
-            Pos = GlobalRect.topLeft();
+            Pos = GlobalRowRect.topLeft();
             break;
         }
 
-        if( GlobalRect.contains( Pos ) == true )
+        if( GlobalRowRect.contains( Pos ) == true )
             break;
 
-        Pos = GlobalRect.topLeft();
+        Pos = GlobalRowRect.topLeft();
         break;
-    }
+
+    } while( false );
 
     return Pos;
 }

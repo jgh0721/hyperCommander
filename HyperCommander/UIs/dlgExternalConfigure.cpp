@@ -71,6 +71,11 @@ QSet< int > CExternalConfigure::SelectedRow() const
     return SelectedRows;
 }
 
+void CExternalConfigure::on_btnClose_clicked( bool checked )
+{
+    done( Rejected );
+}
+
 void CExternalConfigure::on_btnAdd_clicked( bool checked )
 {
     CExternalConfigureItem AddModify;
@@ -97,13 +102,14 @@ void CExternalConfigure::on_btnModify_clicked( bool checked )
         return;
     }
 
-    // SelectedRows 에는 하나만 있어야 한다. 
-    const auto SelectedRow = *SelectedRows.begin();
-    ui.tblEditor->item( SelectedRow, COL_NAME );
-
     CExternalConfigureItem Editor;
 
+    // SelectedRows 에는 하나만 있어야 한다. 
+    const auto SelectedRow = *SelectedRows.begin();
+    Editor.SetItem( ui.tblEditor->item( SelectedRow, COL_NAME )->data( Qt::UserRole ).value< TyExternalEditor >() );
+
     const auto Result = Editor.exec();
+
     if( Result == QDialog::Accepted )
     {
         const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
@@ -116,5 +122,19 @@ void CExternalConfigure::on_btnModify_clicked( bool checked )
 void CExternalConfigure::on_btnRemove_clicked( bool checked )
 {
     const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
+    
+    QSet< int > SelectedRows = SelectedRow();
+    if( SelectedRows.isEmpty() == true )
+    {
+        return;
+    }
+
+    if( SelectedRows.size() > 1 )
+    {
+        return;
+    }
+
+    StExternalMgr->RemoveItem( *SelectedRows.begin() );
+    
     QTimer::singleShot( 1, this, &CExternalConfigure::Refresh );
 }

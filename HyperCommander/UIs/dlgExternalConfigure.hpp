@@ -26,6 +26,7 @@ public:
     QSet< int >                         SelectedRow() const;
 
 protected slots:
+    void                                on_btnClose_clicked( bool checked = false );
 
     void                                on_btnAdd_clicked( bool checked = false );
     void                                on_btnModify_clicked( bool checked = false );
