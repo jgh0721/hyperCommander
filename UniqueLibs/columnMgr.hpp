@@ -1,46 +1,6 @@
 ﻿#pragma once
 
-/*!
-    컬럼 정의 규격
-
-    [=모듈.분류.이름.형식]
-
-
-
-
-    환경설정
-
-    [ColumnView]
-
-
- */
-
-struct Node;
-
-struct ColumnParseResult
-{
-    QStringView                         Module;
-    QStringView                         Cate;
-    QStringView                         Name;
-    QStringView                         Convert;
-};
-
-struct Column
-{
-    int                                 Index = 0;
-    int                                 Row = 0;
-    QString                             Name;
-    Qt::Alignment                       Align;
-    QString                             Content;
-};
-
-struct ColumnView
-{
-    QString                             Name;
-    //bool                                IsBuiltIn = false;
-
-    QVector< Column >                   VecColumns;
-};
+#include "column_Defs.hpp"
 
 class CColumnMgr
 {

@@ -18,6 +18,11 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
 
 struct ColorScheme
 {
+    QString             Name;
+
+    QFont               Main_Font;
+
+    QFont               FileList_Font;
     QColor              FileList_FGColor;
     QColor              FileList_BGColor;
 
@@ -37,3 +42,25 @@ struct TyExternalEditor
 };
 
 Q_DECLARE_METATYPE( TyExternalEditor );
+
+//
+//struct ColorScheme
+//{
+//    QString                             Name;
+//
+//    // Main
+//    QString                             FontFaceMain;
+//
+//    // List
+//
+//    QString                             FontFace;
+//
+//    QColor                              Background;
+//    QColor                              Foreground;
+//    QColor                              Selected;
+//    QColor                              Cursor;
+//
+//    bool IsInverseCursor;
+//    bool IsInverseSelect;
+//
+//};

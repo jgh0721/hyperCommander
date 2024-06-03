@@ -6,20 +6,7 @@
 
 void CColumnMgr::Initialize()
 {
-    VecColumnViews.push_back( ColumnView { QObject::tr( "자세히" ), QVector< Column >() 
-                              << Column {
-                                    0, 0, QObject::tr( "이름" ), Qt::AlignLeft, "[=HC.Fs.name]"
-                                  }
-                              << Column {
-                                    1, 0, QObject::tr( "크기" ), Qt::AlignCenter, "[=HC.Fs.size]"
-                                }
-                              << Column {
-                                    2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter, "[=HC.Fs.created]"
-                                }
-                              << Column {
-                                    3, 0, QObject::tr( "속성" ), Qt::AlignCenter, "[=HC.Fs.attribText]"
-                                }
-                              } );
+    VecColumnViews.push_back( BUILTIN_COLVIEW_DETAILS );
 }
 
 ColumnView CColumnMgr::GetColumnView( int Index )
@@ -215,23 +202,48 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info
 //    QVector< FileSet >                  VecFileSet;
 //};
 
-struct ColorScheme
+/*!
+
+
+
+    File Filter => Label, 
+
+
+
+*/
+
+constexpr int FILE_SET_NOR_FILTERS      = 0x1;
+constexpr int FILE_SET_NOR_EXT_FILTERS  = 0x2;
+
+constexpr int FILE_SET_EXP_ATTRIBUTE    = 0x100;
+constexpr int FILE_SET_EXP_SIZE         = 0x200;
+
+struct FileSet
 {
     QString                             Name;
+    uint32_t                            Flags = 0;
 
-    // Main
-    QString                             FontFaceMain;
+    // 일반
+    QStringList                         Filters;
+    QVector<QString>                    VecExtFilters;
 
-    // List
+    // 확장
+    DWORD                               Attributes = 0;
+    int64_t                             Size = 0;
 
-    QString                             FontFace;
+    QColor                              Color;
+};
 
-    QColor                              Background;
-    QColor                              Foreground;
-    QColor                              Selected;
-    QColor                              Cursor;
+struct Node;
 
-    bool IsInverseCursor;
-    bool IsInverseSelect;
+class CFileSetMgr
+{
+public:
 
+    QColor Judge( const Node* Item );
+
+
+private:
+
+    QVector< FileSet >                  VecFileSet;
 };

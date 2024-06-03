@@ -589,6 +589,9 @@
     <ClInclude Include="..\commonLibs\cmnProcess.hpp">
       <Filter>CommonLibs</Filter>
     </ClInclude>
+    <ClInclude Include="..\UniqueLibs\column_Defs.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="cpp.hint" />

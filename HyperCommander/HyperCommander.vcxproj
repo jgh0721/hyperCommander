@@ -408,7 +408,8 @@
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
-    <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\column_Defs.hpp" />
+    <ClInclude Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
