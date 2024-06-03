@@ -9,7 +9,8 @@ CExternalConfigure::CExternalConfigure( QWidget* parent /* = nullptr*/, Qt::Wind
     : QDialog( parent, f )
 {
     ui.setupUi( this );
-    
+
+    ui.tblEditor->horizontalHeaderItem( 0 )->setSizeHint( QSize( 32, 32 ) );
     Refresh();
 }
 
@@ -29,12 +30,35 @@ void CExternalConfigure::Refresh()
         if( Item.Icon.isNull() == false )
             ui.tblEditor->setItem( Row, COL_ICON, new QTableWidgetItem( Item.Icon, "" ));
         else
-            ui.tblEditor->setItem( Row, COL_ICON, {} );
+        {
+            QIcon Icon;
+            if( Item.IconPath.isEmpty() == false )
+            {
+                if( Item.IconPath.section( '.', -1 ).compare( "exe", Qt::CaseInsensitive ) == 0 )
+                {
+                    QFileIconProvider IconProvider;
+                    Icon = IconProvider.icon( QFileInfo( Item.IconPath ) );
+                }
+                else
+                {
+                    Icon = QIcon( Item.IconPath );
+                }
+
+                if( Icon.isNull() == false )
+                    ui.tblEditor->setItem( Row, COL_ICON, new QTableWidgetItem( Icon, "" ) );
+                else
+                    ui.tblEditor->setItem( Row, COL_ICON, {} );
+            }
+            else
+            {
+                ui.tblEditor->setItem( Row, COL_ICON, {} );
+            }
+        }
         ui.tblEditor->setItem( Row, COL_NAME,       new QTableWidgetItem( Item.Name ) );
         ui.tblEditor->setItem( Row, COL_PROGRAM,    new QTableWidgetItem( Item.FilePath ) );
         ui.tblEditor->setItem( Row, COL_CMDLINE,    new QTableWidgetItem( Item.CMDLine ) );
         ui.tblEditor->setItem( Row, COL_DETECT,     new QTableWidgetItem( Item.Detect ) );
-        ui.tblEditor->setItem( Row, COL_EXTS,       new QTableWidgetItem( Item.SetExtensions.values().join( '|' ) ) );
+        ui.tblEditor->setItem( Row, COL_EXTS,       new QTableWidgetItem( Item.VecExtensions.toList().join( '|' ) ) );
         ui.tblEditor->item( Row, COL_NAME )->setData( Qt::UserRole, QVariant::fromValue( Item ) );
     }
 }

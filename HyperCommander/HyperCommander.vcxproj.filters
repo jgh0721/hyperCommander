@@ -458,9 +458,6 @@
     <QtMoc Include="UIs\dlgGridStyle.hpp">
       <Filter>UI Files</Filter>
     </QtMoc>
-    <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp">
-      <Filter>UniqueLibs</Filter>
-    </QtMoc>
     <QtMoc Include="UIs\dlgExternalConfigure.hpp">
       <Filter>UI Files\Cate - 외부 편집기</Filter>
     </QtMoc>
@@ -472,6 +469,9 @@
     </QtMoc>
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp">
       <Filter>UI Files\Cate - 이름 일괄변경</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp">
+      <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

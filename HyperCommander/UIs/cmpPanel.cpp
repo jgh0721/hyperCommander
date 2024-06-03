@@ -1,17 +1,16 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
-
 #include "dlgGridStyle.hpp"
 
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
 
-#include <QtitanGrid.h>
 #include <shtypes.h>
 #include <ShlObj.h>
 #include <ShObjIdl.h>
 
+#include <QtitanGrid.h>
 #include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/shortcutMgr.hpp"
@@ -239,27 +238,28 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
     const auto View = State->View;
 
     QMenu Menu;
+    Menu.setFocus( Qt::ActiveWindowFocusReason );
+    Menu.setFocusPolicy( Qt::StrongFocus );
     Menu.setFont( QFont( "Sarasa Mono K Light", 14 ) );
     const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
     StExternalMgr->ConstructExternalMenu( &Menu, FileFullPath );
 
     // TODO: 글로벌 위치를 획득한 후, 해당 위치가 항목(SrcIndex) 영역 내에 위치하는 지 확인한다. 
     // 영역내에 위치한다면 해당 위치에 표시하고, 커서가 전혀 다른 곳에 위치한다면, 항목의 영역을 구하고 해당 위치내에서 표시한다. 
-
-    POINT Pos = {};
-    GetCursorPos( &Pos );
-    
-    //const auto ac = Menu.exec( QPoint( Pos.x, Pos.y ) );
-    const auto ac = Menu.exec( QCursor::pos() );
+    const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex));
 
     // 취소하거나 등등
     if( ac == nullptr )
         return;
 
     const auto Editor = ac->data().value< TyExternalEditor >();
-    // 
-    Editor.FilePath;
-    // CreateProcessW()
+    if( Editor.FilePath.isEmpty() == true )
+        return;
+
+    // TODO: CMDLine 을 이용하여 FileFullPath 를 프로세스에 전달할 명령행으로 변환한다. 
+    Editor.CMDLine;
+
+    nsCmn::nsProcess::CreateProcessAsNormal( QDir::toNativeSeparators( Editor.FilePath ), FileFullPath, false, false );
 }
 
 int CmpPanel::InitializeGrid()
@@ -660,6 +660,43 @@ QModelIndex CmpPanel::retrieveFocusViewCursorIndex() const
         return {};
 
     return Row.modelIndex( 0 );
+}
+
+QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex )
+{
+    QPoint Pos( GlobalCursor );
+
+    const auto View = retrieveFocusView();
+    const auto Grid = View->grid();
+    const auto Row = View->getRow( SrcIndex );
+
+    for( const auto Info : Grid->hitInfoAll() )
+    {
+        if( Info.info() != GridHitInfo::Cell )
+            continue;
+
+        if( Info.row().rowIndex() != Row.rowIndex() )
+            continue;
+        if( Info.columnIndex() != 0 )
+            continue;
+
+        QRect GlobalRect( mapToGlobal( Info.rect().topLeft() ), Info.rect().size() );
+        qDebug() << GlobalCursor << Info.rect() << Info.rect().topLeft() << mapToGlobal( Info.rect().topLeft() );
+
+        if( Pos.isNull() == true )
+        {
+            Pos = GlobalRect.topLeft();
+            break;
+        }
+
+        if( GlobalRect.contains( Pos ) == true )
+            break;
+
+        Pos = GlobalRect.topLeft();
+        break;
+    }
+
+    return Pos;
 }
 
 void CmpPanel::processPanelStatusText()

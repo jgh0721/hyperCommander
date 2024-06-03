@@ -26,6 +26,9 @@ Q_DECLARE_METATYPE( TyOpts );
 
 // 변수명, OPT_카테고리_키
 
+const TyOpts OPT_COLOR_SCHEME_COUNT = { "", "", "",
+                                        "ColorScheme", "", "", "", 1 };
+
 const TyOpts OPT_COLORS_LISTFONT  = { QObject::tr( "색상" ), QObject::tr( "글꼴" ), QObject::tr( "파일 목록의 글꼴" ),
                                       "Colors", "FileListFontName", "FontName", "맑은 고딕",
                                       1 };

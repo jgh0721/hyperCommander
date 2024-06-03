@@ -20,13 +20,20 @@ struct ColorScheme
 {
     QString             Name;
 
+    // Main
     QFont               Main_Font;
 
+    // FileList
     QFont               FileList_Font;
     QColor              FileList_FGColor;
     QColor              FileList_BGColor;
-
+    QColor              FileList_Selected;
+    QColor              FileList_Cursor;
+    bool                IsInverseCursor;
+    bool                IsInverseSelect;
 };
+
+Q_DECLARE_METATYPE( ColorScheme );
 
 struct TyExternalEditor
 {
@@ -38,29 +45,7 @@ struct TyExternalEditor
     QString             CMDLine;
 
     QString             Detect;             // force | ext= ...
-    QSet<QString>       SetExtensions;      // 확장자 목록, 소문자
+    QVector<QString>    VecExtensions;      // 확장자 목록, 소문자
 };
 
 Q_DECLARE_METATYPE( TyExternalEditor );
-
-//
-//struct ColorScheme
-//{
-//    QString                             Name;
-//
-//    // Main
-//    QString                             FontFaceMain;
-//
-//    // List
-//
-//    QString                             FontFace;
-//
-//    QColor                              Background;
-//    QColor                              Foreground;
-//    QColor                              Selected;
-//    QColor                              Cursor;
-//
-//    bool IsInverseCursor;
-//    bool IsInverseSelect;
-//
-//};

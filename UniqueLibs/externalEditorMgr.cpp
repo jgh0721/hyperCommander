@@ -49,10 +49,10 @@ void CExternalEditorMgr::Refresh()
         Item.CMDLine    = StSettings->value( QString( "CMDLine%1" ).arg( idx ) ).toString();
         Item.Detect     = StSettings->value( QString( "Detect%1" ).arg( idx ) ).toString();
         for( const auto& Ext : StSettings->value( QString( "Exts%1" ).arg( idx ) ).toString().split( "|", Qt::SkipEmptyParts ).toList() )
-            Item.SetExtensions.insert( Ext );
+            Item.VecExtensions.push_back( Ext );
 
         if( ( Item.Name.isEmpty() == true || Item.FilePath.isEmpty() == true ) || 
-            ( Item.Detect.isEmpty() == true && Item.SetExtensions.isEmpty() == true ) )
+            ( Item.Detect.isEmpty() == true && Item.VecExtensions.isEmpty() == true ) )
             continue;
 
         VecItems.push_back( Item );
@@ -72,25 +72,25 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
 {
     const auto& Ext = FileFullPath.section( '.', -1, -1,  QString::SectionFlag::SectionDefault ).toLower();
 
-    // NOTE: 테스트용
-    if( vecExternalItems.isEmpty() == true )
-    {
-        vecExternalItems.push_back(
-            {
-                "CudaText", QIcon( "C:/Apps/TotalCMD/Tools/CudaText/CudaText.exe" ), "C:/Apps/TotalCMD/Tools/CudaText/CudaText.exe",
-
-                "C:/Apps/TotalCMD/Tools/CudaText/CudaText.exe", "%1",
-
-                "",
-                QSet<QString>() << "txt" << "cpp" << "log"
-            }
-        );
-    }
-
-
     for( const auto& Item : vecExternalItems )
     {
-        bool IsContains = Item.SetExtensions.contains( Ext );
+        bool IsContains = false;
+
+        for( const auto& ProgExt : Item.VecExtensions )
+        {
+            if( ProgExt.contains( "*" ) == true )
+            {
+                IsContains = QRegularExpression::fromWildcard( ProgExt ).match( Ext ).hasMatch();
+            }
+            else
+            {
+                IsContains = ProgExt.compare( Ext, Qt::CaseInsensitive ) == 0;
+            }
+
+            if( IsContains == true )
+                break;
+        }
+
         if( IsContains == false )
         {
             // TODO: Definition 적용
@@ -103,7 +103,7 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
         ac->setText( Item.Name );
         ac->setIcon( Item.Icon );
         ac->setData( QVariant::fromValue( Item ) );
-
+        
         Menu->addAction( ac );
     }
 
@@ -120,18 +120,30 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
 
 void CExternalEditorMgr::AddItem( const TyExternalEditor& Item )
 {
+    vecExternalItems.push_back( Item );
+
     saveSettings();
     Refresh();
 }
 
 void CExternalEditorMgr::RemoveItem( int Index )
 {
+    if( Index < 0 || Index >= vecExternalItems.size() )
+        return;
+
+    vecExternalItems.remove( Index );
+
     saveSettings();
     Refresh();
 }
 
 void CExternalEditorMgr::ModifyItem( int Index, const TyExternalEditor & Item )
 {
+    if( Index < 0 || Index >= vecExternalItems.size() )
+        return;
+
+    vecExternalItems[ Index ] = Item;
+
     saveSettings();
     Refresh();
 }
@@ -142,9 +154,6 @@ void CExternalEditorMgr::ac_configure()
     const auto Result = Configure.exec();
     if( Result == QDialog::Rejected )
         return;
-
-
-
 
 }
 
@@ -173,7 +182,7 @@ void CExternalEditorMgr::saveSettings()
         StSettings->setValue( Program,  Item.FilePath );
         StSettings->setValue( CMDLine,  Item.CMDLine );
         StSettings->setValue( Detect,   Item.Detect );
-        StSettings->setValue( Exts,     Item.SetExtensions.values().join( '|' ) );
+        StSettings->setValue( Exts,     Item.VecExtensions.toList().join( '|' ) );
     }
 
     StSettings->endGroup();

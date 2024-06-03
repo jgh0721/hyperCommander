@@ -104,6 +104,15 @@
    </item>
    <item>
     <widget class="QTableWidget" name="tblEditor">
+     <property name="frameShape">
+      <enum>QFrame::Shape::Box</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Shadow::Sunken</enum>
+     </property>
+     <property name="midLineWidth">
+      <number>0</number>
+     </property>
      <property name="editTriggers">
       <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
      </property>
@@ -112,6 +121,9 @@
      </property>
      <property name="selectionBehavior">
       <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+     </property>
+     <property name="gridStyle">
+      <enum>Qt::PenStyle::SolidLine</enum>
      </property>
      <attribute name="horizontalHeaderStretchLastSection">
       <bool>true</bool>
@@ -122,6 +134,11 @@
      <column>
       <property name="text">
        <string>아이콘</string>
+      </property>
+      <property name="font">
+       <font>
+        <hintingpreference>PreferDefaultHinting</hintingpreference>
+       </font>
       </property>
      </column>
      <column>
