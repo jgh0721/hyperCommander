@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(QTDIR)\include;$(QTDIR)\include\Qt;$(QTDIR)\include\QtCLucene;$(QTDIR)\include\QtCore;$(QTDIR)\include\QtCore\$(QMake_QT_VERSION_);$(QTDIR)\include\QtCore\$(QMake_QT_VERSION_)\QtCore;$(QTDIR)\include\QtConcurrent;$(QTDIR)\include\QtConcurrent\$(QMake_QT_VERSION_);$(QTDIR)\include\QtConcurrent\$(QMake_QT_VERSION_)\QtConcurrent;$(QTDIR)\include\QtGui;$(QTDIR)\include\QtGui\$(QMake_QT_VERSION_);$(QTDIR)\include\QtGui\$(QMake_QT_VERSION_)\QtGui;$(QTDIR)\include\QtNetwork;$(QTDIR)\include\QtNetwork\$(QMake_QT_VERSION_);$(QTDIR)\include\QtNetwork\$(QMake_QT_VERSION_)\QtNetwork;$(QTDIR)\include\QtPlatformHeaders;$(QTDIR)\include\QtPlatformSupport;$(QTDIR)\include\QtPositioning;$(QTDIR)\include\QtPositioning\5.6.5;$(QTDIR)\include\QtPrintSupport;$(QTDIR)\include\qtpropertybrowser;$(QTDIR)\include\QtQml;$(QTDIR)\include\QtQuick;$(QTDIR)\include\QtQuickWidgets;$(QTDIR)\include\QtScript;$(QTDIR)\include\QtScriptTools;$(QTDIR)\include\QtSql;$(QTDIR)\include\QtSql\$(QMake_QT_VERSION_);$(QTDIR)\include\QtSql\$(QMake_QT_VERSION_)\QtSql;$(QTDIR)\include\QtUiTools;$(QTDIR)\include\QtWidgets;$(QTDIR)\include\QtWidgets\$(QMake_QT_VERSION_);$(QTDIR)\include\QtWidgets\$(QMake_QT_VERSION_)\QtWidgets;$(QTDIR)\include\QtTest;$(QTDIR)\include\QtXml;$(QTDIR)\include\QtXmlPatterns;$(QTDIR)\include\QtWinExtras;$(QTDIR)\include\QtZlib;$(QTDIR)\include\QtFtp;$(QTDIR)\include\QtHttp;$(QTDIR)\include\QtQuazip;$(QTDIR)\include\QtRemoteObjects;$(QTDIR)\include\QtRepParser;$(QTDIR)\include\QtServiceFramework;$(QTDIR)\include\QtnChart;$(QTDIR)\include\QtRibbon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(QTDIR)\lib;$(QTDIR)\plugins\accessible;$(QTDIR)\plugins\audio;$(QTDIR)\plugins\bearer;$(QTDIR)\plugins\iconengines;$(QTDIR)\plugins\imageformats;$(QTDIR)\plugins\mediaservice;$(QTDIR)\plugins\platforms;$(QTDIR)\plugins\playlistformats;$(QTDIR)\plugins\printsupport;$(QTDIR)\plugins\qmltooling;$(QTDIR)\plugins\sqldrivers;$(QTDIR)\plugins\codecs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <Natvis Include="$(MsbuildThisFileDirectory)\CustomQt.natvis" />
+  </ItemGroup>
+</Project>

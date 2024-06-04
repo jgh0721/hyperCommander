@@ -54,11 +54,13 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
     <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
+    <Import Project="..\externalLibs\importQTLibs.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
     <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
+    <Import Project="..\externalLibs\importQTLibs.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
@@ -95,6 +97,7 @@
       <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <PostBuildEvent>
       <Command>IF NOT EXIST "$(TargetDir)HyperCommander.ini" (
@@ -331,6 +334,7 @@
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
       <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
@@ -341,6 +345,7 @@
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
     <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
+    <ClCompile Include="UIs\cmpViewer.cpp" />
     <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
@@ -349,10 +354,12 @@
     <ClCompile Include="UIs\dlgMultiRename.cpp" />
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
+    <ClCompile Include="UIs\dlgViewer.cpp" />
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />
+    <QtMoc Include="UIs\dlgViewer.hpp" />
     <QtMoc Include="UIs\dlgExternalConfigure_Item.hpp" />
     <QtMoc Include="UIs\dlgExternalConfigure.hpp" />
     <QtMoc Include="UIs\dlgGridStyle.hpp" />
@@ -405,11 +412,14 @@
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeViewPrivate.h" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.h" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.h" />
+    <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h" />
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
     <ClInclude Include="..\UniqueLibs\column_Defs.hpp" />
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
+    <QtMoc Include="UIs\cmpViewer.hpp" />
+    <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
@@ -454,6 +464,7 @@
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\cmpPanel.ui" />
+    <QtUic Include="UIs\cmpViewer.ui" />
     <QtUic Include="UIs\dlgCopyToAnother.ui" />
     <QtUic Include="UIs\dlgDelete.ui" />
     <QtUic Include="UIs\dlgExternalConfigure.ui" />
@@ -462,6 +473,7 @@
     <QtUic Include="UIs\dlgMain.ui" />
     <QtUic Include="UIs\dlgMultiRename.ui" />
     <QtUic Include="UIs\dlgOpts.ui" />
+    <QtUic Include="UIs\dlgViewer.ui" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

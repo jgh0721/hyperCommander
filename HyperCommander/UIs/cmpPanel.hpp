@@ -60,6 +60,8 @@ public:
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
 
+    void                                ViewOnLister( const QModelIndex& SrcIndex );
+
     int                                 InitializeGrid();
 
 public slots:

@@ -1,16 +1,19 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
 #include "dlgGridStyle.hpp"
+#include "dlgViewer.hpp"
 
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
+#include "UniqueLibs/internalViewerMgr.hpp"
 
 #include <shtypes.h>
 #include <ShlObj.h>
 #include <ShObjIdl.h>
 
 #include <QtitanGrid.h>
+
 #include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/shortcutMgr.hpp"
@@ -266,6 +269,45 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
     Editor.CMDLine;
 
     nsCmn::nsProcess::CreateProcessAsNormal( QDir::toNativeSeparators( Editor.FilePath ), FileFullPath, false, false );
+}
+
+void CmpPanel::ViewOnLister( const QModelIndex& SrcIndex )
+{
+    const auto StInternalMgr = TyStInternalViewerMgr::GetInstance();
+    const auto State = retrieveFocusState();
+    const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
+
+    QMenu Menu;
+    Menu.setFocus( Qt::ActiveWindowFocusReason );
+    Menu.setFocusPolicy( Qt::StrongFocus );
+    Menu.setFont( QFont( "Sarasa Mono K Light", 14 ) );
+    const auto ViewerCount = StInternalMgr->ConstructInternalMenu( &Menu, FileFullPath );
+    if( ViewerCount == 0 )
+        return;
+
+    TyInternalViewer Viewer;
+
+    if( ViewerCount == 1 )
+    {
+        const auto ac = Menu.actions()[ 0 ];
+        Viewer = ac->data().value< TyInternalViewer >();
+    }
+
+    if( ViewerCount > 1 )
+    {
+        const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex ) );
+
+        // 취소하거나 등등
+        if( ac == nullptr )
+            return;
+
+        Viewer = ac->data().value< TyInternalViewer >();
+    }
+
+    auto DlgViewer = new QDlgViewer;
+    DlgViewer->SetFileName( FileFullPath );
+    DlgViewer->SetInternalViewer( Viewer );
+    DlgViewer->show();
 }
 
 int CmpPanel::InitializeGrid()

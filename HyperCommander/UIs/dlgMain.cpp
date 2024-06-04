@@ -67,6 +67,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     currentPanelIndex = Prev;
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_List )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->ViewOnLister( CursorIndex );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_Return )
 {
     const auto Pane = currentFocusPanel();

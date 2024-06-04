@@ -11,6 +11,7 @@
 #include "cmnTypeDefs.hpp"
 #include "cmnTypeDefs_Name.hpp"
 #include "cmnTypeDefs_Opts.hpp"
+#include "QtnPlatform.h"
 
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
@@ -22,21 +23,8 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     QCoreApplication::setOrganizationDomain( "devtester.com" );
     QCoreApplication::setApplicationName( "HyperCommander" );
 
+    SetEnvironmentVariableW( L"COMMANDER_PATH", QDir::toNativeSeparators( applicationDirPath() ).toStdWString().c_str() );
 
-    const auto ewq = StSettings->fileName();
-
-    //QSettings::setDefaultFormat( QSettings::IniFormat );
-    //QSettings::setPath( QSettings::IniFormat, QSettings::UserScope, applicationDirPath() );
-
-    //const auto StSettings = TyStSettings::GetInstance();
-    //
-
-    //QSettings f( QString("%1/111.ini").arg( applicationDirPath() ), QSettings::IniFormat );
-    //f.beginGroup( "fsdfdsfds" );
-    //f.setValue( "fsdfdsds1", "rew" );
-    //f.endGroup();
-    //const auto qw  = f.fileName();
-    
     do
     {
         SHFILEINFO SHInfo = { 0, };
@@ -80,11 +68,6 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     mainUI->restoreGeometry( StSettings->value( "geometry" ).toByteArray() );
     StSettings->endGroup();
     mainUI->show();
-}
-
-void HyperCommanderApp::ToggleHiddenSystem()
-{
-
 }
 
 void HyperCommanderApp::ShowMultiRename( const QVector< QString >& VecFiles )

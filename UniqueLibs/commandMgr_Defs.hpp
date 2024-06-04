@@ -34,6 +34,8 @@ DECLARE_CMD( BuiltInCMD_Tab_Next,                   QObject::tr( "탭" ), "cm_Ne
 DECLARE_CMD( BuiltInCMD_Tab_Close,                  QObject::tr( "탭" ), "cm_CloseTab",
              Qt::ControlModifier | Qt::Key_W,       QObject::tr( "탭 닫기" ) );
 
+DECLARE_CMD( BuiltInCMD_OPs_Lister,                 QObject::tr( "동작" ), "cm_List",
+             Qt::Key_F3,                            QObject::tr( "내장 뷰어로 보기" ) );
 DECLARE_CMD( BuiltInCMD_OPs_Return,                 QObject::tr( "동작" ), "cm_Return",
              Qt::Key_Return,                        QObject::tr( "실행(엔터 키 입력)" ) );
 DECLARE_CMD( BuiltInCMD_OPs_Enter,                  QObject::tr( "동작" ), "cm_Return",
@@ -67,6 +69,7 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_Next,
     BuiltInCMD_Tab_Close,
 
+    BuiltInCMD_OPs_Lister,
     BuiltInCMD_OPs_Return,
     BuiltInCMD_OPs_Enter,
 

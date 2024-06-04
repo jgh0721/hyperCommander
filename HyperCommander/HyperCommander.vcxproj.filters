@@ -51,6 +51,12 @@
     <Filter Include="UI Files\Cate - 이름 일괄변경">
       <UniqueIdentifier>{8f37a3dd-0575-406c-95a0-aac260b696ef}</UniqueIdentifier>
     </Filter>
+    <Filter Include="UI Files\Cate - 내장 뷰어">
+      <UniqueIdentifier>{129b7a7c-82e0-43af-bb39-9b725a4b85f7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ExternalLibs\TotalCommander">
+      <UniqueIdentifier>{54ad314e-592e-4119-aef1-afcab5afc6b0}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -94,9 +100,6 @@
     <ClCompile Include="UIs\dlgMain.cpp">
       <Filter>UI Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\uniqueLibs\model_defs.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
@@ -135,9 +138,6 @@
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp">
       <Filter>UniqueLibs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp">
-      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp">
       <Filter>CommonLibs</Filter>
@@ -295,6 +295,21 @@
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp">
       <Filter>UI Files\Cate - 이름 일괄변경</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\uniqueLibs\model_defs.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\cmpViewer.cpp">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgViewer.cpp">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
+    </ClCompile>
+    <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -323,6 +338,12 @@
     </QtUic>
     <QtUic Include="UIs\dlgMultiRename.ui">
       <Filter>UI Files\Cate - 이름 일괄변경</Filter>
+    </QtUic>
+    <QtUic Include="UIs\cmpViewer.ui">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgViewer.ui">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
     </QtUic>
   </ItemGroup>
   <ItemGroup>
@@ -470,8 +491,17 @@
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp">
       <Filter>UI Files\Cate - 이름 일괄변경</Filter>
     </QtMoc>
+    <QtMoc Include="UIs\cmpViewer.hpp">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgViewer.hpp">
+      <Filter>UI Files\Cate - 내장 뷰어</Filter>
+    </QtMoc>
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp">
-      <Filter>Header Files</Filter>
+      <Filter>UniqueLibs</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp">
+      <Filter>UniqueLibs</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
@@ -592,8 +622,14 @@
     <ClInclude Include="..\UniqueLibs\column_Defs.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
+    <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h">
+      <Filter>ExternalLibs\TotalCommander</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="cpp.hint" />
+  </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="$(MsbuildThisFileDirectory)\CustomQt.natvis" />
   </ItemGroup>
 </Project>
