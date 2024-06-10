@@ -16,7 +16,6 @@
 
 #include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 #include "UniqueLibs/commandMgr.hpp"
-#include "UniqueLibs/shortcutMgr.hpp"
 
 CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 {

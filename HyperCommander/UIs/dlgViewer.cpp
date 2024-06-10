@@ -63,7 +63,7 @@ void QDlgViewer::initialize()
         SetPropW( hViewer, ( LPCWSTR )GlobalAddAtomW( L"HyperCommander" ), ( HANDLE )Ret );
 
         // SetParent( hViewer, hParent );
-        //SetWindowLongPtrW( hViewer, GWLP_HWNDPARENT, (LONG_PTR)hParent );
+        SetWindowLongPtrW( hViewer, GWLP_HWNDPARENT, (LONG_PTR)hParent );
 
         auto ly2 = new QVBoxLayout;
         Parent->setLayout( ly2 );

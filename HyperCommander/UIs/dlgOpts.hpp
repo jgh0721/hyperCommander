@@ -17,6 +17,8 @@ public:
     Q_INVOKABLE void                    LoadSettings();
     Q_INVOKABLE void                    SaveSettings();
 
+    Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
+
 protected slots:
 
     ///////////////////////////////////////////////////////////////////////////////
@@ -29,9 +31,17 @@ protected slots:
 
     void                                on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QListWidgetItem* Previous );
 
-
     ///////////////////////////////////////////////////////////////////////////////
     /// Content
+
+    /// Page = pdDisplay_ColorScheme
+    void                                on_cbxColorScheme_currentIndexChanged( int index );
+    void                                on_btnAddColorScheme_clicked( bool checked = false );
+
+    void                                on_btnLstFGColor_clicked( bool checked = false );
+    void                                on_btnLstBGColor_clicked( bool checked = false );
+    void                                on_btnLstCursorColor_clicked( bool checked = false );
+    void                                on_btnLstSelectColor_clicked( bool checked = false );
 
     void                                on_btnFileListForground_clicked( bool checked = false );
     void                                on_btnFileListBackground_clicked( bool checked = false );
@@ -47,6 +57,7 @@ private:
     void                                initialize();
 
     void                                setButtonColor( QPushButton* Button, const QColor& Color );
+    void                                resetColorScheme( const QString& Name );
 
     Ui::dlgOpts                         ui;
 };

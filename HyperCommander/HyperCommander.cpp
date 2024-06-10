@@ -1,12 +1,13 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander.hpp"
 
+#include "cmnHCUtils.hpp"
 #include "dlgMain.hpp"
 #include "dlgMultiRename.hpp"
 
 #include "../uniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/commandMgr.hpp"
-#include "UniqueLibs/shortcutMgr.hpp"
+#include "UniqueLibs/colorSchemeMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "cmnTypeDefs_Name.hpp"
@@ -60,8 +61,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     } while( false );
 
     TyStCommandMgr::GetInstance()->Refresh();
-
-    TyStShortcutMgr::GetInstance()->SetShortcut( QKeySequence( "Shift+Return", QKeySequence::PortableText ), "ContextMenu" );
+    TyStColorSchemeMgr::GetInstance()->Refresh();
 
     mainUI = new QMainUI;
     StSettings->beginGroup( OPT_SEC_WINDOW );

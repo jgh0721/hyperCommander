@@ -57,6 +57,9 @@
     <Filter Include="ExternalLibs\TotalCommander">
       <UniqueIdentifier>{54ad314e-592e-4119-aef1-afcab5afc6b0}</UniqueIdentifier>
     </Filter>
+    <Filter Include="UI Files\Cate - 환경설정">
+      <UniqueIdentifier>{37718303-1293-458d-9f6d-107ecf5dd1a5}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -115,17 +118,11 @@
     <ClCompile Include="..\commonLibs\cmnPath.cpp">
       <Filter>CommonLibs</Filter>
     </ClCompile>
-    <ClCompile Include="..\UniqueLibs\shortcutMgr.cpp">
-      <Filter>UniqueLibs</Filter>
-    </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp">
       <Filter>CommonLibs\Qt</Filter>
-    </ClCompile>
-    <ClCompile Include="UIs\dlgOpts.cpp">
-      <Filter>UI Files</Filter>
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp">
       <Filter>UniqueLibs</Filter>
@@ -310,15 +307,18 @@
     <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\colorSchemeMgr.cpp">
+      <Filter>UniqueLibs</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgOpts.cpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\cmpPanel.ui">
-      <Filter>UI Files</Filter>
-    </QtUic>
-    <QtUic Include="UIs\dlgOpts.ui">
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgCopyToAnother.ui">
@@ -345,6 +345,9 @@
     <QtUic Include="UIs\dlgViewer.ui">
       <Filter>UI Files\Cate - 내장 뷰어</Filter>
     </QtUic>
+    <QtUic Include="UIs\dlgOpts.ui">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtUic>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="UIs\cmpPanel.hpp">
@@ -359,14 +362,8 @@
     <QtMoc Include="..\UniqueLibs\builtInFsModel.hpp">
       <Filter>UniqueLibs</Filter>
     </QtMoc>
-    <QtMoc Include="..\UniqueLibs\shortcutMgr.hpp">
-      <Filter>UniqueLibs</Filter>
-    </QtMoc>
     <QtMoc Include="..\UniqueLibs\commandMgr.hpp">
       <Filter>UniqueLibs</Filter>
-    </QtMoc>
-    <QtMoc Include="UIs\dlgOpts.hpp">
-      <Filter>UI Files</Filter>
     </QtMoc>
     <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp">
       <Filter>CommonLibs\Qt</Filter>
@@ -503,6 +500,9 @@
     <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp">
       <Filter>UniqueLibs</Filter>
     </QtMoc>
+    <QtMoc Include="UIs\dlgOpts.hpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
@@ -624,6 +624,9 @@
     </ClInclude>
     <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h">
       <Filter>ExternalLibs\TotalCommander</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\colorSchemeMgr.hpp">
+      <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

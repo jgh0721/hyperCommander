@@ -1,24 +1,7 @@
 ﻿#pragma once
 
 #include "columnMgr.hpp"
-
-struct Node
-{
-    QString                             Name;
-    BOOL                                IsNormalizedByNFD = FALSE;
-    QString                             Ext;
-
-    DWORD                               Attiributes = 0;
-    uint64_t                            Size = 0;
-
-    QDateTime                           Created;
-    QDateTime                           Modified;
-
-    ///////////////////////////////////////////////////////////////////////////
-
-    QPixmap                             Icon;
-    QVector< QVariant >                 VecContent;
-};
+#include "cmnTypeDefs.hpp"
 
 class FSModel : public QAbstractItemModel
 {

@@ -2,6 +2,7 @@
 #include "dlgOpts.hpp"
 
 #include "Qt/cmnQtUtils.hpp"
+#include "UniqueLibs/colorSchemeMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
 
@@ -17,6 +18,12 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
 
 void QMainOpts::LoadSettings()
 {
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    StColorSchemeMgr->Refresh();
+
+    ui.cbxColorScheme->clear();
+    ui.cbxColorScheme->addItems( StColorSchemeMgr->GetNames() );
+
     ui.ftCbxFileList->setCurrentFont( GetOPTValue( OPT_COLORS_LISTFONT ) );
     ui.spbFileListFontSize->setValue( GetOPTValue( OPT_COLORS_LISTFONTSIZE ).toInt() );
 
@@ -32,6 +39,29 @@ void QMainOpts::SaveSettings()
     SetOPTValue( OPT_COLORS_BACKCOLOR, ui.btnFileListBackground->text() );
 }
 
+void QMainOpts::RefreshColorScheme( const QString& SchemeName )
+{
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    const auto ColorScheme = StColorSchemeMgr->GetColorScheme( SchemeName );
+    resetColorScheme( ColorScheme.Name );
+
+    if( ColorScheme.Name.isEmpty() == true )
+        return;
+
+    ui.edtColorSchemeName->setText( ColorScheme.Name );
+    ui.chkIsDarkMode->setChecked( ColorScheme.IsDarkMode );
+
+    ui.fntMnuFontBox->setFont( QFont( ColorScheme.Menu_Font ) );
+    ui.spbMnuFontBox->setValue( ColorScheme.Menu_Font.pointSize() );
+
+    ui.fntDlgFontBox->setFont( QFont( ColorScheme.Dialog_Font ) );
+    ui.spbDlgFontBox->setValue( ColorScheme.Dialog_Font.pointSize() );
+
+    ui.fntLstFontBox->setFont( QFont( ColorScheme.FileList_Font ) );
+    ui.spbLstFontBox->setValue( ColorScheme.FileList_Font.pointSize() );
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 /// TitleBar
 
@@ -45,6 +75,9 @@ void QMainOpts::on_btnClose_clicked( bool checked /* = false */ )
 
 void QMainOpts::on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QListWidgetItem* Previous )
 {
+    UNREFERENCED_PARAMETER( Current );
+    UNREFERENCED_PARAMETER( Previous );
+
     if( Current == nullptr )
         return;
 
@@ -54,6 +87,61 @@ void QMainOpts::on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QLis
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Content
+
+/// Page = pdDisplay_ColorScheme
+void QMainOpts::on_cbxColorScheme_currentIndexChanged( int index )
+{
+    RefreshColorScheme( ui.cbxColorScheme->currentText() );
+}
+
+void QMainOpts::on_btnAddColorScheme_clicked( bool checked )
+{
+    const auto Written = QInputDialog::getText( this, tr( "색 구성표 추가" ), tr( "새 구성표 이름:" ) );
+    if( ui.cbxColorScheme->findText( Written ) >= 0 )
+    {
+        // TODO: 중복된 이름
+        return;
+    }
+
+    QSignalBlocker Blocker( ui.cbxColorScheme );
+    {
+        ui.cbxColorScheme->addItem( Written );
+        ui.cbxColorScheme->setCurrentText( Written );
+    }
+    resetColorScheme( Written );
+}
+
+void QMainOpts::on_btnLstFGColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnLstFGColor, Selected );
+}
+
+void QMainOpts::on_btnLstBGColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnLstBGColor, Selected );
+}
+
+void QMainOpts::on_btnLstCursorColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnLstCursorColor, Selected );
+}
+
+void QMainOpts::on_btnLstSelectColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnLstSelectColor, Selected );
+}
 
 void QMainOpts::on_btnFileListForground_clicked( bool checked )
 {
@@ -112,4 +200,20 @@ void QMainOpts::setButtonColor( QPushButton* Button, const QColor& Color )
     Button->setAutoFillBackground( true );
     // Button->setPalette( QPalette( Selected ) );
     Button->setText( Color.name() );
+}
+
+void QMainOpts::resetColorScheme( const QString& Name )
+{
+    ui.edtColorSchemeName->setText( Name );
+    ui.chkIsDarkMode->setChecked( false );
+
+    ui.fntMnuFontBox->setCurrentFont( {} );
+    ui.spbMnuFontBox->setValue( 9 );
+    ui.fntDlgFontBox->setCurrentFont( {} );
+    ui.spbDlgFontBox->setValue( 9 );
+    ui.fntLstFontBox->setCurrentFont( {} );
+    ui.spbLstFontBox->setValue( 14 );
+
+    setButtonColor( ui.btnLstFGColor, {} );
+    setButtonColor( ui.btnLstBGColor, {} );
 }
