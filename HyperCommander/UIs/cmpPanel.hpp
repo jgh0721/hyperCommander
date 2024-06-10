@@ -8,17 +8,10 @@ class FSModel;
 
 namespace Qtitan
 {
-    class GridBandedTableView;
-}
-
-namespace Qtitan
-{
     class GridViewBase;
-}
-
-namespace Qtitan
-{
+    class GridBandedTableView;
     class ContextMenuEventArgs;
+    class RowClickEventArgs;
 }
 
 class CmpPanel : public QWidget
@@ -72,6 +65,7 @@ public slots:
     void                                on_btnGridStyle_clicked( bool checked = false );
     void                                on_tabWidget_currentChanged( int Index );
     void                                oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args );
+    void                                oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args );
 
 signals:
 

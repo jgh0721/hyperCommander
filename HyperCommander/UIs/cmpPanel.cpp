@@ -439,6 +439,8 @@ int CmpPanel::InitializeGrid()
     }
     
     connect( View, &Qtitan::GridViewBase::contextMenu, this, &CmpPanel::oo_grdLocal_contextMenu );
+    connect( View, &Qtitan::GridViewBase::rowDblClicked, this, &CmpPanel::oo_grdLocal_rowDblClicked );
+
     connect( View, &Qtitan::GridViewBase::cellClicked, this, [this]( CellClickEventArgs* Args ) {
         if( retrieveCurrentIndex() >= 0 )
         {
@@ -639,6 +641,21 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     }
 
     Args->setHandled( true );
+}
+
+void CmpPanel::oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args )
+{
+    const auto Row = Args->row();
+    const auto View = retrieveFocusView();
+    const auto Index = Row.modelIndex( 0 );
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+
+    if( View->activeEditor() != nullptr )
+        View->closeEditor();
+
+    QKeyEvent Event( QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier );
+
+    Args->setHandled( StCommandMgr->ProcessKeyPressEvent( &Event, Index ) );
 }
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
