@@ -46,6 +46,11 @@ QString FSModel::GetFileFullPath( const QModelIndex& Index ) const
     return QString( "%1%2\\%3" ).arg( Root ).arg( CurrentPath.length() == 1 ? "" : CurrentPath ).arg( Item.Name );
 }
 
+QString FSModel::GetFileFullPath( const QString& Name ) const
+{
+    return QString( "%1%2\\%3" ).arg( Root ).arg( CurrentPath.length() == 1 ? "" : CurrentPath ).arg( Name );
+}
+
 Node FSModel::GetFileInfo( const QModelIndex& Index ) const
 {
     if( checkIndex( Index, CheckIndexOption::IndexIsValid | CheckIndexOption::DoNotUseParent ) == false )
@@ -84,6 +89,14 @@ int FSModel::GetDirectoryCount() const
 int64_t FSModel::GetTotalSize() const
 {
     return TotalSize;
+}
+
+DWORD FSModel::Rename( const QModelIndex& Index, const QString& NewName )
+{
+    const auto& Old = GetFileFullPath( Index ).toStdWString();
+    const auto& New = GetFileFullPath( NewName ).toStdWString();
+
+    return MoveFileExW( Old.c_str(), New.c_str(), 0 );
 }
 
 void FSModel::Refresh()
@@ -242,7 +255,7 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
 
     // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
 
-    if( role == Qt::DisplayRole )
+    if( role == Qt::DisplayRole || role == Qt::EditRole )
     {
         const auto& Item = VecNode[ Row ];
         if( Item.VecContent.isEmpty() == true || Col >= Item.VecContent.size() )
@@ -319,6 +332,35 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     return QVariant();
 }
 
+bool FSModel::setData( const QModelIndex& index, const QVariant& value, int role )
+{
+    if( role == Qt::EditRole )
+    {
+        if( index.isValid() == false )
+            return QAbstractItemModel::setData( index, value, role );
+
+        const auto Row = index.row();
+        const auto Col = index.column();
+
+        if( Row < 0 || Row >= VecNode.size() )
+            return QAbstractItemModel::setData( index, value, role );
+
+        if( Col < 0 || Col >= CurrentView.VecColumns.size() )
+            return QAbstractItemModel::setData( index, value, role );
+
+        if( Col == 0 )
+        {
+            auto& Node = VecNode[ Row ];
+            Node.Name = value.toString();
+            Node.VecContent[ Col ] = value;
+            emit dataChanged( index, index, QList<int>() << Qt::DisplayRole << Qt::EditRole );
+            return true;
+        }
+    }
+
+    return QAbstractItemModel::setData( index, value, role );
+}
+
 QVariant FSModel::headerData( int section, Qt::Orientation orientation, int role ) const
 {
     if( orientation != Qt::Horizontal )
@@ -334,7 +376,8 @@ QVariant FSModel::headerData( int section, Qt::Orientation orientation, int role
 
 Qt::ItemFlags FSModel::flags( const QModelIndex& index ) const
 {
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    const auto Def = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    return index.column() == 0 ? Def | Qt::ItemIsEditable : Def;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

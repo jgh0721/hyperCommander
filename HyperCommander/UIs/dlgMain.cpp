@@ -67,6 +67,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     currentPanelIndex = Prev;
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_RenameSingleFile )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->RenameFileName( CursorIndex );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_List )
 {
     const auto Pane = currentFocusPanel();

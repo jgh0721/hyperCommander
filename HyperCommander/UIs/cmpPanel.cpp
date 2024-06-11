@@ -26,6 +26,14 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
 void CmpPanel::Initialize()
 {
+    connect( &viewClickTimer, &QTimer::timeout, [this]() {
+        const auto View = retrieveFocusView();
+        if( View == nullptr )
+            return;
+
+        View->showEditor( GridEditor::ActivateByClick );
+    } );
+
     RefreshVolumeList();
 
     while( ui.tabWidget->count() > 0 )
@@ -207,6 +215,20 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
     }
 }
 
+void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    viewClickTimer.stop();
+
+    for( const auto& State : vecTabStates )
+        State->LastFocusedRowIndex = -1;
+
+    const auto View = retrieveFocusView();
+    View->setFocusedColumnIndex( 0 );
+    View->showEditor( GridEditor::ActivateByKeyPress_F2 );
+}
+
 void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
 {
     const auto View = retrieveFocusView();
@@ -358,7 +380,7 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setSelectedBackgroundColor( QColor( 255, 112, 43 ) );
     BaseOpts.setSelectedInverseColor( true );
     BaseOpts.setModelDecorationOpacityRole( FSModel::USR_ROLE_HIDDENOPACITY );
-
+    
     BaseOpts.setGroupsHeaderText( "Fdsfds" );
     BaseOpts.setColumnHeaderHints( true );
     
@@ -373,7 +395,7 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setGroupsHeaderTextColor( "white" );
-
+    
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
     TableOpts.setColumnsQuickCustomization( false );
@@ -407,7 +429,7 @@ int CmpPanel::InitializeGrid()
     // 모든 단축키 등 해제
     for( const auto& act : View->actions() )
     {
-        act->disconnect();
+        (void)act->disconnect();
         act->setShortcut( {} );
     }
     
@@ -428,7 +450,7 @@ int CmpPanel::InitializeGrid()
             GridColumn->setTextAlignment( Column.Align );
             GridColumn->setTextColor( "silver" );
             GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
-            
+            GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
             if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
             {
                 GridColumn->setSortOrder( Qtitan::SortAscending );
@@ -439,27 +461,12 @@ int CmpPanel::InitializeGrid()
     }
     
     connect( View, &Qtitan::GridViewBase::contextMenu, this, &CmpPanel::oo_grdLocal_contextMenu );
+    connect( View, &Qtitan::GridViewBase::cellClicked, this, &CmpPanel::oo_grdLocal_cellClicked );
     connect( View, &Qtitan::GridViewBase::rowDblClicked, this, &CmpPanel::oo_grdLocal_rowDblClicked );
-
-    connect( View, &Qtitan::GridViewBase::cellClicked, this, [this]( CellClickEventArgs* Args ) {
-        if( retrieveCurrentIndex() >= 0 )
-        {
-            if( GetAsyncKeyState( VK_CONTROL ) & 0x8000 )
-            {
-                SelectRowOnCurrentTab( Args->cell().modelIndex(), false );
-                Args->setHandled( true );
-            }
-        }
-    } );
-    connect( View, &Qtitan::GridViewBase::columnClicked, this, [=]( ColumnClickEventArgs* Args ) {
-        qDebug() << Args;
-    } );
-    connect( View, &Qtitan::GridViewBase::selectionChanged, this, [ = ]( GridSelection* selection, GridSelection* oldSelection ) {
-        qDebug() << "Selected = " << selection->selectedRowIndexes().size();
-
-        for( const auto& Row : selection->selectedRowIndexes() )
-            qDebug() << Row;
-    } );
+    connect( View, &Qtitan::GridViewBase::focusRowChanged, this, &CmpPanel::oo_grdLocal_rowFocusChanged );
+    connect( View, &Qtitan::GridViewBase::editorStarted, this, &CmpPanel::oo_grdLocal_editorStarted );
+    connect( View, &Qtitan::GridViewBase::editorPosting, this, &CmpPanel::oo_grdLocal_editorPosting );
+    connect( View, &Qtitan::GridViewBase::selectionChanged, this, &CmpPanel::oo_grdLocal_selectionChanged );
 
     View->endUpdate();
     
@@ -622,7 +629,9 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     const auto Info = Args->hitInfo();
     const auto Type = Info.info();
     const auto ModelIndex = Info.modelIndex();
-    
+
+    viewClickTimer.stop();
+
     switch( Type )
     {
         case GridHitInfo::Cell: {
@@ -643,6 +652,72 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     Args->setHandled( true );
 }
 
+void CmpPanel::oo_grdLocal_cellClicked( Qtitan::CellClickEventArgs* Args )
+{
+    const auto& Cell = Args->cell();
+
+    //// 자신을 포함한 여러 행을 선택하고, 그 중에 하나를 다시 선택하면 해당 행만 남기고 나머지는 선택 해제한다.
+    //// 선택 행이 하나이고, 해당 행을 다시 클릭했을 때는 이름 변경 시도를 고려해야 한다. 
+    //if( spLocalView_->modelController()->isRowSelected( cell.row() ) == true )
+    //{
+    //    if( spLocalView_->modelController()->selection()->selectedRowIndexes().count() > 1 )
+    //    {
+    //        if( QGuiApplication::queryKeyboardModifiers() == Qt::NoModifier )
+    //        {
+    //            spLocalView_->deselectAll();
+    //            spLocalView_->selectRow( cell.row().rowIndex() );
+    //            return;
+    //        }
+    //    }
+    //}
+
+    //if( cell.columnIndex() != TBL_LOCAL_HDX_FILENAME.index )
+    //{
+    //    lastFocusRowIndex_ = spLocalView_->focusedRowIndex();
+    //    viewClickTimer_.stop();
+    //    return;
+    //}
+
+    if( retrieveCurrentIndex() < 0 )
+    {
+        int a = 0;
+    }
+
+    if( retrieveCurrentIndex() >= 0 )
+    {
+        if( Cell.columnIndex() != 0 )
+        {
+            viewClickTimer.stop();
+        }
+
+        const auto Modifiers = QGuiApplication::queryKeyboardModifiers();
+        if( Modifiers.testFlag( Qt::ControlModifier ) )
+        {
+            SelectRowOnCurrentTab( Args->cell().modelIndex(), false );
+            Args->setHandled( true );
+        }
+
+        if( Cell.columnIndex() == 0 && 
+            Modifiers == Qt::NoModifier )
+        {
+            const auto State = retrieveFocusState();
+            const auto View = State->View;
+
+            if( State->LastFocusedRowIndex != View->focusedRowIndex() )
+            {
+                State->LastFocusedRowIndex = View->focusedRowIndex();
+                viewClickTimer.stop();
+                return;
+            }
+
+            static const auto doubleClickInterval = qApp->styleHints()->mouseDoubleClickInterval();
+            viewClickTimer.setSingleShot( true );
+            viewClickTimer.start( doubleClickInterval );
+        }
+    }
+
+}
+
 void CmpPanel::oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 {
     const auto Row = Args->row();
@@ -653,9 +728,88 @@ void CmpPanel::oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args )
     if( View->activeEditor() != nullptr )
         View->closeEditor();
 
+    viewClickTimer.stop();
+
     QKeyEvent Event( QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier );
 
     Args->setHandled( StCommandMgr->ProcessKeyPressEvent( &Event, Index ) );
+}
+
+void CmpPanel::oo_grdLocal_rowFocusChanged( int OldRowIndex, int NewRowIndex )
+{
+    UNREFERENCED_PARAMETER( OldRowIndex );
+    UNREFERENCED_PARAMETER( NewRowIndex );
+
+    //qDebug() << qMakePair( OldRowIndex, NewRowIndex );
+
+    viewClickTimer.stop();
+
+    for( const auto& State : vecTabStates )
+        State->LastFocusedRowIndex = -1;
+    
+    retrieveFocusState()->LastFocusedRowIndex = OldRowIndex;
+}
+
+void CmpPanel::oo_grdLocal_editorStarted( Qtitan::EditorEventArgs* Args )
+{
+    if( Args->column()->index() != 0 )
+        return;
+
+    const auto View = retrieveFocusView();
+    const auto Editor = View->activeEditor();
+    const auto LineEdit = qobject_cast< QLineEdit* >( Editor->getCellWidget() );
+
+    // 파일이름의 경우
+    LineEdit->setTextMargins( 2, 0, 2, 0 );
+    LineEdit->setObjectName( "edtFieldOnList" );
+    LineEdit->installEventFilter( this );
+    LineEdit->setStyleSheet( "margin-left: 28px;" );        // 파일 이름 옆에 나타나는 아이콘의 크기를 측정하여 지정해야한다. 
+
+    // 색상 설정
+    auto Pal = QGuiApplication::palette();
+    Pal.setColor( QPalette::Base, QColor( "black" ) );
+    Pal.setColor( QPalette::WindowText, QColor( "silver" ) );
+    Pal.setColor( QPalette::Text, QColor( "silver" ) );
+    LineEdit->setPalette( Pal );
+
+    auto Text = LineEdit->text();
+
+    if( Text.contains( '.' ) == true )
+    {
+        LineEdit->setSelection( 0, static_cast< int >( Text.lastIndexOf( '.' ) ) );
+    }
+    else
+    {
+        LineEdit->selectAll();
+    }
+}
+
+void CmpPanel::oo_grdLocal_editorPosting( Qtitan::EditorEventArgs* Args )
+{
+    if( Args->column()->index() != 0 )
+        return;
+
+    const auto State = retrieveFocusState();
+    const auto View = State->View;
+    const auto Editor = View->activeEditor();
+    const auto LineEdit = qobject_cast< QLineEdit* >( Editor->getCellWidget() );
+
+    const auto Ret = State->Model->Rename( State->ProxyModel->mapToSource( Args->row().modelIndex( 0 ) ), LineEdit->text() );
+
+    Args->setHandled( Ret != FALSE );
+}
+
+void CmpPanel::oo_grdLocal_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )
+{
+    viewClickTimer.stop();
+
+    for( const auto& State : vecTabStates )
+        State->LastFocusedRowIndex = -1;
+
+    qDebug() << "Selected = " << NewSelection->selectedRowIndexes().size();
+
+    for( const auto& Row : NewSelection->selectedRowIndexes() )
+        qDebug() << Row;
 }
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
@@ -663,13 +817,45 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
     if( Event->type() == QEvent::FocusIn )
     {
         const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
-        if( Grid != nullptr && static_cast< QFocusEvent* >( Event )->gotFocus() == true )
+        if( Grid != nullptr && dynamic_cast< QFocusEvent* >( Event )->gotFocus() == true )
             emit sig_NotifyPanelActivated();
+    }
+
+    if( Event->type() == QEvent::FocusOut )
+    {
+        const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
+        if( Grid != nullptr )
+        {
+            viewClickTimer.stop();
+            for( const auto& State : vecTabStates )
+                State->LastFocusedRowIndex = -1;
+        }
+    }
+
+    // 이름 변경 편집기가 활성화된 상태에서 위/아래 화살표를 누르면 이동한다.
+    if( Event->type() == QEvent::KeyPress && 
+        Object->objectName() == "edtFieldOnList" )
+    {
+        const auto KeyEvent = dynamic_cast< QKeyEvent* >( Event );
+        const auto Pressed = KeyEvent->keyCombination().key();
+        if( Pressed == Qt::Key_Up || Pressed == Qt::Key_Down )
+        {
+            const auto View = retrieveFocusView();
+            if( View->activeEditor() != nullptr )
+                View->closeEditor();
+
+            QMetaObject::invokeMethod( this, "RenameFileName", Qt::QueuedConnection, Q_ARG( const QModelIndex&, QModelIndex() ) );
+            return true;
+        }
     }
 
     if( Event->type() == QEvent::KeyPress )
     {
-        const auto KeyEvent     = static_cast< QKeyEvent* >( Event );
+        const auto View         = retrieveFocusView();
+        if( View->activeEditor() != nullptr )
+            return false;
+
+        const auto KeyEvent     = dynamic_cast< QKeyEvent* >( Event );
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
         //const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
 

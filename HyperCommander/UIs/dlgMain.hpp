@@ -20,6 +20,7 @@ public slots:
     DECLARE_HC_COMMAND( cm_NextTab );
     DECLARE_HC_COMMAND( cm_CloseTab );
 
+    DECLARE_HC_COMMAND( cm_RenameSingleFile );
     DECLARE_HC_COMMAND( cm_List );
     DECLARE_HC_COMMAND( cm_Return );
 

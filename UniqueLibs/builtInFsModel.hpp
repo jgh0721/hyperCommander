@@ -16,6 +16,7 @@ public:
     QString                             GetCurrentPath() const;
     void                                SetColumnView( const ColumnView& CV );
     QString                             GetFileFullPath( const QModelIndex& Index ) const;
+    QString                             GetFileFullPath( const QString& Name ) const;
     Node                                GetFileInfo( const QModelIndex& Index ) const;
     bool                                IsRoot() const;
 
@@ -25,11 +26,14 @@ public:
     int                                 GetDirectoryCount() const;
     int64_t                             GetTotalSize() const;
 
+    DWORD                               Rename( const QModelIndex& Index, const QString& NewName );
+
     QModelIndex                         index( int row, int column, const QModelIndex& parent = QModelIndex() ) const override;
     QModelIndex                         parent( const QModelIndex& child ) const override;
     int                                 rowCount( const QModelIndex& parent = QModelIndex() ) const override;
     int                                 columnCount( const QModelIndex& parent = QModelIndex() ) const override;
     QVariant                            data( const QModelIndex& index, int role = Qt::DisplayRole ) const override;
+    bool                                setData(const QModelIndex& index, const QVariant& value, int role) override;
     QVariant                            headerData( int section, Qt::Orientation orientation, int role = Qt::DisplayRole ) const override;
     Qt::ItemFlags                       flags( const QModelIndex& index ) const override;
 
