@@ -23,6 +23,9 @@ enum TyEnSizeStyle {
 QString                                 GetFormattedSizeText( qint64 Size, TyEnSizeStyle Style );
 QString                                 GetFormattedAttrText( quint32 Attributes, bool IsUpper );
 
+QVariant                                ShowMSGBox( QWidget* parent, QMessageBox::Icon Icon, const QString& Content, const QString& Title = "", QMessageBox::StandardButtons Buttons = QMessageBox::Ok, bool IsWait = true, Qt::WindowFlags Flags = Qt::Dialog | Qt::MSWindowsFixedSizeDialogHint | Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint );
+QVariant                                ShowMSGBoxWithDetail( QWidget* parent, QMessageBox::Icon Icon, const QString& Content, const QString& Detail, const QString& Title = "", QMessageBox::StandardButtons Buttons = QMessageBox::Ok, bool IsWait = true, Qt::WindowFlags Flags = Qt::Dialog | Qt::MSWindowsFixedSizeDialogHint | Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint );
+
 /*!
  * @brief Total Commnader's Detect String Parser Ported from Double Commander's uDetectStr
 

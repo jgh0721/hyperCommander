@@ -132,6 +132,7 @@
          <string notr="true">QListView::item {
 	margin-left: 10px;
 	margin-right: 10px;
+	height: 32px;
 }</string>
         </property>
         <property name="frameShape">
@@ -149,133 +150,23 @@
         <property name="selectionBehavior">
          <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
         </property>
-        <item>
-         <property name="text">
-          <string>새 항목</string>
-         </property>
-        </item>
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="uniformItemSizes">
+         <bool>true</bool>
+        </property>
        </widget>
       </item>
       <item>
        <widget class="QStackedWidget" name="stkOpts">
         <property name="currentIndex">
-         <number>2</number>
+         <number>1</number>
         </property>
         <widget class="QWidget" name="pgDisplay"/>
         <widget class="QWidget" name="pgDisplay_ColorScheme">
          <layout class="QGridLayout" name="gridLayout">
-          <item row="1" column="1" colspan="2">
-           <widget class="QFontComboBox" name="ftCbxFileList"/>
-          </item>
-          <item row="5" column="0">
-           <widget class="QKeySequenceEdit" name="keySequenceEdit"/>
-          </item>
-          <item row="4" column="2">
-           <widget class="QPushButton" name="btnFileListBackground">
-            <property name="text">
-             <string>PushButton</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="0">
-           <widget class="QLabel" name="label">
-            <property name="text">
-             <string>파일 목록 글꼴</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="0" colspan="2">
-           <widget class="QLabel" name="label_3">
-            <property name="text">
-             <string>파일 목록 글꼴 색상</string>
-            </property>
-           </widget>
-          </item>
-          <item row="8" column="0">
-           <spacer name="verticalSpacer">
-            <property name="orientation">
-             <enum>Qt::Orientation::Vertical</enum>
-            </property>
-            <property name="sizeHint" stdset="0">
-             <size>
-              <width>20</width>
-              <height>40</height>
-             </size>
-            </property>
-           </spacer>
-          </item>
-          <item row="2" column="2">
-           <widget class="QSpinBox" name="spbFileListFontSize">
-            <property name="suffix">
-             <string> pt</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="2">
-           <widget class="QPushButton" name="btnFileListForground">
-            <property name="text">
-             <string>btn</string>
-            </property>
-           </widget>
-          </item>
           <item row="2" column="0" colspan="2">
-           <widget class="QLabel" name="label_2">
-            <property name="text">
-             <string>파일 목록 글꼴 크기</string>
-            </property>
-           </widget>
-          </item>
-          <item row="6" column="0" colspan="3">
-           <widget class="QPushButton" name="btnShowFileSetColor">
-            <property name="text">
-             <string>파일 형식별 색상 정의(&amp;D)...</string>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="0" colspan="2">
-           <widget class="QLabel" name="label_4">
-            <property name="text">
-             <string>파일 목록 배경 색상</string>
-            </property>
-           </widget>
-          </item>
-          <item row="0" column="0" colspan="3">
-           <widget class="QWidget" name="widget" native="true">
-            <layout class="QHBoxLayout" name="horizontalLayout_6">
-             <item>
-              <widget class="QLabel" name="label_5">
-               <property name="text">
-                <string>구성표:</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QComboBox" name="cbxColorScheme"/>
-             </item>
-             <item>
-              <spacer name="horizontalSpacer_4">
-               <property name="orientation">
-                <enum>Qt::Orientation::Horizontal</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>662</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
-             <item>
-              <widget class="QPushButton" name="btnAddColorScheme">
-               <property name="text">
-                <string>구성표 추가</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item row="7" column="0" colspan="3">
            <widget class="QFrame" name="frame_2">
             <property name="frameShape">
              <enum>QFrame::Shape::StyledPanel</enum>
@@ -313,7 +204,7 @@
                 </size>
                </property>
                <property name="text">
-                <string>PushButton</string>
+                <string/>
                </property>
               </widget>
              </item>
@@ -332,7 +223,7 @@
                 </size>
                </property>
                <property name="text">
-                <string>PushButton</string>
+                <string/>
                </property>
               </widget>
              </item>
@@ -365,7 +256,7 @@
                 </size>
                </property>
                <property name="text">
-                <string>PushButton</string>
+                <string/>
                </property>
               </widget>
              </item>
@@ -420,7 +311,7 @@
                 </size>
                </property>
                <property name="text">
-                <string>PushButton</string>
+                <string/>
                </property>
               </widget>
              </item>
@@ -501,7 +392,7 @@
              <item row="3" column="1">
               <widget class="QFontComboBox" name="fntLstFontBox"/>
              </item>
-             <item row="6" column="0" colspan="5">
+             <item row="6" column="0" colspan="7">
               <widget class="Grid" name="grdColorPreview">
                <property name="toolTip">
                 <string>Advanced DataGrid for Qt</string>
@@ -515,6 +406,69 @@
               </widget>
              </item>
             </layout>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <spacer name="verticalSpacer">
+            <property name="orientation">
+             <enum>Qt::Orientation::Vertical</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>40</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="0" column="0" colspan="2">
+           <widget class="QWidget" name="widget" native="true">
+            <layout class="QHBoxLayout" name="horizontalLayout_6">
+             <item>
+              <widget class="QLabel" name="label_5">
+               <property name="text">
+                <string>구성표:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="cbxColorScheme"/>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_4">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>662</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnAddColorScheme">
+               <property name="text">
+                <string>구성표 추가</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnRemoveColorScheme">
+               <property name="text">
+                <string>구성표 삭제</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QPushButton" name="btnShowFileSetColor">
+            <property name="text">
+             <string>파일 형식별 색상 정의(&amp;D)...</string>
+            </property>
            </widget>
           </item>
          </layout>

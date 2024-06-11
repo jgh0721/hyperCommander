@@ -3,7 +3,11 @@
 #include "dlgGridStyle.hpp"
 #include "dlgViewer.hpp"
 
+#include "Cate - FileOperation/dlgFileCopy.hpp"
+#include "Cate - FileOperation/dlgCreateDirectory.hpp"
+
 #include "UniqueLibs/columnMgr.hpp"
+#include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
 #include "UniqueLibs/internalViewerMgr.hpp"
@@ -15,7 +19,6 @@
 #include <QtitanGrid.h>
 
 #include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
-#include "UniqueLibs/commandMgr.hpp"
 
 CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 {
@@ -212,6 +215,26 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
         } while( false );
 
         CoUninitialize();
+    }
+}
+
+void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    QDirectoryCreateUI Ui;
+    const auto Ret = Ui.exec();
+    if( Ret == QDialog::Rejected )
+        return;
+
+    const auto NewName = Ui.GetInputText();
+    if( NewName.isEmpty() == true )
+        return;
+
+    const auto State = retrieveFocusState();
+    if( State->Model->MakeDirectory( NewName ) != ERROR_SUCCESS )
+    {
+        
     }
 }
 
@@ -796,7 +819,7 @@ void CmpPanel::oo_grdLocal_editorPosting( Qtitan::EditorEventArgs* Args )
 
     const auto Ret = State->Model->Rename( State->ProxyModel->mapToSource( Args->row().modelIndex( 0 ) ), LineEdit->text() );
 
-    Args->setHandled( Ret != FALSE );
+    Args->setHandled( Ret == ERROR_SUCCESS );
 }
 
 void CmpPanel::oo_grdLocal_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )

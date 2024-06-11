@@ -4,12 +4,6 @@
 
 #include "cmnTypeDefs.hpp"
 
-/*!
-    [Viewer]
-
-
-*/
-
 class CInternalViewerMgr : public QObject
 {
     Q_OBJECT

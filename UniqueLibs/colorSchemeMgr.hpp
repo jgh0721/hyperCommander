@@ -45,10 +45,12 @@ class CColorSchemeMgr
 public:
 
     void                                Refresh();
-
+    
     QVector< QString >                  GetNames() const;
     TyColorScheme                       GetColorScheme( const QString& Name ) const;
     void                                SetCurrentColorScheme( const QString& Name );
+    void                                UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile );
+    void                                RemoveColorScheme( const QString& Name, bool IsWriteToFile );
 
     QVector< QString >                  GetFileSetNames() const;
     TyFileSet                           GetFileSet( const QString& Name ) const;
@@ -61,6 +63,7 @@ signals:
     void sigFileSetChanged();
 
 private:
+    QFont                               retrieveFont( const QString& FontFamily, const QString& FontSize, int DefaultSize = 9 ) const;
 
     TyColorScheme                       currentColorScheme;
     QMap< QString, TyColorScheme >      mapNameToScheme;

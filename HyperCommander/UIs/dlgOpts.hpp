@@ -6,7 +6,9 @@
 
 const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
 const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
+const QPair< int, QString > PAGE_FILESET                    = { 2, QObject::tr("파일집합 정의") };
 const QPair< int, QString > PAGE_SHORTCUT                   = { 2, QObject::tr("단축키") };
+const QPair< int, QString > PAGE_CUSTOM_COLUMNS             = { 3, QObject::tr("사용자정의 컬럼") };
 
 class QMainOpts : public QDialog
 {
@@ -16,9 +18,9 @@ public:
 
     Q_INVOKABLE void                    LoadSettings();
     Q_INVOKABLE void                    SaveSettings();
-
+    Q_INVOKABLE void                    SaveSettings_ColorScheme();
     Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
-
+    
 protected slots:
 
     ///////////////////////////////////////////////////////////////////////////////
@@ -42,9 +44,6 @@ protected slots:
     void                                on_btnLstBGColor_clicked( bool checked = false );
     void                                on_btnLstCursorColor_clicked( bool checked = false );
     void                                on_btnLstSelectColor_clicked( bool checked = false );
-
-    void                                on_btnFileListForground_clicked( bool checked = false );
-    void                                on_btnFileListBackground_clicked( bool checked = false );
 
     ///////////////////////////////////////////////////////////////////////////////
     /// Footer

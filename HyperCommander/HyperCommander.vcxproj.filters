@@ -60,6 +60,9 @@
     <Filter Include="UI Files\Cate - 환경설정">
       <UniqueIdentifier>{37718303-1293-458d-9f6d-107ecf5dd1a5}</UniqueIdentifier>
     </Filter>
+    <Filter Include="UI Files\Cate - 파일 동작">
+      <UniqueIdentifier>{adace7ac-8027-4d2d-b276-75482af8f0f5}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -313,6 +316,12 @@
     <ClCompile Include="UIs\dlgOpts.cpp">
       <Filter>UI Files\Cate - 환경설정</Filter>
     </ClCompile>
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -322,9 +331,6 @@
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgCopyToAnother.ui">
-      <Filter>UI Files</Filter>
-    </QtUic>
-    <QtUic Include="UIs\dlgDelete.ui">
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgGridStyle.ui">
@@ -347,6 +353,15 @@
     </QtUic>
     <QtUic Include="UIs\dlgOpts.ui">
       <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtUic>
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileCopy.ui">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtUic>
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileDelete.ui">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtUic>
+    <QtUic Include="UIs\Cate - FileOperation\dlgCreateDirectory.ui">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
     </QtUic>
   </ItemGroup>
   <ItemGroup>
@@ -503,6 +518,12 @@
     <QtMoc Include="UIs\dlgOpts.hpp">
       <Filter>UI Files\Cate - 환경설정</Filter>
     </QtMoc>
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
@@ -626,6 +647,9 @@
       <Filter>ExternalLibs\TotalCommander</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\colorSchemeMgr.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
   </ItemGroup>

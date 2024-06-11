@@ -17,6 +17,11 @@
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    auto Font = QApplication::font();
+    Font.setStyleStrategy( QFont::PreferAntialias  );
+    Font.setHintingPreference( QFont::PreferFullHinting );
+    QApplication::setFont( Font );
+
     QApplication::setStyle( QStyleFactory::create( "windows11" ) );
     QPixmapCache::setCacheLimit( 65535 );
 

@@ -84,7 +84,23 @@
      <height>33</height>
     </rect>
    </property>
+   <property name="styleSheet">
+    <string notr="true">QMenuBar {
+}
+
+QMenuBar::item {
+}
+
+QMenu {
+	font-size: 10pt;
+	height: 32px;
+}
+</string>
+   </property>
    <widget class="QMenu" name="menu_O">
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
     <property name="title">
      <string>환경설정(&amp;O)</string>
     </property>

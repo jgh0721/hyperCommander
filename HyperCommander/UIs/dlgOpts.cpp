@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
 
+#include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
 
@@ -24,19 +25,40 @@ void QMainOpts::LoadSettings()
     ui.cbxColorScheme->clear();
     ui.cbxColorScheme->addItems( StColorSchemeMgr->GetNames() );
 
-    ui.ftCbxFileList->setCurrentFont( GetOPTValue( OPT_COLORS_LISTFONT ) );
-    ui.spbFileListFontSize->setValue( GetOPTValue( OPT_COLORS_LISTFONTSIZE ).toInt() );
+    //ui.ftCbxFileList->setCurrentFont( GetOPTValue( OPT_COLORS_LISTFONT ) );
+    //ui.spbFileListFontSize->setValue( GetOPTValue( OPT_COLORS_LISTFONTSIZE ).toInt() );
 
-    setButtonColor( ui.btnFileListForground, QColor( GetOPTValue( OPT_COLORS_FORECOLOR ) ) );
-    setButtonColor( ui.btnFileListBackground, QColor( GetOPTValue( OPT_COLORS_BACKCOLOR ) ) );
+    //setButtonColor( ui.btnFileListForground, QColor( GetOPTValue( OPT_COLORS_FORECOLOR ) ) );
+    //setButtonColor( ui.btnFileListBackground, QColor( GetOPTValue( OPT_COLORS_BACKCOLOR ) ) );
 }
 
 void QMainOpts::SaveSettings()
 {
-    SetOPTValue( OPT_COLORS_LISTFONT, ui.ftCbxFileList->currentFont().family() );
-    SetOPTValue( OPT_COLORS_LISTFONTSIZE, ui.spbFileListFontSize->value() );
-    SetOPTValue( OPT_COLORS_FORECOLOR, ui.btnFileListForground->text() );
-    SetOPTValue( OPT_COLORS_BACKCOLOR, ui.btnFileListBackground->text() );
+    //SetOPTValue( OPT_COLORS_LISTFONT, ui.ftCbxFileList->currentFont().family() );
+    //SetOPTValue( OPT_COLORS_LISTFONTSIZE, ui.spbFileListFontSize->value() );
+    //SetOPTValue( OPT_COLORS_FORECOLOR, ui.btnFileListForground->text() );
+    //SetOPTValue( OPT_COLORS_BACKCOLOR, ui.btnFileListBackground->text() );
+}
+
+void QMainOpts::SaveSettings_ColorScheme()
+{
+    TyColorScheme ColorScheme = {};
+
+    ColorScheme.Name                = ui.edtColorSchemeName->text();
+    ColorScheme.IsDarkMode          = ui.chkIsDarkMode->isChecked();
+    ColorScheme.Menu_Font           = ui.fntMnuFontBox->currentFont();
+    ColorScheme.Menu_Font.setPointSize( ui.spbMnuFontBox->value() );
+    ColorScheme.Dialog_Font         = ui.fntDlgFontBox->currentFont();
+    ColorScheme.Dialog_Font.setPointSize( ui.spbDlgFontBox->value() );
+    ColorScheme.FileList_Font       = ui.fntLstFontBox->currentFont();
+    ColorScheme.FileList_Font.setPointSize( ui.spbLstFontBox->value() );
+    ColorScheme.FileList_FGColor    = ui.btnLstFGColor->text();
+    ColorScheme.FileList_BGColor    = ui.btnLstBGColor->text();
+    ColorScheme.FileList_Cursor     = ui.btnLstCursorColor->text();
+    ColorScheme.FileList_Selected   = ui.btnLstSelectColor->text();
+
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    StColorSchemeMgr->UpsertColorScheme( ColorScheme, true );
 }
 
 void QMainOpts::RefreshColorScheme( const QString& SchemeName )
@@ -100,6 +122,7 @@ void QMainOpts::on_btnAddColorScheme_clicked( bool checked )
     if( ui.cbxColorScheme->findText( Written ) >= 0 )
     {
         // TODO: 중복된 이름
+        ShowMSGBox( this, QMessageBox::Information, LANG_OPT_DUPLICATE_SCHEME, "HyperCommander" );
         return;
     }
 
@@ -109,6 +132,7 @@ void QMainOpts::on_btnAddColorScheme_clicked( bool checked )
         ui.cbxColorScheme->setCurrentText( Written );
     }
     resetColorScheme( Written );
+    SaveSettings_ColorScheme();
 }
 
 void QMainOpts::on_btnLstFGColor_clicked( bool checked )
@@ -142,22 +166,22 @@ void QMainOpts::on_btnLstSelectColor_clicked( bool checked )
     if( Selected.isValid() == true )
         setButtonColor( ui.btnLstSelectColor, Selected );
 }
-
-void QMainOpts::on_btnFileListForground_clicked( bool checked )
-{
-    const auto Selected = QColorDialog::getColor( Qt::white, this );
-
-    if( Selected.isValid() == true )
-        setButtonColor( ui.btnFileListForground, Selected );
-}
-
-void QMainOpts::on_btnFileListBackground_clicked( bool checked )
-{
-    const auto Selected = QColorDialog::getColor( Qt::white, this );
-
-    if( Selected.isValid() == true )
-        setButtonColor( ui.btnFileListBackground, Selected );
-}
+//
+//void QMainOpts::on_btnFileListForground_clicked( bool checked )
+//{
+//    const auto Selected = QColorDialog::getColor( Qt::white, this );
+//
+//    if( Selected.isValid() == true )
+//        setButtonColor( ui.btnFileListForground, Selected );
+//}
+//
+//void QMainOpts::on_btnFileListBackground_clicked( bool checked )
+//{
+//    const auto Selected = QColorDialog::getColor( Qt::white, this );
+//
+//    if( Selected.isValid() == true )
+//        setButtonColor( ui.btnFileListBackground, Selected );
+//}
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Footer
@@ -180,13 +204,17 @@ void QMainOpts::on_btnApply_clicked( bool checked )
 
 void QMainOpts::initialize()
 {
+    ui.lstOptCate->clear();
+
     ui.lstOptCate->addItem( PAGE_DISPLAY.second );
     ui.lstOptCate->addItem( PAGE_DISPLAY_FONTCOLOR.second );
+    ui.lstOptCate->addItem( PAGE_FILESET.second );
     ui.lstOptCate->addItem( PAGE_SHORTCUT.second );
+    ui.lstOptCate->addItem( PAGE_CUSTOM_COLUMNS.second );
 
     ui.lstOptCate->setResizeMode( QListView::Adjust );
     ui.lstOptCate->setSpacing( 6 );
-    ui.lstOptCate->setUniformItemSizes( false );
+    ui.lstOptCate->setUniformItemSizes( true );
 
     ui.lstOptCate->setSizeAdjustPolicy( QAbstractScrollArea::AdjustToContents );
     ui.lstOptCate->setFixedWidth( ui.lstOptCate->sizeHintForColumn( 0 ) + ui.lstOptCate->lineWidth() * 2 + ui.lstOptCate->frameWidth() * 2 );
@@ -216,4 +244,7 @@ void QMainOpts::resetColorScheme( const QString& Name )
 
     setButtonColor( ui.btnLstFGColor, {} );
     setButtonColor( ui.btnLstBGColor, {} );
+    setButtonColor( ui.btnLstCursorColor, {} );
+    setButtonColor( ui.btnLstSelectColor, {} );
 }
+

@@ -15,7 +15,7 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     ui.setupUi( this );
 
     setWindowTitle( tr( "HyperCommander" ) );
-
+    
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 }
 
@@ -95,6 +95,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_Return )
         return;
 
     Pane->ReturnOnCurrentTab( CursorIndex );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
+{
+    const auto Pane = currentFocusPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->NewFolderOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
@@ -248,6 +258,11 @@ void QMainUI::closeEvent( QCloseEvent* Event )
 
 void QMainUI::initialize()
 {
+    auto HelpBar = new QMenuBar;
+    auto HelpBar_Root = new QMenu( tr( "도움말(&H)" ), HelpBar );
+    HelpBar->addMenu( HelpBar_Root );
+    ui.menubar->setCornerWidget( HelpBar );
+
     TyStCommandMgr::GetInstance()->SetMainUI( this );
     TyStExternalEditorMgr::GetInstance()->Refresh();
 

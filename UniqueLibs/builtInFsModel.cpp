@@ -7,7 +7,7 @@
 
 #include <QtConcurrent>
 #include <ObjectArray.h>
-
+#include <Shlobj.h>
 
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
@@ -96,7 +96,56 @@ DWORD FSModel::Rename( const QModelIndex& Index, const QString& NewName )
     const auto& Old = GetFileFullPath( Index ).toStdWString();
     const auto& New = GetFileFullPath( NewName ).toStdWString();
 
-    return MoveFileExW( Old.c_str(), New.c_str(), 0 );
+    const auto Ret = MoveFileExW( Old.c_str(), New.c_str(), 0 );
+    return Ret != FALSE ? ERROR_SUCCESS : GetLastError();
+}
+
+DWORD FSModel::MakeDirectory( const QString& NewName )
+{
+    const auto New = GetFileFullPath( NewName ).toStdWString();
+    const auto Ret = SHCreateDirectoryExW( nullptr, New.c_str(), nullptr );
+
+    if( Ret == ERROR_SUCCESS )
+    {
+        // TODO: Refresh 함수에서 파일 추가, 디렉토리 추가를 별도 함수로 만든 후 이곳에 추가한다.
+        Node Item;
+
+        Item.Attiributes    = FILE_ATTRIBUTE_DIRECTORY;
+        Item.Name           = NewName.section( '\\', 0 );
+        Item.Created        = QDateTime::currentDateTime();
+        Item.Icon           = Icon_Directory;
+
+        // 컬럼에 대한 데이터 생성
+        for( const auto& Col : CurrentView.VecColumns )
+        {
+            const auto Def = Col.Content.toStdWString();
+
+            auto Fmt = const_cast< wchar_t* >( Def.c_str() );
+            bool IsParsed = false;
+            QString Content;
+
+            do
+            {
+                ColumnParseResult Result;
+                IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
+
+                if( IsParsed == true )
+                    CColumnMgr::CreateColumnContent( Result, &Item, Content );
+
+            } while( IsParsed == true );
+
+            Item.VecContent.push_back( Content );
+        }
+
+        const auto Row = rowCount();
+
+        beginInsertRows( QModelIndex(), Row, Row );
+        VecNode.push_back( Item );
+        endInsertRows();
+        DirectoryCount++;
+    }
+
+    return Ret;
 }
 
 void FSModel::Refresh()
@@ -228,6 +277,9 @@ QModelIndex FSModel::parent( const QModelIndex& child ) const
 
 int FSModel::rowCount( const QModelIndex& parent ) const
 {
+    if( parent.isValid() == true )
+        return 0;
+
     return VecNode.size();
 }
 

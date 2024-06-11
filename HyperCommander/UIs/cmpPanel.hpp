@@ -57,6 +57,7 @@ public:
 
     Q_INVOKABLE void                    SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
+    void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
 
     Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );

@@ -344,6 +344,8 @@
       <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
     </ClCompile>
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
     <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
@@ -421,6 +423,9 @@
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <QtMoc Include="UIs\cmpViewer.hpp" />
     <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
@@ -463,10 +468,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <QtUic Include="UIs\Cate - FileOperation\dlgCreateDirectory.ui" />
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileDelete.ui" />
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileCopy.ui" />
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\cmpViewer.ui" />
     <QtUic Include="UIs\dlgCopyToAnother.ui" />
-    <QtUic Include="UIs\dlgDelete.ui" />
     <QtUic Include="UIs\dlgExternalConfigure.ui" />
     <QtUic Include="UIs\dlgExternalConfigure_Item.ui" />
     <QtUic Include="UIs\dlgGridStyle.ui" />

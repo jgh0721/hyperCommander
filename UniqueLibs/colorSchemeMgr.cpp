@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "colorSchemeMgr.hpp"
 
+#include <private/qcssparser_p.h>
+
 #include "cmnTypeDefs_Opts.hpp"
 
 
@@ -26,27 +28,20 @@ void CColorSchemeMgr::Refresh()
 
     for( const auto& Name : SetSchemeNames )
     {
-        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( Name ) );
         TyColorScheme ColorScheme;
+        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( Name ) );
 
-        ColorScheme.Name = Name;
-        ColorScheme.IsDarkMode = StSettings->value( "IsDarkMode" ).toBool();
+        ColorScheme.Name                = Name;
+        ColorScheme.IsDarkMode          = StSettings->value( "IsDarkMode" ).toBool();
 
-        QFont Font;
+        ColorScheme.Menu_Font           = retrieveFont( "Menu_Font_Family", "Menu_Font_Size" );
+        ColorScheme.Dialog_Font         = retrieveFont( "Dialog_Font_Family", "Dialog_Font_Size" );
+        ColorScheme.FileList_Font       = retrieveFont( "List_Font_Family", "List_Font_Size", 14 );
 
-        StSettings->value( "Menu_Font_Family" ).toString();
-        StSettings->value( "Menu_Font_Size" ).toInt();
-
-        StSettings->value( "Dialog_Font_Family" ).toString();
-        StSettings->value( "Dialog_Font_Size" ).toInt();
-
-        StSettings->value( "List_Font_Family" ).toString();
-        StSettings->value( "List_Font_Size" ).toInt();
-
-        StSettings->value( "List_FGColor" ).toString();
-        StSettings->value( "List_BGColor" ).toString();
-        StSettings->value( "List_CursorColor" ).toString();
-        StSettings->value( "List_SelectColor" ).toString();
+        ColorScheme.FileList_FGColor    = QColor::fromString( StSettings->value( "List_FGColor" ).toString() );
+        ColorScheme.FileList_BGColor    = QColor::fromString( StSettings->value( "List_BGColor" ).toString() );
+        ColorScheme.FileList_Cursor     = QColor::fromString( StSettings->value( "List_CursorColor" ).toString() );
+        ColorScheme.FileList_Selected   = QColor::fromString( StSettings->value( "List_SelectColor" ).toString() );
 
         mapNameToScheme[ Name ] = ColorScheme;
         StSettings->endGroup();
@@ -91,6 +86,85 @@ void CColorSchemeMgr::SetCurrentColorScheme( const QString& Name )
         return;
 
     currentColorScheme = mapNameToScheme[ Name ];
+}
+
+void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile )
+{
+    mapNameToScheme[ ColorScheme.Name ] = ColorScheme;
+    if( IsWriteToFile == true )
+    {
+        StSettings->beginGroup( "ColorScheme" );
+        StSettings->setValue( "Count", mapNameToScheme.count() );
+        bool IsAlready = false;
+        for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
+        {
+            if( ColorScheme.Name.compare( StSettings->value( QString( "%1_Name" ).arg( Idx ) ).toString(), Qt::CaseInsensitive ) != 0 )
+                continue;
+
+            IsAlready = true;
+            break;
+        }
+        if( IsAlready == false )
+            StSettings->setValue( QString( "%1_Name" ).arg( mapNameToScheme.count() - 1 ), ColorScheme.Name );
+        StSettings->endGroup();
+
+        for( const auto& CS : mapNameToScheme )
+        {
+            StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( CS.Name ) );
+
+            StSettings->setValue( "IsDarkMode",             CS.IsDarkMode );
+            StSettings->setValue( "Menu_Font_Family",       CS.Menu_Font.family() );
+            StSettings->setValue( "Menu_Font_Size",         CS.Menu_Font.pointSize() );
+
+            StSettings->setValue( "Dialog_Font_Family",     CS.Dialog_Font.family() );
+            StSettings->setValue( "Dialog_Font_Size",       CS.Dialog_Font.pointSize() );
+            
+            StSettings->setValue( "List_Font_Family",       CS.FileList_Font.family() );
+            StSettings->setValue( "List_Font_Size",         CS.FileList_Font.pointSize() );
+
+            StSettings->setValue( "List_FGColor",           CS.FileList_FGColor.name( QColor::HexRgb ) );
+            StSettings->setValue( "List_BGColor",           CS.FileList_BGColor.name( QColor::HexRgb ) );
+            StSettings->setValue( "List_CursorColor",       CS.FileList_Cursor.name( QColor::HexRgb ) );
+            StSettings->setValue( "List_SelectColor",       CS.FileList_Selected.name( QColor::HexRgb ) );
+
+            StSettings->endGroup();
+        }
+    }
+}
+
+void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile )
+{
+    if( mapNameToScheme.contains( Name ) == false )
+        return;
+
+    // TODO: 하나 있는 것을 삭제하면 어떻게 할 것인지 고민해보자. 
+    if( mapNameToScheme.count() == 1 )
+    {
+        Q_ASSERT( false );
+    }
+
+    const auto PrevCount = mapNameToScheme.count();
+    mapNameToScheme.remove( Name );
+
+    if( IsWriteToFile == true )
+    {
+        StSettings->beginGroup( "ColorScheme" );
+        for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
+        {
+            const auto Key = QString( "%1_Name" ).arg( Idx );
+            if( StSettings->value( Key ).toString().compare( Name, Qt::CaseInsensitive ) != 0 )
+                continue;
+
+            StSettings->remove( Key );
+            break;
+        }
+        StSettings->setValue( "Count", mapNameToScheme.count() );
+        StSettings->endGroup();
+
+        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( Name ) );
+        StSettings->remove( "" );
+        StSettings->endGroup();
+    }
 }
 
 QVector<QString> CColorSchemeMgr::GetFileSetNames() const
@@ -157,4 +231,21 @@ bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info )
     } while( false );
 
     return IsMatch;
+}
+
+QFont CColorSchemeMgr::retrieveFont( const QString& FontFamily, const QString& FontSize, int DefaultSize ) const
+{
+    // TODO: dlgOpts 에서 설정되는 기본 글꼴 값과 일치해야 한다. 
+    auto Family = StSettings->value( FontFamily ).toString();
+    if( Family.isEmpty() == true )
+        Family = "맑은 고딕";
+
+    auto Size = StSettings->value( FontSize ).toInt();
+    if( Size <= 0 )
+        Size = DefaultSize;
+
+    QFont Font( Family, Size );
+    Font.setStyleStrategy( QFont::PreferAntialias );
+    Font.setHintingPreference( QFont::PreferFullHinting );
+    return Font;
 }

@@ -27,6 +27,7 @@ public:
     int64_t                             GetTotalSize() const;
 
     DWORD                               Rename( const QModelIndex& Index, const QString& NewName );
+    DWORD                               MakeDirectory( const QString& NewName );
 
     QModelIndex                         index( int row, int column, const QModelIndex& parent = QModelIndex() ) const override;
     QModelIndex                         parent( const QModelIndex& child ) const override;
@@ -54,6 +55,8 @@ private:
     int                                 FileCount = -1;
     int                                 DirectoryCount = -1;
     int64_t                             TotalSize = 0;
+
+    // TODO: Mutex 등을 통해 추가로 보호해야 한다.
 
     QVector< Node >                     VecNode;
     QVector< int >                      VecSelectedRows;

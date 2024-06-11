@@ -23,6 +23,7 @@ public slots:
     DECLARE_HC_COMMAND( cm_RenameSingleFile );
     DECLARE_HC_COMMAND( cm_List );
     DECLARE_HC_COMMAND( cm_Return );
+    DECLARE_HC_COMMAND( cm_MkDir );
 
     DECLARE_HC_COMMAND( cm_SelInverse );
 
