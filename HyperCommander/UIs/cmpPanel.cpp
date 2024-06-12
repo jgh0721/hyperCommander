@@ -238,6 +238,52 @@ void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
     }
 }
 
+void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
+{
+    QFileCopyUI Ui;
+
+    const auto Src_State = retrieveFocusState();
+    const auto Dst_State = Dst->retrieveFocusState();
+
+    // 선택된 항목들을 추가한다.
+    QVector< QModelIndex > SrcModel;
+
+    for( const auto Row : Src_State->View->selection()->selectedRowIndexes() )
+    {
+        const auto Index = Src_State->ProxyModel->mapToSource( Row );
+        if( Src_State->Model->GetName( Index ) == ".." )
+            continue;
+
+        SrcModel.push_back( Index );
+    }
+
+    // 선택된 항목이 없다면 현재 커서가 위치한 항목을 복사한다. 
+    if( SrcModel.isEmpty() == true )
+    {
+        const auto Row = Src_State->View->focusedRow();
+        if( Row.isValid() == true )
+        {
+            const auto Index = Src_State->ProxyModel->mapToSource( Row.modelIndex( 0 ) );
+            if( Src_State->Model->GetName( Index ) != ".." )
+            {
+                SrcModel.push_back( Index );
+            }
+        }
+    }
+
+    if( SrcModel.isEmpty() == true )
+    {
+        // TODO: 메시지 출력, 복사할 파일 없음
+        return;
+    }
+
+    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
+    Ui.SetSourceModel( SrcModel );
+    Ui.SetDestinationPath( Dst_State->Model->GetFileFullPath( "" ) );
+
+    Ui.exec();
+}
+
 void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
 {
     UNREFERENCED_PARAMETER( SrcIndex );
@@ -403,7 +449,8 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setSelectedBackgroundColor( QColor( 255, 112, 43 ) );
     BaseOpts.setSelectedInverseColor( true );
     BaseOpts.setModelDecorationOpacityRole( FSModel::USR_ROLE_HIDDENOPACITY );
-    
+    BaseOpts.setRowAutoHeight( true );
+
     BaseOpts.setGroupsHeaderText( "Fdsfds" );
     BaseOpts.setColumnHeaderHints( true );
     
@@ -418,7 +465,7 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setGroupsHeaderTextColor( "white" );
-    
+
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
     TableOpts.setColumnsQuickCustomization( false );

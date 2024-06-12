@@ -59,6 +59,7 @@ public:
     void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
 
+    void                                FileCopyToOtherPanel( CmpPanel* Dst );
     Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                                ExternalEditorMenu( const QModelIndex& SrcIndex );

@@ -15,6 +15,7 @@ public:
     Q_INVOKABLE void                    Refresh();
     QString                             GetCurrentPath() const;
     void                                SetColumnView( const ColumnView& CV );
+    QString                             GetName( const QModelIndex& Index ) const;
     QString                             GetFileFullPath( const QModelIndex& Index ) const;
     QString                             GetFileFullPath( const QString& Name ) const;
     Node                                GetFileInfo( const QModelIndex& Index ) const;

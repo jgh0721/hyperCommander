@@ -23,7 +23,7 @@ using TyMapShortcutToCMDStr = QHash< QKeyCombination, QLatin1String >;
     Q_INVOKABLE void Name( const QModelIndex& CursorIndex )
 
 #define DEFINE_HC_COMMAND( Class, Name ) \
-void Class::##Name( const QModelIndex& CursorIndex )
+void Class:: ##Name( const QModelIndex& CursorIndex )
 
 DECLARE_CMD( BuiltInCMD_Tab_New,                    QObject::tr( "탭" ), "cm_NewTab",
              Qt::ControlModifier | Qt::Key_T,       QObject::tr( "새 탭" ) );
@@ -34,6 +34,8 @@ DECLARE_CMD( BuiltInCMD_Tab_Next,                   QObject::tr( "탭" ), "cm_Ne
 DECLARE_CMD( BuiltInCMD_Tab_Close,                  QObject::tr( "탭" ), "cm_CloseTab",
              Qt::ControlModifier | Qt::Key_W,       QObject::tr( "탭 닫기" ) );
 
+DECLARE_CMD( BuiltInCMD_OPs_FileCopy,               QObject::tr( "동작" ), "cm_CopyOtherPanel",
+             Qt::ControlModifier | Qt::Key_C,       QObject::tr( "다른 패널로 복사" ) );
 DECLARE_CMD( BuiltInCMD_OPs_RenameSingleFile,       QObject::tr( "동작" ), "cm_RenameSingleFile",
              Qt::Key_F2,                            QObject::tr( "커서 위치의 파일명 변경" ) );
 DECLARE_CMD( BuiltInCMD_OPs_Lister,                 QObject::tr( "동작" ), "cm_List",
@@ -73,6 +75,7 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_Next,
     BuiltInCMD_Tab_Close,
 
+    BuiltInCMD_OPs_FileCopy,
     BuiltInCMD_OPs_RenameSingleFile,
     BuiltInCMD_OPs_Lister,
     BuiltInCMD_OPs_Return,

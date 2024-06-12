@@ -133,7 +133,7 @@
        <widget class="QWidget" name="widget" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_2">
          <item>
-          <widget class="QLabel" name="label_2">
+          <widget class="QLabel" name="lblItemCount">
            <property name="text">
             <string>TextLabel</string>
            </property>
@@ -142,7 +142,7 @@
          <item>
           <widget class="QLabel" name="label">
            <property name="text">
-            <string>TextLabel</string>
+            <string>파일을 복사합니다.</string>
            </property>
           </widget>
          </item>
@@ -166,7 +166,7 @@
        <widget class="QWidget" name="widget_2" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_4">
          <item>
-          <widget class="QLineEdit" name="lineEdit"/>
+          <widget class="QDirectoryEdit" name="edtDirectory" native="true"/>
          </item>
          <item>
           <spacer name="horizontalSpacer_5">
@@ -190,7 +190,7 @@
          <item>
           <widget class="QLabel" name="label_3">
            <property name="text">
-            <string>TextLabel</string>
+            <string>아래에 지정한 형식의 파일만 복사</string>
            </property>
           </widget>
          </item>
@@ -208,25 +208,41 @@
           </spacer>
          </item>
          <item>
-          <widget class="QLabel" name="label_4">
+          <widget class="QLabel" name="lblIncludeSize">
            <property name="text">
             <string>TextLabel</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="label_5">
+          <widget class="QLabel" name="lblFileCount">
            <property name="text">
             <string>TextLabel</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="label_6">
+          <widget class="QLabel" name="lblFolderCount">
            <property name="text">
             <string>TextLabel</string>
            </property>
           </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_7">
+           <property name="orientation">
+            <enum>Qt::Orientation::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Policy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>60</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
          </item>
         </layout>
        </widget>
@@ -235,7 +251,7 @@
        <widget class="QWidget" name="widget_4" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_5">
          <item>
-          <widget class="QLineEdit" name="lineEdit_2"/>
+          <widget class="QLineEdit" name="edtIncludeFilter"/>
          </item>
         </layout>
        </widget>
@@ -307,7 +323,7 @@
       <item>
        <widget class="QPushButton" name="btnBackgroundTo">
         <property name="text">
-         <string>백그라운드 작업)&amp;B)</string>
+         <string>백그라운드 작업(&amp;B)</string>
         </property>
        </widget>
       </item>
@@ -329,6 +345,14 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QDirectoryEdit</class>
+   <extends>QWidget</extends>
+   <header>externalLibs/QDirectoryEdit/QDirectoryEdit.hpp</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

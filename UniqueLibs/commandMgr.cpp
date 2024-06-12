@@ -83,6 +83,11 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_CloseTab )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
+DEFINE_HC_COMMAND( CCommandMgr, cm_CopyOtherPanel )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
 DEFINE_HC_COMMAND( CCommandMgr, cm_RenameSingleFile )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );

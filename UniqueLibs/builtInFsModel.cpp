@@ -37,6 +37,14 @@ void FSModel::SetColumnView( const ColumnView& CV)
     CurrentView = CV;
 }
 
+QString FSModel::GetName( const QModelIndex& Index ) const
+{
+    if( Index.isValid() == false || Index.row() < 0 || Index.row() >= VecNode.size() )
+        return "";
+
+    return VecNode.at( Index.row() ).Name;
+}
+
 QString FSModel::GetFileFullPath( const QModelIndex& Index ) const
 {
     if( checkIndex( Index, CheckIndexOption::IndexIsValid ) == false )

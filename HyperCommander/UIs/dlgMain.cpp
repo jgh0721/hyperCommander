@@ -26,7 +26,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
 {
     // 탭을 추가하면서 Qt 가 자동적으로 엉뚱한 곳으로 포커스를 옮기는 행동이 일어날 때가 있다. 이에 대해 보정한다. 
     const auto Prev = currentPanelIndex;
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -37,7 +37,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
 
 DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -47,7 +47,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
 
 DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -58,7 +58,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
 DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
 {
     const auto Prev = currentPanelIndex;
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -67,9 +67,22 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     currentPanelIndex = Prev;
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_CopyOtherPanel )
+{
+    const auto Src = retrieveSrcPanel();
+    const auto Dst = retrieveDstPanel();
+    Q_ASSERT( Src != nullptr );
+    Q_ASSERT( Dst != nullptr );
+
+    if( Src == nullptr || Dst == nullptr )
+        return;
+
+    Src->FileCopyToOtherPanel( Dst );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_RenameSingleFile )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -79,7 +92,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_RenameSingleFile )
 
 DEFINE_HC_COMMAND( QMainUI, cm_List )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -89,7 +102,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_List )
 
 DEFINE_HC_COMMAND( QMainUI, cm_Return )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -99,7 +112,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_Return )
 
 DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -109,7 +122,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
 
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -119,7 +132,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
 
 DEFINE_HC_COMMAND( QMainUI, cm_MultiRenameFiles )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -147,7 +160,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_MultiRenameFiles )
 
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -178,7 +191,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
 
 DEFINE_HC_COMMAND( QMainUI, cm_ContextMenu )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -188,7 +201,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_ContextMenu )
 
 DEFINE_HC_COMMAND( QMainUI, cm_ExternalEditorMenu )
 {
-    const auto Pane = currentFocusPanel();
+    const auto Pane = retrieveSrcPanel();
     Q_ASSERT( Pane != nullptr );
     if( Pane == nullptr )
         return;
@@ -279,15 +292,28 @@ void QMainUI::initialize()
     ui.cmpLeftPanel->Initialize();
 }
 
-CmpPanel* QMainUI::currentFocusPanel() const
+CmpPanel* QMainUI::retrieveSrcPanel() const
 {
-    qDebug() << "현재 패널 번호 " << currentPanelIndex;
+    qDebug() << __FUNCTION__ << " : 현재 패널 번호 " << currentPanelIndex;
 
     if( currentPanelIndex == 0 )
         return ui.cmpLeftPanel;
 
     if( currentPanelIndex == 1 )
         return ui.cmpRightPanel;
+
+    return nullptr;
+}
+
+CmpPanel* QMainUI::retrieveDstPanel() const
+{
+    qDebug() << __FUNCTION__ << " : 현재 패널 번호 " << currentPanelIndex;
+
+    if( currentPanelIndex == 0 )
+        return ui.cmpRightPanel;
+
+    if( currentPanelIndex == 1 )
+        return ui.cmpLeftPanel;
 
     return nullptr;
 }

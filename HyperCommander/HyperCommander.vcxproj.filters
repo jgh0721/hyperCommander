@@ -63,6 +63,9 @@
     <Filter Include="UI Files\Cate - 파일 동작">
       <UniqueIdentifier>{adace7ac-8027-4d2d-b276-75482af8f0f5}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ExternalLibs\QDirectoryEdit">
+      <UniqueIdentifier>{5b731975-1013-42b9-84d3-613e0f323863}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -322,6 +325,9 @@
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp">
       <Filter>UI Files\Cate - 파일 동작</Filter>
     </ClCompile>
+    <ClCompile Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.cpp">
+      <Filter>ExternalLibs\QDirectoryEdit</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -523,6 +529,9 @@
     </QtMoc>
     <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp">
       <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtMoc>
+    <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp">
+      <Filter>ExternalLibs\QDirectoryEdit</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

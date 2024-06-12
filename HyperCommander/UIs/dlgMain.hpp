@@ -20,6 +20,7 @@ public slots:
     DECLARE_HC_COMMAND( cm_NextTab );
     DECLARE_HC_COMMAND( cm_CloseTab );
 
+    DECLARE_HC_COMMAND( cm_CopyOtherPanel );
     DECLARE_HC_COMMAND( cm_RenameSingleFile );
     DECLARE_HC_COMMAND( cm_List );
     DECLARE_HC_COMMAND( cm_Return );
@@ -49,7 +50,8 @@ protected:
 private:
     Q_INVOKABLE void                    initialize();
 
-    CmpPanel*                           currentFocusPanel() const;
+    CmpPanel*                           retrieveSrcPanel() const;
+    CmpPanel*                           retrieveDstPanel() const;
     int                                 currentPanelIndex = 0; // 0 = Left, 1 = Right
     Ui::dlgMain                         ui;
 }; 
