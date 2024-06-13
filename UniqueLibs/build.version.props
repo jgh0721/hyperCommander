@@ -2,26 +2,12 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <!-- build number: concat 2-digit year with 3-digit day of the year (16-bits until 2066) -->
-        <BuildNumber>2</BuildNumber>
-        <ResCompanyName>GYTNI Co., Ltd.</ResCompanyName>
+        <BuildNumber>1</BuildNumber>
+        <ResCompanyName>MyHouse</ResCompanyName>
         <!-- $([System.DateTime]::Now.ToString('yyyy.MM.dd')).1 와 같은 형식을 사용하여 동적으로 생성할 수 있다. 
              하지만, 해당 값들이 전역 전처리기로 등록되어 불필요하게 미리 컴파일된 헤더를 재생성하는 문제가 발생한다.  -->
         <ResCanonicalVersion>2024.05.21.$(BuildNumber)</ResCanonicalVersion>
         <ResCanonicalVersionWithComma>$(ResCanonicalVersion.Replace('.', ','))</ResCanonicalVersionWithComma>
-
-        <ResFSDCanonicalVersion>2024.03.28.1</ResFSDCanonicalVersion>
-        <ResFSDCanonicalVersionWithComma>$(ResFSDCanonicalVersion.Replace('.', ','))</ResFSDCanonicalVersionWithComma>
-
-        <ResSTUBCanonicalVersion>2024.05.08.1</ResSTUBCanonicalVersion>
-        <ResSTUBCanonicalVersionWithComma>$(ResSTUBCanonicalVersion.Replace('.', ','))</ResSTUBCanonicalVersionWithComma>
-
-        <ResUTILCanonicalVersion>2024.03.31.1</ResUTILCanonicalVersion>
-        <ResUTILCanonicalVersionWithComma>$(ResUTILCanonicalVersion.Replace('.', ','))</ResUTILCanonicalVersionWithComma>
-
-        <!-- 해당 버전을 수정하면 에이전트 전체 재빌드 및 MS 로부터 DLL 디지털 서명을 받아야 한다. -->
-        <!-- HOOK DLL 과 서비스는 HOOK DLL 버전과 연관된 뮤텍스로 통신하므로 버전이 불일치하면 안 된다. -->
-        <ResHOOKCanonicalVersion>2024.03.28.1</ResHOOKCanonicalVersion>
-        <ResHOOKCanonicalVersionWithComma>$(ResHOOKCanonicalVersion.Replace('.', ','))</ResHOOKCanonicalVersionWithComma>
 
         <ProductArch Condition="'$(Platform)'=='ARM64'">a64</ProductArch>
         <ProductArch Condition="'$(Platform)'=='x64'">x64</ProductArch>

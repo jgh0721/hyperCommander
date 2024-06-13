@@ -1,4 +1,5 @@
 <RCC>
-    <qresource prefix="HyperCommander">
+    <qresource prefix="/HyperCommander">
+        <file alias="Logo">Resources/HyperCommander.ico</file>
     </qresource>
 </RCC>

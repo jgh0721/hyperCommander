@@ -21,7 +21,8 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     Font.setStyleStrategy( QFont::PreferAntialias  );
     Font.setHintingPreference( QFont::PreferFullHinting );
     QApplication::setFont( Font );
-
+    
+    QApplication::setWindowIcon( QIcon( ":/HyperCommander/Logo" ) );
     QApplication::setStyle( QStyleFactory::create( "windows11" ) );
     QPixmapCache::setCacheLimit( 65535 );
 

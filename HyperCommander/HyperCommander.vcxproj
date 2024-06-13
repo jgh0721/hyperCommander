@@ -1,5 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(SolutionDir)uniqueLibs/build.common.props" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
       <Configuration>Debug</Configuration>
@@ -470,7 +471,6 @@
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="cpp.hint" />
-    <None Include="HyperCommander.ico" />
     <ResourceCompile Include="HyperCommander.rc" />
     <ClInclude Include="..\uniqueLibs\model_defs.hpp" />
     <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp" />
