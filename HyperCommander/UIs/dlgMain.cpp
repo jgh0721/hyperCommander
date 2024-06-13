@@ -170,7 +170,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
 
     QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
     QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
+}
 
+DEFINE_HC_COMMAND( QMainUI, cm_RereadSource )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->RefreshSource( Pane->CurrentTabIndex() );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )

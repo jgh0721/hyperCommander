@@ -45,6 +45,7 @@ public slots:
     DECLARE_HC_COMMAND( cm_MultiRenameFiles );
 
     DECLARE_HC_COMMAND( cm_SwitchHidSys );
+    DECLARE_HC_COMMAND( cm_RereadSource );
 
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );

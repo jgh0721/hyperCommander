@@ -55,6 +55,8 @@ DECLARE_CMD( BuiltInCMD_Tool_MultiRenameFiles,      QObject::tr( "보기" ), "cm
 
 DECLARE_CMD( BuiltInCMD_View_SwitchHidSys,          QObject::tr( "보기" ), "cm_SwitchHidSys",
              Qt::ControlModifier | Qt::Key_H,       QObject::tr( "숨김/시스템 파일 표시 전환" ) );
+DECLARE_CMD( BuiltInCMD_View_RereadSource,          QObject::tr( "보기" ), "cm_RereadSource",
+             Qt::Key_F5,                            QObject::tr( "원본 새로 고침" ) );
 
 DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,            QObject::tr( "기타" ), "cm_SwitchPanel",
              Qt::Key_Tab,                           QObject::tr( "반대편 패널로 전환" ) );
@@ -87,6 +89,7 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_Tool_MultiRenameFiles,
 
     BuiltInCMD_View_SwitchHidSys,
+    BuiltInCMD_View_RereadSource,
 
     BuiltInCMD_Etc_SwitchPanel,
     BuiltInCMD_Etc_ContextMenu,

@@ -123,6 +123,11 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchHidSys )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
+DEFINE_HC_COMMAND( CCommandMgr, cm_RereadSource )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
 DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchPanel )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );

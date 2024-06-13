@@ -138,7 +138,7 @@ void CmpPanel::RefreshVolumeList()
 
 int CmpPanel::CurrentTabIndex() const
 {
-    return ui.tabWidget->currentIndex();
+    return retrieveCurrentIndex();
 }
 
 void CmpPanel::SetFocusView( int TabIndex )
@@ -236,6 +236,14 @@ void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
     {
         
     }
+}
+
+void CmpPanel::RefreshSource( int TabIndex )
+{
+    if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
+        return;
+
+    vecTabStates[ TabIndex ]->Model->Refresh();
 }
 
 void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
