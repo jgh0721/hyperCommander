@@ -717,6 +717,16 @@ void CmpPanel::oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args )
             openShellContextMenuForObject( FsModel->GetFileFullPath( ProxyModel->mapToSource( ModelIndex ) ).toStdWString(), Pos.x, Pos.y,
                                            reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
         } break;
+        case GridHitInfo::Rows: {
+            POINT Pos = {};
+            GetCursorPos( &Pos );
+
+            const auto ProxyModel = qobject_cast< FSProxyModel* >( Args->view()->model() );
+            const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
+
+            openShellContextMenuForObject( FsModel->GetFileFullPath( "" ).toStdWString(), Pos.x, Pos.y,
+                                           reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
+        } break;
     }
 
     Args->setHandled( true );
