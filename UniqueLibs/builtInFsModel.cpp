@@ -198,6 +198,45 @@ DWORD FSModel::MakeDirectory( const QString& NewName )
     return Ret;
 }
 
+QVector<Node> FSModel::GetChildItems( const QString& Path )
+{
+    QVector< Node > Ret;
+    WIN32_FIND_DATA Wfd = { 0, };
+    HANDLE hFind = FindFirstFileExW( ( Path + "\\*.*" ).toStdWString().c_str(),
+                                     FindExInfoBasic, &Wfd,
+                                     FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
+
+    if( hFind == INVALID_HANDLE_VALUE )
+        return {};
+
+    do
+    {
+        if( wcscmp( Wfd.cFileName, L"." ) == 0 ||
+            wcscmp( Wfd.cFileName, L".." ) == 0 )
+            continue;
+
+        Node Item;
+
+        Item.Attiributes    = Wfd.dwFileAttributes;
+        Item.Reserved0      = Wfd.dwReserved0;
+        Item.Name           = QString::fromWCharArray( Wfd.cFileName );
+        Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, Wfd.cFileName, -1 );
+        Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
+        Item.Size           = (static_cast< int64_t >( Wfd.nFileSizeHigh ) << 32) | ( Wfd.nFileSizeLow );
+        Item.Created        = nsCmn::ConvertTo( Wfd.ftCreationTime, false );
+        Item.Modified       = nsCmn::ConvertTo( Wfd.ftLastWriteTime, false );
+
+        Ret.emplace_back( Item );
+
+        if( QThread::currentThread()->isInterruptionRequested() == true )
+            break;
+
+    } while( FindNextFileW( hFind, &Wfd ) != FALSE );
+
+    FindClose( hFind );
+    return Ret;
+}
+
 void FSModel::Refresh()
 {
     HRESULT hRet = OleInitialize( 0 );

@@ -17,6 +17,14 @@ int main( int argc, char* argv[] )
 
     do
     {
+        //SHFILEINFOW SHInfo = { 0, };
+        //const auto File = std::wstring( L"sln" );
+        //SHGetFileInfoW( L".sln", FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
+        //                SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+        //auto Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+        //if( SHInfo.hIcon != Q_NULLPTR )
+        //    DestroyIcon( SHInfo.hIcon );
+
         Ret = app.exec();
 
     } while( false );

@@ -363,8 +363,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
       <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
     </ClCompile>
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
+    <ClCompile Include="Modules\mdlFileOperation.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileProgress.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
     <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
@@ -446,6 +448,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileProgress.hpp" />
+    <QtMoc Include="Modules\mdlFileOperation.hpp" />
     <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
@@ -490,6 +494,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtUic Include="UIs\Cate - FileOperation\dlgCreateDirectory.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileDelete.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileCopy.ui" />
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileProgress.ui" />
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\cmpViewer.ui" />
     <QtUic Include="UIs\dlgCopyToAnother.ui" />

@@ -5,6 +5,7 @@
 #include <tchar.h>
 #include <Windows.h>
 #include <shellapi.h>
+#include <ShlObj.h>
 
 #include <QtWidgets>
 

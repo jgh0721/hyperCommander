@@ -196,6 +196,16 @@ QVariant ShowMSGBoxWithDetail( QWidget* parent, QMessageBox::Icon Icon, const QS
     return QMessageBox::Ok;
 }
 
+void SetTitleIcon( QLabel* Widget )
+{
+    Q_ASSERT( Widget != nullptr );
+    if( Widget == nullptr )
+        return;
+
+    Widget->setPixmap( QPixmap( ":/HyperCommander/Logo" ) );
+    Widget->setScaledContents( true );
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void CDetectParser::SetDetectString( const QString& Detect )

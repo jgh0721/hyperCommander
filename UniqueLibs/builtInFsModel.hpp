@@ -30,6 +30,7 @@ public:
 
     DWORD                               Rename( const QModelIndex& Index, const QString& NewName );
     DWORD                               MakeDirectory( const QString& NewName );
+    QVector< Node >                     GetChildItems( const QString& Path );
 
     QModelIndex                         index( int row, int column, const QModelIndex& parent = QModelIndex() ) const override;
     QModelIndex                         parent( const QModelIndex& child ) const override;
