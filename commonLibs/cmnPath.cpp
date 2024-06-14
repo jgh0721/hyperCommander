@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "cmnPath.hpp"
 
+#include <winioctl.h>
+
 namespace nsCmn
 {
     namespace nsCmnPath
@@ -59,5 +61,45 @@ namespace nsCmn
             return FileName.mid( Pos + 1 );
         }
 
+        QString GetReparsePointTo( const QString& Path )
+        {
+            WIN32_FIND_DATAW Wfd = { 0, };
+            const auto P = Path.toStdWString();
+            auto FindHandle = FindFirstFileW( P.c_str(), &Wfd );
+
+            if( FindHandle == INVALID_HANDLE_VALUE )
+                return "";
+
+            if( FlagOn( Wfd.dwFileAttributes, FILE_ATTRIBUTE_DIRECTORY ) )
+            {
+                if( FlagOn( Wfd.dwReserved0, IO_REPARSE_TAG_SYMLINK ) ||            // SYMLINKD
+                    FlagOn( Wfd.dwReserved0, IO_REPARSE_TAG_MOUNT_POINT ) )         // JUNTION
+                {
+                    auto hFile =
+                        CreateFileW( P.c_str(), 0,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL );
+
+                    if( hFile != INVALID_HANDLE_VALUE )
+                    {
+                        DWORD cbData;
+                        BYTE DataBuffer[ 16384 ] = { 0 };   // REPARSE_GUID_DATA_BUFFER 는 최대 16KB 이다. 
+
+                        if( DeviceIoControl( hFile, FSCTL_GET_REPARSE_POINT, nullptr, 0, &DataBuffer, sizeof( DataBuffer ), &cbData, nullptr ) != FALSE )
+                        {
+                            CloseHandle( hFile );
+                            const auto pRGDB = ( REPARSE_GUID_DATA_BUFFER* )&DataBuffer;
+                            return QString::fromWCharArray( reinterpret_cast< const wchar_t* >( pRGDB->GenericReparseBuffer.DataBuffer ) );
+                        }
+
+                        CloseHandle( hFile );
+                    }
+                }
+            }
+
+            FindClose( FindHandle );
+
+            return "";
+        }
     } // nsCmnPath
 } // nsCmn

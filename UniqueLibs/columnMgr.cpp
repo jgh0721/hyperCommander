@@ -146,7 +146,16 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info
             if( Info->Size > 0 )
                 Content.push_back( QString::number( Info->Size ) );
             else
-                Content.push_back( QObject::tr( "<폴더>" ) );
+            {
+                if( FlagOn( Info->Attiributes, FILE_ATTRIBUTE_REPARSE_POINT ) )
+                {
+                    Content.push_back( QObject::tr( "<링크>" ) );
+                }
+                else
+                {
+                    Content.push_back( QObject::tr( "<폴더>" ) );
+                }
+            }
         }
         else
             Content.push_back( QString::number( Info->Size ) );

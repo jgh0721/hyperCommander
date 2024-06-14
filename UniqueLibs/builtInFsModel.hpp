@@ -22,6 +22,7 @@ public:
     bool                                IsRoot() const;
 
     void                                ChangeDirectory( const QString& Child );
+    void                                ChangeDirectory( const QModelIndex& Child);
 
     int                                 GetFileCount() const;
     int                                 GetDirectoryCount() const;

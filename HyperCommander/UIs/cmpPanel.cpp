@@ -193,7 +193,7 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
 
     if( EntryInfo.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
     {
-        State->Model->ChangeDirectory( EntryInfo.Name );
+        State->Model->ChangeDirectory( ModelIndex );
     }
     else
     {
@@ -551,7 +551,7 @@ int CmpPanel::InitializeGrid()
     auto State = std::make_shared<TyTabState>( currentIndex, View, Model, ProxyModel );
     vecTabStates.push_back( State );
 
-    Model->ChangeDirectory( "" );
+    Model->ChangeDirectory( QModelIndex() );
     View->bestFit( FitToHeaderPercent );
 
     return currentIndex;
@@ -577,15 +577,13 @@ void CmpPanel::oo_ChangedDirectory( const QString& CurrentPath )
 void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
 {
     // TODO: 실제 파일시스템 외의 것들은 예외처리 필요함
-    ;
-
     auto State = retrieveFocusState();
     if( State == nullptr )
         return;
     
     State->Model->SetRoot( ui.cbxVolume->currentText().left( 2 ) );
     State->Model->SetCurrentPath( "/" );
-    State->Model->ChangeDirectory( "" );
+    State->Model->ChangeDirectory( QModelIndex() );
 }
 
 void CmpPanel::on_btnGridStyle_clicked( bool checked )

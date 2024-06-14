@@ -25,6 +25,7 @@ struct Node
     QString                             Ext;
 
     DWORD                               Attiributes = 0;
+    DWORD                               Reserved0 = 0;
     uint64_t                            Size = 0;
 
     QDateTime                           Created;

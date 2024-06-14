@@ -8,6 +8,7 @@
 #include <QtConcurrent>
 #include <ObjectArray.h>
 #include <Shlobj.h>
+#include <winioctl.h>
 
 /// Everything-SDK
 #include "Everything.h"
@@ -87,6 +88,44 @@ void FSModel::ChangeDirectory( const QString& Child )
     emit sigChangedDirectory( QDir::toNativeSeparators( Root + GetCurrentPath() ) );
 }
 
+void FSModel::ChangeDirectory( const QModelIndex& Child )
+{
+    const auto& Node = GetFileInfo( Child );
+    if( Node.Name.isEmpty() == true )
+        ChangeDirectory( "" );
+    else
+    {
+        if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+        {
+            if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_REPARSE_POINT ) )
+            {
+                if( FlagOn( Node.Reserved0, IO_REPARSE_TAG_SYMLINK ) ||            // SYMLINKD
+                    FlagOn( Node.Reserved0, IO_REPARSE_TAG_MOUNT_POINT ) )         // JUNTION
+                {
+                    const auto s = nsCmn::nsCmnPath::GetReparsePointTo( GetFileFullPath( Child ) );
+
+                    if( s.length() > 2 && s.contains( ':' ) == true )
+                    {
+                        SetRoot( s.left( 2 ) );
+                        SetCurrentPath( s.mid( 2 ) );
+
+                        Refresh();
+
+                        emit sigChangedDirectory( QDir::toNativeSeparators( Root + GetCurrentPath() ) );
+                        return;
+                    }
+                    else
+                    {
+                        // TODO: 오류 처리
+                    }
+                }
+            }
+
+            ChangeDirectory( Node.Name );
+        }
+    }
+}
+
 int FSModel::GetFileCount() const
 {
     return FileCount;
@@ -161,7 +200,7 @@ DWORD FSModel::MakeDirectory( const QString& NewName )
 
 void FSModel::Refresh()
 {
-    OleInitialize( 0 );
+    HRESULT hRet = OleInitialize( 0 );
 
     int FileCount_Refresh = 0;
     int DirectoryCount_Refresh = 0;
@@ -201,29 +240,29 @@ void FSModel::Refresh()
         }
     }
 
+    QVector< Node > Nodes;
+
+    if( CurrentPath.length() != 1 )
+    {
+        Node Item;
+
+        Item.Attiributes = FILE_ATTRIBUTE_DIRECTORY;
+        Item.Name = "..";
+        Item.Size = 0;
+        if( Icon_Directory.isNull() == false )
+            Item.Icon = Icon_Directory;
+
+        Nodes.push_back( Item );
+    }
+
     WIN32_FIND_DATA wfd = { 0 };
     const auto Filter = Base + "*.*";
     HANDLE hFile = FindFirstFileExW( Filter.toStdWString().c_str(),
                                      FindExInfoBasic,
                                      &wfd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
-    
-    QVector< Node > Nodes;
 
     if( hFile != INVALID_HANDLE_VALUE )
     {
-        if( CurrentPath.length() != 1  )
-        {
-            Node Item;
-
-            Item.Attiributes = FILE_ATTRIBUTE_DIRECTORY;
-            Item.Name = "..";
-            Item.Size = 0;
-            if( Icon_Directory.isNull() == false )
-                Item.Icon = Icon_Directory;
-
-            Nodes.push_back( Item );
-        }
-
         do
         {
             if( wcscmp( wfd.cFileName, L"." ) == 0 ||
@@ -233,6 +272,7 @@ void FSModel::Refresh()
             Node Item;
 
             Item.Attiributes    = wfd.dwFileAttributes;
+            Item.Reserved0      = wfd.dwReserved0;
             Item.Name           = QString::fromWCharArray( wfd.cFileName );
             Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
             Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
@@ -240,6 +280,8 @@ void FSModel::Refresh()
             {
                 if( MapDirNameToSize.contains( Item.Name ) == true )
                     Item.Size = MapDirNameToSize[ Item.Name ];
+                else
+                    Item.Size = 0;
             }
             else
             {
@@ -257,15 +299,18 @@ void FSModel::Refresh()
             }
             else
             {
-
                 do
                 {
                     SHFILEINFOW SHInfo = { 0, };
-                    SHGetFileInfoW( Item.Name.toStdWString().c_str(), 0, &SHInfo, sizeof( SHFILEINFOW ),
-                                    SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
-                    Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+                    const auto File = Item.Name.toStdWString();
+                    SHGetFileInfoW( File.c_str(), FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
+                                    SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+
                     if( SHInfo.hIcon != Q_NULLPTR )
+                    {
+                        Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
                         DestroyIcon( SHInfo.hIcon );
+                    }
 
                 } while( false );
 
