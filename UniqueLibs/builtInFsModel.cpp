@@ -9,6 +9,9 @@
 #include <ObjectArray.h>
 #include <Shlobj.h>
 
+/// Everything-SDK
+#include "Everything.h"
+
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
     if( row < 0 || column < 0 || row >= rowCount( parent ) || column >= columnCount( parent ) )
@@ -171,8 +174,35 @@ void FSModel::Refresh()
             Icon_Directory = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
     }
 
+    const auto Base = CurrentPath.length() == 1 ? Root + CurrentPath : Root + CurrentPath + "\\";
+
+    Everything_SetMatchPath( TRUE );
+    Everything_SetMatchWholeWord( TRUE );
+    Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
+    Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
+
+    QMap< QString, qint64 > MapDirNameToSize;
+
+    Everything_SetSearchW( Base.toStdWString().c_str() );
+    Everything_QueryW( TRUE );
+
+    LARGE_INTEGER Size = { 0 };
+    for( DWORD i = 0; i < Everything_GetNumResults(); i++ )
+    {
+        if( Everything_IsFolderResult( i ) == FALSE )
+            continue;
+
+        if( Base.contains( QString::fromWCharArray( Everything_GetResultPathW( i ) ) ) == false )
+            break;
+
+        if( Everything_GetResultSize( i, &Size ) != FALSE )
+        {
+            MapDirNameToSize[ QString::fromWCharArray( Everything_GetResultFileNameW( i ) ) ] = Size.QuadPart;
+        }
+    }
+
     WIN32_FIND_DATA wfd = { 0 };
-    const auto Filter = CurrentPath.length() == 1 ? Root + CurrentPath + "*.*" : Root + CurrentPath + "\\*.*";
+    const auto Filter = Base + "*.*";
     HANDLE hFile = FindFirstFileExW( Filter.toStdWString().c_str(),
                                      FindExInfoBasic,
                                      &wfd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
@@ -206,7 +236,15 @@ void FSModel::Refresh()
             Item.Name           = QString::fromWCharArray( wfd.cFileName );
             Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
             Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
-            Item.Size           = (static_cast< int64_t >( wfd.nFileSizeHigh ) << 32) | (wfd.nFileSizeLow);
+            if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+            {
+                if( MapDirNameToSize.contains( Item.Name ) == true )
+                    Item.Size = MapDirNameToSize[ Item.Name ];
+            }
+            else
+            {
+                Item.Size       = (static_cast< int64_t >( wfd.nFileSizeHigh ) << 32) | (wfd.nFileSizeLow);
+            }
             Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
             Item.Modified       = nsCmn::ConvertTo( wfd.ftLastWriteTime, false );
 

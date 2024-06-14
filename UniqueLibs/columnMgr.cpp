@@ -142,7 +142,12 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info
     else if( Name.compare( QLatin1String( "size" ), Qt::CaseInsensitive ) == 0 )
     {
         if( FlagOn( Info->Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-            Content.push_back( QObject::tr( "<폴더>" ) );
+        {
+            if( Info->Size > 0 )
+                Content.push_back( QString::number( Info->Size ) );
+            else
+                Content.push_back( QObject::tr( "<폴더>" ) );
+        }
         else
             Content.push_back( QString::number( Info->Size ) );
     }

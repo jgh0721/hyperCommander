@@ -56,12 +56,14 @@
     <Import Project="$(QtMsBuild)\Qt.props" />
     <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
     <Import Project="..\externalLibs\importQTLibs.props" />
+    <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
     <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
     <Import Project="..\externalLibs\importQTLibs.props" />
+    <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
@@ -85,8 +87,10 @@
     <PostBuildEvent>
       <Command>IF NOT EXIST "$(TargetDir)HyperCommander.ini" (
     ECHO COPY HyperCommander.sample.ini
-    copy /y $(ProjectDir)HyperCommander.sample.ini $(TargetDir)HyperCommander.ini
-)</Command>
+    copy /y "$(ProjectDir)HyperCommander.sample.ini" "$(TargetDir)HyperCommander.ini"
+)
+
+copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
     <QtUic>
       <Include>
@@ -107,8 +111,10 @@
     <PostBuildEvent>
       <Command>IF NOT EXIST "$(TargetDir)HyperCommander.ini" (
     ECHO COPY HyperCommander.sample.ini
-    copy /y $(ProjectDir)HyperCommander.sample.ini $(TargetDir)HyperCommander.ini
-)</Command>
+    copy /y "$(ProjectDir)HyperCommander.sample.ini" "$(TargetDir)HyperCommander.ini"
+)
+
+copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
     <QtUic>
       <Include>
