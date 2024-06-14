@@ -54,7 +54,7 @@ namespace nsCmn
 
         QString GetFileExtension( const QString& FileName )
         {
-            const auto Pos = FileName.indexOf( '.', -1 );
+            const auto Pos = FileName.lastIndexOf( '.' );
             if( Pos < 0 )
                 return "";
 
