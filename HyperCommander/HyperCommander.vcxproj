@@ -21,13 +21,13 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <UseDebugLibraries>true</UseDebugLibraries>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
@@ -37,12 +37,12 @@
     <Import Project="$(QtMsBuild)\qt_defaults.props" />
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
-    <QtInstall>6.7.0_msvc2019_64</QtInstall>
+    <QtInstall>6.8.0_msvc2022_64</QtInstall>
     <QtModules>core;gui;network;widgets;concurrent;printsupport;sql;uitools</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
-    <QtInstall>6.7.0_msvc2019_64</QtInstall>
+    <QtInstall>6.8.0_msvc2022_64</QtInstall>
     <QtModules>core;gui;network;widgets;concurrent;printsupport;sql;uitools</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
@@ -164,6 +164,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
     <ClCompile Include="..\commonLibs\cmnProcess.cpp" />
+    <ClCompile Include="..\commonLibs\cmnSecurity.cpp" />
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
     <ClCompile Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.cpp">
@@ -379,6 +380,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="UIs\dlgOpts.cpp" />
     <ClCompile Include="UIs\dlgViewer.cpp" />
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
+    <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
     <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />

@@ -101,5 +101,66 @@ namespace nsCmn
 
             return "";
         }
+
+        TyOsValue< int64_t > GetFileSize( HANDLE hFile )
+        {
+            LARGE_INTEGER Li = { 0, };
+            if( GetFileSizeEx( hFile, &Li ) != FALSE )
+                return { Li.QuadPart };
+
+            return MAKE_WIN32_LAST_ERROR;
+        }
+
+        TyOsValue<int64_t> GetFileSize( const std::wstring& FilePath )
+        {
+            WIN32_FIND_DATA Wfd = {0,};
+            HANDLE hFind = ::FindFirstFileW( FilePath.c_str(), &Wfd );
+
+            if( hFind != INVALID_HANDLE_VALUE )
+            {
+                ::FindClose( hFind );
+                return MAKE_WIN32_VALUE( MAKEINT64( Wfd.nFileSizeLow, Wfd.nFileSizeHigh ) );
+            }
+
+            return MAKE_WIN32_LAST_ERROR;
+        }
+
+        TyOsValue<uint32_t> GetHardLinkCount( HANDLE hFile )
+        {
+            BY_HANDLE_FILE_INFORMATION FileInformation = {0,};
+
+            if( ::GetFileInformationByHandle( hFile, &FileInformation ) != FALSE )
+                return MAKE_WIN32_VALUE( FileInformation.nNumberOfLinks );
+
+            return MAKE_WIN32_LAST_ERROR;
+        }
+
+        TyOsValue<bool> IsFileExists( const std::wstring& FilePath )
+        {
+            const auto Ret = ::GetFileAttributesW( FilePath.c_str() );
+            if( Ret == INVALID_FILE_ATTRIBUTES )
+                return MAKE_WIN32_LAST_ERROR;
+
+            return MAKE_WIN32_VALUE( !FlagOn( Ret, FILE_ATTRIBUTE_DIRECTORY ) );
+        }
+
+        TyOsValue<bool> CopyACL( const std::wstring& Src, const std::wstring& Dst, SECURITY_INFORMATION Si )
+        {
+            DWORD Cb = 0;
+            std::vector< char > Buffer;
+            PSECURITY_DESCRIPTOR SD = nullptr;
+            BOOL bRet = GetFileSecurityW( Src.c_str(), Si, SD, 0, &Cb );
+            if( bRet == FALSE && Cb == 0 )
+                return { false, { TyOsError::OS_WIN32_ERROR, ::GetLastError() } };
+
+            Buffer.resize( Cb );
+            SD = Buffer.data();
+            bRet = GetFileSecurityW( Src.c_str(), Si, SD, Buffer.size(), &Cb );
+            if( bRet == FALSE )
+                return { false, { TyOsError::OS_WIN32_ERROR, ::GetLastError() } };
+
+            bRet = SetFileSecurityW( Dst.c_str(), Si, SD );
+            return { bRet != FALSE,{ TyOsError::OS_WIN32_ERROR, ::GetLastError() } };
+        }
     } // nsCmnPath
 } // nsCmn

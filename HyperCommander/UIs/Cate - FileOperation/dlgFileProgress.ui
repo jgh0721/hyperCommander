@@ -136,7 +136,7 @@
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
-       <widget class="QWidget" name="widget" native="true">
+       <widget class="QWidget" name="frmSource" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_4">
          <property name="topMargin">
           <number>0</number>
@@ -174,7 +174,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QWidget" name="widget_2" native="true">
+       <widget class="QWidget" name="frmDestination" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_5">
          <property name="topMargin">
           <number>0</number>
@@ -354,7 +354,7 @@
        </spacer>
       </item>
       <item>
-       <widget class="QPushButton" name="btnCancel">
+       <widget class="QPushButton" name="btnPauseOrResume">
         <property name="text">
          <string>일시 중지(&amp;S)</string>
         </property>
@@ -374,7 +374,7 @@
        </spacer>
       </item>
       <item>
-       <widget class="QPushButton" name="btnOK">
+       <widget class="QPushButton" name="btnOKorCancel">
         <property name="text">
          <string>확인(&amp;O)</string>
         </property>

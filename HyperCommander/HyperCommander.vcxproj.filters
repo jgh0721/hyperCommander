@@ -5,14 +5,8 @@
       <UniqueIdentifier>{639EADAA-A684-42e4-A9AD-28FC9BCB8F7C}</UniqueIdentifier>
       <Extensions>ts</Extensions>
     </Filter>
-    <Filter Include="CommonLibs">
-      <UniqueIdentifier>{d7f90754-16e1-4da4-8f30-aefca6811e25}</UniqueIdentifier>
-    </Filter>
     <Filter Include="UniqueLibs">
       <UniqueIdentifier>{e786301a-c1c7-4dac-aeed-d77fa9b79e2b}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="CommonLibs\Qt">
-      <UniqueIdentifier>{445bd6a7-41d0-4242-a165-528a7005d442}</UniqueIdentifier>
     </Filter>
     <Filter Include="UI Files">
       <UniqueIdentifier>{99349809-55BA-4b9d-BF79-8FDBB0286EB3}</UniqueIdentifier>
@@ -66,6 +60,12 @@
     <Filter Include="외부 라이브러리\QDirectoryEdit">
       <UniqueIdentifier>{5b731975-1013-42b9-84d3-613e0f323863}</UniqueIdentifier>
     </Filter>
+    <Filter Include="공통 라이브러리">
+      <UniqueIdentifier>{d7f90754-16e1-4da4-8f30-aefca6811e25}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="공통 라이브러리\Qt">
+      <UniqueIdentifier>{445bd6a7-41d0-4242-a165-528a7005d442}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -113,19 +113,19 @@
       <Filter>UniqueLibs</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnPath.cpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp">
       <Filter>UniqueLibs</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp">
-      <Filter>CommonLibs\Qt</Filter>
+      <Filter>공통 라이브러리\Qt</Filter>
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp">
       <Filter>UniqueLibs</Filter>
@@ -140,7 +140,7 @@
       <Filter>UniqueLibs</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.cpp">
       <Filter>외부 라이브러리\QtitanDataGrid\Base</Filter>
@@ -281,7 +281,7 @@
       <Filter>UniqueLibs</Filter>
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnProcess.cpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="UIs\dlgExternalConfigure.cpp">
       <Filter>UI Files\Cate - 외부 편집기</Filter>
@@ -330,6 +330,9 @@
     </ClCompile>
     <ClCompile Include="Modules\mdlFileOperation.cpp">
       <Filter>모듈</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnSecurity.cpp">
+      <Filter>공통 라이브러리</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -393,7 +396,7 @@
       <Filter>UniqueLibs</Filter>
     </QtMoc>
     <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp">
-      <Filter>CommonLibs\Qt</Filter>
+      <Filter>공통 라이브러리\Qt</Filter>
     </QtMoc>
     <QtMoc Include="HyperCommander.hpp">
       <Filter>헤더 파일</Filter>
@@ -554,31 +557,28 @@
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnDateTime.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnConcurrent.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnPath.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\uniqueLibs\model_defs.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnCompilerDetection.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnSystemDetection.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp">
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp">
-      <Filter>CommonLibs\Qt</Filter>
-    </ClInclude>
-    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp">
-      <Filter>UniqueLibs</Filter>
+      <Filter>공통 라이브러리\Qt</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp">
       <Filter>UniqueLibs</Filter>
@@ -587,10 +587,10 @@
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnBase.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnIncludeLibrary.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="UIs\dlgCopyToAnother.hpp">
       <Filter>UI Files</Filter>
@@ -605,7 +605,7 @@
       <Filter>UniqueLibs</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h">
       <Filter>외부 라이브러리\QtitanDataGrid\Base</Filter>
@@ -659,7 +659,7 @@
       <Filter>외부 라이브러리\QtitanDataGrid\Grid</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnProcess.hpp">
-      <Filter>CommonLibs</Filter>
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\column_Defs.hpp">
       <Filter>UniqueLibs</Filter>
@@ -672,6 +672,12 @@
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp">
       <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp">
+      <Filter>UniqueLibs</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnSecurity.hpp">
+      <Filter>공통 라이브러리</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

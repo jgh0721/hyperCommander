@@ -24,6 +24,9 @@ void QTraverseSrcModel::run()
     if( Parent.endsWith( "\\" ) )
         Parent = Parent.left( Parent.length() - 1 );
 
+    base = Parent;
+    baseLength = base.length();
+
     for( int idx = 0; idx < src.size(); ++idx )
     {
         if( isInterruptionRequested() == true )
@@ -32,41 +35,44 @@ void QTraverseSrcModel::run()
         const auto& Node = Model->GetFileInfo( src[ idx ] );
         if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
         {
-            traverseSubDirectory( Model->GetFileFullPath( src[ idx ] ) );
+            traverseSubDirectory( Model->GetFileFullPath( src[ idx ] ), Node );
         }
         else
         {
             processFile( Parent, Node );
         }
     }
+
+    int a = 0;
 }
 
-void QTraverseSrcModel::traverseSubDirectory( const QString& Path )
+void QTraverseSrcModel::traverseSubDirectory( const QString& Path, const Node& Item )
 {
-    QStack< QString > Stack;
-    Stack.push_back( Path );
+    QStack< QPair< QString, Node > > Stack;
+    Stack.push_back( qMakePair( Path, Item ) );
 
     while( Stack.isEmpty() == false )
     {
         const auto P = Stack.pop();
 
         dirCount_ += 1;
-        vecItemFullPath_.emplace_back( P );
+        vecItems_.push_back( P.second );
+        vecItemMiddle_.emplace_back( P.first.mid( baseLength ) );
 
         emit notifyStats( totalSize_, fileCount_, dirCount_ );
 
-        for( const auto& Child : Model->GetChildItems( P ) )
+        for( const auto& Child : Model->GetChildItems( P.first ) )
         {
             if( isInterruptionRequested() == true )
                 break;
 
             if( FlagOn( Child.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
             {
-                Stack.emplace_back( P + "\\" + Child.Name );
+                Stack.emplace_back( qMakePair( P.first + "\\" + Child.Name, Child ) );
             }
             else
             {
-                processFile( P, Child );
+                processFile( P.first, Child );
             }
         }
     }
@@ -87,7 +93,7 @@ void QTraverseSrcModel::processFile( const QString& Parent, const Node& Item )
         fileCount_ += 1;
 
         vecItems_.emplace_back( Item );
-        vecItemFullPath_.emplace_back( QString( "%1\\%2" ).arg( Parent ).arg( Item.Name ) );
+        vecItemMiddle_.emplace_back( QString( "%1\\%2" ).arg( Parent.mid( baseLength ) ).arg( Item.Name ) );
 
         emit notifyStats( totalSize_, fileCount_, dirCount_ );
     }
@@ -162,6 +168,7 @@ void QFileCopyUI::SetSourceModel( const QVector<QModelIndex>& SrcModel )
 
 void QFileCopyUI::SetDestinationPath( const QString& Dst )
 {
+    dst_ = Dst;
     ui.edtDirectory->setDirectoryPath( Dst );
 }
 
@@ -183,11 +190,20 @@ void QFileCopyUI::on_btnOK_clicked( bool checked )
         auto UiProgress = new QFileProgress;
 
         ClsOperation->SetMode( CFileOperation::FILE_OP_COPY );
-        ClsOperation->SetSource( workerThread_->vecItems_, workerThread_->vecItemFullPath_ );
+        ClsOperation->SetBase( workerThread_->base );
+        ClsOperation->SetSource( workerThread_->vecItems_, workerThread_->vecItemMiddle_ );
+        ClsOperation->SetDestination( dst_ );
 
+        UiProgress->SetMode( false );
+        UiProgress->SetOperationName( tr( "파일 복사" ) );
+        UiProgress->SetInitialItemCount( 0, workerThread_->vecItems_.size() );
+        UiProgress->SetInitialItemSize( 0, workerThread_->totalSize_ );
+
+        connect( ClsOperation, &CFileOperation::NotifyChangedState, UiProgress, &QFileProgress::OnChangedState );
         connect( ClsOperation, &CFileOperation::NotifyChangedItem, UiProgress, &QFileProgress::OnChangedItem );
         connect( ClsOperation, &CFileOperation::NotifyChangedProgress, UiProgress, &QFileProgress::OnChangedProgress );
         connect( ClsOperation, &CFileOperation::NotifyChangedStatus, UiProgress, &QFileProgress::OnChangedStatus );
+        connect( UiProgress, &QFileProgress::RequestChangeState, ClsOperation, &CFileOperation::ChangeState );
 
         ClsOperation->start();
         UiProgress->exec();

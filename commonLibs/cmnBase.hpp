@@ -24,3 +24,22 @@
 
 #define __FUNCNAME__  ( strrchr(__FUNCTION__, ':' ) ? strrchr( __FUNCTION__, ':' ) + 1 : __FUNCTION__ )
 #define __FUNCNAMEW__ ( wcsrchr(__FUNCTIONW__, L':' ) ? wcsrchr( __FUNCTIONW__, L':' ) + 1 : __FUNCTIONW__ )
+
+#define MAKEINT64(low, high) ((((int64_t)(high))<<32)|((int64_t)low))
+
+struct TyOsError
+{
+    enum TyEnOsError { OS_WIN32_ERROR, OS_NT_ERROR, OS_COM_ERROR };
+    TyEnOsError Type = OS_WIN32_ERROR;
+    uint32_t    ErrorCode;
+};
+
+template< typename Ty >
+struct TyOsValue
+{
+    std::optional< Ty > Value;
+    TyOsError           ErrorCode;
+};
+
+#define MAKE_WIN32_VALUE( Value ) { Value, {} }
+#define MAKE_WIN32_LAST_ERROR { std::nullopt, { TyOsError::OS_WIN32_ERROR, ::GetLastError() } }
