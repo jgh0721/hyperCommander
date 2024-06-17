@@ -61,6 +61,7 @@ public:
 
     void                                RefreshSource( int TabIndex );
     void                                FileCopyToOtherPanel( CmpPanel* Dst );
+    void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
     Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                                ExternalEditorMenu( const QModelIndex& SrcIndex );

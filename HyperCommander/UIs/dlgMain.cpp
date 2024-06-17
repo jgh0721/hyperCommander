@@ -120,6 +120,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
     Pane->NewFolderOnCurrentTab( CursorIndex );
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_Delete )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->FileDeleteOnCurrentTab( CursorIndex );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
 {
     const auto Pane = retrieveSrcPanel();

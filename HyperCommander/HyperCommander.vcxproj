@@ -368,6 +368,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="Modules\mdlFileOperation.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileDelete.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileProgress.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
@@ -382,6 +383,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp" />
     <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />

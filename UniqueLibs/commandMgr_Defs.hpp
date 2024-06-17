@@ -46,6 +46,8 @@ DECLARE_CMD( BuiltInCMD_OPs_Enter,                  QObject::tr( "동작" ), "cm
              Qt::KeypadModifier | Qt::Key_Enter,    QObject::tr( "실행(엔터 키 입력)" ) );
 DECLARE_CMD( BuiltInCMD_OPs_MkDir,                  QObject::tr( "동작" ), "cm_MkDir",
              Qt::ControlModifier | Qt::Key_K,       QObject::tr( "새 폴더" ) );
+DECLARE_CMD( BuiltInCMD_OPs_Delete,                 QObject::tr( "동작" ), "cm_Delete",
+             Qt::Key_Delete,                        QObject::tr( "파일 삭제" ) );
 
 DECLARE_CMD( BuiltInCMD_Sel_Inverse,                QObject::tr( "선택" ), "cm_SelInverse",
              Qt::Key_Space,                         QObject::tr( "파일 선택을 반전하고 다음으로 이동" ) );

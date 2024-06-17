@@ -337,6 +337,9 @@
     <ClCompile Include="..\UniqueLibs\fileSetMgr.cpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClCompile>
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileDelete.cpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -547,6 +550,9 @@
     </QtMoc>
     <QtMoc Include="Modules\mdlFileOperation.hpp">
       <Filter>모듈</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

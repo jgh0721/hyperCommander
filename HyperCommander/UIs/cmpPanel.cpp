@@ -172,12 +172,19 @@ void CmpPanel::EnsureKeyboardFocusOnView( Qtitan::GridBandedTableView* View )
 
 void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
 {
+    const auto State = retrieveFocusState();
     const auto View = retrieveFocusView();
     Q_ASSERT( View != nullptr );
     if( View == nullptr )
         return;
 
-    View->selectRow( View->getRow( SrcIndex ).rowIndex(), Qtitan::Invert );
+    // TODO: 각 패널의 하단에 선택된 항목 수 및 크기 등에 대해 갱신해야 한다.
+    // State 에 저장된 항목들 갱신
+    // TODO: 선택된 항목이 디렉토리이고, EverythingSDK 를 쓰지 않고, 디렉토리 계산 기능이 사용 중이라면 디렉토리 크기를 계산한다. 
+    const auto Row = View->getRow( SrcIndex );
+    View->selectRow( Row.rowIndex(), Qtitan::Invert );
+    View->modelController()->isRowSelected( Row );
+
     if( IsMoveDown == true )
         View->navigateDown( Qt::NoModifier );
 }
@@ -290,6 +297,18 @@ void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
     Ui.SetDestinationPath( Dst_State->Model->GetFileFullPath( "" ) );
 
     Ui.exec();
+}
+
+void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    const auto View = retrieveFocusView();
+    const auto Rows = View->selection()->selectedRowIndexes();
+    if( Rows.isEmpty() == true )
+    {
+        
+    }
 }
 
 void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
@@ -1051,8 +1070,6 @@ QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcI
 void CmpPanel::processPanelStatusText()
 {
     const auto& State = retrieveFocusState();
-    
 
     ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" ).arg( 0).arg( State->Model->GetTotalSize() ).arg(0).arg( State->Model->GetFileCount()).arg(0).arg( State->Model->GetDirectoryCount()));
-
 }

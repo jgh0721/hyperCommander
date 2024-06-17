@@ -108,6 +108,11 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_MkDir )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
+DEFINE_HC_COMMAND( CCommandMgr, cm_Delete )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
 DEFINE_HC_COMMAND( CCommandMgr, cm_SelInverse )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );

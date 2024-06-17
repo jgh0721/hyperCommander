@@ -184,6 +184,7 @@ void QMultiRenameUI::on_btnRun_clicked( bool checked )
 
 void QMultiRenameUI::on_btnCancel_clicked( bool checked )
 {
+    done( Rejected );
 }
 
 void QMultiRenameUI::on_btnResultList_clicked( bool checked )
