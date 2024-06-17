@@ -134,6 +134,9 @@ void CmpPanel::RefreshVolumeList()
             ui.cbxVolume->addItem( DriveIcon, driveName );
         }
     }
+
+    if( ui.cbxVolume->count() > 0 )
+        processVolumeStatusText( ui.cbxVolume->currentText()[ 0 ] );
 }
 
 int CmpPanel::CurrentTabIndex() const
@@ -603,6 +606,8 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
     State->Model->SetRoot( ui.cbxVolume->currentText().left( 2 ) );
     State->Model->SetCurrentPath( "/" );
     State->Model->ChangeDirectory( QModelIndex() );
+
+    processVolumeStatusText( ui.cbxVolume->currentText()[ 0 ] );
 }
 
 void CmpPanel::on_btnGridStyle_clicked( bool checked )
@@ -1065,6 +1070,21 @@ QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcI
     } while( false );
 
     return Pos;
+}
+
+void CmpPanel::processVolumeStatusText( QChar Drive )
+{
+    const auto Root = QString( "%1:\\" ).arg( Drive ).toStdWString();
+    ULARGE_INTEGER Avail, TotalBytes, TotalFree;
+    if( GetDiskFreeSpaceExW( Root.c_str(), &Avail, &TotalBytes, &TotalFree ) != FALSE )
+    {
+        // TODO: 크기 문자열 계산 필요
+        ui.lblVolumeStatus->setText( QString( "%1 / %2 (남음/전체)" ).arg( Avail.QuadPart ).arg( TotalBytes.QuadPart ) );
+    }
+    else
+    {
+        ui.lblVolumeStatus->setText( "0 / 0 (남음/전체)" );
+    }
 }
 
 void CmpPanel::processPanelStatusText()

@@ -104,6 +104,7 @@ private:
     // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
     QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
 
+    void                                processVolumeStatusText( QChar Drive );
     void                                processPanelStatusText();
     
     // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
