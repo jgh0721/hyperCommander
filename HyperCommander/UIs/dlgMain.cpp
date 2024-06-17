@@ -296,9 +296,9 @@ void QMainUI::initialize()
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );
 
-    // NOTE: 시작하면 왼쪽에 커서가 위치할 수 있도록 오른쪽부터 초기화한다. 
-    ui.cmpRightPanel->Initialize();
-    ui.cmpLeftPanel->Initialize();
+    // NOTE: 시작하면 왼쪽에 커서가 위치할 수 있도록 오른쪽부터 초기화한다.
+    QMetaObject::invokeMethod( ui.cmpRightPanel, "Initialize", Qt::QueuedConnection );
+    QMetaObject::invokeMethod( ui.cmpLeftPanel, "Initialize", Qt::QueuedConnection );
 }
 
 CmpPanel* QMainUI::retrieveSrcPanel() const

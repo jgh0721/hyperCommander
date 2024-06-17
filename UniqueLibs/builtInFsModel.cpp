@@ -14,6 +14,7 @@
 #include "Everything.h"
 
 #include <QtConcurrent>
+#include <numeric>
 
 #include "colorSchemeMgr.hpp"
 #include "fileSetMgr.hpp"
@@ -262,31 +263,53 @@ void FSModel::Refresh()
 
     const auto Base = CurrentPath.length() == 1 ? Root + CurrentPath : Root + CurrentPath + "\\";
 
-    Everything_SetMatchPath( TRUE );
-    Everything_SetMatchWholeWord( TRUE );
-    Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
-    Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
-
     QMap< QString, qint64 > MapDirNameToSize;
 
-    Everything_SetSearchW( Base.toStdWString().c_str() );
-    Everything_QueryW( TRUE );
+    QtConcurrent::run( [&MapDirNameToSize, Base]() {
 
-    LARGE_INTEGER Size = { 0 };
-    for( DWORD i = 0; i < Everything_GetNumResults(); i++ )
-    {
-        if( Everything_IsFolderResult( i ) == FALSE )
-            continue;
+        Everything_SetMatchPath( TRUE );
+        Everything_SetMatchWholeWord( TRUE );
+        Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
+        Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
 
-        if( Base.contains( QString::fromWCharArray( Everything_GetResultPathW( i ) ) ) == false )
-            break;
+        Everything_SetSearchW( Base.toStdWString().c_str() );
+        Everything_QueryW( TRUE );
 
-        if( Everything_GetResultSize( i, &Size ) != FALSE )
-        {
-            MapDirNameToSize[ QString::fromWCharArray( Everything_GetResultFileNameW( i ) ) ] = Size.QuadPart;
-        }
-    }
-    
+        QVector< uint32_t > VecResults( Everything_GetNumResults() );
+        std::iota( VecResults.begin(), VecResults.end(), 0 );
+
+        std::vector< wchar_t > BaseBuffer( Base.length() + 1 );
+        Base.toWCharArray( &BaseBuffer[ 0 ] );
+
+        bool IsContinue = true;
+        VecResults = QtConcurrent::blockingFiltered( VecResults, [BaseBuffer, &IsContinue]( uint32_t Row ) {
+            if( IsContinue == false ) return false;
+
+            if( Everything_IsFolderResult( Row ) == FALSE )
+                return false;
+
+            if( wcsstr( BaseBuffer.data(), Everything_GetResultPathW( Row ) ) == nullptr )
+            {
+                IsContinue = false;
+                return false;
+            }
+
+            return true;
+        } );
+
+        MapDirNameToSize = QtConcurrent::blockingMappedReduced<decltype( MapDirNameToSize )>( VecResults, [Base]( uint32_t Row ) {
+            QPair< QString, LARGE_INTEGER > Result;
+            if( Everything_GetResultSize( Row, &Result.second ) != FALSE )
+                Result.first = QString::fromWCharArray( Everything_GetResultFileNameW( Row ) );
+
+            return Result;
+        }, [Base]( QMap< QString, qint64 >& Result, const QPair< QString, LARGE_INTEGER >& Value ) {
+            if( Value.first.isEmpty() == false )
+                Result[ Value.first ] = Value.second.QuadPart;
+        } );
+
+    } ).waitForFinished();
+
     QVector< Node > Nodes;
 
     if( CurrentPath.length() != 1 )

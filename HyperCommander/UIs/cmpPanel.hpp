@@ -43,7 +43,7 @@ class CmpPanel : public QWidget
 public:
     CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
-    void                                Initialize();
+    Q_INVOKABLE void                    Initialize();
 
     Q_INVOKABLE void                    AddTab();
     Q_INVOKABLE void                    PrevTab();
