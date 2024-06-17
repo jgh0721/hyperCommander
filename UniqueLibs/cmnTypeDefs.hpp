@@ -18,6 +18,44 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
 
 ////////////////////////////////////////////////////////////////////////////////
 
+/*!
+    Index => 0..N
+
+    [ColorScheme]
+    Count=N
+    Selected=N
+    N_Name=XXXX
+
+    [ColorScheme_XXXX]
+    IsDarkMode=false
+
+    Menu_Font_Family=
+    Menu_Font_Size=Npt or Npx
+    Dialog_Font_Family=
+    Dialog_Font_Size=Npt or Npx
+    List_Font_Family=
+    List_Font_Size=Npt or Npx
+    List_FGColor=
+    List_BGColor=
+    List_CursorColor=
+    List_SelectColor=
+
+    FileSet_XXX_FGColor=
+    FileSet_XXX_BGColor=
+        Color => #RGB, #RRGGBB, #AARRGGBB, #RRRGGGBBB, #RRRRGGGGBBBB, SVG Color Keyword
+
+    [FileSet]
+    Count=N
+    0_Name=XXXX
+    0_Flags=XXXX
+    0_Filters=X
+    0_Exts=XXX|XXX
+    0_Attributes=Z
+    0_Size=Z
+ */
+
+////////////////////////////////////////////////////////////////////////////////
+
 struct Node
 {
     QString                             Name;
@@ -58,11 +96,14 @@ struct TyFileSet
     QVector<QString>                    VecExtFilters;          // 모두 소문자
 
     // 확장
-    DWORD                               Attributes = 0;
+    uint32_t                            Attributes = 0;
     int64_t                             Size = 0;
 };
 
 Q_DECLARE_METATYPE( TyFileSet );
+
+using TyPrFBWithBG = QPair< QColor, QColor >;
+Q_DECLARE_METATYPE( TyPrFBWithBG );
 
 struct TyColorScheme
 {
@@ -85,9 +126,11 @@ struct TyColorScheme
     QColor              FileList_Selected;
     QColor              FileList_Cursor;
 
-    bool                IsInverseCursor;
-    bool                IsInverseSelect;
+    bool                IsInverseCursor = false;
+    bool                IsInverseSelect = false;
 
+    // key = FileSet's Name, value.first = FG, value.second = BG
+    QMap< QString, TyPrFBWithBG > MapNameToColors;
 };
 
 Q_DECLARE_METATYPE( TyColorScheme );

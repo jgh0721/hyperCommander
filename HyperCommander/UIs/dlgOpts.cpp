@@ -6,6 +6,7 @@
 #include "UniqueLibs/colorSchemeMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
+#include "fileSetMgr.hpp"
 
 QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     : QDialog( parent, flags )
@@ -20,24 +21,22 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
 void QMainOpts::LoadSettings()
 {
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    const auto StFileSetMgr = TyStFileSetMgr::GetInstance();
+
     StColorSchemeMgr->Refresh();
+    StFileSetMgr->Refresh();
 
     ui.cbxColorScheme->clear();
     ui.cbxColorScheme->addItems( StColorSchemeMgr->GetNames() );
 
-    //ui.ftCbxFileList->setCurrentFont( GetOPTValue( OPT_COLORS_LISTFONT ) );
-    //ui.spbFileListFontSize->setValue( GetOPTValue( OPT_COLORS_LISTFONTSIZE ).toInt() );
-
-    //setButtonColor( ui.btnFileListForground, QColor( GetOPTValue( OPT_COLORS_FORECOLOR ) ) );
-    //setButtonColor( ui.btnFileListBackground, QColor( GetOPTValue( OPT_COLORS_BACKCOLOR ) ) );
+    ui.lstFileSet->clear();
+    ui.lstFileSet->addItems( StFileSetMgr->GetNames() );
 }
 
 void QMainOpts::SaveSettings()
 {
-    //SetOPTValue( OPT_COLORS_LISTFONT, ui.ftCbxFileList->currentFont().family() );
-    //SetOPTValue( OPT_COLORS_LISTFONTSIZE, ui.spbFileListFontSize->value() );
-    //SetOPTValue( OPT_COLORS_FORECOLOR, ui.btnFileListForground->text() );
-    //SetOPTValue( OPT_COLORS_BACKCOLOR, ui.btnFileListBackground->text() );
+    SaveSettings_ColorScheme();
+    TyStFileSetMgr::GetInstance()->SaveSettings();
 }
 
 void QMainOpts::SaveSettings_ColorScheme()
@@ -46,16 +45,29 @@ void QMainOpts::SaveSettings_ColorScheme()
 
     ColorScheme.Name                = ui.edtColorSchemeName->text();
     ColorScheme.IsDarkMode          = ui.chkIsDarkMode->isChecked();
+
     ColorScheme.Menu_Font           = ui.fntMnuFontBox->currentFont();
     ColorScheme.Menu_Font.setPointSize( ui.spbMnuFontBox->value() );
+
     ColorScheme.Dialog_Font         = ui.fntDlgFontBox->currentFont();
     ColorScheme.Dialog_Font.setPointSize( ui.spbDlgFontBox->value() );
+
     ColorScheme.FileList_Font       = ui.fntLstFontBox->currentFont();
     ColorScheme.FileList_Font.setPointSize( ui.spbLstFontBox->value() );
+
     ColorScheme.FileList_FGColor    = ui.btnLstFGColor->text();
     ColorScheme.FileList_BGColor    = ui.btnLstBGColor->text();
     ColorScheme.FileList_Cursor     = ui.btnLstCursorColor->text();
     ColorScheme.FileList_Selected   = ui.btnLstSelectColor->text();
+
+    for( int row = 0; row < ui.tblFileSetColor->rowCount(); ++row )
+    {
+        const auto FileSet = ui.tblFileSetColor->item( row, 0 )->text();
+        const auto FGColor = static_cast< QPushButton* >( ui.tblFileSetColor->cellWidget( row, 1 ) )->text();
+        const auto BGColor = static_cast< QPushButton* >( ui.tblFileSetColor->cellWidget( row, 2 ) )->text();
+
+        ColorScheme.MapNameToColors[ FileSet ] = qMakePair( FGColor, BGColor );
+    }
 
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     StColorSchemeMgr->UpsertColorScheme( ColorScheme, true );
@@ -73,15 +85,73 @@ void QMainOpts::RefreshColorScheme( const QString& SchemeName )
     ui.edtColorSchemeName->setText( ColorScheme.Name );
     ui.chkIsDarkMode->setChecked( ColorScheme.IsDarkMode );
 
-    ui.fntMnuFontBox->setFont( QFont( ColorScheme.Menu_Font ) );
+    ui.fntMnuFontBox->setCurrentFont( QFont( ColorScheme.Menu_Font ) );
     ui.spbMnuFontBox->setValue( ColorScheme.Menu_Font.pointSize() );
 
-    ui.fntDlgFontBox->setFont( QFont( ColorScheme.Dialog_Font ) );
+    ui.fntDlgFontBox->setCurrentFont( QFont( ColorScheme.Dialog_Font ) );
     ui.spbDlgFontBox->setValue( ColorScheme.Dialog_Font.pointSize() );
 
-    ui.fntLstFontBox->setFont( QFont( ColorScheme.FileList_Font ) );
+    ui.fntLstFontBox->setCurrentFont( QFont( ColorScheme.FileList_Font ) );
     ui.spbLstFontBox->setValue( ColorScheme.FileList_Font.pointSize() );
 
+    setButtonColor( ui.btnLstFGColor, ColorScheme.FileList_FGColor );
+    setButtonColor( ui.btnLstBGColor, ColorScheme.FileList_BGColor );
+    setButtonColor( ui.btnLstCursorColor, ColorScheme.FileList_Cursor );
+    setButtonColor( ui.btnLstSelectColor, ColorScheme.FileList_Selected );
+
+    for( const auto& FileSetName : ColorScheme.MapNameToColors.keys() )
+    {
+        TyFileSet FileSet = { FileSetName, };
+        const auto Colors = ColorScheme.MapNameToColors[ FileSetName ];
+       
+        oo_insertFileSetColorRow( &FileSet, Colors );
+    }
+}
+
+void QMainOpts::RefreshFileSet( const QString& FileSetName )
+{
+    on_btnResetFileSet_clicked();
+
+    if( FileSetName.isEmpty() == true )
+        return;
+
+    const auto& FileSet = TyStFileSetMgr::GetInstance()->GetFileSet( FileSetName );
+    if( FileSet.Name.isEmpty() == true )
+        return;
+
+    ui.edtFileSetName->setText( FileSet.Name );
+
+    if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) )
+    {
+        ui.chkFileSetExt->setChecked( true );
+        ui.edtFileSetExt->setText( FileSet.VecExtFilters.join( '|' ) );
+    }
+
+    if( FlagOn( FileSet.Flags, FILE_SET_NOR_FILTERS ) )
+    {
+        ui.chkFileSetRegExp->setChecked( true );
+        ui.edtFileSetRegExp->setText( FileSet.Filters.join( '|' ) );
+    }
+
+    if( FlagOn( FileSet.Flags, FILE_SET_EXP_ATTRIBUTE ) )
+    {
+        ui.grpFileSetAttr->setChecked( true );
+
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_ARCHIVE ) )
+            ui.chkFileSetAttr_Archive->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_HIDDEN ) )
+            ui.chkFileSetAttr_Hidden->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_DIRECTORY ) )
+            ui.chkFileSetAttr_Directory->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_ENCRYPTED ) )
+            ui.chkFileSetAttr_Encrypted->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_READONLY ) )
+            ui.chkFileSetAttr_ReadOnly->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_SYSTEM ) )
+            ui.chkFileSetAttr_System->setChecked( true );
+        if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_COMPRESSED ) )
+            ui.chkFileSetAttr_Compressed->setChecked( true );
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -166,22 +236,194 @@ void QMainOpts::on_btnLstSelectColor_clicked( bool checked )
     if( Selected.isValid() == true )
         setButtonColor( ui.btnLstSelectColor, Selected );
 }
-//
-//void QMainOpts::on_btnFileListForground_clicked( bool checked )
-//{
-//    const auto Selected = QColorDialog::getColor( Qt::white, this );
-//
-//    if( Selected.isValid() == true )
-//        setButtonColor( ui.btnFileListForground, Selected );
-//}
-//
-//void QMainOpts::on_btnFileListBackground_clicked( bool checked )
-//{
-//    const auto Selected = QColorDialog::getColor( Qt::white, this );
-//
-//    if( Selected.isValid() == true )
-//        setButtonColor( ui.btnFileListBackground, Selected );
-//}
+
+void QMainOpts::oo_refreshFileSetColor()
+{
+    ui.tblFileSetColor->clearContents();
+    ui.tblFileSetColor->setRowCount( 0 );
+
+    const auto SchemeName = ui.edtColorSchemeName->text();
+
+    if( SchemeName.isEmpty() == false )
+    {
+        const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+        const auto StFileSetMgr = TyStFileSetMgr::GetInstance();
+        for( const auto& Name : StFileSetMgr->GetNames() )
+        {
+            const auto& ColorScheme = StColorSchemeMgr->GetColorScheme( SchemeName );
+            const auto FileSet = StFileSetMgr->GetFileSet( Name );
+
+            if( ColorScheme.MapNameToColors.contains( FileSet.Name ) == true )
+                oo_insertFileSetColorRow( &FileSet, ColorScheme.MapNameToColors[ FileSet.Name ] );
+            else
+                oo_insertFileSetColorRow( &FileSet, {} );
+        }
+    }
+
+    oo_insertEmptyFileSetColorRow();
+}
+
+void QMainOpts::oo_insertFileSetColorRow( const TyFileSet* FileSet, const QPair< QColor, QColor >& FGWithBG )
+{
+    Q_ASSERT( FileSet != nullptr && FileSet->Name.isEmpty() == false );
+    const auto Row = oo_insertEmptyFileSetColorRow();
+
+    ui.tblFileSetColor->item( Row, 0 )->setText( FileSet->Name );
+    setButtonColor( static_cast< QPushButton* >( ui.tblFileSetColor->cellWidget( Row, 1 ) ), FGWithBG.first );
+    setButtonColor( static_cast< QPushButton* >( ui.tblFileSetColor->cellWidget( Row, 2 ) ), FGWithBG.second );
+}
+
+int QMainOpts::oo_insertEmptyFileSetColorRow()
+{
+    QPushButton* Button = nullptr;
+    QTableWidgetItem* Item = nullptr;
+    const auto Row = ui.tblFileSetColor->rowCount();
+
+    ui.tblFileSetColor->setRowCount( Row + 1 );
+    ui.tblFileSetColor->setItem( Row, 0, new QTableWidgetItem( "" ) );
+
+    Button = new QPushButton;
+    Button->setFlat( true );
+    Button->setDefault( false );
+    setButtonColor( Button, {} );
+    connect( Button, &QPushButton::clicked, this, &QMainOpts::pickButtonColor );
+    ui.tblFileSetColor->setItem( Row, 1, new QTableWidgetItem( "" ) );
+    ui.tblFileSetColor->setCellWidget( Row, 1, Button );
+
+    Button = new QPushButton;
+    Button->setFlat( true );
+    Button->setDefault( false );
+    setButtonColor( Button, {} );
+    connect( Button, &QPushButton::clicked, this, &QMainOpts::pickButtonColor );
+    ui.tblFileSetColor->setItem( Row, 2, new QTableWidgetItem( "" ) );
+    ui.tblFileSetColor->setCellWidget( Row, 2, Button );
+
+    QWidget* Widget = new QWidget;
+    QHBoxLayout* Layout = new QHBoxLayout;
+    Layout->setContentsMargins( 9, 0, 9, 0 );
+    Widget->setLayout( Layout );
+    QPushButton* AddButton = new QPushButton;
+    QPushButton* DelButton = new QPushButton;
+    AddButton->setDefault( false );
+    DelButton->setDefault( false );
+    AddButton->setText( "+" );
+    DelButton->setText( "-" );
+    Layout->addWidget( AddButton );
+    Layout->addWidget( DelButton );
+    connect( AddButton, &QPushButton::clicked, this, &QMainOpts::oo_insertEmptyFileSetColorRow );
+    connect( DelButton, &QPushButton::clicked, this, &QMainOpts::oo_removeFileSetColorRow );
+    ui.tblFileSetColor->setItem( Row, 3, new QTableWidgetItem( "" ) );
+    ui.tblFileSetColor->setCellWidget( Row, 3, Widget );
+
+    return Row;
+}
+
+void QMainOpts::oo_removeFileSetColorRow()
+{
+    Q_ASSERT( sender() != nullptr );
+    Q_ASSERT( qobject_cast< QPushButton* >( sender() ) != nullptr );
+
+    const int Row = ui.tblFileSetColor->currentRow();
+    if( Row < 0 )
+        return;
+
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+
+    const auto ColorScheme = ui.edtColorSchemeName->text();
+    const auto FileSet = ui.tblFileSetColor->item( Row, 0 )->text();
+
+    if( StColorSchemeMgr->GetNames().contains( ColorScheme ) == false )
+        return;
+
+    StColorSchemeMgr->RemoveFileSetColor( ColorScheme, FileSet );
+    ui.tblFileSetColor->removeRow( Row );
+}
+
+void QMainOpts::on_lstFileSet_currentItemChanged( QListWidgetItem* Current, QListWidgetItem* Previous )
+{
+    UNREFERENCED_PARAMETER( Previous );
+
+    RefreshFileSet( Current != nullptr ? Current->text() : "" );
+}
+
+void QMainOpts::on_btnResetFileSet_clicked( bool checked )
+{
+    ui.edtFileSetName->clear();
+
+    ui.chkFileSetExt->setChecked( false );
+    ui.edtFileSetExt->clear();
+    ui.chkFileSetRegExp->setChecked( false );
+    ui.edtFileSetRegExp->clear();
+
+    ui.grpFileSetAttr->setChecked( false );
+    ui.chkFileSetAttr_Archive->setChecked( false );
+    ui.chkFileSetAttr_Hidden->setChecked( false );
+    ui.chkFileSetAttr_Directory->setChecked( false );
+    ui.chkFileSetAttr_Encrypted->setChecked( false );
+    ui.chkFileSetAttr_ReadOnly->setChecked( false );
+    ui.chkFileSetAttr_System->setChecked( false );
+    ui.chkFileSetAttr_Compressed->setChecked( false );
+}
+
+void QMainOpts::on_btnAddFileSet_clicked( bool checked )
+{
+    TyFileSet FileSet;
+
+    FileSet.Name = ui.edtFileSetName->text();
+
+    if( ui.edtFileSetExt->text().isEmpty() == false )
+    {
+        SetFlag( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS );
+        FileSet.VecExtFilters = ui.edtFileSetExt->text().split( '|', Qt::SkipEmptyParts );
+    }
+
+    if( ui.edtFileSetRegExp->text().isEmpty() == false )
+    {
+        SetFlag( FileSet.Flags, FILE_SET_NOR_FILTERS );
+        FileSet.Filters = ui.edtFileSetRegExp->text().split( '|', Qt::SkipEmptyParts );
+    }
+
+    if( ui.grpFileSetAttr->isChecked() == true )
+    {
+        SetFlag( FileSet.Flags, FILE_SET_EXP_ATTRIBUTE );
+        if( ui.chkFileSetAttr_Archive->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_ARCHIVE );
+        if( ui.chkFileSetAttr_Hidden->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_HIDDEN );
+        if( ui.chkFileSetAttr_Directory->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_DIRECTORY );
+        if( ui.chkFileSetAttr_Encrypted->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_ENCRYPTED );
+        if( ui.chkFileSetAttr_ReadOnly->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_READONLY );
+        if( ui.chkFileSetAttr_System->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_SYSTEM );
+        if( ui.chkFileSetAttr_Compressed->isChecked() == true )
+            SetFlag( FileSet.Attributes, FILE_ATTRIBUTE_COMPRESSED );
+    }
+
+    UNREFERENCED_PARAMETER( FileSet.Size );
+
+    TyStFileSetMgr::GetInstance()->SetFileSet( FileSet );
+    if( ui.lstFileSet->findItems( FileSet.Name, Qt::MatchFixedString ).isEmpty() == true )
+        ui.lstFileSet->addItem( FileSet.Name );
+}
+
+void QMainOpts::on_btnRemoveFileSet_clicked( bool checked )
+{
+    const auto Name = ui.edtFileSetName->text();
+
+    if( Name.isEmpty() == true )
+        return;
+
+    TyStFileSetMgr::GetInstance()->RemoveFileSet( Name );
+
+    for( const auto& Item : ui.lstFileSet->findItems( Name, Qt::MatchFixedString ) )
+    {
+        ui.lstFileSet->takeItem( ui.lstFileSet->row( Item ) );
+        delete Item;
+    }
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Footer
@@ -218,6 +460,10 @@ void QMainOpts::initialize()
 
     ui.lstOptCate->setSizeAdjustPolicy( QAbstractScrollArea::AdjustToContents );
     ui.lstOptCate->setFixedWidth( ui.lstOptCate->sizeHintForColumn( 0 ) + ui.lstOptCate->lineWidth() * 2 + ui.lstOptCate->frameWidth() * 2 );
+
+    oo_insertEmptyFileSetColorRow();
+
+    on_btnResetFileSet_clicked();
 }
 
 void QMainOpts::setButtonColor( QPushButton* Button, const QColor& Color )
@@ -246,5 +492,18 @@ void QMainOpts::resetColorScheme( const QString& Name )
     setButtonColor( ui.btnLstBGColor, {} );
     setButtonColor( ui.btnLstCursorColor, {} );
     setButtonColor( ui.btnLstSelectColor, {} );
+}
+
+void QMainOpts::pickButtonColor( bool checked )
+{
+    Q_ASSERT( sender() != nullptr );
+    Q_ASSERT( qobject_cast< QPushButton* >( sender() ) != nullptr );
+
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( static_cast< QPushButton* >( sender() ), Selected );
+
+    SaveSettings();
 }
 

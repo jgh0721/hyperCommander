@@ -355,6 +355,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\uniqueLibs\columnMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\fileSetMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
@@ -447,6 +448,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <QtMoc Include="UIs\cmpViewer.hpp" />
     <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp" />
+    <ClInclude Include="..\UniqueLibs\fileSetMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp" />

@@ -13,6 +13,11 @@
 /// Everything-SDK
 #include "Everything.h"
 
+#include <QtConcurrent>
+
+#include "colorSchemeMgr.hpp"
+#include "fileSetMgr.hpp"
+
 QModelIndex FSModel::index( int row, int column, const QModelIndex& parent ) const
 {
     if( row < 0 || column < 0 || row >= rowCount( parent ) || column >= columnCount( parent ) )
@@ -240,10 +245,13 @@ QVector<Node> FSModel::GetChildItems( const QString& Path )
 void FSModel::Refresh()
 {
     HRESULT hRet = OleInitialize( 0 );
-
+    
     int FileCount_Refresh = 0;
     int DirectoryCount_Refresh = 0;
     int64_t TotalSize_Refresh = 0;
+    QVector< TyPrFBWithBG > VecRowColors_Refresh;
+    const auto VecFileSet = TyStFileSetMgr::GetInstance()->GetNames();
+    TyStColorSchemeMgr::GetInstance()->SetCurrentColorScheme( "Default" );
 
     if( Icon_Directory.isNull() == true )
     {
@@ -278,7 +286,7 @@ void FSModel::Refresh()
             MapDirNameToSize[ QString::fromWCharArray( Everything_GetResultFileNameW( i ) ) ] = Size.QuadPart;
         }
     }
-
+    
     QVector< Node > Nodes;
 
     if( CurrentPath.length() != 1 )
@@ -292,6 +300,17 @@ void FSModel::Refresh()
             Item.Icon = Icon_Directory;
 
         Nodes.push_back( Item );
+
+        TyPrFBWithBG Colors;
+        for( const auto& FileSetName : VecFileSet )
+        {
+            if( TyStColorSchemeMgr::GetInstance()->JudgeFileSet( TyStFileSetMgr::GetInstance()->GetFileSet( FileSetName ), Item, &Colors.first, &Colors.second ) == false )
+                continue;
+
+            break;
+        }
+
+        VecRowColors_Refresh.push_back( Colors );
     }
 
     WIN32_FIND_DATA wfd = { 0 };
@@ -368,6 +387,7 @@ void FSModel::Refresh()
 
                 do
                 {
+                    // TODO: ColumnParseResult 를 미리 만들어 두면 더욱 빨라질 수 있다.
                     ColumnParseResult Result;
                     IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
 
@@ -381,6 +401,17 @@ void FSModel::Refresh()
 
             Nodes.push_back( Item );
 
+            TyPrFBWithBG Colors;
+            for( const auto& FileSetName : VecFileSet )
+            {
+                if( TyStColorSchemeMgr::GetInstance()->JudgeFileSet( TyStFileSetMgr::GetInstance()->GetFileSet( FileSetName ), Item, &Colors.first, &Colors.second ) == false )
+                    continue;
+
+                break;
+            }
+
+            VecRowColors_Refresh.push_back( Colors );
+
         } while( FindNextFileW( hFile, &wfd ) != 0 );
 
         FindClose( hFile );
@@ -391,6 +422,7 @@ void FSModel::Refresh()
     FileCount = FileCount_Refresh;
     DirectoryCount = DirectoryCount_Refresh;
     TotalSize = TotalSize_Refresh;
+    qSwap( VecRowColors_Refresh, VecRowColors );
     endResetModel();
 
     CoUninitialize();
@@ -453,16 +485,24 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     }
 
     if( role == Qt::BackgroundRole )
-        return QColor( "black" );
+    {
+        if( VecRowColors[ Row ].second.isValid() == true )
+            return VecRowColors[ Row ].second;
+
+        return QColor( 0, 0, 0 );
+    }
 
     if( role == Qt::ForegroundRole )
     {
         const auto& Item = VecNode[ Row ];
 
-        if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-            return QColor( "red" );
+        if( VecRowColors[ Row ].first.isValid() == true )
+            return VecRowColors[ Row ].first;
 
-        return QColor( "white" );
+        //if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
+        //    return QColor( "red" );
+
+        return QColor( "#FFFFFF" );
     }
 
     if( role == Qt::UserRole )

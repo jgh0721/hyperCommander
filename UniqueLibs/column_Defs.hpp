@@ -40,6 +40,7 @@ struct ColumnView
     bool                                IsBuiltIn = false;
 
     QVector< Column >                   VecColumns;
+    QVector< ColumnParseResult >        VecParseResult;
 };
 
 constexpr auto BUILTIN_COL_FS_NAME          = QLatin1String( "[=HC.Fs.Name]" );

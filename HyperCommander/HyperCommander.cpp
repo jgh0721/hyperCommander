@@ -12,6 +12,7 @@
 #include "cmnTypeDefs.hpp"
 #include "cmnTypeDefs_Name.hpp"
 #include "cmnTypeDefs_Opts.hpp"
+#include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
 
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
@@ -32,41 +33,8 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     SetEnvironmentVariableW( L"COMMANDER_PATH", QDir::toNativeSeparators( applicationDirPath() ).toStdWString().c_str() );
 
-    do
-    {
-        SHFILEINFO SHInfo = { 0, };
-
-        if( SHGetFileInfoW( L"C:\\", 0, &SHInfo, sizeof( SHFILEINFOW ), SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES ) != FALSE )
-        {
-            QPixmapCache::insert( "[Drive]", QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) ) );
-            DestroyIcon( SHInfo.hIcon );
-        }
-
-    } while( false );
-
-
-    do
-    {
-        SHFILEINFO SHInfo = { 0, };
-
-        if( SHGetFileInfoW( L"C:\\ABCD", FILE_ATTRIBUTE_DIRECTORY, &SHInfo, sizeof( SHFILEINFOW ), SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES ) != FALSE )
-        {
-            if( QPixmapCache::insert( "Directory", QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) ) ) == false )
-            {
-                int a = 0;
-            }
-            QPixmap pm;
-            if( QPixmapCache::find( "Directory", &pm ) == false )
-            {
-                int a = 0;
-            }
-
-            DestroyIcon( SHInfo.hIcon );
-        }
-
-    } while( false );
-
     TyStCommandMgr::GetInstance()->Refresh();
+    TyStFileSetMgr::GetInstance()->Refresh();
     TyStColorSchemeMgr::GetInstance()->Refresh();
 
     mainUI = new QMainUI;

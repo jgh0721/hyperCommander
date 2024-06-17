@@ -63,6 +63,7 @@ private:
 
     QVector< Node >                     VecNode;
     QVector< int >                      VecSelectedRows;
+    QVector< TyPrFBWithBG >             VecRowColors;
 };
 
 class FSProxyModel : public QSortFilterProxyModel

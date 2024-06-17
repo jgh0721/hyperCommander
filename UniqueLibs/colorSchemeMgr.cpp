@@ -43,28 +43,29 @@ void CColorSchemeMgr::Refresh()
         ColorScheme.FileList_Cursor     = QColor::fromString( StSettings->value( "List_CursorColor" ).toString() );
         ColorScheme.FileList_Selected   = QColor::fromString( StSettings->value( "List_SelectColor" ).toString() );
 
+        for( const auto& Child : StSettings->childKeys() )
+        {
+            if( Child.startsWith( "FileSet", Qt::CaseInsensitive ) == false )
+                continue;
+
+            // FileSet_XXX_FGColor or FileSet_XXX_BGColor
+            const auto L = Child.split( '_', Qt::SkipEmptyParts );
+            if( L.size() != 3 )
+                continue;
+
+            const auto FileSetName = L[ 1 ];
+            if( Child.contains( "FGColor", Qt::CaseInsensitive ) == true )
+                ColorScheme.MapNameToColors[ FileSetName ].first = QColor::fromString( StSettings->value( Child ).toString() );
+            if( Child.contains( "BGColor", Qt::CaseInsensitive ) == true )
+                ColorScheme.MapNameToColors[ FileSetName ].second = QColor::fromString( StSettings->value( Child ).toString() );
+        }
+
         mapNameToScheme[ Name ] = ColorScheme;
         StSettings->endGroup();
     }
 
     if( SelectedSchemeName.isEmpty() == true )
         currentColorScheme = mapNameToScheme.value( SelectedSchemeName );
-
-    StSettings->beginGroup( "FileSet" );
-    Count = StSettings->value( "Count" ).toInt();
-    for( int Idx = 0; Idx < Count; ++Idx )
-    {
-        TyFileSet FileSet;
-        FileSet.Name        = StSettings->value( QString( "%1_Name" ) ).toString();
-        FileSet.Flags       = StSettings->value( QString( "%1_Flags" ) ).toUInt();
-        
-        FileSet.Filters     = StSettings->value( QString( "%1_Filters" ) ).toString().split( '|', Qt::SkipEmptyParts );
-        FileSet.VecExtFilters = StSettings->value( QString( "%1_Exts" ) ).toString().split('|', Qt::SkipEmptyParts);
-        FileSet.Attributes  = StSettings->value( QString( "%1_Attributes" ) ).toUInt();
-        FileSet.Size        = StSettings->value( QString( "%1_Size" ) ).toLongLong();
-        mapNameToFileSet[ FileSet.Name ] = FileSet;
-    }
-    StSettings->endGroup();
 }
 
 QVector<QString> CColorSchemeMgr::GetNames() const
@@ -91,44 +92,50 @@ void CColorSchemeMgr::SetCurrentColorScheme( const QString& Name )
 void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile )
 {
     mapNameToScheme[ ColorScheme.Name ] = ColorScheme;
-    if( IsWriteToFile == true )
+    if( IsWriteToFile == false )
+        return;
+
+    StSettings->beginGroup( "ColorScheme" );
+    StSettings->setValue( "Count", mapNameToScheme.count() );
+    bool IsAlready = false;
+    for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
     {
-        StSettings->beginGroup( "ColorScheme" );
-        StSettings->setValue( "Count", mapNameToScheme.count() );
-        bool IsAlready = false;
-        for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
-        {
-            if( ColorScheme.Name.compare( StSettings->value( QString( "%1_Name" ).arg( Idx ) ).toString(), Qt::CaseInsensitive ) != 0 )
-                continue;
+        if( ColorScheme.Name.compare( StSettings->value( QString( "%1_Name" ).arg( Idx ) ).toString(), Qt::CaseInsensitive ) != 0 )
+            continue;
 
-            IsAlready = true;
-            break;
+        IsAlready = true;
+        break;
+    }
+    if( IsAlready == false )
+        StSettings->setValue( QString( "%1_Name" ).arg( mapNameToScheme.count() - 1 ), ColorScheme.Name );
+    StSettings->endGroup();
+
+    for( const auto& CS : mapNameToScheme )
+    {
+        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( CS.Name ) );
+
+        StSettings->setValue( "IsDarkMode",             CS.IsDarkMode );
+        StSettings->setValue( "Menu_Font_Family",       CS.Menu_Font.family() );
+        StSettings->setValue( "Menu_Font_Size",         CS.Menu_Font.pointSize() );
+
+        StSettings->setValue( "Dialog_Font_Family",     CS.Dialog_Font.family() );
+        StSettings->setValue( "Dialog_Font_Size",       CS.Dialog_Font.pointSize() );
+        
+        StSettings->setValue( "List_Font_Family",       CS.FileList_Font.family() );
+        StSettings->setValue( "List_Font_Size",         CS.FileList_Font.pointSize() );
+
+        StSettings->setValue( "List_FGColor",           CS.FileList_FGColor.name( QColor::HexRgb ) );
+        StSettings->setValue( "List_BGColor",           CS.FileList_BGColor.name( QColor::HexRgb ) );
+        StSettings->setValue( "List_CursorColor",       CS.FileList_Cursor.name( QColor::HexRgb ) );
+        StSettings->setValue( "List_SelectColor",       CS.FileList_Selected.name( QColor::HexRgb ) );
+
+        for( const auto& FileSet : CS.MapNameToColors.keys() )
+        {
+            StSettings->setValue( QString( "FileSet_%1_FGColor" ).arg( FileSet ), CS.MapNameToColors[ FileSet ].first.name( QColor::HexRgb ) );
+            StSettings->setValue( QString( "FileSet_%1_BGColor" ).arg( FileSet ), CS.MapNameToColors[ FileSet ].second.name( QColor::HexRgb ) );
         }
-        if( IsAlready == false )
-            StSettings->setValue( QString( "%1_Name" ).arg( mapNameToScheme.count() - 1 ), ColorScheme.Name );
+        
         StSettings->endGroup();
-
-        for( const auto& CS : mapNameToScheme )
-        {
-            StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( CS.Name ) );
-
-            StSettings->setValue( "IsDarkMode",             CS.IsDarkMode );
-            StSettings->setValue( "Menu_Font_Family",       CS.Menu_Font.family() );
-            StSettings->setValue( "Menu_Font_Size",         CS.Menu_Font.pointSize() );
-
-            StSettings->setValue( "Dialog_Font_Family",     CS.Dialog_Font.family() );
-            StSettings->setValue( "Dialog_Font_Size",       CS.Dialog_Font.pointSize() );
-            
-            StSettings->setValue( "List_Font_Family",       CS.FileList_Font.family() );
-            StSettings->setValue( "List_Font_Size",         CS.FileList_Font.pointSize() );
-
-            StSettings->setValue( "List_FGColor",           CS.FileList_FGColor.name( QColor::HexRgb ) );
-            StSettings->setValue( "List_BGColor",           CS.FileList_BGColor.name( QColor::HexRgb ) );
-            StSettings->setValue( "List_CursorColor",       CS.FileList_Cursor.name( QColor::HexRgb ) );
-            StSettings->setValue( "List_SelectColor",       CS.FileList_Selected.name( QColor::HexRgb ) );
-
-            StSettings->endGroup();
-        }
     }
 }
 
@@ -167,20 +174,25 @@ void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile
     }
 }
 
-QVector<QString> CColorSchemeMgr::GetFileSetNames() const
+void CColorSchemeMgr::UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFBWithBG& FileSetColor )
 {
-    return mapNameToFileSet.keys();
+    Q_ASSERT( mapNameToScheme.contains( ColorScheme ) == true );
+    if( mapNameToScheme.contains( ColorScheme ) == false )
+        return;
+
+    mapNameToScheme[ ColorScheme ].MapNameToColors[ FileSet ] = FileSetColor;
 }
 
-TyFileSet CColorSchemeMgr::GetFileSet( const QString& Name ) const
+void CColorSchemeMgr::RemoveFileSetColor( const QString& ColorScheme, const QString& FileSet )
 {
-    if( mapNameToFileSet.contains( Name ) == false )
-        return {};
+    Q_ASSERT( mapNameToScheme.contains( ColorScheme ) == true );
+    if( mapNameToScheme.contains( ColorScheme ) == false )
+        return;
 
-    return mapNameToFileSet[ Name ];
+    mapNameToScheme[ ColorScheme ].MapNameToColors.remove( FileSet );
 }
 
-bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info )
+bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info, QColor* FGColor, QColor* BGColor )
 {
     bool IsMatch = false;
 
@@ -219,14 +231,36 @@ bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info )
         }
 
         // 가장 오래 걸리는 Filters 와 VecExtFilters 를 나중에 검사한다. 
-        if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) )
-        {
-            Info.Ext;
-            FileSet.VecExtFilters;
 
+        if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) || FlagOn( FileSet.Flags, FILE_SET_NOR_FILTERS ) )
+        {
+            bool IsMatchExt = false;
+            const auto Ext = Info.Ext.toLower();
+
+            // 단순 확장자 목록 또는 와일드 카드/정규식을 이용한 표현식 중 하나만 일치하면 된다.
+            if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) )
+                IsMatchExt |= FileSet.VecExtFilters.contains( Ext );
+
+            //if( IsMatchExt == false && FlagOn( FileSet.Flags, FILE_SET_NOR_FILTERS ) )
+            //    ;
+
+            if( IsMatchExt == false )
+                break;
         }
 
         IsMatch = true;
+
+        if( FGColor != nullptr || BGColor != nullptr )
+        {
+            if( currentColorScheme.MapNameToColors.contains( FileSet.Name ) == true )
+            {
+                const auto Colors = currentColorScheme.MapNameToColors[ FileSet.Name ];
+                if( FGColor != nullptr )
+                    *FGColor = Colors.first;
+                if( BGColor != nullptr )
+                    *BGColor = Colors.second;
+            }
+        }
 
     } while( false );
 
