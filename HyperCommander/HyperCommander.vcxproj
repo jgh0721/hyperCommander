@@ -371,7 +371,6 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileProgress.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
-    <ClCompile Include="UIs\dlgCopyToAnother.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
     <ClCompile Include="UIs\dlgGridStyle.cpp" />
@@ -454,7 +453,6 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileProgress.hpp" />
     <QtMoc Include="Modules\mdlFileOperation.hpp" />
-    <ClInclude Include="UIs\dlgCopyToAnother.hpp" />
     <QtMoc Include="UIs\dlgMultiRename_Model.hpp" />
     <QtMoc Include="UIs\dlgMultiRename.hpp" />
     <QtMoc Include="UIs\dlgOpts.hpp" />
@@ -501,7 +499,6 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtUic Include="UIs\Cate - FileOperation\dlgFileProgress.ui" />
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\cmpViewer.ui" />
-    <QtUic Include="UIs\dlgCopyToAnother.ui" />
     <QtUic Include="UIs\dlgExternalConfigure.ui" />
     <QtUic Include="UIs\dlgExternalConfigure_Item.ui" />
     <QtUic Include="UIs\dlgGridStyle.ui" />

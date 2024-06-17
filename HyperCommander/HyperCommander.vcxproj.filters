@@ -136,9 +136,6 @@
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClCompile>
-    <ClCompile Include="UIs\dlgCopyToAnother.cpp">
-      <Filter>UI Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClCompile>
@@ -346,9 +343,6 @@
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\cmpPanel.ui">
-      <Filter>UI Files</Filter>
-    </QtUic>
-    <QtUic Include="UIs\dlgCopyToAnother.ui">
       <Filter>UI Files</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgGridStyle.ui">
@@ -597,9 +591,6 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnIncludeLibrary.hpp">
       <Filter>라이브러리\공통 라이브러리</Filter>
-    </ClInclude>
-    <ClInclude Include="UIs\dlgCopyToAnother.hpp">
-      <Filter>UI Files</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
