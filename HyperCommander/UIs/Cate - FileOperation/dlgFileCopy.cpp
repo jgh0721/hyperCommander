@@ -149,6 +149,7 @@ QFileCopyUI::~QFileCopyUI()
     if( workerThread_ != nullptr )
     {
         workerThread_->requestInterruption();
+        workerThread_->wait();
         workerThread_->deleteLater();
     }
 }
