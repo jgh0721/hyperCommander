@@ -169,8 +169,17 @@ void CmpPanel::EnsureKeyboardFocusOnView( Qtitan::GridBandedTableView* View )
 
     if( View->getRowCount() > 0 )
     {
-        View->navigateDown();
-        View->navigateUp();
+        if( View->focusedRowIndex() == View->modelController()->getGridRowCount() - 1 )
+        {
+            // 가장 마지막임
+            View->navigateUp();
+            View->navigateDown();
+        }
+        else
+        {
+            View->navigateDown();
+            View->navigateUp();
+        }
     }
 }
 
@@ -695,8 +704,17 @@ void CmpPanel::on_tabWidget_currentChanged( int Index )
 
         if( View->getRowCount() > 0 )
         {
-            View->navigateDown();
-            View->navigateUp();
+            if( View->focusedRowIndex() == View->modelController()->getGridRowCount() - 1 )
+            {
+                // 가장 마지막임
+                View->navigateUp();
+                View->navigateDown();
+            }
+            else
+            {
+                View->navigateDown();
+                View->navigateUp();
+            }
         }
     } );
 }
