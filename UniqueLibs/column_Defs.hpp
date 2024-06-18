@@ -50,6 +50,10 @@ constexpr auto BUILTIN_COL_FS_MODIFIED      = QLatin1String( "[=HC.Fs.Modified]"
 constexpr auto BUILTIN_COL_FS_ATTRIB        = QLatin1String( "[=HC.Fs.Attrib]" );
 constexpr auto BUILTIN_COL_FS_ATTRIB_TEXT   = QLatin1String( "[=HC.Fs.AttribText]" );
 
+constexpr auto BUILTIN_COL_NTFS_STREAM_COUNT = QLatin1String( "[=HC.Ntfs.StreamCount]" );
+// tagURLZone( urlmon.h ), 존재하면 >= -1
+constexpr auto BUILTIN_COL_NTFS_ZONE_ID = QLatin1String( "[=HC.Ntfs.ZoneId]" );
+
 const ColumnView BUILTIN_COLVIEW_DETAILS = {
     QObject::tr( "자세히" ), true, QVector< Column >()
     << Column { 0, 0, QObject::tr( "이름" ),      Qt::AlignLeft,     BUILTIN_COL_FS_NAME }

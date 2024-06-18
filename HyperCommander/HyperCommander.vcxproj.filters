@@ -69,6 +69,12 @@
     <Filter Include="라이브러리\외부 라이브러리\QDirectoryEdit">
       <UniqueIdentifier>{5b731975-1013-42b9-84d3-613e0f323863}</UniqueIdentifier>
     </Filter>
+    <Filter Include="라이브러리\공통 라이브러리\Win">
+      <UniqueIdentifier>{d2fd5609-491f-4639-872d-38bf9ae85224}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="라이브러리\공통 라이브러리\Win32API">
+      <UniqueIdentifier>{992e91bb-a4bf-49c9-9093-805330189e84}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -684,6 +690,9 @@
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\fileSetMgr.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\win\winLIBMgr.hpp">
+      <Filter>라이브러리\공통 라이브러리\Win</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

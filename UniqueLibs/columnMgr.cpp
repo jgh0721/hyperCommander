@@ -112,8 +112,6 @@ bool CColumnMgr::Parse( wchar_t*& Fmt, ColumnParseResult& Result, QString& Conte
 
         } while( false );
     }
-    
-
 
     return IsContinue;
 }

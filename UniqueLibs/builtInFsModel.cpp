@@ -265,50 +265,50 @@ void FSModel::Refresh()
 
     QMap< QString, qint64 > MapDirNameToSize;
 
-    QtConcurrent::run( [&MapDirNameToSize, Base]() {
+    //QtConcurrent::run( [&MapDirNameToSize, Base]() {
 
-        Everything_SetMatchPath( TRUE );
-        Everything_SetMatchWholeWord( TRUE );
-        Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
-        Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
+    //    Everything_SetMatchPath( TRUE );
+    //    Everything_SetMatchWholeWord( TRUE );
+    //    Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
+    //    Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
 
-        Everything_SetSearchW( Base.toStdWString().c_str() );
-        Everything_QueryW( TRUE );
+    //    Everything_SetSearchW( Base.toStdWString().c_str() );
+    //    Everything_QueryW( TRUE );
 
-        QVector< uint32_t > VecResults( Everything_GetNumResults() );
-        std::iota( VecResults.begin(), VecResults.end(), 0 );
+    //    QVector< uint32_t > VecResults( Everything_GetNumResults() );
+    //    std::iota( VecResults.begin(), VecResults.end(), 0 );
 
-        std::vector< wchar_t > BaseBuffer( Base.length() + 1 );
-        Base.toWCharArray( &BaseBuffer[ 0 ] );
+    //    std::vector< wchar_t > BaseBuffer( Base.length() + 1 );
+    //    Base.toWCharArray( &BaseBuffer[ 0 ] );
 
-        bool IsContinue = true;
-        VecResults = QtConcurrent::blockingFiltered( VecResults, [BaseBuffer, &IsContinue]( uint32_t Row ) {
-            if( IsContinue == false ) return false;
+    //    bool IsContinue = true;
+    //    VecResults = QtConcurrent::blockingFiltered( VecResults, [BaseBuffer, &IsContinue]( uint32_t Row ) {
+    //        if( IsContinue == false ) return false;
 
-            if( Everything_IsFolderResult( Row ) == FALSE )
-                return false;
+    //        if( Everything_IsFolderResult( Row ) == FALSE )
+    //            return false;
 
-            if( wcsstr( BaseBuffer.data(), Everything_GetResultPathW( Row ) ) == nullptr )
-            {
-                IsContinue = false;
-                return false;
-            }
+    //        if( wcsstr( BaseBuffer.data(), Everything_GetResultPathW( Row ) ) == nullptr )
+    //        {
+    //            IsContinue = false;
+    //            return false;
+    //        }
 
-            return true;
-        } );
+    //        return true;
+    //    } );
 
-        MapDirNameToSize = QtConcurrent::blockingMappedReduced<decltype( MapDirNameToSize )>( VecResults, [Base]( uint32_t Row ) {
-            QPair< QString, LARGE_INTEGER > Result;
-            if( Everything_GetResultSize( Row, &Result.second ) != FALSE )
-                Result.first = QString::fromWCharArray( Everything_GetResultFileNameW( Row ) );
+    //    MapDirNameToSize = QtConcurrent::blockingMappedReduced<decltype( MapDirNameToSize )>( VecResults, [Base]( uint32_t Row ) {
+    //        QPair< QString, LARGE_INTEGER > Result;
+    //        if( Everything_GetResultSize( Row, &Result.second ) != FALSE )
+    //            Result.first = QString::fromWCharArray( Everything_GetResultFileNameW( Row ) );
 
-            return Result;
-        }, [Base]( QMap< QString, qint64 >& Result, const QPair< QString, LARGE_INTEGER >& Value ) {
-            if( Value.first.isEmpty() == false )
-                Result[ Value.first ] = Value.second.QuadPart;
-        } );
+    //        return Result;
+    //    }, [Base]( QMap< QString, qint64 >& Result, const QPair< QString, LARGE_INTEGER >& Value ) {
+    //        if( Value.first.isEmpty() == false )
+    //            Result[ Value.first ] = Value.second.QuadPart;
+    //    } );
 
-    } ).waitForFinished();
+    //} ).waitForFinished();
 
     QVector< Node > Nodes;
 
@@ -342,6 +342,8 @@ void FSModel::Refresh()
                                      FindExInfoBasic,
                                      &wfd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
 
+    QFileIconProvider Provider;
+    
     if( hFile != INVALID_HANDLE_VALUE )
     {
         do
@@ -382,20 +384,22 @@ void FSModel::Refresh()
             }
             else
             {
-                do
-                {
-                    SHFILEINFOW SHInfo = { 0, };
-                    const auto File = Item.Name.toStdWString();
-                    SHGetFileInfoW( File.c_str(), FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
-                                    SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
+                Item.Icon = Provider.icon( QFileInfo( Base + Item.Name ) ).pixmap( 24, 24 );
 
-                    if( SHInfo.hIcon != Q_NULLPTR )
-                    {
-                        Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-                        DestroyIcon( SHInfo.hIcon );
-                    }
+                //do
+                //{
+                //    SHFILEINFOW SHInfo = { 0, };
+                //    const auto File = Item.Name.toStdWString();
+                //    SHGetFileInfoW( File.c_str(), FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
+                //                    SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
 
-                } while( false );
+                //    if( SHInfo.hIcon != Q_NULLPTR )
+                //    {
+                //        Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
+                //        DestroyIcon( SHInfo.hIcon );
+                //    }
+
+                //} while( false );
 
                 FileCount_Refresh++;
                 TotalSize_Refresh += Item.Size;
@@ -480,109 +484,9 @@ int FSModel::columnCount( const QModelIndex& parent ) const
 
 QVariant FSModel::data( const QModelIndex& index, int role ) const
 {
-    if( index.isValid() == false )
-        return {};
-
-    const auto Row = index.row();
-    const auto Col = index.column();
-
-    if( Row < 0 || Row >= VecNode.size() )
-        return {};
-
-    if( Col < 0 || Col >= CurrentView.VecColumns.size() )
-        return {};
-
-    // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
-
-    if( role == Qt::DisplayRole || role == Qt::EditRole )
-    {
-        const auto& Item = VecNode[ Row ];
-        if( Item.VecContent.isEmpty() == true || Col >= Item.VecContent.size() )
-            return Item.Name;
-
-        return Item.VecContent[ Col ];
-    }
-
-    if( role == Qt::DecorationRole )
-    {
-        if( Col == 0 )
-            return VecNode[ Row ].Icon;
-    }
-
-    if( role == Qt::BackgroundRole )
-    {
-        if( VecRowColors[ Row ].second.isValid() == true )
-            return VecRowColors[ Row ].second;
-
-        return QColor( 0, 0, 0 );
-    }
-
-    if( role == Qt::ForegroundRole )
-    {
-        const auto& Item = VecNode[ Row ];
-
-        if( VecRowColors[ Row ].first.isValid() == true )
-            return VecRowColors[ Row ].first;
-
-        //if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-        //    return QColor( "red" );
-
-        return QColor( "#FFFFFF" );
-    }
-
-    if( role == Qt::UserRole )
-    {
-        // 디렉토리 순으로 정렬하기 위해 디렉토리 이름 앞에 0 을 붙이고, 파일 이름 앞에는 1 을 붙인다.
-        // 이로 인해 오름차순이나 내림차순으로 정렬하면 자연히 이에 따라 정렬된다.
-        // QtitanDataGrid 에서 컬럼을 생성할 때 정렬에 사용할 Role 을 UserRole 로 지정한 컬럼만 적용된다.
-        if( Col == 0 )
-        {
-            const auto& Item = VecNode[ Row ];
-
-            if( Item.Name == ".." || Item.Name == "." )
-                return "0" + Item.Name;
-
-            if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-                return "1" + Item.Name;
-            else
-                return "2" + Item.Name;
-        }
-    }
-
-    if( role == USR_ROLE_ATTRIBUTE )
-    {
-        return static_cast< quint32 >( VecNode[ Row ].Attiributes );
-    }
-
-    if( role == USR_ROLE_HIDDENOPACITY )
-    {
-        const auto& Item = VecNode[ Row ];
-        if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) || FlagOn( Item.Attiributes, FILE_ATTRIBUTE_SYSTEM ) )
-            return 0.5f;
-
-        return 1.0f;
-    }
-
-    if( role == Qt::ForegroundRole )
-    {
-        return QColor( "white" );
-    }
-
-    if( role == Qt::FontRole )
-    {
-        if( Col == 0 )
-        {
-            const auto& Item = VecNode[ Row ];
-            if( Item.IsNormalizedByNFD == TRUE )
-            {
-                QFont a;
-                a.setUnderline( true );
-                return a;
-            }
-        }
-    }
-
-    return QVariant();
+    QModelRoleData roleData( role );
+    multiData( index, roleData );
+    return roleData.data();
 }
 
 bool FSModel::setData( const QModelIndex& index, const QVariant& value, int role )
@@ -632,6 +536,99 @@ Qt::ItemFlags FSModel::flags( const QModelIndex& index ) const
 {
     const auto Def = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     return index.column() == 0 ? Def | Qt::ItemIsEditable : Def;
+}
+
+void FSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
+{
+    if( index.isValid() == false )
+        return;
+
+    const auto Row = index.row();
+    const auto Col = index.column();
+
+    if( Row < 0 || Row >= VecNode.size() )
+        return;
+
+    if( Col < 0 || Col >= CurrentView.VecColumns.size() )
+        return;
+
+    // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
+    for( QModelRoleData& RoleWith : roleDataSpan )
+    {
+        const int Role = RoleWith.role();
+        const auto& Item = VecNode[ Row ];
+
+        switch( Role )
+        {
+            case Qt::DisplayRole:
+            case Qt::EditRole: {
+                if( Item.VecContent.isEmpty() == true || Col >= Item.VecContent.size() )
+                    RoleWith.setData( Item.Name );
+                else
+                    RoleWith.setData( Item.VecContent[ Col ] );
+            } break;
+
+            case Qt::DecorationRole: {
+                if( Col == 0 )
+                    RoleWith.setData( VecNode[ Row ].Icon );
+            } break;
+
+            case Qt::ForegroundRole: {
+                if( VecRowColors[ Row ].first.isValid() == true )
+                    RoleWith.setData( VecRowColors[ Row ].first );
+                else
+                    RoleWith.setData( QColor( "#FFFFFF" ) );
+            } break;
+            case Qt::BackgroundRole: {
+                if( VecRowColors[ Row ].second.isValid() == true )
+                    RoleWith.setData( VecRowColors[ Row ].second );
+                else
+                    RoleWith.setData( QColor( 0, 0, 0 ) );
+            } break;
+            case Qt::FontRole: {
+                if( Col == 0 )
+                {
+                    if( Item.IsNormalizedByNFD == TRUE )
+                    {
+                        QFont a;
+                        a.setUnderline( true );
+                        RoleWith.setData( a );
+                    }
+                }
+
+            } break;
+
+            case FSModel::USR_ROLE_SORT: {
+                // 디렉토리 순으로 정렬하기 위해 디렉토리 이름 앞에 0 을 붙이고, 파일 이름 앞에는 1 을 붙인다.
+                // 이로 인해 오름차순이나 내림차순으로 정렬하면 자연히 이에 따라 정렬된다.
+                // QtitanDataGrid 에서 컬럼을 생성할 때 정렬에 사용할 Role 을 UserRole 로 지정한 컬럼만 적용된다.
+                if( Col == 0 )
+                {
+                    if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
+                    {
+                        if( Item.Name == ".." || Item.Name == "." )
+                            RoleWith.setData( "0" + Item.Name );
+                        else
+                            RoleWith.setData( "1" + Item.Name );
+                    }
+                    else
+                    {
+                        RoleWith.setData( "2" + Item.Name );
+                    }
+                }
+            } break;
+            case FSModel::USR_ROLE_ATTRIBUTE: {
+                RoleWith.setData( static_cast< quint32 >( Item.Attiributes ) );
+            } break;
+            case FSModel::USR_ROLE_HIDDENOPACITY: {
+                if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_HIDDEN ) || 
+                    FlagOn( Item.Attiributes, FILE_ATTRIBUTE_SYSTEM ) )
+                    RoleWith.setData( 0.5f );
+                else
+                    RoleWith.setData( 1.0f );
+            } break;
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

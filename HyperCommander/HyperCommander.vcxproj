@@ -385,6 +385,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp" />
     <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp" />
+    <ClInclude Include="..\commonLibs\win\winLIBMgr.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />
     <QtMoc Include="UIs\dlgViewer.hpp" />

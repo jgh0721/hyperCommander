@@ -18,6 +18,8 @@
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    QSettings::setDefaultFormat( QSettings::IniFormat );
+
     auto Font = QApplication::font();
     Font.setStyleStrategy( QFont::PreferAntialias  );
     Font.setHintingPreference( QFont::PreferFullHinting );
