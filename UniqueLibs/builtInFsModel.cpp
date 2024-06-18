@@ -355,7 +355,9 @@ void FSModel::Refresh()
             Item.Attiributes    = wfd.dwFileAttributes;
             Item.Reserved0      = wfd.dwReserved0;
             Item.Name           = QString::fromWCharArray( wfd.cFileName );
-            Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
+            // Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
+            // NOTE: OS 의 IsNormalizedString 의 정상적인 Latin1 문자열도 TRUE 를 반환한다. 
+            Item.IsNormalizedByNFD = Item.Name != Item.Name.normalized( QString::NormalizationForm_C );
             Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
             if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
             {
@@ -570,7 +572,13 @@ QVariant FSModel::data( const QModelIndex& index, int role ) const
     {
         if( Col == 0 )
         {
-            
+            const auto& Item = VecNode[ Row ];
+            if( Item.IsNormalizedByNFD == TRUE )
+            {
+                QFont a;
+                a.setUnderline( true );
+                return a;
+            }
         }
     }
 
@@ -597,8 +605,9 @@ bool FSModel::setData( const QModelIndex& index, const QVariant& value, int role
         {
             auto& Node = VecNode[ Row ];
             Node.Name = value.toString();
+            Node.IsNormalizedByNFD = FALSE;
             Node.VecContent[ Col ] = value;
-            emit dataChanged( index, index, QList<int>() << Qt::DisplayRole << Qt::EditRole );
+            emit dataChanged( index, index, QList<int>() << Qt::DisplayRole << Qt::EditRole << Qt::FontRole );
             return true;
         }
     }

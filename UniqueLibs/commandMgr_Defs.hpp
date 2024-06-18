@@ -48,6 +48,8 @@ DECLARE_CMD( BuiltInCMD_OPs_MkDir,                  QObject::tr( "동작" ), "cm
              Qt::ControlModifier | Qt::Key_K,       QObject::tr( "새 폴더" ) );
 DECLARE_CMD( BuiltInCMD_OPs_Delete,                 QObject::tr( "동작" ), "cm_Delete",
              Qt::Key_Delete,                        QObject::tr( "파일 삭제" ) );
+DECLARE_CMD( BuiltInCMD_OPs_UnicodeNormalization,   QObject::tr( "동작" ), "cm_NameNormalization",
+             Qt::ControlModifier | Qt::Key_U,       QObject::tr( "파일 이름 정규화(NFC) 교정" ) );
 
 DECLARE_CMD( BuiltInCMD_Sel_Inverse,                QObject::tr( "선택" ), "cm_SelInverse",
              Qt::Key_Space,                         QObject::tr( "파일 선택을 반전하고 다음으로 이동" ) );
@@ -85,6 +87,8 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_OPs_Return,
     BuiltInCMD_OPs_Enter,
     BuiltInCMD_OPs_MkDir,
+    BuiltInCMD_OPs_Delete,
+    BuiltInCMD_OPs_UnicodeNormalization,
 
     BuiltInCMD_Sel_Inverse,
 

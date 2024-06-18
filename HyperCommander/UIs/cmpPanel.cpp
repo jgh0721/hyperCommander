@@ -314,6 +314,26 @@ void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
     }
 }
 
+void CmpPanel::FileNormalization( const QModelIndex& SrcIndex )
+{
+    const auto State = retrieveFocusState();
+    const auto ModelIndex = State->ProxyModel->mapToSource( SrcIndex );
+    const auto Node = State->Model->GetFileInfo( ModelIndex );
+
+    if( Node.IsNormalizedByNFD == FALSE )
+        return;
+
+    const DWORD Ret = State->Model->Rename( ModelIndex, Node.Name.normalized( QString::NormalizationForm_C ) );
+    if( Ret != ERROR_SUCCESS )
+    {
+        // TODO: 오류처리, 오류창 표시
+        // 관리자 권한으로 재시도할 수 있음
+        return;
+    }
+
+    State->Model->setData( ModelIndex, Node.Name.normalized( QString::NormalizationForm_C ), Qt::EditRole );
+}
+
 void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
 {
     UNREFERENCED_PARAMETER( SrcIndex );
@@ -825,7 +845,6 @@ void CmpPanel::oo_grdLocal_cellClicked( Qtitan::CellClickEventArgs* Args )
             viewClickTimer.start( doubleClickInterval );
         }
     }
-
 }
 
 void CmpPanel::oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args )

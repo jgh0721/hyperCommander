@@ -130,6 +130,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_Delete )
     Pane->FileDeleteOnCurrentTab( CursorIndex );
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_NameNormalization )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->FileNormalization( CursorIndex );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
 {
     const auto Pane = retrieveSrcPanel();
