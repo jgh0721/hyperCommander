@@ -32,6 +32,7 @@ class CmpPanel : public QWidget
         FSModel*                        Model = nullptr;
         FSProxyModel*                   ProxyModel = nullptr;
 
+        qint64                          SelectedSize = 0;
         int                             SelectedFileCount = 0;
         int                             SelectedDirectoryCount = 0;
         QVector< QModelIndex >          SelectedIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
@@ -105,8 +106,8 @@ private:
     // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
     QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
 
-    void                                processVolumeStatusText( QChar Drive );
-    void                                processPanelStatusText();
+    void                                processVolumeStatusText( QChar Drive ) const;
+    Q_INVOKABLE void                    processPanelStatusText();
     
     // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
     QVector< TySpTabState >             vecTabStates;

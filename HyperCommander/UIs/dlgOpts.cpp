@@ -20,8 +20,23 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
 
 void QMainOpts::LoadSettings()
 {
+    int Value = 0;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     const auto StFileSetMgr = TyStFileSetMgr::GetInstance();
+
+    StSettings->beginGroup( "Configuration" );
+
+    Value = StSettings->value( "SizeInHeader" ).toInt();
+    if( Value > HC_SIZE_STYLE_BKM )
+        Value = HC_SIZE_STYLE_BYTES;
+    ui.cbxHeaderSizeDisplay->setCurrentIndex( Value );
+
+    Value = StSettings->value( "SizeInFooter" ).toInt();
+    if( Value > HC_SIZE_STYLE_BKM )
+        Value = HC_SIZE_STYLE_BYTES;
+    ui.cbxFooterSizeDisplay->setCurrentIndex( Value );
+
+    StSettings->endGroup();
 
     StColorSchemeMgr->Refresh();
     StFileSetMgr->Refresh();
@@ -35,6 +50,11 @@ void QMainOpts::LoadSettings()
 
 void QMainOpts::SaveSettings()
 {
+    StSettings->beginGroup( "Configuration" );
+    StSettings->setValue( "SizeInHeader", ui.cbxHeaderSizeDisplay->currentIndex() );
+    StSettings->setValue( "SizeInFooter", ui.cbxFooterSizeDisplay->currentIndex() );
+    StSettings->endGroup();
+
     SaveSettings_ColorScheme();
     TyStFileSetMgr::GetInstance()->SaveSettings();
 }
@@ -460,6 +480,31 @@ void QMainOpts::initialize()
 
     ui.lstOptCate->setSizeAdjustPolicy( QAbstractScrollArea::AdjustToContents );
     ui.lstOptCate->setFixedWidth( ui.lstOptCate->sizeHintForColumn( 0 ) + ui.lstOptCate->lineWidth() * 2 + ui.lstOptCate->frameWidth() * 2 );
+
+    // TyEnSizeStyle 과 순서가 일치해야 한다.
+    const auto SizeInStyles = QStringList() << "Bytes" << "KBytes"
+        << "유동적( x.xxx k/M/G )"
+        << "유동적( x.xx  k/M/G )"
+        << "유동적( x.x   k/M/G )"
+        << "유동적( x     k/M/G )"
+        << "유동적( x.xxx k/M/G/T )"
+        << "유동적( x.xx  k/M/G/T )"
+        << "유동적( x.x   k/M/G/T )"
+        << "유동적( x     k/M/G/T )"
+        << "유동적( x.x   k/M )"
+        << "유동적( x     k/M )"
+        ;
+
+    ui.cbxHeaderSizeDisplay->clear();
+    ui.cbxHeaderSizeDisplay->addItems( SizeInStyles );
+    ui.cbxHeaderSizeDisplay->setEditable( true );
+    ui.cbxHeaderSizeDisplay->lineEdit()->setReadOnly( true );
+    ui.cbxHeaderSizeDisplay->lineEdit()->setAlignment( Qt::AlignCenter );
+    ui.cbxFooterSizeDisplay->clear();
+    ui.cbxFooterSizeDisplay->addItems( SizeInStyles );
+    ui.cbxFooterSizeDisplay->setEditable( true );
+    ui.cbxFooterSizeDisplay->lineEdit()->setReadOnly( true );
+    ui.cbxFooterSizeDisplay->lineEdit()->setAlignment( Qt::AlignCenter );
 
     oo_insertEmptyFileSetColorRow();
 

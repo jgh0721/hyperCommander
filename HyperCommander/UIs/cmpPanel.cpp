@@ -18,6 +18,7 @@
 
 #include <QtitanGrid.h>
 
+#include "cmnHCUtils.hpp"
 #include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 
 CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
@@ -185,11 +186,37 @@ void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDo
     // State 에 저장된 항목들 갱신
     // TODO: 선택된 항목이 디렉토리이고, EverythingSDK 를 쓰지 않고, 디렉토리 계산 기능이 사용 중이라면 디렉토리 크기를 계산한다. 
     const auto Row = View->getRow( SrcIndex );
+    const auto ModelIndex = State->ProxyModel->mapToSource( SrcIndex );
+    const auto Node = State->Model->GetFileInfo( ModelIndex );
+
     View->selectRow( Row.rowIndex(), Qtitan::Invert );
-    View->modelController()->isRowSelected( Row );
 
     if( IsMoveDown == true )
         View->navigateDown( Qt::NoModifier );
+
+    if( Node.Name == ".." )
+        return;
+
+    if( View->modelController()->isRowSelected( Row ) == true )
+    {
+        if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+            State->SelectedDirectoryCount += 1;
+        else
+            State->SelectedFileCount += 1;
+
+        State->SelectedSize += Node.Size;
+    }
+    else
+    {
+        if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+            State->SelectedDirectoryCount -= 1;
+        else
+            State->SelectedFileCount -= 1;
+
+        State->SelectedSize -= Node.Size;
+    }
+
+    QMetaObject::invokeMethod( this, "processPanelStatusText", Qt::QueuedConnection );
 }
 
 void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
@@ -988,8 +1015,6 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
         //const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
 
-        qDebug() << KeyEvent;
-
         if( StCommandMgr->ProcessKeyPressEvent( KeyEvent, retrieveFocusViewCursorIndex() ) == true )
             return true;
     }
@@ -1091,14 +1116,17 @@ QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcI
     return Pos;
 }
 
-void CmpPanel::processVolumeStatusText( QChar Drive )
+void CmpPanel::processVolumeStatusText( QChar Drive ) const
 {
     const auto Root = QString( "%1:\\" ).arg( Drive ).toStdWString();
     ULARGE_INTEGER Avail, TotalBytes, TotalFree;
     if( GetDiskFreeSpaceExW( Root.c_str(), &Avail, &TotalBytes, &TotalFree ) != FALSE )
     {
-        // TODO: 크기 문자열 계산 필요
-        ui.lblVolumeStatus->setText( QString( "%1 / %2 (남음/전체)" ).arg( Avail.QuadPart ).arg( TotalBytes.QuadPart ) );
+        const auto SizeStyle = static_cast< TyEnSizeStyle >( StSettings->value( "Configuration/SizeInHeader" ).toInt() );
+        const auto AvailText = GetFormattedSizeText( Avail.QuadPart, SizeStyle );
+        const auto TotalText = GetFormattedSizeText( TotalBytes.QuadPart, SizeStyle );
+
+        ui.lblVolumeStatus->setText( QString( "%1 / %2 (남음/전체)" ).arg( AvailText ).arg( TotalText ) );
     }
     else
     {
@@ -1109,6 +1137,10 @@ void CmpPanel::processVolumeStatusText( QChar Drive )
 void CmpPanel::processPanelStatusText()
 {
     const auto& State = retrieveFocusState();
+    const auto SizeStyle = static_cast< TyEnSizeStyle >( StSettings->value( "Configuration/SizeInFooter" ).toInt() );
 
-    ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" ).arg( 0).arg( State->Model->GetTotalSize() ).arg(0).arg( State->Model->GetFileCount()).arg(0).arg( State->Model->GetDirectoryCount()));
+    ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" )
+                           .arg( GetFormattedSizeText( State->SelectedSize, SizeStyle ) ).arg( GetFormattedSizeText( State->Model->GetTotalSize(), SizeStyle ) )
+                           .arg( State->SelectedFileCount ).arg( State->Model->GetFileCount() )
+                           .arg( State->SelectedDirectoryCount ).arg( State->Model->GetDirectoryCount() ) );
 }

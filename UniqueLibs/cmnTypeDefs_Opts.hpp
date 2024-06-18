@@ -5,25 +5,6 @@
 
 // VERSION = X.Y.Z.Build
 
-/*!
-
-// 내장 뷰어 
-[Viewer]
-
-[ListerPlugins]
-Count=N
-0_Path=XXX                  wlx or wlx64
-0_Detect=XXXX
-0_Support64Bit=True|False
-
-[PacketPlugins]
-Count=N
-0_Path=Caps,XXX
-0_Exts=
-0_Support64Bit=True|False
-
-*/
-
 struct TyOpts
 {
     // UI

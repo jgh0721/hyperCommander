@@ -21,6 +21,10 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
 /*!
     Index => 0..N
 
+    [Configuration]
+    SizeInHeader=
+    SizeInFooter=
+
     [ColorScheme]
     Count=N
     Selected=N
@@ -52,7 +56,32 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
     0_Exts=XXX|XXX
     0_Attributes=Z
     0_Size=Z
+
+    // 내장 뷰어
+    [Viewer]
+
+    [ListerPlugins]
+    Count=N
+    0_Path=XXX                  wlx or wlx64
+    0_Detect=XXXX
+    0_Support64Bit=True|False
+
+    [PacketPlugins]
+    Count=N
+    0_Path=Caps,XXX
+    0_Exts=
+    0_Support64Bit=True|False
  */
+
+////////////////////////////////////////////////////////////////////////////////
+
+struct TyConfiguration
+{
+    int SizeInHeader = 0;
+    int SizeInFooter = 0;
+};
+
+Q_DECLARE_METATYPE( TyConfiguration );
 
 ////////////////////////////////////////////////////////////////////////////////
 

@@ -170,9 +170,68 @@
       <item>
        <widget class="QStackedWidget" name="stkOpts">
         <property name="currentIndex">
-         <number>1</number>
+         <number>0</number>
         </property>
-        <widget class="QWidget" name="pgDisplay"/>
+        <widget class="QWidget" name="pgDisplay">
+         <widget class="QLabel" name="lblHeaderSizeDisplay">
+          <property name="geometry">
+           <rect>
+            <x>50</x>
+            <y>250</y>
+            <width>101</width>
+            <height>16</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>상단 크기 표시:</string>
+          </property>
+         </widget>
+         <widget class="QLabel" name="lblFooterSizeDisplay">
+          <property name="geometry">
+           <rect>
+            <x>50</x>
+            <y>280</y>
+            <width>84</width>
+            <height>16</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>하단 크기 표시:</string>
+          </property>
+         </widget>
+         <widget class="QComboBox" name="cbxHeaderSizeDisplay">
+          <property name="geometry">
+           <rect>
+            <x>150</x>
+            <y>250</y>
+            <width>170</width>
+            <height>22</height>
+           </rect>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>170</width>
+            <height>0</height>
+           </size>
+          </property>
+         </widget>
+         <widget class="QComboBox" name="cbxFooterSizeDisplay">
+          <property name="geometry">
+           <rect>
+            <x>150</x>
+            <y>280</y>
+            <width>170</width>
+            <height>22</height>
+           </rect>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>170</width>
+            <height>0</height>
+           </size>
+          </property>
+         </widget>
+        </widget>
         <widget class="QWidget" name="pgDisplay_ColorScheme">
          <layout class="QGridLayout" name="gridLayout">
           <item row="2" column="0" colspan="2">
