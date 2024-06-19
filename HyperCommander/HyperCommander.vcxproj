@@ -349,6 +349,12 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
+    <ClCompile Include="..\UniqueLibs\cmnHCModelUtils.cpp">
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
+    </ClCompile>
     <ClCompile Include="..\UniqueLibs\cmnHCUtils.cpp" />
     <ClCompile Include="..\UniqueLibs\cmnTypeDefs_Opts.cpp" />
     <ClCompile Include="..\UniqueLibs\colorSchemeMgr.cpp" />
@@ -367,9 +373,11 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
     <ClCompile Include="Modules\mdlFileOperation.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileAttrib.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileDelete.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileProgress.cpp" />
+    <ClCompile Include="UIs\cmnUiUtils.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
@@ -383,6 +391,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileAttrib.hpp" />
+    <QtMoc Include="UIs\cmnUiUtils.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp" />
     <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp" />
     <ClInclude Include="..\commonLibs\win\winLIBMgr.hpp" />
@@ -443,6 +453,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.h" />
     <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h" />
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\cmnHCModelUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
     <ClInclude Include="..\UniqueLibs\colorSchemeMgr.hpp" />
@@ -497,6 +508,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\Cate - FileOperation\dlgCreateDirectory.ui" />
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileAttrib.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileDelete.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileCopy.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileProgress.ui" />

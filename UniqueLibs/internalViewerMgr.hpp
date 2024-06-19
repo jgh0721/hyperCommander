@@ -29,5 +29,4 @@ private:
     QVector< TyInternalViewer >         vecInternalItems;
 };
 
-
 using TyStInternalViewerMgr = nsCmn::nsConcurrent::TSingleton<CInternalViewerMgr>;

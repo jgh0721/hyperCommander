@@ -1,20 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>dlgDelete</class>
- <widget class="QDialog" name="dlgDelete">
+ <class>dlgFileAttrib</class>
+ <widget class="QDialog" name="dlgFileAttrib">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>550</width>
-    <height>307</height>
+    <width>429</width>
+    <height>454</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Dialog</string>
-  </property>
-  <property name="sizeGripEnabled">
-   <bool>true</bool>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <property name="spacing">
@@ -90,7 +87,7 @@
       <item>
        <widget class="QLabel" name="lblTitleBar">
         <property name="text">
-         <string>삭제</string>
+         <string>속성 변경</string>
         </property>
        </widget>
       </item>
@@ -133,87 +130,175 @@
     </widget>
    </item>
    <item>
-    <widget class="QFrame" name="frmContent">
+    <widget class="QFrame" name="frame">
      <property name="frameShape">
       <enum>QFrame::Shape::StyledPanel</enum>
      </property>
      <property name="frameShadow">
       <enum>QFrame::Shadow::Raised</enum>
      </property>
-     <layout class="QGridLayout" name="gridLayout_2">
-      <item row="0" column="0">
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
        <widget class="QWidget" name="widget" native="true">
         <layout class="QHBoxLayout" name="horizontalLayout_2">
          <item>
-          <widget class="QLabel" name="lblInformText">
+          <widget class="QCheckBox" name="chkIsRecursive">
            <property name="text">
-            <string>TextLabel</string>
+            <string>하위 폴더 포함</string>
            </property>
           </widget>
          </item>
         </layout>
        </widget>
       </item>
-      <item row="0" column="1" rowspan="2">
-       <widget class="QWidget" name="widget_2" native="true">
-        <layout class="QVBoxLayout" name="verticalLayout_2">
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QLineEdit" name="edtFilter"/>
-         </item>
-         <item>
-          <widget class="QListView" name="lstTargetItems"/>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item row="1" column="0">
+      <item>
        <widget class="QGroupBox" name="groupBox">
         <property name="title">
-         <string>옵션</string>
+         <string>속성 변경</string>
         </property>
-        <layout class="QGridLayout" name="gridLayout">
-         <item row="0" column="0">
-          <widget class="QCheckBox" name="chkIsUseRecycleBin">
+        <layout class="QVBoxLayout" name="verticalLayout_2">
+         <item>
+          <widget class="QCheckBox" name="chkIsArchive">
            <property name="text">
-            <string>휴지통으로 보내기</string>
+            <string>A 기록</string>
            </property>
           </widget>
          </item>
-         <item row="2" column="0">
-          <widget class="QCheckBox" name="chkIsDeleteHiddenSys">
+         <item>
+          <widget class="QCheckBox" name="chkIsReadOnly">
            <property name="text">
-            <string>숨김 / 시스템 파일 삭제</string>
+            <string>R 읽기 전용</string>
            </property>
           </widget>
          </item>
-         <item row="4" column="0">
-          <widget class="QCheckBox" name="chkIsUseAdminRights">
+         <item>
+          <widget class="QCheckBox" name="chkIsHidden">
            <property name="text">
-            <string>관리자 권한으로 시도</string>
+            <string>H 숨김</string>
            </property>
           </widget>
          </item>
-         <item row="3" column="0">
-          <widget class="QCheckBox" name="chkIsDelReadOnly">
+         <item>
+          <widget class="QCheckBox" name="chkIsSystem">
            <property name="text">
-            <string>읽기전용 파일 삭제</string>
+            <string>S 시스템</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="lblInformText">
+           <property name="text">
+            <string>( 네모 = 변경 안 됨, 선택 = 속성 설정 )</string>
            </property>
           </widget>
          </item>
         </layout>
        </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="grpDateTime">
+        <property name="title">
+         <string>날짜/시간 변경(&amp;C):</string>
+        </property>
+        <property name="flat">
+         <bool>false</bool>
+        </property>
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+        <layout class="QGridLayout" name="gridLayout">
+         <item row="1" column="1">
+          <widget class="QTimeEdit" name="tmTime">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="frame">
+            <bool>true</bool>
+           </property>
+           <property name="accelerated">
+            <bool>false</bool>
+           </property>
+           <property name="displayFormat">
+            <string>AP hh:mm</string>
+           </property>
+           <property name="calendarPopup">
+            <bool>false</bool>
+           </property>
+           <property name="timeSpec">
+            <enum>Qt::TimeSpec::LocalTime</enum>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QDateEdit" name="dtDate">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="frame">
+            <bool>false</bool>
+           </property>
+           <property name="calendarPopup">
+            <bool>true</bool>
+           </property>
+           <property name="timeSpec">
+            <enum>Qt::TimeSpec::LocalTime</enum>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2" rowspan="2">
+          <widget class="QPushButton" name="btnCurrentDateTime">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>66</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>현재 시간</string>
+           </property>
+           <property name="autoDefault">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="label_3">
+           <property name="text">
+            <string>시간(&amp;T):</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_2">
+           <property name="text">
+            <string>날짜(&amp;D):</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <spacer name="verticalSpacer">
+        <property name="orientation">
+         <enum>Qt::Orientation::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
       </item>
      </layout>
     </widget>
@@ -261,7 +346,7 @@
       <item>
        <widget class="QPushButton" name="btnOK">
         <property name="text">
-         <string>시작(&amp;O)</string>
+         <string>확인(&amp;O)</string>
         </property>
        </widget>
       </item>

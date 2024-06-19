@@ -5,6 +5,8 @@
 
 #include "Cate - FileOperation/dlgFileCopy.hpp"
 #include "Cate - FileOperation/dlgCreateDirectory.hpp"
+#include "Cate - FileOperation/dlgFileDelete.hpp"
+#include "Cate - FileOperation/dlgFileAttrib.hpp"
 
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/commandMgr.hpp"
@@ -294,36 +296,15 @@ void CmpPanel::RefreshSource( int TabIndex )
 
 void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
 {
-    QFileCopyUI Ui;
+    Q_ASSERT( Dst != nullptr );
+    if( Dst == nullptr )
+        return;
 
     const auto Src_State = retrieveFocusState();
     const auto Dst_State = Dst->retrieveFocusState();
 
     // 선택된 항목들을 추가한다.
-    QVector< QModelIndex > SrcModel;
-
-    for( const auto Row : Src_State->View->selection()->selectedRowIndexes() )
-    {
-        const auto Index = Src_State->ProxyModel->mapToSource( Row );
-        if( Src_State->Model->GetName( Index ) == ".." )
-            continue;
-
-        SrcModel.push_back( Index );
-    }
-
-    // 선택된 항목이 없다면 현재 커서가 위치한 항목을 복사한다. 
-    if( SrcModel.isEmpty() == true )
-    {
-        const auto Row = Src_State->View->focusedRow();
-        if( Row.isValid() == true )
-        {
-            const auto Index = Src_State->ProxyModel->mapToSource( Row.modelIndex( 0 ) );
-            if( Src_State->Model->GetName( Index ) != ".." )
-            {
-                SrcModel.push_back( Index );
-            }
-        }
-    }
+    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
 
     if( SrcModel.isEmpty() == true )
     {
@@ -331,6 +312,7 @@ void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
         return;
     }
 
+    QFileCopyUI Ui;
     Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
     Ui.SetSourceModel( SrcModel );
     Ui.SetDestinationPath( Dst_State->Model->GetFileFullPath( "" ) );
@@ -342,12 +324,21 @@ void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
 {
     UNREFERENCED_PARAMETER( SrcIndex );
 
-    const auto View = retrieveFocusView();
-    const auto Rows = View->selection()->selectedRowIndexes();
-    if( Rows.isEmpty() == true )
+    const auto Src_State = retrieveFocusState();
+    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
+
+    if( SrcModel.isEmpty() == true )
     {
-        
+        // TODO: 메시지 출력, 복사할 파일 없음
+        return;
     }
+
+    QFileDeleteUI Ui;
+    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
+    Ui.SetSourceModel( SrcModel );
+
+    if( Ui.exec() == QDialog::Accepted )
+        Src_State->View->deselectAll();
 }
 
 void CmpPanel::FileNormalization( const QModelIndex& SrcIndex )
@@ -368,6 +359,27 @@ void CmpPanel::FileNormalization( const QModelIndex& SrcIndex )
     }
 
     State->Model->setData( ModelIndex, Node.Name.normalized( QString::NormalizationForm_C ), Qt::EditRole );
+}
+
+void CmpPanel::FileSetAttrib( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    const auto Src_State = retrieveFocusState();
+    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
+
+    QFileAttribUI Ui;
+    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
+    Ui.SetSourceModel( SrcModel );
+
+    if( SrcModel.isEmpty() == true )
+    {
+        // TODO: 메시지 출력, 복사할 파일 없음
+        return;
+    }
+
+    if( Ui.exec() == QDialog::Accepted )
+        Src_State->View->deselectAll();
 }
 
 void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
@@ -496,6 +508,10 @@ int CmpPanel::InitializeGrid()
     const auto Grid = new Qtitan::Grid;
     Grid->setViewType( Qtitan::Grid::BandedTableView );
     Grid->setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
+    Grid->setAttribute( Qt::WA_KeyCompression );
+    Grid->setAttribute( Qt::WA_InputMethodEnabled );
+    Grid->viewport()->setAttribute( Qt::WA_KeyCompression );
+    Grid->viewport()->setAttribute( Qt::WA_InputMethodEnabled );
 
     Vertical->addWidget( Grid );
 
@@ -631,7 +647,7 @@ int CmpPanel::InitializeGrid()
 
     Model->ChangeDirectory( QModelIndex() );
     View->bestFit( FitToHeaderPercent );
-
+    
     return currentIndex;
 }
 
@@ -975,15 +991,13 @@ void CmpPanel::oo_grdLocal_editorPosting( Qtitan::EditorEventArgs* Args )
 
 void CmpPanel::oo_grdLocal_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )
 {
+    UNREFERENCED_PARAMETER( NewSelection );
+    UNREFERENCED_PARAMETER( OldSelection );
+
     viewClickTimer.stop();
 
     for( const auto& State : vecTabStates )
         State->LastFocusedRowIndex = -1;
-
-    qDebug() << "Selected = " << NewSelection->selectedRowIndexes().size();
-
-    for( const auto& Row : NewSelection->selectedRowIndexes() )
-        qDebug() << Row;
 }
 
 bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
@@ -1032,6 +1046,8 @@ bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
         const auto KeyEvent     = dynamic_cast< QKeyEvent* >( Event );
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
         //const auto StShortcutMgr = TyStShortcutMgr::GetInstance();
+
+        qDebug() << KeyEvent << KeyEvent->text();
 
         if( StCommandMgr->ProcessKeyPressEvent( KeyEvent, retrieveFocusViewCursorIndex() ) == true )
             return true;
@@ -1132,6 +1148,36 @@ QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcI
     } while( false );
 
     return Pos;
+}
+
+QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
+{
+    QVector<QModelIndex> SrcModel;
+
+    for( const auto Row : SrcState->View->selection()->selectedRowIndexes() )
+    {
+        const auto Index = SrcState->ProxyModel->mapToSource( Row );
+        if( SrcState->Model->GetName( Index ) == ".." )
+            continue;
+
+        SrcModel.push_back( Index );
+    }
+
+    // 선택된 항목이 없다면 현재 커서가 위치한 항목을 복사한다. 
+    if( SrcModel.isEmpty() == true )
+    {
+        const auto Row = SrcState->View->focusedRow();
+        if( Row.isValid() == true )
+        {
+            const auto Index = SrcState->ProxyModel->mapToSource( Row.modelIndex( 0 ) );
+            if( SrcState->Model->GetName( Index ) != ".." )
+            {
+                SrcModel.push_back( Index );
+            }
+        }
+    }
+
+    return SrcModel;
 }
 
 void CmpPanel::processVolumeStatusText( QChar Drive ) const

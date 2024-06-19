@@ -35,7 +35,7 @@ class CmpPanel : public QWidget
         qint64                          SelectedSize = 0;
         int                             SelectedFileCount = 0;
         int                             SelectedDirectoryCount = 0;
-        QVector< QModelIndex >          SelectedIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
+        QVector< QModelIndex >          SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
         int                             LastFocusedRowIndex = -1;
     };
 
@@ -64,6 +64,7 @@ public:
     void                                FileCopyToOtherPanel( CmpPanel* Dst );
     void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
     void                                FileNormalization( const QModelIndex& SrcIndex );
+    void                                FileSetAttrib( const QModelIndex& SrcIndex );
     Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
     void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
@@ -105,6 +106,7 @@ private:
     // 현재 마우스 커서의 전역 위치( GetCursorPos 를 통해 획득 ) 와 모델 색인을 통해
     // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
     QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
+    QVector< QModelIndex >              makeSrcModel( const TySpTabState& SrcState );
 
     void                                processVolumeStatusText( QChar Drive ) const;
     Q_INVOKABLE void                    processPanelStatusText();

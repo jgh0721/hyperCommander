@@ -38,6 +38,9 @@ void CColorSchemeMgr::Refresh()
         ColorScheme.Dialog_Font         = retrieveFont( "Dialog_Font_Family", "Dialog_Font_Size" );
         ColorScheme.FileList_Font       = retrieveFont( "List_Font_Family", "List_Font_Size", 14 );
 
+        ColorScheme.Dialog_FGColor      = QColor::fromString( StSettings->value( "Dialog_FGColor" ).toString() );
+        ColorScheme.Dialog_BGColor      = QColor::fromString( StSettings->value( "Dialog_BGColor" ).toString() );
+
         ColorScheme.FileList_FGColor    = QColor::fromString( StSettings->value( "List_FGColor" ).toString() );
         ColorScheme.FileList_BGColor    = QColor::fromString( StSettings->value( "List_BGColor" ).toString() );
         ColorScheme.FileList_Cursor     = QColor::fromString( StSettings->value( "List_CursorColor" ).toString() );
@@ -123,6 +126,9 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
         
         StSettings->setValue( "List_Font_Family",       CS.FileList_Font.family() );
         StSettings->setValue( "List_Font_Size",         CS.FileList_Font.pointSize() );
+
+        StSettings->setValue( "Dialog_FGColor",         CS.Dialog_FGColor.name( QColor::HexRgb ) );
+        StSettings->setValue( "Dialog_BGColor",         CS.Dialog_BGColor.name( QColor::HexRgb ) );
 
         StSettings->setValue( "List_FGColor",           CS.FileList_FGColor.name( QColor::HexRgb ) );
         StSettings->setValue( "List_BGColor",           CS.FileList_BGColor.name( QColor::HexRgb ) );

@@ -37,6 +37,8 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
     Menu_Font_Size=Npt or Npx
     Dialog_Font_Family=
     Dialog_Font_Size=Npt or Npx
+    Dialog_FGColor=
+    Dialog_BGColor=
     List_Font_Family=
     List_Font_Size=Npt or Npx
     List_FGColor=

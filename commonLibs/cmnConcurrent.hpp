@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿#ifndef __HDR_CMN_CONCURRENT__
+#define __HDR_CMN_CONCURRENT__
 
 #include <memory>
 #include <atomic>
@@ -230,3 +231,5 @@ namespace nsCmn
     } // nsConcurrent
 
 } // nsCmn
+
+#endif

@@ -59,6 +59,31 @@ void CFileOperation::SetDestination( const QString& Dst )
         dst_ = dst_.left( dst_.length() - 1 );
 }
 
+TyOsError CFileOperation::ResultCode() const
+{
+    return resultCode_;
+}
+
+void CFileOperation::SetDeleteIsDelHiddenSys( bool IsDelHiddenSys )
+{
+    isDelHiddenSys_ = IsDelHiddenSys;
+}
+
+void CFileOperation::SetDeleteIsDelReadOnly( bool IsDelReadOnly )
+{
+    isDelReadonly_ = IsDelReadOnly;
+}
+
+void CFileOperation::SetDeleteIsUseRecycleBin( bool IsUseRecycleBin )
+{
+    isUseRecycleBin = IsUseRecycleBin;
+}
+
+void CFileOperation::SetDeleteIsUseAutoAdminRights( bool IsUseAutoAdminRights )
+{
+    isUseAutoAdminRights = IsUseAutoAdminRights;
+}
+
 void CFileOperation::ChangeState( int State )
 {
     // TODO: 이전 상태를 참고하여 현재 상태 변경
@@ -110,7 +135,7 @@ void CFileOperation::workCopy()
     qint64 writtenTotalSize = 0;
     qint32 itemProgress = 0;
     qint32 totalProgress = 0;
-    qsizetype totalCount = vecSrc_.size();
+    const qsizetype totalCount = vecSrc_.size();
 
     for( int idx = 0; idx < vecSrc_.size(); ++idx )
     {
@@ -198,10 +223,133 @@ void CFileOperation::workCopy()
 
 void CFileOperation::workMove()
 {
+/*!
+    MoveFile 은 CopyFile 과 달리 원본 또는 대상이 디렉토리이면 여러 가지 제약이 걸린다.
+    따라서, 이를 구분하여 직접 복사/삭제 동작을 수행해야 할 수 있다.
+
+    Src 와 Dst 의 드라이브(루트) 가 같은지 확인한다.
+        UNC 경로는 서버 이름까지 확인한다.  
+
+    Src 가 디렉토리이고 루트가 다르면 직접 복사/삭제를 수행해야 한다.
+
+ */
+
+
 }
 
 void CFileOperation::workDelete()
 {
+    qint32 itemProgress = 0;
+    qint32 itemCount = 0;
+    qint32 totalProgress = 0;
+    qint64 totalSize = 0;
+    const qsizetype totalCount = vecSrc_.size();
+
+    bool IsAlwaysYes_ReadOnly = isDelReadonly_;
+    bool IsAlwaysYes_HiddenSys = isDelHiddenSys_;
+
+    SHFILEOPSTRUCTW SHFileOP = { 0, };
+    RtlZeroMemory( &SHFileOP, sizeof( SHFileOP ) );
+    SHFileOP.hwnd = nullptr;
+    SHFileOP.wFunc = FO_DELETE;
+    SHFileOP.fFlags |= FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_NO_UI | FOF_SILENT;
+
+    SHFileOperationW( &SHFileOP );
+
+    // 파일 및 디렉토리를 삭제할 때에는 디렉토리가 비어 있어야 삭제가 가능하다.
+    // 그러므로, 벡터를 역순으로 순회하며 가장 깊은 곳의 파일/디렉토리부터 순차적으로 삭제한다.
+    for( int idx = vecSrc_.size() - 1; idx >= 0; --idx )
+    {
+        const auto Src      = vecSrcMiddle_[ idx ];
+        const auto SrcInfo  = vecSrc_[ idx ];
+        auto Dst = retrieveDstItem( base_, Src, FlagOn( SrcInfo.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) ? "" : SrcInfo.Name );
+        const auto DstW = Dst.contains( ":" ) == true && isUseRecycleBin == false ? ( R"(\\?\)" + Dst ).toStdWString() : Dst.toStdWString();
+
+        if( waitRunningState() == false )
+            break;
+
+        if( FlagOn( SrcInfo.Attiributes, FILE_ATTRIBUTE_HIDDEN ) ||
+            FlagOn( SrcInfo.Attiributes, FILE_ATTRIBUTE_SYSTEM ) )
+        {
+            if( isDelHiddenSys_ == false || IsAlwaysYes_HiddenSys == false )
+            {
+                // 숨김 파일 삭제를 체크하지 않았거나, 한 번 사용자에게 알린 후, 사용자가 모두 삭제를 선택하지 않았다면 알린다. 
+            }
+        }
+
+        if( FlagOn( SrcInfo.Attiributes, FILE_ATTRIBUTE_READONLY ) )
+        {
+            if( isDelReadonly_ == false || IsAlwaysYes_ReadOnly == false )
+            {
+                // 읽기전용 파일 삭제를 체크하지 않았거나, 한 번 사용자에게 알린 후, 사용자가 모두 삭제를 선택하지 않았다면 알린다. 
+            }
+        }
+
+        emit NotifyChangedItem( Dst, "" );
+        emit NotifyChangedProgress( 0, totalProgress );
+        emit NotifyChangedStatus( ++itemCount, totalSize );
+
+        if( !FlagOn( SrcInfo.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+        {
+            do
+            {
+                SetFileAttributesW( DstW.c_str(), FILE_ATTRIBUTE_NORMAL );
+                const BOOL bRet = DeleteFileW( Dst.toStdWString().c_str() );
+                if( bRet != FALSE )
+                    break;
+
+                const auto ErrorCode = ::GetLastError();
+                if( ErrorCode == ERROR_FILE_NOT_FOUND )     // 성공으로 간주
+                    break;
+
+                // 삭제가 실패했으므로, 속성을 원상 복구한다. 
+                SetFileAttributesW( DstW.c_str(), SrcInfo.Attiributes );
+                if( ErrorCode == ERROR_ACCESS_DENIED )
+                {
+                    if( isUseAutoAdminRights == true )
+                    {
+                        // 관리자 권한으로 시도 후, 실패하면 아래로 이동하여 오류 창 표시
+                        // 성공하면 break
+                    }
+                }
+
+                // 오류창 통지
+
+            } while( false );
+        }
+        else
+        {
+            // 디렉토리를 삭제하려하는데 오류가 NOT_EMPTY 가 반환됨. 하지만, isDelHiddenSys_ 가 false 이면 오류창을 표시하지 않고 무시.
+            const BOOL bRet = RemoveDirectoryW( Dst.toStdWString().c_str() );
+            if( bRet == FALSE )
+            {
+                const auto ErrorCode = ::GetLastError();
+                if( ( ErrorCode != ERROR_DIR_NOT_EMPTY ) ||
+                    ( ErrorCode == ERROR_DIR_NOT_EMPTY && isDelHiddenSys_ == true ) )
+                {
+                    // 오류 통지 후 수행
+                }
+                else
+                {
+                    // 무시
+                }
+
+                if( isDelHiddenSys_ == true )
+                {
+
+                }
+            }
+        }
+
+        // (전체크기 - 지금까지 전송크기) * 현재 소요시간 / 지금까지의 전송크기 = 앞으로의 잔여시간
+        // https://ko.wikihow.com/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%A0%84%EC%86%A1-%EC%86%8D%EB%8F%84%EB%A5%BC-%EA%B3%84%EC%82%B0%ED%95%98%EB%8A%94-%EB%B0%A9%EB%B2%95
+        // 전체 백분율 계산
+        totalProgress = ( static_cast< double >( itemCount ) / static_cast< double >( totalCount ) ) * 100.0;
+        emit NotifyChangedProgress( 100, totalProgress );
+
+        totalSize += SrcInfo.Size;
+        emit NotifyChangedStatus( itemCount, totalSize );
+    }
 }
 
 bool CFileOperation::isErrorOccuredConnected() const
@@ -213,9 +361,9 @@ bool CFileOperation::isErrorOccuredConnected() const
 QString CFileOperation::retrieveDstItem( const QString& Dst, const QString& Middle, const QString& Name )
 {
     if( Name.isEmpty() == false )
-        return Dst + Middle + "\\" + Name;
+        return Dst + Middle + Name;
 
-    return Dst + Middle;
+    return Dst + Middle.left( Middle.length() - 1 );
 }
 
 bool CFileOperation::waitRunningState()

@@ -14,7 +14,7 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
 {
     ui.setupUi( this );
 
-    setWindowTitle( tr( "HyperCommander" ) );
+    setWindowTitle( tr( "HyperCommander - %1" ).arg( CMN_MAKE_STR( RES_CANONICAL_VERSION ) ) );
     
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 }
@@ -138,6 +138,16 @@ DEFINE_HC_COMMAND( QMainUI, cm_NameNormalization )
         return;
 
     Pane->FileNormalization( CursorIndex );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_SetAttrib )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->FileSetAttrib( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )

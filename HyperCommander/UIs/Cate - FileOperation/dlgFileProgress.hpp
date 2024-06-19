@@ -21,7 +21,7 @@ signals:
 public slots:
     void                                OnChangedState( int State );
     void                                OnChangedItem( const QString& Src, const QString& Dst );
-    void                                OnChangedProgress( qint16 Item, qint64 Total );
+    void                                OnChangedProgress( qint16 Item, qint16 Total );
     void                                OnChangedStatus( qint64 CurrentItemCount, qint64 CurrentTotalSize );
 
 protected slots:

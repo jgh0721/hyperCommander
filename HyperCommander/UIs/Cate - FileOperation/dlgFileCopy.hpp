@@ -8,36 +8,7 @@
 
 #include "UniqueLibs/builtInFsModel.hpp"
 
-class QTraverseSrcModel : public QThread
-{
-    Q_OBJECT
-
-public:
-    QVector< QModelIndex >              src;
-    QString                             base;
-    quint32                             baseLength = 0;
-    QString                             filter;
-    QRegularExpression                  regexp;
-
-    QVector< Node >                     vecItems_;
-    QVector< QString >                  vecItemMiddle_;     // Src 의 전체 경로에서 base 부분과 이름을 제외한 나머지 경로들이 들어간다. 
-
-    qint64                              totalSize_ = 0;
-    qint64                              fileCount_ = 0;
-    qint64                              dirCount_ = 0;
-
-protected:
-    void                                run() override;
-
-signals:
-    void                                notifyStats( qint64 totalSize, qint64 fileCount, qint64 dirCount );
-
-private:
-    void                                traverseSubDirectory( const QString& Path, const Node& Item );
-    void                                processFile( const QString& Parent, const Node& Item );
-
-    FSModel*                            Model = nullptr;
-};
+class QTraverseSrcModel;
 
 class QFileCopyUI : public QDialog
 {
@@ -59,7 +30,7 @@ public slots:
     void                                on_btnOK_clicked( bool checked = false );
     void                                on_btnCancel_clicked( bool checked = false );
 
-    void                                slt_notifyStats( qint64 totalSize, qint64 fileCount, qint64 dirCount );
+    void                                slt_notifyStats( const QString& Item, bool IsDirectory, qint64 totalSize, qint64 fileCount, qint64 dirCount );
 
 private:
     void                                work();

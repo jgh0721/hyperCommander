@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿#ifndef __HDR_CMN_PATH__
+#define __HDR_CMN_PATH__
 
 #include <string>
 
@@ -24,3 +25,5 @@ namespace nsCmn
 
     } // nsCmnPath
 } // nsCmn
+
+#endif

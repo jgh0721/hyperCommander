@@ -79,7 +79,7 @@ void QFileProgress::OnChangedItem( const QString& Src, const QString& Dst )
     ui.lblDestination->setText( Dst );
 }
 
-void QFileProgress::OnChangedProgress( qint16 Item, qint64 Total )
+void QFileProgress::OnChangedProgress( qint16 Item, qint16 Total )
 {
     ui.progItem->setValue( Item );
     ui.progTotal->setValue( Total );

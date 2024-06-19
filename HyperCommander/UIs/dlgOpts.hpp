@@ -5,11 +5,14 @@
 #include "ui_dlgOpts.h"
 
 struct TyFileSet;
+struct TyColorScheme;
+
 const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
 const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
 const QPair< int, QString > PAGE_FILESET                    = { 2, QObject::tr("파일집합 정의") };
-const QPair< int, QString > PAGE_SHORTCUT                   = { 2, QObject::tr("단축키") };
-const QPair< int, QString > PAGE_CUSTOM_COLUMNS             = { 3, QObject::tr("사용자정의 컬럼") };
+const QPair< int, QString > PAGE_SHORTCUT                   = { 3, QObject::tr("단축키") };
+const QPair< int, QString > PAGE_CUSTOM_COLUMNS             = { 4, QObject::tr("사용자정의 컬럼") };
+const QPair< int, QString > PAGE_PLUGIN_MGR                 = { 5, QObject::tr("플러그인 관리") };
 
 class QMainOpts : public QDialog
 {
@@ -20,8 +23,13 @@ public:
     Q_INVOKABLE void                    LoadSettings();
     Q_INVOKABLE void                    SaveSettings();
     Q_INVOKABLE void                    SaveSettings_ColorScheme();
+    Q_INVOKABLE void                    SaveSettings_PluginList();
     Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
     Q_INVOKABLE void                    RefreshFileSet( const QString& FileSetName );
+    Q_INVOKABLE void                    RefreshPluginList();
+
+signals:
+    void                                NotifyColorSchemeChanged( const TyColorScheme& ColorScheme );
 
 protected slots:
 
@@ -59,6 +67,11 @@ protected slots:
     void                                on_btnResetFileSet_clicked( bool checked = false );
     void                                on_btnAddFileSet_clicked( bool checked = false );
     void                                on_btnRemoveFileSet_clicked( bool checked = false );
+
+    /// Page = pgPluginManage
+
+    void                                on_btnAddWLX_clicked( bool checked = false );
+    void                                on_btnRemoveWLX_clicked( bool checked = false );
 
     ///////////////////////////////////////////////////////////////////////////////
     /// Footer

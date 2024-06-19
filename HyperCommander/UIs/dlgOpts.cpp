@@ -46,6 +46,8 @@ void QMainOpts::LoadSettings()
 
     ui.lstFileSet->clear();
     ui.lstFileSet->addItems( StFileSetMgr->GetNames() );
+
+    RefreshPluginList();
 }
 
 void QMainOpts::SaveSettings()
@@ -57,6 +59,7 @@ void QMainOpts::SaveSettings()
 
     SaveSettings_ColorScheme();
     TyStFileSetMgr::GetInstance()->SaveSettings();
+    SaveSettings_PluginList();
 }
 
 void QMainOpts::SaveSettings_ColorScheme()
@@ -75,6 +78,9 @@ void QMainOpts::SaveSettings_ColorScheme()
     ColorScheme.FileList_Font       = ui.fntLstFontBox->currentFont();
     ColorScheme.FileList_Font.setPointSize( ui.spbLstFontBox->value() );
 
+    ColorScheme.Dialog_FGColor      = ui.btnDlgFGColor->text();
+    ColorScheme.Dialog_BGColor      = ui.btnDlgBGColor->text();
+
     ColorScheme.FileList_FGColor    = ui.btnLstFGColor->text();
     ColorScheme.FileList_BGColor    = ui.btnLstBGColor->text();
     ColorScheme.FileList_Cursor     = ui.btnLstCursorColor->text();
@@ -91,6 +97,10 @@ void QMainOpts::SaveSettings_ColorScheme()
 
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     StColorSchemeMgr->UpsertColorScheme( ColorScheme, true );
+}
+
+void QMainOpts::SaveSettings_PluginList()
+{
 }
 
 void QMainOpts::RefreshColorScheme( const QString& SchemeName )
@@ -113,6 +123,9 @@ void QMainOpts::RefreshColorScheme( const QString& SchemeName )
 
     ui.fntLstFontBox->setCurrentFont( QFont( ColorScheme.FileList_Font ) );
     ui.spbLstFontBox->setValue( ColorScheme.FileList_Font.pointSize() );
+
+    setButtonColor( ui.btnDlgFGColor, ColorScheme.Dialog_FGColor );
+    setButtonColor( ui.btnDlgBGColor, ColorScheme.Dialog_BGColor );
 
     setButtonColor( ui.btnLstFGColor, ColorScheme.FileList_FGColor );
     setButtonColor( ui.btnLstBGColor, ColorScheme.FileList_BGColor );
@@ -172,6 +185,19 @@ void QMainOpts::RefreshFileSet( const QString& FileSetName )
         if( FlagOn( FileSet.Flags, FILE_ATTRIBUTE_COMPRESSED ) )
             ui.chkFileSetAttr_Compressed->setChecked( true );
     }
+}
+
+void QMainOpts::RefreshPluginList()
+{
+    StSettings->beginGroup( "ListerPlugins" );
+    const auto Count = StSettings->value( "Count" ).toInt();
+    for( int idx = 0; idx < Count; ++idx )
+    {
+        const auto FilePath = StSettings->value( QString( "%1_Path" ).arg( idx ) );
+        const auto Detect = StSettings->value( QString( "%1_Detect" ).arg( idx ) );
+        const auto Support64Bit = StSettings->value( QString( "%1_Support64Bit" ).arg( idx ) ).toBool();
+    }
+    StSettings->endGroup();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -445,6 +471,14 @@ void QMainOpts::on_btnRemoveFileSet_clicked( bool checked )
     }
 }
 
+void QMainOpts::on_btnAddWLX_clicked( bool checked )
+{
+}
+
+void QMainOpts::on_btnRemoveWLX_clicked( bool checked )
+{
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 /// Footer
 
@@ -462,6 +496,8 @@ void QMainOpts::on_btnCancel_clicked( bool checked )
 void QMainOpts::on_btnApply_clicked( bool checked )
 {
     SaveSettings();
+
+    ui.btnApply->setEnabled( false );
 }
 
 void QMainOpts::initialize()

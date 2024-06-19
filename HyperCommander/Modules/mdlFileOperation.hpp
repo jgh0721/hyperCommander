@@ -56,14 +56,45 @@ public:
     void                                SetBase( const QString& Parent );
     void                                SetSource( const QVector< Node >& Src, const QVector< QString >& SrcMiddle );
     void                                SetDestination( const QString& Dst );
+    TyOsError                           ResultCode() const;
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 복사 옵션
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 이동 옵션
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 삭제 옵션
+
+    void                                SetDeleteIsDelHiddenSys( bool IsDelHiddenSys );
+    void                                SetDeleteIsDelReadOnly( bool IsDelReadOnly );
+    void                                SetDeleteIsUseRecycleBin( bool IsUseRecycleBin );
+    void                                SetDeleteIsUseAutoAdminRights( bool IsUseAutoAdminRights );
 
 signals:
-    // int = TyEnOperationState
+    /*! 변경된 작동 상태를 통지
+     * State => TyEnOperationState
+     */
     void                                NotifyChangedState( int State );
-    void                                NotifyChangedItem( const QString& Src, const QString& Dst );
-    void                                NotifyChangedProgress( qint16 Item, qint64 Total );
-    void                                NotifyChangedStatus( qint64 CurrentItemCount, qint64 CurrentTotalSize );
-    void                                NotifyErrorOccured( quint32 ErrorCode, TyEnUserInteracts Flags, TyUserInteract* User );
+    /*! 작업 대상 항목을 통지
+     *  삭제 작업의 경우에는 SRC 만 사용
+     */
+    void NotifyChangedItem( const QString& Src, const QString& Dst );
+    /*!
+     * 각 항목의 진행도를 통지
+     * @param Item 현재 항목의 진행도( 0 ~ 100 )
+     * @param Total 전체 항목의 진행도( 0 ~ 100 )
+     */
+    void NotifyChangedProgress( qint16 Item, qint16 Total );
+    /*!
+     * 
+     * @param CurrentItemCount 전체 항목 수량 중 현재 항목 색인
+     * @param CurrentTotalSize 전체 크기 중 현재까지 진행된 크기
+     */
+    void NotifyChangedStatus( qint64 CurrentItemCount, qint64 CurrentTotalSize );
+    void NotifyErrorOccured( quint32 ErrorCode, TyEnUserInteracts Flags, TyUserInteract* User );
+     // void NotifyConfirm( const QString& Title, const QString& Content, const QMessageBox::StandardButtons Buttons, QMessageBox::StandardButton* Ret );
 
 public slots:
     void                                ChangeState( int State );
@@ -82,6 +113,7 @@ private:
     // PAUSED, STOPPING 상태에서는 대기한다. 
     bool                                waitRunningState();
 
+
     DWORD CALLBACK CopyProgressRoutine(
   __in LARGE_INTEGER TotalFileSize,
   __in LARGE_INTEGER TotalBytesTransferred,
@@ -94,14 +126,32 @@ private:
   __in_opt LPVOID lpData
     );
 
+    ////////////////////////////////////////////////////////////////////////////
+    /// 공통 옵션
 
     TyEnOperation                       mode_ = FILE_OP_COPY;
     TyEnOperationState                  state_ = FILE_STATE_NOT_STARTED;
-    
+    TyOsError                           resultCode_;
+
     QString                             base_;
     QVector< Node >                     vecSrc_;
     QVector< QString >                  vecSrcMiddle_;            // base 부분을 제외한 경로가 들어간다. 
     qint64                              totalSize_ = 0;
 
     QString                             dst_;
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 복사 옵션
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 이동 옵션
+
+    ////////////////////////////////////////////////////////////////////////////
+    /// 삭제 옵션
+
+
+    bool                                isDelHiddenSys_ = false;
+    bool                                isDelReadonly_ = false;
+    bool                                isUseRecycleBin = false;
+    bool                                isUseAutoAdminRights = false;
 };
