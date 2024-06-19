@@ -60,6 +60,8 @@ void QMainOpts::SaveSettings()
     SaveSettings_ColorScheme();
     TyStFileSetMgr::GetInstance()->SaveSettings();
     SaveSettings_PluginList();
+
+    emit NotifyColorSchemeChanged( TyStColorSchemeMgr::GetInstance()->GetColorScheme( ui.cbxColorScheme->currentText() ) );
 }
 
 void QMainOpts::SaveSettings_ColorScheme()
@@ -230,6 +232,8 @@ void QMainOpts::on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QLis
 void QMainOpts::on_cbxColorScheme_currentIndexChanged( int index )
 {
     RefreshColorScheme( ui.cbxColorScheme->currentText() );
+
+    TyStColorSchemeMgr::GetInstance()->SetCurrentColorScheme( ui.cbxColorScheme->currentText() );
 }
 
 void QMainOpts::on_btnAddColorScheme_clicked( bool checked )
