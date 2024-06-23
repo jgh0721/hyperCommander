@@ -5,6 +5,7 @@ namespace nsCmn
 {
     namespace nsProcess
     {
+#if defined(USE_QT_SUPPORT)
         bool CreateProcessAsNormal( const QString& sFilePath, const QString& sCMDLine, bool isHide, bool isWait, uint32_t* dwProcessId )
         {
             bool isSuccess = false;
@@ -72,6 +73,7 @@ namespace nsCmn
 
             return isSuccess;
         }
+#endif
 
     } // nsProcess
 

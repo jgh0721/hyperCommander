@@ -11,6 +11,9 @@ documentation/build/
 _conan/debug
 _conan/release
 _conan/generated
+cmake-build-debug/
+cmake-build-release/
+venv/
 
 *.bak
 *.suo

@@ -29,7 +29,9 @@ namespace nsCmn
         WORD wMilliseconds;
     };
 
+#if defined(USE_QT_SUPPORT)
     QDateTime                           ConvertTo( const FILETIME& Time, bool IsUTC, bool* ok = nullptr );
+#endif
 
     void                                GetTimeOfDay( OAL_TIMEVAL* tv, OAL_TIMEZONE* tz );
 } // nsCmn

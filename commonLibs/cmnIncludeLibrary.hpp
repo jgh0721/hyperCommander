@@ -8,8 +8,10 @@
 #include "cmnTextUtils.hpp"
 #include "cmnProcess.hpp"
 
+#if defined(USE_QT_SUPPORT)
 #include "Qt/cmnQtUtils.hpp"
 #include "Qt/cmnQtDelegator.hpp"
+#endif
 
 #define DECLARE_NSCMN using namespace nsCmn;
 

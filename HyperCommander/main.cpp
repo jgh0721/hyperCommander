@@ -17,16 +17,6 @@ int main( int argc, char* argv[] )
 
     do
     {
-        nsCmn::nsCmnPath::CopyACL( LR"(C:\swapfile.sys)", LR"(D:\appverifUI.dll)", DACL_SECURITY_INFORMATION );
-
-        //SHFILEINFOW SHInfo = { 0, };
-        //const auto File = std::wstring( L"sln" );
-        //SHGetFileInfoW( L".sln", FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
-        //                SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
-        //auto Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-        //if( SHInfo.hIcon != Q_NULLPTR )
-        //    DestroyIcon( SHInfo.hIcon );
-
         Ret = app.exec();
 
     } while( false );

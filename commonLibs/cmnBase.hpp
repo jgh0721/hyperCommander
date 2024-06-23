@@ -1,7 +1,13 @@
 ﻿#pragma once
 
+#include "cmnConfig.hpp"
 #include "cmnSystemDetection.hpp"
 #include "cmnCompilerDetection.hpp"
+
+#include <optional>
+#include <vector>
+#include <string>
+#include <cstdint>
 
 #define CMN_MAKE_STR2(x) #x
 #define CMN_MAKE_STR(x) CMN_MAKE_STR2(x)

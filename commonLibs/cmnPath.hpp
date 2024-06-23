@@ -10,10 +10,14 @@ namespace nsCmn
     namespace nsCmnPath
     {
         int64_t                         CalculateDirSize( const std::wstring& Path );
+#if defined(USE_QT_SUPPORT)
         QString                         GetFileExtension( const QString& FileName );
+#endif
 
+#if defined(USE_QT_SUPPORT)
         // 지정한 경로가 SymLink, SymLinkD, Juntion 일 경우 실제 파일/디렉토리를 반환
         QString                         GetReparsePointTo( const QString& Path );
+#endif
 
         TyOsValue< int64_t >            GetFileSize( HANDLE hFile );
         TyOsValue< int64_t >            GetFileSize( const std::wstring& FilePath );

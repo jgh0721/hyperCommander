@@ -2,6 +2,7 @@
 #include "cmnPath.hpp"
 
 #include <winioctl.h>
+#include <vector>
 
 namespace nsCmn
 {
@@ -52,6 +53,7 @@ namespace nsCmn
             return Size;
         }
 
+#if defined(USE_QT_SUPPORT)
         QString GetFileExtension( const QString& FileName )
         {
             const auto Pos = FileName.lastIndexOf( '.' );
@@ -60,7 +62,9 @@ namespace nsCmn
 
             return FileName.mid( Pos + 1 );
         }
+#endif
 
+#if defined(USE_QT_SUPPORT)
         QString GetReparsePointTo( const QString& Path )
         {
             WIN32_FIND_DATAW Wfd = { 0, };
@@ -101,6 +105,7 @@ namespace nsCmn
 
             return "";
         }
+#endif
 
         TyOsValue< int64_t > GetFileSize( HANDLE hFile )
         {

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <limits>
+#include <assert.h>
 
 // Parses an unsigned integer advancing s to the end of the parsed input.
 // This function assumes that the first character of s is a digit.

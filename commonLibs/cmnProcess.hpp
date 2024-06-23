@@ -1,11 +1,14 @@
 ﻿#pragma once
 
+#if defined(USE_QT_SUPPORT)
 #include <QtCore>
+#endif
 
 namespace nsCmn
 {
     namespace nsProcess
     {
+#if defined(USE_QT_SUPPORT)
         /*!
             주어진 경로의 파일을 실행한다.
 
@@ -16,6 +19,7 @@ namespace nsCmn
             @return : 성공 / 실패
         */
         bool                                            CreateProcessAsNormal( const QString& sFilePath, const QString& sCMDLine, bool isHide, bool isWait, uint32_t* dwProcessId = nullptr );
+#endif
 
     } // nsProcess
 

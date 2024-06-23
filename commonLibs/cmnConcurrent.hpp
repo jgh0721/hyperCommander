@@ -1,8 +1,11 @@
 ﻿#ifndef __HDR_CMN_CONCURRENT__
 #define __HDR_CMN_CONCURRENT__
 
+#include "cmnBase.hpp"
+
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 namespace nsCmn
 {
