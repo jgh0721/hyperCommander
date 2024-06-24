@@ -74,6 +74,8 @@ public:
     Node                                GetFileInfo( const QModelIndex& Index ) const;
     bool                                IsRoot() const;
 
+    void                                SetColorScheme( const TyColorScheme& ColorScheme );
+        
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
 
@@ -113,6 +115,7 @@ private:
     QString                             CurrentPath;
     ColumnView                          CurrentView;
     QPixmap                             Icon_Directory;
+    TyColorScheme                       ColorScheme;
 
     int                                 FileCount = -1;
     int                                 DirectoryCount = -1;

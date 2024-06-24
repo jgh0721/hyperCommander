@@ -244,7 +244,7 @@ bool CDetectParser::TestFile( const QFileInfo& FileInfo )
     if( File.open( QIODeviceBase::ReadOnly ) == false )
         return false;
 
-    for( int idx = 0; idx < VecOutput_.size() - 1; ++idx )
+    for( int idx = 0; idx < VecOutput_.size(); ++idx )
     {
         if( VecOutput_[ idx ].Type == EM_OPERAND )
         {
@@ -253,7 +253,7 @@ bool CDetectParser::TestFile( const QFileInfo& FileInfo )
         }
         else if( VecOutput_[ idx ].Type == EM_OP )
         {
-            if( VecStack_.isEmpty() == false )
+            if( VecStack_.size() > 1 )
             {
                 auto tmp1 = VecStack_[ VecStack_.size() - 1 ];
                 auto tmp2 = VecStack_[ VecStack_.size() - 2 ];
@@ -266,7 +266,7 @@ bool CDetectParser::TestFile( const QFileInfo& FileInfo )
             }
         }
     }
-    bool IsMatch = VecStack_.isEmpty() == false && strToBoolean( VecStack_[ 0 ].Operand );\
+    bool IsMatch = VecStack_.isEmpty() == false && strToBoolean( VecStack_[ 0 ].Operand );
     VecStack_.clear();
     return IsMatch;
 }
@@ -458,31 +458,31 @@ void CDetectParser::preprocessString()
 
     const auto q = MathStr_.length();
 
-    while( Idx <= MathStr_.length() - 2 )
+    while( Idx < MathStr_.length() )
     {
-        if( MathStr_[ Idx + 1 ] == '(' )
+        if( MathStr_[ Idx ] == '(' )
         {
             VecInput_[ Idx ].Type = EM_LEFT_BRACKET;
             Idx++;
         }
-        else if( MathStr_[ Idx + 1 ] == ')' )
+        else if( MathStr_[ Idx ] == ')' )
         {
             VecInput_[ Idx ].Type = EM_RIGHT_BRACKET;
             Idx++;
         }
-        else if( isOperator( MathStr_[ Idx + 1 ] ) )
+        else if( isOperator( MathStr_[ Idx ] ) )
         {
             VecInput_[ Idx ].Type   = EM_OP;
-            VecInput_[ Idx ].Op     = convertCharToOperator( MathStr_[ Idx + 1] );
+            VecInput_[ Idx ].Op     = convertCharToOperator( MathStr_[ Idx] );
             Idx++;
         }
-        else if( isOperand( MathStr_[ Idx + 1 ] ) )
+        else if( isOperand( MathStr_[ Idx ] ) )
         {
             VecInput_[ Idx ].Type       = EM_OPERAND;
-            VecInput_[ Idx ].Operand    = getOperand( Idx + 1, NumLen );
+            VecInput_[ Idx ].Operand    = getOperand( Idx, NumLen );
             Idx += NumLen;
         }
-        else if( MathStr_[ Idx + 1 ] == ' ' )
+        else if( MathStr_[ Idx ] == ' ' )
         {
             Idx++;
         }

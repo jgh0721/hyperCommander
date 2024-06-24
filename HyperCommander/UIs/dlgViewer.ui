@@ -58,12 +58,21 @@
         <property name="text">
          <string/>
         </property>
+        <property name="pixmap">
+         <pixmap resource="../HyperCommander.qrc">:/HyperCommander/Logo</pixmap>
+        </property>
+        <property name="scaledContents">
+         <bool>true</bool>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignmentFlag::AlignCenter</set>
+        </property>
        </widget>
       </item>
       <item>
        <widget class="QLabel" name="lblTitleBar">
         <property name="text">
-         <string>삭제</string>
+         <string>내장 뷰어</string>
         </property>
        </widget>
       </item>
@@ -103,13 +112,8 @@
     </widget>
    </item>
    <item>
-    <widget class="CmpViewer" name="wViewer" native="true">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
+    <widget class="QStackedWidget" name="stackedWidget">
+     <widget class="CmpViewer" name="pgWLXViewer"/>
     </widget>
    </item>
    <item>
@@ -132,6 +136,8 @@
    <container>1</container>
   </customwidget>
  </customwidgets>
- <resources/>
+ <resources>
+  <include location="../HyperCommander.qrc"/>
+ </resources>
  <connections/>
 </ui>

@@ -362,7 +362,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\fileSetMgr.cpp" />
-    <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\solTCPluginMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
       <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
@@ -460,7 +460,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\column_Defs.hpp" />
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <QtMoc Include="UIs\cmpViewer.hpp" />
-    <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\solTCPluginMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\fileSetMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp" />

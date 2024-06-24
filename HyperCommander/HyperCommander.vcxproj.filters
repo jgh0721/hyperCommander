@@ -313,7 +313,7 @@
     <ClCompile Include="UIs\dlgViewer.cpp">
       <Filter>UI Files\Cate - 내장 뷰어</Filter>
     </ClCompile>
-    <ClCompile Include="..\UniqueLibs\internalViewerMgr.cpp">
+    <ClCompile Include="..\UniqueLibs\solTCPluginMgr.cpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\colorSchemeMgr.cpp">
@@ -548,9 +548,6 @@
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
-    <QtMoc Include="..\UniqueLibs\internalViewerMgr.hpp">
-      <Filter>라이브러리\고유 라이브러리</Filter>
-    </QtMoc>
     <QtMoc Include="UIs\dlgOpts.hpp">
       <Filter>UI Files\Cate - 환경설정</Filter>
     </QtMoc>
@@ -580,6 +577,9 @@
     </QtMoc>
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileAttrib.hpp">
       <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\solTCPluginMgr.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

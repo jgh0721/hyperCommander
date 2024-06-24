@@ -6,6 +6,7 @@
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/cmnTypeDefs.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
+#include "UniqueLibs/solTCPluginMgr.hpp"
 
 #include "UniqueLibs/builtInFsModel.hpp"
 
@@ -317,6 +318,7 @@ void QMainUI::initialize()
 
     TyStCommandMgr::GetInstance()->SetMainUI( this );
     TyStExternalEditorMgr::GetInstance()->Refresh();
+    TyStPlugInMgr::GetInstance()->Refresh();
 
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );

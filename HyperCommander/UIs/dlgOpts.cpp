@@ -4,6 +4,7 @@
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
+#include "UniqueLibs/solTCPluginMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "fileSetMgr.hpp"
@@ -103,6 +104,7 @@ void QMainOpts::SaveSettings_ColorScheme()
 
 void QMainOpts::SaveSettings_PluginList()
 {
+    TyStPlugInMgr::GetInstance()->SaveSettings();
 }
 
 void QMainOpts::RefreshColorScheme( const QString& SchemeName )
@@ -191,15 +193,19 @@ void QMainOpts::RefreshFileSet( const QString& FileSetName )
 
 void QMainOpts::RefreshPluginList()
 {
-    StSettings->beginGroup( "ListerPlugins" );
-    const auto Count = StSettings->value( "Count" ).toInt();
-    for( int idx = 0; idx < Count; ++idx )
+    const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
+    StPlugInMgr->Refresh();
+
+    ui.tblWLX->clearContents();
+    ui.tblWLX->setRowCount( 0 );
+
+    for( uint32_t Idx = 0; Idx < StPlugInMgr->GetWLXCount(); ++Idx )
     {
-        const auto FilePath = StSettings->value( QString( "%1_Path" ).arg( idx ) );
-        const auto Detect = StSettings->value( QString( "%1_Detect" ).arg( idx ) );
-        const auto Support64Bit = StSettings->value( QString( "%1_Support64Bit" ).arg( idx ) ).toBool();
+        const auto Row = ui.tblWLX->rowCount();
+        ui.tblWLX->setRowCount( Row + 1 );
+        ui.tblWLX->setItem( Row, 0, new QTableWidgetItem( StPlugInMgr->GetWLXFilePath( Idx ) ) );
+        ui.tblWLX->setItem( Row, 1, new QTableWidgetItem( StPlugInMgr->GetWLXDetect( Idx ) ) );
     }
-    StSettings->endGroup();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -477,10 +483,60 @@ void QMainOpts::on_btnRemoveFileSet_clicked( bool checked )
 
 void QMainOpts::on_btnAddWLX_clicked( bool checked )
 {
+    const auto FileFullPath = QFileDialog::getOpenFileName( this, tr( "WLX 플러그인 열기" ), QApplication::applicationDirPath(),
+                                                        tr( "WLX (*.wlx;*.wlx64)" ) );
+
+    if( FileFullPath.isEmpty() == true )
+        return;
+
+    QFileInfo FileInfo( FileFullPath );
+
+    TyPlugInWLX WLX;
+    TyPlugInWLXFuncs WLXFuncs;
+    CTCPlugInWLX::RetrieveWLXFuncs( FileFullPath, &WLXFuncs );
+
+    if( WLXFuncs.hModule == nullptr )
+    {
+        ShowMSGBox( this, QMessageBox::Information, tr( "" ) );
+        return;
+    }
+
+    if( WLXFuncs.ListGetDetectString == nullptr )
+    {
+        ShowMSGBox( this, QMessageBox::Information, tr( "" ) );
+        return;
+    }
+    
+    std::vector< char > Detect( MAX_PATH );
+    WLXFuncs.ListGetDetectString( Detect.data(), MAX_PATH );
+    
+    WLX.FileFullPath = FileFullPath;
+    WLX.IsContain64Bit = true;          // TODO: 64bit OS 라면 무조건 true
+    WLX.Detect = QString::fromUtf8( Detect.data() );
+
+    const auto Row = ui.tblWLX->rowCount();
+    ui.tblWLX->setRowCount( Row + 1 );
+    ui.tblWLX->setItem( Row, 0, new QTableWidgetItem( FileFullPath ) );
+    ui.tblWLX->setItem( Row, 1, new QTableWidgetItem( WLX.Detect ) );
+
+    TyStPlugInMgr::GetInstance()->SetWLXOpts( UINT_MAX, WLX );
+
 }
 
 void QMainOpts::on_btnRemoveWLX_clicked( bool checked )
 {
+    QSet< int > SelectedRows;
+    for( auto& Item : ui.tblWLX->selectedItems() )
+        SelectedRows.insert( Item->row() );
+
+    const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
+
+    // TODO: 여러 개라면 큰 수에서 작은 수로 진행하도록 뒤집어야 한다. 
+    for( auto& Row : SelectedRows )
+    {
+        ui.tblWLX->removeRow( Row );
+        StPlugInMgr->DelWLXOpts( Row );
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

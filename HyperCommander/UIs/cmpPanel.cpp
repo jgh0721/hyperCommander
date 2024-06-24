@@ -12,7 +12,7 @@
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
-#include "UniqueLibs/internalViewerMgr.hpp"
+#include "UniqueLibs/solTCPluginMgr.hpp"
 
 #include <shtypes.h>
 #include <ShlObj.h>
@@ -461,37 +461,41 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
 
 void CmpPanel::ViewOnLister( const QModelIndex& SrcIndex )
 {
-    const auto StInternalMgr = TyStInternalViewerMgr::GetInstance();
     const auto State = retrieveFocusState();
     const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
+    const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
 
-    QMenu Menu;
-    Menu.setFocus( Qt::ActiveWindowFocusReason );
-    Menu.setFocusPolicy( Qt::StrongFocus );
-    Menu.setFont( QFont( "Sarasa Mono K Light", 14 ) );
-    const auto ViewerCount = StInternalMgr->ConstructInternalMenu( &Menu, FileFullPath );
+    auto Menu = new QMenu;
+    Menu->setFocus( Qt::ActiveWindowFocusReason );
+    Menu->setFocusPolicy( Qt::StrongFocus );
+    Menu->setFont( QFont( "Sarasa Mono K Light", 14 ) );
+    Menu->deleteLater();
+
+    const auto ViewerCount = StPlugInMgr->ConstructWLXMenu( Menu, FileFullPath );
     if( ViewerCount == 0 )
         return;
 
-    TyInternalViewer Viewer;
+    TySpWLX Viewer;
 
     if( ViewerCount == 1 )
     {
-        const auto ac = Menu.actions()[ 0 ];
-        Viewer = ac->data().value< TyInternalViewer >();
+        const auto ac = Menu->actions()[ 0 ];
+        Viewer = ac->data().value< TySpWLX >();
     }
 
     if( ViewerCount > 1 )
     {
-        const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex ) );
+        Menu->setActiveAction( Menu->actions()[ 0 ] );
+        QMetaObject::invokeMethod( Menu, "setFocus", Qt::QueuedConnection );
+        const auto ac = Menu->exec( retrieveMenuPoint( QCursor::pos(), SrcIndex ) );
 
         // 취소하거나 등등
         if( ac == nullptr )
             return;
 
-        Viewer = ac->data().value< TyInternalViewer >();
+        Viewer = ac->data().value< TySpWLX >();
     }
-
+    
     auto DlgViewer = new QDlgViewer;
     DlgViewer->SetFileName( FileFullPath );
     DlgViewer->SetInternalViewer( Viewer );
@@ -567,7 +571,7 @@ int CmpPanel::InitializeGrid()
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setGroupsHeaderTextColor( "white" );
-
+    
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
     TableOpts.setColumnsQuickCustomization( false );
@@ -625,8 +629,10 @@ int CmpPanel::InitializeGrid()
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
             if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
             {
-                GridColumn->setSortOrder( Qtitan::SortAscending );
+                GridColumn->setSortLocaleAware( true );
+                GridColumn->setSortOrder( Qtitan::SortAscending, true );
                 GridColumn->dataBinding()->setSortRole( Qt::UserRole );
+                
             }
             GridColumn->setFilterButtonVisible( false );
         }

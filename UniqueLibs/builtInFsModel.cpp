@@ -82,6 +82,11 @@ bool FSModel::IsRoot() const
     return CurrentPath.length() == 1;
 }
 
+void FSModel::SetColorScheme( const TyColorScheme& ColorScheme )
+{
+    this->ColorScheme = ColorScheme;
+}
+
 void FSModel::ChangeDirectory( const QString& Child )
 {
     if( IsRoot() == true )
@@ -607,13 +612,13 @@ void FSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSp
                     if( Item.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
                     {
                         if( Item.Name == ".." || Item.Name == "." )
-                            RoleWith.setData( "0" + Item.Name );
+                            RoleWith.setData( "0_" + Item.Name );
                         else
-                            RoleWith.setData( "1" + Item.Name );
+                            RoleWith.setData( "1_" + Item.Name );
                     }
                     else
                     {
-                        RoleWith.setData( "2" + Item.Name );
+                        RoleWith.setData( "2_" + Item.Name );
                     }
                 }
             } break;

@@ -73,9 +73,9 @@ private:
 
     struct MathChar
     {
-        EnMathType      Type;
-        QString         Operand;        // Type == EM_OPERAND
-        EnOperatorType  Op;             // Type == EM_OP
+        EnMathType      Type = EM_NIL;
+        QString         Operand;                    // Type == EM_OPERAND
+        EnOperatorType  Op = EO_NONE;               // Type == EM_OP
     };
 
 public:

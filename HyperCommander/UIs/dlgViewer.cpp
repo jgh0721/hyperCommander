@@ -1,7 +1,7 @@
 ﻿#include "stdafx.h"
 #include "dlgViewer.hpp"
 
-#include "UniqueLibs/internalViewerMgr.hpp"
+#include "UniqueLibs/solTCPluginMgr.hpp"
 
 #include <WinUser.h>
 
@@ -10,17 +10,20 @@ QDlgViewer::QDlgViewer( QWidget* parent, Qt::WindowFlags f )
 {
     ui.setupUi( this );
 
+    setAttribute( Qt::WA_DeleteOnClose );
+
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 }
 
 void QDlgViewer::SetFileName( const QString& FilePath )
 {
     currentFilePath = FilePath;
+    ui.pgWLXViewer->SetLoadToFile( FilePath );
 }
 
-void QDlgViewer::SetInternalViewer( const TyInternalViewer& IV )
+void QDlgViewer::SetInternalViewer( TySpWLX Lister )
 {
-    viewer = IV;
+    ui.pgWLXViewer->SetWLX( Lister );
 }
 
 void QDlgViewer::on_btnClose_clicked( bool checked )
@@ -28,53 +31,20 @@ void QDlgViewer::on_btnClose_clicked( bool checked )
     done( Accepted );
 }
 
-void QDlgViewer::initialize()
+void QDlgViewer::keyPressEvent( QKeyEvent* Ev )
 {
-    wchar_t Buffer[ MAX_PATH ] = { 0, };
-    GetEnvironmentVariableW( L"COMMANDER_PATH", Buffer, MAX_PATH );
-    const auto WLX = QString( viewer.FileFullPath ).replace( "%COMMANDER_PATH%", QString::fromWCharArray( Buffer ) );
-
-    CInternalViewerMgr::searchViewerFuncs( WLX, &viewer.Funcs );
-
-    HWND hParent2 = reinterpret_cast< HWND >( ui.wViewer->winId() );
-    RtlZeroMemory( Buffer, sizeof( WCHAR ) * MAX_PATH );
-    wcscat_s( Buffer, currentFilePath.toStdWString().c_str() );
-
-    const auto Parent = new QWidget;
-
-    auto ly = new QVBoxLayout;
-    ui.wViewer->setLayout( ly );
-    ly->addWidget( Parent );
-    
-    hParent = ( HWND )Parent->winId();
-    hViewer = viewer.Funcs.ListLoadW( hParent, Buffer, 0 );
-    if( hViewer != nullptr )
+    if( Ev->key() == Qt::Key_Escape )
     {
-
-        //SetParent( hViewer, ( HWND )Parent->winId() );
-        QWindow* child = QWindow::fromWinId( reinterpret_cast< WId >( hViewer ) );
-        child->setFlags( Qt::FramelessWindowHint );
-        QWidget* child_widget = QWidget::createWindowContainer( child, Parent );
-
-        auto Ret = SetWindowLongPtrW( hParent, GWLP_WNDPROC, (LONG_PTR)&QDlgViewer::cbWndProc);
-        SetPropW( hParent, (LPCWSTR)GlobalAddAtomW( L"HyperCommander" ), (HANDLE)Ret );
-
-        Ret = SetWindowLongPtrW( hViewer, GWLP_WNDPROC, ( LONG_PTR )&QDlgViewer::cbWndProcChild );
-        SetPropW( hViewer, ( LPCWSTR )GlobalAddAtomW( L"HyperCommander" ), ( HANDLE )Ret );
-
-        // SetParent( hViewer, hParent );
-        SetWindowLongPtrW( hViewer, GWLP_HWNDPARENT, (LONG_PTR)hParent );
-
-        auto ly2 = new QVBoxLayout;
-        Parent->setLayout( ly2 );
-        ly2->addWidget( child_widget );
-
-        child_widget->show();
+        done( QDialog::Accepted );
+        return;
     }
 
-    // if( viewer.Funcs.ListLoad(  ) )
+    QDialog::keyPressEvent( Ev );
+}
 
-    int a = 0;
+void QDlgViewer::initialize()
+{
+
 }
 
 bool QDlgViewer::nativeEvent( const QByteArray& eventType, void* message, qintptr* result )
@@ -87,11 +57,6 @@ bool QDlgViewer::nativeEvent( const QByteArray& eventType, void* message, qintpt
     if( msg->message == WM_LBUTTONDOWN )
     {
         int a = 0;
-    }
-
-    if( msg->hwnd == hViewer )
-    {
-        return true;
     }
 
     return QDialog::nativeEvent( eventType, message, result );
