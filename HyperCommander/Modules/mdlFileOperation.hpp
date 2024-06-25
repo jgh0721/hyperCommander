@@ -127,7 +127,7 @@ signals:
     void NotifyChangedStatus( qint64 CurrentItemCount, qint64 CurrentTotalSize );
     void NotifyErrorOccured( quint32 ErrorCode, TyEnUserInteracts Flags, TyUserInteract* User );
      // void NotifyConfirm( const QString& Title, const QString& Content, const QMessageBox::StandardButtons Buttons, QMessageBox::StandardButton* Ret );
-
+    
      
     //// 현재 항목 변경 알림
     //void NotifyItemChanged( const QString& Src, const QString& Dst, qint64 SrcSize, qint64 SrcIndex );

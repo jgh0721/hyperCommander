@@ -37,6 +37,13 @@ namespace nsHC
         FE_USER_SKIP_ALL,
     };
 
+    enum TyEnFEResult
+    {
+        FE_RESULT_SUCCEED, 
+        FS_RESULT_FAILED,
+        FE_RESULT_CANCELED,
+    };
+
     class CFileEngine : public QThread
     {
         Q_OBJECT
@@ -88,6 +95,8 @@ namespace nsHC
 
         qint64 GetFreeSpaceW();
         qint64 GetTotalSpace();
+        quint64 GetTotalSize();
+
         QString GetRoot();              // UNC 라면 \\ServerName\Share
                                         // Packer 라면 기반이 되는 압축파일의 경로
 
@@ -101,7 +110,8 @@ namespace nsHC
         int Features_;
     };
 
-
+    // 패널에 CFileSystem 또는 그 자식 클래스를 가진다.  
+    
     class CFileSource
     {
     public:
@@ -113,7 +123,9 @@ namespace nsHC
 
     private:
 
+        // FileSystem 클래스
     };
 
+    // 파일 엔진 클래스는 CFileSource 를 입력으로 받음
 } // nsHC
 
