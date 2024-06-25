@@ -1,16 +1,19 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
 
+#include "dlgDefaultCMD.hpp"
+
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
 #include "UniqueLibs/solTCPluginMgr.hpp"
+#include "UniqueLibs/commandMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "fileSetMgr.hpp"
 
 QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
-    : QDialog( parent, flags )
+    : QBaseUI( parent, flags )
 {
     ui.setupUi( this );
 
@@ -49,6 +52,7 @@ void QMainOpts::LoadSettings()
     ui.lstFileSet->addItems( StFileSetMgr->GetNames() );
 
     RefreshPluginList();
+    RefreshShortcuts();
 }
 
 void QMainOpts::SaveSettings()
@@ -208,6 +212,33 @@ void QMainOpts::RefreshPluginList()
     }
 }
 
+void QMainOpts::RefreshShortcuts()
+{
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    StCommandMgr->Refresh();
+
+    ui.tblShortCut->clearContents();
+    ui.tblShortCut->setRowCount( 0 );
+
+    const auto Map = StCommandMgr->Retrieve();
+    for( const auto Key : Map.keys() )
+    {
+        const auto CMD = Map[ Key ];
+        const auto CMD_Default = StCommandMgr->GetDefaultCMD( CMD );
+
+        const auto Row = ui.tblShortCut->rowCount();
+
+        ui.tblShortCut->setRowCount( Row + 1 );
+        ui.tblShortCut->setItem( Row, 0, new QTableWidgetItem( CMD ) );
+        ui.tblShortCut->setItem( Row, 1, new QTableWidgetItem( QKeySequence( CMD_Default.Default ).toString() ) );
+        if( Key == CMD_Default.Default )
+            ui.tblShortCut->setItem( Row, 2, new QTableWidgetItem() );
+        else
+            ui.tblShortCut->setItem( Row, 2, new QTableWidgetItem( QKeySequence( Key ).toString() ) );
+        ui.tblShortCut->setItem( Row, 3, new QTableWidgetItem( CMD_Default.Desc ) );
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 /// TitleBar
 
@@ -259,6 +290,22 @@ void QMainOpts::on_btnAddColorScheme_clicked( bool checked )
     }
     resetColorScheme( Written );
     SaveSettings_ColorScheme();
+}
+
+void QMainOpts::on_btnDlgFGColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnDlgFGColor, Selected );
+}
+
+void QMainOpts::on_btnDlgBGColor_clicked( bool checked )
+{
+    const auto Selected = QColorDialog::getColor( Qt::white, this );
+
+    if( Selected.isValid() == true )
+        setButtonColor( ui.btnDlgBGColor, Selected );
 }
 
 void QMainOpts::on_btnLstFGColor_clicked( bool checked )
@@ -479,6 +526,57 @@ void QMainOpts::on_btnRemoveFileSet_clicked( bool checked )
         ui.lstFileSet->takeItem( ui.lstFileSet->row( Item ) );
         delete Item;
     }
+}
+
+void QMainOpts::on_btnAddShortcutCMD_clicked( bool checked )
+{
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    const auto Input = ui.keySequenceEdit->keySequence();
+    if( Input.isEmpty() == true )
+    {
+        // TODO: 안내 메시지
+        return;
+    }
+
+    QDefaultCMDUI Ui;
+
+    const auto Ret = Ui.exec();
+    if( Ret == Rejected )
+        return;
+
+    const auto Selected = Ui.GetSelectedCMD();
+    if( Selected.Name.isEmpty() == true )
+    {
+        // TODO: 안내 메시지
+        return;
+    }
+
+    StCommandMgr->SetShortcutWithCMD( Input[ 0 ], Selected.Name );
+    const auto Row = ui.tblShortCut->rowCount();
+    ui.tblShortCut->setRowCount( Row + 1 );
+    ui.tblShortCut->setItem( Row, 0, new QTableWidgetItem( Selected.Name ) );
+    ui.tblShortCut->setItem( Row, 1, new QTableWidgetItem( QKeySequence( Selected.Default ).toString() ) );
+    ui.tblShortCut->setItem( Row, 2, new QTableWidgetItem( Input.toString() ) );
+    ui.tblShortCut->setItem( Row, 3, new QTableWidgetItem( Selected.Desc ) );
+
+    RefreshShortcuts();
+}
+
+void QMainOpts::on_btnDelShortcutCMD_clicked( bool checked )
+{
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    QSet< int > SelectedRows = nsHC::SelectedRowsFromTbl( ui.tblShortCut );
+
+    for( const auto Row : SelectedRows )
+    {
+        const auto Default_Key = ui.tblShortCut->item( Row, 1 )->text();
+        const auto Override_Key = ui.tblShortCut->item( Row, 2 )->text();
+
+        const QString Key = Override_Key.isEmpty() == false ? Override_Key : Default_Key;
+        StCommandMgr->DelShortcut( QKeySequence( Key )[0] );
+    }
+
+    RefreshShortcuts();
 }
 
 void QMainOpts::on_btnAddWLX_clicked( bool checked )

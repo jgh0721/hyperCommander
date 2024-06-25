@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "cmnTypeDefs_Opts.hpp"
+#include "cmnUiUtils.hpp"
 
 #include "ui_dlgOpts.h"
 
@@ -14,7 +15,7 @@ const QPair< int, QString > PAGE_SHORTCUT                   = { 3, QObject::tr("
 const QPair< int, QString > PAGE_CUSTOM_COLUMNS             = { 4, QObject::tr("사용자정의 컬럼") };
 const QPair< int, QString > PAGE_PLUGIN_MGR                 = { 5, QObject::tr("플러그인 관리") };
 
-class QMainOpts : public QDialog
+class QMainOpts : public nsHC::QBaseUI
 {
     Q_OBJECT
 public:
@@ -27,6 +28,7 @@ public:
     Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
     Q_INVOKABLE void                    RefreshFileSet( const QString& FileSetName );
     Q_INVOKABLE void                    RefreshPluginList();
+    Q_INVOKABLE void                    RefreshShortcuts();
 
 signals:
     void                                NotifyColorSchemeChanged( const TyColorScheme& ColorScheme );
@@ -51,6 +53,9 @@ protected slots:
     void                                on_cbxColorScheme_currentIndexChanged( int index );
     void                                on_btnAddColorScheme_clicked( bool checked = false );
 
+    void                                on_btnDlgFGColor_clicked( bool checked = false );
+    void                                on_btnDlgBGColor_clicked( bool checked = false );
+
     void                                on_btnLstFGColor_clicked( bool checked = false );
     void                                on_btnLstBGColor_clicked( bool checked = false );
     void                                on_btnLstCursorColor_clicked( bool checked = false );
@@ -67,6 +72,10 @@ protected slots:
     void                                on_btnResetFileSet_clicked( bool checked = false );
     void                                on_btnAddFileSet_clicked( bool checked = false );
     void                                on_btnRemoveFileSet_clicked( bool checked = false );
+
+    /// Page = pgShortcut
+    void                                on_btnAddShortcutCMD_clicked( bool checked = false );
+    void                                on_btnDelShortcutCMD_clicked( bool checked = false );
 
     /// Page = pgPluginManage
 

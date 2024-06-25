@@ -15,22 +15,6 @@
 #define CMN_MAKE_CONCAT_L2(x) L ## x
 #define CMN_MAKE_CONCAT_L(x) CMN_MAKE_CONCAT_L2(x)
 
-#ifndef FlagOn
-    #define FlagOn(_F,_SF)        ((_F) & (_SF))
-#endif
-
-#ifndef BooleanFlagOn
-    #define BooleanFlagOn(F,SF)   ((BOOLEAN)(((F) & (SF)) != 0))
-#endif
-
-#ifndef SetFlag
-    #define SetFlag(_F,_SF)       ((_F) |= (_SF))
-#endif
-
-#ifndef ClearFlag
-    #define ClearFlag(_F,_SF)     ((_F) &= ~(_SF))
-#endif
-
 #define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : strrchr(__FILE__, '\\') ? strrchr(__FILE__, '\\') + 1 : __FILE__)
 #define __FILENAMEW__ (wcsrchr(__FILEW__, L'/') ? wcsrchr(__FILEW__, L'/') + 1 : wcsrchr(__FILEW__, L'\\') ? wcsrchr(__FILEW__, L'\\') + 1 : __FILEW__)
 

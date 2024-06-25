@@ -12,12 +12,44 @@
     예) C:\AMD(\GPIO\Radeon.sys) => C:\Apps
         결과 : C:\Apps\AMD\GPIO\Radeon.sys
 
-
     C:\AMD, 
         Parent = C:\
     C:\AMD\GPIO\Radeon.sys
         Parent = C:\, Path = AMD\GPIO\Radeon.sys
         Dst = D:\Apps, Result = D:\Apps\AMD\GPIO\Radeon.sys
+
+    ----------------------------------------------------------------------------
+
+    로컬 검퓨터 간의 파일 복사 : CopyFileEx
+    로컬 컴퓨터 간의 파일 이동 : MoveFileWithProgress, 디렉토리는 다른 디스크로 이동 불가
+    로컬 컴퓨터 간의 파일 삭제 : DeleteFileW
+    
+    ----------------------------------------------------------------------------
+
+    파일 작업 등에 사용되는 시간 계산
+
+    시간 계산은 500ms 단위로 계산
+
+    항목 => 총 수량, 현재 색인
+    크기 => 총 크기, 현재까지 진행된 크기, 현재 항목의 크기
+
+    시작
+        모든 변수 초기화
+        진행 막대 0 으로 초기화, 최대값 1090
+        500ms 단위로 타이머 시작
+
+    진행
+        항목 시작 통지
+
+        항목 완료 통지
+
+    완료
+        상태 변경 통지( 완료 )
+
+
+    시간 계산 : Time, Second, Bytes
+        S = B / T
+        예) 25MB, 2min => 25 * 1048576 / 120 => 2621,4400 / 120 => 21,8453 Bytes / S
  */
 
 struct TyUserInteract
@@ -32,7 +64,7 @@ class CFileOperation : public QThread
     Q_OBJECT
 public:
 
-    enum TyEnOperation { FILE_OP_COPY, FILE_OP_MOVE, FILE_OP_DELETE };
+    enum TyEnOperation { FILE_OP_COPY, FILE_OP_MOVE, FILE_OP_DELETE, FILE_OP_RENAME };
     enum TyEnOperationState { FILE_STATE_NOT_STARTED, FILE_STATE_RUNNING, FILE_STATE_PAUSED, FILE_STATE_STOPPING };
 
     Q_ENUM( TyEnOperation );
@@ -95,6 +127,13 @@ signals:
     void NotifyChangedStatus( qint64 CurrentItemCount, qint64 CurrentTotalSize );
     void NotifyErrorOccured( quint32 ErrorCode, TyEnUserInteracts Flags, TyUserInteract* User );
      // void NotifyConfirm( const QString& Title, const QString& Content, const QMessageBox::StandardButtons Buttons, QMessageBox::StandardButton* Ret );
+
+     
+    //// 현재 항목 변경 알림
+    //void NotifyItemChanged( const QString& Src, const QString& Dst, qint64 SrcSize, qint64 SrcIndex );
+    //void NotifyItemCompleted();
+    //void NotifyChangedProgress( qint16 Current, qint16 Total );
+    //void NotifyChangedTransfer( qint64 ItemProgressSize, qint64 ItemCompleteSize, qint64 TotalProgressSize, qint64 TotalCompleteSize );
 
 public slots:
     void                                ChangeState( int State );

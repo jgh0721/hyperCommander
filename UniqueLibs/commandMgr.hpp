@@ -19,6 +19,12 @@ public:
     CCommandMgr( QObject* parent = nullptr );
 
     void                                Refresh();
+    void                                SaveSettings();
+    TyMapShortcutToCMDStr               Retrieve() const;
+    TyHC_COMMAND                        GetDefaultCMD( const QString& Command );
+
+    void                                SetShortcutWithCMD( QKeyCombination Key, const QString& CMD );
+    void                                DelShortcut( QKeyCombination Key );
 
     QWidget*                            GetMainUI() const;
     void                                SetMainUI( QWidget* MainUI );
@@ -57,9 +63,9 @@ public slots:
 private:
     using TySpMapKeyToCMDStr = std::shared_ptr< TyMapShortcutToCMDStr >;
 
-    TySpMapKeyToCMDStr                  retrieve();
+    TySpMapKeyToCMDStr                  retrieve() const;
 
-    TySpMapKeyToCMDStr                  SpMapKeyToCMDText;
+    TySpMapKeyToCMDStr                  SpMapKeyToCMDText_;
 
     QWidget*                            MainUI_ = nullptr;
 };

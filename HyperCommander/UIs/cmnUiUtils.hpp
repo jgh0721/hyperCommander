@@ -34,6 +34,8 @@ namespace nsHC
         void                            showEvent( QShowEvent* event ) override;
 
     private:
+        void                            initializeColorScheme();
+
         QFrame*                         titleBar_ = nullptr;
         QLabel*                         titleBarIcon_ = nullptr;
         QLabel*                         titleBarText_ = nullptr;
@@ -49,5 +51,7 @@ namespace nsHC
         int                             nDragableHeightPx_ = 48;
 
     };
+
+    QSet< int >                         SelectedRowsFromTbl( QTableWidget* Widget );
 
 } // nsHC

@@ -18,6 +18,7 @@ namespace nsCmn
         // 지정한 경로가 SymLink, SymLinkD, Juntion 일 경우 실제 파일/디렉토리를 반환
         QString                         GetReparsePointTo( const QString& Path );
 #endif
+        TyOsValue< uint64_t >           GetFreeDiskSpace( const std::wstring& Directory );
 
         TyOsValue< int64_t >            GetFileSize( HANDLE hFile );
         TyOsValue< int64_t >            GetFileSize( const std::wstring& FilePath );
@@ -26,6 +27,7 @@ namespace nsCmn
 
         TyOsValue< bool >               IsFileExists( const std::wstring& FilePath );
         TyOsValue< bool >               CopyACL( const std::wstring& Src, const std::wstring& Dst, SECURITY_INFORMATION Si );
+
 
     } // nsCmnPath
 } // nsCmn

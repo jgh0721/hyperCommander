@@ -106,6 +106,14 @@ namespace nsCmn
             return "";
         }
 #endif
+        TyOsValue<uint64_t> GetFreeDiskSpace( const std::wstring& Directory )
+        {
+            ULARGE_INTEGER Free = { 0, };
+            if( GetDiskFreeSpaceExW( Directory.c_str(), &Free, nullptr, nullptr ) == FALSE )
+                return MAKE_WIN32_LAST_ERROR;
+
+            return MAKE_WIN32_VALUE( Free.QuadPart );
+        }
 
         TyOsValue< int64_t > GetFileSize( HANDLE hFile )
         {

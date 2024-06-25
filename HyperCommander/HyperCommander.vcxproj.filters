@@ -75,6 +75,12 @@
     <Filter Include="라이브러리\공통 라이브러리\Win32API">
       <UniqueIdentifier>{992e91bb-a4bf-49c9-9093-805330189e84}</UniqueIdentifier>
     </Filter>
+    <Filter Include="라이브러리\공통 라이브러리\Concurrent">
+      <UniqueIdentifier>{528968a1-677a-456d-a456-c3484560af93}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="라이브러리\공통 라이브러리\Logging">
+      <UniqueIdentifier>{03916785-185f-40fd-a6ea-9a6c566172a1}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -355,6 +361,24 @@
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileAttrib.cpp">
       <Filter>UI Files\Cate - 파일 동작</Filter>
     </ClCompile>
+    <ClCompile Include="..\commonLibs\concurrent\cmnConditionVariable.cpp">
+      <Filter>라이브러리\공통 라이브러리\Concurrent</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\concurrent\cmnMutex.cpp">
+      <Filter>라이브러리\공통 라이브러리\Concurrent</Filter>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\cmnUtils.cpp">
+      <Filter>라이브러리\공통 라이브러리</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileMove.cpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgDefaultCMD.cpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </ClCompile>
+    <ClCompile Include="Modules\mdlFileEngine.cpp">
+      <Filter>모듈</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -398,6 +422,12 @@
     </QtUic>
     <QtUic Include="UIs\Cate - FileOperation\dlgFileAttrib.ui">
       <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtUic>
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileMove.ui">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgDefaultCMD.ui">
+      <Filter>UI Files\Cate - 환경설정</Filter>
     </QtUic>
   </ItemGroup>
   <ItemGroup>
@@ -581,6 +611,15 @@
     <QtMoc Include="..\UniqueLibs\solTCPluginMgr.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileMove.hpp">
+      <Filter>UI Files\Cate - 파일 동작</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgDefaultCMD.hpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtMoc>
+    <QtMoc Include="Modules\mdlFileEngine.hpp">
+      <Filter>모듈</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
@@ -714,6 +753,24 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\win\winLIBMgr.hpp">
       <Filter>라이브러리\공통 라이브러리\Win</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\concurrent\cmnConditionVariable.hpp">
+      <Filter>라이브러리\공통 라이브러리\Concurrent</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\concurrent\cmnMutex.hpp">
+      <Filter>라이브러리\공통 라이브러리\Concurrent</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\concurrent\cmnSingleton.hpp">
+      <Filter>라이브러리\공통 라이브러리\Concurrent</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnTypes.hpp">
+      <Filter>라이브러리\공통 라이브러리</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\cmnUtils.hpp">
+      <Filter>라이브러리\공통 라이브러리</Filter>
+    </ClInclude>
+    <ClInclude Include="..\commonLibs\logging\cmnLogger_Defs.hpp">
+      <Filter>라이브러리\공통 라이브러리\Logging</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

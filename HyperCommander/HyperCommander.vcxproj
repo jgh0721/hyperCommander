@@ -166,6 +166,9 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\commonLibs\cmnProcess.cpp" />
     <ClCompile Include="..\commonLibs\cmnSecurity.cpp" />
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp" />
+    <ClCompile Include="..\commonLibs\cmnUtils.cpp" />
+    <ClCompile Include="..\commonLibs\concurrent\cmnConditionVariable.cpp" />
+    <ClCompile Include="..\commonLibs\concurrent\cmnMutex.cpp" />
     <ClCompile Include="..\commonLibs\Qt\cmnQtUtils.cpp" />
     <ClCompile Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
@@ -371,15 +374,18 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
       <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
     </ClCompile>
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
+    <ClCompile Include="Modules\mdlFileEngine.cpp" />
     <ClCompile Include="Modules\mdlFileOperation.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileAttrib.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileDelete.cpp" />
+    <ClCompile Include="UIs\Cate - FileOperation\dlgFileMove.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileProgress.cpp" />
     <ClCompile Include="UIs\cmnUiUtils.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
+    <ClCompile Include="UIs\dlgDefaultCMD.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
     <ClCompile Include="UIs\dlgGridStyle.cpp" />
@@ -391,10 +397,18 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <QtMoc Include="UIs\dlgDefaultCMD.hpp" />
+    <QtMoc Include="UIs\Cate - FileOperation\dlgFileMove.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileAttrib.hpp" />
     <QtMoc Include="UIs\cmnUiUtils.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp" />
     <QtMoc Include="..\externalLibs\QDirectoryEdit\QDirectoryEdit.hpp" />
+    <ClInclude Include="..\commonLibs\cmnTypes.hpp" />
+    <ClInclude Include="..\commonLibs\cmnUtils.hpp" />
+    <ClInclude Include="..\commonLibs\concurrent\cmnConditionVariable.hpp" />
+    <ClInclude Include="..\commonLibs\concurrent\cmnMutex.hpp" />
+    <ClInclude Include="..\commonLibs\concurrent\cmnSingleton.hpp" />
+    <ClInclude Include="..\commonLibs\logging\cmnLogger_Defs.hpp" />
     <ClInclude Include="..\commonLibs\win\winLIBMgr.hpp" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h" />
@@ -500,6 +514,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ResourceCompile Include="HyperCommander.rc" />
     <ClInclude Include="..\uniqueLibs\model_defs.hpp" />
     <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp" />
+    <QtMoc Include="Modules\mdlFileEngine.hpp" />
     <ClInclude Include="stdafx.h" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>
@@ -511,9 +526,11 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtUic Include="UIs\Cate - FileOperation\dlgFileAttrib.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileDelete.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileCopy.ui" />
+    <QtUic Include="UIs\Cate - FileOperation\dlgFileMove.ui" />
     <QtUic Include="UIs\Cate - FileOperation\dlgFileProgress.ui" />
     <QtUic Include="UIs\cmpPanel.ui" />
     <QtUic Include="UIs\cmpViewer.ui" />
+    <QtUic Include="UIs\dlgDefaultCMD.ui" />
     <QtUic Include="UIs\dlgExternalConfigure.ui" />
     <QtUic Include="UIs\dlgExternalConfigure_Item.ui" />
     <QtUic Include="UIs\dlgGridStyle.ui" />

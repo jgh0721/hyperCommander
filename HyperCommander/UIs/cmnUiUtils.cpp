@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "cmnUiUtils.hpp"
 
+#include "colorSchemeMgr.hpp"
+
 DECLARE_CMNLIBSV2_NAMESPACE
 
 namespace nsHC
@@ -76,11 +78,47 @@ namespace nsHC
         {
             if( titleBar_ != nullptr )
                 nDragableHeightPx_ = titleBar_->height();
-                
+
+            initializeColorScheme();
+
             emit NotifyUiReady();
             isInitOnce = true;
         }
 
         QDialog::showEvent( event );
+    }
+
+    void QBaseUI::initializeColorScheme()
+    {
+        const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+        const auto ColorScheme = StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() );
+
+        auto Palette = palette();
+        setFont( ColorScheme.Dialog_Font );
+        //
+        //Palette.setColor( QPalette::ColorRole::Window, ColorScheme.Dialog_BGColor );
+        //Palette.setColor( QPalette::ColorRole::Button, ColorScheme.Dialog_BGColor );
+        //Palette.setColor( QPalette::ColorRole::WindowText, ColorScheme.Dialog_FGColor );
+        //Palette.setColor( QPalette::ColorRole::ButtonText, ColorScheme.Dialog_FGColor );
+
+        //if( ColorScheme.IsDarkMode == true )
+        //{
+        //    setStyleSheet( R"(
+        //        * { border-radius : 2px; border-color: cyan; border-width: 1px; };
+        //    )" );
+        //}
+
+        //setPalette( Palette );
+    }
+
+    //////////////////////////////////////////////////////////////////////////
+
+    QSet<int> SelectedRowsFromTbl( QTableWidget* Widget )
+    {
+        QSet< int > SelectedRows;
+        for( auto& Item : Widget->selectedItems() )
+            SelectedRows.insert( Item->row() );
+
+        return SelectedRows;
     }
 }

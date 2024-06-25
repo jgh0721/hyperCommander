@@ -12,6 +12,7 @@ public:
     
     QVector< QString >                  GetNames() const;
     TyColorScheme                       GetColorScheme( const QString& Name ) const;
+    QString                             GetCurrentColorScheme() const;
     void                                SetCurrentColorScheme( const QString& Name );
     void                                UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile );
     void                                RemoveColorScheme( const QString& Name, bool IsWriteToFile );
@@ -24,8 +25,8 @@ public:
 
 signals:
 
-    void sigColorSchemeChanged( const TyColorScheme& ColorScheme );
-    void sigFileSetChanged();
+    void                                sigColorSchemeChanged( const TyColorScheme& ColorScheme );
+    void                                sigFileSetChanged();
 
 private:
     QFont                               retrieveFont( const QString& FontFamily, const QString& FontSize, int DefaultSize = 9 ) const;

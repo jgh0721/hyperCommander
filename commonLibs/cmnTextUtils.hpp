@@ -3,6 +3,14 @@
 #include <limits>
 #include <assert.h>
 
+namespace nsCmn
+{
+    int                                 stricmp( const char* lhs, const char* rhs );
+    int                                 stricmp( const wchar_t* lhs, const wchar_t* rhs );
+    int                                 stricmp( const std::string& lhs, const std::string& rhs );
+    int                                 stricmp( const std::wstring& lhs, const std::wstring& rhs );
+} // nsCmn
+
 // Parses an unsigned integer advancing s to the end of the parsed input.
 // This function assumes that the first character of s is a digit.
 template <typename Char>

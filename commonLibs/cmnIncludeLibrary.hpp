@@ -2,7 +2,12 @@
 
 #include "cmnBase.hpp"
 
+#include "cmnTypes.hpp"
+#include "cmnUtils.hpp"
 #include "cmnConcurrent.hpp"
+#include "concurrent/cmnConditionVariable.hpp"
+#include "concurrent/cmnMutex.hpp"
+#include "concurrent/cmnSingleton.hpp"
 #include "cmnDateTime.hpp"
 #include "cmnPath.hpp"
 #include "cmnTextUtils.hpp"

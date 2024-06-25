@@ -84,6 +84,11 @@ TyColorScheme CColorSchemeMgr::GetColorScheme( const QString& Name ) const
     return mapNameToScheme[ Name ];
 }
 
+QString CColorSchemeMgr::GetCurrentColorScheme() const
+{
+    return currentColorScheme.Name;
+}
+
 void CColorSchemeMgr::SetCurrentColorScheme( const QString& Name )
 {
     if( mapNameToScheme.contains( Name ) == false )

@@ -24,6 +24,7 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
     [Configuration]
     SizeInHeader=
     SizeInFooter=
+    UseBuiltInShortcut=True
 
     [ColorScheme]
     Count=N
@@ -73,6 +74,11 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
     0_Path=Caps,XXX
     0_Exts=
     0_Support64Bit=True|False
+
+    // Num( NumpadModifier ), Ctrl, Alt, Shift 
+    // UseBuiltInShortcut 값이 True 이면 해당 값을 먼저 가져온 후, 이후에 사용자가 설정한 값으로 재정의한다. 
+    [Shortcut]
+
  */
 
 ////////////////////////////////////////////////////////////////////////////////
