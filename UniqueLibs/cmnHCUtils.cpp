@@ -206,6 +206,74 @@ void SetTitleIcon( QLabel* Widget )
     Widget->setScaledContents( true );
 }
 
+bool OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow )
+{
+    //assert( parentWindow );
+    ITEMIDLIST* id = nullptr;
+    IShellFolder* ifolder = nullptr;
+    IContextMenu* imenu = nullptr;
+    std::wstring windowsPath = path;
+    bool IsSuccess = false;
+
+    do
+    {
+        //std::replace( windowsPath.begin(), windowsPath.end(), '/', '\');
+        HRESULT result = SHParseDisplayName( windowsPath.c_str(), 0, &id, 0, 0 );
+        if( !SUCCEEDED( result ) || !id )
+            break;
+
+        LPCITEMIDLIST idChild = 0;
+        result = SHBindToParent( id, IID_IShellFolder, ( void** )&ifolder, &idChild );
+        if( !SUCCEEDED( result ) || !ifolder )
+            break;
+
+        result = ifolder->GetUIObjectOf( ( HWND )parentWindow, 1, &idChild, IID_IContextMenu, 0, reinterpret_cast< void** >( &imenu ) );
+        if( !SUCCEEDED( result ) || !ifolder )
+            break;
+
+        HMENU hMenu = CreatePopupMenu();
+        if( !hMenu )
+            break;
+
+        if( SUCCEEDED( imenu->QueryContextMenu( hMenu, 0, 1, 0x7FFF, CMF_NORMAL ) ) )
+        {
+            UINT Flags = TPM_RETURNCMD ;
+            if( GetSystemMetrics( SM_MENUDROPALIGNMENT ) != 0 )
+                Flags |= TPM_RIGHTALIGN | TPM_HORNEGANIMATION;
+            else
+                Flags |= TPM_LEFTALIGN | TPM_HORPOSANIMATION;
+
+            int iCmd = TrackPopupMenuEx( hMenu, Flags, xPos, yPos, ( HWND )parentWindow, NULL );
+            if( iCmd > 0 )
+            {
+                CMINVOKECOMMANDINFOEX info = { 0 };
+                info.cbSize = sizeof( info );
+                info.fMask = CMIC_MASK_UNICODE ;
+                info.hwnd = ( HWND )parentWindow;
+                info.lpVerb = MAKEINTRESOURCEA( iCmd - 1 );
+                info.lpVerbW = MAKEINTRESOURCEW( iCmd - 1 );
+                info.nShow = SW_SHOWNORMAL;
+                imenu->InvokeCommand( ( LPCMINVOKECOMMANDINFO )&info );
+            }
+        }
+        DestroyMenu( hMenu );
+
+        IsSuccess = true;
+
+    } while( false );
+
+    if( imenu )
+        imenu->Release();
+
+    if( ifolder )
+        ifolder->Release();
+
+    if( id )
+        CoTaskMemFree( id );
+
+    return IsSuccess;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void CDetectParser::SetDetectString( const QString& Detect )

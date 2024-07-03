@@ -63,69 +63,6 @@ namespace nsHC
         void NotifyTransferChanged();
     };
 
-    enum TyEnFSCate
-    {
-        FS_CATE_LOCAL, 
-        FS_CATE_REMOVABLE,
-        FS_CATE_REMOTE, 
-        FS_CATE_VFS, 
-        FS_CATE_PACKER,
-    };
-
-    enum TyEnFSFeature
-    {
-        FS_FEA_LIST, 
-        FS_FEA_READABLE, 
-        FS_FEA_WRITABLE,
-        FS_FEA_MOVABLE,
-        FS_FEA_DELETABLE, 
-        FS_FEA_RENAMABLE,
-        FS_FEA_PERMISSION,      // POSIX 
-        FS_FEA_SECURITY,        // NTFS ACL
-    };
-    
-    class CFileSystem
-    {
-        // 파일시스템
-        // UNC(SMB) 여부
-        // Packer 여부
-        // VFS 여부
-        // 파일시스템 능력, 
-        //      읽기 가능, 쓰기 가능, 이동 가능, 이름 변경 가능, 삭제 가능, 열거 가능, 
-
-        qint64 GetFreeSpaceW();
-        qint64 GetTotalSpace();
-        quint64 GetTotalSize();
-
-        QString GetRoot();              // UNC 라면 \\ServerName\Share
-                                        // Packer 라면 기반이 되는 압축파일의 경로
-
-        void SetRoot();
-
-        int Features();
-    private:
-        void readFileSystemFeatures();
-
-        TyEnFSCate Cate;
-        int Features_;
-    };
-
-    // 패널에 CFileSystem 또는 그 자식 클래스를 가진다.  
-    
-    class CFileSource
-    {
-    public:
-        qint64 GetCount();
-        QString GetName( qint64 Idx );
-        QString GetRoot( qint64 Idx );      // UNC 라면 \\ServerName\Path 
-        QString GetPath( qint64 Idx );
-        qint64 GetSize( qint64 Idx );
-
-    private:
-
-        // FileSystem 클래스
-    };
-
     // 파일 엔진 클래스는 CFileSource 를 입력으로 받음
 } // nsHC
 

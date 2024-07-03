@@ -1,19 +1,23 @@
 ﻿#pragma once
 
+#include <QtCore>
+
+#include "cmnTypeDefs.hpp"
+
 #include "ui_cmpPanel.h"
+#include "Modules/mdlFileSystem.hpp"
 
-namespace Qtitan
-{
-    class GridSelection;
-}
-
+class CFsModelT;
 class QMainUI;
-class FSProxyModel;
-class FSModel;
+class CFSProxyModel;
+class CFSModel;
+class CViewT;
 
 namespace Qtitan
 {
+    class Grid;
     class GridViewBase;
+    class GridSelection;
     class GridBandedTableView;
     class ContextMenuEventArgs;
     class CellClickEventArgs;
@@ -21,22 +25,37 @@ namespace Qtitan
     class EditorEventArgs;
 }
 
+/*!
+ * 
+ *
+ * 초기화 순서
+ * 1. UI 초기화, 컨트롤 설정
+ * 2. UI 에 색상 구성표 적용
+ * 3. 패널에 기본 탭 추가( GridView )
+ * 4. 비동기로 각 탭마다 새로고침 시도
+ *      Set CurrentVolume On cbxVolume
+ *          -> 헤더의 VolumeInfo 갱신
+ *          -> View 에서 Model 을 획득 후 경로 등 설정 후 새로고침
+ *              -> Model 에서 새로고침 후 디렉토리 변경 통지를 받아 DirectoryInfo 갱신
+ *
+ */
+
 class CmpPanel : public QWidget
 {
     Q_OBJECT
 
     struct TyTabState
     {
-        int                             ViewMode = 0;   // Normal FS, Packer, VFS
-        Qtitan::GridBandedTableView*    View = nullptr;
-        FSModel*                        Model = nullptr;
-        FSProxyModel*                   ProxyModel = nullptr;
+        int                         Index = -1;
+        CViewT*                     View = nullptr;
+        CFsModelT*                  Model = nullptr;
+        CFSProxyModel*              ProxyModel = nullptr;
 
-        qint64                          SelectedSize = 0;
-        int                             SelectedFileCount = 0;
-        int                             SelectedDirectoryCount = 0;
-        QVector< QModelIndex >          SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
-        int                             LastFocusedRowIndex = -1;
+        quint64                     SelectedSize = 0;
+        int                         SelectedFileCount = 0;
+        int                         SelectedDirectoryCount = 0;
+// QVector< QModelIndex >      SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
+//        //int                             LastFocusedRowIndex = -1;
     };
 
     using TySpTabState = std::shared_ptr<TyTabState>;
@@ -44,76 +63,95 @@ class CmpPanel : public QWidget
 public:
     CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
-    Q_INVOKABLE void                    Initialize();
+    Q_INVOKABLE void                RefreshVolumeList() const;
 
-    Q_INVOKABLE void                    AddTab();
-    Q_INVOKABLE void                    PrevTab();
-    Q_INVOKABLE void                    NextTab();
-    Q_INVOKABLE void                    CloseTab();
-    Q_INVOKABLE void                    RefreshVolumeList();
-    int                                 CurrentTabIndex() const;
-    Q_INVOKABLE void                    SetFocusView( int TabIndex );
-    Qtitan::GridBandedTableView*        GetFocusView() const;
-    void                                EnsureKeyboardFocusOnView( Qtitan::GridBandedTableView* View );
+    int                             CurrentTabIndex() const;
+    void                            SetFocusView( int TabIndex );
 
-    Q_INVOKABLE void                    SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
-    void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
-    void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
-
-    void                                RefreshSource( int TabIndex );
-    void                                FileCopyToOtherPanel( CmpPanel* Dst );
-    void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
-    void                                FileNormalization( const QModelIndex& SrcIndex );
-    void                                FileSetAttrib( const QModelIndex& SrcIndex );
-    Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
-    void                                ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
-    void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
-
-    void                                ViewOnLister( const QModelIndex& SrcIndex );
-
-    int                                 InitializeGrid();
+    void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
+    void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
 
 public slots:
 
-    void                                oo_ChangedDirectory( const QString& CurrentPath );
+    void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
 
-    void                                on_cbxVolume_currentIndexChanged( int index );
-    void                                on_btnGridStyle_clicked( bool checked = false );
-    void                                on_tabWidget_currentChanged( int Index );
-    void                                oo_grdLocal_contextMenu( Qtitan::ContextMenuEventArgs* Args );
-    void                                oo_grdLocal_cellClicked( Qtitan::CellClickEventArgs* Args );
-    void                                oo_grdLocal_rowDblClicked( Qtitan::RowClickEventArgs* Args );
-    void                                oo_grdLocal_rowFocusChanged( int OldRowIndex, int NewRowIndex );
-    void                                oo_grdLocal_editorStarted( Qtitan::EditorEventArgs* Args );
-    void                                oo_grdLocal_editorPosting( Qtitan::EditorEventArgs* Args );
-    void                                oo_grdLocal_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection );
+    void                            on_cbxVolume_currentIndexChanged( int index );
+    void                            on_tabWidget_currentChanged( int Index );
 
 signals:
-
-    void                                sig_NotifyCurrentDirectory( const QString& CurrentPath );
-    void                                sig_NotifyPanelActivated();
+    void                            sig_NotifyPanelActivated();
 
 private:
     friend class QMainUI;
 
-    bool                                eventFilter( QObject* Object, QEvent* Event ) override;
-    void                                resizeEvent( QResizeEvent* event ) override;
+    bool                            eventFilter( QObject* Object, QEvent* Event ) override;
+    void                            resizeEvent( QResizeEvent* event ) override;
 
-    int                                 retrieveCurrentIndex() const;
-    TySpTabState                        retrieveFocusState();
-    Qtitan::GridBandedTableView*        retrieveFocusView() const;
-    QModelIndex                         retrieveFocusViewCursorIndex() const;
-    // 현재 마우스 커서의 전역 위치( GetCursorPos 를 통해 획득 ) 와 모델 색인을 통해
-    // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
-    QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
-    QVector< QModelIndex >              makeSrcModel( const TySpTabState& SrcState );
+    void                            initializeUIs();
 
-    void                                processVolumeStatusText( QChar Drive ) const;
-    Q_INVOKABLE void                    processPanelStatusText();
-    
+    CViewT*                         createGridView();
+    int                             retrieveCurrentIndex() const;
+    TySpTabState                    retrieveFocusState();
+    CViewT*                         retrieveFocusView() const;
+
+    Q_INVOKABLE void                processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem ) const;
+    Q_INVOKABLE void                processPanelStatusText();
+
+    Ui::cmpPanel                    ui;
+
     // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
-    QVector< TySpTabState >             vecTabStates;
-    QTimer                              viewClickTimer;
-
-    Ui::cmpPanel                        ui;
+    QVector< TySpTabState >         vecTabStates;
 };
+
+//class CmpPanel : public QWidget
+//{
+//    Q_OBJECT
+//
+//public:
+//    CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
+//
+//    Q_INVOKABLE void                    Initialize();
+//
+//    //Q_INVOKABLE void                    AddTab();
+//    //Q_INVOKABLE void                    PrevTab();
+//    //Q_INVOKABLE void                    NextTab();
+//    //Q_INVOKABLE void                    CloseTab();
+//    //Qtitan::GridBandedTableView*        GetFocusView() const;
+//
+//    //void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
+//    //void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
+//
+//    //void                                RefreshSource( int TabIndex );
+//    //void                                FileCopyToOtherPanel( CmpPanel* Dst );
+//    //void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
+//    //void                                FileNormalization( const QModelIndex& SrcIndex );
+//    //void                                FileSetAttrib( const QModelIndex& SrcIndex );
+//    //Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
+//    //void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
+//
+//    //void                                ViewOnLister( const QModelIndex& SrcIndex );
+//
+//    //int                                 InitializeGrid();
+//
+//public slots:
+//    //    void                                oo_ChangedDirectory( const QString& CurrentPath );
+////
+////    void                                on_btnGridStyle_clicked( bool checked = false );
+////
+////signals:
+////
+////    void                                sig_NotifyCurrentDirectory( const QString& CurrentPath );
+////
+//private:
+//
+//    void                                initializeVolumeList();
+//    Qtitan::GridBandedTableView*        initializeGrid( Qtitan::Grid* Grid );
+//
+////    // 현재 마우스 커서의 전역 위치( GetCursorPos 를 통해 획득 ) 와 모델 색인을 통해
+////    // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
+////    QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
+////    QVector< QModelIndex >              makeSrcModel( const TySpTabState& SrcState );
+////
+//
+//    Ui::cmpPanel                        ui;
+//};

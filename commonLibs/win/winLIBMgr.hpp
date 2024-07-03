@@ -13,7 +13,6 @@
 #include "cmnBase.hpp"
 #include "cmnSystemDetection.hpp"
 #include "cmnCompilerDetection.hpp"
-#include "cmnStringEncrypt.hpp"
 
 /// 외부 라이브러리
 
@@ -72,20 +71,20 @@ namespace nsCmn
         public:
             ~CLibBase()
             {
-                if( _hLib != NULL )
+                if( _hLib != nullptr )
                 {
                     FreeLibrary( _hLib );
-                    _hLib = NULL;
+                    _hLib = nullptr;
                 }
 
-                if( _sLib != NULLPTR )
+                if( _sLib != nullptr )
                 {
                     delete[] _sLib;
-                    _sLib = NULLPTR;
+                    _sLib = nullptr;
                 }
             }
 
-            bool                                    IsInit() const { return _hLib != NULLPTR; }
+            bool                                    IsInit() const { return _hLib != nullptr; }
 
             DWORD                                   GetLoadError() const { return _dwError; }
             const wchar_t* GetModuleName() const { return static_cast< const wchar_t* >( _sLib ); }
@@ -93,9 +92,9 @@ namespace nsCmn
         protected:
             bool                                    init( const wchar_t* sModulePath )
             {
-                assert( sModulePath != NULLPTR && _sLib == NULLPTR );
+                assert( sModulePath != nullptr && _sLib == nullptr );
 
-                if( _sLib == NULLPTR )
+                if( _sLib == nullptr )
                 {
                     if( sModulePath && *sModulePath )
                     {
@@ -114,7 +113,7 @@ namespace nsCmn
             }
             FARPROC                                 getProcAddress( LPCSTR pszFuncName, eImportedProcState& ips )
             {
-                FARPROC pfn = NULLPTR;
+                FARPROC pfn = nullptr;
                 ips = IMPORT_PROC_STATE_UNKNOWN;
 
                 if( _hLib )
@@ -129,10 +128,10 @@ namespace nsCmn
                 return pfn;
             }
 
-            HMODULE                                 _hLib = NULL;
+            HMODULE                                 _hLib = nullptr;
             DWORD                                   _dwError = 0;
 
-            wchar_t* _sLib = NULLPTR;
+            wchar_t*                                _sLib = nullptr;
         };
 
         /*!
@@ -152,7 +151,7 @@ namespace nsCmn
 
 #define DECLARE_FUNC_PTR( FuncName ) \
         public: \
-            TYPE_##FuncName m_pf##FuncName = NULLPTR; \
+            TYPE_##FuncName m_pf##FuncName = nullptr; \
         private: \
             nsCmn::nsDetailLib::eImportedProcState m_ips##FuncName = nsCmn::nsDetailLib::IMPORT_PROC_STATE_UNKNOWN; \
 
@@ -161,7 +160,7 @@ namespace nsCmn
             bool Is_##FuncName() \
             { \
                 if( nsCmn::nsDetailLib::IMPORT_PROC_STATE_UNKNOWN == m_ips##FuncName ) \
-                    m_pf##FuncName = (TYPE_##FuncName)getProcAddress( makeStringA( #FuncName ).c_str(), m_ips##FuncName); \
+                    m_pf##FuncName = (TYPE_##FuncName)getProcAddress( #FuncName, m_ips##FuncName); \
                 return( nsCmn::nsDetailLib::IMPORT_PROC_STATE_AVAILABLE == m_ips##FuncName); \
             }
 

@@ -10,3 +10,6 @@ constexpr auto DEFAULT_FS_DIR       = QLatin1String( "%COMMANDER_PATH%\\Addons\\
 constexpr auto DEFAULT_PACKER_DIR   = QLatin1String( "%COMMANDER_PATH%\\Addons\\WCX" );
 constexpr auto DEFAULT_LISTER_DIR   = QLatin1String( "%COMMANDER_PATH%\\Addons\\WLX" );
 
+constexpr auto NTPATH               = QLatin1String( R"(\\?\)" );
+constexpr auto NTPATH_UNC           = QLatin1String( R"(\\?\UNC\)" );
+constexpr auto VFSPATH              = QLatin1String( R"(\\\)" );

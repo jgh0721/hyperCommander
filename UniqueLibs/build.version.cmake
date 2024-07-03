@@ -1,0 +1,5 @@
+﻿set(SOL_BUILD_NUMBER 1)
+set(SOL_COMPANY_NAME MyHouse)
+set(SOL_VERSION "2024.05.21")
+
+add_compile_definitions( RES_CANONICAL_VERSION_COMMA=2024,05,21 )

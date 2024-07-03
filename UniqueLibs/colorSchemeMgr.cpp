@@ -4,7 +4,12 @@
 #include <private/qcssparser_p.h>
 
 #include "cmnTypeDefs_Opts.hpp"
+#include "Modules/mdlFileSystem.hpp"
 
+DECLARE_CMNLIBSV2_NAMESPACE
+
+////////////////////////////////////////////////////////////////////////////////
+///
 
 void CColorSchemeMgr::Refresh()
 {
@@ -67,8 +72,13 @@ void CColorSchemeMgr::Refresh()
         StSettings->endGroup();
     }
 
-    if( SelectedSchemeName.isEmpty() == true )
+    if( SelectedSchemeName.isEmpty() == false )
         currentColorScheme = mapNameToScheme.value( SelectedSchemeName );
+    else
+    {
+        if( mapNameToScheme.isEmpty() == false )
+            currentColorScheme = mapNameToScheme.first();
+    }
 }
 
 QVector<QString> CColorSchemeMgr::GetNames() const
@@ -78,7 +88,7 @@ QVector<QString> CColorSchemeMgr::GetNames() const
 
 TyColorScheme CColorSchemeMgr::GetColorScheme( const QString& Name ) const
 {
-    if( mapNameToScheme.contains( Name ) == false )
+    if( Name.isEmpty() == true || mapNameToScheme.contains( Name ) == false )
         return {};
 
     return mapNameToScheme[ Name ];
@@ -148,6 +158,12 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
         
         StSettings->endGroup();
     }
+
+    if( ColorScheme.Name == currentColorScheme.Name )
+    {
+        currentColorScheme = ColorScheme;
+        emit sigColorSchemeChanged( ColorScheme );
+    }
 }
 
 void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile )
@@ -185,13 +201,18 @@ void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile
     }
 }
 
-void CColorSchemeMgr::UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFBWithBG& FileSetColor )
+void CColorSchemeMgr::UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFGWithBG& FileSetColor )
 {
     Q_ASSERT( mapNameToScheme.contains( ColorScheme ) == true );
     if( mapNameToScheme.contains( ColorScheme ) == false )
         return;
 
     mapNameToScheme[ ColorScheme ].MapNameToColors[ FileSet ] = FileSetColor;
+    if( ColorScheme == GetCurrentColorScheme() )
+    {
+        currentColorScheme = mapNameToScheme[ ColorScheme ];
+        emit sigColorSchemeChanged( currentColorScheme );
+    }
 }
 
 void CColorSchemeMgr::RemoveFileSetColor( const QString& ColorScheme, const QString& FileSet )
@@ -203,41 +224,44 @@ void CColorSchemeMgr::RemoveFileSetColor( const QString& ColorScheme, const QStr
     mapNameToScheme[ ColorScheme ].MapNameToColors.remove( FileSet );
 }
 
-bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info, QColor* FGColor, QColor* BGColor )
+bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, nsHC::CFileSourceT* Info, QColor* FGColor, QColor* BGColor )
 {
     bool IsMatch = false;
 
     do
     {
+        if( Info == nullptr )
+            break;
+
         // Archive, Hidden, Directory, Encrypted, ReadOnly, System, Compressed
         if( FlagOn( FileSet.Flags, FILE_SET_EXP_ATTRIBUTE ) )
         {
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_ARCHIVE ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_ARCHIVE ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_ARCHIVE ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_HIDDEN ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_HIDDEN ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_HIDDEN ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_DIRECTORY ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_ENCRYPTED ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_ENCRYPTED ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_ENCRYPTED ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_READONLY ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_READONLY ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_READONLY ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_SYSTEM ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_SYSTEM ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_SYSTEM ) )
                 break;
 
             if( FlagOn( FileSet.Attributes, FILE_ATTRIBUTE_COMPRESSED ) &&
-                !FlagOn( Info.Attiributes, FILE_ATTRIBUTE_COMPRESSED ) )
+                !FlagOn( Info->Attributes_, FILE_ATTRIBUTE_COMPRESSED ) )
                 break;
         }
 
@@ -246,7 +270,7 @@ bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, const Node& Info, 
         if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) || FlagOn( FileSet.Flags, FILE_SET_NOR_FILTERS ) )
         {
             bool IsMatchExt = false;
-            const auto Ext = Info.Ext.toLower();
+            const auto Ext = Info->Ext_.toLower();
 
             // 단순 확장자 목록 또는 와일드 카드/정규식을 이용한 표현식 중 하나만 일치하면 된다.
             if( FlagOn( FileSet.Flags, FILE_SET_NOR_EXT_FILTERS ) )

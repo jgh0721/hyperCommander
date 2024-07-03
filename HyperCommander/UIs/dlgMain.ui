@@ -84,18 +84,8 @@
      <height>33</height>
     </rect>
    </property>
-   <property name="styleSheet">
-    <string notr="true">QMenuBar {
-}
-
-QMenuBar::item {
-}
-
-QMenu {
-	font-size: 10pt;
-	height: 32px;
-}
-</string>
+   <property name="nativeMenuBar">
+    <bool>true</bool>
    </property>
    <widget class="QMenu" name="menu_O">
     <property name="styleSheet">

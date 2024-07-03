@@ -80,7 +80,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)externalLibs\QDirectoryEdit;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)externalLibs\QDirectoryEdit;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(ProjectDir)UniqueLibs;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -103,7 +103,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
       <LanguageStandard>stdcpp20</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)externalLibs\QDirectoryEdit;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)commonLibs;$(SolutionDir)commonLibs\fmt-10.2.0\include;$(SolutionDir)externalLibs\QDirectoryEdit;$(SolutionDir)uniqueLibs;$(ProjectDir)Uis;$(ProjectDir)UniqueLibs;$(QtInstallDir)\include\QtCore\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion);$(QtInstallDir)\include\QtGui\$(QtVersion)\QtGui;$(QtInstallDir)\include\QtWidgets\$(QtVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>QT_NO_DEPRECATED_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -375,7 +375,9 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </ClCompile>
     <ClCompile Include="..\uniqueLibs\SHChangeNotify.cpp" />
     <ClCompile Include="Modules\mdlFileEngine.cpp" />
+    <ClCompile Include="Modules\mdlFileModel.cpp" />
     <ClCompile Include="Modules\mdlFileOperation.cpp" />
+    <ClCompile Include="Modules\mdlFileSystem.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgCreateDirectory.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileAttrib.cpp" />
     <ClCompile Include="UIs\Cate - FileOperation\dlgFileCopy.cpp" />
@@ -385,6 +387,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="UIs\cmnUiUtils.cpp" />
     <ClCompile Include="UIs\cmpPanel.cpp" />
     <ClCompile Include="UIs\cmpViewer.cpp" />
+    <ClCompile Include="UIs\Components\cmpView.cpp" />
     <ClCompile Include="UIs\dlgDefaultCMD.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
@@ -394,9 +397,12 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="UIs\dlgMultiRename_Model.cpp" />
     <ClCompile Include="UIs\dlgOpts.cpp" />
     <ClCompile Include="UIs\dlgViewer.cpp" />
+    <ClCompile Include="UniqueLibs\uiComboBoxWidget.cpp" />
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <QtMoc Include="UIs\Components\cmpView.hpp" />
+    <QtMoc Include="UniqueLibs\uiComboBoxWidget.hpp" />
     <QtMoc Include="UIs\dlgDefaultCMD.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileMove.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileAttrib.hpp" />
@@ -470,7 +476,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="..\UniqueLibs\cmnHCModelUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
-    <ClInclude Include="..\UniqueLibs\colorSchemeMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\colorSchemeMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\column_Defs.hpp" />
     <QtMoc Include="..\UniqueLibs\externalEditorMgr.hpp" />
     <QtMoc Include="UIs\cmpViewer.hpp" />
@@ -515,6 +521,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\uniqueLibs\model_defs.hpp" />
     <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp" />
     <QtMoc Include="Modules\mdlFileEngine.hpp" />
+    <QtMoc Include="Modules\mdlFileSystem.hpp" />
+    <QtMoc Include="Modules\mdlFileModel.hpp" />
     <ClInclude Include="stdafx.h" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>

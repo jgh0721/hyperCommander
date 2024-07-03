@@ -4,6 +4,8 @@
 
 #include "ui_dlgMain.h"
 
+class QSHChangeNotify;
+
 class QMainUI : public QMainWindow
 {
     Q_OBJECT
@@ -11,6 +13,12 @@ public:
     QMainUI( QWidget* parent = nullptr, Qt::WindowFlags flags = Qt::WindowFlags() );
 
 public slots:
+
+    void                            OnDriveAdd( const QString& Root );
+    void                            OnDriveRemoved( const QString& Root );
+    void                            OnMediaInserted( const QString& ItemIDDisplayName );
+    void                            OnMediaRemoved( const QString& Root );
+    void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
 
     ////////////////////////////////////////////////////////////////////////////
     /// 명령 핸들러
@@ -56,6 +64,10 @@ private:
 
     CmpPanel*                           retrieveSrcPanel() const;
     CmpPanel*                           retrieveDstPanel() const;
+
+
+    QSHChangeNotify*                    shlChangeNotify = nullptr;
     int                                 currentPanelIndex = 0; // 0 = Left, 1 = Right
+
     Ui::dlgMain                         ui;
 }; 

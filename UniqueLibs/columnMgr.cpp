@@ -4,9 +4,19 @@
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
 
+CColumnMgr::CColumnMgr()
+{
+    Initialize();
+}
+
 void CColumnMgr::Initialize()
 {
     VecColumnViews.push_back( BUILTIN_COLVIEW_DETAILS );
+}
+
+qsizetype CColumnMgr::GetCount() const
+{
+    return VecColumnViews.count();
 }
 
 ColumnView CColumnMgr::GetColumnView( int Index )
@@ -116,7 +126,7 @@ bool CColumnMgr::Parse( wchar_t*& Fmt, ColumnParseResult& Result, QString& Conte
     return IsContinue;
 }
 
-void CColumnMgr::CreateColumnContent( const ColumnParseResult& Result, Node* Info, QString& Content )
+void CColumnMgr::CreateColumnContent( const ColumnParseResult& Result, nsHC::CFileSourceT* Info, QString& Content )
 {
     if( Result.Module.compare( QLatin1StringView( "HC" ), Qt::CaseInsensitive ) == 0 )
     {
@@ -128,7 +138,7 @@ void CColumnMgr::CreateColumnContent( const ColumnParseResult& Result, Node* Inf
     }
 }
 
-void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info, QString& Content )
+void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, nsHC::CFileSourceT* Info, QString& Content )
 {
     if( Info == nullptr )
         return;
@@ -136,16 +146,16 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info
     // TODO: Type 을 고려해야 한다. 
 
     if( Name.compare( QLatin1String( "name" ), Qt::CaseInsensitive ) == 0 )
-        Content.push_back( Info->Name );
+        Content.push_back( Info->Name_ );
     else if( Name.compare( QLatin1String( "size" ), Qt::CaseInsensitive ) == 0 )
     {
-        if( FlagOn( Info->Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+        if( FlagOn( Info->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
         {
-            if( Info->Size > 0 )
-                Content.push_back( QString::number( Info->Size ) );
+            if( Info->Size_ > 0 )
+                Content.push_back( QString::number( Info->Size_ ) );
             else
             {
-                if( FlagOn( Info->Attiributes, FILE_ATTRIBUTE_REPARSE_POINT ) )
+                if( FlagOn( Info->Attributes_, FILE_ATTRIBUTE_REPARSE_POINT ) )
                 {
                     Content.push_back( QObject::tr( "<링크>" ) );
                 }
@@ -156,14 +166,14 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, Node* Info
             }
         }
         else
-            Content.push_back( QString::number( Info->Size ) );
+            Content.push_back( QString::number( Info->Size_ ) );
     }
     else if( Name.compare( QLatin1String( "created" ), Qt::CaseInsensitive ) == 0 )
     {
-        Content.push_back( Info->Created.toString( "yyyy-MM-dd hh:mm:ss" ) );
+        Content.push_back( Info->Created_.toString( "yyyy-MM-dd hh:mm:ss" ) );
     }
     else if( Name.compare( QLatin1String( "attribText" ), Qt::CaseInsensitive ) == 0 )
     {
-        Content.push_back( GetFormattedAttrText( Info->Attiributes, false ) );
+        Content.push_back( GetFormattedAttrText( Info->Attributes_, false ) );
     }
 }

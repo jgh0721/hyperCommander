@@ -32,6 +32,9 @@ struct Column
     QString                             Name;
     Qt::Alignment                       Align;
     QString                             Content;
+
+    // Internal Use Only.
+    QVector< wchar_t >                  Content_CVT;
 };
 
 struct ColumnView
@@ -55,9 +58,10 @@ constexpr auto BUILTIN_COL_NTFS_STREAM_COUNT = QLatin1String( "[=HC.Ntfs.StreamC
 constexpr auto BUILTIN_COL_NTFS_ZONE_ID = QLatin1String( "[=HC.Ntfs.ZoneId]" );
 
 const ColumnView BUILTIN_COLVIEW_DETAILS = {
-    QObject::tr( "자세히" ), true, QVector< Column >()
-    << Column { 0, 0, QObject::tr( "이름" ),      Qt::AlignLeft,     BUILTIN_COL_FS_NAME }
-    << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignCenter,   BUILTIN_COL_FS_SIZE }
-    << Column { 2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_CREATED }
-    << Column { 3, 0, QObject::tr( "속성" ),      Qt::AlignCenter,   BUILTIN_COL_FS_ATTRIB_TEXT }
+    QObject::tr( "자세히" ), true,
+    QVector< Column >()
+        << Column { 0, 0, QObject::tr( "이름" ),      Qt::AlignLeft,     BUILTIN_COL_FS_NAME }
+        << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignCenter,   BUILTIN_COL_FS_SIZE }
+        << Column { 2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_CREATED }
+        << Column { 3, 0, QObject::tr( "속성" ),      Qt::AlignCenter,   BUILTIN_COL_FS_ATTRIB_TEXT }
 };

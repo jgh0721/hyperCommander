@@ -81,6 +81,12 @@
     <Filter Include="라이브러리\공통 라이브러리\Logging">
       <UniqueIdentifier>{03916785-185f-40fd-a6ea-9a6c566172a1}</UniqueIdentifier>
     </Filter>
+    <Filter Include="라이브러리\고유 라이브러리%28UI%29">
+      <UniqueIdentifier>{8e0fd86e-5a45-4bb5-abbc-0cdb2f4d8d31}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI Files\Components">
+      <UniqueIdentifier>{caa9c6b8-d2f5-4c6e-b387-6e6957934459}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -379,6 +385,18 @@
     <ClCompile Include="Modules\mdlFileEngine.cpp">
       <Filter>모듈</Filter>
     </ClCompile>
+    <ClCompile Include="Modules\mdlFileSystem.cpp">
+      <Filter>모듈</Filter>
+    </ClCompile>
+    <ClCompile Include="UniqueLibs\uiComboBoxWidget.cpp">
+      <Filter>라이브러리\고유 라이브러리%28UI%29</Filter>
+    </ClCompile>
+    <ClCompile Include="Modules\mdlFileModel.cpp">
+      <Filter>모듈</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\Components\cmpView.cpp">
+      <Filter>UI Files\Components</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -431,9 +449,6 @@
     </QtUic>
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="UIs\cmpPanel.hpp">
-      <Filter>UI Files</Filter>
-    </QtMoc>
     <QtMoc Include="..\uniqueLibs\SHChangeNotify.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
@@ -620,6 +635,24 @@
     <QtMoc Include="Modules\mdlFileEngine.hpp">
       <Filter>모듈</Filter>
     </QtMoc>
+    <QtMoc Include="Modules\mdlFileSystem.hpp">
+      <Filter>모듈</Filter>
+    </QtMoc>
+    <QtMoc Include="UniqueLibs\uiComboBoxWidget.hpp">
+      <Filter>라이브러리\고유 라이브러리%28UI%29</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\colorSchemeMgr.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
+    </QtMoc>
+    <QtMoc Include="Modules\mdlFileModel.hpp">
+      <Filter>모듈</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\Components\cmpView.hpp">
+      <Filter>UI Files\Components</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\cmpPanel.hpp">
+      <Filter>UI Files</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
@@ -735,9 +768,6 @@
     </ClInclude>
     <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h">
       <Filter>라이브러리\외부 라이브러리\TotalCommander</Filter>
-    </ClInclude>
-    <ClInclude Include="..\UniqueLibs\colorSchemeMgr.hpp">
-      <Filter>라이브러리\고유 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>

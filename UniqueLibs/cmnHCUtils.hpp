@@ -27,7 +27,9 @@ QVariant                                ShowMSGBox( QWidget* parent, QMessageBox
 QVariant                                ShowMSGBoxWithDetail( QWidget* parent, QMessageBox::Icon Icon, const QString& Content, const QString& Detail, const QString& Title = "", QMessageBox::StandardButtons Buttons = QMessageBox::Ok, bool IsWait = true, Qt::WindowFlags Flags = Qt::Dialog | Qt::MSWindowsFixedSizeDialogHint | Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint );
 
 void                                    SetTitleIcon( QLabel* Widget );
+bool                                    OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow );
 
+///
 /*!
  * @brief Total Commnader's Detect String Parser Ported from Double Commander's uDetectStr
 

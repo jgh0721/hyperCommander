@@ -1,13 +1,14 @@
 ﻿#include "stdafx.h"
 #include "dlgMain.hpp"
 
+#include "colorSchemeMgr.hpp"
 #include "UIs/dlgOpts.hpp"
 
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/cmnTypeDefs.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
 #include "UniqueLibs/solTCPluginMgr.hpp"
-
+#include "UniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 
 QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
@@ -16,8 +17,40 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     ui.setupUi( this );
 
     setWindowTitle( tr( "HyperCommander - %1" ).arg( CMN_MAKE_STR( RES_CANONICAL_VERSION ) ) );
-    
+
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
+}
+
+void QMainUI::OnDriveAdd( const QString& Root )
+{
+    qDebug() << __FUNCTION__ << " : " << Root;
+}
+
+void QMainUI::OnDriveRemoved( const QString& Root )
+{
+    qDebug() << __FUNCTION__ << " : " << Root;
+}
+
+void QMainUI::OnMediaInserted( const QString& ItemIDDisplayName )
+{
+    qDebug() << __FUNCTION__ << " : " << ItemIDDisplayName;
+}
+
+void QMainUI::OnMediaRemoved( const QString& Root )
+{
+    qDebug() << __FUNCTION__ << " : " << Root;
+
+}
+
+void QMainUI::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
+{
+    if( ColorScheme.Name.isEmpty() == true )
+        return;
+
+    QApplication::setFont( ColorScheme.Dialog_Font );
+
+    ui.cmpLeftPanel->OnColorSchemeChanged( ColorScheme );
+    ui.cmpRightPanel->OnColorSchemeChanged( ColorScheme );
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -32,7 +65,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
     if( Pane == nullptr )
         return;
 
-    Pane->AddTab();
+    // Pane->AddTab();
     currentPanelIndex = Prev;
 }
 
@@ -43,7 +76,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
     if( Pane == nullptr )
         return;
 
-    Pane->PrevTab();
+    // Pane->PrevTab();
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
@@ -53,7 +86,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
     if( Pane == nullptr )
         return;
 
-    Pane->NextTab();
+    // Pane->NextTab();
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
@@ -64,7 +97,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     if( Pane == nullptr )
         return;
 
-    Pane->CloseTab();
+    // Pane->CloseTab();
     currentPanelIndex = Prev;
 }
 
@@ -78,7 +111,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_CopyOtherPanel )
     if( Src == nullptr || Dst == nullptr )
         return;
 
-    Src->FileCopyToOtherPanel( Dst );
+    // Src->FileCopyToOtherPanel( Dst );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_RenameSingleFile )
@@ -88,7 +121,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_RenameSingleFile )
     if( Pane == nullptr )
         return;
 
-    Pane->RenameFileName( CursorIndex );
+    // Pane->RenameFileName( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_List )
@@ -98,7 +131,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_List )
     if( Pane == nullptr )
         return;
 
-    Pane->ViewOnLister( CursorIndex );
+    // Pane->ViewOnLister( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_Return )
@@ -108,7 +141,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_Return )
     if( Pane == nullptr )
         return;
 
-    Pane->ReturnOnCurrentTab( CursorIndex );
+    // Pane->ReturnOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
@@ -118,7 +151,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
     if( Pane == nullptr )
         return;
 
-    Pane->NewFolderOnCurrentTab( CursorIndex );
+    // Pane->NewFolderOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_Delete )
@@ -128,7 +161,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_Delete )
     if( Pane == nullptr )
         return;
 
-    Pane->FileDeleteOnCurrentTab( CursorIndex );
+    // Pane->FileDeleteOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_NameNormalization )
@@ -138,7 +171,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NameNormalization )
     if( Pane == nullptr )
         return;
 
-    Pane->FileNormalization( CursorIndex );
+    // Pane->FileNormalization( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SetAttrib )
@@ -148,7 +181,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_SetAttrib )
     if( Pane == nullptr )
         return;
 
-    Pane->FileSetAttrib( CursorIndex );
+    // Pane->FileSetAttrib( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SelInverse )
@@ -168,25 +201,25 @@ DEFINE_HC_COMMAND( QMainUI, cm_MultiRenameFiles )
     if( Pane == nullptr )
         return;
 
-    const auto View = Pane->retrieveFocusView();
-    const auto Selection = View->modelController()->selection();
-    if( Selection->isEmpty() == true )
-    {
-        QMessageBox::information( nullptr, tr( "HyperCommander" ), tr( "이름을 변경할 파일을 선택해 주세요." ) );
-        return;
-    }
+    //const auto View = Pane->retrieveFocusView();
+    //const auto Selection = View->modelController()->selection();
+    //if( Selection->isEmpty() == true )
+    //{
+    //    QMessageBox::information( nullptr, tr( "HyperCommander" ), tr( "이름을 변경할 파일을 선택해 주세요." ) );
+    //    return;
+    //}
 
-    QVector< QString > VecFiles;
-    const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
-    const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
+    //QVector< QString > VecFiles;
+    //const auto ProxyModel = qobject_cast< FSProxyModel* >( View->model() );
+    //const auto FsModel = qobject_cast< FSModel* >( ProxyModel->sourceModel() );
 
-    for( const auto& Item : Selection->selectedRowIndexes() )
-    {
-        qDebug() << FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) );
-        VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
-    }
+    //for( const auto& Item : Selection->selectedRowIndexes() )
+    //{
+    //    qDebug() << FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) );
+    //    VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
+    //}
 
-    QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
+    //QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
@@ -196,11 +229,11 @@ DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
     if( Pane == nullptr )
         return;
 
-    const auto State = Pane->retrieveFocusState();
-    bool IsShow = false;
+    //const auto State = Pane->retrieveFocusState();
+    //bool IsShow = false;
 
-    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
-    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
+    //QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
+    //QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_RereadSource )
@@ -210,7 +243,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_RereadSource )
     if( Pane == nullptr )
         return;
 
-    Pane->RefreshSource( Pane->CurrentTabIndex() );
+    // Pane->RefreshSource( Pane->CurrentTabIndex() );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
@@ -246,7 +279,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_ExternalEditorMenu )
     if( Pane == nullptr )
         return;
 
-    Pane->ExternalEditorMenu( CursorIndex );
+    // Pane->ExternalEditorMenu( CursorIndex );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
@@ -268,16 +301,12 @@ void QMainUI::oo_notifyPanelActivated()
 
     if( Sender == ui.cmpLeftPanel )
     {
-        qDebug() << "왼쪽 패널 활성화";
-        ui.cmpLeftPanel->EnsureKeyboardFocusOnView( ui.cmpLeftPanel->GetFocusView() );
-
+        qDebug() << __FUNCTION__ << " : " << "왼쪽 패널 활성화";
         currentPanelIndex = 0;
     }
     else if( Sender == ui.cmpRightPanel )
     {
-        qDebug() << "오른쪽 패널 활성화";
-        ui.cmpRightPanel->EnsureKeyboardFocusOnView( ui.cmpRightPanel->GetFocusView() );
-
+        qDebug() << __FUNCTION__ << " : " << "오른쪽 패널 활성화";
         currentPanelIndex = 1;
     }
 }
@@ -311,26 +340,36 @@ void QMainUI::closeEvent( QCloseEvent* Event )
 
 void QMainUI::initialize()
 {
-    auto HelpBar = new QMenuBar;
-    auto HelpBar_Root = new QMenu( tr( "도움말(&H)" ), HelpBar );
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+
+    ui.menubar->setNativeMenuBar( true );
+
+    auto HelpBar = new QMenuBar( ui.menubar );
+    auto HelpBar_Root = new QMenu( LANG_MNU_HELP, HelpBar );
     HelpBar->addMenu( HelpBar_Root );
-    ui.menubar->setCornerWidget( HelpBar );
 
-    TyStCommandMgr::GetInstance()->SetMainUI( this );
-    TyStExternalEditorMgr::GetInstance()->Refresh();
-    TyStPlugInMgr::GetInstance()->Refresh();
+    ui.menubar->setCornerWidget( HelpBar, Qt::TopRightCorner );
 
-    connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
-    connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+    StCommandMgr->SetMainUI( this );
+
+    shlChangeNotify = new QSHChangeNotify;
+    shlChangeNotify->StartWatching();
+
+    connect( shlChangeNotify, &QSHChangeNotify::OnDriveAdd, this, &QMainUI::OnDriveAdd );
+    connect( shlChangeNotify, &QSHChangeNotify::OnDriveRemoved, this, &QMainUI::OnDriveRemoved );
+    connect( shlChangeNotify, &QSHChangeNotify::OnMediaInserted, this, &QMainUI::OnMediaInserted );
+    connect( shlChangeNotify, &QSHChangeNotify::OnMediaRemoved, this, &QMainUI::OnMediaRemoved );
+
+    connect( StColorSchemeMgr, &CColorSchemeMgr::sigColorSchemeChanged, this, &QMainUI::OnColorSchemeChanged );
+
+    //connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
+    //connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
 
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );
-
-    // NOTE: 시작하면 왼쪽에 커서가 위치할 수 있도록 오른쪽부터 초기화한다.
-    QMetaObject::invokeMethod( ui.cmpRightPanel, "Initialize", Qt::QueuedConnection );
-    QMetaObject::invokeMethod( ui.cmpLeftPanel, "Initialize", Qt::QueuedConnection );
 }
 
 CmpPanel* QMainUI::retrieveSrcPanel() const

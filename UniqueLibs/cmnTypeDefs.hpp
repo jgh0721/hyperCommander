@@ -46,6 +46,8 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
     List_BGColor=
     List_CursorColor=
     List_SelectColor=
+    List_Column_FGColor=
+    List_Column_BGColor=
 
     FileSet_XXX_FGColor=
     FileSet_XXX_BGColor=
@@ -139,8 +141,8 @@ struct TyFileSet
 
 Q_DECLARE_METATYPE( TyFileSet );
 
-using TyPrFBWithBG = QPair< QColor, QColor >;
-Q_DECLARE_METATYPE( TyPrFBWithBG );
+using TyPrFGWithBG = QPair< QColor, QColor >;
+Q_DECLARE_METATYPE( TyPrFGWithBG );
 
 struct TyColorScheme
 {
@@ -167,7 +169,7 @@ struct TyColorScheme
     bool                IsInverseSelect = false;
 
     // key = FileSet's Name, value.first = FG, value.second = BG
-    QMap< QString, TyPrFBWithBG > MapNameToColors;
+    QMap< QString, TyPrFGWithBG > MapNameToColors;
 };
 
 Q_DECLARE_METATYPE( TyColorScheme );

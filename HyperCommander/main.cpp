@@ -4,6 +4,9 @@
 
 #include <combaseapi.h>
 
+#include "ipc/ipc.hpp"
+#include "win32api/W32API_NtDll.hpp"
+
 int main( int argc, char* argv[] )
 {
     int Ret = 0;
@@ -24,3 +27,19 @@ int main( int argc, char* argv[] )
     CoUninitialize();
     return Ret;
 }
+
+/*!
+
+    추상화 계층
+        FileSource
+            모든 항목의 기초 클래스
+
+        FileSystem
+            모든 파일시스템의 기초 클래스
+
+        CFSNTFS : public FileSystem
+
+
+
+ */
+

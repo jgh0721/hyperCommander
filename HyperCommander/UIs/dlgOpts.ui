@@ -173,7 +173,7 @@
       <item>
        <widget class="QStackedWidget" name="stkOpts">
         <property name="currentIndex">
-         <number>3</number>
+         <number>1</number>
         </property>
         <widget class="QWidget" name="pgDisplay">
          <widget class="QLabel" name="lblHeaderSizeDisplay">

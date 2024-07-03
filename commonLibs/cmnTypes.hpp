@@ -46,4 +46,7 @@ namespace std
 #endif
 #endif
 
+const auto FnItemIDListDeleter = [&]( LPITEMIDLIST Ptr ) { CoTaskMemFree( Ptr ); };
+using TyUpItemIDList = std::unique_ptr< ITEMIDLIST, decltype( FnItemIDListDeleter ) >;
+
 #endif // __HDR_CMN_TYPE__

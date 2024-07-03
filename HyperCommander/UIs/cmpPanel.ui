@@ -42,7 +42,7 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="QComboBox" name="cbxVolume">
+       <widget class="QComboBoxForWidget" name="cbxVolume">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -148,6 +148,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QComboBoxForWidget</class>
+   <extends>QComboBox</extends>
+   <header>uiComboBoxWidget.hpp</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

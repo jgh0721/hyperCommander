@@ -18,17 +18,9 @@ public:
 
     Q_INVOKABLE void                    ShowMultiRename( const QVector< QString >& VecFiles );
 
-protected slots:
-
-    void                                OnDriveAdd( const QString& Root );
-    void                                OnDriveRemoved( const QString& Root );
-    void                                OnMediaInserted( const QString& ItemIDDisplayName );
-    void                                OnMediaRemoved( const QString& Root );
-
 private:
 
     Q_INVOKABLE void                    initialize();
 
-    QSHChangeNotify*                    shlChangeNotify = nullptr;
     QMainUI*                            mainUI = nullptr;
 };

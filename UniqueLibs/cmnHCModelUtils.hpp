@@ -4,7 +4,7 @@
 
 #include "cmnTypeDefs.hpp"
 
-class FSModel;
+class CFSModel;
 
 class QTraverseSrcModel : public QThread
 {
@@ -39,5 +39,5 @@ private:
     void                                processFile( const QString& Parent, const Node& Item );
 
     bool                                isFinished_ = false;
-    FSModel*                            model_ = nullptr;
+    CFSModel*                           model_ = nullptr;
 };

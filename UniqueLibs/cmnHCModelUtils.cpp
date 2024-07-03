@@ -18,33 +18,33 @@ void QTraverseSrcModel::run()
     emit notifyStats( "", false, 0, 0, 0 );
 
     if( src.isEmpty() == false )
-        model_ = const_cast< FSModel* >( qobject_cast< const FSModel* >( src[ 0 ].model() ) );
+        model_ = const_cast< CFSModel* >( qobject_cast< const CFSModel* >( src[ 0 ].model() ) );
 
     if( filter.isEmpty() == false )
         regexp = QRegularExpression( QRegularExpression::wildcardToRegularExpression( filter ) );
 
-    auto Parent = model_->GetFileFullPath( "" );
-    if( Parent.endsWith( "\\" ) )
-        Parent = Parent.left( Parent.length() - 1 );
+    //auto Parent = model_->GetFileFullPath( "" );
+    //if( Parent.endsWith( "\\" ) )
+    //    Parent = Parent.left( Parent.length() - 1 );
 
-    base = Parent;
-    baseLength = base.length();
+    //base = Parent;
+    //baseLength = base.length();
 
-    for( int idx = 0; idx < src.size(); ++idx )
-    {
-        if( isInterruptionRequested() == true )
-            break;
+    //for( int idx = 0; idx < src.size(); ++idx )
+    //{
+    //    if( isInterruptionRequested() == true )
+    //        break;
 
-        const auto& Node = model_->GetFileInfo( src[ idx ] );
-        if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-        {
-            traverseSubDirectory( model_->GetFileFullPath( src[ idx ] ), Node );
-        }
-        else
-        {
-            processFile( Parent, Node );
-        }
-    }
+    //    const auto& Node = model_->GetFileInfo( src[ idx ] );
+    //    if( FlagOn( Node.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+    //    {
+    //        traverseSubDirectory( model_->GetFileFullPath( src[ idx ] ), Node );
+    //    }
+    //    else
+    //    {
+    //        processFile( Parent, Node );
+    //    }
+    //}
 
     isFinished_ = true;
     emit notifyResultReady();
@@ -68,20 +68,20 @@ void QTraverseSrcModel::traverseSubDirectory( const QString& Path, const Node& I
         if( isRecursive == false )
             continue;
 
-        for( const auto& Child : model_->GetChildItems( P.first ) )
-        {
-            if( isInterruptionRequested() == true )
-                break;
+        //for( const auto& Child : model_->GetChildItems( P.first ) )
+        //{
+        //    if( isInterruptionRequested() == true )
+        //        break;
 
-            if( FlagOn( Child.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-            {
-                Stack.emplace_back( qMakePair( P.first + "\\" + Child.Name, Child ) );
-            }
-            else
-            {
-                processFile( P.first, Child );
-            }
-        }
+        //    if( FlagOn( Child.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
+        //    {
+        //        Stack.emplace_back( qMakePair( P.first + "\\" + Child.Name, Child ) );
+        //    }
+        //    else
+        //    {
+        //        processFile( P.first, Child );
+        //    }
+        //}
     }
 }
 

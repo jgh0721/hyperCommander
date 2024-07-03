@@ -4,8 +4,14 @@
 
 #include "cmnTypeDefs.hpp"
 
-class CColorSchemeMgr
+namespace nsHC
 {
+    class CFileSourceT;
+}
+
+class CColorSchemeMgr : public QObject
+{
+    Q_OBJECT
 public:
 
     void                                Refresh();
@@ -17,11 +23,11 @@ public:
     void                                UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile );
     void                                RemoveColorScheme( const QString& Name, bool IsWriteToFile );
 
-    void                                UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFBWithBG& FileSetColor );
+    void                                UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFGWithBG& FileSetColor );
     void                                RemoveFileSetColor( const QString& ColorScheme, const QString& FileSet );
 
     //static QString                      JudgeFileSet( const TyFileSet& FileSet, const QString& FileFullPath );
-    bool                                JudgeFileSet( const TyFileSet& FileSet, const Node& Info, QColor* FGColor, QColor* BGColor );
+    bool                                JudgeFileSet( const TyFileSet& FileSet, nsHC::CFileSourceT* Info, QColor* FGColor, QColor* BGColor );
 
 signals:
 

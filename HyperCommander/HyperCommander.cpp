@@ -5,19 +5,24 @@
 #include "dlgMain.hpp"
 #include "dlgMultiRename.hpp"
 
-#include "../uniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "cmnTypeDefs_Name.hpp"
 #include "cmnTypeDefs_Opts.hpp"
+#include "externalEditorMgr.hpp"
 #include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
+#include "solTCPluginMgr.hpp"
+#include "Modules/mdlFileSystem.hpp"
+
+#include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
 
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    Qtitan::CommonStyle::ensureStyle();
     QSettings::setDefaultFormat( QSettings::IniFormat );
 
     auto Font = QApplication::font();
@@ -35,9 +40,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     SetEnvironmentVariableW( L"COMMANDER_PATH", QDir::toNativeSeparators( applicationDirPath() ).toStdWString().c_str() );
 
-    TyStCommandMgr::GetInstance()->Refresh();
-    TyStFileSetMgr::GetInstance()->Refresh();
-    TyStColorSchemeMgr::GetInstance()->Refresh();
+    initialize();
 
     mainUI = new QMainUI;
     StSettings->beginGroup( OPT_SEC_WINDOW );
@@ -55,37 +58,18 @@ void HyperCommanderApp::ShowMultiRename( const QVector< QString >& VecFiles )
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void HyperCommanderApp::OnDriveAdd( const QString& Root )
-{
-
-}
-
-void HyperCommanderApp::OnDriveRemoved( const QString& Root )
-{
-
-}
-
-void HyperCommanderApp::OnMediaInserted( const QString& ItemIDDisplayName )
-{
-
-}
-
-void HyperCommanderApp::OnMediaRemoved( const QString& Root )
-{
-
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void HyperCommanderApp::initialize()
 {
-    shlChangeNotify = new QSHChangeNotify;
-    shlChangeNotify->StartWatching();
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
 
-    connect( shlChangeNotify, &QSHChangeNotify::OnDriveAdd, this, &HyperCommanderApp::OnDriveAdd );
-    connect( shlChangeNotify, &QSHChangeNotify::OnDriveRemoved, this, &HyperCommanderApp::OnDriveRemoved );
-    connect( shlChangeNotify, &QSHChangeNotify::OnMediaInserted, this, &HyperCommanderApp::OnMediaInserted );
-    connect( shlChangeNotify, &QSHChangeNotify::OnMediaRemoved, this, &HyperCommanderApp::OnMediaRemoved );
+    TyStExternalEditorMgr::GetInstance()->Refresh();
+    TyStPlugInMgr::GetInstance()->Refresh();
+    TyStFileSetMgr::GetInstance()->Refresh();
 
+    StCommandMgr->Refresh();
+    StColorSchemeMgr->Refresh();
 
 }
