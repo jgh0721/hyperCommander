@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "mdlFileSystem.hpp"
 
+#include "cmnHCUtils.hpp"
 #include "cmnTypeDefs_Name.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
@@ -214,6 +215,147 @@ namespace nsHC
             return "";
 
         return QString::fromWCharArray( VecBuffer.data() );
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    ///
+
+    CFSShell::CFSShell( const LPITEMIDLIST Root )
+        : CFileSystemT( "" )
+    {
+        cate_ = FS_CATE_VIRUAL;
+        features_ = FS_FEA_LIST;
+    }
+
+    CFSShell::CFSShell( const KNOWNFOLDERID& FolderId )
+        : CFileSystemT( "" )
+    {
+        cate_ = FS_CATE_VIRUAL;
+        features_ = FS_FEA_LIST;
+        const auto Ret = SHGetKnownFolderIDList( FolderId, KF_FLAG_CREATE, nullptr, &Root );
+    }
+
+    CFSShell::~CFSShell()
+    {
+        if( Root != nullptr )
+            ILFree( Root );
+        Root = nullptr;
+
+        if( Desktop != nullptr )
+            Desktop->Release();
+        Desktop = nullptr;
+    }
+
+    QVector<nsHC::TySpFileSource> CFSShell::GetChildItems( LPITEMIDLIST Child, bool IncludeDotDot )
+    {
+        CoInitializeEx( 0, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE );
+        QVector<nsHC::TySpFileSource> Items;
+        HRESULT Ret = S_OK;
+
+        LPSHELLFOLDER sfFolder = nullptr;
+        LPENUMIDLIST enumIDL = nullptr;
+
+        do
+        {
+            if( Desktop == nullptr )
+            {
+                Ret = SHGetDesktopFolder( &Desktop );
+                if( FAILED( Ret ) )
+                    break;
+            }
+
+            if( Root == nullptr )
+                break;
+
+            Ret = Desktop->BindToObject( Child == nullptr ? Root : Child, nullptr, IID_IShellFolder, reinterpret_cast< void** >( &sfFolder ) );
+            if( FAILED( Ret ) )
+                break;
+            
+            Ret = sfFolder->EnumObjects( nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN | SHCONTF_SHAREABLE | SHCONTF_STORAGE, &enumIDL );
+            if( FAILED( Ret ) )
+                break;
+            
+            while( true )
+            {
+                LPITEMIDLIST PIDL = nullptr;
+                Ret = enumIDL->Next( 1, &PIDL, nullptr );
+                if( Ret == NOERROR )
+                {
+                    STRRET Name;
+                    sfFolder->GetDisplayNameOf( PIDL, SHGDN_FORPARSING, &Name );
+
+                    const auto Fs = TySpFileSource( new nsHC::CFileSourceT, []( nsHC::CFileSourceT* Ptr ) {
+                        if( Ptr != nullptr )
+                        {
+                            if( Ptr->PIDL != nullptr )
+                                ILFree( Ptr->PIDL );
+                            Ptr->PIDL = nullptr;
+                            delete Ptr;
+                        }
+                    } );
+
+                    Fs->Name_       = ConvertSTRRETTo( &Name );
+                    Fs->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+                    Fs->Size_       = 0;
+                    Fs->Flags_      = CFileSourceT::FS_FLAG_PIDL;
+                    if( Child == nullptr )
+                        Fs->Flags_ |= CFileSourceT::FS_FLAG_DRIVE;
+                    Fs->Reserved0_  = 0;
+                    Fs->Created_    = QDateTime::currentDateTime();
+                    Fs->Modified_   = QDateTime::currentDateTime();
+
+                    Fs->PIDL        = PIDL;
+
+                    Items.push_back( Fs );
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+        } while( false );
+
+        if( enumIDL != nullptr )
+            enumIDL->Release();
+
+        if( sfFolder != nullptr )
+            sfFolder->Release();
+
+        CoUninitialize();
+        return Items;
+
+            //int  a = 0;
+
+            //do
+            //{
+            //    
+            //    while( true )
+            //    {
+            //        LPITEMIDLIST pidl = nullptr;
+            //        auto hr = EnumIDL->Next( 1, &pidl, nullptr );
+            //        if( hr == NOERROR )
+            //        {
+            //            WIN32_FIND_DATAW ffw;
+            //            SHGetDataFromIDListW( sfFolder, pidl, SHGDFIL_FINDDATA, &ffw, sizeof( WIN32_FIND_DATAW ) );
+            //            const auto Fs = std::make_shared< nsHC::CFileSourceT >();
+            //            Fs->Name_ = QString::fromWCharArray( ffw.cFileName );
+
+            //            VecItems.push_back( Fs );
+
+            //            ILFree( pidl );
+            //            int a = 0;
+            //        }
+            //        else
+            //        {
+            //            break;
+            //        }
+            //    }
+
+            //    sfFolder->Release();
+            //} while( false );
+
+            //ShellDesktop->Release();
     }
 
 } // nsHC

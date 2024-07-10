@@ -86,6 +86,7 @@ private:
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;
     int                             lastFocusedRowIndex_ = -1;
+    int                             fileNameColumnIndex = -1;       // 추후 사용.
 };
 
 class CCardView : public CViewT

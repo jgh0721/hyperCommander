@@ -164,6 +164,42 @@ void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDo
     QMetaObject::invokeMethod( this, "processPanelStatusText", Qt::QueuedConnection );
 }
 
+void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    auto State = retrieveFocusState();
+    if( State == nullptr )
+        return;
+
+    const auto ModelIndex = State->ConvertToSrcIndex( SrcIndex );
+    const auto EntryInfo = State->Model->GetFileInfo( ModelIndex );
+
+    if( EntryInfo->Attributes_ & FILE_ATTRIBUTE_DIRECTORY )
+    {
+        State->Model->ChangeDirectory( ModelIndex );
+    }
+    else
+    {
+        // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
+        // NOTE: 토탈 커맨더의 경우 .DLL 등 명시적인 실행파일이 아닌 경우 레지스트리를 뒤져 실행가능하지 않다면 ShellExecuteExW 를 호출하지 않고, 오류창을 표시한다. 
+        CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
+        std::wstring Src = State->Model->GetFileFullPath( ModelIndex ).toStdWString();
+
+        do
+        {
+            SHELLEXECUTEINFOW shinfo = { 0, };
+            shinfo.cbSize = sizeof( shinfo );
+            shinfo.nShow = SW_NORMAL;
+            shinfo.lpVerb = L"open";
+            shinfo.lpFile = Src.c_str();
+
+            ShellExecuteExW( &shinfo );
+
+        } while( false );
+
+        CoUninitialize();
+    }
+}
+
 void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
 {
     const auto State = retrieveFocusState();
@@ -192,6 +228,52 @@ void CmpPanel::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
     }
 
     int a = 0;
+}
+
+void CmpPanel::OnChangedDirectory( const QString& CurrentPath )
+{
+    qDebug() << __FUNCTION__ << " : " << CurrentPath;
+
+    if( CurrentPath.isEmpty() == true )
+    {
+        // TODO: Model 에서 해당 이름을 전달해줄 수 있어야 한다. 
+        ui.tabWidget->setTabText( retrieveCurrentIndex(), "\\내 PC" );
+        return;
+    }
+
+    QDir dir( CurrentPath );
+    if( dir.exists() == true )
+    {
+        const auto Current = ui.cbxVolume->GetItem( ui.cbxVolume->currentIndex() );
+        const auto Fs = Current->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+
+        if( CurrentPath.contains( Fs->GetRoot() ) == false )
+        {
+            // NOTE: 볼륨이 설정과 달라졌다면 cbxVolume 을 찾아서 변경해야 한다.
+            for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
+            {
+                const auto Item = ui.cbxVolume->GetItem( idx );
+                const auto ItemFs = Item->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+                if( CurrentPath.contains( ItemFs->GetRoot() ) == false )
+                    continue;
+
+                QSignalBlocker locker( ui.cbxVolume );
+                ui.cbxVolume->setCurrentIndex( idx );
+                processVolumeStatusText( ItemFs );
+                break;
+            }
+        }
+
+        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath.left( 2 ) + dir.dirName() );
+    }
+    else
+    {
+        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath );
+    }
+
+    processPanelStatusText();
+
+    emit sig_NotifyCurrentDirectory( CurrentPath );
 }
 
 void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
@@ -313,6 +395,7 @@ void CmpPanel::initializeUIs()
 
     const auto FsModel = new CFSModel;
     const auto ProxyModel = new CFSProxyModel;
+    connect( FsModel, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory );
 
     DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
 
@@ -502,42 +585,7 @@ void CmpPanel::processPanelStatusText()
 ////}
 ////
 ////
-////void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
-////{
-////    auto State = retrieveFocusState();
-////    if( State == nullptr )
-////        return;
-////
-////    const auto ModelIndex = State->ProxyModel->mapToSource( SrcIndex );
-////    const auto EntryInfo = State->Model->GetFileInfo( ModelIndex );
-////
-////    if( EntryInfo.Attiributes & FILE_ATTRIBUTE_DIRECTORY )
-////    {
-////        State->Model->ChangeDirectory( ModelIndex );
-////    }
-////    else
-////    {
-////        // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
-////        // NOTE: 토탈 커맨더의 경우 .DLL 등 명시적인 실행파일이 아닌 경우 레지스트리를 뒤져 실행가능하지 않다면 ShellExecuteExW 를 호출하지 않고, 오류창을 표시한다. 
-////        CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
-////        std::wstring Src = State->Model->GetFileFullPath( ModelIndex ).toStdWString();
-////
-////        do
-////        {
-////            SHELLEXECUTEINFOW shinfo = { 0, };
-////            shinfo.cbSize = sizeof( shinfo );
-////            shinfo.nShow = SW_NORMAL;
-////            shinfo.lpVerb = L"open";
-////            shinfo.lpFile = Src.c_str();
-////
-////            ShellExecuteExW( &shinfo );
-////
-////        } while( false );
-////
-////        CoUninitialize();
-////    }
-////}
-////
+
 ////void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
 ////{
 ////    UNREFERENCED_PARAMETER( SrcIndex );
@@ -903,23 +951,6 @@ void CmpPanel::processPanelStatusText()
 ////    return currentIndex;
 ////}
 ////
-////void CmpPanel::oo_ChangedDirectory( const QString& CurrentPath )
-////{
-////    QDir dir( CurrentPath );
-////    if( dir.exists() == true )
-////    {
-////        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath.left( 2 ) + dir.dirName() );
-////    }
-////    else
-////    {
-////        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath );
-////    }
-////
-////    processPanelStatusText();
-////
-////    emit sig_NotifyCurrentDirectory( CurrentPath );
-////}
-//
 //
 ////void CmpPanel::on_btnGridStyle_clicked( bool checked )
 ////{

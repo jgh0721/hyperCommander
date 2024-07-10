@@ -26,6 +26,11 @@ void CFsModelT::SetRoot( nsHC::TySpFileSystem Fs )
     vecFs_.push_back( Fs );
 }
 
+void CFsModelT::AppendRoot( nsHC::TySpFileSystem Fs )
+{
+    vecFs_.push_back( Fs );
+}
+
 nsHC::TySpFileSystem CFsModelT::GetRoot() const
 {
     if( vecFs_.isEmpty() == true )
@@ -50,13 +55,23 @@ QString CFsModelT::GetCurrentPath() const
 void CFsModelT::ChangeDirectory( const QString& Child )
 {
     if( IsRoot() == true )
-        SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + Child ) ) );
+    {
+        if( Child == ".." )
+        {
+            SetCurrentPath( "" );
+            AppendRoot( nsHC::TySpFileSystem( new nsHC::CFSShell( FOLDERID_ComputerFolder ) ) );
+        }
+        else
+            SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + Child ) ) );
+    }
     else
         SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + "\\" + Child ) ) );
 
+    qDebug() << __FUNCTION__ << " : " << QDir::toNativeSeparators( GetCurrentPathWithRoot() );
+
     Refresh();
 
-    emit sigChangedDirectory( QDir::toNativeSeparators( GetCurrentPathWithRoot() ) );
+    emit sigChangedDirectory( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPathWithRoot() ) ) );
 }
 
 void CFsModelT::ChangeDirectory( const QModelIndex& Child )
@@ -68,39 +83,47 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
         return;
     }
 
-    if( !FlagOn( Node->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
+    if( FlagOn( Node->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE ) )
     {
-        // 압축파일 
-        return;
+        SetRoot( nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( Node->Name_ ) ) );
+        ChangeDirectory( "" );
     }
-
-    // 디렉토리, 일반적인 경우
-
-    if( FlagOn( Node->Attributes_, FILE_ATTRIBUTE_REPARSE_POINT ) )
+    else
     {
-        if( FlagOn( Node->Reserved0_, IO_REPARSE_TAG_SYMLINK ) ||            // SYMLINKD
-            FlagOn( Node->Reserved0_, IO_REPARSE_TAG_MOUNT_POINT ) )         // JUNTION
+        if( !FlagOn( Node->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
         {
-            const auto s = nsCmn::nsCmnPath::GetReparsePointTo( GetFileFullPath( Child ) );
-
-            //if( s.length() > 2 && s.contains( ':' ) == true )
-            //{
-            //    SetRoot( s.left( 2 ) );
-            //    SetCurrentPath( s.mid( 2 ) );
-
-            //    Refresh();
-
-            //    emit sigChangedDirectory( QDir::toNativeSeparators( Root + GetCurrentPath() ) );
-            //    return;
-            //}
-            //else
-            //{
-            //    // TODO: 오류 처리
-            //}
+            // 압축파일 
+            return;
         }
-    }
 
-    ChangeDirectory( Node->Name_ );
+        // 디렉토리, 일반적인 경우
+
+        if( FlagOn( Node->Attributes_, FILE_ATTRIBUTE_REPARSE_POINT ) )
+        {
+            if( FlagOn( Node->Reserved0_, IO_REPARSE_TAG_SYMLINK ) ||            // SYMLINKD
+                FlagOn( Node->Reserved0_, IO_REPARSE_TAG_MOUNT_POINT ) )         // JUNTION
+            {
+                const auto s = nsCmn::nsCmnPath::GetReparsePointTo( GetFileFullPath( Child ) );
+
+                //if( s.length() > 2 && s.contains( ':' ) == true )
+                //{
+                //    SetRoot( s.left( 2 ) );
+                //    SetCurrentPath( s.mid( 2 ) );
+
+                //    Refresh();
+
+                //    emit sigChangedDirectory( QDir::toNativeSeparators( Root + GetCurrentPath() ) );
+                //    return;
+                //}
+                //else
+                //{
+                //    // TODO: 오류 처리
+                //}
+            }
+        }
+
+        ChangeDirectory( Node->Name_ );
+    }
 }
 
 

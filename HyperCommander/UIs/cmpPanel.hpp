@@ -2,6 +2,7 @@
 
 #include <QtCore>
 
+#include "builtInFsModel.hpp"
 #include "cmnTypeDefs.hpp"
 
 #include "ui_cmpPanel.h"
@@ -54,6 +55,9 @@ class CmpPanel : public QWidget
         quint64                     SelectedSize = 0;
         int                         SelectedFileCount = 0;
         int                         SelectedDirectoryCount = 0;
+
+        QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
+
 // QVector< QModelIndex >      SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
 //        //int                             LastFocusedRowIndex = -1;
     };
@@ -65,21 +69,28 @@ public:
 
     Q_INVOKABLE void                RefreshVolumeList() const;
 
+    //void                    AddTab();
+    //void                    PrevTab();
+    //void                    NextTab();
+    //void                    CloseTab();
     int                             CurrentTabIndex() const;
     void                            SetFocusView( int TabIndex );
 
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
+    void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
 
 public slots:
 
     void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
+    void                            OnChangedDirectory( const QString& CurrentPath );
 
     void                            on_cbxVolume_currentIndexChanged( int index );
     void                            on_tabWidget_currentChanged( int Index );
 
 signals:
     void                            sig_NotifyPanelActivated();
+    void                            sig_NotifyCurrentDirectory( const QString& CurrentPath );
 
 private:
     friend class QMainUI;
@@ -112,13 +123,8 @@ private:
 //
 //    Q_INVOKABLE void                    Initialize();
 //
-//    //Q_INVOKABLE void                    AddTab();
-//    //Q_INVOKABLE void                    PrevTab();
-//    //Q_INVOKABLE void                    NextTab();
-//    //Q_INVOKABLE void                    CloseTab();
 //    //Qtitan::GridBandedTableView*        GetFocusView() const;
 //
-//    //void                                ReturnOnCurrentTab( const QModelIndex& SrcIndex );
 //    //void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
 //
 //    //void                                RefreshSource( int TabIndex );
@@ -134,13 +140,9 @@ private:
 //    //int                                 InitializeGrid();
 //
 //public slots:
-//    //    void                                oo_ChangedDirectory( const QString& CurrentPath );
 ////
 ////    void                                on_btnGridStyle_clicked( bool checked = false );
 ////
-////signals:
-////
-////    void                                sig_NotifyCurrentDirectory( const QString& CurrentPath );
 ////
 //private:
 //

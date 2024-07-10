@@ -146,7 +146,12 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, nsHC::CFil
     // TODO: Type 을 고려해야 한다. 
 
     if( Name.compare( QLatin1String( "name" ), Qt::CaseInsensitive ) == 0 )
-        Content.push_back( Info->Name_ );
+    {
+        if( !FlagOn( Info->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE ) )
+            Content.push_back( Info->Name_ );
+        else
+            Content.push_back( Info->Name_.left(2) );
+    }
     else if( Name.compare( QLatin1String( "size" ), Qt::CaseInsensitive ) == 0 )
     {
         if( FlagOn( Info->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )

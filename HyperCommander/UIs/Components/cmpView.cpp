@@ -6,7 +6,7 @@
 #include "commandMgr.hpp"
 #include "Modules/mdlFileModel.hpp"
 
-#include "QtitanGrid.h"
+#include <QtitanGrid.h>
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -74,22 +74,22 @@ void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 
 void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
 {
-    //const auto& Cell = Args->cell();
+    const auto& Cell = Args->cell();
 
-    ////// 자신을 포함한 여러 행을 선택하고, 그 중에 하나를 다시 선택하면 해당 행만 남기고 나머지는 선택 해제한다.
-    ////// 선택 행이 하나이고, 해당 행을 다시 클릭했을 때는 이름 변경 시도를 고려해야 한다. 
-    ////if( spLocalView_->modelController()->isRowSelected( cell.row() ) == true )
-    ////{
-    ////    if( spLocalView_->modelController()->selection()->selectedRowIndexes().count() > 1 )
-    ////    {
-    ////        if( QGuiApplication::queryKeyboardModifiers() == Qt::NoModifier )
-    ////        {
-    ////            spLocalView_->deselectAll();
-    ////            spLocalView_->selectRow( cell.row().rowIndex() );
-    ////            return;
-    ////        }
-    ////    }
-    ////}
+    //// 자신을 포함한 여러 행을 선택하고, 그 중에 하나를 다시 선택하면 해당 행만 남기고 나머지는 선택 해제한다.
+    //// 선택 행이 하나이고, 해당 행을 다시 클릭했을 때는 이름 변경 시도를 고려해야 한다. 
+    //if( spLocalView_->modelController()->isRowSelected( cell.row() ) == true )
+    //{
+    //    if( spLocalView_->modelController()->selection()->selectedRowIndexes().count() > 1 )
+    //    {
+    //        if( QGuiApplication::queryKeyboardModifiers() == Qt::NoModifier )
+    //        {
+    //            spLocalView_->deselectAll();
+    //            spLocalView_->selectRow( cell.row().rowIndex() );
+    //            return;
+    //        }
+    //    }
+    //}
 
     ////if( cell.columnIndex() != TBL_LOCAL_HDX_FILENAME.index )
     ////{
@@ -97,11 +97,6 @@ void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
     ////    viewClickTimer_.stop();
     ////    return;
     ////}
-
-    //if( retrieveCurrentIndex() < 0 )
-    //{
-    //    int a = 0;
-    //}
 
     //if( retrieveCurrentIndex() >= 0 )
     //{
@@ -139,19 +134,18 @@ void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
 
 void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 {
-    //const auto Row = Args->row();
-    //const auto View = retrieveFocusView();
-    //const auto Index = Row.modelIndex( 0 );
-    //const auto StCommandMgr = TyStCommandMgr::GetInstance();
+    const auto Row = Args->row();
+    const auto Index = Row.modelIndex( 0 );
+    const auto StCommandMgr = TyStCommandMgr::GetInstance();
 
-    //if( View->activeEditor() != nullptr )
-    //    View->closeEditor();
+    if( view_->activeEditor() != nullptr )
+        view_->closeEditor();
 
-    //viewClickTimer.stop();
+    viewClickTimer_.stop();
 
-    //QKeyEvent Event( QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier );
+    QKeyEvent Event( QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier );
 
-    //Args->setHandled( StCommandMgr->ProcessKeyPressEvent( &Event, Index ) );
+    Args->setHandled( StCommandMgr->ProcessKeyPressEvent( &Event, Index ) );
 }
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )

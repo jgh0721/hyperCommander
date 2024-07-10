@@ -141,7 +141,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_Return )
     if( Pane == nullptr )
         return;
 
-    // Pane->ReturnOnCurrentTab( CursorIndex );
+    Pane->ReturnOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
@@ -229,11 +229,11 @@ DEFINE_HC_COMMAND( QMainUI, cm_SwitchHidSys )
     if( Pane == nullptr )
         return;
 
-    //const auto State = Pane->retrieveFocusState();
-    //bool IsShow = false;
+    const auto State = Pane->retrieveFocusState();
+    bool IsShow = false;
 
-    //QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
-    //QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
+    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "GetHiddenSystem", qReturnArg( IsShow ) );
+    QMetaObject::invokeMethod( ( QObject* )State->ProxyModel, "SetHiddenSystem", !IsShow );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_RereadSource )

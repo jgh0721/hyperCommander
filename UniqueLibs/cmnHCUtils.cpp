@@ -274,6 +274,22 @@ bool OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos
     return IsSuccess;
 }
 
+QString ConvertSTRRETTo( STRRET* Str )
+{
+    if( Str == nullptr )
+        return "";
+
+    if( Str->uType == STRRET_CSTR )
+        return QString::fromLocal8Bit( Str->cStr );
+
+    if( Str->uType == STRRET_OFFSET )
+        ;
+
+    const auto Ret = QString::fromWCharArray( Str->pOleStr );
+    CoTaskMemFree( Str->pOleStr );
+    return Ret;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void CDetectParser::SetDetectString( const QString& Detect )

@@ -1,10 +1,5 @@
 ﻿#pragma once
 
-class QFileIconGatherer
-{
-    
-};
-
 enum TyEnSizeStyle {
     HC_SIZE_STYLE_BYTES,
     HC_SIZE_STYLE_KBYTES,
@@ -28,6 +23,8 @@ QVariant                                ShowMSGBoxWithDetail( QWidget* parent, Q
 
 void                                    SetTitleIcon( QLabel* Widget );
 bool                                    OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow );
+
+QString                                 ConvertSTRRETTo( STRRET* Str );
 
 ///
 /*!

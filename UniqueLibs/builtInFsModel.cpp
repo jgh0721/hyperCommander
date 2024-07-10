@@ -15,16 +15,136 @@
 
 #include <QtConcurrent>
 #include <numeric>
+#include <Shlwapi.h>
 
 #include "colorSchemeMgr.hpp"
 #include "fileSetMgr.hpp"
+
+#pragma comment( lib, "shlwapi" )
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
 
-QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPath )
+void CFSIconGatherer::run()
+{
+    QFileIconProvider Provider;
+
+    for( int row = 0; row < vecNode_.size(); ++row )
+    {
+        if( isInterruptionRequested() == true )
+            break;
+
+        CCmnMutexLocker Locker( lock_ );
+        const auto& Item = vecNode_[ row ];
+
+        if( Item->Icon.isNull() == false )
+            continue;
+
+        if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
+        {
+            Item->Icon = Provider.icon( QAbstractFileIconProvider::Folder ).pixmap( 32, 32 );
+        }
+        else
+        {
+            Item->Icon = Provider.icon( QFileInfo( currentPathWithRoot_ + Item->Name_ ) ).pixmap( 32, 32 );
+        }
+
+        if( Item->Icon.isNull() == false )
+            model_->dataChanged( model_->index( row, 0 ), model_->index( row, 0 ), QList<int>() << Qt::DecorationRole );
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+///
+
+void CFSDirSizeGatherer::run()
+{
+    if( sizeCol_ < 0 )
+        return;
+
+    QMap< QString, qint64 > MapDirNameToSize;
+    
+    QtConcurrent::run( [&MapDirNameToSize, this]() {
+
+        Everything_SetMatchPath( TRUE );
+        Everything_SetMatchWholeWord( TRUE );
+        Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
+        Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
+
+        Everything_SetReplyID( QRandomGenerator().generate() );
+        Everything_SetSearchW( currentPathWithRoot_.toStdWString().c_str() );
+        Everything_QueryW( TRUE );
+
+        QVector< uint32_t > VecResults( Everything_GetNumResults() );
+        std::iota( VecResults.begin(), VecResults.end(), 0 );
+
+        std::vector< wchar_t > BaseBuffer( currentPathWithRoot_.length() + 1 );
+        currentPathWithRoot_.toWCharArray( &BaseBuffer[ 0 ] );
+
+        bool IsContinue = true;
+
+        VecResults = QtConcurrent::blockingFiltered( VecResults, [BaseBuffer, &IsContinue, this]( uint32_t Row ) {
+            if( isInterruptionRequested() == true )
+                return false;
+
+            if( IsContinue == false ) return false;
+
+            if( Everything_IsFolderResult( Row ) == FALSE )
+                return false;
+
+            if( wcsstr( BaseBuffer.data(), Everything_GetResultPathW( Row ) ) == nullptr )
+            {
+                IsContinue = false;
+                return false;
+            }
+
+            return true;
+        } );
+
+        if( isInterruptionRequested() == true )
+            return;
+
+        MapDirNameToSize = QtConcurrent::blockingMappedReduced<decltype( MapDirNameToSize )>( VecResults, [this]( uint32_t Row ) {
+            QPair< QString, LARGE_INTEGER > Result;
+            if( Everything_GetResultSize( Row, &Result.second ) != FALSE )
+                Result.first = QString::fromWCharArray( Everything_GetResultFileNameW( Row ) );
+
+            return Result;
+        }, [this]( QMap< QString, qint64 >& Result, const QPair< QString, LARGE_INTEGER >& Value ) {
+            if( Value.first.isEmpty() == false )
+                Result[ Value.first ] = Value.second.QuadPart;
+        } );
+
+    } ).waitForFinished();
+
+    if( isInterruptionRequested() == true )
+        return;
+
+    for( int row = 0; row < vecNode_.size(); ++row )
+    {
+        if( isInterruptionRequested() == true )
+            break;
+
+        {
+            CCmnMutexLocker Locker( lock_ );
+            const auto& Item = vecNode_[ row ];
+
+            if( MapDirNameToSize.contains( Item->Name_ ) == true )
+                Item->Size_ = MapDirNameToSize[ Item->Name_ ];
+
+            ( ( CFSModel* )model_ )->createBuiltFsValues( Item, sizeCol_ );
+        }
+
+        model_->dataChanged( model_->index( row, sizeCol_ ), model_->index( row, sizeCol_ ), QList<int>() << Qt::DisplayRole << Qt::EditRole );
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+///
+
+QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPath, bool IncludeDotDot /* = false */ )
 {
     WIN32_FIND_DATA Wfd = { 0, };
     QVector< nsHC::TySpFileSource > VecRet;
@@ -36,10 +156,21 @@ QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPa
     if( hFind == INVALID_HANDLE_VALUE )
         return {};
 
+    if( IncludeDotDot == true )
+    {
+        // NOTE: FindFirstFileExW 는 . 과 .. 를 반환하지 않는다.
+        const auto Fs = std::make_shared< nsHC::CFileSourceT >();
+
+        Fs->Name_       = "..";
+        Fs->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+
+        VecRet.emplace_back( Fs );
+    }
+
     do
     {
-        if( wcscmp( Wfd.cFileName, L"." ) == 0 ||
-            wcscmp( Wfd.cFileName, L".." ) == 0 )
+        if( ( wcscmp( Wfd.cFileName, L"." ) == 0 ) ||
+            ( wcscmp( Wfd.cFileName, L".." ) == 0 ) )
             continue;
 
         const auto Fs = std::make_shared< nsHC::CFileSourceT >();
@@ -82,6 +213,8 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
     if( Col < 0 || Col >= columnView_.VecColumns.size() )
         return;
+
+    CCmnMutexLocker Locker( &lock );
 
     // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
     for( QModelRoleData& RoleWith : roleDataSpan )
@@ -166,6 +299,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 void CFSModel::doRefresh()
 {
     // Root + CurrentPath 의 대상이 압축파일인지 확인
+    const auto Root = GetRoot();
     const auto Base = retrieveRootWithPath();
 
     /*!
@@ -180,30 +314,23 @@ void CFSModel::doRefresh()
     int DirectoryCount = 0;
     uint64_t TotalSize = 0;
 
+    QVector< TyPrFGWithBG > VecRowColors;
     QVector< nsHC::TySpFileSource > VecItems;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-    const auto Attr = GetFileAttributesW( Base.toStdWString().c_str() );
-
-    if( Attr == INVALID_FILE_ATTRIBUTES )
-    {
-        if( ::GetLastError() == ERROR_BAD_PATHNAME )
-        {
-            if( GetRoot()->GetCate() != nsHC::FS_CATE_REMOTE )
-            {
-
-            }
-        }
-    }
+    const auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
 
     // NOTE: 해당 스레드에서 기본적인 파일 목록을 완성한다.
     // NOTE: 추가적으로 폴더 크기, 아이콘 등은 배경 스레드를 통해 완성시킨다. 
-    QVector< TyPrFGWithBG > VecRowColors;
-    QVector< nsHC::TySpFileSource > VecItmes;
 
-    if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
+    if( ( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) ) ||
+        ( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL ) )
     {
         // 파일 목록을 얻은 후, 스레드를 통해 아이콘 등을 획득한다.
-        VecItems = GetChildItems( Base );
+        if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
+            VecItems += GetChildItems( Base, true );
+        if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL )
+            VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
+
         VecRowColors.resize( VecItems.count(), qMakePair( colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor ) );
 
         createBuiltFsValues( VecItems );
@@ -212,12 +339,12 @@ void CFSModel::doRefresh()
         {
             const auto& Item = VecItems[ idx ];
 
-            if( FlagOn( Item->Flags_, FILE_ATTRIBUTE_DIRECTORY ) )
-                directoryCount_++;
+            if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
+                DirectoryCount++;
             else
             {
-                fileCount_++;
-                totalSize_ += Item->Size_;
+                FileCount++;
+                TotalSize += Item->Size_;
             }
 
             for( const auto& FileSet : vecFileSetColors_ )
@@ -235,13 +362,47 @@ void CFSModel::doRefresh()
         // NOTE: 압축파일인지 확인
     }
 
-    beginResetModel();
-    qSwap( VecItems, vecNode_ );
-    qSwap( VecRowColors, vecRowColors_ );
-    qSwap( FileCount, fileCount_ );
-    qSwap( DirectoryCount, directoryCount_ );
-    qSwap( TotalSize, totalSize_ );
-    endResetModel();
+    {
+        beginResetModel();
+        if( FsIconGatherer_ != nullptr )
+            FsIconGatherer_->requestInterruption();
+        if( DirSizeGatherer_ != nullptr )
+            DirSizeGatherer_->requestInterruption();
+        qSwap( VecItems, vecNode_ );
+        qSwap( VecRowColors, vecRowColors_ );
+        qSwap( FileCount, fileCount_ );
+        qSwap( DirectoryCount, directoryCount_ );
+        qSwap( TotalSize, totalSize_ );
+        endResetModel();
+    }
+
+    if( FsIconGatherer_ == nullptr )
+    {
+        FsIconGatherer_ = new CFSIconGatherer( this, vecNode_, GetCurrentPathWithRoot(), &lock );
+        FsIconGatherer_->setAutoDelete( false );
+    }
+
+    FsIconGatherer_->clearInterruption();
+    QThreadPool::globalInstance()->start( FsIconGatherer_ );
+
+    if( DirSizeGatherer_ == nullptr )
+    {
+        int ColSize = -1;
+        for( const auto& ColView : columnView_.VecColumns )
+        {
+            if( ColView.Content.contains( BUILTIN_COL_FS_SIZE ) == false )
+                continue;
+
+            ColSize = ColView.Index;
+            break;
+        }
+
+        DirSizeGatherer_ = new CFSDirSizeGatherer( this, vecNode_, GetCurrentPathWithRoot(), ColSize, &lock );
+        DirSizeGatherer_->setAutoDelete( false );
+    }
+
+    DirSizeGatherer_->clearInterruption();
+    QThreadPool::globalInstance()->start( DirSizeGatherer_ );
 }
 
 QString CFSModel::retrieveRootWithPath() const
@@ -253,6 +414,8 @@ QString CFSModel::retrieveRootWithPath() const
         const auto Root = GetRoot();
         return Root->GetRoot() + GetCurrentPath();
     }
+
+    return "";
 }
 
 void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
@@ -290,6 +453,31 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
             Item->VecContent.push_back( Content );
         }
     }
+}
+
+void CFSModel::createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column )
+{
+    if( Column < 0 || Column >= columnView_.VecColumns.size() )
+        return;
+
+    const auto& Col = columnView_.VecColumns[ Column ];
+
+    QString Content;
+    bool IsParsed = false;
+    auto Fmt = const_cast< wchar_t* >( Col.Content_CVT.data() );
+
+    do
+    {
+        // TODO: ColumnParseResult 를 미리 만들어 두면 더욱 빨라질 수 있다.
+        ColumnParseResult Result;
+        IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
+
+        if( IsParsed == true )
+            CColumnMgr::CreateColumnContent( Result, Item.get(), Content );
+
+    } while( IsParsed == true );
+
+    Item->VecContent[ Column ] = Content;
 }
 
 //QString FSModel::GetName( const QModelIndex& Index ) const
@@ -377,53 +565,7 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
 //
 //    const auto Base = CurrentPath.length() == 1 ? Root + CurrentPath : Root + CurrentPath + "\\";
 //
-//    QMap< QString, qint64 > MapDirNameToSize;
-//
-//    //QtConcurrent::run( [&MapDirNameToSize, Base]() {
-//
-//    //    Everything_SetMatchPath( TRUE );
-//    //    Everything_SetMatchWholeWord( TRUE );
-//    //    Everything_SetRequestFlags( EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH | EVERYTHING_REQUEST_SIZE );
-//    //    Everything_SetSort( EVERYTHING_SORT_PATH_ASCENDING );
-//
-//    //    Everything_SetSearchW( Base.toStdWString().c_str() );
-//    //    Everything_QueryW( TRUE );
-//
-//    //    QVector< uint32_t > VecResults( Everything_GetNumResults() );
-//    //    std::iota( VecResults.begin(), VecResults.end(), 0 );
-//
-//    //    std::vector< wchar_t > BaseBuffer( Base.length() + 1 );
-//    //    Base.toWCharArray( &BaseBuffer[ 0 ] );
-//
-//    //    bool IsContinue = true;
-//    //    VecResults = QtConcurrent::blockingFiltered( VecResults, [BaseBuffer, &IsContinue]( uint32_t Row ) {
-//    //        if( IsContinue == false ) return false;
-//
-//    //        if( Everything_IsFolderResult( Row ) == FALSE )
-//    //            return false;
-//
-//    //        if( wcsstr( BaseBuffer.data(), Everything_GetResultPathW( Row ) ) == nullptr )
-//    //        {
-//    //            IsContinue = false;
-//    //            return false;
-//    //        }
-//
-//    //        return true;
-//    //    } );
-//
-//    //    MapDirNameToSize = QtConcurrent::blockingMappedReduced<decltype( MapDirNameToSize )>( VecResults, [Base]( uint32_t Row ) {
-//    //        QPair< QString, LARGE_INTEGER > Result;
-//    //        if( Everything_GetResultSize( Row, &Result.second ) != FALSE )
-//    //            Result.first = QString::fromWCharArray( Everything_GetResultFileNameW( Row ) );
-//
-//    //        return Result;
-//    //    }, [Base]( QMap< QString, qint64 >& Result, const QPair< QString, LARGE_INTEGER >& Value ) {
-//    //        if( Value.first.isEmpty() == false )
-//    //            Result[ Value.first ] = Value.second.QuadPart;
-//    //    } );
-//
-//    //} ).waitForFinished();
-//
+
 //    QVector< Node > Nodes;
 //
 //    if( CurrentPath.length() != 1 )

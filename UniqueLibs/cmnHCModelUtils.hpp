@@ -41,3 +41,4 @@ private:
     bool                                isFinished_ = false;
     CFSModel*                           model_ = nullptr;
 };
+

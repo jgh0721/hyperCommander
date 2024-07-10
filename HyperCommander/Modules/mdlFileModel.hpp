@@ -66,6 +66,7 @@ public:
     void                            Refresh();
 
     void                            SetRoot( nsHC::TySpFileSystem Fs );
+    void                            AppendRoot( nsHC::TySpFileSystem Fs );
     nsHC::TySpFileSystem            GetRoot() const;
     qsizetype                       GetRootCount() const { return vecFs_.count(); }
 
@@ -119,6 +120,7 @@ protected:
     TyColorScheme                   colorScheme_;
     QVector< QPair< TyFileSet, TyPrFGWithBG > > vecFileSetColors_;
 
+    mutable nsCmn::nsConcurrent::CCmnMutex  lock;
     QVector< nsHC::TySpFileSystem > vecFs_;         // 어떠한 FS 에서 PACKER 를 호출하면 PACKER FS 가 추가된다.
     QVector< nsHC::TySpFileSource > vecNode_;
     QVector< TyPrFGWithBG >         vecRowColors_;

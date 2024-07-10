@@ -38,6 +38,7 @@ namespace nsHC
     {
         FS_CATE_LOCAL,
         FS_CATE_REMOTE,
+        FS_CATE_VIRUAL,
         FS_CATE_VFS,
     };
 
@@ -90,6 +91,7 @@ namespace nsHC
 
         QPixmap                 Icon;
         QVector< QVariant >     VecContent;
+        LPITEMIDLIST            PIDL = nullptr;
     };
 
     Q_DECLARE_METATYPE( CFileSourceT );
@@ -155,6 +157,22 @@ namespace nsHC
         explicit CFSNtfs( const QString& Root );
 
         QString                 GetVolumeName() override;
+    };
+
+    class CFSShell : public CFileSystemT
+    {
+    public:
+        explicit CFSShell( const LPITEMIDLIST Root );
+        explicit CFSShell( const KNOWNFOLDERID& FolderId );
+        ~CFSShell() override;
+
+        LPITEMIDLIST            GetRoot() const { return Root; }
+        QVector< nsHC::TySpFileSource > GetChildItems( LPITEMIDLIST Child, bool IncludeDotDot = false );
+
+    private:
+
+        LPITEMIDLIST            Root = nullptr;
+        LPSHELLFOLDER           Desktop = nullptr;
     };
 
     class CFSPack : public CFileSystemT
