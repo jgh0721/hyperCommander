@@ -85,8 +85,13 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
 
     if( FlagOn( Node->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE ) )
     {
-        SetRoot( nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( Node->Name_ ) ) );
-        ChangeDirectory( "" );
+        TyOsError Err;
+        const auto Sp = nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( Node->Name_, &Err ) );
+        if( Err.ErrorCode == ERROR_SUCCESS )
+        {
+            SetRoot( Sp );
+            ChangeDirectory( "" );
+        }
     }
     else
     {

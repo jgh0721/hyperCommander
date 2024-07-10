@@ -102,7 +102,9 @@ namespace nsHC
                     RootPath = R"(\\)";
             }
 
-            RootPath = s.mid( Base, 3 );
+            RootPath += s.mid( Base, 3 );
+            if( RootPath.endsWith( "\\" ) == false )
+                RootPath += "\\";
 
             // 반드시 \\ 로 끝나야 한다. 
 
@@ -281,9 +283,8 @@ namespace nsHC
                 Ret = enumIDL->Next( 1, &PIDL, nullptr );
                 if( Ret == NOERROR )
                 {
-                    STRRET Name;
-                    sfFolder->GetDisplayNameOf( PIDL, SHGDN_FORPARSING, &Name );
-
+                    STRRET Name = { STRRET_OFFSET, 0 };
+                    sfFolder->GetDisplayNameOf( PIDL, SHGDN_INFOLDER | SHGDN_FORPARSING, &Name );
                     const auto Fs = TySpFileSource( new nsHC::CFileSourceT, []( nsHC::CFileSourceT* Ptr ) {
                         if( Ptr != nullptr )
                         {
@@ -294,8 +295,17 @@ namespace nsHC
                         }
                     } );
 
+                    // NOTE: 미리 값을 세팅하면 해당 값의 여부만 검사하므로 더욱 빠르다.
+                    DWORD dwAttributes = SFGAO_FOLDER | SFGAO_HIDDEN | SFGAO_SYSTEM;
+                    sfFolder->GetAttributesOf( 1, (LPCITEMIDLIST*)&PIDL, &dwAttributes);
+                    
                     Fs->Name_       = ConvertSTRRETTo( &Name );
-                    Fs->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+                    if( FlagOn( dwAttributes, SFGAO_FOLDER ) || Child == nullptr )
+                        Fs->Attributes_ |= FILE_ATTRIBUTE_DIRECTORY;
+                    if( FlagOn( dwAttributes, SFGAO_HIDDEN ) )
+                        Fs->Attributes_ |= FILE_ATTRIBUTE_HIDDEN;
+                    if( FlagOn( dwAttributes, SFGAO_SYSTEM ) )
+                        Fs->Attributes_ |= FILE_ATTRIBUTE_SYSTEM;
                     Fs->Size_       = 0;
                     Fs->Flags_      = CFileSourceT::FS_FLAG_PIDL;
                     if( Child == nullptr )

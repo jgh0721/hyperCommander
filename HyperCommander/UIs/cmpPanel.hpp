@@ -69,10 +69,10 @@ public:
 
     Q_INVOKABLE void                RefreshVolumeList() const;
 
-    //void                    AddTab();
-    //void                    PrevTab();
-    //void                    NextTab();
-    //void                    CloseTab();
+    void                            AddTab();
+    void                            PrevTab();
+    void                            NextTab();
+    void                            CloseTab();
     int                             CurrentTabIndex() const;
     void                            SetFocusView( int TabIndex );
 

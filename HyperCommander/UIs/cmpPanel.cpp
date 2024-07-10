@@ -105,6 +105,116 @@ void CmpPanel::RefreshVolumeList() const
     
 }
 
+void CmpPanel::AddTab()
+{
+    const auto TabCount = ui.tabWidget->count();
+    const auto TabCurrent = ui.tabWidget->currentIndex();
+
+    // TODO: 중복제거 필요함
+    // 탭에 어떠한 뷰도 없으므로, 기보값으로 GridView 를 추가한다.
+    const auto StColumnMgr = TyStColumnMgr::GetInstance();
+    auto ColumnView = StColumnMgr->GetColumnView( 0 );
+
+    const auto DefaultView = static_cast< CGridView* >( createGridView() );
+    if( DefaultView == nullptr )
+        return;
+
+    ui.tabWidget->blockSignals( true );
+    const auto TabIndex = ui.tabWidget->addTab( DefaultView, "" );
+    ui.tabWidget->setCurrentIndex( -1 );
+    ui.tabWidget->blockSignals( false );
+
+    connect( DefaultView, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated );
+
+    const auto FsModel = new CFSModel;
+    const auto ProxyModel = new CFSProxyModel;
+    connect( FsModel, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory );
+
+    DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
+
+    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, FsModel, ProxyModel );
+    vecTabStates.push_back( State );
+
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    OnColorSchemeChanged( StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() ) );
+
+    const auto Fs = ui.cbxVolume->GetItem( ui.cbxVolume->currentIndex() )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+
+    ui.tabWidget->setCurrentIndex( TabCount );
+
+    State->Model->SetRoot( Fs );
+    State->Model->SetCurrentPath( "\\" );
+    State->Model->ChangeDirectory( QModelIndex() );
+
+    State->View->AdjustSizeToContents();
+    SetFocusView( TabCount );
+
+    QTimer::singleShot( 0, [State]() {State->View->EnsureKeyboardFocusOnView(); } );
+}
+
+void CmpPanel::PrevTab()
+{
+    // 탭이 하나라면 아무 것도 하지 않는다. 
+    if( ui.tabWidget->count() <= 1 )
+        return;
+
+    // TODO: 볼륨 목록 동기화
+
+    const auto Current = ui.tabWidget->currentIndex();
+    Q_ASSERT( Current >= 0 );
+    if( Current == 0 )
+        ui.tabWidget->setCurrentIndex( ui.tabWidget->count() - 1 );
+    else
+        ui.tabWidget->setCurrentIndex( Current - 1 );
+}
+
+void CmpPanel::NextTab()
+{
+    // 탭이 하나라면 아무 것도 하지 않는다. 
+    if( ui.tabWidget->count() <= 1 )
+        return;
+
+    // TODO: 볼륨 목록 동기화
+
+    const auto Current = ui.tabWidget->currentIndex();
+    Q_ASSERT( Current >= 0 );
+    if( Current == ui.tabWidget->count() - 1 )
+        ui.tabWidget->setCurrentIndex( 0 );
+    else
+        ui.tabWidget->setCurrentIndex( Current + 1 );
+}
+
+void CmpPanel::CloseTab()
+{
+    // 마지막 탭이라면 닫지 않는다.
+    if( ui.tabWidget->count() == 1 )
+        return;
+
+    auto Current = ui.tabWidget->currentIndex();
+
+    const auto State = retrieveFocusState();
+    if( State != nullptr )
+        vecTabStates.removeAt( Current );
+
+    int New = -1;
+    // 첫 번째 탭이라면 다음 탭으로
+    if( Current == 0 )
+        New = 1;
+    // 마지막 탭이라면 이전 탭으로
+    else if( Current == ui.tabWidget->count() - 1 )
+        New = Current - 1;
+    else
+        New = Current + 1;
+
+    // TODO: 볼륨 목록 동기화
+
+    ui.tabWidget->setCurrentIndex( New );
+    const auto w = ui.tabWidget->widget( Current );
+    ui.tabWidget->removeTab( Current );
+    delete w;
+    SetFocusView( New );
+}
+
 int CmpPanel::CurrentTabIndex() const
 {
     return retrieveCurrentIndex();
@@ -313,7 +423,13 @@ void CmpPanel::on_tabWidget_currentChanged( int Index )
     if( Index >= vecTabStates.size() )
         return;
 
+    // TODO: 해당 탭에 설정된 Root 의 볼륨으로 cbxVolume
+    // TODO: VolumeStatus
+    // TODO: DirectoryStatus
+
     const auto View = vecTabStates.value( Index )->View;
+
+    // retrieveFocusState();
 
     //QTimer::singleShot( 0, [View]() {
     //    View->grid()->setFocus();
@@ -512,72 +628,7 @@ void CmpPanel::processPanelStatusText()
 //    // TODO: 현재 있는 그리드들에 색상 / 글꼴 적용
 //}
 //
-////void CmpPanel::AddTab()
-////{
-////    qDebug() << this << "0";
-////    const auto Index = InitializeGrid();
-////    SetFocusView( Index );
-////    qDebug() << this << "1";
-////}
-////
-////void CmpPanel::PrevTab()
-////{
-////    // 탭이 하나라면 아무 것도 하지 않는다. 
-////    if( ui.tabWidget->count() <= 1 )
-////        return;
-////
-////    const auto Current = ui.tabWidget->currentIndex();
-////    Q_ASSERT( Current >= 0 );
-////    if( Current == 0 )
-////        ui.tabWidget->setCurrentIndex( ui.tabWidget->count() - 1 );
-////    else
-////        ui.tabWidget->setCurrentIndex( Current - 1 );
-////}
-////
-////void CmpPanel::NextTab()
-////{
-////    // 탭이 하나라면 아무 것도 하지 않는다. 
-////    if( ui.tabWidget->count() <= 1 )
-////        return;
-////
-////    const auto Current = ui.tabWidget->currentIndex();
-////    Q_ASSERT( Current >= 0 );
-////    if( Current == ui.tabWidget->count() - 1 )
-////        ui.tabWidget->setCurrentIndex( 0 );
-////    else
-////        ui.tabWidget->setCurrentIndex( Current + 1 );
-////}
-////
-////void CmpPanel::CloseTab()
-////{
-////    // 마지막 탭이라면 닫지 않는다.
-////    if( ui.tabWidget->count() == 1 )
-////        return;
-////
-////    TySpTabState State;
-////    auto Current = ui.tabWidget->currentIndex();
-////
-////    State = retrieveFocusState();
-////    if( State != nullptr )
-////        vecTabStates.removeAt( Current );
-////
-////    int New = -1;
-////    // 첫 번째 탭이라면 다음 탭으로
-////    if( Current == 0 )
-////        New = 1;
-////    // 마지막 탭이라면 이전 탭으로
-////    else if( Current == ui.tabWidget->count() - 1 )
-////        New = Current - 1;
-////    else
-////        New = Current + 1;
-////
-////    ui.tabWidget->setCurrentIndex( New );
-////    const auto w = ui.tabWidget->widget( Current );
-////    ui.tabWidget->removeTab( Current );
-////    delete w;
-////    SetFocusView( New );
-////}
-////
+
 //
 ////Qtitan::GridBandedTableView* CmpPanel::GetFocusView() const
 ////{

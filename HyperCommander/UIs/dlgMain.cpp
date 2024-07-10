@@ -65,7 +65,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
     if( Pane == nullptr )
         return;
 
-    // Pane->AddTab();
+    Pane->AddTab();
     currentPanelIndex = Prev;
 }
 
@@ -76,7 +76,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
     if( Pane == nullptr )
         return;
 
-    // Pane->PrevTab();
+    Pane->PrevTab();
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
@@ -86,7 +86,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NextTab )
     if( Pane == nullptr )
         return;
 
-    // Pane->NextTab();
+    Pane->NextTab();
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
@@ -97,7 +97,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     if( Pane == nullptr )
         return;
 
-    // Pane->CloseTab();
+    Pane->CloseTab();
     currentPanelIndex = Prev;
 }
 
