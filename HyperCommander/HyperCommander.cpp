@@ -71,5 +71,4 @@ void HyperCommanderApp::initialize()
 
     StCommandMgr->Refresh();
     StColorSchemeMgr->Refresh();
-
 }

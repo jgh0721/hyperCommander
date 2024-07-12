@@ -352,6 +352,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\backgroundJobMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\builtInFsModel.cpp" />
+    <ClCompile Include="..\UniqueLibs\builtInVolumeModel.cpp" />
     <ClCompile Include="..\UniqueLibs\cmnHCModelUtils.cpp">
       <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
       <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
@@ -474,6 +475,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\externalLibs\TotalCommander\tc_listplug.h" />
     <ClInclude Include="..\UniqueLibs\backgroundJobMgr.hpp" />
     <QtMoc Include="..\UniqueLibs\cmnHCModelUtils.hpp" />
+    <QtMoc Include="..\UniqueLibs\builtInVolumeModel.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Name.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnTypeDefs_Opts.hpp" />
     <QtMoc Include="..\UniqueLibs\colorSchemeMgr.hpp" />

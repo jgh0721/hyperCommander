@@ -4,6 +4,7 @@
 
 #include "cmnBase.hpp"
 #include "mdlFileSystem.hpp"
+#include "solTCPluginMgr.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -104,7 +105,7 @@ namespace nsHC
     public:
         explicit CFileSystemT( const QString& Root );
 
-        static CFileSystemT* MakeFileSystem( const QString& Root, TyOsError* Error = nullptr );
+        static CFileSystemT*    MakeFileSystem( const QString& Root, TyOsError* Error = nullptr );
 
         // LOCAL => X:, REMOTE => \\MyServer 또는 \\MyServer\\Av
         QString                 GetRoot() const { return root_; };
@@ -178,7 +179,19 @@ namespace nsHC
     class CFSPack : public CFileSystemT
     {
     public:
+        explicit CFSPack( const QString& Root, const TySpWCX& WCX );
+        ~CFSPack() override;
 
+        TySpWCX                 GetWCX() const;
+        QString                 GetParent() const;
+        void                    SetParent( const QString& Parent );
+
+        CPackFSModel*           Model();
+    private:
+
+        TySpWCX                 WCX_;
+        QString                 Parent_;
+        CPackFSModel*           FsModel_ = nullptr;
     };
 
     class CFSVFS : public CFileSystemT

@@ -317,7 +317,9 @@ void CFSModel::doRefresh()
     QVector< TyPrFGWithBG > VecRowColors;
     QVector< nsHC::TySpFileSource > VecItems;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-    const auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
+    auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
+    if( Attr == INVALID_FILE_ATTRIBUTES || FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
+        Attr = 0;
 
     // NOTE: 해당 스레드에서 기본적인 파일 목록을 완성한다.
     // NOTE: 추가적으로 폴더 크기, 아이콘 등은 배경 스레드를 통해 완성시킨다. 
@@ -330,36 +332,61 @@ void CFSModel::doRefresh()
             VecItems += GetChildItems( Base, true );
         if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL )
             VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
-
-        VecRowColors.resize( VecItems.count(), qMakePair( colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor ) );
-
-        createBuiltFsValues( VecItems );
-
-        for( qsizetype idx = 0; idx < VecItems.size(); ++idx )
-        {
-            const auto& Item = VecItems[ idx ];
-
-            if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
-                DirectoryCount++;
-            else
-            {
-                FileCount++;
-                TotalSize += Item->Size_;
-            }
-
-            for( const auto& FileSet : vecFileSetColors_ )
-            {
-                if( StColorSchemeMgr->JudgeFileSet( FileSet.first, Item.get(), nullptr, nullptr ) == false )
-                    continue;
-
-                VecRowColors[ idx ] = FileSet.second;
-                break;
-            }
-        }
     }
     else
     {
         // NOTE: 압축파일인지 확인
+        if( FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
+        {
+            const auto Model = ( ( nsHC::CFSPack* )Root.get() )->Model();
+
+            // 압축 파일을 빠져나가기 위해 .. 추가
+            const auto Fs = std::make_shared< nsHC::CFileSourceT >();
+            Fs->Name_ = "..";
+            Fs->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+            VecItems.push_back( Fs );
+
+            Model->ChDir( Base );
+
+            for( const auto& Item : Model->FindFiles( "*.*" ) )
+            {
+                const auto Fs = std::make_shared< nsHC::CFileSourceT >();
+
+                Fs->Name_       = Item->FileName;
+                Fs->Ext_        = nsCmn::nsCmnPath::GetFileExtension( Fs->Name_ );
+                if( Fs->Name_ != Fs->Name_.normalized( QString::NormalizationForm_C ) )
+                    SetFlag( Fs->Flags_, nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD );
+                Fs->Attributes_ = Item->Attributes;
+                Fs->Size_       = Item->UncompressedSize;
+
+                VecItems.push_back( Fs );
+            }
+        }
+    }
+
+    VecRowColors.resize( VecItems.count(), qMakePair( colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor ) );
+    createBuiltFsValues( VecItems );
+
+    for( qsizetype idx = 0; idx < VecItems.size(); ++idx )
+    {
+        const auto& Item = VecItems[ idx ];
+
+        if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
+            DirectoryCount++;
+        else
+        {
+            FileCount++;
+            TotalSize += Item->Size_;
+        }
+
+        for( const auto& FileSet : vecFileSetColors_ )
+        {
+            if( StColorSchemeMgr->JudgeFileSet( FileSet.first, Item.get(), nullptr, nullptr ) == false )
+                continue;
+
+            VecRowColors[ idx ] = FileSet.second;
+            break;
+        }
     }
 
     {
@@ -385,24 +412,28 @@ void CFSModel::doRefresh()
     FsIconGatherer_->clearInterruption();
     QThreadPool::globalInstance()->start( FsIconGatherer_ );
 
-    if( DirSizeGatherer_ == nullptr )
+    if( !FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
     {
-        int ColSize = -1;
-        for( const auto& ColView : columnView_.VecColumns )
+        if( DirSizeGatherer_ == nullptr )
         {
-            if( ColView.Content.contains( BUILTIN_COL_FS_SIZE ) == false )
-                continue;
+            int ColSize = -1;
+            for( const auto& ColView : columnView_.VecColumns )
+            {
+                if( ColView.Content.contains( BUILTIN_COL_FS_SIZE ) == false )
+                    continue;
 
-            ColSize = ColView.Index;
-            break;
+                    ColSize = ColView.Index;
+                    break;
+            }
+
+            DirSizeGatherer_ = new CFSDirSizeGatherer( this, vecNode_, GetCurrentPathWithRoot(), ColSize, &lock );
+            DirSizeGatherer_->setAutoDelete( false );
         }
 
-        DirSizeGatherer_ = new CFSDirSizeGatherer( this, vecNode_, GetCurrentPathWithRoot(), ColSize, &lock );
-        DirSizeGatherer_->setAutoDelete( false );
+        DirSizeGatherer_->clearInterruption();
+        DirSizeGatherer_->setCurrentPath( GetCurrentPathWithRoot() );
+        QThreadPool::globalInstance()->start( DirSizeGatherer_ );
     }
-
-    DirSizeGatherer_->clearInterruption();
-    QThreadPool::globalInstance()->start( DirSizeGatherer_ );
 }
 
 QString CFSModel::retrieveRootWithPath() const
@@ -415,7 +446,7 @@ QString CFSModel::retrieveRootWithPath() const
         return Root->GetRoot() + GetCurrentPath();
     }
 
-    return "";
+    return GetCurrentPath();
 }
 
 void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )

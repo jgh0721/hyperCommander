@@ -27,7 +27,7 @@
 
 struct TyOsError
 {
-    enum TyEnOsError { OS_WIN32_ERROR, OS_NT_ERROR, OS_COM_ERROR };
+    enum TyEnOsError { OS_WIN32_ERROR, OS_NT_ERROR, OS_COM_ERROR, OS_ETC_ERROR };
     TyEnOsError Type = OS_WIN32_ERROR;
     uint32_t    ErrorCode = ERROR_SUCCESS;
 };

@@ -150,12 +150,12 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 {
-    //UNREFERENCED_PARAMETER( OldRowIndex );
-    //UNREFERENCED_PARAMETER( NewRowIndex );
+    UNREFERENCED_PARAMETER( OldRowIndex );
+    UNREFERENCED_PARAMETER( NewRowIndex );
 
     ////qDebug() << qMakePair( OldRowIndex, NewRowIndex );
 
-    //viewClickTimer.stop();
+    viewClickTimer_.stop();
 
     //for( const auto& State : vecTabStates )
     //    State->LastFocusedRowIndex = -1;
@@ -217,7 +217,7 @@ void CGridView::oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Q
     UNREFERENCED_PARAMETER( NewSelection );
     UNREFERENCED_PARAMETER( OldSelection );
 
-    //viewClickTimer.stop();
+    viewClickTimer_.stop();
 
     //for( const auto& State : vecTabStates )
     //    State->LastFocusedRowIndex = -1;

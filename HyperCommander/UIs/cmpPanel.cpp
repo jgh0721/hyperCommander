@@ -289,10 +289,20 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
     }
     else
     {
+        // 해당 확장자를 처리할 수 있다고 주장하는 플러그인이 있다면 처리를 맡긴다. 
+        const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
+        std::wstring Src = State->Model->GetFileFullPath( ModelIndex ).toStdWString();
+        const auto VecWCXs = StPlugInMgr->RetrieveWCXByExts( EntryInfo->Ext_ );
+
+        if( VecWCXs.count() > 0 )
+        {
+            State->Model->ChangeDirectory( ModelIndex );
+            return;
+        }
+
         // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
         // NOTE: 토탈 커맨더의 경우 .DLL 등 명시적인 실행파일이 아닌 경우 레지스트리를 뒤져 실행가능하지 않다면 ShellExecuteExW 를 호출하지 않고, 오류창을 표시한다. 
         CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
-        std::wstring Src = State->Model->GetFileFullPath( ModelIndex ).toStdWString();
 
         do
         {

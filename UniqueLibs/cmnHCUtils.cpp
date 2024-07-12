@@ -256,6 +256,7 @@ bool OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos
                 imenu->InvokeCommand( ( LPCMINVOKECOMMANDINFO )&info );
             }
         }
+
         DestroyMenu( hMenu );
 
         IsSuccess = true;

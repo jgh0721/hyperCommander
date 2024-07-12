@@ -45,6 +45,7 @@ public:
         : model_( Model ), vecNode_( Nodes ), currentPathWithRoot_( CurrentPathWithRoot ), sizeCol_( SizeCol ), lock_( lock ) {}
 
     void                            run() override;
+    void                            setCurrentPath( const QString& CurrentPath ) { currentPathWithRoot_ = CurrentPath; }
 
     void                            requestInterruption() { interrupt_.testAndSetOrdered( 0, 1 ); }
     bool                            isInterruptionRequested() const { return static_cast< int >( interrupt_ ); }
@@ -66,7 +67,7 @@ public:
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
-
+    
     QVector< nsHC::TySpFileSource > GetChildItems( const QString& RootWithPath, bool IncludeDotDot = false );
     
     // QString                         GetFileFullPath( const QString& Name ) const;

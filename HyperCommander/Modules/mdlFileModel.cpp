@@ -2,6 +2,7 @@
 #include "mdlFileModel.hpp"
 
 #include "fileSetMgr.hpp"
+#include "solTCPluginMgr.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -54,24 +55,58 @@ QString CFsModelT::GetCurrentPath() const
 
 void CFsModelT::ChangeDirectory( const QString& Child )
 {
-    if( IsRoot() == true )
+    QString Notify; bool IsEscape = false;
+    const auto Root = GetRoot();
+
+    if( Child.startsWith( '/' ) == true || Child.startsWith( '\\' ) == true )
     {
-        if( Child == ".." )
-        {
-            SetCurrentPath( "" );
-            AppendRoot( nsHC::TySpFileSystem( new nsHC::CFSShell( FOLDERID_ComputerFolder ) ) );
-        }
-        else
-            SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + Child ) ) );
+        SetCurrentPath( Child );
     }
     else
-        SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + "\\" + Child ) ) );
+    {
+        if( IsRoot() == true )
+        {
+            if( Child == ".." )
+            {
+                // LOCAL FS 의 Root 에서 .. 일 때와 PACK FS 의 Root 에서 .. 일 때 구분,
+                if( !FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
+                {
+                    SetCurrentPath( "" );
+                    AppendRoot( nsHC::TySpFileSystem( new nsHC::CFSShell( FOLDERID_ComputerFolder ) ) );
+                }
+                else
+                {
+                    // 압축파일 보기 모드에서 빠져나가야 한다.
+                    IsEscape = true;
+                    SetCurrentPath( ( ( nsHC::CFSPack* )Root.get() )->GetParent() );
+                    vecFs_.removeLast();
+                }
+            }
+            else
+                SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + Child ) ) );
+        }
+        else
+            SetCurrentPath( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPath() + "\\" + Child ) ) );
+    }
 
-    qDebug() << __FUNCTION__ << " : " << QDir::toNativeSeparators( GetCurrentPathWithRoot() );
+    if( !FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) || IsEscape == true )
+        Notify = QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPathWithRoot() ) );
+    else
+    {
+        int a = 0;
+        if( IsRoot() == true )
+        {
+            Notify = QDir::toNativeSeparators( QDir::cleanPath( Root->GetRoot() ) );
+        }
+        else
+        {
+            Notify = GetCurrentPath();
+        }
+    }
 
+    qDebug() << __FUNCTION__ << " : " << Notify;
     Refresh();
-
-    emit sigChangedDirectory( QDir::toNativeSeparators( QDir::cleanPath( GetCurrentPathWithRoot() ) ) );
+    emit sigChangedDirectory( Notify );
 }
 
 void CFsModelT::ChangeDirectory( const QModelIndex& Child )
@@ -97,7 +132,31 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
     {
         if( !FlagOn( Node->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
         {
-            // 압축파일 
+            // 압축파일
+            const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
+            const auto VecWCXs = StPlugInMgr->RetrieveWCXByExts( Node->Ext_ );
+
+            for( const auto& WCX : VecWCXs )
+            {
+                // 플러그인 로딩 후, OpenArchive 가 성공하면 해당 플러그인을 사용하여 파일 목록을 구성한다.
+                const auto SpWCX = TySpWCX( new CTCPlugInWCX );
+                if( SpWCX->LoadWCX( WCX ).ErrorCode != ERROR_SUCCESS )
+                    continue;
+
+                const auto Ret = SpWCX->OpenArchive( GetFileFullPath( Child ), PK_OM_LIST );
+                if( Ret.Value.has_value() == false || Ret.Value.value() == false )
+                    continue;
+
+                const auto Packer = new nsHC::CFSPack( GetFileFullPath( Child ), SpWCX );
+                Packer->SetParent( GetCurrentPath() );
+                
+                // CFSPack 에 TySpWCX 와 압축파일 이름을 넣고, FS 스택 위에 넣는다.
+                const auto Fs = nsHC::TySpFileSystem( Packer );
+                vecFs_.push_back( Fs );
+                break;
+            }
+
+            ChangeDirectory( "/" );
             return;
         }
 

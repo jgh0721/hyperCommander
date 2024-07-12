@@ -397,6 +397,9 @@
     <ClCompile Include="UIs\Components\cmpView.cpp">
       <Filter>UI Files\Components</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\builtInVolumeModel.cpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -652,6 +655,9 @@
     </QtMoc>
     <QtMoc Include="UIs\cmpPanel.hpp">
       <Filter>UI Files</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\builtInVolumeModel.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

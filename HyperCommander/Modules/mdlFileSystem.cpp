@@ -196,8 +196,6 @@ namespace nsHC
 
         if( FlagOn( FsFlags, FILE_NAMED_STREAMS ) )
             features_ |= FS_FEA_STREAMS;
-
-        features_ |= FS_FEA_PACK;
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -366,6 +364,46 @@ namespace nsHC
             //} while( false );
 
             //ShellDesktop->Release();
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    ///
+
+    CFSPack::CFSPack( const QString& Root, const TySpWCX& WCX )
+        : CFileSystemT( Root ), WCX_( WCX )
+    {
+        cate_       = FS_CATE_LOCAL;
+        features_   |= FS_FEA_PACK;
+    }
+
+    CFSPack::~CFSPack()
+    {
+        if( FsModel_ != nullptr )
+            delete FsModel_;
+    }
+
+    TySpWCX CFSPack::GetWCX() const
+    {
+        return WCX_;
+    }
+
+    QString CFSPack::GetParent() const
+    {
+        return Parent_;
+    }
+
+    void CFSPack::SetParent( const QString& Parent )
+    {
+        Parent_ = Parent;
+    }
+
+    CPackFSModel* CFSPack::Model()
+    {
+        if( FsModel_ != nullptr )
+            return FsModel_;
+
+        FsModel_ = GetWCX()->CreatePackModel().Value.value();
+        return FsModel_;
     }
 
 } // nsHC
