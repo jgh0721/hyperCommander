@@ -40,6 +40,8 @@ public slots:
     DECLARE_HC_COMMAND( cm_NextTab );
     DECLARE_HC_COMMAND( cm_CloseTab );
 
+    DECLARE_HC_COMMAND( cm_SrcQuickView );
+
     DECLARE_HC_COMMAND( cm_CopyOtherPanel );
     DECLARE_HC_COMMAND( cm_RenameSingleFile );
     DECLARE_HC_COMMAND( cm_List );
@@ -55,6 +57,9 @@ public slots:
 
     DECLARE_HC_COMMAND( cm_SwitchHidSys );
     DECLARE_HC_COMMAND( cm_RereadSource );
+
+    DECLARE_HC_COMMAND( cm_DirectoryHotList );
+    DECLARE_HC_COMMAND_EX( cm_GotoDrive );
 
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );

@@ -88,5 +88,26 @@ FsModelT
 
 	[Configuration]
 
-	[Favorite]
+	[Favorites]
 	Count=
+	MenuN=
+	CmdN=
+	PathN=
+	DrivesOn=0|1|2
+		0 = None, 1 = Top, 2 = Bottom
+
+	[Viewer]
+
+	[ListerPlugins]
+	Count=N
+	N_Path=XXX
+	N_Detect=XXX
+	N_Support64Bit=True|False
+
+	[PackerPlugins]
+	Count=N
+	N_Path=XXX
+	N_Exts=XXX|XXX
+	N_Caps=
+	N_Support64Bit=True|False
+

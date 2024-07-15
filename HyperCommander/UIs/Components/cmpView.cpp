@@ -498,6 +498,11 @@ void CGridView::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
     oo_grid_contextMenu( &Args );
 }
 
+Qtitan::GridViewBase* CGridView::BaseView() const
+{
+    return view_;
+}
+
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
     if( Event->type() == QEvent::KeyPress )

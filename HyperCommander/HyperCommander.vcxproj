@@ -366,6 +366,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\commandMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\externalEditorMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\fileSetMgr.cpp" />
+    <ClCompile Include="..\UniqueLibs\solFavoriteDirMgr.cpp" />
     <ClCompile Include="..\UniqueLibs\solTCPluginMgr.cpp" />
     <ClCompile Include="..\uniqueLibs\model_defs.cpp" />
     <ClCompile Include="..\UniqueLibs\pixmapCacheEx.cpp">
@@ -392,6 +393,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="UIs\dlgDefaultCMD.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure.cpp" />
     <ClCompile Include="UIs\dlgExternalConfigure_Item.cpp" />
+    <ClCompile Include="UIs\dlgFavoriteDir.cpp" />
     <ClCompile Include="UIs\dlgGridStyle.cpp" />
     <ClCompile Include="UIs\dlgMain.cpp" />
     <ClCompile Include="UIs\dlgMultiRename.cpp" />
@@ -402,6 +404,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\cmnProcess.hpp" />
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp" />
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp" />
+    <QtMoc Include="UIs\dlgFavoriteDir.hpp" />
     <QtMoc Include="UIs\Components\cmpView.hpp" />
     <QtMoc Include="UniqueLibs\uiComboBoxWidget.hpp" />
     <QtMoc Include="UIs\dlgDefaultCMD.hpp" />
@@ -484,6 +487,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="UIs\cmpViewer.hpp" />
     <QtMoc Include="..\UniqueLibs\solTCPluginMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\fileSetMgr.hpp" />
+    <QtMoc Include="..\UniqueLibs\solFavoriteDirMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileCopy.hpp" />
     <QtMoc Include="UIs\Cate - FileOperation\dlgCreateDirectory.hpp" />
@@ -509,7 +513,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="..\commonLibs\Qt\cmnQtDelegator.hpp" />
     <ClInclude Include="..\commonLibs\Qt\cmnQtUtils.hpp" />
     <ClInclude Include="..\UniqueLibs\cmnHCUtils.hpp" />
-    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp" />
+    <QtMoc Include="..\UniqueLibs\cmnTypeDefs.hpp" />
     <ClInclude Include="..\uniqueLibs\columnMgr.hpp" />
     <QtMoc Include="..\UniqueLibs\commandMgr.hpp" />
     <ClInclude Include="..\UniqueLibs\commandMgr_Defs.hpp" />
@@ -543,6 +547,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtUic Include="UIs\dlgDefaultCMD.ui" />
     <QtUic Include="UIs\dlgExternalConfigure.ui" />
     <QtUic Include="UIs\dlgExternalConfigure_Item.ui" />
+    <QtUic Include="UIs\dlgFavoriteDir.ui" />
     <QtUic Include="UIs\dlgGridStyle.ui" />
     <QtUic Include="UIs\dlgMain.ui" />
     <QtUic Include="UIs\dlgMultiRename.ui" />

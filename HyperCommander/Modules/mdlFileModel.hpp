@@ -74,6 +74,7 @@ public:
     virtual void                    SetCurrentPath( const QString& Path );
     virtual QString                 GetCurrentPath() const;
     virtual QString                 GetCurrentPathWithRoot() const { return ""; }
+    virtual QString                 GetName( const QModelIndex& Index ) const { return ""; }
 
     void                            ChangeDirectory( const QString& Child );
     void                            ChangeDirectory( const QModelIndex& Child );

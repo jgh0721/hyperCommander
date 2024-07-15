@@ -22,8 +22,14 @@ using TyMapShortcutToCMDStr = QHash< QKeyCombination, QLatin1String >;
 #define DECLARE_HC_COMMAND( Name ) \
     Q_INVOKABLE void Name( const QModelIndex& CursorIndex )
 
+#define DECLARE_HC_COMMAND_EX( Name ) \
+    Q_INVOKABLE void Name( const QModelIndex& CursorIndex, const QVariant& Parameter )
+
 #define DEFINE_HC_COMMAND( Class, Name ) \
-void Class:: ##Name( const QModelIndex& CursorIndex )
+    void Class:: ##Name( const QModelIndex& CursorIndex )
+
+#define DEFINE_HC_COMMAND_EX( Class, Name ) \
+    void Class:: ##Name( const QModelIndex& CursorIndex, const QVariant& Parameter )
 
 DECLARE_CMD( BuiltInCMD_Tab_New,                    QObject::tr( "탭" ), "cm_NewTab",
              Qt::ControlModifier | Qt::Key_T,       QObject::tr( "새 탭" ) );
@@ -33,6 +39,9 @@ DECLARE_CMD( BuiltInCMD_Tab_Next,                   QObject::tr( "탭" ), "cm_Ne
              Qt::ControlModifier | Qt::Key_Tab,     QObject::tr( "다음 탭" ) );
 DECLARE_CMD( BuiltInCMD_Tab_Close,                  QObject::tr( "탭" ), "cm_CloseTab",
              Qt::ControlModifier | Qt::Key_W,       QObject::tr( "탭 닫기" ) );
+
+DECLARE_CMD( BuiltInCMD_Src_QuickView,              QObject::tr( "원본" ), "cm_SrcQuickView",
+             Qt::ControlModifier | Qt::Key_Q,       QObject::tr( "빠른 보기 창" ) );
 
 DECLARE_CMD( BuiltInCMD_OPs_FileCopy,               QObject::tr( "동작" ), "cm_CopyOtherPanel",
              Qt::ControlModifier | Qt::Key_C,       QObject::tr( "다른 패널로 복사" ) );
@@ -66,6 +75,11 @@ DECLARE_CMD( BuiltInCMD_View_SwitchHidSys,          QObject::tr( "보기" ), "cm
 DECLARE_CMD( BuiltInCMD_View_RereadSource,          QObject::tr( "보기" ), "cm_RereadSource",
              Qt::Key_F5,                            QObject::tr( "원본 새로 고침" ) );
 
+DECLARE_CMD( BuiltInCMD_Nav_FavoriteDir,            QObject::tr( "탐색" ), "cm_DirectoryHotList",
+             Qt::ControlModifier | Qt::Key_G,       QObject::tr( "즐겨찾기 폴더 목록" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDrive,              QObject::tr( "탐색" ), "cm_GotoDrive",
+             Qt::Key_F12,                           QObject::tr( "드라이브 전환" ) );
+
 DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,            QObject::tr( "기타" ), "cm_SwitchPanel",
              Qt::Key_Tab,                           QObject::tr( "반대편 패널로 전환" ) );
 
@@ -85,6 +99,8 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_Next,
     BuiltInCMD_Tab_Close,
 
+    BuiltInCMD_Src_QuickView,
+
     BuiltInCMD_OPs_FileCopy,
     BuiltInCMD_OPs_RenameSingleFile,
     BuiltInCMD_OPs_Lister,
@@ -102,6 +118,9 @@ const QVector< TyHC_COMMAND > GlobalBuiltInCMDs = {
 
     BuiltInCMD_View_SwitchHidSys,
     BuiltInCMD_View_RereadSource,
+
+    BuiltInCMD_Nav_FavoriteDir,
+    BuiltInCMD_Nav_GotoDrive,
 
     BuiltInCMD_Etc_SwitchPanel,
     BuiltInCMD_Etc_ContextMenu,

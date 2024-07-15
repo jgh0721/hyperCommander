@@ -23,6 +23,7 @@ public:
     virtual bool                    IsEditing() const { return false; };
     virtual void                    AdjustSizeToContents() const {};
     virtual void                    EnsureKeyboardFocusOnView() const {};
+    virtual void                    CloseView() {};
 
 signals:
     void                            sig_NotifyViewActivated();
@@ -59,6 +60,8 @@ public:
 
     nsHC::TySpFileSource            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown, bool& IsSelected );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
+
+    Qtitan::GridViewBase*           BaseView() const;
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );

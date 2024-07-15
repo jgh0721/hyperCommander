@@ -86,6 +86,21 @@ Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp
 
 ////////////////////////////////////////////////////////////////////////////////
 
+class ISettings : public QObject
+{
+    Q_OBJECT
+public:
+    bool                            Refresh() { return doRefresh(); }
+    bool                            SaveSettings() { return doSaveSettings(); }
+
+protected:
+    virtual bool                    doRefresh() { return false; }
+    virtual bool                    doSaveSettings() { return false; }
+
+private:
+
+};
+
 struct TyConfiguration
 {
     int SizeInHeader = 0;

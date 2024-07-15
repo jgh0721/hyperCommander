@@ -49,6 +49,7 @@ class CmpPanel : public QWidget
     {
         int                         Index = -1;
         CViewT*                     View = nullptr;
+        CViewT*                     QuickView = nullptr;
         CFsModelT*                  Model = nullptr;
         CFSProxyModel*              ProxyModel = nullptr;
 
@@ -75,10 +76,16 @@ public:
     void                            CloseTab();
     int                             CurrentTabIndex() const;
     void                            SetFocusView( int TabIndex );
+    CViewT*                         GetFocusView( int TabIndex ) const;
 
+    void                            CloseQuickView( int TabIndex );
+
+    void                            RefreshSource( int TabIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
+    void                            ExternalEditorMenu( const QModelIndex& SrcIndex );
+    void                            ChangeVolume( const QString& Drive );
 
 public slots:
 
@@ -105,6 +112,11 @@ private:
     TySpTabState                    retrieveFocusState();
     CViewT*                         retrieveFocusView() const;
 
+    // 현재 마우스 커서의 전역 위치( GetCursorPos 를 통해 획득 ) 와 모델 색인을 통해
+    // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
+    QPoint                          retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
+    QVector< QModelIndex >          makeSrcModel( const TySpTabState& SrcState );
+
     Q_INVOKABLE void                processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem ) const;
     Q_INVOKABLE void                processPanelStatusText();
 
@@ -127,13 +139,11 @@ private:
 //
 //    //void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
 //
-//    //void                                RefreshSource( int TabIndex );
 //    //void                                FileCopyToOtherPanel( CmpPanel* Dst );
 //    //void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
 //    //void                                FileNormalization( const QModelIndex& SrcIndex );
 //    //void                                FileSetAttrib( const QModelIndex& SrcIndex );
 //    //Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );
-//    //void                                ExternalEditorMenu( const QModelIndex& SrcIndex );
 //
 //    //void                                ViewOnLister( const QModelIndex& SrcIndex );
 //
@@ -142,17 +152,11 @@ private:
 //public slots:
 ////
 ////    void                                on_btnGridStyle_clicked( bool checked = false );
-////
-////
 //private:
 //
 //    void                                initializeVolumeList();
 //    Qtitan::GridBandedTableView*        initializeGrid( Qtitan::Grid* Grid );
 //
-////    // 현재 마우스 커서의 전역 위치( GetCursorPos 를 통해 획득 ) 와 모델 색인을 통해
-////    // 실제 메뉴를 표시할 위치를 계산하여 전역 위치값으로 반환한다. 
-////    QPoint                              retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
-////    QVector< QModelIndex >              makeSrcModel( const TySpTabState& SrcState );
 ////
 //
 //    Ui::cmpPanel                        ui;

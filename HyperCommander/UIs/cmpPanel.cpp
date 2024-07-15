@@ -132,7 +132,7 @@ void CmpPanel::AddTab()
 
     DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
 
-    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, FsModel, ProxyModel );
+    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, nullptr, FsModel, ProxyModel );
     vecTabStates.push_back( State );
 
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
@@ -229,6 +229,44 @@ void CmpPanel::SetFocusView( int TabIndex )
 
     if( View->GetViewMode() == CViewT::VM_GRID )
         View->EnsureKeyboardFocusOnView();
+}
+
+CViewT* CmpPanel::GetFocusView( int TabIndex ) const
+{
+    if( TabIndex < 0 || vecTabStates.isEmpty() == true )
+        return {};
+
+    const auto& State = vecTabStates.value( TabIndex );
+    if( State->QuickView != nullptr )
+        State->QuickView;
+
+    return State->View;
+}
+
+void CmpPanel::CloseQuickView( int TabIndex )
+{
+    Q_ASSERT( TabIndex >= 0 && TabIndex < ui.tabWidget->count() );
+    if( TabIndex < 0 || TabIndex >= ui.tabWidget->count() )
+        return;
+
+    const auto& State = vecTabStates[ TabIndex ];
+
+    if( State->QuickView == nullptr )
+        return;
+
+    State->QuickView->CloseView();
+    ui.tabWidget->setCurrentWidget( State->View );
+    State->QuickView->deleteLater();
+    State->QuickView = nullptr;
+    SetFocusView( TabIndex );
+}
+
+void CmpPanel::RefreshSource( int TabIndex )
+{
+    if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
+        return;
+
+    vecTabStates[ TabIndex ]->Model->Refresh();
 }
 
 void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
@@ -332,6 +370,99 @@ void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
         return;
 
     ( ( CGridView* )View )->ContextMenuOnCurrentTab( SrcIndex );
+}
+
+void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
+{
+    /*!
+        View 가 QuickView 인지 아닌지 확인한다. 
+        해당 모델의 최상위 Fs 를 획득한다.
+        Fs 가 직접적으로 파일을 획득할 수 있는지 확인한다. ( PACKER 여부 )
+            PACKER 라면 임시 디렉토리에 파일을 해제할 수 있는지 확인한다. 
+        선택한 것이 있는가? 없다면 현재 커서가 위치한 항목 사용
+        선택항목이 하나 인가? 하나라면 해당 항목 사용
+        선택항목이 여러 개라면 설정에 따라 목록을 전송하거나 첫째 항목 전송
+     */
+
+    const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
+    const auto ColorScheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme( TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme() );
+    const auto State = retrieveFocusState();
+    const auto View = State->View;
+    const auto Fs = State->Model->GetRoot();
+
+    if( View->GetViewMode() != CViewT::VM_GRID )
+        return;
+
+    const auto& VecSrcModel = makeSrcModel( State );
+
+    if( VecSrcModel.isEmpty() == true )
+    {
+        // 선택된 항목이 없음
+        return;
+    }
+
+    if( FlagOn( Fs->GetFeatures(), nsHC::FS_FEA_PACK ) )
+    {
+        // TODO: 선택된 항목들의 압축을 해제한 후, 임시 파일에 대한 목록을 가져온다. 
+
+        Q_ASSERT( false );
+    }
+
+    QMenu Menu;
+    Menu.setFocus( Qt::ActiveWindowFocusReason );
+    Menu.setFocusPolicy( Qt::StrongFocus );
+    Menu.setFont( QFont( ColorScheme.Dialog_Font.family(), 14 ) );
+
+    const auto FileFullPath = State->Model->GetFileFullPath( VecSrcModel[0] );
+    StExternalMgr->ConstructExternalMenu( &Menu, FileFullPath );
+
+    // TODO: 글로벌 위치를 획득한 후, 해당 위치가 항목(SrcIndex) 영역 내에 위치하는 지 확인한다. 
+    // 영역내에 위치한다면 해당 위치에 표시하고, 커서가 전혀 다른 곳에 위치한다면, 항목의 영역을 구하고 해당 위치내에서 표시한다. 
+    POINT Pos = {};
+    GetCursorPos( &Pos );
+
+    qDebug() << QCursor::pos() << QPoint( Pos.x, Pos.y );
+
+    QMetaObject::invokeMethod( &Menu, "setFocus", Qt::QueuedConnection );
+    auto ArrowDownEvent = new QKeyEvent( QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier );
+    qApp->postEvent( &Menu, ArrowDownEvent );   // 이벤트의 소유권은 Qt 에게로 이전되며, 자동으로 삭제된다. 
+    const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex ) );
+
+    // 취소하거나 등등
+    if( ac == nullptr )
+        return;
+    
+    const auto Editor = ac->data().value< TyExternalEditor >();
+    if( Editor.FilePath.isEmpty() == true )
+        return;
+
+    // TODO: CMDLine 을 이용하여 FileFullPath 를 프로세스에 전달할 명령행으로 변환한다. 
+    Editor.CMDLine;
+
+    nsCmn::nsProcess::CreateProcessAsNormal( QDir::toNativeSeparators( Editor.FilePath ), FileFullPath, false, false );
+}
+
+void CmpPanel::ChangeVolume( const QString& Drive )
+{
+    int FsIndex = -1;
+
+    for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
+    {
+        const auto& Fs = ui.cbxVolume->GetItem( idx )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+        if( Fs == nullptr )
+            continue;
+
+        // TODO: Drive 가 UNC 인 경우에도 추가처리가 필요하다. 
+        const auto Root = Fs->GetRoot();
+        if( Root.compare( Drive, Qt::CaseInsensitive ) != 0 )
+            continue;
+
+        FsIndex = idx;
+        break;
+    }
+
+    if( FsIndex >= 0 )
+        ui.cbxVolume->setCurrentIndex( FsIndex );
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -525,7 +656,7 @@ void CmpPanel::initializeUIs()
 
     DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
 
-    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, FsModel, ProxyModel );
+    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, nullptr, FsModel, ProxyModel );
     vecTabStates.push_back( State );
 }
 
@@ -555,7 +686,111 @@ CViewT* CmpPanel::retrieveFocusView() const
     if( Current < 0 || vecTabStates.isEmpty() == true )
         return {};
 
-    return vecTabStates.value( Current )->View;
+    const auto& State = vecTabStates.value( Current );
+    if( State->QuickView != nullptr )
+        State->QuickView;
+
+    return State->View;
+}
+
+QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex )
+{
+    QPoint Pos( GlobalCursor );
+    const auto View = retrieveFocusView();
+
+    do
+    {
+        if( View->GetViewMode() != CViewT::VM_GRID )
+            break;
+        
+        const auto GridViewBase = qobject_cast< CGridView* >( View )->BaseView();
+        const auto Row = GridViewBase->getRow( SrcIndex );
+
+        if( SrcIndex.isValid() == false || Row.isValid() == false )
+            return Pos;
+
+        QRect GlobalRowRect;
+        const auto Grid = GridViewBase->grid();
+       
+        for( const auto& Info : Grid->hitInfoAll() )
+        {
+            if( Info.info() != GridHitInfo::Cell )
+                continue;
+
+            if( Info.row().rowIndex() != Row.rowIndex() )
+                continue;
+
+            if( Info.columnIndex() == 0 )
+            {
+                GlobalRowRect.setTopLeft( Grid->mapToGlobal( Info.rect().topLeft() ) );
+                GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
+            }
+
+            if( Info.columnIndex() == GridViewBase->getColumnCount() - 1 )
+                GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
+        }
+
+        do
+        {
+            if( Pos.isNull() == true )
+            {
+                Pos = GlobalRowRect.topLeft();
+                break;
+            }
+
+            if( GlobalRowRect.contains( Pos ) == true )
+                break;
+
+            Pos = GlobalRowRect.topLeft();
+            break;
+
+        } while( false );
+
+    } while( false );
+
+    return Pos;
+}
+
+QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
+{
+    QVector<QModelIndex> SrcModel;
+    const auto View = qobject_cast< CGridView* >( SrcState->View );
+
+    do
+    {
+        if( View == nullptr )
+            break;
+
+        const auto BaseGrid = View->BaseView();
+        if( BaseGrid == nullptr )
+            break;
+
+        for( const auto Row : BaseGrid->selection()->selectedRowIndexes() )
+        {
+            const auto Index = SrcState->ConvertToSrcIndex( Row );
+            if( SrcState->Model->GetName( Index ) == ".." )
+                continue;
+
+            SrcModel.push_back( Index );
+        }
+
+        // 선택된 항목이 없다면 현재 커서가 위치한 항목을 복사한다. 
+        if( SrcModel.isEmpty() == true )
+        {
+            const auto Row = BaseGrid->focusedRow();
+            if( Row.isValid() == true )
+            {
+                const auto Index = SrcState->ConvertToSrcIndex( Row.modelIndex( 0 ) );
+                if( SrcState->Model->GetName( Index ) != ".." )
+                {
+                    SrcModel.push_back( Index );
+                }
+            }
+        }
+
+    } while( false );
+
+    return SrcModel;
 }
 
 void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem ) const
@@ -667,14 +902,6 @@ void CmpPanel::processPanelStatusText()
 ////    }
 ////}
 ////
-////void CmpPanel::RefreshSource( int TabIndex )
-////{
-////    if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
-////        return;
-////
-////    vecTabStates[ TabIndex ]->Model->Refresh();
-////}
-////
 ////void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
 ////{
 ////    Q_ASSERT( Dst != nullptr );
@@ -777,43 +1004,7 @@ void CmpPanel::processPanelStatusText()
 ////    View->showEditor( GridEditor::ActivateByKeyPress_F2 );
 ////}
 ////
-////void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
-////{
-////    const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
-////    const auto State = retrieveFocusState();
-////    const auto View = State->View;
-////
-////    QMenu Menu;
-////    Menu.setFocus( Qt::ActiveWindowFocusReason );
-////    Menu.setFocusPolicy( Qt::StrongFocus );
-////    Menu.setFont( QFont( "Sarasa Mono K Light", 14 ) );
-////    const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
-////    StExternalMgr->ConstructExternalMenu( &Menu, FileFullPath );
-////
-////    // TODO: 글로벌 위치를 획득한 후, 해당 위치가 항목(SrcIndex) 영역 내에 위치하는 지 확인한다. 
-////    // 영역내에 위치한다면 해당 위치에 표시하고, 커서가 전혀 다른 곳에 위치한다면, 항목의 영역을 구하고 해당 위치내에서 표시한다. 
-////    POINT Pos = {};
-////    GetCursorPos( &Pos );
-////
-////    qDebug() << QCursor::pos() << QPoint( Pos.x, Pos.y );
-////
-////    QMetaObject::invokeMethod( &Menu, "setFocus", Qt::QueuedConnection );
-////    const auto ac = Menu.exec( retrieveMenuPoint( QCursor::pos(), SrcIndex) );
-////
-////    // 취소하거나 등등
-////    if( ac == nullptr )
-////        return;
-////    
-////    const auto Editor = ac->data().value< TyExternalEditor >();
-////    if( Editor.FilePath.isEmpty() == true )
-////        return;
-////
-////    // TODO: CMDLine 을 이용하여 FileFullPath 를 프로세스에 전달할 명령행으로 변환한다. 
-////    Editor.CMDLine;
-////
-////    nsCmn::nsProcess::CreateProcessAsNormal( QDir::toNativeSeparators( Editor.FilePath ), FileFullPath, false, false );
-////}
-////
+
 ////void CmpPanel::ViewOnLister( const QModelIndex& SrcIndex )
 ////{
 ////    const auto State = retrieveFocusState();
@@ -1042,84 +1233,4 @@ void CmpPanel::processPanelStatusText()
 ////        return {};
 ////
 ////    return Row.modelIndex( 0 );
-////}
-////
-////QPoint CmpPanel::retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex )
-////{
-////    QPoint Pos( GlobalCursor );
-////
-////    const auto View = retrieveFocusView();
-////    const auto Grid = View->grid();
-////    const auto Row = View->getRow( SrcIndex );
-////
-////    if( SrcIndex.isValid() == false || Row.isValid() == false )
-////        return Pos;
-////
-////    QRect GlobalRowRect;
-////
-////    for( const auto& Info : Grid->hitInfoAll() )
-////    {
-////        if( Info.info() != GridHitInfo::Cell )
-////            continue;
-////
-////        if( Info.row().rowIndex() != Row.rowIndex() )
-////            continue;
-////
-////        if( Info.columnIndex() == 0 )
-////        {
-////            GlobalRowRect.setTopLeft( Grid->mapToGlobal( Info.rect().topLeft() ) );
-////            GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
-////        }
-////
-////        if( Info.columnIndex() == View->getColumnCount() - 1 )
-////            GlobalRowRect.setBottomRight( Grid->mapToGlobal( Info.rect().bottomRight() ) );
-////    }
-////
-////    do
-////    {
-////        if( Pos.isNull() == true )
-////        {
-////            Pos = GlobalRowRect.topLeft();
-////            break;
-////        }
-////
-////        if( GlobalRowRect.contains( Pos ) == true )
-////            break;
-////
-////        Pos = GlobalRowRect.topLeft();
-////        break;
-////
-////    } while( false );
-////
-////    return Pos;
-////}
-////
-////QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
-////{
-////    QVector<QModelIndex> SrcModel;
-////
-////    for( const auto Row : SrcState->View->selection()->selectedRowIndexes() )
-////    {
-////        const auto Index = SrcState->ProxyModel->mapToSource( Row );
-////        if( SrcState->Model->GetName( Index ) == ".." )
-////            continue;
-////
-////        SrcModel.push_back( Index );
-////    }
-////
-////    // 선택된 항목이 없다면 현재 커서가 위치한 항목을 복사한다. 
-////    if( SrcModel.isEmpty() == true )
-////    {
-////        const auto Row = SrcState->View->focusedRow();
-////        if( Row.isValid() == true )
-////        {
-////            const auto Index = SrcState->ProxyModel->mapToSource( Row.modelIndex( 0 ) );
-////            if( SrcState->Model->GetName( Index ) != ".." )
-////            {
-////                SrcModel.push_back( Index );
-////            }
-////        }
-////    }
-////
-////    return SrcModel;
 ////}

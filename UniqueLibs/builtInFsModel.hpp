@@ -64,6 +64,7 @@ public:
     ///
 
     QString                         GetCurrentPathWithRoot() const override { return retrieveRootWithPath(); }
+    QString                         GetName( const QModelIndex& Index ) const;
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
@@ -74,7 +75,6 @@ public:
 
 
 //    QString                             GetCurrentPath() const;
-//    QString                             GetName( const QModelIndex& Index ) const;
 //        
 //
 //    DWORD                               Rename( const QModelIndex& Index, const QString& NewName );

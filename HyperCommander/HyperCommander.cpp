@@ -14,6 +14,7 @@
 #include "externalEditorMgr.hpp"
 #include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
+#include "solFavoriteDirMgr.hpp"
 #include "solTCPluginMgr.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
@@ -68,6 +69,7 @@ void HyperCommanderApp::initialize()
     TyStExternalEditorMgr::GetInstance()->Refresh();
     TyStPlugInMgr::GetInstance()->Refresh();
     TyStFileSetMgr::GetInstance()->Refresh();
+    TyStFavoriteDirMgr::GetInstance()->Refresh();
 
     StCommandMgr->Refresh();
     StColorSchemeMgr->Refresh();

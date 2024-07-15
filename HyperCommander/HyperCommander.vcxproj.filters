@@ -400,6 +400,12 @@
     <ClCompile Include="..\UniqueLibs\builtInVolumeModel.cpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClCompile>
+    <ClCompile Include="..\UniqueLibs\solFavoriteDirMgr.cpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
+    </ClCompile>
+    <ClCompile Include="UIs\dlgFavoriteDir.cpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="UIs\dlgMain.ui">
@@ -448,6 +454,9 @@
       <Filter>UI Files\Cate - 파일 동작</Filter>
     </QtUic>
     <QtUic Include="UIs\dlgDefaultCMD.ui">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtUic>
+    <QtUic Include="UIs\dlgFavoriteDir.ui">
       <Filter>UI Files\Cate - 환경설정</Filter>
     </QtUic>
   </ItemGroup>
@@ -659,6 +668,15 @@
     <QtMoc Include="..\UniqueLibs\builtInVolumeModel.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
+    <QtMoc Include="..\UniqueLibs\cmnTypeDefs.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\solFavoriteDirMgr.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
+    </QtMoc>
+    <QtMoc Include="UIs\dlgFavoriteDir.hpp">
+      <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\uniqueLibs\globalCtx.hpp">
@@ -776,9 +794,6 @@
       <Filter>라이브러리\외부 라이브러리\TotalCommander</Filter>
     </ClInclude>
     <ClInclude Include="..\UniqueLibs\solMultiLang_Defs.hpp">
-      <Filter>라이브러리\고유 라이브러리</Filter>
-    </ClInclude>
-    <ClInclude Include="..\UniqueLibs\cmnTypeDefs.hpp">
       <Filter>라이브러리\고유 라이브러리</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnSecurity.hpp">

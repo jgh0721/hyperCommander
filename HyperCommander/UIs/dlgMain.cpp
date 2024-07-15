@@ -2,7 +2,9 @@
 #include "dlgMain.hpp"
 
 #include "colorSchemeMgr.hpp"
+#include "Components/cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
+#include "UIs/dlgFavoriteDir.hpp"
 
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/cmnTypeDefs.hpp"
@@ -10,6 +12,7 @@
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
+#include "UniqueLibs/solFavoriteDirMgr.hpp"
 
 QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     : QMainWindow( parent, flags )
@@ -101,6 +104,35 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
     currentPanelIndex = Prev;
 }
 
+DEFINE_HC_COMMAND( QMainUI, cm_SrcQuickView )
+{
+    const auto Src = retrieveSrcPanel();
+    const auto Dst = retrieveDstPanel();
+    Q_ASSERT( Src != nullptr );
+    Q_ASSERT( Dst != nullptr );
+
+    if( Src == nullptr || Dst == nullptr )
+        return;
+
+    /*!
+        Dst 의 현재 뷰가 QuickView 인지 확인. 그렇다면 이전 뷰로 되돌리고 끝낸다. ( QuickView 종료 )
+
+        Src 에서 현재 커서가 위치한 대상 파일이름 획득한다.
+        해당 파일명을 Dst 에 전달
+        Dst : 현재 포커스가 있는 뷰를 전환한다. 
+     */
+
+    const auto DstView = Dst->GetFocusView( Dst->CurrentTabIndex() );
+    if( DstView->GetViewMode() == CViewT::VM_QUICK )
+    {
+        Dst->CloseQuickView( Dst->CurrentTabIndex() );
+        return;
+    }
+
+    //Pane->CloseTab();
+    //currentPanelIndex = Prev;
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_CopyOtherPanel )
 {
     const auto Src = retrieveSrcPanel();
@@ -133,7 +165,6 @@ DEFINE_HC_COMMAND( QMainUI, cm_List )
 
     // Pane->ViewOnLister( CursorIndex );
 }
-
 DEFINE_HC_COMMAND( QMainUI, cm_Return )
 {
     const auto Pane = retrieveSrcPanel();
@@ -243,7 +274,32 @@ DEFINE_HC_COMMAND( QMainUI, cm_RereadSource )
     if( Pane == nullptr )
         return;
 
-    // Pane->RefreshSource( Pane->CurrentTabIndex() );
+    Pane->RefreshSource( Pane->CurrentTabIndex() );
+}
+
+DEFINE_HC_COMMAND( QMainUI, cm_DirectoryHotList )
+{
+    const auto StFavoriteDirMgr = TyStFavoriteDirMgr::GetInstance();
+
+    QMenu Menu;
+    StFavoriteDirMgr->ConstructDirMenu( &Menu );
+
+    QMetaObject::invokeMethod( &Menu, "setFocus", Qt::QueuedConnection );
+    auto ArrowDownEvent = new QKeyEvent( QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier );
+    qApp->postEvent( &Menu, ArrowDownEvent );   // 이벤트의 소유권은 Qt 에게로 이전되며, 자동으로 삭제된다. 
+
+    // TODO: 화면 중앙에 나타나도록 개선 필요함
+    Menu.exec( QCursor::pos() );
+}
+
+DEFINE_HC_COMMAND_EX( QMainUI, cm_GotoDrive )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    Pane->ChangeVolume( Parameter.toString() );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
@@ -279,7 +335,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_ExternalEditorMenu )
     if( Pane == nullptr )
         return;
 
-    // Pane->ExternalEditorMenu( CursorIndex );
+    Pane->ExternalEditorMenu( CursorIndex );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )

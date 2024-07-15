@@ -168,6 +168,11 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_CloseTab )
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
+DEFINE_HC_COMMAND( CCommandMgr, cm_SrcQuickView )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
 DEFINE_HC_COMMAND( CCommandMgr, cm_CopyOtherPanel )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
@@ -225,6 +230,16 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchHidSys )
 DEFINE_HC_COMMAND( CCommandMgr, cm_RereadSource )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND( CCommandMgr, cm_DirectoryHotList )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND_EX( CCommandMgr, cm_GotoDrive )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchPanel )

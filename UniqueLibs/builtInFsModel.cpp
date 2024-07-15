@@ -144,6 +144,14 @@ void CFSDirSizeGatherer::run()
 ////////////////////////////////////////////////////////////////////////////////
 ///
 
+QString CFSModel::GetName( const QModelIndex& Index ) const
+{
+    if( Index.isValid() == false || Index.row() < 0 || Index.row() >= vecNode_.size() )
+        return "";
+
+    return vecNode_.at( Index.row() )->Name_;
+}
+
 QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPath, bool IncludeDotDot /* = false */ )
 {
     WIN32_FIND_DATA Wfd = { 0, };
@@ -511,13 +519,6 @@ void CFSModel::createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column
     Item->VecContent[ Column ] = Content;
 }
 
-//QString FSModel::GetName( const QModelIndex& Index ) const
-//{
-//    if( Index.isValid() == false || Index.row() < 0 || Index.row() >= VecNode.size() )
-//        return "";
-//
-//    return VecNode.at( Index.row() ).Name;
-//}
 
 //DWORD FSModel::Rename( const QModelIndex& Index, const QString& NewName )
 //{
