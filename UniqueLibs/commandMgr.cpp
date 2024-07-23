@@ -145,6 +145,29 @@ bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& 
     return KeyEvent->isAccepted();
 }
 
+void CCommandMgr::ProcessFavoriteDir( const QString& Command, const QString& Path )
+{
+    if( Command.startsWith( "cd ", Qt::CaseInsensitive ) == true )
+    {
+        auto Arg = Command.mid( 3 );
+
+        if( Arg.startsWith( R"(\\\)" ) == true )
+        {
+            // VFS 플러그인
+        }
+        else
+        {
+            if( Arg.startsWith( "\"" ) == true && Arg.endsWith( "\"" ) == true )
+                Arg = Arg.mid( 1, Arg.size() - 1 );
+
+            cm_ChangePath( QModelIndex(), QStringList() << Arg << Path );
+            return;
+        }
+    }
+
+    Q_ASSERT( false );
+}
+
 ////////////////////////////////////////////////////////////////////////////
 /// 명령 핸들러
 
@@ -238,6 +261,11 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_DirectoryHotList )
 }
 
 DEFINE_HC_COMMAND_EX( CCommandMgr, cm_GotoDrive )
+{
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );
+}
+
+DEFINE_HC_COMMAND_EX( CCommandMgr, cm_ChangePath )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );
 }

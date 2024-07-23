@@ -62,6 +62,7 @@ public:
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
 
     Qtitan::GridViewBase*           BaseView() const;
+    CFsModelT*                      BaseModel() const;
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );

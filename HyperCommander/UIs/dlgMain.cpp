@@ -302,6 +302,20 @@ DEFINE_HC_COMMAND_EX( QMainUI, cm_GotoDrive )
     Pane->ChangeVolume( Parameter.toString() );
 }
 
+DEFINE_HC_COMMAND_EX( QMainUI, cm_ChangePath )
+{
+    const auto Pane = retrieveSrcPanel();
+    Q_ASSERT( Pane != nullptr );
+    if( Pane == nullptr )
+        return;
+
+    const auto Args = Parameter.toStringList();
+    if( Args.isEmpty() == true )
+        return;
+
+    Pane->ChangeCurrentPath( Args[ 0 ], Args.size() == 2 ? Args[1] : "" );
+}
+
 DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
 {
     if( currentPanelIndex == 0 )
@@ -336,6 +350,40 @@ DEFINE_HC_COMMAND( QMainUI, cm_ExternalEditorMenu )
         return;
 
     Pane->ExternalEditorMenu( CursorIndex );
+}
+
+void QMainUI::OnAddCurrentDirToFavorite()
+{
+    const auto Src = retrieveSrcPanel();
+    const auto View = Src->GetFocusView( Src->CurrentTabIndex() );
+    
+    if( View == nullptr )
+        return;
+
+    if( View->GetViewMode() != CViewT::VM_GRID )
+        return;
+
+    const auto Model = ( ( CGridView* )View )->BaseModel();
+    if( Model == nullptr )
+        return;
+
+    const auto Current = Model->GetCurrentPathWithRoot();
+
+    QInputDialog Ui;
+    Ui.setLabelText( tr( "항목의 이름을 지정해 주세요:" ) );
+    Ui.setOkButtonText( tr( "확인(&O)" ) );
+    Ui.setCancelButtonText( tr( "취소(&C)" ) );
+    Ui.setTextValue( Current );
+    Ui.setOptions( QInputDialog::UsePlainTextEditForTextInput );
+    Ui.setInputMode( QInputDialog::TextInput );
+    if( Ui.exec() == QDialog::Rejected )
+        return;
+
+    const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
+    CFavoriteDirMgr::TyFavoriteDir CurrentCMD;
+    CurrentCMD.Name = Ui.textValue();
+    CurrentCMD.Command = QString( R"(cd %1)" ).arg( Current );
+    StFavorites->SetItem( CurrentCMD );
 }
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
@@ -398,6 +446,9 @@ void QMainUI::initialize()
 {
     const auto StCommandMgr = TyStCommandMgr::GetInstance();
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+    const auto StFavoriteDirMgr = TyStFavoriteDirMgr::GetInstance();
+
+    connect( StFavoriteDirMgr, &CFavoriteDirMgr::NotifyAppendCurrentPath, this, &QMainUI::OnAddCurrentDirToFavorite );
 
     ui.menubar->setNativeMenuBar( true );
 

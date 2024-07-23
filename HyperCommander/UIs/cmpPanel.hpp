@@ -86,13 +86,14 @@ public:
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ExternalEditorMenu( const QModelIndex& SrcIndex );
     void                            ChangeVolume( const QString& Drive );
+    void                            ChangeCurrentPath( const QString& Path, const QString& Parameter );
 
 public slots:
 
     void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
     void                            OnChangedDirectory( const QString& CurrentPath );
 
-    void                            on_cbxVolume_currentIndexChanged( int index );
+    void                            on_cbxVolume_currentIndexChanged( int index, const QString& Path = "" );
     void                            on_tabWidget_currentChanged( int Index );
 
 signals:

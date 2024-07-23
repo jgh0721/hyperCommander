@@ -48,12 +48,15 @@ public slots:
 
     DECLARE_HC_COMMAND( cm_DirectoryHotList );
     DECLARE_HC_COMMAND_EX( cm_GotoDrive );
+    DECLARE_HC_COMMAND_EX( cm_ChangePath );
 
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );
     DECLARE_HC_COMMAND( cm_ExternalEditorMenu );
 
 protected slots:
+
+    void                                OnAddCurrentDirToFavorite();
 
     void                                on_acShowMainOpts_triggered( bool checked = false );
 

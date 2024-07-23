@@ -30,6 +30,7 @@ public:
     void                                SetMainUI( QWidget* MainUI );
 
     bool                                ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex );
+    void                                ProcessFavoriteDir( const QString& Command, const QString& Path );
 
 public slots:
     ////////////////////////////////////////////////////////////////////////////
@@ -60,6 +61,7 @@ public slots:
 
     DECLARE_HC_COMMAND( cm_DirectoryHotList );
     DECLARE_HC_COMMAND_EX( cm_GotoDrive );
+    DECLARE_HC_COMMAND_EX( cm_ChangePath );
 
     DECLARE_HC_COMMAND( cm_SwitchPanel );
     DECLARE_HC_COMMAND( cm_ContextMenu );

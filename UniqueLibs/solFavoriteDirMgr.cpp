@@ -62,6 +62,21 @@ void CFavoriteDirMgr::SetItem( TyFavoriteDir Item )
     SaveSettings();
 }
 
+void CFavoriteDirMgr::RemoveItem( const QString& Name )
+{
+    for( int idx = 0; idx < vecItems_.size(); ++idx )
+    {
+        const auto& Item = vecItems_[ idx ];
+        if( Item.Name != Name )
+            continue;
+
+        vecItems_.removeAt( idx );
+        break;
+    }
+
+    SaveSettings();
+}
+
 CFavoriteDirMgr::TyEnDrivesOn CFavoriteDirMgr::GetDrivesOn() const
 {
     return drivesOn_;
@@ -84,7 +99,10 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
 
     for( const auto& Dir : vecItems_ )
     {
-        
+        const auto Ac = Menu->addAction( Dir.Name );
+        connect( Ac, &QAction::triggered, [Dir]() {
+            TyStCommandMgr::GetInstance()->ProcessFavoriteDir( Dir.Command, Dir.Path );
+        } );
     }
 
     if( drivesOn_ == DRIVES_ON_BOTTOM )

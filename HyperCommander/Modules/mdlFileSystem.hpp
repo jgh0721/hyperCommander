@@ -173,7 +173,19 @@ namespace nsHC
     private:
 
         LPITEMIDLIST            Root = nullptr;
+        KNOWNFOLDERID           RootId;
         LPSHELLFOLDER           Desktop = nullptr;
+    };
+
+    class CFSSmb : public CFileSystemT
+    {
+    public:
+        explicit CFSSmb( const QString& Root );
+
+        QVector< nsHC::TySpFileSource > GetChildItems( const QString& Server, bool IncludeDotDot = false );
+
+    private:
+        CFSShell                shl_net;
     };
 
     class CFSPack : public CFileSystemT

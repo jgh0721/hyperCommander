@@ -24,6 +24,7 @@ public:
     TyFavoriteDir                   GetItem( qsizetype Idx ) const;
     TyFavoriteDir                   GetItem( const QString& Name ) const;
     void                            SetItem( TyFavoriteDir Item );
+    void                            RemoveItem( const QString& Name );
     TyEnDrivesOn                    GetDrivesOn() const;
     void                            SetDrivesOn( TyEnDrivesOn DrivesOn );
 

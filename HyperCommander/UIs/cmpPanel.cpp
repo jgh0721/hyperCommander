@@ -97,6 +97,26 @@ void CmpPanel::RefreshVolumeList() const
         }
     }
 
+    {
+        const auto FsUNC = nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( R"(\\)" ) );
+        if( FsUNC != nullptr )
+        {
+            const auto Item = ui.cbxVolume->CreateItem();
+            const auto Label = tr("\\ | 네트워크 환경" );
+
+            Item->setFixedHeight( 32 );
+            Item->SetText( tr("네트워크 환경") );
+            Item->GetItem()->setForeground( QColor( "black" ) );
+            Item->GetItem()->setBackground( QColor( "yellow" ) );
+            Item->GetItem()->setIcon( DriveIcon );
+            Item->AddLabel()->setText( Label );
+            Item->AddLabel()->adjustSize();
+            Item->SetUserData( Qt::UserRole, QVariant::fromValue( FsUNC ) );
+
+            ui.cbxVolume->AppendItem( Item->GetItem(), Item );
+        }
+    }
+
     ui.cbxVolume->setCurrentIndex( Current );
 
     //    //if( ui.cbxVolume->count() > 0 )
@@ -465,6 +485,38 @@ void CmpPanel::ChangeVolume( const QString& Drive )
         ui.cbxVolume->setCurrentIndex( FsIndex );
 }
 
+void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter )
+{
+    int FsIndex = -1;
+    QString Child;
+
+    {
+        QSignalBlocker Blocker( ui.cbxVolume );
+
+        for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
+        {
+            const auto& Fs = ui.cbxVolume->GetItem( idx )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+            if( Fs == nullptr )
+                continue;
+
+            // TODO: Drive 가 UNC 인 경우에도 추가처리가 필요하다. 
+            const auto Root = Fs->GetRoot();
+            if( Path.startsWith( Root, Qt::CaseInsensitive ) == false )
+                continue;
+
+            FsIndex = idx;
+            Child = Path.mid( Root.size() );
+            break;
+        }
+
+        if( FsIndex >= 0 )
+            ui.cbxVolume->setCurrentIndex( FsIndex );
+    }
+
+    if( FsIndex >= 0 )
+        on_cbxVolume_currentIndexChanged( FsIndex, Child );
+}
+
 //////////////////////////////////////////////////////////////////////////////
 /// Slot Handler 
 
@@ -527,7 +579,7 @@ void CmpPanel::OnChangedDirectory( const QString& CurrentPath )
     emit sig_NotifyCurrentDirectory( CurrentPath );
 }
 
-void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
+void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path )
 {
     // TODO: 실제 파일시스템 외의 것들은 예외처리 필요함
     const auto State = retrieveFocusState();
@@ -545,7 +597,10 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index )
 
     State->Model->SetRoot( Fs );
     State->Model->SetCurrentPath( "\\" );
-    State->Model->ChangeDirectory( QModelIndex() );
+    if( Path.isEmpty() == true )
+        State->Model->ChangeDirectory( QModelIndex() );
+    else
+        State->Model->ChangeDirectory( Path );
 
     State->View->AdjustSizeToContents();
     QTimer::singleShot( 0, [State]() {State->View->EnsureKeyboardFocusOnView(); } );
@@ -823,7 +878,7 @@ void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem
     }
     else if( SpFileSystem->GetCate() == nsHC::FS_CATE_REMOTE )
     {
-        Q_ASSERT( false );
+        //Q_ASSERT( false );
     }
 }
 

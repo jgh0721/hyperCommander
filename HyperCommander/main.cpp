@@ -18,24 +18,6 @@ int main( int argc, char* argv[] )
     QCoreApplication::setAttribute( Qt::AA_EnableHighDpiScaling, true );
     QCoreApplication::setAttribute( Qt::AA_UseHighDpiPixmaps, true );
 
-    WCHAR a[ MAX_PATH ];
-    auto q = GetLogicalDriveStringsW( MAX_PATH, a );
-    WCHAR* b = a;
-    WCHAR wszDrive[ 3 ] = L" :";
-    bool bFound = false;
-
-    const auto ty = GetDriveTypeW( L"F:\\" );
-
-    do
-    {
-        *wszDrive = *b;
-        qDebug() << QString::fromWCharArray( wszDrive );
-
-
-        while( *b++ );
-        
-    } while( !bFound && *b );
-
     HyperCommanderApp app( argc, argv );
 
     do

@@ -4,6 +4,8 @@
 #include "cmnHCUtils.hpp"
 #include "cmnTypeDefs_Name.hpp"
 
+#include <lm.h>
+
 DECLARE_CMNLIBSV2_NAMESPACE
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -71,8 +73,7 @@ namespace nsHC
 
         if( IsUNCPath == true )
         {
-
-            return nullptr;
+            return new nsHC::CFSSmb( "\\" );
         }
 
         if( IsUNCPath == false )
@@ -232,7 +233,8 @@ namespace nsHC
     {
         cate_ = FS_CATE_VIRUAL;
         features_ = FS_FEA_LIST;
-        const auto Ret = SHGetKnownFolderIDList( FolderId, KF_FLAG_CREATE, nullptr, &Root );
+        RootId = FolderId;
+        const auto Ret = SHGetKnownFolderIDList( RootId, KF_FLAG_CREATE, nullptr, &Root );
     }
 
     CFSShell::~CFSShell()
@@ -306,7 +308,7 @@ namespace nsHC
                         Fs->Attributes_ |= FILE_ATTRIBUTE_SYSTEM;
                     Fs->Size_       = 0;
                     Fs->Flags_      = CFileSourceT::FS_FLAG_PIDL;
-                    if( Child == nullptr )
+                    if( Child == nullptr && RootId == FOLDERID_ComputerFolder )
                         Fs->Flags_ |= CFileSourceT::FS_FLAG_DRIVE;
                     Fs->Reserved0_  = 0;
                     Fs->Created_    = QDateTime::currentDateTime();
@@ -364,6 +366,58 @@ namespace nsHC
             //} while( false );
 
             //ShellDesktop->Release();
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    ///
+
+    CFSSmb::CFSSmb( const QString& Root )
+        : CFileSystemT( Root ), shl_net( FOLDERID_NetworkFolder )
+    {
+        cate_ = FS_CATE_REMOTE;
+        features_ |= FS_FEA_LIST;
+    }
+
+#pragma comment( lib, "netapi32" )
+
+    QVector<nsHC::TySpFileSource> CFSSmb::GetChildItems( const QString& Server, bool IncludeDotDot )
+    {
+        QVector<nsHC::TySpFileSource> Ret;
+        PSHARE_INFO_1 Buffer = nullptr, Cur = nullptr;
+        NET_API_STATUS Res;
+        DWORD er = 0, tr = 0, resume = 0;
+
+        do
+        {
+            Res = NetShareEnum( (LPWSTR) Server.toStdWString().c_str(), 1, reinterpret_cast< LPBYTE* >( &Buffer ), MAX_PREFERRED_LENGTH, &er, &tr, &resume );
+
+            if( Res == ERROR_SUCCESS || Res == ERROR_MORE_DATA )
+            {
+                Cur = Buffer;
+
+                for( DWORD i = 1; i <= er; ++i )
+                {
+                    if( FlagOn( Cur->shi1_type, STYPE_SPECIAL ) )
+                    {
+                        Cur++;
+                        continue;
+                    }
+
+                    const auto Fs = std::make_shared_for_overwrite< nsHC::CFileSourceT >();
+
+                    Fs->Name_ = QString::fromWCharArray( Cur->shi1_netname );
+                    Fs->Attributes_ |= FILE_ATTRIBUTE_DIRECTORY;
+                    
+                    Cur++;
+                    Ret.push_back( Fs );
+                }
+
+                NetApiBufferFree( Buffer );
+            }
+
+        } while( Res == ERROR_MORE_DATA );
+
+        return Ret;
     }
 
     ////////////////////////////////////////////////////////////////////////////////

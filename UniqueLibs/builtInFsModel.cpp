@@ -328,7 +328,9 @@ void CFSModel::doRefresh()
     auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
     if( Attr == INVALID_FILE_ATTRIBUTES || FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
         Attr = 0;
-
+    if( Root->GetCate() == nsHC::FS_CATE_REMOTE )
+        Attr = FILE_ATTRIBUTE_DIRECTORY;
+    
     // NOTE: 해당 스레드에서 기본적인 파일 목록을 완성한다.
     // NOTE: 추가적으로 폴더 크기, 아이콘 등은 배경 스레드를 통해 완성시킨다. 
 
@@ -336,10 +338,27 @@ void CFSModel::doRefresh()
         ( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL ) )
     {
         // 파일 목록을 얻은 후, 스레드를 통해 아이콘 등을 획득한다.
-        if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
-            VecItems += GetChildItems( Base, true );
-        if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL )
-            VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
+        if( Root->GetCate() == nsHC::FS_CATE_REMOTE )
+        {
+            // NOTE: 서버 주소만 있다면 다른 방식으로 열거해야 한다.
+            if( Base.startsWith( "\\\\" ) == true && Base.count( '\\' ) == 2 )
+            {
+                // 서버 주소, Share 열거해야 함
+                VecItems += ( ( nsHC::CFSSmb* )Root.get() )->GetChildItems( Base, false );
+            }
+            else
+            {
+                if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
+                    VecItems += GetChildItems( Base, true );
+            }
+        }
+        else
+        {
+            if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
+                VecItems += GetChildItems( Base, true );
+            if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL )
+                VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
+        }
     }
     else
     {

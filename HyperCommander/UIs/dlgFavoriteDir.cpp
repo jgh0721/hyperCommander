@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "dlgFavoriteDir.hpp"
 
+#include "cmnHCUtils.hpp"
 #include "solFavoriteDirMgr.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
@@ -29,7 +30,37 @@ void QFavoriteDirConfigure::on_lstDir_currentItemChanged( QListWidgetItem* Curre
 
 void QFavoriteDirConfigure::on_btnAdd_clicked( bool checked )
 {
-    // TODO: 이름 중복 체크
+    bool Is = false;
+    const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
+
+    do
+    {
+        QInputDialog Ui;
+
+        Ui.setLabelText( tr( "항목의 이름을 지정해 주세요:" ) );
+        Ui.setOkButtonText( tr( "확인(&O)" ) );
+        Ui.setCancelButtonText( tr( "취소(&C)" ) );
+        Ui.setTextValue( tr( "새 항목" ) );
+        Ui.setOptions( QInputDialog::UsePlainTextEditForTextInput );
+        Ui.setInputMode( QInputDialog::TextInput );
+        if( Ui.exec() == QDialog::Rejected )
+            return;
+
+        const auto Name = Ui.textValue();
+
+        if( StFavorites->GetNames().contains( Name, Qt::CaseInsensitive ) == true )
+        {
+            ::ShowMSGBox( this, QMessageBox::Information, tr( "이미 있는 이름입니다." ) );
+            Is = true;
+        }
+        else
+        {
+            ui.lstDir->addItem( Name );
+            StFavorites->SetItem( { Name, "", "" } );
+            Is = false;
+        }
+
+    } while( Is == true );
 }
 
 void QFavoriteDirConfigure::on_btnRemove_clicked( bool checked )
@@ -39,6 +70,12 @@ void QFavoriteDirConfigure::on_btnRemove_clicked( bool checked )
         return;
 
     // 해당 이름으로 Remove, 그후 SaveSettings 및 Refresh, UI 새로고침
+
+    const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
+    StFavorites->RemoveItem( Current->text() );
+
+    refresh();
+    refreshItem( "" );
 }
 
 void QFavoriteDirConfigure::on_btnRename_clicked( bool checked )
@@ -46,6 +83,8 @@ void QFavoriteDirConfigure::on_btnRename_clicked( bool checked )
     const auto Current = ui.lstDir->currentItem();
     if( Current == nullptr )
         return;
+
+    const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
 
     // TODO: QInputDialog 로 변경할 이름 입력 받음
     // TODO: Rename 함수 필요함

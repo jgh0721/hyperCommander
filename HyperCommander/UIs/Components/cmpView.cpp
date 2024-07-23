@@ -503,6 +503,11 @@ Qtitan::GridViewBase* CGridView::BaseView() const
     return view_;
 }
 
+CFsModelT* CGridView::BaseModel() const
+{
+    return model_;
+}
+
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
     if( Event->type() == QEvent::KeyPress )
