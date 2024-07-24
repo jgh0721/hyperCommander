@@ -362,7 +362,7 @@ void CFSModel::doRefresh()
     }
     else
     {
-        // NOTE: 압축파일인지 확인
+        // NOTE: 압축파일인지 확인6
         if( FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
         {
             const auto Model = ( ( nsHC::CFSPack* )Root.get() )->Model();

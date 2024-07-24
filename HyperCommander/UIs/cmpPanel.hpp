@@ -6,6 +6,7 @@
 #include "cmnTypeDefs.hpp"
 
 #include "ui_cmpPanel.h"
+#include "Components/cmpView.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
 class CFsModelT;
@@ -57,6 +58,7 @@ class CmpPanel : public QWidget
         int                         SelectedFileCount = 0;
         int                         SelectedDirectoryCount = 0;
 
+        CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }
         QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
 
 // QVector< QModelIndex >      SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
@@ -78,6 +80,7 @@ public:
     void                            SetFocusView( int TabIndex );
     CViewT*                         GetFocusView( int TabIndex ) const;
 
+    void                            OpenQuickView( int TabIndex, const QString& FilePath );
     void                            CloseQuickView( int TabIndex );
 
     void                            RefreshSource( int TabIndex );

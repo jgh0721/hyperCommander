@@ -258,9 +258,27 @@ CViewT* CmpPanel::GetFocusView( int TabIndex ) const
 
     const auto& State = vecTabStates.value( TabIndex );
     if( State->QuickView != nullptr )
-        State->QuickView;
+        return State->QuickView;
 
     return State->View;
+}
+
+void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
+{
+    if( TabIndex < 0 || vecTabStates.isEmpty() == true )
+        return;
+
+    {
+        QSignalBlocker Blocker( ui.tabWidget );
+        const auto& State = vecTabStates.value( TabIndex );
+        const auto& TabTitle = ui.tabWidget->tabText( TabIndex );
+
+        ui.tabWidget->removeTab( TabIndex );
+        State->QuickView = new CQuickView;
+        ( ( CQuickView* )State->QuickView )->SetFilePath( FilePath );
+        ui.tabWidget->insertTab( 0, State->QuickView, TabTitle );
+        ui.tabWidget->setCurrentIndex( TabIndex );
+    }
 }
 
 void CmpPanel::CloseQuickView( int TabIndex )
@@ -269,16 +287,21 @@ void CmpPanel::CloseQuickView( int TabIndex )
     if( TabIndex < 0 || TabIndex >= ui.tabWidget->count() )
         return;
 
-    const auto& State = vecTabStates[ TabIndex ];
+    {
+        QSignalBlocker Blocker( ui.tabWidget );
+        const auto& State = vecTabStates[ TabIndex ];
+        const auto& TabTitle = ui.tabWidget->tabText( TabIndex );
 
-    if( State->QuickView == nullptr )
-        return;
+        if( State->QuickView == nullptr )
+            return;
 
-    State->QuickView->CloseView();
-    ui.tabWidget->setCurrentWidget( State->View );
-    State->QuickView->deleteLater();
-    State->QuickView = nullptr;
-    SetFocusView( TabIndex );
+        State->QuickView->CloseView();
+        ui.tabWidget->removeTab( TabIndex );
+        State->QuickView->deleteLater();
+        State->QuickView = nullptr;
+        ui.tabWidget->insertTab( 0, State->View, TabTitle );
+        ui.tabWidget->setCurrentIndex( TabIndex );
+    }
 }
 
 void CmpPanel::RefreshSource( int TabIndex )
@@ -586,6 +609,10 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path 
     if( State == nullptr )
         return;
 
+    // 해당 탭에서 QuickView 를 표시하고 있었다면 닫고 GridView 로 전환한다.
+    if( State->GetViewMode() == CViewT::VM_QUICK )
+        CloseQuickView( retrieveCurrentIndex() );
+
     const auto ViewMode = State->View->GetViewMode();
     Q_ASSERT( ViewMode == CViewT::VM_GRID );
 
@@ -609,7 +636,9 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path 
 }
 
 void CmpPanel::on_tabWidget_currentChanged( int Index )
-{   
+{
+    // TODO: 모든 탭을 검사하여 기존에 탭 중에 QuickView 모드인 것이 있다면 닫아야 한다.
+
     if( Index < 0 )
         return;
     

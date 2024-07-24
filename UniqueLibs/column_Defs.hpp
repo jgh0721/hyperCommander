@@ -61,7 +61,7 @@ const ColumnView BUILTIN_COLVIEW_DETAILS = {
     QObject::tr( "자세히" ), true,
     QVector< Column >()
         << Column { 0, 0, QObject::tr( "이름" ),      Qt::AlignLeft,     BUILTIN_COL_FS_NAME }
-        << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignCenter,   BUILTIN_COL_FS_SIZE }
+        << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignRight,    BUILTIN_COL_FS_SIZE }
         << Column { 2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_CREATED }
         << Column { 3, 0, QObject::tr( "속성" ),      Qt::AlignCenter,   BUILTIN_COL_FS_ATTRIB_TEXT }
 };

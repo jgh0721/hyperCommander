@@ -15,7 +15,7 @@ class CViewT : public QWidget
 {
     Q_OBJECT
 public:
-    enum TyEnViewMode { VM_NONE, VM_GRID, VM_WLX, VM_QUICK };
+    enum TyEnViewMode { VM_NONE, VM_GRID, VM_QUICK, VM_LISTER };
     CViewT( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     TyEnViewMode                    GetViewMode() const { return viewMode_; }
@@ -104,12 +104,62 @@ private:
 
 };
 
-class CWLXView : public CViewT
+class CViewBase : public CViewT
 {
     Q_OBJECT
 public:
+    CViewBase( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() )
+        : CViewT( Parent, f )
+    {}
+
+    void                            SetFilePath( const QString& FilePath ) { filePath_ = FilePath; }
+    QString                         GetFilePath() const { return filePath_; }
+
+protected:
+
+    QString                         filePath_;
 
 private:
+};
+
+class CInternalViewer : public CViewBase
+{
+    Q_OBJECT
+public:
+    CInternalViewer( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
+
+};
+
+class CExternalViewer : public CViewBase
+{
+    Q_OBJECT
+public:
+    CExternalViewer( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::FramelessWindowHint  );
+    ~CExternalViewer();
+
+    void                            SetWLX( TySpWLX Viewer );
+    bool                            Initialize();
+
+    ///////////////////////////////////////////////////////////////////////////
+    ///
+
+    HWND                            ListLoad( HWND ParentWin, const QString& FilePath, int ShowFlags );
+
+private:
+    void                            setDefaultParams();
+
+    static LRESULT CALLBACK         cbWndProc( _In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In_ LPARAM lParam );
+    static LRESULT CALLBACK         cbWndProcChild( _In_ HWND hWnd, _In_ UINT uMsg, _In_ WPARAM wParam, _In_ LPARAM lParam );
+
+protected:
+
+    TySpWLX                         viewer_;
+    ATOM                            atom;
+    QWidget*                        wParent = nullptr;
+    HWND                            hParent = nullptr;
+
+    QWidget*                        wChild = nullptr;
+    HWND                            hChild = nullptr;
 
     QVBoxLayout*                    vbox_ = nullptr;
 };
@@ -118,9 +168,19 @@ class CQuickView : public CViewT
 {
     Q_OBJECT
 public:
+    CQuickView( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
+
+    void                            SetFilePath( const QString& FilePath );
+
+protected:
+    void                            showEvent( QShowEvent* event ) override;
 
 private:
 
-    QVBoxLayout*                    vbox_ = nullptr;
+    bool                            isInitOnce_ = false;
+    QString                         filePath_;
+    CInternalViewer*                internalViewer_ = nullptr;
+    CExternalViewer*                externalViewer_ = nullptr;
 
+    QVBoxLayout*                    vbox_ = nullptr;
 };

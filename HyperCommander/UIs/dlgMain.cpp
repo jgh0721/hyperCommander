@@ -129,8 +129,17 @@ DEFINE_HC_COMMAND( QMainUI, cm_SrcQuickView )
         return;
     }
 
-    //Pane->CloseTab();
-    //currentPanelIndex = Prev;
+    const auto SrcView = Src->GetFocusView( Src->CurrentTabIndex() );
+    Q_ASSERT( SrcView->GetViewMode() == CViewT::VM_GRID );
+
+    QModelIndex SrcIndex = CursorIndex;
+    const auto Proxy = qobject_cast< const QAbstractProxyModel* >( CursorIndex.model() );
+    if( Proxy != nullptr )
+        SrcIndex = Proxy->mapToSource( CursorIndex );
+
+    const auto FilePath = static_cast< CGridView* >( SrcView )->BaseModel()->GetFileFullPath( SrcIndex );
+
+    Dst->OpenQuickView( Dst->CurrentTabIndex(), FilePath );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_CopyOtherPanel )
