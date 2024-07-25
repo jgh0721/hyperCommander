@@ -68,37 +68,51 @@ ECHO.
 
 ECHO Building Google ProtocolBuffer...
 PUSHD %~dp0
-Call GoogleProtocolBuffer\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "GoogleProtocolBuffer\Script\buildWithMSVC.cmd" (
+	Call GoogleProtocolBuffer\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building bit7z...
 PUSHD %~dp0
-Call bit7z\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "bit7z\script\buildWithMSVC.cmd" (
+	Call bit7z\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building CryptoPP...
 PUSHD %~dp0
-Call CryptoPP\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "CryptoPP\script\buildWithMSVC.cmd" (
+	Call CryptoPP\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building QtitanDataGrid...
 PUSHD %~dp0
-Call QtitanDataGrid\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "QtitanDataGrid\script\buildWithMSVC.cmd" (
+	Call QtitanDataGrid\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building QtitanChart...
 PUSHD %~dp0
-Call QtitanChart\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "QtitanChart\script\buildWithMSVC.cmd" (
+	Call QtitanChart\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building QtnProperty...
 PUSHD %~dp0
-Call QtnProperty\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+IF EXIST "QtnProperty\script\buildWithMSVC.cmd" (
+	Call QtnProperty\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static
+)
 POPD
 
 ECHO Building QtPropertyBrowser...
 PUSHD %~dp0
-Call QtPropertyBrowser\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static 
+IF EXIST "QtPropertyBrowser\script\buildWithMSVC.cmd" (
+	Call QtPropertyBrowser\script\buildWithMSVC.cmd %COMPILER% %PLATFORM% Static 
+)
 POPD
 
 GOTO END
