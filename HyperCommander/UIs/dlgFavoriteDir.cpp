@@ -90,8 +90,27 @@ void QFavoriteDirConfigure::on_btnRename_clicked( bool checked )
     // TODO: Rename 함수 필요함
 }
 
+void QFavoriteDirConfigure::on_edtCommand_editingFinished()
+{
+    CFavoriteDirMgr::TyFavoriteDir Item;
+    const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
+
+    Item.Name       = ui.lstDir->currentItem()->text();
+    Item.Command    = ui.edtCommand->text();
+    Item.Path       = ui.edtPath->text();
+
+    StFavorites->SetItem( Item );
+}
+
+void QFavoriteDirConfigure::on_edtPath_editingFinished()
+{
+    on_edtCommand_editingFinished();
+}
+
 void QFavoriteDirConfigure::on_btnOK_clicked( bool checked )
 {
+    on_edtCommand_editingFinished();
+
     done( Accepted );
 }
 

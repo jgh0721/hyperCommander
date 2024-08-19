@@ -19,6 +19,9 @@ protected slots:
     void                            on_btnRemove_clicked( bool checked = false );
     void                            on_btnRename_clicked( bool checked = false );
 
+    void                            on_edtCommand_editingFinished();
+    void                            on_edtPath_editingFinished();
+
     void                            on_btnOK_clicked( bool checked = false );
     void                            on_btnCancel_clicked( bool checked = false );
 
