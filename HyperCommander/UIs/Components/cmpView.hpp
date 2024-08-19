@@ -76,6 +76,7 @@ protected slots:
 protected:
     bool                            eventFilter( QObject* watched, QEvent* Event ) override;
     void                            resizeEvent( QResizeEvent* event ) override;
+    bool                            nativeEvent( const QByteArray& eventType, void* message, qintptr* result ) override;
 
 private:
     QModelIndex                     retrieveCursorIndex() const;

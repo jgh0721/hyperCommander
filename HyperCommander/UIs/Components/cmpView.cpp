@@ -45,6 +45,7 @@ bool CViewT::eventFilter( QObject* Watched, QEvent* Event )
 CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     : CViewT( Parent, f )
 {
+    ( void )winId();
     setAttribute( Qt::WA_KeyCompression, true );
     setAttribute( Qt::WA_InputMethodEnabled, true );
 
@@ -62,6 +63,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     grid_->viewport()->setFocusPolicy( Qt::StrongFocus );
 
     grid_->installEventFilter( this );
+
     grid_->setContextMenuPolicy( Qt::CustomContextMenu );
 
     view_ = grid_->view< GridBandedTableView >();
@@ -549,6 +551,21 @@ void CGridView::resizeEvent( QResizeEvent* event )
         view_->bestFit( FitToHeaderPercent );
 
     CViewT::resizeEvent( event );
+}
+
+bool CGridView::nativeEvent( const QByteArray& eventType, void* message, qintptr* result )
+{
+    int a = 0;
+    if( eventType != "windows_generic_MSG" )
+        return CViewT::nativeEvent( eventType, message, result );
+
+    MSG* msg = static_cast< MSG* >( message );
+    if( msg->message == WM_CHAR )
+    {
+        qDebug() << __FUNCTION__ << " : " << QChar( ushort( msg->wParam ) );
+    }
+
+    return false;
 }
 
 QModelIndex CGridView::retrieveCursorIndex() const
