@@ -140,7 +140,7 @@ bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& 
 
     const auto CMD = KtoCMD->value( KCombined );
     Q_ASSERT( CMD.isEmpty() == false );
-    KeyEvent->setAccepted( QMetaObject::invokeMethod( this, CMD.data(), Qt::QueuedConnection, CursorIndex ) );
+    KeyEvent->setAccepted( QMetaObject::invokeMethod( this, CMD.data(), Qt::DirectConnection, CursorIndex ) );
 
     return KeyEvent->isAccepted();
 }
