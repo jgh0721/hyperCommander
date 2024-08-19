@@ -2,14 +2,19 @@
 
 #include <QtCore>
 
+#include "mdlFileSystem.hpp"
+
 namespace nsHC
 {
     enum TyEnFEMode
     {
+        FE_MODE_NONE,
         FE_MODE_COPY, 
         FE_MODE_MOVE, 
         FE_MODE_DELETE, 
         FE_MODE_RENAME,
+        FE_MODE_MKDIR,              // Src = 부모 디렉토리, Dst = , Input = 생성할 디렉토리 이름( 구분자를 이용하여 다단계 생성 가능 )
+        FE_MODE_RMDIR,              // Src = 디렉토리 목록,
     };
 
     enum TyEnFEState
@@ -40,29 +45,88 @@ namespace nsHC
     enum TyEnFEResult
     {
         FE_RESULT_SUCCEED, 
-        FS_RESULT_FAILED,
+        FE_RESULT_FAILED,
         FE_RESULT_CANCELED,
     };
+
+    struct CFETaskItemSource
+    {
+        nsHC::TySpFileSystem                Fs;
+        QVector< nsHC::TySpFileSource >     Items;
+    };
+
+    using TySpFETaskItemSource = QSharedPointer< CFETaskItemSource >;
+
+    /*!
+     * 지정한 작업의 상태 전환 알림
+     * TyEnFEState 의 값 순서대로 상태 전환이 이루어짐
+     *
+     * @return  0 == 계속 진행
+     *          1 == 처리 중지( 사용자 취소 )
+     */
+    typedef int ( *TyFnFEChangeState )( PVOID Context, TyEnFEState Current, TyEnFEState Previous );
+    /*!
+     * 지정한 작업의 진행 상태 알림
+     * 총 몇 개 중에 몇 번째 항목 진행 중
+     * 총 크기 ~~ 바이트, 현재 항목의 크기 ~~ 바이트, 현재 진행 ~~ 바이트
+     * @return  0 == 계속 진행
+     */
+    typedef int ( *TyFnFENotifyProgress )( PVOID Context, uint32_t CurrentIdx, uint32_t TotalCount, uint64_t CurrentSize, uint64_t Progress, uint64_t TotalSize );
+    /*!
+     * 오류 상황을 제외하고 사용자와 상호작용을 해야할 때 알림
+     *
+     * @return 
+     */
+    typedef int ( *TyFnFEUserInteraction )( PVOID Context, const QString& Caption, const QString& Content );
+    /*!
+     * 오류가 발생하였음을 알림
+     *
+     * @return 
+     */
+    typedef int ( *TyFnFEErrorOccured )( PVOID Context, const QString& Caption, const QString& Content, const TyOsError& ErrorValue );
+
+    struct CFETaskItem
+    {
+        GUID                                Id;
+        TyEnFEMode                          Type = FE_MODE_NONE;
+        TySpFETaskItemSource                Src;
+        TySpFETaskItemSource                Dst;
+        QString                             Input;
+
+        // 필요한 콜백 함수
+        PVOID                               Context = nullptr;
+
+        // 상태 전환 함수
+        TyFnFEChangeState                   pfnChangeState = nullptr;
+
+        // 진행도 알림 함수
+        // 상호작용 함수
+        TyFnFEUserInteraction               pfnUserInteraction = nullptr;
+        TyFnFEErrorOccured                  pfnErrorOccured = nullptr;
+    };
+
+    using TySpFETaskItem = QSharedPointer< CFETaskItem >;
 
     class CFileEngine : public QThread
     {
         Q_OBJECT
     public:
+        bool                                QueueTask( const TySpFETaskItem& Item );
 
-    public:
+        bool                                ExecuteTask( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
 
-        void SetMode();
-        void SetSrcModel();
-        void SetDstModel();
-        void SetDefaultAction();
+    private:
+            
+        void                                processMkDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
+        void                                processRmDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
 
-    signals:
-        void NotifyStateChanged( TyEnFEState State );
-        void NotifyItemChanged();
-        void NotifyProgressChanged();
-        void NotifyTransferChanged();
+        int                                 notifyChangeState( const TySpFETaskItem& Task, TyEnFEState Curr, TyEnFEState Prev );
+
+        QVector< TySpFETaskItem >           Items;
     };
 
     // 파일 엔진 클래스는 CFileSource 를 입력으로 받음
 } // nsHC
+
+using TyStFileEngine = nsCmn::nsConcurrent::TSingleton< nsHC::CFileEngine >;
 

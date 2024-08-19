@@ -26,6 +26,8 @@
 
 #include <QtitanGrid.h>
 
+#include "Modules/mdlFileEngine.hpp"
+
 DECLARE_CMNLIBSV2_NAMESPACE
 
 //////////////////////////////////////////////////////////////////////////////
@@ -310,6 +312,46 @@ void CmpPanel::RefreshSource( int TabIndex )
         return;
 
     vecTabStates[ TabIndex ]->Model->Refresh();
+}
+
+void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    QDirectoryCreateUI Ui;
+    const auto Ret = Ui.exec();
+    if( Ret == QDialog::Rejected )
+        return;
+
+    const auto NewName = Ui.GetInputText();
+    if( NewName.isEmpty() == true )
+        return;
+
+    const auto FileEngine = TyStFileEngine::GetInstance();
+    const auto State = retrieveFocusState();
+
+    const auto TaskItem = nsHC::TySpFETaskItem( new nsHC::CFETaskItem );
+    TaskItem->Id;
+    TaskItem->Type = nsHC::FE_MODE_MKDIR;
+    TaskItem->Src = nsHC::TySpFETaskItemSource( new nsHC::CFETaskItemSource );
+    TaskItem->Src->Fs = State->Model->GetRoot();
+
+    const auto Src = nsHC::TySpFileSource( new nsHC::CFileSourceT );
+
+    Src->Flags_ = 0;
+    Src->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+    Src->Name_ = State->Model->GetCurrentPath();
+
+    TaskItem->Src->Items.push_back( Src );
+
+    TaskItem->Input = NewName;
+
+    TyOsValue<nsHC::TyEnFEResult> Result;
+    if( FileEngine->ExecuteTask( TaskItem, Result ) == false )
+        return;
+
+    if( Result.Value.value_or( nsHC::FE_RESULT_FAILED ) == nsHC::FE_RESULT_SUCCEED )
+        ( ( CFSModel* )State->Model )->InsertChildItem( NewName );
 }
 
 void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
@@ -966,26 +1008,7 @@ void CmpPanel::processPanelStatusText()
 ////
 ////
 
-////void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
-////{
-////    UNREFERENCED_PARAMETER( SrcIndex );
-////
-////    QDirectoryCreateUI Ui;
-////    const auto Ret = Ui.exec();
-////    if( Ret == QDialog::Rejected )
-////        return;
-////
-////    const auto NewName = Ui.GetInputText();
-////    if( NewName.isEmpty() == true )
-////        return;
-////
-////    const auto State = retrieveFocusState();
-////    if( State->Model->MakeDirectory( NewName ) != ERROR_SUCCESS )
-////    {
-////        
-////    }
-////}
-////
+
 ////void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
 ////{
 ////    Q_ASSERT( Dst != nullptr );

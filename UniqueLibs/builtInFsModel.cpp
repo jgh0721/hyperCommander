@@ -208,6 +208,62 @@ QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPa
     return VecRet;
 }
 
+TyOsError CFSModel::InsertChildItem( const QString& NewName )
+{
+    QString Name = NewName;
+
+    // 하위 디렉토리 생성이 포함되었다 하더라도 현재 디렉토리 기준으로 1단계 밑의 디렉토리가 화면에 표시되므로 해당 디렉토리 이름을 추출한다. 
+    if( IsContainPathSeps( NewName ) == true )
+        Name = NewName.split( QRegularExpression( "(\\|/)" ), Qt::SkipEmptyParts )[ 0 ];
+
+    // TODO: Refresh 함수에서 파일 추가, 디렉토리 추가를 별도 함수로 만든 후 이곳에 추가한다.
+    const auto Item = nsHC::TySpFileSource( new nsHC::CFileSourceT );
+
+    Item->Name_         = Name;
+    Item->Attributes_   = FILE_ATTRIBUTE_DIRECTORY;
+    Item->Created_      = QDateTime::currentDateTime();
+
+    // 컬럼에 대한 데이터 생성
+    createBuiltFsValues( QVector< nsHC::TySpFileSource >() << Item );
+    
+    const auto Row = rowCount();
+    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
+
+    beginInsertRows( QModelIndex(), Row, Row );
+
+    // 기본 전경/배경 
+    vecRowColors_.push_back( QPair< QColor, QColor >() );
+
+    // 확장자 등에 의한 색상 설정
+    for( const auto& FileSet : vecFileSetColors_ )
+    {
+        if( StColorSchemeMgr->JudgeFileSet( FileSet.first, Item.get(), nullptr, nullptr ) == false )
+            continue;
+
+        vecRowColors_[ Row - 1 ] = FileSet.second;
+        break;
+    }
+
+    vecNode_.push_back( Item );
+    directoryCount_++;
+
+    if( FsIconGatherer_ != nullptr )
+        FsIconGatherer_->requestInterruption();
+
+    endInsertRows();
+
+    if( FsIconGatherer_ == nullptr )
+    {
+        FsIconGatherer_ = new CFSIconGatherer( this, vecNode_, GetCurrentPathWithRoot(), &lock );
+        FsIconGatherer_->setAutoDelete( false );
+    }
+
+    FsIconGatherer_->clearInterruption();
+    QThreadPool::globalInstance()->start( FsIconGatherer_ );
+
+    return { TyOsError::OS_WIN32_ERROR, ERROR_SUCCESS };
+}
+
 void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
 {
     if( index.isValid() == false )
@@ -325,7 +381,7 @@ void CFSModel::doRefresh()
     QVector< TyPrFGWithBG > VecRowColors;
     QVector< nsHC::TySpFileSource > VecItems;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-    auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
+    auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRTUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
     if( Attr == INVALID_FILE_ATTRIBUTES || FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
         Attr = 0;
     if( Root->GetCate() == nsHC::FS_CATE_REMOTE )
@@ -335,7 +391,7 @@ void CFSModel::doRefresh()
     // NOTE: 추가적으로 폴더 크기, 아이콘 등은 배경 스레드를 통해 완성시킨다. 
 
     if( ( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) ) ||
-        ( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL ) )
+        ( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRTUAL ) )
     {
         // 파일 목록을 얻은 후, 스레드를 통해 아이콘 등을 획득한다.
         if( Root->GetCate() == nsHC::FS_CATE_REMOTE )
@@ -356,7 +412,7 @@ void CFSModel::doRefresh()
         {
             if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
                 VecItems += GetChildItems( Base, true );
-            if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRUAL )
+            if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRTUAL )
                 VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
         }
     }
@@ -548,54 +604,7 @@ void CFSModel::createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column
 //    return Ret != FALSE ? ERROR_SUCCESS : GetLastError();
 //}
 //
-//DWORD FSModel::MakeDirectory( const QString& NewName )
-//{
-//    const auto New = GetFileFullPath( NewName ).toStdWString();
-//    const auto Ret = SHCreateDirectoryExW( nullptr, New.c_str(), nullptr );
-//
-//    if( Ret == ERROR_SUCCESS )
-//    {
-//        // TODO: Refresh 함수에서 파일 추가, 디렉토리 추가를 별도 함수로 만든 후 이곳에 추가한다.
-//        Node Item;
-//
-//        Item.Attiributes    = FILE_ATTRIBUTE_DIRECTORY;
-//        Item.Name           = NewName.section( '\\', 0 );
-//        Item.Created        = QDateTime::currentDateTime();
-//        Item.Icon           = Icon_Directory;
-//
-//        // 컬럼에 대한 데이터 생성
-//        for( const auto& Col : CurrentView.VecColumns )
-//        {
-//            const auto Def = Col.Content.toStdWString();
-//
-//            auto Fmt = const_cast< wchar_t* >( Def.c_str() );
-//            bool IsParsed = false;
-//            QString Content;
-//
-//            do
-//            {
-//                ColumnParseResult Result;
-//                IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
-//
-//                if( IsParsed == true )
-//                    CColumnMgr::CreateColumnContent( Result, &Item, Content );
-//
-//            } while( IsParsed == true );
-//
-//            Item.VecContent.push_back( Content );
-//        }
-//
-//        const auto Row = rowCount();
-//
-//        beginInsertRows( QModelIndex(), Row, Row );
-//        VecNode.push_back( Item );
-//        endInsertRows();
-//        DirectoryCount++;
-//    }
-//
-//    return Ret;
-//}
-//
+
 //void FSModel::Refresh()
 //{
 //    HRESULT hRet = OleInitialize( 0 );

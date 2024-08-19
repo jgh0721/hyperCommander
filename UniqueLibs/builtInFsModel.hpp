@@ -70,7 +70,8 @@ public:
     /// 파일 / 디렉토리 조작 
     
     QVector< nsHC::TySpFileSource > GetChildItems( const QString& RootWithPath, bool IncludeDotDot = false );
-    
+    TyOsError                       InsertChildItem( const QString& NewName );
+
     // QString                         GetFileFullPath( const QString& Name ) const;
 
 
@@ -78,7 +79,6 @@ public:
 //        
 //
 //    DWORD                               Rename( const QModelIndex& Index, const QString& NewName );
-//    DWORD                               MakeDirectory( const QString& NewName );
 //    QVector< Node >                     GetChildItems( const QString& Path );
 //
     ////////////////////////////////////////////////////////////////////////////

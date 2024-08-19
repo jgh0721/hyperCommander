@@ -105,6 +105,11 @@ namespace nsCmn
 
             return "";
         }
+
+        bool IsContainPathSeps( const QString& Path )
+        {
+            return Path.contains( '/' ) || Path.contains( '\\' );
+        }
 #endif
         TyOsValue<uint64_t> GetFreeDiskSpace( const std::wstring& Directory )
         {
@@ -146,6 +151,15 @@ namespace nsCmn
                 return MAKE_WIN32_VALUE( FileInformation.nNumberOfLinks );
 
             return MAKE_WIN32_LAST_ERROR;
+        }
+
+        TyOsValue<bool> IsDirExists( const std::wstring& DirPath )
+        {
+            const auto Ret = ::GetFileAttributesW( DirPath.c_str() );
+            if( Ret == INVALID_FILE_ATTRIBUTES )
+                return MAKE_WIN32_LAST_ERROR;
+
+            return MAKE_WIN32_VALUE( FlagOn( Ret, FILE_ATTRIBUTE_DIRECTORY ) );
         }
 
         TyOsValue<bool> IsFileExists( const std::wstring& FilePath )

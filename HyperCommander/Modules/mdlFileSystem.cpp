@@ -224,14 +224,14 @@ namespace nsHC
     CFSShell::CFSShell( const LPITEMIDLIST Root )
         : CFileSystemT( "" )
     {
-        cate_ = FS_CATE_VIRUAL;
+        cate_ = FS_CATE_VIRTUAL;
         features_ = FS_FEA_LIST;
     }
 
     CFSShell::CFSShell( const KNOWNFOLDERID& FolderId )
         : CFileSystemT( "" )
     {
-        cate_ = FS_CATE_VIRUAL;
+        cate_ = FS_CATE_VIRTUAL;
         features_ = FS_FEA_LIST;
         RootId = FolderId;
         const auto Ret = SHGetKnownFolderIDList( RootId, KF_FLAG_CREATE, nullptr, &Root );

@@ -84,13 +84,13 @@ public:
     void                            CloseQuickView( int TabIndex );
 
     void                            RefreshSource( int TabIndex );
+    void                            NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ExternalEditorMenu( const QModelIndex& SrcIndex );
     void                            ChangeVolume( const QString& Drive );
     void                            ChangeCurrentPath( const QString& Path, const QString& Parameter );
-
 public slots:
 
     void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
@@ -141,7 +141,6 @@ private:
 //
 //    //Qtitan::GridBandedTableView*        GetFocusView() const;
 //
-//    //void                                NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
 //
 //    //void                                FileCopyToOtherPanel( CmpPanel* Dst );
 //    //void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );

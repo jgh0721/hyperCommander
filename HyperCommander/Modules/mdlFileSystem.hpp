@@ -39,7 +39,7 @@ namespace nsHC
     {
         FS_CATE_LOCAL,
         FS_CATE_REMOTE,
-        FS_CATE_VIRUAL,
+        FS_CATE_VIRTUAL,
         FS_CATE_VFS,
     };
 

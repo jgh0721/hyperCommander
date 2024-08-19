@@ -191,7 +191,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_MkDir )
     if( Pane == nullptr )
         return;
 
-    // Pane->NewFolderOnCurrentTab( CursorIndex );
+    Pane->NewFolderOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_Delete )
