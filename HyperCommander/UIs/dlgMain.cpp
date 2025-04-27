@@ -201,7 +201,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_Delete )
     if( Pane == nullptr )
         return;
 
-    // Pane->FileDeleteOnCurrentTab( CursorIndex );
+    Pane->FileDeleteOnCurrentTab( CursorIndex );
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_NameNormalization )

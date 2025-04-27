@@ -85,6 +85,7 @@ public:
 
     void                            RefreshSource( int TabIndex );
     void                            NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
+    void                            FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
@@ -143,7 +144,6 @@ private:
 //
 //
 //    //void                                FileCopyToOtherPanel( CmpPanel* Dst );
-//    //void                                FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
 //    //void                                FileNormalization( const QModelIndex& SrcIndex );
 //    //void                                FileSetAttrib( const QModelIndex& SrcIndex );
 //    //Q_INVOKABLE void                    RenameFileName( const QModelIndex& SrcIndex );

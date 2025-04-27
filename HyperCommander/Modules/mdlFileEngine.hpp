@@ -11,10 +11,10 @@ namespace nsHC
         FE_MODE_NONE,
         FE_MODE_COPY, 
         FE_MODE_MOVE, 
-        FE_MODE_DELETE, 
+        FE_MODE_DELETE,             // Src = 삭제 목록
         FE_MODE_RENAME,
+        FE_MODE_ATTRIB,
         FE_MODE_MKDIR,              // Src = 부모 디렉토리, Dst = , Input = 생성할 디렉토리 이름( 구분자를 이용하여 다단계 생성 가능 )
-        FE_MODE_RMDIR,              // Src = 디렉토리 목록,
     };
 
     enum TyEnFEState
@@ -40,6 +40,15 @@ namespace nsHC
         FE_USER_OVERWRITE_ALL,
         FE_USER_SKIP_SINGLE, 
         FE_USER_SKIP_ALL,
+    };
+
+    enum TyEnFEOptions : uint64_t
+    {
+        FE_OPT_CMN_ADMIN_RIGHTS     = 0x1,
+
+        FE_OPT_DEL_RECYCLE_BIN      = 0x1000,
+        FE_OPT_DEL_READ_ONLY        = 0x2000,
+        FE_OPT_DEL_HIDDEN_SYSTEM    = 0x4000, 
     };
 
     enum TyEnFEResult
@@ -92,6 +101,7 @@ namespace nsHC
         TySpFETaskItemSource                Src;
         TySpFETaskItemSource                Dst;
         QString                             Input;
+        uint64_t                            Options;        // TyEnFEOptions Bitwise
 
         // 필요한 콜백 함수
         PVOID                               Context = nullptr;
@@ -117,8 +127,8 @@ namespace nsHC
 
     private:
             
+        void                                processDelete( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
         void                                processMkDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
-        void                                processRmDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result );
 
         int                                 notifyChangeState( const TySpFETaskItem& Task, TyEnFEState Curr, TyEnFEState Prev );
 

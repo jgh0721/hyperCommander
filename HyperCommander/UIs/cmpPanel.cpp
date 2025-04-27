@@ -354,6 +354,26 @@ void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
         ( ( CFSModel* )State->Model )->InsertChildItem( NewName );
 }
 
+void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
+{
+    UNREFERENCED_PARAMETER( SrcIndex );
+
+    const auto Src_State = retrieveFocusState();
+    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
+
+    if( SrcModel.isEmpty() == true )
+        return;
+
+    QFileDeleteUI Ui;
+    Ui.SetSourcePath( Src_State->Model->GetCurrentPathWithRoot() );
+    Ui.SetSourceModel( SrcModel );
+
+    if( Ui.exec() == QDialog::Accepted )
+        ;
+
+        //Src_State->View->deselectAll();
+}
+
 void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
 {
     const auto State = retrieveFocusState();
@@ -1033,27 +1053,6 @@ void CmpPanel::processPanelStatusText()
 ////    Ui.SetDestinationPath( Dst_State->Model->GetFileFullPath( "" ) );
 ////
 ////    Ui.exec();
-////}
-////
-////void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
-////{
-////    UNREFERENCED_PARAMETER( SrcIndex );
-////
-////    const auto Src_State = retrieveFocusState();
-////    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
-////
-////    if( SrcModel.isEmpty() == true )
-////    {
-////        // TODO: 메시지 출력, 복사할 파일 없음
-////        return;
-////    }
-////
-////    QFileDeleteUI Ui;
-////    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
-////    Ui.SetSourceModel( SrcModel );
-////
-////    if( Ui.exec() == QDialog::Accepted )
-////        Src_State->View->deselectAll();
 ////}
 ////
 ////void CmpPanel::FileNormalization( const QModelIndex& SrcIndex )

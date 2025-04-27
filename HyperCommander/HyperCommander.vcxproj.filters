@@ -87,6 +87,12 @@
     <Filter Include="UI Files\Components">
       <UniqueIdentifier>{caa9c6b8-d2f5-4c6e-b387-6e6957934459}</UniqueIdentifier>
     </Filter>
+    <Filter Include="라이브러리\외부 라이브러리\ElaWidgettools">
+      <UniqueIdentifier>{7222a0a2-d9c6-481d-bce1-b302de3b6634}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="라이브러리\외부 라이브러리\ElaWidgettools\DeveloperComponents">
+      <UniqueIdentifier>{8ff7c5d2-9373-4f9b-bfc5-d2d9e4b2acc5}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="HyperCommander.qrc">
@@ -626,9 +632,6 @@
     <QtMoc Include="UIs\Cate - FileOperation\dlgFileDelete.hpp">
       <Filter>UI Files\Cate - 파일 동작</Filter>
     </QtMoc>
-    <QtMoc Include="..\UniqueLibs\cmnHCModelUtils.hpp">
-      <Filter>라이브러리\고유 라이브러리</Filter>
-    </QtMoc>
     <QtMoc Include="UIs\cmnUiUtils.hpp">
       <Filter>UI Files</Filter>
     </QtMoc>
@@ -676,6 +679,9 @@
     </QtMoc>
     <QtMoc Include="UIs\dlgFavoriteDir.hpp">
       <Filter>UI Files\Cate - 환경설정</Filter>
+    </QtMoc>
+    <QtMoc Include="..\UniqueLibs\cmnHCModelUtils.hpp">
+      <Filter>라이브러리\고유 라이브러리</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>

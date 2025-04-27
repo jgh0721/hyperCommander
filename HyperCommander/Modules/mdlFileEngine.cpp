@@ -13,15 +13,40 @@ namespace nsHC
 
         switch( Task->Type )
         {
+            case FE_MODE_DELETE: {
+                processDelete( Task, Result );
+            } break;
             case FE_MODE_MKDIR: {
                 processMkDir( Task, Result );
-            } break;
-            case FE_MODE_RMDIR: {
-                processRmDir( Task, Result );
             } break;
         }
 
         return Result.Value == FE_RESULT_SUCCEED;
+    }
+
+    void CFileEngine::processDelete( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result )
+    {
+        Q_ASSERT( Task->Src != nullptr );
+        Q_ASSERT( Task->Src->Fs != nullptr );
+
+        TyEnFEState Curr = FE_STATE_NOT_STARTED;
+        TyEnFEState Prev = FE_STATE_NOT_STARTED;
+
+        do
+        {
+            Prev = Curr;
+            Curr = FE_STATE_STARTING;
+            if( notifyChangeState( Task, Curr, Prev ) == 1 )
+            {
+                Result.Value = FE_RESULT_CANCELED;
+                break;
+            }
+
+            // Task->Src->Fs;
+            Task->Src->Items;
+
+
+        } while( false );
     }
 
     void CFileEngine::processMkDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result )
@@ -123,31 +148,6 @@ namespace nsHC
 
             //Task->Src->Fs->GetCate() == FS_CATE_VFS;
             //Task->Src->Fs->GetCate() == FS_CATE_VIRUAL;
-
-        } while( false );
-    }
-
-    void CFileEngine::processRmDir( const TySpFETaskItem& Task, TyOsValue<TyEnFEResult>& Result )
-    {
-        Q_ASSERT( Task->Src != nullptr );
-        Q_ASSERT( Task->Src->Fs != nullptr );
-
-        TyEnFEState Curr = FE_STATE_NOT_STARTED;
-        TyEnFEState Prev = FE_STATE_NOT_STARTED;
-
-        do
-        {
-            Prev = Curr;
-            Curr = FE_STATE_STARTING;
-            if( notifyChangeState( Task, Curr, Prev ) == 1 )
-            {
-                Result.Value = FE_RESULT_CANCELED;
-                break;
-            }
-
-            // Task->Src->Fs;
-            Task->Src->Items;
-
 
         } while( false );
     }

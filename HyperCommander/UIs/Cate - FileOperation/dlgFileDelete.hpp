@@ -29,10 +29,12 @@ private:
     QVector< QModelIndex >              src_;
     QString                             srcPath_;
 
-    QTimer                              update_;
-    QAtomicInt                          isUpdate_;
-    QStringList                         model_;
-    QTraverseSrcModel*                  workerThread_ = nullptr;
+    QThread                             workerThread_;
+
+    //QTimer                              update_;
+    //QAtomicInt                          isUpdate_;
+    //QStringList                         model_;
+    //QTraverseSrcModel*                  workerThread_ = nullptr;
 
     Ui::dlgDelete                       ui;
 };

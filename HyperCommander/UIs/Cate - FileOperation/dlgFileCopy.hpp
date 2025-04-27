@@ -43,7 +43,7 @@ private:
     QPixmap                             dirIcon_;
     QPixmap                             fileIcon_;
 
-    QTraverseSrcModel*                  workerThread_ = nullptr;
+    //QTraverseSrcModel*                  workerThread_ = nullptr;
 
     Ui::dlgFileCopy                     ui;
 };

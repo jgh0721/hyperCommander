@@ -56,12 +56,12 @@ QFileCopyUI::QFileCopyUI( QWidget* Parent, Qt::WindowFlags Flags )
 
 QFileCopyUI::~QFileCopyUI()
 {
-    if( workerThread_ != nullptr )
-    {
-        workerThread_->requestInterruption();
-        workerThread_->wait();
-        workerThread_->deleteLater();
-    }
+    //if( workerThread_ != nullptr )
+    //{
+    //    workerThread_->requestInterruption();
+    //    workerThread_->wait();
+    //    workerThread_->deleteLater();
+    //}
 }
 
 void QFileCopyUI::SetSourcePath( const QString& Src )
@@ -95,32 +95,32 @@ void QFileCopyUI::on_edtIncludeFilter_textChanged( const QString& text )
 
 void QFileCopyUI::on_btnOK_clicked( bool checked )
 {
-    if( workerThread_ != nullptr )
-    {
-        workerThread_->wait();
+    //if( workerThread_ != nullptr )
+    //{
+    //    workerThread_->wait();
 
-        auto UiProgress     = new QFileProgress;
-        auto ClsOperation   = new CFileOperation;
+    //    //auto UiProgress     = new QFileProgress;
+    //    //auto ClsOperation   = new CFileOperation;
 
-        ClsOperation->SetMode( CFileOperation::FILE_OP_COPY );
-        ClsOperation->SetBase( workerThread_->base );
-        ClsOperation->SetSource( workerThread_->vecItems_, workerThread_->vecItemMiddle_ );
-        ClsOperation->SetDestination( dst_ );
+    //    //ClsOperation->SetMode( CFileOperation::FILE_OP_COPY );
+    //    //ClsOperation->SetBase( workerThread_->base );
+    //    //ClsOperation->SetSource( workerThread_->vecItems_, workerThread_->vecItemMiddle_ );
+    //    //ClsOperation->SetDestination( dst_ );
 
-        UiProgress->SetMode( false );
-        UiProgress->SetOperationName( tr( "파일 복사" ) );
-        UiProgress->SetInitialItemCount( 0, workerThread_->vecItems_.size() );
-        UiProgress->SetInitialItemSize( 0, workerThread_->totalSize_ );
+    //    //UiProgress->SetMode( false );
+    //    //UiProgress->SetOperationName( tr( "파일 복사" ) );
+    //    //UiProgress->SetInitialItemCount( 0, workerThread_->vecItems_.size() );
+    //    //UiProgress->SetInitialItemSize( 0, workerThread_->totalSize_ );
 
-        connect( ClsOperation, &CFileOperation::NotifyChangedState, UiProgress, &QFileProgress::OnChangedState );
-        connect( ClsOperation, &CFileOperation::NotifyChangedItem, UiProgress, &QFileProgress::OnChangedItem );
-        connect( ClsOperation, &CFileOperation::NotifyChangedProgress, UiProgress, &QFileProgress::OnChangedProgress );
-        connect( ClsOperation, &CFileOperation::NotifyChangedStatus, UiProgress, &QFileProgress::OnChangedStatus );
-        connect( UiProgress, &QFileProgress::RequestChangeState, ClsOperation, &CFileOperation::ChangeState );
+    //    //connect( ClsOperation, &CFileOperation::NotifyChangedState, UiProgress, &QFileProgress::OnChangedState );
+    //    //connect( ClsOperation, &CFileOperation::NotifyChangedItem, UiProgress, &QFileProgress::OnChangedItem );
+    //    //connect( ClsOperation, &CFileOperation::NotifyChangedProgress, UiProgress, &QFileProgress::OnChangedProgress );
+    //    //connect( ClsOperation, &CFileOperation::NotifyChangedStatus, UiProgress, &QFileProgress::OnChangedStatus );
+    //    //connect( UiProgress, &QFileProgress::RequestChangeState, ClsOperation, &CFileOperation::ChangeState );
 
-        ClsOperation->start();
-        UiProgress->exec();
-    }
+    //    //ClsOperation->start();
+    //    //UiProgress->exec();
+    //}
 
     done( Accepted );
 }
@@ -139,18 +139,18 @@ void QFileCopyUI::slt_notifyStats( const QString& Item, bool IsDirectory, qint64
 
 void QFileCopyUI::work()
 {
-    if( workerThread_ != nullptr )
-    {
-        workerThread_->requestInterruption();
-        workerThread_->wait();
-        delete workerThread_;
-        workerThread_ = nullptr;
-    }
+    //if( workerThread_ != nullptr )
+    //{
+    //    workerThread_->requestInterruption();
+    //    workerThread_->wait();
+    //    delete workerThread_;
+    //    workerThread_ = nullptr;
+    //}
 
-    workerThread_ = new QTraverseSrcModel;
-    workerThread_->src = src_;
-    workerThread_->filter = ui.edtIncludeFilter->text();
+    //workerThread_ = new QTraverseSrcModel;
+    //workerThread_->src = src_;
+    //workerThread_->filter = ui.edtIncludeFilter->text();
 
-    connect( workerThread_, &QTraverseSrcModel::notifyStats, this, &QFileCopyUI::slt_notifyStats );
-    workerThread_->start();
+    //connect( workerThread_, &QTraverseSrcModel::notifyStats, this, &QFileCopyUI::slt_notifyStats );
+    //workerThread_->start();
 }

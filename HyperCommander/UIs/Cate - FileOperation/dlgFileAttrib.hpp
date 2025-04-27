@@ -28,7 +28,7 @@ private:
     QVector< QModelIndex >              src_;
     QString                             srcPath_;
 
-    QTraverseSrcModel*                  workerThread_ = nullptr;
+    //QTraverseSrcModel*                  workerThread_ = nullptr;
 
     Ui::dlgFileAttrib                   ui;
 };
