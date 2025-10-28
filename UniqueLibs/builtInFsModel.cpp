@@ -44,11 +44,11 @@ void CFSIconGatherer::run()
 
         if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
         {
-            Item->Icon = Provider.icon( QAbstractFileIconProvider::Folder ).pixmap( 32, 32 );
+            Item->Icon = Provider.icon( QAbstractFileIconProvider::Folder ).pixmap( 32, 32 ).scaledToWidth( 32, Qt::SmoothTransformation );
         }
         else
         {
-            Item->Icon = Provider.icon( QFileInfo( currentPathWithRoot_ + Item->Name_ ) ).pixmap( 32, 32 );
+            Item->Icon = Provider.icon( QFileInfo( currentPathWithRoot_ + Item->Name_ ) ).pixmap( 32, 32 ).scaledToWidth( 32, Qt::SmoothTransformation );
         }
 
         if( Item->Icon.isNull() == false )
