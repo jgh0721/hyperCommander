@@ -2,6 +2,10 @@
 #include "commandUiBridge.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "builtInFsModel.hpp"
+#include "fileJobUi.hpp"
+#include "nativeWritableStorage.hpp"
+#include "storageProviders.hpp"
+#include <QtitanGrid.h>
 
 using namespace hc::commands;
 using namespace hc::storage;
@@ -55,7 +59,12 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         {"hc.navigate.path", 1, {{"path", {ParameterType::String}}}},
         {"hc.navigate.parent"}, {"hc.navigate.refresh"}, {"hc.navigate.cancel"}, {"hc.navigate.open"},
         {"hc.navigate.provider", 1, {{"enabled", {ParameterType::Boolean}}}},
-        {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}, {"hc.view.columns"}
+        {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}, {"hc.view.columns"},
+        {"hc.file.copy", 1, {{"destination", {ParameterType::String}}}, "file-write"},
+        {"hc.file.move", 1, {{"destination", {ParameterType::String}}}, "file-write"},
+        {"hc.file.rename", 1, {{"destination", {ParameterType::String}}}, "file-write"},
+        {"hc.file.mkdir", 1, {{"destination", {ParameterType::String}}}, "file-write"},
+        {"hc.file.delete", 1, {}, "file-write"}
     };
     for (const auto& Descriptor : Commands)
     {
@@ -75,6 +84,18 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
             Window->statusBar()->showMessage(QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
     });
     errorSubscription_ = std::move(Subscription.Value());
+    fileJobs_ = new FileJobUi(Main, events_);
+    fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
+        if (!Guard || !Guard->main_) return;
+        const auto It = Guard->affectedLocations_.find(Result.snapshot_.id_);
+        if (It == Guard->affectedLocations_.end()) return;
+        for (auto* Model : Guard->main_->findChildren<CFSModel*>())
+            if (Model->GetRoot() && Model->ProviderEnabled() && !Model->IsLoading())
+                for (const auto& At : It->second)
+                    if (QDir::cleanPath(QString::fromStdString(At.root_)).compare(QDir::cleanPath(Model->GetCurrentPathWithRoot()), Qt::CaseInsensitive) == 0)
+                    { Model->Refresh(); break; }
+        Guard->affectedLocations_.erase(It);
+    };
     bindModels();
     createActions();
 }
@@ -130,8 +151,9 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
 {
     CommandInvocation Invocation;
     Invocation.id_ = Id.toStdString();
-    Invocation.context_ = Capture(Index);
+    Invocation.context_ = Id.startsWith("hc.file.") ? captureFiles(Index, Id == "hc.file.rename") : Capture(Index);
     Invocation.permissions_.insert("navigation");
+    if (Id.startsWith("hc.file.")) Invocation.permissions_.insert("file-write");
     Invocation.source_ = Source.toStdString();
     Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
     for (auto It = Parameters.begin(); It != Parameters.end(); ++It)
@@ -182,6 +204,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     }
     if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot())))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+    if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
     if ((Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel") || Id == "hc.tab.close")
         if (Model->IsLoading()) Model->CancelNavigation();
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel")
@@ -272,4 +295,124 @@ void CommandUiBridge::createActions()
     connect(Compatibility, &QAction::triggered, this, [this](bool Checked) {
         Dispatch("hc.navigate.provider", {{"enabled", !Checked}}, "menu");
     });
+    auto* Files = Window->menuBar()->addMenu(tr("파일 작업"));
+    const std::vector<std::pair<QString, QString>> FileActions{
+        {"hc.file.copy", tr("복사")}, {"hc.file.move", tr("이동")}, {"hc.file.rename", tr("이름 변경")},
+        {"hc.file.mkdir", tr("새 폴더")}, {"hc.file.delete", tr("영구 삭제")}
+    };
+    for (const auto& [Id, Label] : FileActions)
+    {
+        auto* Action = Files->addAction(Label);
+        Action->setObjectName("hc.menu." + Id);
+        connect(Action, &QAction::triggered, this, [this, Id] { PromptFileOperation(Id, "menu"); });
+    }
+    auto* Jobs = Files->addAction(tr("작업 목록"));
+    connect(Jobs, &QAction::triggered, this, [this] { fileJobs_->Show(); });
+}
+
+CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Single)
+{
+    auto Context = Capture(Index);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model) return Context;
+    const auto Panel = PanelOf(Model);
+    const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
+    if (!View || View->BaseModel() != Model) return Context;
+    const auto Grid = View->BaseView();
+    QList<QModelIndex> Selected;
+    if (!Single)
+        for (const auto Row : Grid->selection()->selectedRowIndexes()) Selected.push_back(SourceIndex(Row));
+    if (Selected.isEmpty())
+    {
+        const auto Focused = Grid->focusedRow();
+        const auto Cursor = Index.isValid() ? SourceIndex(Index) : Focused.isValid() ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
+        if (Cursor.isValid()) Selected.push_back(Cursor);
+    }
+    Context.selection_.clear();
+    for (const auto& At : Selected)
+    {
+        if (At.model() != Model || !At.isValid()) continue;
+        const auto Entry = Model->GetFileInfo(At);
+        if (!Entry || Entry->Name_ == "..") continue;
+        Context.selection_.push_back(Entry->storageEntry_ ? Entry->storageEntry_->id_
+            : ResourceId{{"legacy"}, Entry->Name_.toStdString(), IdentityScope::NavigationSession, {}});
+    }
+    return Context;
+}
+
+void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Source, const QModelIndex& Index)
+{
+    // Capture before showing a dialog: a nested Qt event loop can change tabs.
+    CommandInvocation Invocation;
+    Invocation.id_ = Id.toStdString(); Invocation.source_ = Source.toStdString();
+    Invocation.permissions_.insert("file-write");
+    Invocation.context_ = captureFiles(Index, Id == "hc.file.rename");
+    Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    auto* Model = findModel(Invocation.context_.tabId_);
+    if (!Model || !Model->GetRoot()) return;
+    if (Id != "hc.file.delete")
+    {
+        QString Default = QString::fromStdString(Invocation.context_.location_.root_);
+        if (Id == "hc.file.copy" || Id == "hc.file.move")
+            for (auto* Other : main_->findChildren<CmpPanel*>())
+                if (Other != PanelOf(Model))
+                    if (auto* Destination = PanelModel(Other)) Default = Destination->GetCurrentPathWithRoot();
+        const bool NameOnly = Id == "hc.file.rename" || Id == "hc.file.mkdir";
+        if (NameOnly) Default = Id == "hc.file.mkdir" ? tr("새 폴더") : QString{};
+        bool Accepted = false;
+        const auto Input = QInputDialog::getText(main_, Id == "hc.file.move" ? tr("이동") : tr("파일 작업"),
+            NameOnly ? tr("새 이름") : tr("목적지 폴더"), QLineEdit::Normal, Default, &Accepted);
+        if (!Accepted || Input.isEmpty()) return;
+        Invocation.parameters_["destination"] = NameOnly
+            ? QDir(QString::fromStdString(Invocation.context_.location_.root_)).filePath(Input).toStdString() : Input.toStdString();
+    }
+    DispatchInvocation(std::move(Invocation));
+}
+
+Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Invocation, CFSModel* Model)
+{
+    using namespace hc::operations;
+    if (Model->IsLoading()) return Error{ErrorCategory::InvalidRequest, "navigation-in-progress"};
+    FileOperationRequest Request;
+    Request.operation_ = Invocation.id_ == "hc.file.copy" ? hc::operations::FileOperation::Copy : Invocation.id_ == "hc.file.move" ? hc::operations::FileOperation::Move
+        : Invocation.id_ == "hc.file.rename" ? hc::operations::FileOperation::Rename : Invocation.id_ == "hc.file.mkdir" ? hc::operations::FileOperation::MakeDirectory : hc::operations::FileOperation::Delete;
+    Request.correlationId_ = Invocation.correlationId_;
+    const auto Kind = Invocation.context_.location_.kind_;
+    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb) return Error{ErrorCategory::Unsupported, "native-file-operation-required"};
+    auto Reader = Model->GetRoot()->ReadProvider();
+    auto Writer = MakeNativeWritableStorage(Kind, Reader);
+    if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
+        for (const auto& Selected : Invocation.context_.selection_)
+        {
+            bool Found = false;
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+            {
+                const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+                if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected)
+                { Request.sources_.push_back({*Entry->storageEntry_, Reader, Writer}); Found = true; break; }
+            }
+            if (!Found) return Error{ErrorCategory::StaleRevision, "selection-changed-or-provider-disabled"};
+        }
+    if (Request.operation_ != hc::operations::FileOperation::Delete)
+    {
+        auto Path = QString::fromStdString(std::get<std::string>(Invocation.parameters_.at("destination")));
+        Path = QDir::toNativeSeparators(Path);
+        if (Path.isEmpty() || Path.contains(QChar::Null) || !QDir::isAbsolutePath(Path)) return Error{ErrorCategory::InvalidRequest, "absolute-destination-required"};
+        Request.destination_ = {Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+        if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Request.destination_.kind_ = LocatorKind::Smb;
+        auto DestinationReader = MakeNativeReadProvider(Request.destination_.kind_);
+        Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, std::move(DestinationReader));
+    }
+    std::vector<Locator> Affected{Invocation.context_.location_};
+    if (Request.operation_ != hc::operations::FileOperation::Delete)
+    {
+        auto Destination = Request.destination_;
+        if (Request.operation_ == hc::operations::FileOperation::Rename || Request.operation_ == hc::operations::FileOperation::MakeDirectory)
+            Destination.root_ = QFileInfo(QString::fromStdString(Destination.root_)).path().toStdString();
+        Affected.push_back(std::move(Destination));
+    }
+    auto Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
+    if (!Started.HasValue()) return Started.Failure();
+    affectedLocations_.emplace(Started.Value().id_, std::move(Affected));
+    return CommandOutcome{CommandOutcome::Status::Accepted, Started.Value().id_};
 }

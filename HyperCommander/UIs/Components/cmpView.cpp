@@ -172,6 +172,12 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
 
     model_ = Source;
     proxy_ = Proxy;
+    // HC-QTN-005: 8.2.0 can retain selection ranges across a model reset.
+    // Clear them before rows disappear: selectedRowIndexes otherwise dereferences
+    // an invalid GridRow, and old row positions must not target different files.
+    disconnect(selectionReset_);
+    selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
+        this, [this] { view_->deselectAll(); }, Qt::DirectConnection);
     model_->SetColumnView( *Columns );
 
     if( Proxy != nullptr )

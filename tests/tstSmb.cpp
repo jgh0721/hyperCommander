@@ -6,6 +6,9 @@
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
 #include "qtitanColumnAdapter.hpp"
+#include "fileJobUi.hpp"
+#include "nativeWritableStorage.hpp"
+#include "storageProviders.hpp"
 #include <QtitanGrid.h>
 #ifdef _DEBUG
 #include <crtdbg.h>
@@ -308,6 +311,155 @@ private slots:
         QTRY_VERIFY(HasTerminal());
         QCOMPARE(Model->GetCurrentPathWithRoot(), unc_);
         QVERIFY(Model->property("hc.correlation").toString().isEmpty());
+    }
+
+    void fileCommandsAndProgressUi()
+    {
+        using namespace hc::operations;
+        using namespace hc::commands;
+        using namespace hc::storage;
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        const auto Source = Directory.filePath("source");
+        const auto Destination = Directory.filePath("destination");
+        QVERIFY(QDir().mkpath(Source)); QVERIFY(QDir().mkpath(Destination));
+        for (const auto& Name : {QStringLiteral("first.txt"), QStringLiteral("second.txt")})
+        { QFile File(Source + '/' + Name); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Name.toUtf8()), Name.size()); }
+        auto* Panel = panels_.front();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Source), {});
+        QTRY_VERIFY(!Model->IsLoading());
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        const auto IndexFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+                if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        for (const auto& Name : {QStringLiteral("first.txt"), QStringLiteral("second.txt")})
+        {
+            const auto Proxy = qobject_cast<QAbstractProxyModel*>(View->BaseView()->model());
+            const auto Row = View->BaseView()->getRow(Proxy ? Proxy->mapFromSource(IndexFor(Name)) : IndexFor(Name));
+            QVERIFY(Row.isValid()); View->BaseView()->selectRow(Row.rowIndex(), Qtitan::Select);
+        }
+        QCOMPARE(View->BaseView()->selection()->selectedRowIndexes().size(), 2);
+        auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", Destination}}, "test", IndexFor("first.txt"));
+        QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Accepted = Copy.get(); QVERIFY(Accepted.HasValue());
+        QCOMPARE(Accepted.Value().status_, CommandOutcome::Status::Accepted);
+        const auto Copied = Accepted.Value().jobId_;
+        QTRY_VERIFY(IsTerminal(Scheduler.Snapshot(Copied).Value().state_));
+        QCOMPARE(Scheduler.Snapshot(Copied).Value().state_, JobState::Completed);
+        QCOMPARE(Scheduler.Snapshot(Copied).Value().completedItems_, 2u);
+        QVERIFY(QFile::exists(Destination + "/first.txt")); QVERIFY(QFile::exists(Destination + "/second.txt"));
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+
+        // Captured context is rejected after navigation; permission checks run first.
+        CommandInvocation Stale;
+        Stale.id_ = "hc.file.delete"; Stale.context_ = Bridge->Capture(IndexFor("first.txt"));
+        auto Denied = Bridge->DispatchInvocation(Stale);
+        QCOMPARE(Denied.get().Failure().category_, ErrorCategory::AccessDenied);
+        Stale.permissions_.insert("file-write");
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Destination), {});
+        QTRY_VERIFY(!Model->IsLoading());
+        auto Rejected = Bridge->DispatchInvocation(Stale);
+        QTRY_VERIFY(Rejected.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(Rejected.get().Failure().code_, std::string("navigation-context-changed"));
+        QVERIFY(QFile::exists(Source + "/first.txt"));
+
+        auto Rename = Bridge->Dispatch("hc.file.rename", {{"destination", Destination + "/renamed.txt"}}, "test", IndexFor("first.txt"));
+        QTRY_VERIFY(Rename.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Renamed = Rename.get(); QVERIFY(Renamed.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Renamed.Value().jobId_).Value().state_, JobState::Completed);
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+        QVERIFY(QFile::exists(Destination + "/renamed.txt"));
+        auto Delete = Bridge->Dispatch("hc.file.delete", {}, "test", IndexFor("renamed.txt"));
+        QTRY_VERIFY(Delete.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Deleted = Delete.get(); QVERIFY(Deleted.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Deleted.Value().jobId_).Value().state_, JobState::WaitingForUser);
+        QVERIFY(QFile::exists(Destination + "/renamed.txt"));
+        auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Confirm)));
+        QVERIFY(Confirm); QTRY_VERIFY(Confirm->isVisible());
+        QTest::mouseClick(Confirm, Qt::LeftButton);
+        QTRY_COMPARE(Scheduler.Snapshot(Deleted.Value().jobId_).Value().state_, JobState::Completed);
+        QVERIFY(!QFile::exists(Destination + "/renamed.txt"));
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+
+        auto Cancel = Bridge->Dispatch("hc.file.delete", {}, "test", IndexFor("second.txt"));
+        QTRY_VERIFY(Cancel.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Cancelled = Cancel.get(); QVERIFY(Cancelled.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Cancelled.Value().jobId_).Value().state_, JobState::WaitingForUser);
+        auto* CancelButton = main_->findChild<QPushButton*>("hc.jobs.cancel");
+        QVERIFY(CancelButton); QTest::mouseClick(CancelButton, Qt::LeftButton);
+        QTRY_COMPARE(Scheduler.Snapshot(Cancelled.Value().jobId_).Value().state_, JobState::Cancelled);
+        QVERIFY(QFile::exists(Destination + "/second.txt"));
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Source), {});
+        QTRY_VERIFY(!Model->IsLoading());
+        auto Conflict = Bridge->Dispatch("hc.file.copy", {{"destination", Destination}}, "test", IndexFor("second.txt"));
+        QTRY_VERIFY(Conflict.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Conflicting = Conflict.get(); QVERIFY(Conflicting.HasValue());
+        const auto ConflictId = Conflicting.Value().jobId_;
+        QTRY_COMPARE(Scheduler.Snapshot(ConflictId).Value().state_, JobState::WaitingForUser);
+        auto* PauseButton = main_->findChild<QPushButton*>("hc.jobs.pause");
+        QVERIFY(PauseButton); QTRY_VERIFY(PauseButton->isEnabled());
+        QTest::mouseClick(PauseButton, Qt::LeftButton);
+        QTRY_VERIFY(Scheduler.Snapshot(ConflictId).Value().pauseRequested_);
+        QTest::mouseClick(PauseButton, Qt::LeftButton);
+        QTRY_VERIFY(!Scheduler.Snapshot(ConflictId).Value().pauseRequested_);
+        auto* NewName = main_->findChild<QLineEdit*>("hc.jobs.newName");
+        auto* RenameChoice = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Rename)));
+        QVERIFY(NewName); QVERIFY(RenameChoice); QTRY_VERIFY(NewName->isVisible());
+        NewName->setText("alternate.txt"); QTest::mouseClick(RenameChoice, Qt::LeftButton);
+        QTRY_COMPARE(Scheduler.Snapshot(ConflictId).Value().state_, JobState::Completed);
+        QVERIFY(QFile::exists(Destination + "/alternate.txt"));
+        QVERIFY(QFile::exists(Destination + "/second.txt"));
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+        auto Mkdir = Bridge->Dispatch("hc.file.mkdir", {{"destination", Destination + "/folder"}}, "test", IndexFor("second.txt"));
+        QTRY_VERIFY(Mkdir.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Made = Mkdir.get(); QVERIFY(Made.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Made.Value().jobId_).Value().state_, JobState::Completed);
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+        auto Move = Bridge->Dispatch("hc.file.move", {{"destination", Destination + "/folder"}}, "test", IndexFor("second.txt"));
+        QTRY_VERIFY(Move.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Moved = Move.get(); QVERIFY(Moved.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Moved.Value().jobId_).Value().state_, JobState::Completed);
+        QVERIFY(!QFile::exists(Source + "/second.txt"));
+        QVERIFY(QFile::exists(Destination + "/folder/second.txt"));
+        QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+        auto* Jobs = main_->findChild<QDialog*>("hc.fileJobs");
+        QVERIFY(Jobs); QVERIFY(Jobs->grab().save(QCoreApplication::applicationDirPath() + "/m4-jobs.png"));
+        Jobs->hide();
+        Panel->ChangeCurrentPath(unc_, {});
+        QTRY_VERIFY(!Model->IsLoading());
+    }
+
+    void closingWindowCancelsWaitingFileJob()
+    {
+        using namespace hc::operations;
+        using namespace hc::storage;
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("keep.txt"));
+        QVERIFY(File.open(QIODevice::WriteOnly)); File.write("keep"); File.close();
+        Locator At{LocatorKind::Local, QDir::toNativeSeparators(File.fileName()).toStdString()};
+        auto Reader = MakeNativeReadProvider(At.kind_);
+        auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.show();
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request;
+        Request.operation_ = hc::operations::FileOperation::Delete;
+        Request.sources_.push_back({Entry.Value(), Reader, MakeNativeWritableStorage(At.kind_, Reader)});
+        auto Job = Jobs.Submit(std::move(Request), {}); QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Jobs.Scheduler().Snapshot(Job.Value().id_).Value().state_, JobState::WaitingForUser);
+        QElapsedTimer Timer; Timer.start(); Window.close();
+        QVERIFY(Timer.elapsed() < 500);
+        QTRY_VERIFY(Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+        QTRY_VERIFY(!Window.isVisible());
+        QVERIFY(QFile::exists(File.fileName()));
     }
 
     void columnWidthLayoutAndSettings()

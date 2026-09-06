@@ -106,6 +106,8 @@ set(UNIQUELIBS_SRC
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
         ../UniqueLibs/commandUiBridge.hpp
+        ../UniqueLibs/fileJobUi.cpp
+        ../UniqueLibs/fileJobUi.hpp
         ../commonLibs/view/columnWidthPolicy.hpp
         ../UniqueLibs/columnWidthSettings.hpp
         ../UniqueLibs/qtitanColumnAdapter.hpp

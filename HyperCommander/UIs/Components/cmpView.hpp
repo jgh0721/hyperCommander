@@ -91,6 +91,7 @@ private:
     CFsModelT*                      model_ = nullptr;
     QAbstractProxyModel*            proxy_ = nullptr;
     QtitanColumnAdapter*            columnAdapter_ = nullptr;
+    QMetaObject::Connection         selectionReset_;
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;

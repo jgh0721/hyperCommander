@@ -549,6 +549,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandUiBridge.cpp" />
+    <ClCompile Include="..\UniqueLibs\fileJobUi.cpp" />
     <ClCompile Include="..\UniqueLibs\qtitanColumnAdapter.cpp" />
     <None Include="cpp.hint" />
     <ResourceCompile Include="HyperCommander.rc" />
@@ -565,6 +566,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\operations\fileOperation.hpp" />
     <ClInclude Include="..\UniqueLibs\nativeWritableStorage.hpp" />
     <ClInclude Include="..\UniqueLibs\commandUiBridge.hpp" />
+    <ClInclude Include="..\UniqueLibs\fileJobUi.hpp" />
     <ClInclude Include="..\commonLibs\commands\commandBus.hpp" />
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />

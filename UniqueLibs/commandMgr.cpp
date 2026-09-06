@@ -204,11 +204,13 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_SrcQuickView )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_CopyOtherPanel )
 {
+    if (bridge_) { bridge_->PromptFileOperation("hc.file.copy", "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_RenameSingleFile )
 {
+    if (bridge_) { bridge_->PromptFileOperation("hc.file.rename", "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
@@ -225,11 +227,13 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_Return )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_MkDir )
 {
+    if (bridge_) { bridge_->PromptFileOperation("hc.file.mkdir", "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_Delete )
 {
+    if (bridge_) { bridge_->PromptFileOperation("hc.file.delete", "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
