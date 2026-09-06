@@ -1,11 +1,30 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
+qt_add_executable(hc_viewer_tests
+    tstViewer.cpp
+    ../commonLibs/viewer/viewer.cpp
+    ../commonLibs/viewer/viewer.hpp
+    ../commonLibs/operations/jobScheduler.cpp
+    ../UniqueLibs/qtViewerProvider.cpp
+    ../UniqueLibs/qtViewerProvider.hpp
+    ../UniqueLibs/storageProviders.cpp
+    ../UniqueLibs/wcxStorage.cpp
+    ../UniqueLibs/nativeMaterializer.cpp
+)
+target_include_directories(hc_viewer_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_options(hc_viewer_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_viewer_tests PRIVATE Qt6::Test Qt6::Gui)
+add_test(NAME hc.viewer COMMAND hc_viewer_tests)
+set_tests_properties(hc.viewer PROPERTIES TIMEOUT 60)
+hc_enable_qt_deployment(hc_viewer_tests TEST PLUGINS)
 if(NOT TARGET hc_wcx_fixture)
     qt_add_library(hc_wcx_fixture SHARED wcxFixture.cpp)
     target_include_directories(hc_wcx_fixture PRIVATE ${PROJECT_SOURCE_DIR})
     target_compile_options(hc_wcx_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
     set_target_properties(hc_wcx_fixture PROPERTIES SUFFIX ".wcx64")
 endif()
+add_dependencies(hc_viewer_tests hc_wcx_fixture)
 qt_add_executable(hc_wcx_tests
     tstWcx.cpp
     ../UniqueLibs/wcxStorage.cpp
@@ -146,7 +165,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
@@ -155,7 +174,7 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests HyperCommander
+    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_viewer_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )
