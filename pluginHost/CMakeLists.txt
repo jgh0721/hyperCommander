@@ -1,6 +1,8 @@
 qt_add_library(hc_plugin_contract STATIC
     ../commonLibs/plugins/pluginManifest.cpp
     ../commonLibs/plugins/pluginManifest.hpp
+    ../commonLibs/plugins/pluginWire.cpp
+    ../commonLibs/plugins/pluginWire.hpp
 )
 set_target_properties(hc_plugin_contract PROPERTIES AUTOMOC OFF AUTOUIC OFF)
 target_include_directories(hc_plugin_contract PUBLIC ${PROJECT_SOURCE_DIR})
@@ -13,3 +15,12 @@ qt_add_executable(hc-plugin-inspect inspectMain.cpp)
 target_link_libraries(hc-plugin-inspect PRIVATE hc_plugin_manifest)
 target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-inspect)
+qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp)
+target_link_libraries(hc_plugin_process PUBLIC hc_plugin_manifest PRIVATE advapi32)
+target_compile_definitions(hc_plugin_process PRIVATE UNICODE _UNICODE)
+target_compile_options(hc_plugin_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+qt_add_executable(hc-plugin-host-x64 hostMain.cpp)
+target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process advapi32)
+target_compile_definitions(hc-plugin-host-x64 PRIVATE UNICODE _UNICODE)
+target_compile_options(hc-plugin-host-x64 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc-plugin-host-x64)
