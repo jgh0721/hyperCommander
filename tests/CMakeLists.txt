@@ -1,6 +1,19 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
 
+qt_add_executable(hc_storage_tests tstStorage.cpp memoryStorage.hpp
+    ../commonLibs/storage/storage.hpp)
+target_include_directories(hc_storage_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_options(hc_storage_tests PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+)
+target_link_libraries(hc_storage_tests PRIVATE Qt6::Test)
+add_test(NAME hc.storage COMMAND hc_storage_tests)
+set_tests_properties(hc.storage PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    TIMEOUT 30
+)
+
 qt_add_executable(hc_path_tests
     tstPath.cpp
     stdafx.h
@@ -42,7 +55,7 @@ set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_path_tests HyperCommander
+    DEPENDS hc_path_tests hc_storage_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )
