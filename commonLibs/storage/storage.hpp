@@ -93,6 +93,7 @@ namespace hc::storage
         std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::time_point::max();
         std::size_t maxPageItems_ = 256;
         std::size_t maxReadBytes_ = 1024 * 1024;
+        std::size_t maxEnumerationEntries_ = 100000;
         std::optional<Error> Check(const ProviderId& Provider) const
         {
             if (stopToken_.stop_requested())
@@ -111,6 +112,10 @@ namespace hc::storage
         bool directory_ = false;
         std::uint64_t size_ = 0;
         std::uint32_t attributes_ = 0;
+        std::int64_t createdUtcMs_ = 0;
+        std::int64_t modifiedUtcMs_ = 0;
+        // Provider-specific presentation hints; no native pointer crosses the boundary.
+        std::map<std::string, std::string> hints_;
     };
     struct EntryPage
     {

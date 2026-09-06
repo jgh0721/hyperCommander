@@ -96,6 +96,9 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../commonLibs/storage/storage.hpp
+        ../UniqueLibs/storageProviders.cpp
+        ../UniqueLibs/storageProviders.hpp
         ../UniqueLibs/backgroundJobMgr.cpp
         ../UniqueLibs/backgroundJobMgr.hpp
         ../UniqueLibs/builtInFsModel.cpp
@@ -191,6 +194,10 @@ target_link_libraries(HyperCommander
 option(HC_BUILD_SMB_TESTS "Build the live SMB application integration tests" OFF)
 if(HC_BUILD_SMB_TESTS)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+    qt_add_library(hc_wcx_fixture SHARED ../tests/wcxFixture.cpp)
+    target_include_directories(hc_wcx_fixture PRIVATE ${PROJECT_SOURCE_DIR})
+    target_compile_options(hc_wcx_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+    set_target_properties(hc_wcx_fixture PROPERTIES SUFFIX ".wcx64")
     set(HC_SMB_SOURCES ${PROJECT_SOURCES})
     list(REMOVE_ITEM HC_SMB_SOURCES main.cpp)
     qt_add_executable(hc_smb_tests
@@ -207,4 +214,5 @@ if(HC_BUILD_SMB_TESTS)
     )
     get_target_property(HC_PRODUCT_LIBRARIES HyperCommander LINK_LIBRARIES)
     target_link_libraries(hc_smb_tests PRIVATE ${HC_PRODUCT_LIBRARIES} Qt6::Test)
+    add_dependencies(hc_smb_tests hc_wcx_fixture)
 endif()

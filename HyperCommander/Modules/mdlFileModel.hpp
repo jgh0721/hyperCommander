@@ -64,6 +64,8 @@ public:
     static constexpr int USR_ROLE_HIDDENOPACITY = Qt::UserRole + 2;
 
     void                            Refresh();
+    virtual bool                    IsLoading() const { return false; }
+    virtual bool                    HandlesRefreshSignals() const { return false; }
 
     void                            SetRoot( nsHC::TySpFileSystem Fs );
     void                            AppendRoot( nsHC::TySpFileSystem Fs );
@@ -97,6 +99,7 @@ signals:
 
     void                            sigRefreshCompleted();
     void                            sigChangedDirectory( const QString& CurrentPath );
+    void                            sigNavigationFailed(const QString& Code);
 
 public:
     //////////////////////////////////////////////////////////////////////////

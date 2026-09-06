@@ -5,6 +5,7 @@
 #include "cmnBase.hpp"
 #include "mdlFileSystem.hpp"
 #include "solTCPluginMgr.hpp"
+#include "commonLibs/storage/storage.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -93,6 +94,7 @@ namespace nsHC
         QPixmap                 Icon;
         QVector< QVariant >     VecContent;
         LPITEMIDLIST            PIDL = nullptr;
+        std::optional<hc::storage::EntrySnapshot> storageEntry_;
     };
 
     Q_DECLARE_METATYPE( CFileSourceT );
@@ -120,6 +122,8 @@ namespace nsHC
 
         virtual quint64         GetTotalSize() { return 0; }
         virtual quint64         GetFreeSize() { return 0; }
+        virtual std::shared_ptr<hc::storage::IStorageProvider> ReadProvider();
+        virtual hc::storage::Locator ReadLocation(const QString& Path) const;
 
     protected:
         virtual void            readFsInformation();
@@ -128,6 +132,7 @@ namespace nsHC
         QString                 root_;
         TyEnFSCate              cate_ = FS_CATE_LOCAL;
         TyEnFSFeatures          features_ = FS_FEA_NONE;
+        std::shared_ptr<hc::storage::IStorageProvider> readProvider_;
     };
 
     Q_DECLARE_METATYPE( CFileSystemT );
@@ -169,6 +174,8 @@ namespace nsHC
 
         LPITEMIDLIST            GetRoot() const { return Root; }
         QVector< nsHC::TySpFileSource > GetChildItems( LPITEMIDLIST Child, bool IncludeDotDot = false );
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
+        hc::storage::Locator ReadLocation(const QString& Path) const override;
 
     private:
 
@@ -199,6 +206,8 @@ namespace nsHC
         void                    SetParent( const QString& Parent );
 
         CPackFSModel*           Model();
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
+        hc::storage::Locator ReadLocation(const QString& Path) const override;
     private:
 
         TySpWCX                 WCX_;

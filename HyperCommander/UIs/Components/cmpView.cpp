@@ -148,11 +148,25 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
 {
+    if (Source && !Source->QObject::parent()) Source->setParent(this);
+    if (Proxy && !Proxy->QObject::parent()) Proxy->setParent(this);
     if( view_ == nullptr )
         return;
 
     if( Source == nullptr || Columns == nullptr )
         return;
+
+    // Qtitan's progress estimate evaluates log(0) when sorting an empty model.
+    // Cancel only that vacuous sort through its public hook; retain the sort rule
+    // so later asynchronous rows are sorted normally, including empty directories.
+    const auto Controller = view_->modelController();
+    if (!Controller->property("hc.emptySortGuard").toBool())
+    {
+        connect(Controller, &Qtitan::GridModelController::aboutToBeSorted, this, [Controller](bool& Cancel) {
+            if (Controller->getRecordCount() == 0) Cancel = true;
+        }, Qt::DirectConnection);
+        Controller->setProperty("hc.emptySortGuard", true);
+    }
 
     model_ = Source;
     proxy_ = Proxy;

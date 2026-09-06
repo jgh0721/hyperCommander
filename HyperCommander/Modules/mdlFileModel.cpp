@@ -18,7 +18,7 @@ void CFsModelT::Refresh()
 {
     doRefresh();
 
-    emit sigRefreshCompleted();
+    if (!HandlesRefreshSignals()) emit sigRefreshCompleted();
 }
 
 void CFsModelT::SetRoot( nsHC::TySpFileSystem Fs )
@@ -68,6 +68,14 @@ void CFsModelT::ChangeDirectory( const QString& Child )
         {
             if( Child == ".." )
             {
+                if (Root->GetCate() == nsHC::FS_CATE_VIRTUAL && vecFs_.size() > 1)
+                {
+                    vecFs_.removeLast();
+                    SetCurrentPath("\\");
+                    Refresh();
+                    if (!HandlesRefreshSignals()) emit sigChangedDirectory(GetCurrentPathWithRoot());
+                    return;
+                }
                 // LOCAL FS 의 Root 에서 .. 일 때와 PACK FS 의 Root 에서 .. 일 때 구분,
                 if( !FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
                 {
@@ -106,7 +114,7 @@ void CFsModelT::ChangeDirectory( const QString& Child )
 
     qDebug() << __FUNCTION__ << " : " << Notify;
     Refresh();
-    emit sigChangedDirectory( Notify );
+    if (!HandlesRefreshSignals()) emit sigChangedDirectory( Notify );
 }
 
 void CFsModelT::ChangeDirectory( const QModelIndex& Child )
@@ -115,6 +123,26 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
     if( Node == nullptr || Node->Name_.isEmpty() == true )
     {
         ChangeDirectory( "" );
+        return;
+    }
+
+    if (Node->storageEntry_ && Node->storageEntry_->hints_.contains("filesystemPath") && (Node->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        const auto Path = QString::fromStdString(Node->storageEntry_->hints_.at("filesystemPath"));
+        const auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Path));
+        if (Fs)
+        {
+            SetRoot(Fs);
+            SetCurrentPath(Path.mid(Fs->GetRoot().size()));
+            ChangeDirectory("");
+        }
+        return;
+    }
+    if (Node->storageEntry_ && Node->PIDL && (Node->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSShell(Node->PIDL)));
+        SetCurrentPath("\\");
+        ChangeDirectory("");
         return;
     }
 
@@ -257,6 +285,8 @@ QString CFsModelT::GetFileFullPath( const QModelIndex& Index ) const
         return "";
 
     const auto& Item = vecNode_.at( Index.row() );
+    if (Item->storageEntry_ && Item->storageEntry_->hints_.contains("filesystemPath"))
+        return QString::fromStdString(Item->storageEntry_->hints_.at("filesystemPath"));
     return QString( "%1%2%3" ).arg( GetCurrentPathWithRoot() ).arg( IsRoot() ? "" : "\\" ).arg( Item->Name_ );
 }
 

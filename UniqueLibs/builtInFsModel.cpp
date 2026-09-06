@@ -362,6 +362,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
 void CFSModel::doRefresh()
 {
+    if (providerEnabled_)
+    {
+        refreshProvider();
+        return;
+    }
     // Root + CurrentPath 의 대상이 압축파일인지 확인
     const auto Root = GetRoot();
     const auto Base = retrieveRootWithPath();
@@ -517,6 +522,178 @@ void CFSModel::doRefresh()
         DirSizeGatherer_->setCurrentPath( GetCurrentPathWithRoot() );
         QThreadPool::globalInstance()->start( DirSizeGatherer_ );
     }
+}
+
+CFSModel::~CFSModel()
+{
+    navigationStop_.request_stop();
+    if (FsIconGatherer_ || DirSizeGatherer_)
+    {
+        if (FsIconGatherer_) FsIconGatherer_->requestInterruption();
+        if (DirSizeGatherer_) DirSizeGatherer_->requestInterruption();
+        QThreadPool::globalInstance()->waitForDone();
+        delete FsIconGatherer_;
+        delete DirSizeGatherer_;
+    }
+}
+
+void CFSModel::CancelNavigation()
+{
+    navigationStop_.request_stop();
+    ++generation_;
+    if (loading_)
+    {
+        loading_ = false;
+        navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Cancelled, "cancelled"};
+        emit sigNavigationFailed("cancelled");
+        emit sigRefreshCompleted();
+    }
+}
+
+void CFSModel::SetProviderEnabled(bool Enabled)
+{
+    if (providerEnabled_ == Enabled) return;
+    CancelNavigation();
+    // Legacy gatherers refer to model-owned rows. Drain them before changing modes.
+    if (FsIconGatherer_ || DirSizeGatherer_)
+    {
+        if (FsIconGatherer_) FsIconGatherer_->requestInterruption();
+        if (DirSizeGatherer_) DirSizeGatherer_->requestInterruption();
+        QThreadPool::globalInstance()->waitForDone();
+    }
+    providerEnabled_ = Enabled;
+    acceptedRoots_ = vecFs_;
+    acceptedPath_ = path_;
+    if (GetRoot()) Refresh();
+}
+
+void CFSModel::refreshProvider()
+{
+    using namespace hc::storage;
+    navigationStop_.request_stop();
+    navigationStop_ = std::stop_source{};
+    const auto Generation = ++generation_;
+    const auto TargetRoots = vecFs_;
+    const auto TargetPath = path_;
+    const auto Root = GetRoot();
+    if (!Root) return;
+    const auto Location = Root->ReadLocation(retrieveRootWithPath());
+    const auto Provider = Root->ReadProvider();
+    if (!acceptedRoots_.isEmpty())
+    {
+        vecFs_ = acceptedRoots_;
+        path_ = acceptedPath_;
+    }
+    navigationError_.reset();
+    loading_ = true;
+    OperationContext Context;
+    Context.requestId_ = std::to_string(Generation);
+    Context.stopToken_ = navigationStop_.get_token();
+    using ReadResult = Result<std::vector<EntrySnapshot>>;
+    auto* Watcher = new QFutureWatcher<ReadResult>(this);
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath] {
+        const auto Result = Watcher->result();
+        Watcher->deleteLater();
+        if (Generation != generation_) return;
+        loading_ = false;
+        if (!Result.HasValue())
+        {
+            navigationError_ = Result.Failure();
+            emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_));
+            emit sigRefreshCompleted();
+            return;
+        }
+        vecFs_ = TargetRoots;
+        path_ = TargetPath;
+        acceptedRoots_ = TargetRoots;
+        acceptedPath_ = TargetPath;
+        publishProvider(Result.Value());
+        emit sigRefreshCompleted();
+        const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
+            ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
+        emit sigChangedDirectory(QDir::toNativeSeparators(QDir::cleanPath(Notify)));
+    });
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context]() -> ReadResult {
+        // Only provider ownership and immutable values enter this worker.
+        try
+        {
+            if (!Provider) return Error{ErrorCategory::Unsupported, "provider-not-available"};
+            auto Cursor = Provider->Enumerate(Location, Context).get();
+            if (!Cursor.HasValue()) return Cursor.Failure();
+            std::vector<EntrySnapshot> Entries;
+            for (;;)
+            {
+                auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context).get();
+                if (!Page.HasValue()) return Page.Failure();
+                if (Page.Value().entries_.size() > Context.maxEnumerationEntries_ - Entries.size())
+                    return Error{ErrorCategory::BudgetExceeded, "entry-limit", Provider->Id()};
+                if (Page.Value().entries_.empty() && !Page.Value().end_)
+                    return Error{ErrorCategory::Internal, "cursor-no-progress", Provider->Id()};
+                Entries.insert(Entries.end(), Page.Value().entries_.begin(), Page.Value().entries_.end());
+                if (Page.Value().end_) break;
+            }
+            if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
+            return Entries;
+        }
+        catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
+    }));
+}
+
+void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
+{
+    QVector<nsHC::TySpFileSource> Items;
+    if (GetRoot()->ReadLocation(GetCurrentPathWithRoot()).kind_ != hc::storage::LocatorKind::Shell || GetRootCount() > 1)
+    {
+        auto Parent = std::make_shared<nsHC::CFileSourceT>();
+        Parent->Name_ = "..";
+        Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+        Items.push_back(Parent);
+    }
+    QFileIconProvider Icons;
+    for (auto& Entry : Entries)
+    {
+        nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
+        Item->Name_ = QString::fromStdString(Entry.name_);
+        Item->Ext_ = nsCmn::nsCmnPath::GetFileExtension(Item->Name_);
+        Item->Attributes_ = Entry.attributes_;
+        Item->Size_ = Entry.size_;
+        if (Entry.createdUtcMs_) Item->Created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
+        if (Entry.modifiedUtcMs_) Item->Modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
+        if (Item->Name_ != Item->Name_.normalized(QString::NormalizationForm_C)) Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
+        if (Entry.hints_.contains("reparseTag")) Item->Reserved0_ = QString::fromStdString(Entry.hints_.at("reparseTag")).toUInt();
+        if (Entry.hints_.contains("shellPidl"))
+        {
+            const auto Bytes = QByteArray::fromBase64(QByteArray::fromStdString(Entry.hints_.at("shellPidl")));
+            Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Bytes.size()));
+            if (Item->PIDL) memcpy(Item->PIDL, Bytes.data(), Bytes.size());
+            Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_PIDL;
+        }
+        // Generic icons avoid filesystem/network calls on the GUI thread.
+        Item->Icon = Icons.icon(Entry.directory_ ? QFileIconProvider::Folder : QFileIconProvider::File).pixmap(32, 32);
+        Item->storageEntry_ = std::move(Entry);
+        Items.push_back(std::move(Item));
+    }
+    createBuiltFsValues(Items);
+    QVector<TyPrFGWithBG> Colors;
+    int Files = 0, Directories = 0;
+    std::uint64_t Size = 0;
+    const auto ColorMgr = TyStColorSchemeMgr::GetInstance();
+    for (const auto& Item : Items)
+    {
+        auto Color = qMakePair(colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor);
+        for (const auto& Set : vecFileSetColors_)
+            if (ColorMgr->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
+        Colors.push_back(Color);
+        if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ++Directories;
+        else { ++Files; Size += Item->Size_; }
+    }
+    beginResetModel();
+    vecNode_ = std::move(Items);
+    vecRowColors_ = std::move(Colors);
+    fileCount_ = Files;
+    directoryCount_ = Directories;
+    totalSize_ = Size;
+    endResetModel();
 }
 
 QString CFSModel::retrieveRootWithPath() const

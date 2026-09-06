@@ -538,6 +538,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="HyperCommander.hpp" />
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="..\UniqueLibs\storageProviders.cpp" />
     <None Include="cpp.hint" />
     <ResourceCompile Include="HyperCommander.rc" />
     <ClInclude Include="..\uniqueLibs\model_defs.hpp" />
@@ -546,6 +547,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <QtMoc Include="Modules\mdlFileSystem.hpp" />
     <QtMoc Include="Modules\mdlFileModel.hpp" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="..\UniqueLibs\storageProviders.hpp" />
+    <ClInclude Include="..\commonLibs\storage\storage.hpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">Create</PrecompiledHeader>

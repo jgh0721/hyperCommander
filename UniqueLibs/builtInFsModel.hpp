@@ -63,6 +63,14 @@ public:
     ////////////////////////////////////////////////////////////////////////////
     ///
 
+    ~CFSModel() override;
+    void                            SetProviderEnabled(bool Enabled);
+    bool                            ProviderEnabled() const { return providerEnabled_; }
+    bool                            IsLoading() const override { return loading_; }
+    bool                            HandlesRefreshSignals() const override { return providerEnabled_; }
+    void                            CancelNavigation();
+    std::optional<hc::storage::Error> LastNavigationError() const { return navigationError_; }
+
     QString                         GetCurrentPathWithRoot() const override { return retrieveRootWithPath(); }
     QString                         GetName( const QModelIndex& Index ) const;
 
@@ -96,6 +104,15 @@ private:
     QString                         retrieveRootWithPath() const;
     void                            createBuiltFsValues( QVector< nsHC::TySpFileSource >& Items );
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
+    void                            refreshProvider();
+    void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
+    bool                            providerEnabled_ = true;
+    bool                            loading_ = false;
+    std::uint64_t                   generation_ = 0;
+    std::stop_source                navigationStop_;
+    std::optional<hc::storage::Error> navigationError_;
+    QVector<nsHC::TySpFileSystem>    acceptedRoots_;
+    QString                         acceptedPath_;
 
     CFSIconGatherer*                FsIconGatherer_ = nullptr;
     CFSDirSizeGatherer*             DirSizeGatherer_ = nullptr;

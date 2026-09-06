@@ -1,5 +1,6 @@
 ﻿#include "commonLibs/storage/storage.hpp"
 #include "memoryStorage.hpp"
+#include "UniqueLibs/storageProviders.hpp"
 #include <QtTest>
 
 using namespace hc::storage;
@@ -9,6 +10,71 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void nativeReadProvider()
+    {
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        const auto Path = Directory.filePath(QString::fromUtf8("한글 sample.txt"));
+        QFile File(Path);
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write("abcdef"), 6);
+        File.close();
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        const Locator At{LocatorKind::Local, QDir::toNativeSeparators(Directory.path()).toStdString()};
+        auto Cursor = Provider->Enumerate(At, {}).get();
+        QVERIFY(Cursor.HasValue());
+        auto Page = Cursor.Value()->Next(1, {}).get();
+        QCOMPARE(Page.Value().entries_.size(), 1u);
+        const auto Id = Page.Value().entries_[0].id_;
+        QCOMPARE(Provider->Stat(Id, {}).get().Value().size_, 6u);
+        auto A = Provider->OpenRead(Id, {}).get();
+        auto B = Provider->OpenRead(Id, {}).get();
+        QVERIFY(A.HasValue() && B.HasValue());
+        QCOMPARE(A.Value()->Read(1, {}).get().Value().bytes_[0], std::byte{'a'});
+        QCOMPARE(A.Value()->Read(1, {}).get().Value().bytes_[0], std::byte{'b'});
+        QCOMPARE(B.Value()->Read(1, {}).get().Value().bytes_[0], std::byte{'a'});
+        QVERIFY(A.Value()->Seek(6, {}).get().HasValue());
+        QVERIFY(A.Value()->Read(1, {}).get().Value().eof_);
+        QVERIFY(!MakeNativeReadProvider(LocatorKind::Local)->Stat(Id, {}).get().HasValue());
+        QVERIFY(File.open(QIODevice::WriteOnly));
+        File.write("changed length");
+        File.close();
+        QCOMPARE(Provider->Stat(Id, {}).get().Failure().category_, ErrorCategory::StaleRevision);
+        QCOMPARE(Provider->OpenRead(Id, {}).get().Failure().category_, ErrorCategory::StaleRevision);
+        auto Missing = At;
+        Missing.root_ += "\\missing";
+        QCOMPARE(Provider->Enumerate(Missing, {}).get().Failure().category_, ErrorCategory::NotFound);
+        OperationContext Context;
+        Context.maxEnumerationEntries_ = 0;
+        QCOMPARE(Provider->Enumerate(At, Context).get().Failure().category_, ErrorCategory::BudgetExceeded);
+    }
+    void shellAndArchiveProviders()
+    {
+        const Locator Computer{LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
+        auto Shell = MakeShellReadProvider(Computer.root_);
+        auto ShellCursor = Shell->Enumerate(Computer, {}).get();
+        QVERIFY(ShellCursor.HasValue());
+        QVERIFY(ShellCursor.Value()->Next(256, {}).get().HasValue());
+        const Locator Root{LocatorKind::Archive, "fixture.zip", {{"wcx", "/"}}};
+        auto Child = Root;
+        Child.nesting_.back().entry_ = "/한글.txt";
+        EntrySnapshot Item;
+        Item.locator_ = Child;
+        Item.name_ = "한글.txt";
+        Item.size_ = 42;
+        auto Archive = MakeArchiveReadProvider(Root, {{Root, {Item}}});
+        auto Cursor = Archive->Enumerate(Root, {}).get();
+        QVERIFY(Cursor.HasValue());
+        auto Page = Cursor.Value()->Next(2, {}).get();
+        QCOMPARE(Page.Value().entries_.size(), 1u);
+        QCOMPARE(Archive->Stat(Page.Value().entries_[0].id_, {}).get().Value().size_, 42u);
+        const auto Support = Archive->Supports(Operation::OpenRead, {}).get().Value();
+        QCOMPARE(Support.availability_, Availability::Conditional);
+        QVERIFY(Support.requiresMaterialization_);
+        auto Bad = Root;
+        Bad.nesting_.back().entry_ = "/missing";
+        QCOMPARE(Archive->Enumerate(Bad, {}).get().Failure().category_, ErrorCategory::NotFound);
+    }
     void locatorRoundTrip()
     {
         const std::vector<Locator> Inputs{

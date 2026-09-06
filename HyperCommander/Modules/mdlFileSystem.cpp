@@ -3,6 +3,7 @@
 
 #include "cmnHCUtils.hpp"
 #include "cmnTypeDefs_Name.hpp"
+#include "storageProviders.hpp"
 
 #include <lm.h>
 
@@ -226,6 +227,7 @@ namespace nsHC
     {
         cate_ = FS_CATE_VIRTUAL;
         features_ = FS_FEA_LIST;
+        this->Root = ILCloneFull(Root);
     }
 
     CFSShell::CFSShell( const KNOWNFOLDERID& FolderId )
@@ -456,8 +458,78 @@ namespace nsHC
         if( FsModel_ != nullptr )
             return FsModel_;
 
-        FsModel_ = GetWCX()->CreatePackModel().Value.value();
+        const auto Result = GetWCX()->CreatePackModel();
+        if (!Result.Value.has_value()) return nullptr;
+        FsModel_ = Result.Value.value();
         return FsModel_;
+    }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFileSystemT::ReadProvider()
+    {
+        if (!readProvider_)
+            readProvider_ = hc::storage::MakeNativeReadProvider(cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local);
+        return readProvider_;
+    }
+
+    hc::storage::Locator CFileSystemT::ReadLocation(const QString& Path) const
+    {
+        return {cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local, Path.toStdString()};
+    }
+
+    hc::storage::Locator CFSShell::ReadLocation(const QString&) const
+    {
+        PWSTR Parsing = nullptr;
+        std::string Name;
+        if (Root && SUCCEEDED(SHGetNameFromIDList(Root, SIGDN_DESKTOPABSOLUTEPARSING, &Parsing)))
+        {
+            Name = QString::fromWCharArray(Parsing).toStdString();
+            CoTaskMemFree(Parsing);
+        }
+        return {hc::storage::LocatorKind::Shell, std::move(Name)};
+    }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFSShell::ReadProvider()
+    {
+        if (!readProvider_) readProvider_ = hc::storage::MakeShellReadProvider(ReadLocation({}).root_);
+        return readProvider_;
+    }
+
+    hc::storage::Locator CFSPack::ReadLocation(const QString& Path) const
+    {
+        auto Entry = QDir::fromNativeSeparators(Path);
+        if (!Entry.startsWith('/')) Entry.prepend('/');
+        return {hc::storage::LocatorKind::Archive, root_.toStdString(), {{"wcx", Entry.toStdString()}}};
+    }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
+    {
+        if (readProvider_) return readProvider_;
+        const auto Parsed = Model();
+        if (!Parsed || !Parsed->Root_) return {};
+        std::vector<hc::storage::SnapshotDirectory> Directories;
+        std::function<void(CPackFSModel::Node*, QString)> CopyTree;
+        CopyTree = [&](CPackFSModel::Node* Parent, QString Path) {
+            std::vector<hc::storage::EntrySnapshot> Entries;
+            for (const auto* Child : Parent->Children)
+            {
+                hc::storage::EntrySnapshot Entry;
+                const auto ChildPath = Path + (Path.endsWith('/') ? "" : "/") + Child->FileName;
+                Entry.locator_ = ReadLocation(ChildPath);
+                Entry.name_ = Child->FileName.toStdString();
+                Entry.attributes_ = Child->Attributes;
+                Entry.directory_ = (Child->Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                Entry.size_ = Child->UncompressedSize;
+                Entry.modifiedUtcMs_ = Child->FileTime.toMSecsSinceEpoch();
+                Entries.push_back(std::move(Entry));
+            }
+            Directories.emplace_back(ReadLocation(Path), std::move(Entries));
+            for (auto* Child : Parent->Children)
+                if (Child->Attributes & FILE_ATTRIBUTE_DIRECTORY)
+                    CopyTree(Child, Path + (Path.endsWith('/') ? "" : "/") + Child->FileName);
+        };
+        CopyTree(Parsed->Root_, "/");
+        readProvider_ = hc::storage::MakeArchiveReadProvider(ReadLocation("/"), std::move(Directories));
+        return readProvider_;
     }
 
 } // nsHC

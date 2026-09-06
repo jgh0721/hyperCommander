@@ -2,8 +2,10 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
 
 qt_add_executable(hc_storage_tests tstStorage.cpp memoryStorage.hpp
+    ../UniqueLibs/storageProviders.cpp
+    ../UniqueLibs/storageProviders.hpp
     ../commonLibs/storage/storage.hpp)
-target_include_directories(hc_storage_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_include_directories(hc_storage_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_compile_options(hc_storage_tests PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
 )
