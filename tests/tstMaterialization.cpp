@@ -60,6 +60,22 @@ class MaterializationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void failedProducerWorkspacePreservesManifest()
+    {
+        QTemporaryDir Directory;
+        auto ManagerResult = MakeNativeMaterializer(Directory.path().toStdString()); QVERIFY(ManagerResult.HasValue());
+        auto Store = MakeNativeContentStore(Directory.path().toStdString()); QVERIFY(Store.HasValue());
+        QString Workspace;
+        const auto Failed = Store.Value()->Produce(Content("x")->Describe(), {}, {}, {}, [&](const std::string& Path, OperationContext) -> Result<Unit> {
+            Workspace = QFileInfo(QString::fromStdString(Path)).dir().filePath("inputs");
+            if (!QDir().mkdir(Workspace)) return Error{ErrorCategory::Unavailable, "mkdir-failed"};
+            return Error{ErrorCategory::Unavailable, "injected-interrupted-producer"};
+        }); QVERIFY(!Failed.HasValue()); QVERIFY(Failed.Failure().userAction_.find("cleanup-pending:") == 0);
+        QVERIFY(QFile::exists(QFileInfo(Workspace).dir().filePath("owner.lock")));
+        QVERIFY(QDir(Workspace).exists());
+        QVERIFY(QDir().rmdir(Workspace)); QVERIFY(ManagerResult.Value()->DrainCleanup().errors_.empty());
+        QVERIFY(LeaseDirectories(Directory.path()).isEmpty());
+    }
     void producersShareRootQuotaAndValidateOutput()
     {
         QTemporaryDir Directory;
@@ -76,6 +92,15 @@ private slots:
         auto Produced = Store->Produce(Content("hello")->Describe(), {}, {}, {}, Write); QVERIFY(Produced.HasValue());
         const auto Full = Manager->Materialize({Content("x")}, {}).get(); QVERIFY(!Full.HasValue()); QCOMPARE(Full.Failure().category_, ErrorCategory::BudgetExceeded);
         Produced.Value().reset(); QVERIFY(Manager->DrainCleanup().errors_.empty());
+        auto Bounded = Store->Produce(Content("12345")->Describe(), {}, {}, {}, [](const std::string& Path, OperationContext) -> Result<Unit> {
+            QFile File(QString::fromStdString(Path)); if (!File.open(QIODevice::WriteOnly) || File.write("x") != 1) return Error{ErrorCategory::Unavailable, "write-failed"};
+            return Unit{};
+        }, ProducedSize::Bounded); QVERIFY(Bounded.HasValue()); QCOMPARE(Bounded.Value()->Describe().size_, 1u);
+        const auto CeilingReserved = Manager->Materialize({Content("x")}, {}).get(); QVERIFY(!CeilingReserved.HasValue());
+        QCOMPARE(CeilingReserved.Failure().category_, ErrorCategory::BudgetExceeded);
+        Bounded.Value().reset(); QVERIFY(Manager->DrainCleanup().errors_.empty());
+        const auto CeilingExceeded = Store->Produce(Content("1234")->Describe(), {}, {}, {}, Write, ProducedSize::Bounded);
+        QVERIFY(!CeilingExceeded.HasValue()); QCOMPARE(CeilingExceeded.Failure().code_, "invalid-produced-content");
         const auto WrongSize = Store->Produce(Content("1234")->Describe(), {}, {}, {}, Write); QVERIFY(!WrongSize.HasValue()); QCOMPARE(WrongSize.Failure().code_, "invalid-produced-content");
         const auto Failed = Store->Produce(Content("hello")->Describe(), {}, {}, {}, [](const std::string&, OperationContext) -> Result<Unit> {
             throw std::runtime_error("producer failure");

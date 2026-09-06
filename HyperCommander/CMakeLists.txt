@@ -107,6 +107,9 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/nativeMaterializer.hpp
         ../UniqueLibs/wcxStorage.cpp
         ../UniqueLibs/wcxStorage.hpp
+        ../UniqueLibs/wcxMutation.cpp
+        ../UniqueLibs/wcxMutation.hpp
+        ../commonLibs/storage/archiveMutation.hpp
         ../commonLibs/storage/materializedContent.hpp
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp

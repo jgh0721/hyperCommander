@@ -213,6 +213,9 @@ namespace hc::storage
                     if (Entry.size_ > 64ULL * 1024 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "archive-size-budget"};
                     Entry.hints_["packedSize"] = std::to_string((static_cast<std::uint64_t>(Header.PackSizeHigh) << 32) | Header.PackSize);
                     Entry.hints_["crc"] = std::to_string(static_cast<std::uint32_t>(Header.FileCRC));
+                    // Deletion must use the plugin's exact directory marker:
+                    // some WCX plugins expose directories without a final slash.
+                    Entry.hints_["wcxName"] = QString::fromWCharArray(Header.FileName).toStdString();
                     Entry.id_.revision_->token_ += ":" + Entry.hints_["crc"] + ":" + std::to_string(Entry.size_);
                     entries_[Path] = std::move(Entry);
                     for (auto Parent = ParentOf(Path); Parent != "/"; Parent = ParentOf(Parent))

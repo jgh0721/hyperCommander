@@ -9,6 +9,7 @@ endif()
 qt_add_executable(hc_wcx_tests
     tstWcx.cpp
     ../UniqueLibs/wcxStorage.cpp
+    ../UniqueLibs/wcxMutation.cpp
     ../UniqueLibs/nativeMaterializer.cpp
     ../UniqueLibs/storageProviders.cpp
     ../UniqueLibs/nativeWritableStorage.cpp

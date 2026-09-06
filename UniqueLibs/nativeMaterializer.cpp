@@ -116,6 +116,23 @@ namespace hc::storage
         Result<Unit> Cleanup(Record& Item)
         {
             Item.file_.Close();
+            // A producer can leave a private workspace after a crash. Preserve
+            // its ownership manifest until all unexpected entries are resolved;
+            // never recursively remove a tree based only on its location.
+            WIN32_FIND_DATAW Found{};
+            const auto Search = FindFirstFileW(Native(QDir(Item.directory_).filePath("*")).c_str(), &Found);
+            if (Search != INVALID_HANDLE_VALUE)
+            {
+                const auto Close = qScopeGuard([&] { FindClose(Search); });
+                for (;;)
+                {
+                    const auto Name = QString::fromWCharArray(Found.cFileName);
+                    if (Name != "." && Name != ".." && Name != "owner.lock" && Name != QFileInfo(Item.content_).fileName())
+                        return Error{ErrorCategory::InvalidRequest, "unexpected-lease-entry", {}, {}, false, "preserved-workspace:" + Item.directory_.toStdString()};
+                    if (!FindNextFileW(Search, &Found)) { if (GetLastError() != ERROR_NO_MORE_FILES) return WinError(Item.directory_); break; }
+                }
+            }
+            else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) return WinError(Item.directory_);
             if (!Item.content_.isEmpty())
             {
                 Handle Data(CreateFileW(Native(Item.content_).c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
@@ -160,7 +177,7 @@ namespace hc::storage
             }
             Result<std::shared_ptr<IMaterializedFileLease>> Produce(EntrySnapshot Entry,
                 std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
-                OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer) override;
+                OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer, ProducedSize Size) override;
             Result<std::unique_ptr<Record>> Create(const EntrySnapshot& Entry)
             {
                 std::lock_guard Maintenance(maintenance_);
@@ -318,10 +335,11 @@ namespace hc::storage
         };
         Result<std::shared_ptr<IMaterializedFileLease>> Store::Produce(EntrySnapshot Entry,
             std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
-            OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer)
+            OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer, ProducedSize Size)
         {
             if (const auto Failure = Context.Check({"materializer"})) return *Failure;
-            if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400) || Parents.size() > 8)
+            if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400) || Parents.size() > 8
+                || (Size != ProducedSize::Exact && Size != ProducedSize::Bounded))
                 return Error{ErrorCategory::InvalidRequest, "invalid-content-producer"};
             auto Depth = Entry.locator_.nesting_.size();
             for (const auto& Parent : Parents)
@@ -360,8 +378,12 @@ namespace hc::storage
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(Item->file_.value_, &Info)) return Fail(WinError(Item->content_));
             const auto Bytes = (static_cast<std::uint64_t>(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
-            if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1 || Bytes != Entry.size_)
+            if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1
+                || (Size == ProducedSize::Exact ? Bytes != Entry.size_ : Bytes > Entry.size_))
                 return Fail({ErrorCategory::InvalidRequest, "invalid-produced-content"});
+            // A bounded producer reserves its ceiling until lease release, but
+            // describes the actual content size to consumers.
+            Entry.size_ = Bytes;
             return std::shared_ptr<IMaterializedFileLease>(new Lease(shared_from_this(), std::move(Item), std::move(Entry), std::move(Parents), Depth));
         }
 
