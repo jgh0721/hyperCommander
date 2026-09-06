@@ -212,29 +212,20 @@ void CmpPanel::CloseTab()
     if( ui.tabWidget->count() == 1 )
         return;
 
-    auto Current = ui.tabWidget->currentIndex();
-
-    const auto State = retrieveFocusState();
-    if( State != nullptr )
-        vecTabStates.removeAt( Current );
-
-    int New = -1;
-    // 첫 번째 탭이라면 다음 탭으로
-    if( Current == 0 )
-        New = 1;
-    // 마지막 탭이라면 이전 탭으로
-    else if( Current == ui.tabWidget->count() - 1 )
-        New = Current - 1;
-    else
-        New = Current + 1;
-
-    // TODO: 볼륨 목록 동기화
-
-    ui.tabWidget->setCurrentIndex( New );
-    const auto w = ui.tabWidget->widget( Current );
-    ui.tabWidget->removeTab( Current );
-    delete w;
-    SetFocusView( New );
+    const auto Current = ui.tabWidget->currentIndex();
+    if (Current < 0 || Current >= vecTabStates.size()) return;
+    // Restore the original grid before deleting a preview tab so neither its
+    // hidden model nor an active viewer session survives tab closure.
+    if (vecTabStates[Current]->QuickView) CloseQuickView(Current);
+    const auto Closing = ui.tabWidget->widget(Current);
+    {
+        QSignalBlocker Blocker(ui.tabWidget);
+        ui.tabWidget->removeTab(Current);
+        vecTabStates.removeAt(Current);
+        ui.tabWidget->setCurrentIndex(std::min(Current, ui.tabWidget->count() - 1));
+    }
+    delete Closing;
+    SetFocusView(ui.tabWidget->currentIndex());
 }
 
 int CmpPanel::CurrentTabIndex() const
@@ -255,7 +246,7 @@ void CmpPanel::SetFocusView( int TabIndex )
 
 CViewT* CmpPanel::GetFocusView( int TabIndex ) const
 {
-    if( TabIndex < 0 || vecTabStates.isEmpty() == true )
+    if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return {};
 
     const auto& State = vecTabStates.value( TabIndex );
@@ -267,8 +258,10 @@ CViewT* CmpPanel::GetFocusView( int TabIndex ) const
 
 void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
 {
-    if( TabIndex < 0 || vecTabStates.isEmpty() == true )
+    if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return;
+
+    if (vecTabStates[TabIndex]->QuickView) CloseQuickView(TabIndex);
 
     {
         QSignalBlocker Blocker( ui.tabWidget );
@@ -278,7 +271,7 @@ void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
         ui.tabWidget->removeTab( TabIndex );
         State->QuickView = new CQuickView;
         ( ( CQuickView* )State->QuickView )->SetFilePath( FilePath );
-        ui.tabWidget->insertTab( 0, State->QuickView, TabTitle );
+        ui.tabWidget->insertTab( TabIndex, State->QuickView, TabTitle );
         ui.tabWidget->setCurrentIndex( TabIndex );
     }
 }
@@ -301,7 +294,7 @@ void CmpPanel::CloseQuickView( int TabIndex )
         ui.tabWidget->removeTab( TabIndex );
         State->QuickView->deleteLater();
         State->QuickView = nullptr;
-        ui.tabWidget->insertTab( 0, State->View, TabTitle );
+        ui.tabWidget->insertTab( TabIndex, State->View, TabTitle );
         ui.tabWidget->setCurrentIndex( TabIndex );
     }
 }
@@ -829,12 +822,12 @@ CmpPanel::TySpTabState CmpPanel::retrieveFocusState()
 CViewT* CmpPanel::retrieveFocusView() const
 {
     const auto Current = retrieveCurrentIndex();
-    if( Current < 0 || vecTabStates.isEmpty() == true )
+    if( Current < 0 || Current >= vecTabStates.size() )
         return {};
 
     const auto& State = vecTabStates.value( Current );
     if( State->QuickView != nullptr )
-        State->QuickView;
+        return State->QuickView;
 
     return State->View;
 }

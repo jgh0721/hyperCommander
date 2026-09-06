@@ -10,7 +10,11 @@
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
 #include "storageProviders.hpp"
+#include "qtViewerSurface.hpp"
+#include "qtViewerHost.hpp"
 #include <QtitanGrid.h>
+#include <iostream>
+#include <psapi.h>
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -61,6 +65,9 @@ private slots:
             if (auto* Main = qobject_cast<QMainUI*>(Window))
                 main_ = Main;
         QVERIFY(main_);
+        const auto ExpectedDpr = qEnvironmentVariable("HC_UI_EXPECT_DPR");
+        if (!ExpectedDpr.isEmpty()) QCOMPARE(main_->devicePixelRatioF(), ExpectedDpr.toDouble());
+        qInfo() << "Product UI DPR:" << main_->devicePixelRatioF();
         panels_ = main_->findChildren<CmpPanel*>();
         QCOMPARE(panels_.size(), 2);
         QTRY_VERIFY_WITH_TIMEOUT(model(panels_.front())->GetRoot(), 5000);
@@ -71,7 +78,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi"};
+            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -224,6 +231,105 @@ private slots:
         }
         Panel->ChangeCurrentPath(unc_, {});
         QTRY_VERIFY(!Model->IsLoading());
+    }
+
+    void viewerCommandsAndPreviewUi()
+    {
+        const auto PrivateBytes = [] {
+            PROCESS_MEMORY_COUNTERS_EX Counters{}; Counters.cb = sizeof(Counters);
+            return GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&Counters), sizeof(Counters))
+                ? static_cast<quint64>(Counters.PrivateUsage) : quint64{};
+        };
+        const auto BeforeBytes = PrivateBytes(); QVERIFY(BeforeBytes > 0);
+        auto PeakBytes = BeforeBytes;
+        QTimer MemorySampler; MemorySampler.setInterval(25);
+        connect(&MemorySampler, &QTimer::timeout, this, [&] { PeakBytes = std::max(PeakBytes, PrivateBytes()); }); MemorySampler.start();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
+        QVERIFY(Put("first.txt", "first viewer content")); QVERIFY(Put("second.md", "# Second\n\nMarkdown preview")); QVERIFY(Put("archive.hcwcx", "HCWCX01"));
+        QImage Picture(160, 90, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180));
+        QVERIFY(Picture.save(Directory.filePath("picture.png")));
+        auto* SourcePanel = panels_.front(); auto* TargetPanel = panels_.back();
+        for (auto* Panel : panels_)
+        {
+            static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+            QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+        }
+        auto* Model = static_cast<CFSModel*>(model(SourcePanel));
+        auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex())); QVERIFY(Grid);
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+            {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.model() == Model && Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); return Index; }
+            }
+            return QModelIndex{};
+        };
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        const auto Dispatch = [&](const QString& Id, QModelIndex Index = {}) {
+            auto Future = Bridge->Dispatch(Id, {}, "test", Index); QElapsedTimer Wait; Wait.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { if (Wait.elapsed() > 5000) return false; QTest::qWait(10); }
+            auto Result = Future.get(); if (!Result.HasValue()) qWarning() << QString::fromStdString(Result.Failure().code_); return Result.HasValue();
+        };
+        auto First = Focus("first.txt"); QVERIFY(First.isValid());
+        QVERIFY(QApplication::focusWidget()); QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000);
+        QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
+        auto* FullSurface = Full->findChild<QtViewerSurface*>(); QVERIFY(FullSurface);
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 5000);
+        QCOMPARE(FullSurface->findChild<QPlainTextEdit*>()->toPlainText(), QString("first viewer content"));
+        QTest::keyClick(Full.data(), Qt::Key_Escape); QTRY_VERIFY(Full.isNull());
+
+        auto* Tabs = TargetPanel->findChild<QTabWidget*>("tabWidget"); QVERIFY(Tabs);
+        const auto OriginalCount = Tabs->count(); QPointer<QWidget> FirstTab = Tabs->widget(0);
+        TargetPanel->AddTab(); const auto PreviewIndex = TargetPanel->CurrentTabIndex();
+        QTRY_VERIFY(!model(TargetPanel)->IsLoading());
+        QPointer<QWidget> OriginalView = Tabs->widget(PreviewIndex);
+        First = Focus("first.txt"); QVERIFY(First.isValid());
+        auto* QuickAction = main_->findChild<QAction*>("hc.menu.hc.viewer.quick"); QVERIFY(QuickAction); QuickAction->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex)), 5000);
+        QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex));
+        auto* Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QCOMPARE(Tabs->currentIndex(), PreviewIndex); QCOMPARE(Tabs->widget(0), FirstTab.data()); QCOMPARE(Tabs->count(), OriginalCount + 1);
+        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("first viewer content"));
+        QVERIFY(Focus("second.md").isValid());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 5000);
+        QVERIFY(Surface->findChild<QTextBrowser*>()->toPlainText().contains("Second"));
+        for (int Repeat = 0; Repeat < 12; ++Repeat)
+        {
+            QVERIFY(Focus("first.txt").isValid()); QTest::qWait(15);
+            QVERIFY(Focus("picture.png").isValid()); QTest::qWait(15);
+            QVERIFY(Focus("second.md").isValid()); QTest::qWait(15);
+        }
+        QVERIFY(Focus("picture.png").isValid());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "picture.png", 5000);
+        QVERIFY(Surface->findChild<QScrollArea*>("hc.viewer.image")->isVisible());
+        QVERIFY(Focus("second.md").isValid());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 5000);
+        QVERIFY(main_->grab().save("viewer-product-quick.png"));
+        Surface->findChild<QTextBrowser*>()->setFocus(); QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
+        QTRY_VERIFY_WITH_TIMEOUT(Quick.isNull(), 5000); QCOMPARE(Tabs->widget(PreviewIndex), OriginalView.data()); QCOMPARE(Tabs->widget(0), FirstTab.data());
+
+        // Archive content follows the same commands; no fake native pathname.
+        const auto ArchivePath = Directory.filePath("archive.hcwcx");
+        TyPlugInWCX Spec; Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
+        auto Plugin = TySpWCX(new CTCPlugInWCX); QCOMPARE(Plugin->LoadWCX(Spec).ErrorCode, 0u); QVERIFY(Plugin->OpenArchive(ArchivePath).Value.value_or(false));
+        Model->AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSPack(ArchivePath, Plugin))); Model->ChangeDirectory("/"); QTRY_VERIFY(!Model->IsLoading());
+        const auto Archived = Focus("alpha.txt"); QVERIFY(Archived.isValid()); QVERIFY(Dispatch("hc.viewer.open", Archived));
+        Full = main_->findChild<QDialog*>("hc.viewer.full"); QVERIFY(Full); FullSurface = Full->findChild<QtViewerSurface*>();
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 5000); QCOMPARE(FullSurface->findChild<QPlainTextEdit*>()->toPlainText(), QString("alpha")); Full->reject(); QTRY_VERIFY(Full.isNull());
+        QVERIFY(Dispatch("hc.viewer.quick", Archived)); Quick = qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex)); QVERIFY(Quick);
+        Surface = Quick->findChild<QtViewerSurface*>(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("alpha"));
+        TargetPanel->CloseTab(); QTRY_VERIFY(Quick.isNull()); QVERIFY(OriginalView.isNull()); QCOMPARE(Tabs->count(), OriginalCount); QCOMPARE(Tabs->widget(0), FirstTab.data());
+        SourcePanel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        const auto AfterBytes = PrivateBytes(); PeakBytes = std::max(PeakBytes, AfterBytes); MemorySampler.stop();
+        qInfo() << "Viewer product private bytes: before=" << BeforeBytes << "sampledPeak=" << PeakBytes << "afterIdle=" << AfterBytes;
     }
 
     void archiveCommandsAndBatchUi()
@@ -832,6 +938,12 @@ private:
 
 int main(int Argc, char** Argv)
 {
+    if (Argc == 2 && QByteArray(Argv[1]) == "--probe-dpr")
+    {
+        QApplication App(Argc, Argv);
+        std::cout << App.primaryScreen()->devicePixelRatio() << std::endl;
+        return 0;
+    }
 #ifdef _DEBUG
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);

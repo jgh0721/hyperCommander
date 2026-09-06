@@ -6,6 +6,8 @@
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
 #include "wcxMutation.hpp"
+#include "qtViewerHost.hpp"
+#include "commonLibs/storage/materializedContent.hpp"
 #include <QtitanGrid.h>
 
 using namespace hc::commands;
@@ -61,6 +63,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         {"hc.navigate.parent"}, {"hc.navigate.refresh"}, {"hc.navigate.cancel"}, {"hc.navigate.open"},
         {"hc.navigate.provider", 1, {{"enabled", {ParameterType::Boolean}}}},
         {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}, {"hc.view.columns"},
+        {"hc.viewer.open"}, {"hc.viewer.quick"}, {"hc.viewer.preview"}, {"hc.viewer.close"},
         {"hc.file.copy", 1, {{"destination", {ParameterType::String}}, {"destinationTab", {ParameterType::String, false}}, {"destinationLocation", {ParameterType::String, false}}}, "file-write"},
         {"hc.file.move", 1, {{"destination", {ParameterType::String}}, {"destinationTab", {ParameterType::String, false}}, {"destinationLocation", {ParameterType::String, false}}}, "file-write"},
         {"hc.file.rename", 1, {{"destination", {ParameterType::String}}}, "file-write"},
@@ -71,7 +74,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     {
         const auto Registered = registry_->Register(Descriptor, {
             [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) {
-                const bool Available = Guard && Guard->findModel(Invocation.context_.tabId_);
+                const bool Available = Guard && (Guard->findModel(Invocation.context_.tabId_)
+                    || Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && Guard->quick_));
                 return SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "tab-available" : "tab-closed"};
             },
             [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) -> Result<CommandOutcome> {
@@ -86,6 +90,9 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
+    viewers_ = new QtViewerHost(Main);
+    auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
+    connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
         if (!Guard || !Guard->main_) return;
         const auto It = Guard->affectedLocations_.find(Result.snapshot_.id_);
@@ -156,7 +163,8 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
 {
     CommandInvocation Invocation;
     Invocation.id_ = Id.toStdString();
-    Invocation.context_ = Id.startsWith("hc.file.") ? captureFiles(Index, Id == "hc.file.rename") : Capture(Index);
+    Invocation.context_ = Id.startsWith("hc.viewer.") ? captureFiles(Index, true)
+        : Id.startsWith("hc.file.") ? captureFiles(Index, Id == "hc.file.rename") : Capture(Index);
     Invocation.permissions_.insert("navigation");
     if (Id.startsWith("hc.file.")) Invocation.permissions_.insert("file-write");
     Invocation.source_ = Source.toStdString();
@@ -194,8 +202,11 @@ CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
 Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocation)
 {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && quick_))
+    { closeQuick(); return CommandOutcome{}; }
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model) return Error{ErrorCategory::Cancelled, "tab-closed"};
+    if (!Model->GetRoot()) return Error{ErrorCategory::Unavailable, "tab-not-ready"};
     auto* Panel = PanelOf(Model);
     if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
     const auto& Id = Invocation.id_;
@@ -210,6 +221,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot())))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
+    if (Id.starts_with("hc.viewer.")) return executeViewer(Invocation, Model);
     if ((Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel") || Id == "hc.tab.close")
         if (Model->IsLoading()) Model->CancelNavigation();
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel")
@@ -301,6 +313,13 @@ void CommandUiBridge::createActions()
         Dispatch("hc.navigate.provider", {{"enabled", !Checked}}, "menu");
     });
     auto* Files = Window->menuBar()->addMenu(tr("파일 작업"));
+    auto* Viewers = Window->menuBar()->addMenu(tr("뷰어"));
+    for (const auto& Item : std::vector<std::pair<QString, QString>>{
+        {"hc.viewer.open", tr("내장 뷰어로 열기")}, {"hc.viewer.quick", tr("반대 패널 미리 보기")}, {"hc.viewer.close", tr("미리 보기 닫기")}})
+    {
+        auto* Action = Viewers->addAction(Item.second); Action->setObjectName("hc.menu." + Item.first);
+        connect(Action, &QAction::triggered, this, [this, Id = Item.first] { Dispatch(Id, {}, "menu"); });
+    }
     const std::vector<std::pair<QString, QString>> FileActions{
         {"hc.file.copy", tr("복사")}, {"hc.file.move", tr("이동")}, {"hc.file.rename", tr("이름 변경")},
         {"hc.file.mkdir", tr("새 폴더")}, {"hc.file.delete", tr("영구 삭제")}
@@ -313,6 +332,80 @@ void CommandUiBridge::createActions()
     }
     auto* Jobs = Files->addAction(tr("작업 목록"));
     connect(Jobs, &QAction::triggered, this, [this] { fileJobs_->Show(); });
+}
+
+void CommandUiBridge::closeQuick()
+{
+    if (!quick_) return;
+    auto* Quick = quick_.data(); Quick->CloseView();
+    bool Restored = false;
+    if (quickPanel_)
+        if (auto* Tabs = quickPanel_->findChild<QTabWidget*>("tabWidget"))
+            for (int Index = 0; Index < Tabs->count(); ++Index)
+                if (quickPanel_->GetFocusView(Index) == Quick)
+                { quickPanel_->CloseQuickView(Index); Restored = true; break; }
+    if (!Restored) Quick->deleteLater();
+    quick_.clear(); quickPanel_.clear(); quickSource_.clear(); quickKey_.clear();
+}
+
+void CommandUiBridge::refreshPreview()
+{
+    if (!quick_ || !quickSource_ || !quickPanel_ || !quick_->isVisible()) return;
+    if (quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_) return;
+    auto* Model = PanelModel(quickSource_);
+    auto* View = qobject_cast<CGridView*>(quickSource_->GetFocusView(quickSource_->CurrentTabIndex()));
+    if (!Model || !View || Model->IsLoading() || !Model->ProviderEnabled())
+    { quick_->CloseView(); quickKey_.clear(); return; }
+    const auto Focused = View->BaseView()->focusedRow();
+    const auto Index = Focused.isValid() ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
+    const auto Entry = Index.isValid() ? Model->GetFileInfo(Index) : nsHC::TySpFileSource{};
+    if (!Entry || !Entry->storageEntry_ || Entry->storageEntry_->directory_)
+    { quick_->CloseView(); quickKey_.clear(); return; }
+    const auto Key = Model->property("hc.tabId").toString() + QString::fromStdString(Serialize(Entry->storageEntry_->id_) + Serialize(Entry->storageEntry_->locator_));
+    if (quickKey_ == Key) return;
+    quickKey_ = Key;
+    Dispatch("hc.viewer.preview", {}, "preview", Index);
+}
+
+Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& Invocation, CFSModel* Model)
+{
+    if (Model->IsLoading()) return Error{ErrorCategory::Unavailable, "navigation-in-progress"};
+    auto Reader = Model->SnapshotProvider();
+    if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
+    if (Invocation.context_.selection_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-selection-required"};
+    std::optional<EntrySnapshot> Selected;
+    for (int Row = 0; Row < Model->rowCount(); ++Row)
+    {
+        const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+        if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Invocation.context_.selection_.front())
+        { Selected = *Entry->storageEntry_; break; }
+    }
+    if (!Selected) return Error{ErrorCategory::StaleRevision, "selection-changed"};
+    if (Selected->directory_) return Error{ErrorCategory::Unsupported, "viewer-directory"};
+    auto Content = std::make_shared<ProviderContentSource>(std::move(Reader), *Selected);
+    if (Invocation.id_ == "hc.viewer.open") { viewers_->OpenFull(std::move(Content)); return CommandOutcome{}; }
+    auto* SourcePanel = PanelOf(Model);
+    if (Invocation.id_ == "hc.viewer.quick")
+    {
+        CmpPanel* Target = nullptr;
+        for (auto* Panel : main_->findChildren<CmpPanel*>()) if (Panel != SourcePanel) { Target = Panel; break; }
+        if (!Target || !qobject_cast<CGridView*>(Target->GetFocusView(Target->CurrentTabIndex())))
+            return Error{ErrorCategory::Unavailable, "preview-panel-unavailable"};
+        Target->OpenQuickView(Target->CurrentTabIndex(), {});
+        quick_ = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
+        if (!quick_) return Error{ErrorCategory::Internal, "preview-surface-unavailable"};
+        quickPanel_ = Target; quickSource_ = SourcePanel;
+        connect(quick_, &CQuickView::CloseRequested, this, [this] { Dispatch("hc.viewer.close", {}, "shortcut"); });
+    }
+    else if (Invocation.id_ != "hc.viewer.preview") return Error{ErrorCategory::Unsupported, "viewer-command-unavailable"};
+    if (!quick_ || quickSource_ != SourcePanel || !quickPanel_
+        || quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_)
+        return Error{ErrorCategory::Cancelled, "preview-closed"};
+    quickKey_ = Model->property("hc.tabId").toString() + QString::fromStdString(Serialize(Selected->id_) + Serialize(Selected->locator_));
+    quick_->SetContent(*viewers_, std::move(Content));
+    if (Invocation.id_ == "hc.viewer.quick")
+        if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) Grid->EnsureKeyboardFocusOnView();
+    return CommandOutcome{};
 }
 
 CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Single)

@@ -11,6 +11,9 @@
 class CFsModelT;
 struct ColumnView;
 class QtitanColumnAdapter;
+class QtViewerHost;
+class QtViewerSurface;
+namespace hc::storage { class IContentSource; }
 
 class CViewT : public QWidget
 {
@@ -177,6 +180,12 @@ public:
     CQuickView( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     void                            SetFilePath( const QString& FilePath );
+    void                            SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source);
+    void                            CloseView() override;
+    void                            EnsureKeyboardFocusOnView() const override;
+
+signals:
+    void                            CloseRequested();
 
 protected:
     void                            showEvent( QShowEvent* event ) override;
@@ -184,6 +193,7 @@ protected:
 private:
 
     bool                            isInitOnce_ = false;
+    QtViewerSurface*                surface_ = nullptr;
     QString                         filePath_;
     CInternalViewer*                internalViewer_ = nullptr;
     CExternalViewer*                externalViewer_ = nullptr;

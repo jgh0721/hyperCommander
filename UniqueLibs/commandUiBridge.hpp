@@ -9,6 +9,8 @@ class QWidget;
 class CmpPanel;
 class CFSModel;
 class FileJobUi;
+class QtViewerHost;
+class CQuickView;
 
 std::shared_ptr<hc::commands::IExecutor> MakeQtExecutor(QObject* Owner);
 
@@ -31,6 +33,9 @@ private:
     hc::storage::Result<hc::commands::CommandOutcome> execute(const hc::commands::CommandInvocation& Invocation);
     hc::storage::CommandContext captureFiles(const QModelIndex& Index, bool Single);
     hc::storage::Result<hc::commands::CommandOutcome> executeFile(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
+    hc::storage::Result<hc::commands::CommandOutcome> executeViewer(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
+    void refreshPreview();
+    void closeQuick();
     QPointer<QWidget> main_;
     QPointer<CmpPanel> activePanel_;
     std::shared_ptr<hc::commands::IExecutor> executor_;
@@ -39,5 +44,9 @@ private:
     std::unique_ptr<hc::commands::CommandDispatcher> dispatcher_;
     hc::commands::EventSubscription errorSubscription_;
     FileJobUi* fileJobs_ = nullptr;
+    QtViewerHost* viewers_ = nullptr;
+    QPointer<CmpPanel> quickSource_, quickPanel_;
+    QPointer<CQuickView> quick_;
+    QString quickKey_;
     std::map<std::string, std::vector<hc::storage::Locator>> affectedLocations_;
 };

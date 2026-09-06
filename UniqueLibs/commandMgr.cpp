@@ -199,6 +199,7 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_CloseTab )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_SrcQuickView )
 {
+    if (bridge_) { bridge_->Dispatch("hc.viewer.quick", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
@@ -216,6 +217,7 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_RenameSingleFile )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_List )
 {
+    if (bridge_) { bridge_->Dispatch("hc.viewer.open", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 

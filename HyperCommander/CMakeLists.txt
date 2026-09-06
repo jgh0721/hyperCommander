@@ -178,13 +178,16 @@ qt_add_executable(HyperCommander
 target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
-get_target_property(HC_SOURCE_INPUTS HyperCommander SOURCES)
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
-    if(NOT HC_SOURCE MATCHES "^\\$<")
-        cmake_path(ABSOLUTE_PATH HC_SOURCE NORMALIZE OUTPUT_VARIABLE HC_SOURCE_ABSOLUTE)
-        string(APPEND HC_SOURCE_INVENTORY "${HC_SOURCE_ABSOLUTE}\n")
-    endif()
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt)
+    get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
+    get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
+    foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
+        if(NOT HC_SOURCE MATCHES "\\$<")
+            cmake_path(ABSOLUTE_PATH HC_SOURCE BASE_DIRECTORY "${HC_SOURCE_DIRECTORY}" NORMALIZE OUTPUT_VARIABLE HC_SOURCE_ABSOLUTE)
+            string(APPEND HC_SOURCE_INVENTORY "${HC_SOURCE_ABSOLUTE}\n")
+        endif()
+    endforeach()
 endforeach()
 file(WRITE "${CMAKE_BINARY_DIR}/hc-product-sources.txt" "${HC_SOURCE_INVENTORY}")
 
@@ -215,6 +218,7 @@ target_link_libraries(HyperCommander
         Qt6::CorePrivate
         Qt6::GuiPrivate
         Qt6::WidgetsPrivate
+        hc_viewer_qt
 )
 
 # Keep the application executable immediately runnable from its build directory.

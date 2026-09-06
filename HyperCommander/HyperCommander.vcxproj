@@ -550,6 +550,14 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandUiBridge.cpp" />
     <ClCompile Include="..\UniqueLibs\fileJobUi.cpp" />
+    <ClCompile Include="..\commonLibs\viewer\viewer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\UniqueLibs\qtViewerProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\UniqueLibs\qtViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\UniqueLibs\qtViewerHost.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\viewer\viewer.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtViewerProvider.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtViewerHost.hpp" />
+    <QtMoc Include="..\UniqueLibs\qtViewerSurface.hpp" />
     <ClCompile Include="..\UniqueLibs\qtitanColumnAdapter.cpp" />
     <None Include="cpp.hint" />
     <ResourceCompile Include="HyperCommander.rc" />

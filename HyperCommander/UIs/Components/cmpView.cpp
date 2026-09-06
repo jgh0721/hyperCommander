@@ -5,6 +5,7 @@
 #include "cmnHCUtils.hpp"
 #include "commandMgr.hpp"
 #include "qtitanColumnAdapter.hpp"
+#include "qtViewerHost.hpp"
 #include "Modules/mdlFileModel.hpp"
 
 #include <QtitanGrid.h>
@@ -799,6 +800,7 @@ void CQuickView::SetFilePath( const QString& FilePath )
 
 void CQuickView::showEvent( QShowEvent* event )
 {
+    if (surface_ || filePath_.isEmpty()) { CViewT::showEvent(event); return; }
     do
     {
         if( event->spontaneous() == false && isInitOnce_ == false )
@@ -845,6 +847,21 @@ void CQuickView::showEvent( QShowEvent* event )
 
     CViewT::showEvent( event );
 }
+
+void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source)
+{
+    if (!surface_)
+    {
+        surface_ = Host.CreateSurface(this); vbox_->addWidget(surface_); setFocusProxy(surface_);
+        auto* Close = new QAction(tr("미리 보기 닫기"), this);
+        Close->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q)); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
+        connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
+    }
+    surface_->Open(std::move(Source), hc::viewer::ViewerPurpose::QuickPreview);
+}
+
+void CQuickView::CloseView() { if (surface_) surface_->Close(); }
+void CQuickView::EnsureKeyboardFocusOnView() const { if (surface_) surface_->setFocus(); }
 
 ////int CmpPanel::InitializeGrid()
 ////{
