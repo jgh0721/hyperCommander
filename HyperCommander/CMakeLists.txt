@@ -185,3 +185,26 @@ target_link_libraries(HyperCommander
         Qt6::GuiPrivate
         Qt6::WidgetsPrivate
 )
+
+# Opt-in live integration tests compile the same UI/model sources with a test entry
+# point. They must never run implicitly on developer or CI machines without a NAS.
+option(HC_BUILD_SMB_TESTS "Build the live SMB application integration tests" OFF)
+if(HC_BUILD_SMB_TESTS)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+    set(HC_SMB_SOURCES ${PROJECT_SOURCES})
+    list(REMOVE_ITEM HC_SMB_SOURCES main.cpp)
+    qt_add_executable(hc_smb_tests
+        ../tests/tstSmb.cpp
+        ${HC_SMB_SOURCES}
+        ${COMMONLIBS_SRC} ${EXTERNAL_SRC}
+        ${PROJECT_MODULE_SRC} ${PROJECT_UI_SRC} ${UNIQUELIBS_SRC}
+    )
+    target_precompile_headers(hc_smb_tests PRIVATE stdafx.h)
+    target_include_directories(hc_smb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/UniqueLibs)
+    target_compile_options(hc_smb_tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/bigobj>
+    )
+    get_target_property(HC_PRODUCT_LIBRARIES HyperCommander LINK_LIBRARIES)
+    target_link_libraries(hc_smb_tests PRIVATE ${HC_PRODUCT_LIBRARIES} Qt6::Test)
+endif()
