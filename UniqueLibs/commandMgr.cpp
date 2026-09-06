@@ -129,6 +129,8 @@ QWidget* CCommandMgr::GetMainUI() const
 void CCommandMgr::SetMainUI( QWidget* MainUI )
 {
     MainUI_ = MainUI;
+    if (bridge_) delete bridge_.data();
+    if (MainUI) bridge_ = new CommandUiBridge(MainUI);
 }
 
 bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex )
@@ -158,7 +160,7 @@ void CCommandMgr::ProcessFavoriteDir( const QString& Command, const QString& Pat
         else
         {
             if( Arg.startsWith( "\"" ) == true && Arg.endsWith( "\"" ) == true )
-                Arg = Arg.mid( 1, Arg.size() - 1 );
+                Arg = Arg.mid( 1, Arg.size() - 2 );
 
             cm_ChangePath( QModelIndex(), QStringList() << Arg << Path );
             return;
@@ -173,21 +175,25 @@ void CCommandMgr::ProcessFavoriteDir( const QString& Command, const QString& Pat
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_NewTab )
 {
+    if (bridge_) { bridge_->Dispatch("hc.tab.new", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_PrevTab )
 {
+    if (bridge_) { bridge_->Dispatch("hc.tab.previous", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_NextTab )
 {
+    if (bridge_) { bridge_->Dispatch("hc.tab.next", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_CloseTab )
 {
+    if (bridge_) { bridge_->Dispatch("hc.tab.close", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
@@ -213,6 +219,7 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_List )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_Return )
 {
+    if (bridge_ && bridge_->DispatchFolder(CursorIndex)) return;
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
@@ -252,6 +259,7 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_SwitchHidSys )
 
 DEFINE_HC_COMMAND( CCommandMgr, cm_RereadSource )
 {
+    if (bridge_) { bridge_->Dispatch("hc.navigate.refresh", {}, "shortcut", CursorIndex); return; }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
@@ -262,11 +270,24 @@ DEFINE_HC_COMMAND( CCommandMgr, cm_DirectoryHotList )
 
 DEFINE_HC_COMMAND_EX( CCommandMgr, cm_GotoDrive )
 {
+    if (bridge_)
+    {
+        auto Path = Parameter.toString();
+        if (Path.size() == 1 && Path[0].isLetter()) Path += ":\\";
+        bridge_->Dispatch("hc.navigate.path", {{"path", Path}}, "shortcut", CursorIndex);
+        return;
+    }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );
 }
 
 DEFINE_HC_COMMAND_EX( CCommandMgr, cm_ChangePath )
 {
+    if (bridge_)
+    {
+        const auto Paths = Parameter.toStringList();
+        bridge_->Dispatch("hc.navigate.path", {{"path", Paths.isEmpty() ? Parameter.toString() : Paths.front()}}, "legacy", CursorIndex);
+        return;
+    }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );
 }
 

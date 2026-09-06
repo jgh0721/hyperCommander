@@ -4,6 +4,7 @@
 #include "UIs/dlgMain.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
+#include "commandMgr.hpp"
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -187,6 +188,124 @@ private slots:
         }
         Panel->ChangeCurrentPath(unc_, {});
         QTRY_VERIFY(!Model->IsLoading());
+    }
+
+    void commandEntryPointsAndTabLifetime()
+    {
+        using namespace hc::commands;
+        using namespace hc::storage;
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        QVERIFY(Bridge);
+        std::vector<EventEnvelope> Events;
+        auto Subscription = Bridge->Events()->Subscribe("", MakeQtExecutor(this), [&](const auto& Event) { Events.push_back(Event); });
+        QVERIFY(Subscription.HasValue());
+        for (const auto& Source : {QStringLiteral("menu"), QStringLiteral("toolbar"), QStringLiteral("shortcut")})
+        {
+            Events.clear();
+            if (Source == "shortcut")
+            {
+                QKeyEvent Key(QEvent::KeyPress, Qt::Key_F5, Qt::NoModifier);
+                QVERIFY(TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Key, {}));
+            }
+            else
+            {
+                auto* Action = main_->findChild<QAction*>("hc." + Source + ".hc.navigate.refresh");
+                QVERIFY(Action);
+                Action->trigger();
+            }
+            const auto HasEvent = [&](const std::string& Id) {
+                return std::any_of(Events.begin(), Events.end(), [&](const auto& Event) { return Event.id_ == Id; });
+            };
+            QTRY_VERIFY_WITH_TIMEOUT(HasEvent("navigation.completed"), 15000);
+            const auto Started = std::find_if(Events.begin(), Events.end(), [](const auto& Event) { return Event.id_ == "command.started"; });
+            QVERIFY(Started != Events.end());
+            QCOMPARE(std::get<std::string>(Started->payload_.at("command")), std::string("hc.navigate.refresh"));
+            QCOMPARE(std::get<std::string>(Started->payload_.at("source")), Source.toStdString());
+            const auto Complete = std::find_if(Events.begin(), Events.end(), [](const auto& Event) { return Event.id_ == "navigation.completed"; });
+            QCOMPARE(Complete->correlationId_, Started->correlationId_);
+            QVERIFY(!Started->correlationId_.empty());
+        }
+        auto* Panel = panels_.front();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto Path = Bridge->Dispatch("hc.navigate.path", {{"path", unc_}}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Path.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(Path.get().HasValue());
+        QTRY_VERIFY(!Model->IsLoading());
+        QCOMPARE(Model->GetCurrentPathWithRoot(), unc_);
+        auto Add = Bridge->Dispatch("hc.tab.new", {}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Add.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(Add.get().HasValue());
+        auto* NewModel = static_cast<CFSModel*>(model(Panel));
+        QVERIFY(NewModel != Model);
+        QTRY_VERIFY(!NewModel->IsLoading());
+        CommandInvocation Closed;
+        Closed.id_ = "hc.navigate.refresh";
+        Closed.permissions_.insert("navigation");
+        Closed.context_ = Bridge->Capture(NewModel->index(0, 0));
+        QVERIFY(!Closed.context_.tabId_.empty());
+        QPointer<CFSModel> Guard(NewModel);
+        Panel->CloseTab();
+        QTRY_VERIFY(Guard.isNull());
+        auto Rejected = Bridge->DispatchInvocation(Closed);
+        QTRY_VERIFY(Rejected.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(Rejected.get().Failure().code_, std::string("tab-closed"));
+        QCOMPARE(model(Panel), Model);
+        QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/m2-navigation.png"));
+    }
+
+    void queuedQtOwnerDestruction()
+    {
+        using namespace hc::commands;
+        using namespace hc::storage;
+        auto Registry = std::make_shared<CommandRegistry>();
+        auto Hub = std::make_shared<EventHub>();
+        auto* Owner = new QObject;
+        bool Executed = false;
+        QVERIFY(Registry->Register({"test"}, {{}, [&](const auto&) -> Result<CommandOutcome> { Executed = true; return CommandOutcome{}; }}, MakeQtExecutor(Owner)).HasValue());
+        CommandDispatcher Dispatcher(Registry, Hub);
+        CommandInvocation Invocation;
+        Invocation.id_ = "test";
+        Invocation.permissions_.insert("navigation");
+        auto Pending = Dispatcher.Dispatch(Invocation);
+        delete Owner;
+        QTRY_VERIFY(Pending.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(Pending.get().Failure().category_, ErrorCategory::Cancelled);
+        QVERIFY(!Executed);
+    }
+
+    void commandCancellationCorrelation()
+    {
+        using namespace hc::commands;
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto* Model = static_cast<CFSModel*>(model(panels_.front()));
+        std::vector<EventEnvelope> Events;
+        auto Subscription = Bridge->Events()->Subscribe("", MakeQtExecutor(this), [&](const auto& Event) { Events.push_back(Event); });
+        auto Provider = std::make_shared<GatedProvider>();
+        auto Release = qScopeGuard([&] { Provider->release_.set_value(); });
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider)));
+        Model->SetCurrentPath("\\");
+        auto Started = Bridge->Dispatch("hc.navigate.refresh", {}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Started.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Outcome = Started.get();
+        QVERIFY(Outcome.HasValue());
+        QCOMPARE(Outcome.Value().status_, CommandOutcome::Status::Accepted);
+        QTRY_VERIFY(Provider->started_.load());
+        auto Invalid = Bridge->Dispatch("hc.navigate.path", {{"path", QStringLiteral("relative")}}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Invalid.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(!Invalid.get().HasValue());
+        QVERIFY(Model->IsLoading());
+        auto Cancelled = Bridge->Dispatch("hc.navigate.cancel", {}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Cancelled.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(Cancelled.get().HasValue());
+        QVERIFY(!Model->IsLoading());
+        const auto HasTerminal = [&] {
+            return std::any_of(Events.begin(), Events.end(), [&](const auto& Event) {
+                return Event.id_ == "navigation.failed" && Event.correlationId_ == Outcome.Value().jobId_;
+            });
+        };
+        QTRY_VERIFY(HasTerminal());
+        QCOMPARE(Model->GetCurrentPathWithRoot(), unc_);
+        QVERIFY(Model->property("hc.correlation").toString().isEmpty());
     }
 
 private:

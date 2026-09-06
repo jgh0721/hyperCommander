@@ -4,6 +4,7 @@
 
 
 #include "commandMgr_Defs.hpp"
+#include "commandUiBridge.hpp"
 
 #include <memory>
 
@@ -28,6 +29,7 @@ public:
 
     QWidget*                            GetMainUI() const;
     void                                SetMainUI( QWidget* MainUI );
+    CommandUiBridge*                     Bridge() const { return bridge_; }
 
     bool                                ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex );
     void                                ProcessFavoriteDir( const QString& Command, const QString& Path );
@@ -75,6 +77,7 @@ private:
     TySpMapKeyToCMDStr                  SpMapKeyToCMDText_;
 
     QWidget*                            MainUI_ = nullptr;
+    QPointer<CommandUiBridge>            bridge_;
 };
 
 using TyStCommandMgr = nsCmn::nsConcurrent::TSingleton< CCommandMgr >;

@@ -96,6 +96,9 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../commonLibs/commands/commandBus.hpp
+        ../UniqueLibs/commandUiBridge.cpp
+        ../UniqueLibs/commandUiBridge.hpp
         ../commonLibs/storage/storage.hpp
         ../UniqueLibs/storageProviders.cpp
         ../UniqueLibs/storageProviders.hpp

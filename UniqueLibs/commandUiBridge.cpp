@@ -1,0 +1,270 @@
+﻿#include "stdafx.h"
+#include "commandUiBridge.hpp"
+#include "UIs/cmpPanel.hpp"
+#include "builtInFsModel.hpp"
+
+using namespace hc::commands;
+using namespace hc::storage;
+
+namespace
+{
+    class QtExecutor final : public IExecutor
+    {
+    public:
+        explicit QtExecutor(QObject* Owner) : owner_(Owner) {}
+        bool Post(std::function<void()> Work) override
+        {
+            const auto App = QCoreApplication::instance();
+            if (!App) return false;
+            // The application is the stable delivery context. The owner guard is
+            // examined on the GUI thread, so deleting a tab/window drops its work.
+            return QMetaObject::invokeMethod(App, [Owner = owner_, Work = std::move(Work)] { if (Owner) Work(); }, Qt::QueuedConnection);
+        }
+    private:
+        QPointer<QObject> owner_;
+    };
+    QModelIndex SourceIndex(QModelIndex Index)
+    {
+        while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+        return Index;
+    }
+    CmpPanel* PanelOf(QObject* Object)
+    {
+        for (auto* Parent = Object; Parent; Parent = Parent->parent())
+            if (auto* Panel = qobject_cast<CmpPanel*>(Parent)) return Panel;
+        return nullptr;
+    }
+    CFSModel* PanelModel(CmpPanel* Panel)
+    {
+        if (!Panel) return nullptr;
+        const auto View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        return View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    }
+}
+
+std::shared_ptr<IExecutor> MakeQtExecutor(QObject* Owner) { return std::make_shared<QtExecutor>(Owner); }
+
+CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), executor_(MakeQtExecutor(this)),
+    registry_(std::make_shared<CommandRegistry>()), events_(std::make_shared<EventHub>())
+{
+    dispatcher_ = std::make_unique<CommandDispatcher>(registry_, events_);
+    activePanel_ = Main->findChild<CmpPanel*>("cmpLeftPanel");
+    for (auto* Panel : Main->findChildren<CmpPanel*>())
+        connect(Panel, &CmpPanel::sig_NotifyPanelActivated, this, [this, Panel] { activePanel_ = Panel; });
+    const std::vector<CommandDescriptor> Commands{
+        {"hc.navigate.path", 1, {{"path", {ParameterType::String}}}},
+        {"hc.navigate.parent"}, {"hc.navigate.refresh"}, {"hc.navigate.cancel"}, {"hc.navigate.open"},
+        {"hc.navigate.provider", 1, {{"enabled", {ParameterType::Boolean}}}},
+        {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}
+    };
+    for (const auto& Descriptor : Commands)
+    {
+        const auto Registered = registry_->Register(Descriptor, {
+            [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) {
+                const bool Available = Guard && Guard->findModel(Invocation.context_.tabId_);
+                return SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "tab-available" : "tab-closed"};
+            },
+            [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) -> Result<CommandOutcome> {
+                if (!Guard) return Error{ErrorCategory::Cancelled, "window-closed"};
+                return Guard->execute(Invocation);
+            }}, executor_);
+        Q_ASSERT(Registered.HasValue());
+    }
+    auto Subscription = events_->Subscribe("command.failed", executor_, [Guard = QPointer<QWidget>(Main)](const EventEnvelope& Event) {
+        if (auto* Window = qobject_cast<QMainWindow*>(Guard.data()))
+            Window->statusBar()->showMessage(QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
+    });
+    errorSubscription_ = std::move(Subscription.Value());
+    bindModels();
+    createActions();
+}
+
+void CommandUiBridge::bindModels()
+{
+    if (!main_) return;
+    for (auto* Model : main_->findChildren<CFSModel*>())
+    {
+        if (Model->property("hc.tabId").isNull()) Model->setProperty("hc.tabId", QUuid::createUuid().toString(QUuid::Id128));
+        if (Model->property("hc.commandSignals").toBool()) continue;
+        Model->setProperty("hc.commandSignals", true);
+        const auto Publish = [this, Model](bool Success, const QString& Code) {
+            EventEnvelope Event;
+            Event.id_ = Success ? "navigation.completed" : "navigation.failed";
+            Event.producer_ = "qt-navigation";
+            Event.correlationId_ = Model->property("hc.correlation").toString().toStdString();
+            Model->setProperty("hc.correlation", QVariant{});
+            Event.causationId_ = Event.correlationId_;
+            Event.payload_ = {{"tab", Model->property("hc.tabId").toString().toStdString()},
+                {"path", Model->GetCurrentPathWithRoot().toStdString()}, {"code", Code.toStdString()}};
+            events_->Publish(std::move(Event));
+            if (!Success)
+                if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
+                    Window->statusBar()->showMessage(tr("폴더를 열 수 없습니다: %1").arg(Code), 6000);
+        };
+        connect(Model, &CFsModelT::sigChangedDirectory, this, [Publish](const QString&) { Publish(true, {}); });
+        connect(Model, &CFsModelT::sigNavigationFailed, this, [Publish](const QString& Code) { Publish(false, Code); });
+    }
+}
+
+CommandContext CommandUiBridge::Capture(const QModelIndex& Index)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    bindModels();
+    const auto Source = SourceIndex(Index);
+    auto* Model = Source.isValid() ? qobject_cast<CFSModel*>(const_cast<QAbstractItemModel*>(Source.model())) : PanelModel(activePanel_);
+    if (!Model || !Model->GetRoot()) return {};
+    CommandContext Context;
+    Context.tabId_ = Model->property("hc.tabId").toString().toStdString();
+    Context.location_ = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
+    if (Source.isValid())
+    {
+        const auto Entry = Model->GetFileInfo(Source);
+        if (Entry)
+            Context.selection_.push_back(Entry->storageEntry_ ? Entry->storageEntry_->id_
+                : ResourceId{{"legacy"}, Entry->Name_.toStdString(), IdentityScope::NavigationSession, {}});
+    }
+    return Context;
+}
+
+Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariantMap& Parameters, const QString& Source, const QModelIndex& Index)
+{
+    CommandInvocation Invocation;
+    Invocation.id_ = Id.toStdString();
+    Invocation.context_ = Capture(Index);
+    Invocation.permissions_.insert("navigation");
+    Invocation.source_ = Source.toStdString();
+    Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    for (auto It = Parameters.begin(); It != Parameters.end(); ++It)
+    {
+        if (It.value().metaType().id() == QMetaType::Bool) Invocation.parameters_[It.key().toStdString()] = It.value().toBool();
+        else if (It.value().metaType().id() == QMetaType::QString) Invocation.parameters_[It.key().toStdString()] = It.value().toString().toStdString();
+        else return Ready<CommandOutcome>(Error{ErrorCategory::InvalidRequest, "unsupported-ui-parameter"});
+    }
+    return DispatchInvocation(std::move(Invocation));
+}
+
+Task<CommandOutcome> CommandUiBridge::DispatchInvocation(CommandInvocation Invocation) { return dispatcher_->Dispatch(std::move(Invocation)); }
+
+bool CommandUiBridge::DispatchFolder(const QModelIndex& Index)
+{
+    const auto Source = SourceIndex(Index);
+    auto* Model = qobject_cast<CFSModel*>(const_cast<QAbstractItemModel*>(Source.model()));
+    if (!Model || !Source.isValid()) return false;
+    const auto Entry = Model->GetFileInfo(Source);
+    if (!Entry || !(Entry->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    Dispatch("hc.navigate.open", {}, "shortcut", Index);
+    return true;
+}
+
+CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
+{
+    if (!main_ || TabId.empty()) return nullptr;
+    for (auto* Model : main_->findChildren<CFSModel*>())
+        if (Model->property("hc.tabId").toString().toStdString() == TabId) return Model;
+    return nullptr;
+}
+
+Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocation)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    auto* Model = findModel(Invocation.context_.tabId_);
+    if (!Model) return Error{ErrorCategory::Cancelled, "tab-closed"};
+    auto* Panel = PanelOf(Model);
+    if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
+    const auto& Id = Invocation.id_;
+    QString Path;
+    if (Id == "hc.navigate.path")
+    {
+        Path = QString::fromStdString(std::get<std::string>(Invocation.parameters_.at("path")));
+        if (Path.size() == 2 && Path.endsWith(':')) Path += '\\';
+        if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-path-required"};
+        Path = QDir::toNativeSeparators(QDir::cleanPath(Path));
+    }
+    if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot())))
+        return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+    if ((Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel") || Id == "hc.tab.close")
+        if (Model->IsLoading()) Model->CancelNavigation();
+    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel")
+        Model->setProperty("hc.correlation", QString::fromStdString(Invocation.correlationId_));
+    if (Id == "hc.navigate.path")
+    {
+        Panel->ChangeCurrentPath(Path, {});
+        if (!Model->IsLoading() && Model->GetCurrentPathWithRoot().compare(Path, Qt::CaseInsensitive) != 0)
+            return Error{ErrorCategory::NotFound, "path-not-available"};
+    }
+    else if (Id == "hc.navigate.refresh") Model->Refresh();
+    else if (Id == "hc.navigate.parent") Model->ChangeDirectory("..");
+    else if (Id == "hc.navigate.cancel") Model->CancelNavigation();
+    else if (Id == "hc.navigate.provider") Model->SetProviderEnabled(std::get<bool>(Invocation.parameters_.at("enabled")));
+    else if (Id == "hc.navigate.open")
+    {
+        if (Invocation.context_.selection_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-selection-required"};
+        const auto& Selected = Invocation.context_.selection_.front();
+        QModelIndex Target;
+        for (int Row = 0; Row < Model->rowCount(); ++Row)
+        {
+            const auto Index = Model->index(Row, 0);
+            const auto Entry = Model->GetFileInfo(Index);
+            if ((Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected)
+                || (!Entry->storageEntry_ && Selected.providerId_.value_ == "legacy" && Entry->Name_.toStdString() == Selected.key_))
+            {
+                if (!(Entry->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) return Error{ErrorCategory::Unsupported, "directory-required"};
+                Target = Index;
+                break;
+            }
+        }
+        if (!Target.isValid()) return Error{ErrorCategory::StaleRevision, "selection-changed"};
+        Model->ChangeDirectory(Target);
+    }
+    else if (Id == "hc.tab.new") { Panel->AddTab(); bindModels(); return CommandOutcome{}; }
+    else if (Id == "hc.tab.close") { Panel->CloseTab(); return CommandOutcome{}; }
+    else if (Id == "hc.tab.next") { Panel->NextTab(); return CommandOutcome{}; }
+    else if (Id == "hc.tab.previous") { Panel->PrevTab(); return CommandOutcome{}; }
+    else return Error{ErrorCategory::NotFound, "unknown-command"};
+    return CommandOutcome{Model->IsLoading() ? CommandOutcome::Status::Accepted : CommandOutcome::Status::Completed,
+        Model->IsLoading() ? Invocation.correlationId_ : std::string{}};
+}
+
+void CommandUiBridge::createActions()
+{
+    auto* Window = qobject_cast<QMainWindow*>(main_.data());
+    if (!Window) return;
+    auto* Menu = Window->menuBar()->addMenu(tr("탐색"));
+    auto* Toolbar = Window->addToolBar(tr("탐색"));
+    Toolbar->setObjectName("hc.navigationToolbar");
+    const std::vector<std::pair<QString, QString>> Actions{
+        {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
+        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")}
+    };
+    for (const auto& [Id, Label] : Actions)
+    {
+        for (const auto& Source : {QStringLiteral("menu"), QStringLiteral("toolbar")})
+        {
+            auto* Action = new QAction(Label, this);
+            Action->setObjectName("hc." + Source + "." + Id);
+            if (Source == "menu") Menu->addAction(Action); else Toolbar->addAction(Action);
+            connect(Action, &QAction::triggered, this, [this, Id, Source] {
+                QVariantMap Parameters;
+                if (Id == "hc.navigate.path")
+                {
+                    bool Accepted = false;
+                    const auto Context = Capture();
+                    const auto Path = QInputDialog::getText(main_, tr("폴더 이동"), tr("경로"), QLineEdit::Normal,
+                        QString::fromStdString(Context.location_.root_), &Accepted);
+                    if (!Accepted) return;
+                    Parameters["path"] = Path;
+                }
+                Dispatch(Id, Parameters, Source);
+            });
+        }
+    }
+    auto* Compatibility = Menu->addAction(tr("호환 탐색"));
+    Compatibility->setObjectName("hc.menu.compatibility");
+    Compatibility->setCheckable(true);
+    connect(Menu, &QMenu::aboutToShow, this, [this, Compatibility] {
+        if (const auto Model = PanelModel(activePanel_)) Compatibility->setChecked(!Model->ProviderEnabled());
+    });
+    connect(Compatibility, &QAction::triggered, this, [this](bool Checked) {
+        Dispatch("hc.navigate.provider", {{"enabled", !Checked}}, "menu");
+    });
+}
