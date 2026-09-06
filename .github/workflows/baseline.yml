@@ -1,0 +1,20 @@
+name: Windows baseline
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: [self-hosted, Windows, X64, hc-qt612-vc2026]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          # This runner has licensed, ignored QtitanDataGrid source provisioned locally.
+          clean: false
+          persist-credentials: false
+      - name: Build and test with the qualified Qt kit
+        shell: powershell
+        run: ./tools/Invoke-Baseline.ps1 -Fresh

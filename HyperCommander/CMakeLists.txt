@@ -1,37 +1,9 @@
-cmake_minimum_required(VERSION 3.16)
-project(HyperCommander LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 # Find includes in the build directories
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-set(CMAKE_PREFIX_PATH D:/Qt/6.8.0/msvc2022_64)
 
 add_compile_definitions( QT_NO_DEPRECATED_WARNINGS )
 
-include( qt.cmake )
 include( ../UniqueLibs/build.common.cmake )
-
-qt_standard_project_setup()
-
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core)
-
-find_package(Qt${QT_VERSION_MAJOR}
-        COMPONENTS
-        Core
-        Concurrent
-        Gui
-        Sql
-        Network
-        UiTools
-        PrintSupport
-        Widgets
-)
-
-include_directories(${Qt${QT_VERSION_MAJOR}Core_PRIVATE_INCLUDE_DIRS})
-include_directories(${Qt${QT_VERSION_MAJOR}Gui_PRIVATE_INCLUDE_DIRS})
-include_directories(${Qt${QT_VERSION_MAJOR}Widgets_PRIVATE_INCLUDE_DIRS})
 
 include( ../commonLibs/commonLibs.cmake )
 include( ../externalLibs/externalLibs.cmake )
@@ -53,11 +25,17 @@ set(PROJECT_SOURCES
 set(PROJECT_MODULE_SRC
         Modules/mdlFileEngine.cpp
         Modules/mdlFileEngine.hpp
+        Modules/mdlFileModel.cpp
+        Modules/mdlFileModel.hpp
         Modules/mdlFileOperation.cpp
         Modules/mdlFileOperation.hpp
+        Modules/mdlFileSystem.cpp
+        Modules/mdlFileSystem.hpp
 )
 
 set(PROJECT_UI_SRC
+        UIs/Components/cmpView.cpp
+        UIs/Components/cmpView.hpp
         UIs/cmnUiUtils.cpp
         UIs/cmnUiUtils.hpp
         UIs/cmpPanel.cpp
@@ -75,6 +53,9 @@ set(PROJECT_UI_SRC
         UIs/dlgExternalConfigure_Item.cpp
         UIs/dlgExternalConfigure_Item.hpp
         UIs/dlgExternalConfigure_Item.ui
+        UIs/dlgFavoriteDir.cpp
+        UIs/dlgFavoriteDir.hpp
+        UIs/dlgFavoriteDir.ui
         UIs/dlgGridStyle.cpp
         UIs/dlgGridStyle.hpp
         UIs/dlgGridStyle.ui
@@ -110,6 +91,8 @@ set(PROJECT_UI_SRC
         "UIs/Cate - FileOperation/dlgFileProgress.cpp"
         "UIs/Cate - FileOperation/dlgFileProgress.hpp"
         "UIs/Cate - FileOperation/dlgFileProgress.ui"
+        UniqueLibs/uiComboBoxWidget.cpp
+        UniqueLibs/uiComboBoxWidget.hpp
 )
 
 set(UNIQUELIBS_SRC
@@ -117,6 +100,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/backgroundJobMgr.hpp
         ../UniqueLibs/builtInFsModel.cpp
         ../UniqueLibs/builtInFsModel.hpp
+        ../UniqueLibs/builtInVolumeModel.cpp
+        ../UniqueLibs/builtInVolumeModel.hpp
         ../UniqueLibs/cmnHCModelUtils.cpp
         ../UniqueLibs/cmnHCModelUtils.hpp
         ../UniqueLibs/cmnHCUtils.cpp
@@ -145,6 +130,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/SHChangeNotify.cpp
         ../UniqueLibs/SHChangeNotify.hpp
         ../UniqueLibs/solAdminWIthIPC.hpp
+        ../UniqueLibs/solFavoriteDirMgr.cpp
+        ../UniqueLibs/solFavoriteDirMgr.hpp
         ../UniqueLibs/solMultiLang_Defs.hpp
         ../UniqueLibs/solTCPluginMgr.cpp
         ../UniqueLibs/solTCPluginMgr.hpp
@@ -157,7 +144,27 @@ qt_add_executable(HyperCommander
         ${UNIQUELIBS_SRC}
 )
 
-target_precompile_headers( HyperCommander PUBLIC stdafx.h )
+target_precompile_headers( HyperCommander PRIVATE stdafx.h )
+
+# Export the actual target inputs so the legacy VS project can be checked for drift.
+get_target_property(HC_SOURCE_INPUTS HyperCommander SOURCES)
+set(HC_SOURCE_INVENTORY "")
+foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
+    if(NOT HC_SOURCE MATCHES "^\\$<")
+        cmake_path(ABSOLUTE_PATH HC_SOURCE NORMALIZE OUTPUT_VARIABLE HC_SOURCE_ABSOLUTE)
+        string(APPEND HC_SOURCE_INVENTORY "${HC_SOURCE_ABSOLUTE}\n")
+    endif()
+endforeach()
+file(WRITE "${CMAKE_BINARY_DIR}/hc-product-sources.txt" "${HC_SOURCE_INVENTORY}")
+
+target_include_directories(HyperCommander PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/UniqueLibs
+)
+
+target_compile_options(HyperCommander PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/bigobj>
+)
 
 set_target_properties(HyperCommander
         PROPERTIES
@@ -165,7 +172,7 @@ set_target_properties(HyperCommander
 )
 
 target_link_libraries(HyperCommander
-        PUBLIC
+        PRIVATE
         Qt::Core
         Qt::Concurrent
         Qt::Gui
@@ -174,4 +181,7 @@ target_link_libraries(HyperCommander
         Qt::UiTools
         Qt::PrintSupport
         Qt::Widgets
+        Qt6::CorePrivate
+        Qt6::GuiPrivate
+        Qt6::WidgetsPrivate
 )

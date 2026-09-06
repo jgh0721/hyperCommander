@@ -1,22 +1,32 @@
 {
   "version": 3,
+  "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
   "configurePresets": [
     {
       "hidden": true,
       "name": "Qt",
       "cacheVariables": {
         "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      }
+    },
+    {
+      "name": "vc2026-qt612",
+      "displayName": "VC2026 x64 / Qt 6.12.0",
+      "inherits": "Qt",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "toolset": "v145,host=x64",
+      "binaryDir": "${sourceDir}/_build/vc2026-qt612",
+      "environment": {
+        "QTDIR": "D:/Qt/Qt-6.12.0-VC2026-X64-H-MD-2026-09-04"
       },
-      "vendor": {
-        "qt-project.org/Qt": {
-          "checksum": "wVa86FgEkvdCTVp1/nxvrkaemJc="
-        }
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
     }
   ],
-  "vendor": {
-    "qt-project.org/Presets": {
-      "checksum": "67SmY24ZeVbebyKD0fGfIzb/bGI="
-    }
-  }
+  "buildPresets": [
+    { "name": "vc2026-debug", "configurePreset": "vc2026-qt612", "configuration": "Debug" },
+    { "name": "vc2026-release", "configurePreset": "vc2026-qt612", "configuration": "Release" }
+  ]
 }
