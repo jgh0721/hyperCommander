@@ -207,7 +207,7 @@ namespace nsHC
         void                    SetParent( const QString& Parent );
 
         CPackFSModel*           Model();
-        void RefreshReadProvider() override { readProvider_.reset(); }
+        void RefreshReadProvider() override;
         std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
         hc::storage::Locator ReadLocation(const QString& Path) const override;
     private:

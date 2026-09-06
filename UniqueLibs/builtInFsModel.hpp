@@ -94,6 +94,10 @@ public:
     
     void                            multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const override;
 
+    // Resource IDs belong to the provider that published the displayed rows.
+    // Another tab may refresh the provider cached by a shared filesystem root.
+    std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return acceptedProvider_; }
+
 protected:
     void                            doRefresh() override;
 
@@ -113,6 +117,7 @@ private:
     std::optional<hc::storage::Error> navigationError_;
     QVector<nsHC::TySpFileSystem>    acceptedRoots_;
     QString                         acceptedPath_;
+    std::shared_ptr<hc::storage::IStorageProvider> acceptedProvider_;
 
     CFSIconGatherer*                FsIconGatherer_ = nullptr;
     CFSDirSizeGatherer*             DirSizeGatherer_ = nullptr;

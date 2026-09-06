@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QObject>
 #include <QPointer>
-#include "commonLibs/operations/fileOperation.hpp"
+#include "commonLibs/operations/archiveOperation.hpp"
 
 class QWidget;
 class QDialog;
@@ -20,12 +20,16 @@ public:
     ~FileJobUi() override;
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::FileOperationRequest Request,
         hc::storage::OperationContext Context);
+    hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::ArchiveOperationRequest Request,
+        hc::storage::OperationContext Context);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
     void Show();
     std::function<void(const hc::operations::JobResult&)> onFinished_;
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
+    hc::storage::Result<hc::operations::JobHandle> track(hc::storage::Result<hc::operations::JobHandle> Submitted,
+        hc::operations::FileOperation Operation, const std::string& Label);
     void updateJobs();
     void updateSelection();
     void answer(hc::operations::InteractionChoice Choice);

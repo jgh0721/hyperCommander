@@ -4,7 +4,7 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
-#include "commonLibs/operations/fileOperation.hpp"
+#include "commonLibs/operations/archiveOperation.hpp"
 #include <Windows.h>
 #include "externalLibs/TotalCommander/wcxhead.h"
 
@@ -23,6 +23,54 @@ namespace
         auto Reader = MakeNativeReadProvider(LocatorKind::Local);
         auto Entry = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get();
         return Entry.HasValue() ? std::make_shared<ProviderContentSource>(Reader, Entry.Value()) : nullptr;
+    }
+    ArchiveOperationRequest ArchiveRequest(const QString& Path, const QString& TemporaryBase)
+    {
+        ArchiveOperationRequest Request;
+        Request.archive_ = Request.destination_ = Location(Path);
+        Request.reader_ = MakeWcxReadProvider(Fixture().toStdString(), Request.archive_, TemporaryBase.toStdString());
+        Request.begin_ = [Plugin = Fixture().toStdString(), Root = Request.archive_, Reader = Request.reader_, Base = TemporaryBase.toStdString()](OperationContext Context) {
+            return BeginWcxMutation(Plugin, Root, Reader, Base, {}, Context);
+        };
+        return Request;
+    }
+    struct BatchGate
+    {
+        std::promise<void> prepared_;
+        std::atomic<bool> release_ = false;
+        std::atomic<int> commits_ = 0;
+        std::function<void()> afterCommit_;
+    };
+    class GatedBatch final : public IArchiveMutationSession
+    {
+    public:
+        GatedBatch(std::unique_ptr<IArchiveMutationSession> Inner, std::shared_ptr<BatchGate> Gate) : inner_(std::move(Inner)), gate_(std::move(Gate)) {}
+        Result<Unit> Prepare(std::vector<ArchiveChange> Changes, OperationContext Context) override
+        {
+            auto Prepared = inner_->Prepare(std::move(Changes), Context);
+            gate_->prepared_.set_value();
+            const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!gate_->release_ && !Context.stopToken_.stop_requested() && std::chrono::steady_clock::now() < Deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return Prepared;
+        }
+        Result<WriteReceipt> Commit(OperationContext Context) override
+        {
+            ++gate_->commits_; auto Receipt = inner_->Commit(Context);
+            if (Receipt.HasValue() && gate_->afterCommit_) gate_->afterCommit_();
+            return Receipt;
+        }
+        std::vector<Error> Abort() override { return inner_->Abort(); }
+    private:
+        std::unique_ptr<IArchiveMutationSession> inner_;
+        std::shared_ptr<BatchGate> gate_;
+    };
+    void GateRequest(ArchiveOperationRequest& Request, const std::shared_ptr<BatchGate>& Gate)
+    {
+        Request.begin_ = [Begin = Request.begin_, Gate](OperationContext Context) -> Result<std::unique_ptr<IArchiveMutationSession>> {
+            auto Batch = Begin(Context); if (!Batch.HasValue()) return Batch.Failure();
+            return std::unique_ptr<IArchiveMutationSession>(new GatedBatch(std::move(Batch.Value()), Gate));
+        };
     }
     class FailedDestination final : public IWritableStorage
     {
@@ -62,6 +110,76 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void archiveJobCommitBoundary_data()
+    {
+        QTest::addColumn<bool>("CancelBeforeCommit");
+        QTest::newRow("pause-and-cancel-before-commit") << true;
+        QTest::newRow("cancel-after-commit-reports-entire-batch") << false;
+    }
+    void archiveJobCommitBoundary()
+    {
+        QFETCH(bool, CancelBeforeCommit);
+        QTemporaryDir Directory; const auto Path = Directory.filePath("jobs.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        const auto Original = FileBytes(Path);
+        auto Request = ArchiveRequest(Path, Directory.path()); Request.operation_ = FileOperation::Delete; Request.confirmDelete_ = false;
+        for (const auto& Name : {"/alpha.txt", "/sub"})
+        {
+            auto Entry = Request.reader_->Resolve(Location(Path, Name), {}).get(); QVERIFY(Entry.HasValue());
+            Request.sources_.push_back({Entry.Value(), Request.reader_, {}});
+        }
+        auto Gate = std::make_shared<BatchGate>(); auto Prepared = Gate->prepared_.get_future(); GateRequest(Request, Gate);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitArchiveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue()); const auto Handle = Submitted.Value();
+        QTRY_VERIFY(Prepared.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(FileBytes(Path), Original); QCOMPARE(Scheduler.Snapshot(Handle.id_).Value().completedItems_, 0u);
+        if (CancelBeforeCommit)
+        {
+            QVERIFY(Scheduler.Pause(Handle.id_, true).HasValue()); Gate->release_ = true;
+            QTRY_COMPARE(Scheduler.Snapshot(Handle.id_).Value().state_, JobState::Paused);
+            QCOMPARE(FileBytes(Path), Original); QVERIFY(Scheduler.Cancel(Handle.id_).HasValue());
+        }
+        else
+        {
+            Gate->afterCommit_ = [&] { Scheduler.Cancel(Handle.id_); };
+            Gate->release_ = true;
+        }
+        QTRY_VERIFY(Handle.completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Result = Handle.completion_.get(); QVERIFY(Result.cleanupErrors_.empty());
+        QCOMPARE(Result.snapshot_.state_, CancelBeforeCommit ? JobState::Cancelled : JobState::Completed);
+        QCOMPARE(Gate->commits_.load(), CancelBeforeCommit ? 0 : 1);
+        QCOMPARE(Result.items_.size(), CancelBeforeCommit ? 0u : 2u);
+        if (CancelBeforeCommit) QCOMPARE(FileBytes(Path), Original);
+        else
+        {
+            for (const auto& Item : Result.items_) { QCOMPARE(Item.status_, ItemOutcome::Status::Completed); QVERIFY(Item.sourceRemoved_); }
+            auto Reader = ArchiveRequest(Path, Directory.path()).reader_;
+            auto Cursor = Reader->Enumerate(Location(Path), {}).get(); QVERIFY(Cursor.HasValue());
+            auto Page = Cursor.Value()->Next(100, {}).get(); QVERIFY(Page.HasValue()); QVERIFY(Page.Value().entries_.empty());
+        }
+    }
+    void archiveJobRecursiveConflictRename()
+    {
+        QTemporaryDir Directory; const auto Path = Directory.filePath("jobs.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        const auto SourcePath = Directory.filePath("alpha.txt"); QVERIFY(QDir().mkdir(SourcePath));
+        QVERIFY(Put(SourcePath + "/child.txt", "child-content"));
+        auto Source = MakeNativeReadProvider(LocatorKind::Local);
+        auto Entry = Source->Resolve({LocatorKind::Local, SourcePath.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        auto Request = ArchiveRequest(Path, Directory.path()); Request.sources_.push_back({Entry.Value(), Source, {}});
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitArchiveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue()); const auto Handle = Submitted.Value();
+        QTRY_COMPARE(Scheduler.Snapshot(Handle.id_).Value().state_, JobState::WaitingForUser);
+        auto Interaction = Scheduler.Snapshot(Handle.id_).Value().interaction_; QVERIFY(Interaction);
+        QVERIFY(Scheduler.Reply(Handle.id_, {Interaction->id_, InteractionChoice::Rename, "renamed"}).HasValue());
+        QTRY_VERIFY(Handle.completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Result = Handle.completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Completed); QCOMPARE(Result.items_.size(), 2u);
+        for (const auto& Item : Result.items_) QVERIFY(Item.destinationCommitted_);
+        auto Reader = ArchiveRequest(Path, Directory.path()).reader_;
+        auto Child = Reader->Resolve(Location(Path, "/renamed/child.txt"), {}).get(); QVERIFY(Child.HasValue());
+        auto Stream = Reader->OpenRead(Child.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+        auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue()); QCOMPARE(Bytes(Read.Value()), "child-content");
+        QVERIFY(Reader->Resolve(Location(Path, "/alpha.txt"), {}).get().HasValue());
+        QVERIFY(QFile::exists(SourcePath + "/child.txt"));
+    }
     void mutationReplaceAndRemoveLastImplicitChild()
     {
         QTemporaryDir Directory; const auto Path = Directory.filePath("batch.hct"); QVERIFY(Put(Path, "HCWCX01"));

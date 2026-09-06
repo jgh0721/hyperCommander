@@ -214,6 +214,104 @@ private slots:
         QTRY_VERIFY(!Model->IsLoading());
     }
 
+    void archiveCommandsAndBatchUi()
+    {
+        using namespace hc::storage;
+        using namespace hc::operations;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto ArchivePath = Directory.filePath("jobs.hcwcx");
+        { QFile File(ArchivePath); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
+        const auto SourcePath = Directory.filePath("source"); QVERIFY(QDir().mkdir(SourcePath));
+        { QFile File(SourcePath + "/new.txt"); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("archive input"), 13); }
+        auto* Left = static_cast<CFSModel*>(model(panels_.front()));
+        auto* Right = static_cast<CFSModel*>(model(panels_.back()));
+        Left->SetProviderEnabled(true); Right->SetProviderEnabled(true);
+        panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        panels_.back()->ChangeCurrentPath(QDir::toNativeSeparators(SourcePath), {});
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
+        TyPlugInWCX Spec; Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
+        auto Plugin = TySpWCX(new CTCPlugInWCX); QCOMPARE(Plugin->LoadWCX(Spec).ErrorCode, 0u);
+        QVERIFY(Plugin->OpenArchive(ArchivePath).Value.value_or(false));
+        auto Pack = nsHC::TySpFileSystem(new nsHC::CFSPack(ArchivePath, Plugin));
+        Left->AppendRoot(Pack); Left->ChangeDirectory("/"); QTRY_VERIFY(!Left->IsLoading());
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        const auto Index = [](CFSModel* Model, const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto Submit = [&](const QString& Id, QVariantMap Parameters, CFSModel* Model, const QString& Name) -> std::string {
+            auto Future = Bridge->Dispatch(Id, Parameters, "test", Index(Model, Name));
+            QElapsedTimer Timer; Timer.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            {
+                if (Timer.elapsed() >= 5000) return {};
+                QTest::qWait(10);
+            }
+            const auto Accepted = Future.get(); return Accepted.HasValue() ? Accepted.Value().jobId_ : std::string{};
+        };
+        const auto Finished = [&](const std::string& Id) { const auto State = Scheduler.Snapshot(Id); return State.HasValue() && IsTerminal(State.Value().state_); };
+        auto Job = Submit("hc.file.mkdir", {{"destination", "/target"}}, Left, "alpha.txt"); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && names(Left).contains("target"));
+        Job = Submit("hc.file.rename", {{"destination", "renamed.txt"}}, Left, "alpha.txt"); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && names(Left).contains("renamed.txt"));
+        Locator Target{LocatorKind::Archive, ArchivePath.toStdString(), {{"wcx", "/target"}}};
+        Job = Submit("hc.file.move", {{"destination", QString::fromStdString(Serialize(Target))}}, Left, "renamed.txt"); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !names(Left).contains("renamed.txt"));
+        QFile Before(ArchivePath); QVERIFY(Before.open(QIODevice::ReadOnly)); const auto Original = Before.readAll(); Before.close();
+        Job = Submit("hc.file.delete", {}, Left, "target"); QVERIFY(!Job.empty());
+        QTRY_COMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser);
+        auto* Cancel = main_->findChild<QPushButton*>("hc.jobs.cancel"); QVERIFY(Cancel); QTest::mouseClick(Cancel, Qt::LeftButton);
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Cancelled);
+        QVERIFY(Before.open(QIODevice::ReadOnly)); QCOMPARE(Before.readAll(), Original); Before.close();
+        QTest::qWait(150); QTRY_VERIFY(!Left->IsLoading());
+        Job = Submit("hc.file.delete", {}, Left, "target"); QVERIFY(!Job.empty());
+        QTRY_COMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser);
+        auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Confirm))); QVERIFY(Confirm);
+        QTRY_VERIFY(Confirm->isVisible()); QTest::mouseClick(Confirm, Qt::LeftButton);
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !names(Left).contains("target"));
+        Target.nesting_[0].entry_ = "/";
+        const auto Parameters = [&] { return QVariantMap{{"destination", QString::fromStdString(Serialize(Target))},
+            {"destinationTab", Left->property("hc.tabId").toString()}, {"destinationLocation", QString::fromStdString(Serialize(Target))}}; };
+        Job = Submit("hc.file.copy", Parameters(), Right, "new.txt"); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Left).contains("new.txt"));
+        Job = Submit("hc.file.copy", Parameters(), Right, "new.txt"); QVERIFY(!Job.empty());
+        QTRY_COMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser);
+        auto* NewName = main_->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(NewName); NewName->setText("copy.txt");
+        auto* Rename = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Rename))); QVERIFY(Rename);
+        QTRY_VERIFY(Rename->isVisible()); QTest::mouseClick(Rename, Qt::LeftButton);
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Left).contains("copy.txt"));
+        Left->ChangeDirectory("sub"); QTRY_VERIFY(!Left->IsLoading());
+        auto Stale = Bridge->Dispatch("hc.file.copy", Parameters(), "test", Index(Right, "new.txt"));
+        QTRY_VERIFY(Stale.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Rejected = Stale.get(); QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, "archive-destination-location-changed");
+        Left->ChangeDirectory(".."); QTRY_VERIFY(!Left->IsLoading());
+        Right->AppendRoot(Pack); Right->ChangeDirectory("/"); QTRY_VERIFY(!Right->IsLoading());
+        Right->Refresh(); QTRY_VERIFY(!Right->IsLoading());
+        QVERIFY(Left->SnapshotProvider() != Right->SnapshotProvider());
+        Job = Submit("hc.file.rename", {{"destination", "copy2.txt"}}, Left, "copy.txt"); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Left).contains("copy2.txt") && names(Right).contains("copy2.txt"));
+        const QVariantMap MoveParameters{{"destination", QString::fromStdString(Serialize(Target))},
+            {"destinationTab", Right->property("hc.tabId").toString()}, {"destinationLocation", QString::fromStdString(Serialize(Target))}};
+        Right->ChangeDirectory("sub"); QTRY_VERIFY(!Right->IsLoading());
+        auto StaleMove = Bridge->Dispatch("hc.file.move", MoveParameters, "test", Index(Left, "new.txt"));
+        QTRY_VERIFY(StaleMove.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        Rejected = StaleMove.get(); QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, "archive-destination-location-changed");
+        panels_.back()->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Right->IsLoading());
+        Left->SetProviderEnabled(false); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        Left->Refresh(); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        QVERIFY(QFile::remove(ArchivePath)); Left->Refresh(); QVERIFY(names(Left).isEmpty());
+        Left->SetProviderEnabled(true); QTRY_VERIFY(!Left->IsLoading());
+        panels_.front()->ChangeCurrentPath(unc_, {}); panels_.back()->ChangeCurrentPath(unc_, {});
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
+    }
+
     void commandEntryPointsAndTabLifetime()
     {
         using namespace hc::commands;

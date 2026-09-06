@@ -317,7 +317,7 @@ TyPlugInWLXFuncs CTCPlugInWLX::Funcs() const
 
 CTCPlugInWCX::~CTCPlugInWCX()
 {
-    CloseArchive();
+    CloseWCX();
 }
 
 TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
@@ -363,6 +363,7 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode )
 {
     std::lock_guard Lock(WcxCallMutex());
+    CloseArchive();
     TyOsValue<bool> Ret = { false, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
 
     do
@@ -376,22 +377,29 @@ TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode
         }
 
         ArchiveFile = FileFullPath;
-        Arc = Result.Value.value();
-        Ret.Value = true;
+        // Navigation retains the archive path, not an idle file handle that
+        // would prevent a later staged archive replacement.
+        const auto Closed = close(Result.Value.value());
+        Ret.Value = Closed == 0;
+        Ret.ErrorCode.Type = TyOsError::OS_ETC_ERROR; Ret.ErrorCode.ErrorCode = Closed;
 
     } while( false );
 
     return Ret;
 }
 
-TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
+TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel()
 {
     std::lock_guard Lock(WcxCallMutex());
     TyOsValue<CPackFSModel*> Ret;
+    const auto Opened = open(ArchiveFile, PK_OM_LIST);
+    if (!Opened.Value.has_value() || !Opened.Value.value()) { Ret.ErrorCode = Opened.ErrorCode; return Ret; }
+    const auto ArchiveHandle = Opened.Value.value();
+    const auto Close = qScopeGuard([&] { close(ArchiveHandle); });
 
     do
     {
-        if( Arc == nullptr )
+        if( ArchiveHandle == nullptr )
         {
             Ret.ErrorCode.Type = TyOsError::OS_WIN32_ERROR;
             Ret.ErrorCode.ErrorCode = ERROR_INVALID_HANDLE;
@@ -405,12 +413,12 @@ TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
         do
         {
             tHeaderDataExW HDR = { 0, };
-            Err = wcx_.Funcs.ReadHeaderExW( Arc, &HDR );
+            Err = wcx_.Funcs.ReadHeaderExW( ArchiveHandle, &HDR );
             if( Err != 0 )
                 break;
 
             if( Err == 0 )
-                Err = wcx_.Funcs.ProcessFileW( Arc, PK_SKIP, nullptr, nullptr );
+                Err = wcx_.Funcs.ProcessFileW( ArchiveHandle, PK_SKIP, nullptr, nullptr );
 
             const auto Item = new CPackFSModel::Node;
             Item->FileName = "/" + QString::fromWCharArray( HDR.FileName );

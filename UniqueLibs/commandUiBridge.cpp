@@ -5,6 +5,7 @@
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
+#include "wcxMutation.hpp"
 #include <QtitanGrid.h>
 
 using namespace hc::commands;
@@ -60,8 +61,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         {"hc.navigate.parent"}, {"hc.navigate.refresh"}, {"hc.navigate.cancel"}, {"hc.navigate.open"},
         {"hc.navigate.provider", 1, {{"enabled", {ParameterType::Boolean}}}},
         {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}, {"hc.view.columns"},
-        {"hc.file.copy", 1, {{"destination", {ParameterType::String}}}, "file-write"},
-        {"hc.file.move", 1, {{"destination", {ParameterType::String}}}, "file-write"},
+        {"hc.file.copy", 1, {{"destination", {ParameterType::String}}, {"destinationTab", {ParameterType::String, false}}, {"destinationLocation", {ParameterType::String, false}}}, "file-write"},
+        {"hc.file.move", 1, {{"destination", {ParameterType::String}}, {"destinationTab", {ParameterType::String, false}}, {"destinationLocation", {ParameterType::String, false}}}, "file-write"},
         {"hc.file.rename", 1, {{"destination", {ParameterType::String}}}, "file-write"},
         {"hc.file.mkdir", 1, {{"destination", {ParameterType::String}}}, "file-write"},
         {"hc.file.delete", 1, {}, "file-write"}
@@ -92,8 +93,12 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         for (auto* Model : Guard->main_->findChildren<CFSModel*>())
             if (Model->GetRoot() && Model->ProviderEnabled() && !Model->IsLoading())
                 for (const auto& At : It->second)
-                    if (QDir::cleanPath(QString::fromStdString(At.root_)).compare(QDir::cleanPath(Model->GetCurrentPathWithRoot()), Qt::CaseInsensitive) == 0)
+                {
+                    const auto Current = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
+                    if (Current.kind_ == At.kind_ && QDir::cleanPath(QString::fromStdString(At.root_)).compare(
+                        QDir::cleanPath(QString::fromStdString(Current.root_)), Qt::CaseInsensitive) == 0)
                     { Model->Refresh(); break; }
+                }
         Guard->affectedLocations_.erase(It);
     };
     bindModels();
@@ -352,19 +357,38 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     if (!Model || !Model->GetRoot()) return;
     if (Id != "hc.file.delete")
     {
-        QString Default = QString::fromStdString(Invocation.context_.location_.root_);
-        if (Id == "hc.file.copy" || Id == "hc.file.move")
+        const bool NameOnly = Id == "hc.file.rename" || Id == "hc.file.mkdir";
+        auto Destination = Invocation.context_.location_;
+        std::string DestinationTab;
+        if (!NameOnly)
             for (auto* Other : main_->findChildren<CmpPanel*>())
                 if (Other != PanelOf(Model))
-                    if (auto* Destination = PanelModel(Other)) Default = Destination->GetCurrentPathWithRoot();
-        const bool NameOnly = Id == "hc.file.rename" || Id == "hc.file.mkdir";
+                    if (auto* Target = PanelModel(Other); Target && Target->GetRoot())
+                    {
+                        Destination = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
+                        DestinationTab = Target->property("hc.tabId").toString().toStdString();
+                    }
+        const bool Archive = Destination.kind_ == LocatorKind::Archive;
+        auto Default = Archive ? QString::fromStdString(Destination.nesting_.back().entry_) : QString::fromStdString(Destination.root_);
         if (NameOnly) Default = Id == "hc.file.mkdir" ? tr("새 폴더") : QString{};
+        auto Prompt = NameOnly ? tr("새 이름") : Archive ? tr("목적지 폴더 (%1 내부)").arg(QFileInfo(QString::fromStdString(Destination.root_)).fileName()) : tr("목적지 폴더");
         bool Accepted = false;
-        const auto Input = QInputDialog::getText(main_, Id == "hc.file.move" ? tr("이동") : tr("파일 작업"),
-            NameOnly ? tr("새 이름") : tr("목적지 폴더"), QLineEdit::Normal, Default, &Accepted);
+        const auto Input = QInputDialog::getText(main_, Id == "hc.file.move" ? tr("이동") : tr("파일 작업"), Prompt, QLineEdit::Normal, Default, &Accepted);
         if (!Accepted || Input.isEmpty()) return;
-        Invocation.parameters_["destination"] = NameOnly
-            ? QDir(QString::fromStdString(Invocation.context_.location_.root_)).filePath(Input).toStdString() : Input.toStdString();
+        if (Archive)
+        {
+            auto Target = Destination;
+            const auto Base = QString::fromStdString(Destination.nesting_.back().entry_);
+            const auto Internal = QDir::fromNativeSeparators(Input);
+            Target.nesting_.back().entry_ = QDir::cleanPath(Internal.startsWith('/') ? Internal : QDir(Base).filePath(Internal)).toStdString();
+            Invocation.parameters_["destination"] = Serialize(Target);
+            if (!NameOnly)
+            {
+                Invocation.parameters_["destinationTab"] = DestinationTab;
+                Invocation.parameters_["destinationLocation"] = Serialize(Destination);
+            }
+        }
+        else Invocation.parameters_["destination"] = NameOnly ? QDir(QString::fromStdString(Destination.root_)).filePath(Input).toStdString() : Input.toStdString();
     }
     DispatchInvocation(std::move(Invocation));
 }
@@ -378,10 +402,10 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         : Invocation.id_ == "hc.file.rename" ? hc::operations::FileOperation::Rename : Invocation.id_ == "hc.file.mkdir" ? hc::operations::FileOperation::MakeDirectory : hc::operations::FileOperation::Delete;
     Request.correlationId_ = Invocation.correlationId_;
     const auto Kind = Invocation.context_.location_.kind_;
-    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb
-        && !(Kind == LocatorKind::Archive && Request.operation_ == hc::operations::FileOperation::Copy))
-        return Error{ErrorCategory::Unsupported, "native-file-operation-required"};
-    auto Reader = Model->GetRoot()->ReadProvider();
+    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Archive)
+        return Error{ErrorCategory::Unsupported, "file-operation-provider-required"};
+    auto Reader = Model->SnapshotProvider();
+    if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
     auto Writer = Kind == LocatorKind::Archive ? nullptr : MakeNativeWritableStorage(Kind, Reader);
     if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
         for (const auto& Selected : Invocation.context_.selection_)
@@ -397,23 +421,96 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         }
     if (Request.operation_ != hc::operations::FileOperation::Delete)
     {
-        auto Path = QString::fromStdString(std::get<std::string>(Invocation.parameters_.at("destination")));
-        Path = QDir::toNativeSeparators(Path);
-        if (Path.isEmpty() || Path.contains(QChar::Null) || !QDir::isAbsolutePath(Path)) return Error{ErrorCategory::InvalidRequest, "absolute-destination-required"};
-        Request.destination_ = {Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
-        if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Request.destination_.kind_ = LocatorKind::Smb;
-        auto DestinationReader = MakeNativeReadProvider(Request.destination_.kind_);
-        Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, std::move(DestinationReader));
+        const auto Text = std::get<std::string>(Invocation.parameters_.at("destination"));
+        if (Text.starts_with("hcl1"))
+        {
+            auto Parsed = ParseLocator(Text); if (!Parsed.HasValue()) return Parsed.Failure();
+            Request.destination_ = std::move(Parsed.Value());
+        }
+        else if (Kind == LocatorKind::Archive && (Request.operation_ == hc::operations::FileOperation::Rename || Request.operation_ == hc::operations::FileOperation::MakeDirectory))
+        {
+            Request.destination_ = Invocation.context_.location_;
+            const auto Path = QDir::fromNativeSeparators(QString::fromStdString(Text));
+            Request.destination_.nesting_.back().entry_ = Path.startsWith('/') ? Path.toStdString()
+                : QDir(QString::fromStdString(Request.destination_.nesting_.back().entry_)).filePath(Path).toStdString();
+        }
+        else
+        {
+            auto Path = QDir::toNativeSeparators(QString::fromStdString(Text));
+            if (Path.isEmpty() || Path.contains(QChar::Null) || !QDir::isAbsolutePath(Path)) return Error{ErrorCategory::InvalidRequest, "absolute-destination-required"};
+            Request.destination_ = {Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+            if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Request.destination_.kind_ = LocatorKind::Smb;
+        }
     }
     std::vector<Locator> Affected{Invocation.context_.location_};
     if (Request.operation_ != hc::operations::FileOperation::Delete)
     {
         auto Destination = Request.destination_;
-        if (Request.operation_ == hc::operations::FileOperation::Rename || Request.operation_ == hc::operations::FileOperation::MakeDirectory)
+        if (Destination.kind_ != LocatorKind::Archive && (Request.operation_ == hc::operations::FileOperation::Rename || Request.operation_ == hc::operations::FileOperation::MakeDirectory))
             Destination.root_ = QFileInfo(QString::fromStdString(Destination.root_)).path().toStdString();
         Affected.push_back(std::move(Destination));
     }
-    auto Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
+    Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
+    const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
+        || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
+    if (ArchiveMutation)
+    {
+        if (Request.operation_ == hc::operations::FileOperation::Move && (Kind != LocatorKind::Archive || Request.destination_.kind_ != LocatorKind::Archive
+            || Request.destination_.root_ != Invocation.context_.location_.root_))
+            return Error{ErrorCategory::Unsupported, "cross-container-move-unavailable"};
+        CFSModel* ArchiveModel = Model;
+        CFSModel* CapturedDestination = nullptr;
+        if (Invocation.parameters_.contains("destinationTab"))
+        {
+            CapturedDestination = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
+            if (!CapturedDestination || PanelModel(PanelOf(CapturedDestination)) != CapturedDestination || CapturedDestination->IsLoading() || !CapturedDestination->GetRoot())
+                return Error{ErrorCategory::StaleRevision, "archive-destination-tab-changed"};
+            const auto Current = CapturedDestination->GetRoot()->ReadLocation(CapturedDestination->GetCurrentPathWithRoot());
+            if (Invocation.parameters_.contains("destinationLocation"))
+            {
+                auto Expected = ParseLocator(std::get<std::string>(Invocation.parameters_.at("destinationLocation")));
+                if (!Expected.HasValue() || Expected.Value() != Current)
+                    return Error{ErrorCategory::StaleRevision, "archive-destination-location-changed"};
+            }
+            if (Current.kind_ != LocatorKind::Archive || Current.root_ != Request.destination_.root_)
+                return Error{ErrorCategory::StaleRevision, "archive-destination-container-changed"};
+        }
+        if (Request.operation_ == hc::operations::FileOperation::Copy)
+        {
+            ArchiveModel = CapturedDestination;
+            if (!ArchiveModel)
+                for (auto* Candidate : main_->findChildren<CFSModel*>())
+                    if (Candidate->GetRoot() && Candidate->GetRoot()->ReadLocation(Candidate->GetCurrentPathWithRoot()).kind_ == LocatorKind::Archive
+                        && Candidate->GetRoot()->GetRoot().toStdString() == Request.destination_.root_)
+                    { ArchiveModel = Candidate; break; }
+        }
+        if (!ArchiveModel || !ArchiveModel->ProviderEnabled() || ArchiveModel->IsLoading() || !ArchiveModel->SnapshotProvider())
+            return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
+        const auto Pack = dynamic_cast<nsHC::CFSPack*>(ArchiveModel->GetRoot().get());
+        if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
+        auto Root = Pack->ReadLocation("/");
+        if (Request.operation_ != hc::operations::FileOperation::Delete && Request.destination_.root_ != Root.root_)
+            return Error{ErrorCategory::InvalidRequest, "archive-destination-container-mismatch"};
+        ArchiveOperationRequest Archive;
+        Archive.operation_ = Request.operation_; Archive.archive_ = Root; Archive.destination_ = Request.destination_;
+        Archive.sources_ = std::move(Request.sources_); Archive.reader_ = ArchiveModel->SnapshotProvider(); Archive.correlationId_ = Request.correlationId_;
+        const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
+        Archive.begin_ = [Plugin, Root, Reader = Archive.reader_](OperationContext Context) {
+            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context));
+        };
+        Started = fileJobs_->Submit(std::move(Archive), Invocation.operation_);
+    }
+    else
+    {
+        if (Request.operation_ != hc::operations::FileOperation::Delete)
+        {
+            if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
+                return Error{ErrorCategory::Unsupported, "native-destination-required"};
+            auto DestinationReader = MakeNativeReadProvider(Request.destination_.kind_);
+            Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, std::move(DestinationReader));
+        }
+        Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
+    }
     if (!Started.HasValue()) return Started.Failure();
     affectedLocations_.emplace(Started.Value().id_, std::move(Affected));
     return CommandOutcome{CommandOutcome::Status::Accepted, Started.Value().id_};

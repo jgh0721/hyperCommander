@@ -100,10 +100,22 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
+    return track(SubmitFileOperation(scheduler_, std::move(Request), std::move(Context)), Operation, Label);
+}
+
+Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context)
+{
+    if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
+    const auto Label = Request.sources_.empty() ? Request.destination_.nesting_.back().entry_ : Request.sources_.front().entry_.name_;
+    const auto Operation = Request.operation_;
+    return track(SubmitArchiveOperation(scheduler_, std::move(Request), std::move(Context)), Operation, Label);
+}
+
+Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::FileOperation Operation, const std::string& Label)
+{
     const auto OperationLabel = Operation == hc::operations::FileOperation::Copy ? tr("복사")
         : Operation == hc::operations::FileOperation::Move ? tr("이동") : Operation == hc::operations::FileOperation::Delete ? tr("삭제")
         : Operation == hc::operations::FileOperation::Rename ? tr("이름 변경") : tr("새 폴더");
-    auto Submitted = SubmitFileOperation(scheduler_, std::move(Request), std::move(Context));
     if (!Submitted.HasValue()) return Submitted.Failure();
     const auto& Handle = Submitted.Value();
     pending_.emplace(Handle.id_, Handle);

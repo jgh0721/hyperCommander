@@ -465,6 +465,13 @@ namespace nsHC
         return FsModel_;
     }
 
+    void CFSPack::RefreshReadProvider()
+    {
+        readProvider_.reset();
+        delete FsModel_;
+        FsModel_ = nullptr;
+    }
+
     std::shared_ptr<hc::storage::IStorageProvider> CFileSystemT::ReadProvider()
     {
         if (!readProvider_)

@@ -14,6 +14,7 @@ qt_add_executable(hc_wcx_tests
     ../UniqueLibs/storageProviders.cpp
     ../UniqueLibs/nativeWritableStorage.cpp
     ../commonLibs/operations/fileOperation.cpp
+    ../commonLibs/operations/archiveOperation.cpp
     ../commonLibs/operations/jobScheduler.cpp
 )
 target_include_directories(hc_wcx_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}

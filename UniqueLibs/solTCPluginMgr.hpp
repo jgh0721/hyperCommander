@@ -208,7 +208,7 @@ public:
     QString                             PluginPath() const { return wcx_.FileFullPath; }
 
     TyOsValue<bool>                     OpenArchive( const QString& FileFullPath, int Mode = PK_OM_LIST );
-    TyOsValue<CPackFSModel*>            CreatePackModel() const;
+    TyOsValue<CPackFSModel*>            CreatePackModel();
     // Src = 압축 파일 내에서의 경로 디렉토리 구분자는 /, \ 
     void                                ExtractFile( const QString& Src, const QString& Dst );
     void                                CloseArchive();

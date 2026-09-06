@@ -362,9 +362,9 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
 void CFSModel::doRefresh()
 {
+    if (const auto Root = GetRoot()) Root->RefreshReadProvider();
     if (providerEnabled_)
     {
-        GetRoot()->RefreshReadProvider();
         refreshProvider();
         return;
     }
@@ -435,20 +435,23 @@ void CFSModel::doRefresh()
             Fs->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
             VecItems.push_back( Fs );
 
-            Model->ChDir( Base );
-
-            for( const auto& Item : Model->FindFiles( "*.*" ) )
+            // A removed or damaged archive must still allow navigation out.
+            if (Model)
             {
-                const auto Fs = std::make_shared< nsHC::CFileSourceT >();
+                Model->ChDir( Base );
+                for( const auto& Item : Model->FindFiles( "*.*" ) )
+                {
+                    const auto Fs = std::make_shared< nsHC::CFileSourceT >();
 
-                Fs->Name_       = Item->FileName;
-                Fs->Ext_        = nsCmn::nsCmnPath::GetFileExtension( Fs->Name_ );
-                if( Fs->Name_ != Fs->Name_.normalized( QString::NormalizationForm_C ) )
-                    SetFlag( Fs->Flags_, nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD );
-                Fs->Attributes_ = Item->Attributes;
-                Fs->Size_       = Item->UncompressedSize;
+                    Fs->Name_       = Item->FileName;
+                    Fs->Ext_        = nsCmn::nsCmnPath::GetFileExtension( Fs->Name_ );
+                    if( Fs->Name_ != Fs->Name_.normalized( QString::NormalizationForm_C ) )
+                        SetFlag( Fs->Flags_, nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD );
+                    Fs->Attributes_ = Item->Attributes;
+                    Fs->Size_       = Item->UncompressedSize;
 
-                VecItems.push_back( Fs );
+                    VecItems.push_back( Fs );
+                }
             }
         }
     }
@@ -592,7 +595,7 @@ void CFSModel::refreshProvider()
     Context.stopToken_ = navigationStop_.get_token();
     using ReadResult = Result<std::vector<EntrySnapshot>>;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider] {
         const auto Result = Watcher->result();
         Watcher->deleteLater();
         if (Generation != generation_) return;
@@ -608,6 +611,7 @@ void CFSModel::refreshProvider()
         path_ = TargetPath;
         acceptedRoots_ = TargetRoots;
         acceptedPath_ = TargetPath;
+        acceptedProvider_ = Provider;
         publishProvider(Result.Value());
         emit sigRefreshCompleted();
         const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)

@@ -110,6 +110,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/wcxMutation.cpp
         ../UniqueLibs/wcxMutation.hpp
         ../commonLibs/storage/archiveMutation.hpp
+        ../commonLibs/operations/archiveOperation.cpp
+        ../commonLibs/operations/archiveOperation.hpp
         ../commonLibs/storage/materializedContent.hpp
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
