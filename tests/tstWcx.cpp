@@ -4,7 +4,7 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
-#include "commonLibs/operations/archiveOperation.hpp"
+#include "commonLibs/operations/moveOperation.hpp"
 #include <Windows.h>
 #include "externalLibs/TotalCommander/wcxhead.h"
 
@@ -40,6 +40,7 @@ namespace
         std::atomic<bool> release_ = false;
         std::atomic<int> commits_ = 0;
         std::function<void()> afterCommit_;
+        bool throwAbort_ = false;
     };
     class GatedBatch final : public IArchiveMutationSession
     {
@@ -60,7 +61,12 @@ namespace
             if (Receipt.HasValue() && gate_->afterCommit_) gate_->afterCommit_();
             return Receipt;
         }
-        std::vector<Error> Abort() override { return inner_->Abort(); }
+        std::vector<Error> Abort() override
+        {
+            auto Errors = inner_->Abort();
+            if (gate_->throwAbort_) { gate_->throwAbort_ = false; throw std::runtime_error("injected-finalize-exception"); }
+            return Errors;
+        }
     private:
         std::unique_ptr<IArchiveMutationSession> inner_;
         std::shared_ptr<BatchGate> gate_;
@@ -72,6 +78,8 @@ namespace
             return std::unique_ptr<IArchiveMutationSession>(new GatedBatch(std::move(Batch.Value()), Gate));
         };
     }
+    ArchiveMoveEndpoint MoveEndpoint(const ArchiveOperationRequest& Request)
+    { return {Request.archive_, Request.reader_, Request.begin_}; }
     class FailedDestination final : public IWritableStorage
     {
         class Session final : public IWriteSession
@@ -90,7 +98,7 @@ namespace
             bool commitFailure_;
         };
     public:
-        explicit FailedDestination(bool CommitFailure) : inner_(MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local))), commitFailure_(CommitFailure) {}
+        explicit FailedDestination(bool CommitFailure, bool RemoveFailure = false) : inner_(MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local))), commitFailure_(CommitFailure), removeFailure_(RemoveFailure) {}
         ProviderId Id() const override { return inner_->Id(); }
         Result<SupportDecision> Supports(Mutation Op, Locator At, OperationContext Context) override { return inner_->Supports(Op, At, Context); }
         Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return inner_->Inspect(At, Context); }
@@ -99,17 +107,204 @@ namespace
             return std::unique_ptr<IWriteSession>(new Session(std::move(Result.Value()), commitFailure_));
         }
         Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { return inner_->MakeDirectory(At, Context); }
-        Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override { return inner_->Remove(Entry, Context); }
+        Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override { return removeFailure_ ? Result<Unit>(Error{ErrorCategory::Unavailable, "injected-source-remove-failure"}) : inner_->Remove(Entry, Context); }
         Result<Unit> Rename(EntrySnapshot Entry, Locator At, OperationContext Context) override { return inner_->Rename(Entry, At, Context); }
     private:
         std::shared_ptr<IWritableStorage> inner_;
         bool commitFailure_;
+        bool removeFailure_;
     };
 }
 class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void crossProviderMove_data()
+    {
+        QTest::addColumn<bool>("SourceArchive"); QTest::addColumn<bool>("DestinationArchive"); QTest::addColumn<bool>("Skip");
+        for (bool Source : {false, true}) for (bool Destination : {false, true}) for (bool Skip : {false, true})
+        {
+            const auto Name = QByteArray(Source ? "archive" : "native") + "-to-" + (Destination ? "archive" : "native") + (Skip ? "-skip" : "-replace");
+            QTest::newRow(Name.constData()) << Source << Destination << Skip;
+        }
+    }
+    void crossProviderMove()
+    {
+        QFETCH(bool, SourceArchive); QFETCH(bool, DestinationArchive); QFETCH(bool, Skip);
+        QTemporaryDir Directory; const auto Source = Directory.filePath(SourceArchive ? "source.hct" : "source");
+        const auto Destination = Directory.filePath(DestinationArchive ? "destination.hct" : "destination");
+        MoveOperationRequest Request; Request.conflict_ = Skip ? ConflictPolicy::Skip : ConflictPolicy::Replace;
+        if (SourceArchive)
+        {
+            QVERIFY(Put(Source, "HCWCX01")); Request.sourceArchive_ = MoveEndpoint(ArchiveRequest(Source, Directory.path()));
+            Request.sourceReader_ = Request.sourceArchive_->reader_;
+        }
+        else
+        {
+            QVERIFY(QDir().mkpath(Source + "/sub")); QVERIFY(Put(Source + "/alpha.txt", "alpha")); QVERIFY(Put(Source + "/sub/한글.txt", "한글!\r\n"));
+            Request.sourceReader_ = MakeNativeReadProvider(LocatorKind::Local);
+            Request.sourceWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Request.sourceReader_);
+        }
+        if (DestinationArchive)
+        {
+            QVERIFY(Put(Destination, "HCWCX01")); Request.destinationArchive_ = MoveEndpoint(ArchiveRequest(Destination, Directory.path()));
+            Request.destination_ = Location(Destination);
+        }
+        else
+        {
+            QVERIFY(QDir().mkdir(Destination)); QVERIFY(Put(Destination + "/alpha.txt", "existing"));
+            Request.destination_ = {LocatorKind::Local, Destination.toStdString()};
+            Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+        }
+        for (const auto& Name : {"/alpha.txt", "/sub"})
+        {
+            auto At = SourceArchive ? Location(Source, Name) : Locator{LocatorKind::Local, (Source + Name).toStdString()};
+            auto Entry = Request.sourceReader_->Resolve(At, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value());
+        }
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue()); const auto Handle = Submitted.Value();
+        QTRY_VERIFY(Handle.completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Result = Handle.completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete");
+        QCOMPARE(Result.items_.size(), 3u); QVERIFY(Result.cleanupErrors_.empty());
+        const auto Skipped = Skip ? DestinationArchive ? 3u : 1u : 0u;
+        QCOMPARE(Result.snapshot_.skippedItems_, Skipped); QCOMPARE(Result.snapshot_.completedItems_, 3u - Skipped);
+        for (const auto& Item : Result.items_)
+            if (Item.status_ == ItemOutcome::Status::Completed) { QVERIFY(Item.destinationCommitted_); QVERIFY(Item.sourceRemoved_); }
+            else QVERIFY(!Item.sourceRemoved_);
+        auto UpdatedSource = SourceArchive ? ArchiveRequest(Source, Directory.path()).reader_ : MakeNativeReadProvider(LocatorKind::Local);
+        auto UpdatedDestination = DestinationArchive ? ArchiveRequest(Destination, Directory.path()).reader_ : MakeNativeReadProvider(LocatorKind::Local);
+        for (const auto& Name : {"/alpha.txt", "/sub/한글.txt"})
+        {
+            auto From = SourceArchive ? Location(Source, Name) : Locator{LocatorKind::Local, (Source + Name).toStdString()};
+            QCOMPARE(UpdatedSource->Resolve(From, {}).get().HasValue(), Skip && (DestinationArchive || std::string(Name) == "/alpha.txt"));
+            auto To = DestinationArchive ? Location(Destination, Name) : Locator{LocatorKind::Local, (Destination + Name).toStdString()};
+            auto Entry = UpdatedDestination->Resolve(To, {}).get(); QVERIFY(Entry.HasValue());
+            auto Stream = UpdatedDestination->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+            auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue());
+            QCOMPARE(Bytes(Read.Value()), std::string(Name) == "/alpha.txt" ? QByteArray(Skip && !DestinationArchive ? "existing" : "alpha") : QByteArray("한글!\r\n"));
+        }
+    }
+    void moveArchiveRemovalCancellation_data()
+    {
+        QTest::addColumn<bool>("CancelBeforeCommit");
+        QTest::newRow("cancel-after-copy-before-source-removal") << true;
+        QTest::newRow("late-cancel-retains-all-removal-results") << false;
+    }
+    void moveArchiveRemovalCancellation()
+    {
+        QFETCH(bool, CancelBeforeCommit);
+        QTemporaryDir Directory; const auto Source = Directory.filePath("source.hct"); QVERIFY(Put(Source, "HCWCX01"));
+        const auto Original = FileBytes(Source); const auto Destination = Directory.filePath("destination"); QVERIFY(QDir().mkdir(Destination));
+        auto Archive = ArchiveRequest(Source, Directory.path()); auto Gate = std::make_shared<BatchGate>();
+        auto Prepared = Gate->prepared_.get_future(); GateRequest(Archive, Gate);
+        MoveOperationRequest Request; Request.sourceArchive_ = MoveEndpoint(Archive); Request.sourceReader_ = Archive.reader_;
+        Request.destination_ = {LocatorKind::Local, Destination.toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+        for (const auto& Name : {"/alpha.txt", "/sub"})
+        { auto Entry = Request.sourceReader_->Resolve(Location(Source, Name), {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value()); }
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue()); const auto Handle = Submitted.Value();
+        QTRY_VERIFY(Prepared.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(FileBytes(Source), Original); QCOMPARE(FileBytes(Destination + "/alpha.txt"), "alpha");
+        if (CancelBeforeCommit) QVERIFY(Scheduler.Cancel(Handle.id_).HasValue());
+        else Gate->afterCommit_ = [&] { Scheduler.Cancel(Handle.id_); };
+        Gate->release_ = true;
+        QTRY_VERIFY(Handle.completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Result = Handle.completion_.get(); QCOMPARE(Result.snapshot_.state_, CancelBeforeCommit ? JobState::Cancelled : JobState::Completed);
+        QCOMPARE(Result.items_.size(), 3u); QCOMPARE(Result.snapshot_.completedItems_, 3u);
+        for (const auto& Item : Result.items_) { QVERIFY(Item.destinationCommitted_); QCOMPARE(Item.sourceRemoved_, !CancelBeforeCommit); }
+        if (CancelBeforeCommit) QCOMPARE(FileBytes(Source), Original);
+        QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void moveRemovalFailuresRetainCopies_data()
+    {
+        QTest::addColumn<bool>("SourceArchive"); QTest::newRow("native-remove-failure") << false; QTest::newRow("archive-commit-failure") << true;
+    }
+    void moveSourceRevisionAfterDestinationCommit()
+    {
+        QTemporaryDir Directory; const auto Source = Directory.filePath("new.txt"); QVERIFY(Put(Source, "original"));
+        const auto Destination = Directory.filePath("destination.hct"); QVERIFY(Put(Destination, "HCWCX01"));
+        auto Archive = ArchiveRequest(Destination, Directory.path()); auto Gate = std::make_shared<BatchGate>();
+        Gate->release_ = true; std::atomic<bool> Changed = false;
+        Gate->afterCommit_ = [&] { Changed = Put(Source, "new revision must remain"); }; GateRequest(Archive, Gate);
+        MoveOperationRequest Request; Request.destinationArchive_ = MoveEndpoint(Archive); Request.destination_ = Location(Destination);
+        Request.sourceReader_ = MakeNativeReadProvider(LocatorKind::Local); Request.sourceWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Request.sourceReader_);
+        auto Entry = Request.sourceReader_->Resolve({LocatorKind::Local, Source.toStdString()}, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue());
+        QTRY_VERIFY(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(Changed); const auto Result = Submitted.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+        QCOMPARE(Result.items_.size(), 1u); QVERIFY(Result.items_[0].destinationCommitted_); QVERIFY(!Result.items_[0].sourceRemoved_);
+        QCOMPARE(FileBytes(Source), "new revision must remain");
+        auto Reader = ArchiveRequest(Destination, Directory.path()).reader_;
+        auto Copied = Reader->Resolve(Location(Destination, "/new.txt"), {}).get(); QVERIFY(Copied.HasValue());
+        auto Stream = Reader->OpenRead(Copied.Value().id_, {}).get(); QVERIFY(Stream.HasValue()); auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue());
+        QCOMPARE(Bytes(Read.Value()), "original");
+    }
+    void moveCopyFinalizeExceptionPreservesCommittedOutcome()
+    {
+        QTemporaryDir Directory; const auto Source = Directory.filePath("new.txt"); QVERIFY(Put(Source, "original"));
+        const auto Destination = Directory.filePath("destination.hct"); QVERIFY(Put(Destination, "HCWCX01"));
+        auto Archive = ArchiveRequest(Destination, Directory.path()); auto Gate = std::make_shared<BatchGate>();
+        Gate->release_ = true; Gate->throwAbort_ = true; GateRequest(Archive, Gate);
+        MoveOperationRequest Request; Request.destinationArchive_ = MoveEndpoint(Archive); Request.destination_ = Location(Destination);
+        Request.sourceReader_ = MakeNativeReadProvider(LocatorKind::Local); Request.sourceWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Request.sourceReader_);
+        const auto Entry = Request.sourceReader_->Resolve({LocatorKind::Local, Source.toStdString()}, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue());
+        QTRY_VERIFY(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Result = Submitted.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+        QCOMPARE(Result.items_.size(), 1u); QVERIFY(Result.items_[0].destinationCommitted_); QVERIFY(!Result.items_[0].sourceRemoved_);
+        QCOMPARE(Result.cleanupErrors_.size(), 1u); QCOMPARE(Result.cleanupErrors_[0].code_, "copy-finalize-exception");
+        QCOMPARE(FileBytes(Source), "original");
+        auto Reader = ArchiveRequest(Destination, Directory.path()).reader_; auto Copied = Reader->Resolve(Location(Destination, "/new.txt"), {}).get(); QVERIFY(Copied.HasValue());
+        auto Stream = Reader->OpenRead(Copied.Value().id_, {}).get(); QVERIFY(Stream.HasValue()); auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue());
+        QCOMPARE(Bytes(Read.Value()), "original");
+    }
+    void moveRejectsDestinationInsideNativeSource()
+    {
+        QTemporaryDir Directory; const auto Destination = Directory.filePath("destination.hct"); QVERIFY(Put(Destination, "HCWCX01"));
+        const auto Original = FileBytes(Destination);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        for (const auto& Source : {Destination, Directory.path()})
+        {
+            MoveOperationRequest Request; Request.destinationArchive_ = MoveEndpoint(ArchiveRequest(Destination, Directory.path())); Request.destination_ = Location(Destination);
+            Request.sourceReader_ = MakeNativeReadProvider(LocatorKind::Local); Request.sourceWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Request.sourceReader_);
+            const auto Entry = Request.sourceReader_->Resolve({LocatorKind::Local, Source.toStdString()}, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value());
+            const auto Rejected = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(!Rejected.HasValue());
+            QCOMPARE(Rejected.Failure().code_, "destination-inside-source"); QCOMPARE(FileBytes(Destination), Original);
+        }
+        QVERIFY(Scheduler.Snapshots().empty());
+    }
+    void moveRemovalFailuresRetainCopies()
+    {
+        QFETCH(bool, SourceArchive);
+        QTemporaryDir Directory; const auto Source = Directory.filePath(SourceArchive ? "source.hct" : "alpha.txt");
+        const auto Destination = Directory.filePath("destination.hct"); QVERIFY(Put(Destination, "HCWCX01"));
+        MoveOperationRequest Request; Request.conflict_ = ConflictPolicy::Replace;
+        Request.destinationArchive_ = MoveEndpoint(ArchiveRequest(Destination, Directory.path())); Request.destination_ = Location(Destination);
+        QVERIFY(Put(Source, SourceArchive ? "HCWCX01" : "changed")); const auto Original = FileBytes(Source);
+        if (SourceArchive)
+        {
+            auto Archive = ArchiveRequest(Source, Directory.path());
+            Archive.begin_ = [Plugin = Fixture().toStdString(), Root = Archive.archive_, Reader = Archive.reader_, Base = Directory.path().toStdString()](OperationContext Context) {
+                return BeginWcxMutation(Plugin, Root, Reader, Base, {}, Context, std::make_shared<FailedDestination>(true));
+            };
+            Request.sourceArchive_ = MoveEndpoint(Archive); Request.sourceReader_ = Archive.reader_;
+        }
+        else { Request.sourceReader_ = MakeNativeReadProvider(LocatorKind::Local); Request.sourceWriter_ = std::make_shared<FailedDestination>(true, true); }
+        auto Entry = Request.sourceReader_->Resolve(SourceArchive ? Location(Source, "/alpha.txt") : Locator{LocatorKind::Local, Source.toStdString()}, {}).get();
+        QVERIFY(Entry.HasValue()); Request.sources_.push_back(Entry.Value());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue());
+        QTRY_VERIFY(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Result = Submitted.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Result.items_.size(), 1u);
+        QVERIFY(Result.items_[0].destinationCommitted_); QVERIFY(!Result.items_[0].sourceRemoved_); QCOMPARE(FileBytes(Source), Original);
+        auto Reader = ArchiveRequest(Destination, Directory.path()).reader_; auto Copied = Reader->Resolve(Location(Destination, "/alpha.txt"), {}).get(); QVERIFY(Copied.HasValue());
+        auto Stream = Reader->OpenRead(Copied.Value().id_, {}).get(); QVERIFY(Stream.HasValue()); auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue());
+        QCOMPARE(Bytes(Read.Value()), SourceArchive ? "alpha" : "changed"); QVERIFY(Result.cleanupErrors_.empty());
+    }
     void archiveJobCommitBoundary_data()
     {
         QTest::addColumn<bool>("CancelBeforeCommit");
@@ -425,6 +620,39 @@ private slots:
             auto Expansion = Limited.Value()->Prepare({{ArchiveChangeKind::Put, "/compressible.bin", {}, ::Content(Compressible)}}, {});
             QVERIFY(!Expansion.HasValue()); QCOMPARE(Expansion.Failure().category_, ErrorCategory::BudgetExceeded); QCOMPARE(FileBytes(ArchivePath), EmptyBytes);
         };
+        const auto ExerciseMoves = [&](const QString& Base) {
+            const auto First = QDir(Base).filePath("move-source.7z"), Second = QDir(Base).filePath("move-target.7z"), Native = QDir(Base).filePath("move-files");
+            QVERIFY(QFile::copy(QString::fromStdWString(Archive), First)); QVERIFY(QFile::copy(QString::fromStdWString(Archive), Second));
+            QVERIFY(QDir().mkdir(Native)); QVERIFY(Put(Native + "/round.txt", "roundtrip"));
+            const auto NativeKind = QDir::toNativeSeparators(Base).startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local;
+            const auto Endpoint = [&](const QString& Path) {
+                ArchiveMoveEndpoint Value{Location(Path), MakeWcxReadProvider(Plugin.toStdString(), Location(Path), Directory.path().toStdString())};
+                Value.begin_ = [Binary = Plugin.toStdString(), Root = Value.root_, Reader = Value.reader_, Temporary = Directory.path().toStdString()](OperationContext Context) {
+                    return BeginWcxMutation(Binary, Root, Reader, Temporary, {}, Context);
+                };
+                return Value;
+            };
+            for (int Stage = 0; Stage < 3; ++Stage)
+            {
+                MoveOperationRequest Request;
+                if (Stage == 0) { Request.sourceReader_ = MakeNativeReadProvider(NativeKind); Request.sourceWriter_ = MakeNativeWritableStorage(NativeKind, Request.sourceReader_); }
+                else { Request.sourceArchive_ = Endpoint(Stage == 1 ? First : Second); Request.sourceReader_ = Request.sourceArchive_->reader_; }
+                if (Stage < 2) { Request.destinationArchive_ = Endpoint(Stage == 0 ? First : Second); Request.destination_ = Request.destinationArchive_->root_; }
+                else { Request.destination_ = {NativeKind, Native.toStdString()}; Request.destinationWriter_ = MakeNativeWritableStorage(NativeKind, MakeNativeReadProvider(NativeKind)); }
+                const auto From = Stage == 0 ? Locator{NativeKind, (Native + "/round.txt").toStdString()} : Location(Stage == 1 ? First : Second, "/round.txt");
+                const auto Selected = Request.sourceReader_->Resolve(From, {}).get(); QVERIFY(Selected.HasValue()); Request.sources_.push_back(Selected.Value());
+                JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+                auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue());
+                QTRY_VERIFY(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+                const auto Result = Submitted.Value().completion_.get();
+                QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "move incomplete");
+                QCOMPARE(Result.items_.size(), 1u); QVERIFY(Result.items_[0].destinationCommitted_); QVERIFY(Result.items_[0].sourceRemoved_);
+                if (Stage == 0) QVERIFY(!QFile::exists(Native + "/round.txt"));
+                else QVERIFY(!Endpoint(Stage == 1 ? First : Second).reader_->Resolve(From, {}).get().HasValue());
+            }
+            QCOMPARE(FileBytes(Native + "/round.txt"), "roundtrip");
+        };
+        ExerciseMoves(Directory.path());
         const auto SmbRoot = qEnvironmentVariable("HC_WCX_SMB_ROOT");
         if (!SmbRoot.isEmpty())
         {
@@ -437,6 +665,7 @@ private slots:
             QVERIFY2(RemoteStream.HasValue(), RemoteStream.HasValue() ? "" : RemoteStream.Failure().code_.c_str());
             auto RemoteChunk = RemoteStream.Value()->Read(32, {}).get(); QVERIFY(RemoteChunk.HasValue()); QCOMPARE(Bytes(RemoteChunk.Value()), QByteArray("한글!\r\n"));
             Mutate(RemoteArchive);
+            ExerciseMoves(Remote.path());
         }
         Mutate(QString::fromStdWString(Archive));
     }

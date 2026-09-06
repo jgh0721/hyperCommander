@@ -52,8 +52,11 @@ private slots:
         server_ = qEnvironmentVariable("HC_SMB_SERVER", "DEVTESTER-QTS");
         share_ = qEnvironmentVariable("HC_SMB_SHARE", "Public");
         QVERIFY(!server_.contains('\\') && !share_.contains('\\'));
-        unc_ = "\\\\" + server_ + "\\" + share_;
-        QVERIFY2(QDir(unc_).exists(), "Live SMB share must be accessible before running this suite");
+        const auto LocalRoot = qEnvironmentVariable("HC_UI_LOCAL_ROOT");
+        localOnly_ = !LocalRoot.isEmpty();
+        unc_ = localOnly_ ? LocalRoot : "\\\\" + server_ + "\\" + share_;
+        QVERIFY2(QDir(unc_).exists(), localOnly_ ? "Local UI test root must exist" : "Live SMB share must be accessible before running this suite");
+        if (localOnly_) qInfo("Local UI mode: no SMB coverage; only explicitly allowed local scenarios may run");
         for (auto* Window : QApplication::topLevelWidgets())
             if (auto* Main = qobject_cast<QMainUI*>(Window))
                 main_ = Main;
@@ -62,6 +65,15 @@ private slots:
         QCOMPARE(panels_.size(), 2);
         QTRY_VERIFY_WITH_TIMEOUT(model(panels_.front())->GetRoot(), 5000);
         for (auto* Panel : panels_) QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 15000);
+    }
+
+    void init()
+    {
+        if (localOnly_)
+        {
+            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi"};
+            QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
+        }
     }
 
     void shareNavigation_data()
@@ -308,6 +320,53 @@ private slots:
         Left->Refresh(); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
         QVERIFY(QFile::remove(ArchivePath)); Left->Refresh(); QVERIFY(names(Left).isEmpty());
         Left->SetProviderEnabled(true); QTRY_VERIFY(!Left->IsLoading());
+        panels_.front()->ChangeCurrentPath(unc_, {}); panels_.back()->ChangeCurrentPath(unc_, {});
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
+    }
+
+    void archiveCrossContainerMovesUi()
+    {
+        using namespace hc::storage; using namespace hc::operations;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Native = Directory.filePath("native"); QVERIFY(QDir().mkdir(Native));
+        { QFile File(Native + "/move.txt"); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("move-content"), 12); }
+        const auto A = Directory.filePath("a.hcwcx"), B = Directory.filePath("b.hcwcx");
+        for (const auto& Path : {A, B}) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
+        auto* Left = static_cast<CFSModel*>(model(panels_.front())); auto* Right = static_cast<CFSModel*>(model(panels_.back()));
+        Left->SetProviderEnabled(true); Right->SetProviderEnabled(true);
+        panels_.front()->ChangeCurrentPath(Native, {}); panels_.back()->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
+        const auto Mount = [&](CFSModel* Model, const QString& Path) -> bool {
+            TyPlugInWCX Spec; Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
+            auto Plugin = TySpWCX(new CTCPlugInWCX);
+            if (Plugin->LoadWCX(Spec).ErrorCode || !Plugin->OpenArchive(Path).Value.value_or(false)) return false;
+            Model->AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSPack(Path, Plugin))); Model->ChangeDirectory("/"); return true;
+        };
+        QVERIFY(Mount(Right, A)); QTRY_VERIFY(!Right->IsLoading());
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        const auto Move = [&](CFSModel* Source, const QString& Destination) -> std::string {
+            QModelIndex Cursor;
+            for (int Row = 0; Row < Source->rowCount(); ++Row) if (Source->GetName(Source->index(Row, 0)) == "move.txt") { Cursor = Source->index(Row, 0); break; }
+            if (!Cursor.isValid()) return {};
+            auto Future = Bridge->Dispatch("hc.file.move", {{"destination", Destination}}, "test", Cursor);
+            QElapsedTimer Timer; Timer.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { if (Timer.elapsed() > 5000) return {}; QTest::qWait(10); }
+            auto Accepted = Future.get(); return Accepted.HasValue() ? Accepted.Value().jobId_ : std::string{};
+        };
+        const auto Finished = [&](const std::string& Id) { const auto State = Scheduler.Snapshot(Id); return State.HasValue() && IsTerminal(State.Value().state_); };
+        auto Job = Move(Left, QString::fromStdString(Serialize({LocatorKind::Archive, A.toStdString(), {{"wcx", "/"}}}))); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Right).contains("move.txt")); QVERIFY(!QFile::exists(Native + "/move.txt"));
+        panels_.front()->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!Left->IsLoading());
+        QVERIFY(Mount(Left, B)); QTRY_VERIFY(!Left->IsLoading());
+        Job = Move(Right, QString::fromStdString(Serialize({LocatorKind::Archive, B.toStdString(), {{"wcx", "/"}}}))); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Left).contains("move.txt") && !names(Right).contains("move.txt"));
+        panels_.back()->ChangeCurrentPath(Native, {}); QTRY_VERIFY(!Right->IsLoading());
+        Job = Move(Left, Native); QVERIFY(!Job.empty());
+        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && !names(Left).contains("move.txt") && names(Right).contains("move.txt"));
+        QFile File(Native + "/move.txt"); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), "move-content"); File.close();
         panels_.front()->ChangeCurrentPath(unc_, {}); panels_.back()->ChangeCurrentPath(unc_, {});
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
     }
@@ -764,6 +823,7 @@ private:
     }
 
     QMainUI* main_ = nullptr;
+    bool localOnly_ = false;
     QList<CmpPanel*> panels_;
     QString server_;
     QString share_;

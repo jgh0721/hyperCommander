@@ -450,22 +450,26 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             Destination.root_ = QFileInfo(QString::fromStdString(Destination.root_)).path().toStdString();
         Affected.push_back(std::move(Destination));
     }
-    Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
-    const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
-        || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
-    if (ArchiveMutation)
-    {
-        if (Request.operation_ == hc::operations::FileOperation::Move && (Kind != LocatorKind::Archive || Request.destination_.kind_ != LocatorKind::Archive
-            || Request.destination_.root_ != Invocation.context_.location_.root_))
-            return Error{ErrorCategory::Unsupported, "cross-container-move-unavailable"};
-        CFSModel* ArchiveModel = Model;
-        CFSModel* CapturedDestination = nullptr;
+    const auto Endpoint = [](CFSModel* ArchiveModel) -> Result<ArchiveMoveEndpoint> {
+        if (!ArchiveModel || !ArchiveModel->ProviderEnabled() || ArchiveModel->IsLoading() || !ArchiveModel->SnapshotProvider() || !ArchiveModel->GetRoot())
+            return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
+        const auto Pack = dynamic_cast<nsHC::CFSPack*>(ArchiveModel->GetRoot().get());
+        if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
+        ArchiveMoveEndpoint Value{Pack->ReadLocation("/"), ArchiveModel->SnapshotProvider()};
+        const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
+        Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_](OperationContext Context) {
+            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context));
+        };
+        return Value;
+    };
+    const auto DestinationModel = [&]() -> Result<CFSModel*> {
+        CFSModel* Target = nullptr;
         if (Invocation.parameters_.contains("destinationTab"))
         {
-            CapturedDestination = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
-            if (!CapturedDestination || PanelModel(PanelOf(CapturedDestination)) != CapturedDestination || CapturedDestination->IsLoading() || !CapturedDestination->GetRoot())
+            Target = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
+            if (!Target || PanelModel(PanelOf(Target)) != Target || Target->IsLoading() || !Target->GetRoot())
                 return Error{ErrorCategory::StaleRevision, "archive-destination-tab-changed"};
-            const auto Current = CapturedDestination->GetRoot()->ReadLocation(CapturedDestination->GetCurrentPathWithRoot());
+            const auto Current = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
             if (Invocation.parameters_.contains("destinationLocation"))
             {
                 auto Expected = ParseLocator(std::get<std::string>(Invocation.parameters_.at("destinationLocation")));
@@ -475,29 +479,55 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             if (Current.kind_ != LocatorKind::Archive || Current.root_ != Request.destination_.root_)
                 return Error{ErrorCategory::StaleRevision, "archive-destination-container-changed"};
         }
-        if (Request.operation_ == hc::operations::FileOperation::Copy)
+        else
+            for (auto* Candidate : main_->findChildren<CFSModel*>())
+                if (Candidate->GetRoot() && Candidate->GetRoot()->ReadLocation(Candidate->GetCurrentPathWithRoot()).kind_ == LocatorKind::Archive
+                    && Candidate->GetRoot()->GetRoot().toStdString() == Request.destination_.root_)
+                { Target = Candidate; break; }
+        if (!Target) return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
+        return Target;
+    };
+    Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
+    const bool CrossMove = Request.operation_ == hc::operations::FileOperation::Move && (Kind == LocatorKind::Archive || Request.destination_.kind_ == LocatorKind::Archive)
+        && !(Kind == LocatorKind::Archive && Request.destination_.kind_ == LocatorKind::Archive && Request.destination_.root_ == Invocation.context_.location_.root_);
+    const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
+        || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
+    if (CrossMove)
+    {
+        MoveOperationRequest Move;
+        Move.sourceReader_ = Reader; Move.sourceWriter_ = Writer; Move.destination_ = Request.destination_; Move.correlationId_ = Request.correlationId_;
+        for (const auto& Source : Request.sources_) Move.sources_.push_back(Source.entry_);
+        if (Kind == LocatorKind::Archive)
         {
-            ArchiveModel = CapturedDestination;
-            if (!ArchiveModel)
-                for (auto* Candidate : main_->findChildren<CFSModel*>())
-                    if (Candidate->GetRoot() && Candidate->GetRoot()->ReadLocation(Candidate->GetCurrentPathWithRoot()).kind_ == LocatorKind::Archive
-                        && Candidate->GetRoot()->GetRoot().toStdString() == Request.destination_.root_)
-                    { ArchiveModel = Candidate; break; }
+            auto Source = Endpoint(Model); if (!Source.HasValue()) return Source.Failure(); Move.sourceArchive_ = std::move(Source.Value());
         }
-        if (!ArchiveModel || !ArchiveModel->ProviderEnabled() || ArchiveModel->IsLoading() || !ArchiveModel->SnapshotProvider())
-            return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
-        const auto Pack = dynamic_cast<nsHC::CFSPack*>(ArchiveModel->GetRoot().get());
-        if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
-        auto Root = Pack->ReadLocation("/");
-        if (Request.operation_ != hc::operations::FileOperation::Delete && Request.destination_.root_ != Root.root_)
+        if (Request.destination_.kind_ == LocatorKind::Archive)
+        {
+            auto Target = DestinationModel(); if (!Target.HasValue()) return Target.Failure();
+            auto Destination = Endpoint(Target.Value()); if (!Destination.HasValue()) return Destination.Failure(); Move.destinationArchive_ = std::move(Destination.Value());
+        }
+        else
+        {
+            if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
+                return Error{ErrorCategory::Unsupported, "native-destination-required"};
+            Move.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
+        }
+        Started = fileJobs_->Submit(std::move(Move), Invocation.operation_);
+    }
+    else if (ArchiveMutation)
+    {
+        CFSModel* ArchiveModel = Model;
+        if (Request.operation_ == hc::operations::FileOperation::Copy || Invocation.parameters_.contains("destinationTab"))
+        {
+            auto Target = DestinationModel(); if (!Target.HasValue()) return Target.Failure();
+            if (Request.operation_ == hc::operations::FileOperation::Copy) ArchiveModel = Target.Value();
+        }
+        auto Target = Endpoint(ArchiveModel); if (!Target.HasValue()) return Target.Failure();
+        if (Request.operation_ != hc::operations::FileOperation::Delete && Request.destination_.root_ != Target.Value().root_.root_)
             return Error{ErrorCategory::InvalidRequest, "archive-destination-container-mismatch"};
         ArchiveOperationRequest Archive;
-        Archive.operation_ = Request.operation_; Archive.archive_ = Root; Archive.destination_ = Request.destination_;
-        Archive.sources_ = std::move(Request.sources_); Archive.reader_ = ArchiveModel->SnapshotProvider(); Archive.correlationId_ = Request.correlationId_;
-        const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
-        Archive.begin_ = [Plugin, Root, Reader = Archive.reader_](OperationContext Context) {
-            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context));
-        };
+        Archive.operation_ = Request.operation_; Archive.archive_ = Target.Value().root_; Archive.destination_ = Request.destination_;
+        Archive.sources_ = std::move(Request.sources_); Archive.reader_ = Target.Value().reader_; Archive.begin_ = std::move(Target.Value().begin_); Archive.correlationId_ = Request.correlationId_;
         Started = fileJobs_->Submit(std::move(Archive), Invocation.operation_);
     }
     else
@@ -506,8 +536,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         {
             if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
                 return Error{ErrorCategory::Unsupported, "native-destination-required"};
-            auto DestinationReader = MakeNativeReadProvider(Request.destination_.kind_);
-            Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, std::move(DestinationReader));
+            Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
         }
         Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
     }

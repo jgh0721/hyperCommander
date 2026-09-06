@@ -106,9 +106,16 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
 Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context)
 {
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
-    const auto Label = Request.sources_.empty() ? Request.destination_.nesting_.back().entry_ : Request.sources_.front().entry_.name_;
+    const auto Label = Request.sources_.empty() ? Request.destination_.nesting_.empty() ? Request.destination_.root_ : Request.destination_.nesting_.back().entry_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
     return track(SubmitArchiveOperation(scheduler_, std::move(Request), std::move(Context)), Operation, Label);
+}
+
+Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationContext Context)
+{
+    if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
+    const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().name_;
+    return track(SubmitMoveOperation(scheduler_, std::move(Request), std::move(Context)), hc::operations::FileOperation::Move, Label);
 }
 
 Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::FileOperation Operation, const std::string& Label)

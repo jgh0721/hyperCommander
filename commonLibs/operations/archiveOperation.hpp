@@ -19,6 +19,7 @@ namespace hc::operations
         storage::ArchiveMutationLimits limits_;
         std::string correlationId_;
     };
+    Result<PreparedJob> PrepareArchiveOperation(ArchiveOperationRequest Request, storage::OperationContext Context = {});
     Result<JobHandle> SubmitArchiveOperation(JobScheduler& Scheduler, ArchiveOperationRequest Request,
         storage::OperationContext Context = {});
 }

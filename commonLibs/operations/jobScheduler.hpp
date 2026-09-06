@@ -40,6 +40,9 @@ namespace hc::operations
         std::optional<Error> error_;
         bool destinationCommitted_ = false;
         bool sourceRemoved_ = false;
+        // Immutable identity actually copied; a later move cleanup must never
+        // resolve a changed path and delete its replacement.
+        std::optional<storage::EntrySnapshot> source_;
     };
     struct JobSnapshot
     {
@@ -97,6 +100,9 @@ namespace hc::operations
         std::optional<InteractionRequest> interaction_;
         std::optional<Error> error_;
         bool retry_ = false;
+        // Replace a previously emitted outcome without counting the item twice.
+        // Used when destination commit and source removal are separate phases.
+        std::optional<std::size_t> replaceItem_;
     };
     class IJobTask
     {
@@ -108,6 +114,11 @@ namespace hc::operations
         // Called once, including for never-started and failed tasks, outside locks.
         // Cleanup must not inherit user cancellation; report every failed cleanup.
         virtual std::vector<Error> Finalize(JobState State) = 0;
+    };
+    struct PreparedJob
+    {
+        JobRequest request_;
+        std::unique_ptr<IJobTask> task_;
     };
     class JobScheduler
     {

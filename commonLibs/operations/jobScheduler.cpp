@@ -342,25 +342,43 @@ namespace hc::operations
                 auto& Snapshot = Value->result_.snapshot_;
                 // Retry describes an unfinished step, not another outcome for an
                 // already accounted item or an outstanding user interaction.
-                if (Step.retry_ && (Step.item_ || Step.interaction_))
+                if (Step.retry_ && (Step.item_ || Step.interaction_ || Step.replaceItem_))
                 {
                     Step = JobStep{JobState::Failed};
                     Step.error_ = Error{ErrorCategory::Internal, "invalid-retry-result"};
                 }
                 if (Step.progress_) { Snapshot.progress_ = std::move(*Step.progress_); Shared->notify(*Value, "job.progress", true); }
+                if (Step.replaceItem_ && (!Step.item_ || *Step.replaceItem_ >= Value->result_.items_.size()
+                    || Value->result_.items_[*Step.replaceItem_].item_ != Step.item_->item_
+                    || (Value->result_.items_[*Step.replaceItem_].destinationCommitted_ && !Step.item_->destinationCommitted_)
+                    || (Value->result_.items_[*Step.replaceItem_].sourceRemoved_ && !Step.item_->sourceRemoved_)))
+                {
+                    Step = JobStep{JobState::Failed};
+                    Step.error_ = Error{ErrorCategory::Internal, "invalid-item-result-update"};
+                }
                 if (Step.item_)
                 {
-                    if (Value->result_.items_.size() == Value->request_.maxItemResults_)
+                    if (!Step.replaceItem_ && Value->result_.items_.size() == Value->request_.maxItemResults_)
                     { Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::BudgetExceeded, "item-result-budget"}; Step.retry_ = false; }
                     else
                     {
+                        if (Step.replaceItem_)
+                        {
+                            switch (Value->result_.items_[*Step.replaceItem_].status_)
+                            {
+                            case ItemOutcome::Status::Completed: --Snapshot.completedItems_; break;
+                            case ItemOutcome::Status::Skipped: --Snapshot.skippedItems_; break;
+                            case ItemOutcome::Status::Failed: --Snapshot.failedItems_; break;
+                            }
+                        }
                         switch (Step.item_->status_)
                         {
                         case ItemOutcome::Status::Completed: ++Snapshot.completedItems_; break;
                         case ItemOutcome::Status::Skipped: ++Snapshot.skippedItems_; break;
                         case ItemOutcome::Status::Failed: ++Snapshot.failedItems_; break;
                         }
-                        Value->result_.items_.push_back(std::move(*Step.item_));
+                        if (Step.replaceItem_) Value->result_.items_[*Step.replaceItem_] = std::move(*Step.item_);
+                        else Value->result_.items_.push_back(std::move(*Step.item_));
                     }
                 }
                 if (Step.retry_)

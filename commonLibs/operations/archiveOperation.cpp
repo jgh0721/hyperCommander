@@ -41,7 +41,7 @@ namespace hc::operations
                     if (!Context.answer_) return failed({ErrorCategory::Internal, "archive-conflict-answer-required"});
                     if (Context.answer_->choice_ == InteractionChoice::Skip)
                     {
-                        auto Step = progress(); Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Skipped}; phase_ = Phase::Plan; return Step;
+                        auto Step = progress(); Step.item_ = outcome(ItemOutcome::Status::Skipped); phase_ = Phase::Plan; return Step;
                     }
                     if (Context.answer_->choice_ == InteractionChoice::Rename)
                     {
@@ -88,7 +88,7 @@ namespace hc::operations
                 if (reported_ < outcomes_.size())
                 {
                     auto Outcome = outcomes_[reported_++];
-                    Outcome.destinationCommitted_ = committed_ && request_.operation_ != FileOperation::Delete;
+                    Outcome.destinationCommitted_ = Outcome.destinationCommitted_ || (committed_ && request_.operation_ != FileOperation::Delete);
                     Outcome.sourceRemoved_ = committed_ && (request_.operation_ == FileOperation::Delete || request_.operation_ == FileOperation::Rename || request_.operation_ == FileOperation::Move);
                     Step.item_ = std::move(Outcome);
                 }
@@ -109,6 +109,12 @@ namespace hc::operations
             enum class Phase { Plan, Conflict, Confirm, Prepare, Commit, Report };
             Locator at(const std::string& Path) const { auto At = request_.archive_; At.nesting_[0].entry_ = Path; return At; }
             std::string itemLocator() const { return Serialize(current_.source_.reader_ ? current_.source_.entry_.locator_ : at(current_.destination_)); }
+            ItemOutcome outcome(ItemOutcome::Status Status = ItemOutcome::Status::Completed) const
+            {
+                ItemOutcome Outcome{itemLocator(), Status};
+                if (current_.source_.reader_) Outcome.source_ = current_.source_.entry_;
+                return Outcome;
+            }
             JobStep progress() const
             {
                 JobStep Step{phase_ == Phase::Plan ? JobState::Preparing : JobState::Running};
@@ -164,7 +170,7 @@ namespace hc::operations
                 if (request_.operation_ == FileOperation::Delete)
                 {
                     changes_.push_back({ArchiveChangeKind::Remove, current_.source_.entry_.locator_.nesting_[0].entry_, {}, {}, current_.source_.entry_.id_});
-                    outcomes_.push_back({itemLocator()}); return progress();
+                    outcomes_.push_back(outcome()); return progress();
                 }
                 return destination(Context);
             }
@@ -180,7 +186,7 @@ namespace hc::operations
                     expected_ = {true, Existing.Value().id_.revision_};
                     replaceAllowed_ = request_.operation_ == FileOperation::Copy && !Existing.Value().directory_ && !current_.source_.entry_.directory_;
                     if (request_.operation_ == FileOperation::Copy && request_.conflict_ == ConflictPolicy::Skip)
-                    { auto Step = progress(); Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Skipped}; phase_ = Phase::Plan; return Step; }
+                    { auto Step = progress(); Step.item_ = outcome(ItemOutcome::Status::Skipped); phase_ = Phase::Plan; return Step; }
                     if (replaceAllowed_ && request_.conflict_ == ConflictPolicy::Replace) return accept(Context);
                     phase_ = Phase::Conflict; auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                     Step.interaction_ = InteractionRequest{"", InteractionKind::Overwrite, "archive-destination-exists", {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value().id_};
@@ -202,7 +208,8 @@ namespace hc::operations
                 }
                 else
                     changes_.push_back({ArchiveChangeKind::Put, current_.destination_, {}, std::make_shared<ProviderContentSource>(current_.source_.reader_, current_.source_.entry_), {}, expected_});
-                outcomes_.push_back({itemLocator()});
+                auto Outcome = outcome(); Outcome.destinationCommitted_ = MergeDirectory;
+                outcomes_.push_back(std::move(Outcome));
                 if (request_.operation_ == FileOperation::Copy && current_.source_.entry_.directory_)
                 {
                     auto Cursor = current_.source_.reader_->Enumerate(current_.source_.entry_.locator_, Context).get(); if (!Cursor.HasValue()) return failed(Cursor.Failure());
@@ -226,7 +233,7 @@ namespace hc::operations
             bool replaceAllowed_ = false, committed_ = false;
         };
     }
-    Result<JobHandle> SubmitArchiveOperation(JobScheduler& Scheduler, ArchiveOperationRequest Request, OperationContext Context)
+    Result<PreparedJob> PrepareArchiveOperation(ArchiveOperationRequest Request, OperationContext Context)
     {
         const auto ValidLocation = [&](const Locator& At) { return At.kind_ == LocatorKind::Archive && At.root_ == Request.archive_.root_
             && At.nesting_.size() == 1 && At.nesting_[0].provider_ == Request.archive_.nesting_[0].provider_ && At.nesting_[0].entry_.starts_with('/'); };
@@ -252,6 +259,11 @@ namespace hc::operations
         Job.resourceLanes_.push_back(Lane(Request.archive_.root_));
         for (const auto& Source : Request.sources_)
             if (Source.entry_.locator_.kind_ == LocatorKind::Archive) Job.resourceLanes_.push_back(Lane(Source.entry_.locator_.root_));
-        return Scheduler.Submit(std::move(Job), std::make_unique<ArchiveTask>(std::move(Request)));
+        return PreparedJob{std::move(Job), std::make_unique<ArchiveTask>(std::move(Request))};
+    }
+    Result<JobHandle> SubmitArchiveOperation(JobScheduler& Scheduler, ArchiveOperationRequest Request, OperationContext Context)
+    {
+        auto Prepared = PrepareArchiveOperation(std::move(Request), Context); if (!Prepared.HasValue()) return Prepared.Failure();
+        return Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_));
     }
 }

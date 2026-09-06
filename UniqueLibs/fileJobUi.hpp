@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QObject>
 #include <QPointer>
-#include "commonLibs/operations/archiveOperation.hpp"
+#include "commonLibs/operations/moveOperation.hpp"
 
 class QWidget;
 class QDialog;
@@ -23,6 +23,8 @@ public:
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::ArchiveOperationRequest Request,
         hc::storage::OperationContext Context);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
+    hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
+        hc::storage::OperationContext Context);
     void Show();
     std::function<void(const hc::operations::JobResult&)> onFinished_;
 protected:

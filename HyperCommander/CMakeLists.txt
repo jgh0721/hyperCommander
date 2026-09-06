@@ -111,6 +111,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/wcxMutation.hpp
         ../commonLibs/storage/archiveMutation.hpp
         ../commonLibs/operations/archiveOperation.cpp
+        ../commonLibs/operations/moveOperation.cpp
+        ../commonLibs/operations/moveOperation.hpp
         ../commonLibs/operations/archiveOperation.hpp
         ../commonLibs/storage/materializedContent.hpp
         ../commonLibs/commands/commandBus.hpp

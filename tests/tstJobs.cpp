@@ -73,6 +73,40 @@ class JobTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void itemUpdatesPreserveEffectsAndCounts_data()
+    {
+        QTest::addColumn<int>("Kind");
+        QTest::newRow("removal-updates-existing-item-at-result-limit") << 0;
+        QTest::newRow("removal-failure-updates-counts") << 1;
+        QTest::newRow("invalid-index-preserves-copy") << 2;
+        QTest::newRow("effect-regression-preserves-copy") << 3;
+    }
+    void itemUpdatesPreserveEffectsAndCounts()
+    {
+        QFETCH(int, Kind);
+        auto ProbeValue = std::make_shared<Probe>();
+        JobRequest Request; Request.maxItemResults_ = 1;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = Scheduler.Submit(Request, std::make_unique<ScriptTask>(ProbeValue, [ProbeValue, Kind](auto) {
+            JobStep Step{ProbeValue->calls_ == 1 ? JobState::Running : JobState::Completed};
+            Step.item_ = ItemOutcome{"copied", ItemOutcome::Status::Completed, {}, true, false};
+            if (ProbeValue->calls_ > 1)
+            {
+                Step.replaceItem_ = Kind == 2 ? 1 : 0;
+                Step.item_->sourceRemoved_ = Kind == 0;
+                if (Kind == 1) { Step.item_->status_ = ItemOutcome::Status::Failed; Step.item_->error_ = Error{ErrorCategory::Unavailable, "remove-failed"}; }
+                if (Kind == 3) Step.item_->destinationCommitted_ = false;
+            }
+            return Step;
+        }));
+        QVERIFY(Submitted.HasValue()); QVERIFY(Ready(Submitted.Value())); const auto Result = Submitted.Value().completion_.get();
+        QCOMPARE(Result.items_.size(), 1u); QVERIFY(Result.items_[0].destinationCommitted_);
+        QCOMPARE(Result.snapshot_.state_, Kind == 0 ? JobState::Completed : JobState::Failed);
+        QCOMPARE(Result.snapshot_.completedItems_, Kind == 1 ? 0u : 1u);
+        QCOMPARE(Result.snapshot_.failedItems_, Kind == 1 ? 1u : 0u);
+        QCOMPARE(Result.items_[0].sourceRemoved_, Kind == 0);
+        if (Kind >= 2) QCOMPARE(Result.snapshot_.error_->code_, "invalid-item-result-update");
+    }
     void interactionReleasesWorkerButRetainsResourceLane()
     {
         auto A = std::make_shared<Probe>();

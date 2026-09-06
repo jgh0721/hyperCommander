@@ -571,6 +571,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\storage\archiveMutation.hpp" />
     <ClInclude Include="..\commonLibs\operations\archiveOperation.hpp" />
     <ClCompile Include="..\commonLibs\operations\archiveOperation.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\operations\moveOperation.hpp" />
+    <ClCompile Include="..\commonLibs\operations\moveOperation.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\wcxMutation.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\wcxStorage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\storage\materializedContent.hpp" />

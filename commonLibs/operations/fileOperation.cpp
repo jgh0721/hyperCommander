@@ -163,7 +163,7 @@ namespace hc::operations
             {
                 JobStep Step{JobState::Failed}; Step.error_ = Error;
                 if (phase_ != Phase::Preparing && index_ < items_.size())
-                    Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Failed, Error, destinationCommitted_, false};
+                    Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Failed, Error, destinationCommitted_, false, current().source_.entry_};
                 return Step;
             }
             JobStep done(ItemOutcome::Status Status = ItemOutcome::Status::Completed, bool Destination = false, bool Removed = false)
@@ -173,7 +173,7 @@ namespace hc::operations
                     skippedSources_.push_back(current().source_.entry_.locator_);
                 // Move directories produce one outcome when source removal runs.
                 if (!(request_.operation_ == FileOperation::Move && current().source_.entry_.directory_ && !current().removeDirectory_))
-                    Step.item_ = ItemOutcome{itemLocator(), Status, {}, Destination, Removed};
+                    Step.item_ = ItemOutcome{itemLocator(), Status, {}, Destination, Removed, current().source_.entry_};
                 session_.reset(); stream_.reset(); chunk_ = {}; itemBytes_ = 0; destinationCommitted_ = false;
                 ++index_;
                 phase_ = Phase::Begin;
@@ -366,7 +366,7 @@ namespace hc::operations
             bool replaceAllowed_ = false, destinationCommitted_ = false;
         };
     }
-    Result<JobHandle> SubmitFileOperation(JobScheduler& Scheduler, FileOperationRequest Request, OperationContext Context)
+    Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)
     {
         if (Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
             || !Request.maxEntries_ || Request.maxEntries_ > 100000 || !Request.maxDepth_ || Request.maxDepth_ > 256 || !Request.maxBytes_
@@ -389,6 +389,11 @@ namespace hc::operations
             }
             Job.resourceLanes_.push_back(LaneFor(Source.entry_.locator_));
         }
-        return Scheduler.Submit(std::move(Job), std::make_unique<FileTask>(std::move(Request)));
+        return PreparedJob{std::move(Job), std::make_unique<FileTask>(std::move(Request))};
+    }
+    Result<JobHandle> SubmitFileOperation(JobScheduler& Scheduler, FileOperationRequest Request, OperationContext Context)
+    {
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); if (!Prepared.HasValue()) return Prepared.Failure();
+        return Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_));
     }
 }

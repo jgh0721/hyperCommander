@@ -26,6 +26,9 @@ namespace hc::operations
         std::uint64_t maxBytes_ = 64ULL * 1024 * 1024 * 1024;
         std::string correlationId_;
     };
+    // Pure construction/validation, no I/O; allows coordinators to compose tasks
+    // while retaining one scheduler job and one set of resource lanes.
+    Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, storage::OperationContext Context = {});
     Result<JobHandle> SubmitFileOperation(JobScheduler& Scheduler, FileOperationRequest Request,
         storage::OperationContext Context = {});
 }
