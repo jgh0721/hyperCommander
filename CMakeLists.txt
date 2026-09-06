@@ -25,6 +25,27 @@ include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
 include(cmake/QtDeployment.cmake)
 
+qt_add_library(hc_viewer_core STATIC
+    commonLibs/viewer/viewer.cpp
+    commonLibs/viewer/viewer.hpp
+    commonLibs/operations/jobScheduler.cpp
+    commonLibs/operations/jobScheduler.hpp
+)
+# The core uses the kit's CRT settings but has no Qt headers or linkage.
+set_target_properties(hc_viewer_core PROPERTIES AUTOMOC OFF AUTOUIC OFF)
+target_include_directories(hc_viewer_core PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_options(hc_viewer_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+qt_add_library(hc_viewer_qt STATIC
+    UniqueLibs/qtViewerProvider.cpp
+    UniqueLibs/qtViewerProvider.hpp
+    UniqueLibs/qtViewerSurface.cpp
+    UniqueLibs/qtViewerSurface.hpp
+    UniqueLibs/qtViewerHost.cpp
+    UniqueLibs/qtViewerHost.hpp
+)
+target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core Qt6::Widgets)
+target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
 add_subdirectory(HyperCommander)
 
 include(CTest)
