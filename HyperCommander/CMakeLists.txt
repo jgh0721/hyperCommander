@@ -103,6 +103,9 @@ set(UNIQUELIBS_SRC
         ../commonLibs/storage/writableStorage.hpp
         ../UniqueLibs/nativeWritableStorage.cpp
         ../UniqueLibs/nativeWritableStorage.hpp
+        ../UniqueLibs/nativeMaterializer.cpp
+        ../UniqueLibs/nativeMaterializer.hpp
+        ../commonLibs/storage/materializedContent.hpp
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
         ../UniqueLibs/commandUiBridge.hpp

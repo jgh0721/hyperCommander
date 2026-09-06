@@ -8,6 +8,7 @@
 #include "qtitanColumnAdapter.hpp"
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
+#include "nativeMaterializer.hpp"
 #include "storageProviders.hpp"
 #include <QtitanGrid.h>
 #ifdef _DEBUG
@@ -434,6 +435,26 @@ private slots:
         Jobs->hide();
         Panel->ChangeCurrentPath(unc_, {});
         QTRY_VERIFY(!Model->IsLoading());
+    }
+
+    void materializationCopiesRemoteContent()
+    {
+        using namespace hc::storage;
+        QTemporaryDir Remote(unc_ + "/hc-materializer-test-XXXXXX"); QVERIFY(Remote.isValid());
+        QTemporaryDir Local; QVERIFY(Local.isValid());
+        QFile File(Remote.filePath("원격.txt")); QVERIFY(File.open(QIODevice::WriteOnly));
+        const auto Bytes = QByteArray(65536, 'r'); QCOMPARE(File.write(Bytes), Bytes.size()); File.close();
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Entry = Reader->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(File.fileName()).toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        auto Service = MakeNativeMaterializer(Local.path().toStdString()); QVERIFY(Service.HasValue());
+        auto Made = Service.Value()->Materialize({std::make_shared<ProviderContentSource>(Reader, Entry.Value())}, {});
+        bool Tick = false; QTimer::singleShot(0, this, [&Tick] { Tick = true; });
+        QTRY_VERIFY(Tick);
+        QTRY_VERIFY(Made.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Lease = Made.get(); QVERIFY(Lease.HasValue());
+        QFile Copy(QString::fromStdString(Lease.Value()->LocalPath())); QVERIFY(Copy.open(QIODevice::ReadOnly)); QCOMPARE(Copy.readAll(), Bytes); Copy.close();
+        Lease.Value().reset(); QVERIFY(Service.Value()->DrainCleanup().errors_.empty());
+        QVERIFY(!QFile::exists(Copy.fileName())); QVERIFY(QFile::exists(File.fileName()));
     }
 
     void closingWindowCancelsWaitingFileJob()

@@ -565,6 +565,9 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\operations\jobScheduler.hpp" />
     <ClInclude Include="..\commonLibs\operations\fileOperation.hpp" />
     <ClInclude Include="..\UniqueLibs\nativeWritableStorage.hpp" />
+    <ClInclude Include="..\UniqueLibs\nativeMaterializer.hpp" />
+    <ClInclude Include="..\commonLibs\storage\materializedContent.hpp" />
+    <ClCompile Include="..\UniqueLibs\nativeMaterializer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\UniqueLibs\commandUiBridge.hpp" />
     <ClInclude Include="..\UniqueLibs\fileJobUi.hpp" />
     <ClInclude Include="..\commonLibs\commands\commandBus.hpp" />

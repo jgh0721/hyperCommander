@@ -177,6 +177,8 @@ namespace hc::storage
         virtual ~IContentSource() = default;
         virtual EntrySnapshot Describe() const = 0;
         virtual Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext Context) = 0;
+        virtual Task<Unit> Verify(OperationContext)
+        { return Ready<Unit>(Error{ErrorCategory::Unsupported, "content-verification-unavailable"}); }
     };
     struct CommandContext
     {
