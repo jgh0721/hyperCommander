@@ -196,6 +196,9 @@ target_link_libraries(HyperCommander
         Qt6::WidgetsPrivate
 )
 
+# Keep the application executable immediately runnable from its build directory.
+hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
+
 # Opt-in live integration tests compile the same UI/model sources with a test entry
 # point. They must never run implicitly on developer or CI machines without a NAS.
 option(HC_BUILD_SMB_TESTS "Build the live SMB application integration tests" OFF)
@@ -222,4 +225,5 @@ if(HC_BUILD_SMB_TESTS)
     get_target_property(HC_PRODUCT_LIBRARIES HyperCommander LINK_LIBRARIES)
     target_link_libraries(hc_smb_tests PRIVATE ${HC_PRODUCT_LIBRARIES} Qt6::Test)
     add_dependencies(hc_smb_tests hc_wcx_fixture)
+    hc_enable_qt_deployment(hc_smb_tests TEST PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 endif()

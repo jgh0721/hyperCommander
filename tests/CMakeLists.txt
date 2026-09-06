@@ -8,7 +8,7 @@ target_include_directories(hc_column_tests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_options(hc_column_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_link_libraries(hc_column_tests PRIVATE Qt6::Test)
 add_test(NAME hc.columns COMMAND hc_column_tests)
-set_tests_properties(hc.columns PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>" TIMEOUT 30)
+set_tests_properties(hc.columns PROPERTIES TIMEOUT 30)
 
 qt_add_executable(hc_command_tests tstCommands.cpp ../commonLibs/commands/commandBus.hpp)
 target_include_directories(hc_command_tests PRIVATE ${PROJECT_SOURCE_DIR})
@@ -16,7 +16,6 @@ target_compile_options(hc_command_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC
 target_link_libraries(hc_command_tests PRIVATE Qt6::Test)
 add_test(NAME hc.commands COMMAND hc_command_tests)
 set_tests_properties(hc.commands PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     TIMEOUT 30
 )
 
@@ -31,7 +30,6 @@ target_compile_options(hc_storage_tests PRIVATE
 target_link_libraries(hc_storage_tests PRIVATE Qt6::Test)
 add_test(NAME hc.storage COMMAND hc_storage_tests)
 set_tests_properties(hc.storage PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     TIMEOUT 30
 )
 
@@ -52,7 +50,6 @@ target_compile_options(hc_path_tests PRIVATE
 target_link_libraries(hc_path_tests PRIVATE Qt6::Test advapi32)
 add_test(NAME hc.path COMMAND hc_path_tests)
 set_tests_properties(hc.path PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     TIMEOUT 30
 )
 
@@ -72,6 +69,15 @@ add_test(NAME hc.startup
 set_tests_properties(hc.sources PROPERTIES TIMEOUT 30)
 set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 
+add_test(NAME hc.deployment
+    COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
+        -Executable "$<TARGET_FILE:HyperCommander>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>"
+        -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
+)
+set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
@@ -80,3 +86,7 @@ add_custom_target(hc_check
     USES_TERMINAL
     VERBATIM
 )
+
+foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests)
+    hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)
+endforeach()

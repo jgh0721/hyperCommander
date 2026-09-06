@@ -23,6 +23,7 @@ qt_standard_project_setup(REQUIRES 6.12)
 
 include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
+include(cmake/QtDeployment.cmake)
 
 add_subdirectory(HyperCommander)
 
@@ -30,3 +31,4 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+hc_finalize_qt_deployment()
