@@ -1,5 +1,6 @@
 ﻿#include "pipeChannel.hpp"
 #include "manifestFile.hpp"
+#include "wcxHostService.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -35,15 +36,16 @@ namespace
     struct LoadedPlugin
     {
         std::vector<WinHandle> locks_;
+        std::unique_ptr<WcxHostService> archives_;
         HMODULE module_ = nullptr;
-        ~LoadedPlugin() { if (module_) FreeLibrary(module_); }
+        ~LoadedPlugin() { archives_.reset(); if (module_) FreeLibrary(module_); }
         Result<Unit> Open(const QJsonObject& Hello)
         {
             if (Hello.size() != 2 || !Hello["manifestPath"].isString() || !Hello["manifest"].isObject()) return HostError("host-hello-fields");
             const auto Path = Hello["manifestPath"].toString();
             auto Expected = ParseManifest(QJsonDocument(Hello["manifest"].toObject()).toJson()); if (!Expected.HasValue()) return Expected.Failure();
             if (Expected.Value().format_ != PluginFormat::Wcx || Expected.Value().architecture_ != Architecture::X64
-                || Expected.Value().execution_ != ExecutionMode::Isolated || Expected.Value().extensions_ != std::set{Extension::ArchiveRead}
+                || Expected.Value().execution_ != ExecutionMode::Isolated || !Expected.Value().extensions_.contains(Extension::ArchiveRead)
                 || Expected.Value().protocol_.major_ != 1 || Expected.Value().protocol_.minimumMinor_ != 0) return HostError("host-unsupported-manifest");
             auto Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value()) return HostError("host-manifest-changed");
@@ -63,7 +65,8 @@ namespace
             Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value() || Inspected.Value().binaryPath_ != Binary) return HostError("host-manifest-changed");
             module_ = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-            if (!module_) return HostError("host-plugin-load", GetLastError()); return Unit{};
+            if (!module_) return HostError("host-plugin-load", GetLastError());
+            archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite)); return Unit{};
         }
         Result<QJsonObject> Probe()
         {
@@ -112,7 +115,15 @@ int main(int Argc, char** Argv)
             else if (Header.kind_ == WireKind::Probe) Result = Plugin.Probe();
             else if (Header.kind_ == WireKind::Close) Result = QJsonObject{{"closed", true}};
         }
-        const auto Reply = Result.HasValue() ? Result.Value() : QJsonObject{{"code", QString::fromStdString(Result.Failure().code_)}};
+        else if (Ready && Header.kind_ >= WireKind::ArchiveOpen && Header.kind_ <= WireKind::ArchiveUpdateApply)
+        {
+            QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
+            if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
+            Result = Plugin.archives_->Handle(Header.kind_, Request.object());
+        }
+        const auto Reply = Result.HasValue() ? Result.Value() : QJsonObject{{"code", QString::fromStdString(Result.Failure().code_)},
+            {"category", static_cast<int>(Result.Failure().category_)}, {"provider", QString::fromStdString(Result.Failure().provider_.value_)},
+            {"retryable", Result.Failure().retryable_}, {"userAction", QString::fromStdString(Result.Failure().userAction_)}};
         if (!WriteFrame(Pipe.Get(), Parent.Get(), Result.HasValue() ? WireKind::Response : WireKind::Failure,
             Header.sequence_, QJsonDocument(Reply).toJson(QJsonDocument::Compact), Deadline(3000)).HasValue()) return 10;
         if (!Ready || Header.kind_ == WireKind::Close) return Result.HasValue() ? 0 : 11;

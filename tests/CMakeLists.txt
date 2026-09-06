@@ -9,7 +9,7 @@ qt_add_executable(hc_viewer_tests
 target_include_directories(hc_viewer_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_compile_options(hc_viewer_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_viewer_tests PRIVATE Qt6::Test hc_viewer_qt)
+target_link_libraries(hc_viewer_tests PRIVATE Qt6::Test hc_viewer_qt hc_wcx_backend)
 add_test(NAME hc.viewer COMMAND hc_viewer_tests)
 set_tests_properties(hc.viewer PROPERTIES TIMEOUT 60)
 hc_enable_qt_deployment(hc_viewer_tests TEST PLUGINS)
@@ -77,12 +77,23 @@ qt_add_executable(hc_wcx_tests
 target_include_directories(hc_wcx_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_compile_options(hc_wcx_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_wcx_tests PRIVATE Qt6::Test)
+target_link_libraries(hc_wcx_tests PRIVATE Qt6::Test hc_wcx_backend)
 add_dependencies(hc_wcx_tests hc_wcx_fixture)
 add_test(NAME hc.wcx COMMAND hc_wcx_tests)
 set_tests_properties(hc.wcx PROPERTIES TIMEOUT 45 ENVIRONMENT "HC_WCX_PLUGIN=")
 add_custom_command(TARGET hc_wcx_tests POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:hc_wcx_fixture>" "$<TARGET_FILE_DIR:hc_wcx_tests>/hc_wcx_fixture.wcx64" VERBATIM)
+get_target_property(HC_WCX_TEST_SOURCES hc_wcx_tests SOURCES)
+list(REMOVE_ITEM HC_WCX_TEST_SOURCES tstWcx.cpp)
+qt_add_executable(hc_hosted_wcx_tests tstHostedWcx.cpp ${HC_WCX_TEST_SOURCES})
+target_include_directories(hc_hosted_wcx_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_hosted_wcx_tests PRIVATE hc_plugin_process hc_wcx_backend Qt6::Test)
+target_compile_options(hc_hosted_wcx_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_hosted_wcx_tests hc-plugin-host-x64 hc_wcx_fixture)
+add_test(NAME hc.hosted_wcx COMMAND hc_hosted_wcx_tests)
+set_tests_properties(hc.hosted_wcx PROPERTIES TIMEOUT 45)
+hc_enable_qt_deployment(hc_hosted_wcx_tests TEST)
 qt_add_executable(hc_materialization_tests
     tstMaterialization.cpp
     ../UniqueLibs/nativeMaterializer.cpp
@@ -202,7 +213,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
@@ -211,7 +222,7 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
+    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )

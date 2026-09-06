@@ -46,8 +46,8 @@ qt_add_library(hc_viewer_qt STATIC
 target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core Qt6::Widgets)
 target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
-add_subdirectory(HyperCommander)
 add_subdirectory(pluginHost)
+add_subdirectory(HyperCommander)
 
 include(CTest)
 if(BUILD_TESTING)

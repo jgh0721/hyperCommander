@@ -1,4 +1,5 @@
 qt_add_library(hc_plugin_contract STATIC
+    ../commonLibs/plugins/archiveBackend.hpp
     ../commonLibs/plugins/pluginManifest.cpp
     ../commonLibs/plugins/pluginManifest.hpp
     ../commonLibs/plugins/pluginWire.cpp
@@ -16,11 +17,21 @@ target_link_libraries(hc-plugin-inspect PRIVATE hc_plugin_manifest)
 target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-inspect)
 qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp)
+target_sources(hc_plugin_process PRIVATE archiveCodec.cpp archiveCodec.hpp hostedArchiveBackend.cpp hostedArchiveBackend.hpp)
 target_link_libraries(hc_plugin_process PUBLIC hc_plugin_manifest PRIVATE advapi32)
 target_compile_definitions(hc_plugin_process PRIVATE UNICODE _UNICODE)
 target_compile_options(hc_plugin_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_executable(hc-plugin-host-x64 hostMain.cpp)
-target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process advapi32)
+qt_add_library(hc_wcx_backend STATIC
+    ../UniqueLibs/wcxBackend.cpp
+    ../UniqueLibs/wcxBackend.hpp
+    ../commonLibs/plugins/archiveBackend.hpp
+)
+target_include_directories(hc_wcx_backend PUBLIC ${PROJECT_SOURCE_DIR})
+target_link_libraries(hc_wcx_backend PRIVATE Qt6::Core)
+target_compile_options(hc_wcx_backend PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_sources(hc-plugin-host-x64 PRIVATE wcxHostService.cpp wcxHostService.hpp)
+target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process hc_wcx_backend advapi32)
 target_compile_definitions(hc-plugin-host-x64 PRIVATE UNICODE _UNICODE)
 target_compile_options(hc-plugin-host-x64 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-host-x64)

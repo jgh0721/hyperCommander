@@ -575,6 +575,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\nativeWritableStorage.hpp" />
     <ClInclude Include="..\UniqueLibs\nativeMaterializer.hpp" />
     <ClInclude Include="..\UniqueLibs\wcxStorage.hpp" />
+    <ClInclude Include="..\UniqueLibs\wcxBackend.hpp" />
+    <ClInclude Include="..\commonLibs\plugins\archiveBackend.hpp" />
     <ClInclude Include="..\UniqueLibs\wcxMutation.hpp" />
     <ClInclude Include="..\commonLibs\storage\archiveMutation.hpp" />
     <ClInclude Include="..\commonLibs\operations\archiveOperation.hpp" />
@@ -583,6 +585,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\commonLibs\operations\moveOperation.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\wcxMutation.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\wcxStorage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\UniqueLibs\wcxBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\storage\materializedContent.hpp" />
     <ClCompile Include="..\UniqueLibs\nativeMaterializer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\UniqueLibs\commandUiBridge.hpp" />

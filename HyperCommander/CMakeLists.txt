@@ -179,7 +179,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt hc_wcx_backend)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
@@ -219,6 +219,7 @@ target_link_libraries(HyperCommander
         Qt6::GuiPrivate
         Qt6::WidgetsPrivate
         hc_viewer_qt
+        hc_wcx_backend
 )
 
 # Keep the application executable immediately runnable from its build directory.

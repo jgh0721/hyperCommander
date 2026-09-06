@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "manifestFile.hpp"
+#include "commonLibs/plugins/pluginWire.hpp"
 #include <QJsonObject>
 
 namespace hc::plugins
@@ -28,6 +29,7 @@ namespace hc::plugins
         ~PluginProcess();
         storage::Result<QJsonObject> Probe(storage::OperationContext Context = {});
         storage::Result<QJsonObject> Ping(storage::OperationContext Context = {});
+        storage::Result<QJsonObject> ArchiveCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
         HostSnapshot Snapshot() const;
         void Close();
     private:

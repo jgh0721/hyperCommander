@@ -95,7 +95,12 @@ namespace hc::plugins
             {
                 const auto Code = Document.object()["code"].toString();
                 if (Code.isEmpty() || Code.size() > 256) { fail(HostError("host-error-envelope")); return *failure_; }
-                return HostError(Code.toUtf8().constData());
+                auto Failure = HostError(Code.toUtf8().constData());
+                const auto Category = Document.object()["category"].toInt(-1);
+                if (Category < 0 || Category > static_cast<int>(ErrorCategory::Internal)) { fail(HostError("host-error-category")); return *failure_; }
+                Failure.category_ = static_cast<ErrorCategory>(Category); Failure.provider_.value_ = Document.object()["provider"].toString().toStdString();
+                Failure.retryable_ = Document.object()["retryable"].toBool(); Failure.userAction_ = Document.object()["userAction"].toString().toStdString();
+                return Failure;
             }
             return Document.object();
         }
@@ -110,7 +115,7 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx}; Profile.extensions_ = {Extension::ArchiveRead}; Profile.supportsIsolation_ = true;
+        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx}; Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();
         if (HostPath.isEmpty() || !QFileInfo(HostPath).isFile()) return HostError("host-executable-missing");
@@ -177,6 +182,11 @@ namespace hc::plugins
     { std::lock_guard Lock(state_->mutex_); return state_->call(WireKind::Probe, {}, Context); }
     Result<QJsonObject> PluginProcess::Ping(OperationContext Context)
     { std::lock_guard Lock(state_->mutex_); return state_->call(WireKind::Ping, {}, Context); }
+    Result<QJsonObject> PluginProcess::ArchiveCall(WireKind Kind, QJsonObject Request, OperationContext Context)
+    {
+        if (Kind < WireKind::ArchiveOpen || Kind > WireKind::ArchiveUpdateApply) return HostError("host-archive-command");
+        std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
+    }
     HostSnapshot PluginProcess::Snapshot() const
     {
         std::lock_guard Lock(state_->mutex_); HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;

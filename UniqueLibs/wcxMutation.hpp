@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/storage/archiveMutation.hpp"
+#include "commonLibs/plugins/archiveBackend.hpp"
 
 namespace hc::storage
 {
@@ -8,5 +9,5 @@ namespace hc::storage
     Result<std::unique_ptr<IArchiveMutationSession>> BeginWcxMutation(std::string PluginPath,
         Locator Root, std::shared_ptr<IStorageProvider> Reader, std::string TemporaryBase,
         ArchiveMutationLimits Limits = {}, OperationContext Context = {},
-        std::shared_ptr<IWritableStorage> DestinationWriter = {});
+        std::shared_ptr<IWritableStorage> DestinationWriter = {}, std::shared_ptr<hc::plugins::IArchiveBackend> Backend = {});
 }

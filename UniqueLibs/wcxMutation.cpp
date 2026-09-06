@@ -1,4 +1,5 @@
 ﻿#include "wcxMutation.hpp"
+#include "wcxBackend.hpp"
 #include "wcxStorage.hpp"
 #include "nativeMaterializer.hpp"
 #include "nativeWritableStorage.hpp"
@@ -10,14 +11,12 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-#include "externalLibs/TotalCommander/wcxhead.h"
 
 namespace hc::storage
 {
     namespace
     {
         Error Invalid(std::string Code) { return {ErrorCategory::InvalidRequest, std::move(Code), {"wcx"}}; }
-        Error PluginError(int Code) { return {Code == E_EABORTED ? ErrorCategory::Cancelled : ErrorCategory::Unavailable, "wcx:" + std::to_string(Code), {"wcx"}}; }
         std::wstring Native(const QString& Path) { return QDir::toNativeSeparators(Path).toStdWString(); }
         bool Inside(const std::string& Path, const std::string& Parent) { return Path == Parent || Path.starts_with(Parent + "/"); }
         std::string Parent(const std::string& Path) { const auto Slash = Path.find_last_of('/'); return Slash == 0 ? "/" : Path.substr(0, Slash); }
@@ -40,52 +39,6 @@ namespace hc::storage
             }
             return Path;
         }
-        struct Callback
-        {
-            OperationContext context_;
-            QString output_;
-            std::uint64_t limit_;
-            bool exceeded_ = false, volume_ = false;
-        };
-        thread_local Callback* Current = nullptr;
-        int __stdcall Progress(wchar_t*, int)
-        {
-            if (!Current || Current->context_.Check({"wcx"})) return 0;
-            if (QFileInfo(Current->output_).size() > static_cast<qint64>(Current->limit_)) { Current->exceeded_ = true; return 0; }
-            return 1;
-        }
-        int __stdcall Volume(wchar_t*, int) { if (Current) Current->volume_ = true; return 0; }
-        struct Module
-        {
-            HMODULE handle_ = nullptr;
-            int (__stdcall* pack_)(wchar_t*, wchar_t*, wchar_t*, wchar_t*, int) = nullptr;
-            int (__stdcall* remove_)(wchar_t*, wchar_t*) = nullptr;
-            HANDLE (__stdcall* open_)(tOpenArchiveDataW*) = nullptr;
-            int (__stdcall* header_)(HANDLE, tHeaderDataExW*) = nullptr;
-            int (__stdcall* process_)(HANDLE, int, wchar_t*, wchar_t*) = nullptr;
-            int (__stdcall* close_)(HANDLE) = nullptr;
-            void (__stdcall* progress_)(HANDLE, tProcessDataProcW) = nullptr;
-            void (__stdcall* volume_)(HANDLE, tChangeVolProcW) = nullptr;
-            ~Module() { if (handle_) FreeLibrary(handle_); }
-            Result<Unit> Load(const std::string& Path)
-            {
-                if (!QFileInfo(QString::fromStdString(Path)).isAbsolute() || Path.find('\0') != std::string::npos) return Invalid("absolute-plugin-path-required");
-                handle_ = LoadLibraryExW(Native(QString::fromStdString(Path)).c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-                if (!handle_) return Error{ErrorCategory::Unavailable, "wcx-load:" + std::to_string(GetLastError())};
-#define HC_BIND(Member, Name) Member = reinterpret_cast<decltype(Member)>(GetProcAddress(handle_, Name))
-                HC_BIND(pack_, "PackFilesW"); HC_BIND(remove_, "DeleteFilesW"); HC_BIND(open_, "OpenArchiveW");
-                HC_BIND(header_, "ReadHeaderExW"); HC_BIND(process_, "ProcessFileW"); HC_BIND(close_, "CloseArchive");
-                HC_BIND(progress_, "SetProcessDataProcW"); HC_BIND(volume_, "SetChangeVolProcW");
-#undef HC_BIND
-                const auto Background = reinterpret_cast<int (__stdcall*)()>(GetProcAddress(handle_, "GetBackgroundFlags"));
-                const auto Caps = reinterpret_cast<int (__stdcall*)()>(GetProcAddress(handle_, "GetPackerCaps"));
-                if (!pack_ || !remove_ || !open_ || !header_ || !process_ || !close_ || !progress_ || !volume_ || !Background || !Caps
-                    || (Background() & (BACKGROUND_PACK | BACKGROUND_UNPACK)) != (BACKGROUND_PACK | BACKGROUND_UNPACK)
-                    || (Caps() & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE))
-                    return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required"};
-                return Unit{};
-            }
-        };
         std::uint32_t Crc(std::uint32_t Value, const QByteArray& Bytes)
         {
             static const auto Table = [] { std::array<std::uint32_t, 256> Values{}; for (std::uint32_t Index = 0; Index < 256; ++Index) {
@@ -104,9 +57,10 @@ namespace hc::storage
         public:
             Session(std::string Plugin, Locator Root, std::shared_ptr<IStorageProvider> Reader,
                 std::string Temporary, ArchiveMutationLimits Limits, EntrySnapshot Original,
-                std::shared_ptr<IStorageProvider> NativeReader, std::shared_ptr<IWritableStorage> Writer)
+                std::shared_ptr<IStorageProvider> NativeReader, std::shared_ptr<IWritableStorage> Writer, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
                 : plugin_(std::move(Plugin)), root_(std::move(Root)), reader_(std::move(Reader)), temporary_(std::move(Temporary)),
-                  limits_(Limits), original_(std::move(Original)), native_(std::move(NativeReader)), writer_(std::move(Writer)) {}
+                  limits_(Limits), original_(std::move(Original)), native_(std::move(NativeReader)), writer_(std::move(Writer)),
+                  backend_(Backend ? std::move(Backend) : hc::plugins::MakeInProcessWcxBackend(plugin_)) {}
             ~Session() { Abort(); }
             Result<Unit> Prepare(std::vector<ArchiveChange> Changes, OperationContext Context) override
             {
@@ -330,7 +284,7 @@ namespace hc::storage
                     return Unit{};
                 };
                 std::uint64_t Total = 0;
-                std::wstring Added, Removed;
+                std::vector<std::string> Added, Removed;
                 for (auto& [Path, Item] : draft_)
                 {
                     if (!Item.changed_) continue;
@@ -349,8 +303,8 @@ namespace hc::storage
                         std::uint32_t Check = 0; const auto Copied = copySource(Item.content_, Name, Context, &Check); if (!Copied.HasValue()) return Copied;
                         Item.entry_.hints_["crc"] = std::to_string(Check);
                     }
-                    auto Name = Native(QString::fromStdString(Path.substr(1))); if (Item.entry_.directory_) Name += L"\\";
-                    Added += Name; Added.push_back(0);
+                    auto Name = Path.substr(1); if (Item.entry_.directory_) Name += "/";
+                    Added.push_back(std::move(Name));
                 }
                 for (const auto& [Path, Item] : before_)
                     if (!draft_.contains(Path) || draft_.at(Path).changed_)
@@ -359,52 +313,33 @@ namespace hc::storage
                         // they are not records accepted by DeleteFilesW.
                         if (Item.entry_.directory_ && Item.entry_.hints_.empty()) continue;
                         const auto Raw = Item.entry_.hints_.find("wcxName");
-                        Removed += Native(QString::fromStdString(Raw == Item.entry_.hints_.end() ? Path.substr(1) : Raw->second)); Removed.push_back(0);
+                        Removed.push_back(Raw == Item.entry_.hints_.end() ? Path.substr(1) : Raw->second);
                     }
                 const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
                 std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
                 while (!Lock.try_lock_for(std::chrono::milliseconds(25))) if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                Module Plugin; const auto Loaded = Plugin.Load(plugin_); if (!Loaded.HasValue()) return Loaded;
-                Callback Call{Context, Output, limits_.maxArchiveBytes_}; const auto Previous = Current; Current = &Call;
-                const auto Restore = qScopeGuard([&] { Current = Previous; });
-                auto Archive = Native(Output), Source = Native(InputRoot + '/');
-                Plugin.progress_(nullptr, &Progress);
-                Plugin.volume_(nullptr, &Volume);
-                const auto CheckCall = [&](int Code) -> Result<Unit> {
-                    if (Call.volume_) return Error{ErrorCategory::Unsupported, "archive-volume-required"};
-                    if (Call.exceeded_) return Error{ErrorCategory::BudgetExceeded, "archive-output-budget"};
-                    if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                    if (Code) return PluginError(Code); return Unit{};
-                };
-                if (!Removed.empty()) { Removed.push_back(0); const auto Result = CheckCall(Plugin.remove_(Archive.data(), Removed.data())); if (!Result.HasValue()) return Result; }
-                if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                if (!Added.empty()) { Added.push_back(0); const auto Result = CheckCall(Plugin.pack_(Archive.data(), nullptr, Source.data(), Added.data(), PK_PACK_SAVE_PATHS)); if (!Result.HasValue()) return Result; }
-                if (Call.exceeded_ || QFileInfo(Output).size() > static_cast<qint64>(limits_.maxArchiveBytes_)) return Error{ErrorCategory::BudgetExceeded, "archive-output-budget"};
-                if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                tOpenArchiveDataW Open{}; Open.ArcName = Archive.data(); Open.OpenMode = PK_OM_EXTRACT;
-                const auto Handle = Plugin.open_(&Open); if (!Handle) return PluginError(Open.OpenResult ? Open.OpenResult : E_EOPEN);
-                auto Close = qScopeGuard([&] { Plugin.close_(Handle); }); Plugin.progress_(Handle, &Progress); Plugin.volume_(Handle, &Volume);
+                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_}, Context);
+                if (!Updated.HasValue()) return Updated;
+                auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 std::set<std::string> Seen;
                 for (;;)
                 {
-                    if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                    tHeaderDataExW Header{}; const auto Code = Plugin.header_(Handle, &Header);
-                    const auto HeaderResult = CheckCall(Code == E_END_ARCHIVE ? 0 : Code); if (!HeaderResult.HasValue()) return HeaderResult;
-                    if (Code == E_END_ARCHIVE) break;
-                    const auto Length = wcsnlen_s(Header.FileName, 1024); if (!Length || Length == 1024) return Invalid("archive-output-name");
-                    auto Name = QString::fromWCharArray(Header.FileName, Length); Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1);
-                    const auto Path = "/" + Name.toStdString();
-                    if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
-                    const auto& Expected = draft_.at(Path).entry_;
-                    const auto Packed = (static_cast<std::uint64_t>(Header.PackSizeHigh) << 32) | Header.PackSize;
-                    if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
-                        return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
-                    if (Expected.directory_ != !!(Header.FileAttr & FILE_ATTRIBUTE_DIRECTORY)
-                        || (!Expected.directory_ && (Expected.size_ != ((static_cast<std::uint64_t>(Header.UnpSizeHigh) << 32) | Header.UnpSize)
-                            || (Expected.hints_.contains("crc") && Expected.hints_.at("crc") != std::to_string(static_cast<std::uint32_t>(Header.FileCRC))))))
-                        return Invalid("archive-output-content-mismatch");
-                    const auto Tested = Plugin.process_(Handle, Expected.directory_ ? PK_SKIP : PK_TEST, nullptr, nullptr);
-                    const auto TestedResult = CheckCall(Tested); if (!TestedResult.HasValue()) return TestedResult;
+                    auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context); if (!Page.HasValue()) return Page.Failure();
+                    if (Page.Value().entries_.empty() && !Page.Value().end_) return Invalid("archive-cursor-no-progress");
+                    for (const auto& Header : Page.Value().entries_)
+                    {
+                        auto Name = QString::fromStdString(Header.name_); Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1);
+                        const auto Path = "/" + Name.toStdString();
+                        if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
+                        const auto& Expected = draft_.at(Path).entry_;
+                        const auto Packed = Header.packedSize_;
+                        if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
+                            return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
+                        if (Expected.directory_ != Header.directory_ || (!Expected.directory_ && (Expected.size_ != Header.size_
+                            || (Expected.hints_.contains("crc") && Expected.hints_.at("crc") != std::to_string(Header.crc_)))))
+                            return Invalid("archive-output-content-mismatch");
+                    }
+                    if (Page.Value().end_) break;
                 }
                 for (const auto& [Path, Item] : draft_)
                     if (!Seen.contains(Path))
@@ -414,7 +349,6 @@ namespace hc::storage
                         const bool ImplicitDirectory = Item.entry_.directory_ && Child != Seen.end() && Child->starts_with(Prefix);
                         if (!ImplicitDirectory) return Invalid("archive-output-missing-entry");
                     }
-                const auto Closed = Plugin.close_(Handle); Close.dismiss(); if (Closed) return PluginError(Closed);
                 const auto Errors = Clean(); Cleanup.dismiss();
                 if (!Errors.empty()) return Errors.front();
                 return Unit{};
@@ -455,6 +389,7 @@ namespace hc::storage
             EntrySnapshot original_;
             std::shared_ptr<IStorageProvider> native_;
             std::shared_ptr<IWritableStorage> writer_;
+            std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
             std::unique_ptr<IWriteSession> output_;
             std::map<std::string, DraftEntry> draft_, before_;
             State state_ = State::New;
@@ -462,7 +397,7 @@ namespace hc::storage
     }
     Result<std::unique_ptr<IArchiveMutationSession>> BeginWcxMutation(std::string PluginPath, Locator Root,
         std::shared_ptr<IStorageProvider> Reader, std::string TemporaryBase, ArchiveMutationLimits Limits,
-        OperationContext Context, std::shared_ptr<IWritableStorage> DestinationWriter)
+        OperationContext Context, std::shared_ptr<IWritableStorage> DestinationWriter, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
     {
         if (!Reader || Reader->Id().value_ != "wcx" || Root.kind_ != LocatorKind::Archive || Root.nesting_.size() != 1
             || Root.nesting_[0].provider_ != "wcx" || Root.nesting_[0].entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
@@ -478,6 +413,6 @@ namespace hc::storage
         if (!DestinationWriter) DestinationWriter = MakeNativeWritableStorage(Kind, NativeReader);
         if (TemporaryBase.empty()) TemporaryBase = QDir::tempPath().toStdString();
         return std::unique_ptr<IArchiveMutationSession>(new Session(std::move(PluginPath), std::move(Root), std::move(Reader),
-            std::move(TemporaryBase), Limits, std::move(Original.Value()), std::move(NativeReader), std::move(DestinationWriter)));
+            std::move(TemporaryBase), Limits, std::move(Original.Value()), std::move(NativeReader), std::move(DestinationWriter), std::move(Backend)));
     }
 }

@@ -124,6 +124,14 @@ extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wcha
         std::erase_if(State.entries_, [&](const Entry& Old) { return Old.name_ == Item.name_; }); State.entries_.push_back(std::move(Item));
     }
     if (!Save(Archive, State)) return E_EWRITE;
+    // Host-only fault cases occur after the staged archive has been written.
+    if (State.mode_ == 'H' || State.mode_ == 'J') {
+        const auto Name = L"Local\\hc-wcx-stage-" + std::to_wstring(GetCurrentProcessId());
+        const auto Signal = OpenEventW(EVENT_MODIFY_STATE, FALSE, Name.c_str());
+        if (Signal) { SetEvent(Signal); CloseHandle(Signal); }
+    }
+    if (State.mode_ == 'H') Sleep(INFINITE);
+    if (State.mode_ == 'J') RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
     if (PackingProgress && !PackingProgress(nullptr, 0)) return E_EABORTED;
     return State.mode_ == 'P' ? E_EWRITE : 0;
 }

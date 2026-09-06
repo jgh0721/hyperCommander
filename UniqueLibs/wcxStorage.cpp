@@ -1,4 +1,5 @@
 ﻿#include "wcxStorage.hpp"
+#include "wcxBackend.hpp"
 #include "storageProviders.hpp"
 #include "nativeMaterializer.hpp"
 #include <QtCore>
@@ -6,7 +7,6 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-#include "externalLibs/TotalCommander/wcxhead.h"
 #include <set>
 
 std::recursive_timed_mutex& WcxCallMutex() { static std::recursive_timed_mutex Mutex; return Mutex; }
@@ -14,14 +14,11 @@ namespace hc::storage
 {
     namespace
     {
-        Error WcxError(int Code)
-        { return {Code == E_EABORTED ? ErrorCategory::Cancelled : Code == E_NOT_SUPPORTED ? ErrorCategory::Unsupported : ErrorCategory::Unavailable,
-            "wcx:" + std::to_string(Code), {"wcx"}}; }
-        Result<std::string> EntryPath(const wchar_t* Name)
+        Result<std::string> EntryPath(const std::string& Name)
         {
-            const auto Size = wcsnlen_s(Name, 1024);
-            if (!Size || Size == 1024) return Error{ErrorCategory::InvalidRequest, "invalid-archive-name", {"wcx"}};
-            auto Path = QString::fromWCharArray(Name, static_cast<int>(Size)); Path.replace('\\', '/');
+            const auto Text = QString::fromStdString(Name);
+            if (Text.isEmpty() || Text.size() >= 1024 || Text.toUtf8().toStdString() != Name) return Error{ErrorCategory::InvalidRequest, "invalid-archive-name", {"wcx"}};
+            auto Path = Text; Path.replace('\\', '/');
             if (Path.startsWith('/') || Path.contains(':') || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "archive-traversal", {"wcx"}};
             if (Path.endsWith('/')) Path.chop(1);
             const auto Parts = Path.split('/');
@@ -31,50 +28,6 @@ namespace hc::storage
             return ("/" + Path).toStdString();
         }
         std::string ParentOf(const std::string& Path) { const auto Slash = Path.find_last_of('/'); return Slash == 0 ? "/" : Path.substr(0, Slash); }
-        struct CallbackState
-        {
-            OperationContext context_;
-            QString output_;
-            std::uint64_t maxBytes_ = 0;
-            bool volume_ = false, exceeded_ = false;
-        };
-        thread_local CallbackState* Current = nullptr;
-        int __stdcall Progress(wchar_t*, int)
-        {
-            if (!Current) return 0;
-            if (Current->context_.Check({"wcx"})) return 0;
-            if (!Current->output_.isEmpty() && QFileInfo(Current->output_).size() > static_cast<qint64>(Current->maxBytes_))
-            { Current->exceeded_ = true; return 0; }
-            return 1;
-        }
-        int __stdcall Volume(wchar_t*, int) { if (Current) Current->volume_ = true; return 0; }
-        struct Module
-        {
-            HMODULE module_ = nullptr;
-            HANDLE (__stdcall* open_)(tOpenArchiveDataW*) = nullptr;
-            int (__stdcall* header_)(HANDLE, tHeaderDataExW*) = nullptr;
-            int (__stdcall* process_)(HANDLE, int, wchar_t*, wchar_t*) = nullptr;
-            int (__stdcall* close_)(HANDLE) = nullptr;
-            void (__stdcall* progress_)(HANDLE, tProcessDataProcW) = nullptr;
-            void (__stdcall* volume_)(HANDLE, tChangeVolProcW) = nullptr;
-            ~Module() { if (module_) { std::lock_guard Lock(WcxCallMutex()); FreeLibrary(module_); } }
-            Result<Unit> Load(const std::string& Path)
-            {
-                if (module_) return Unit{};
-                const auto Name = QString::fromStdString(Path);
-                if (!QFileInfo(Name).isAbsolute() || Name.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-plugin-path-required"};
-                module_ = LoadLibraryExW(QDir::toNativeSeparators(Name).toStdWString().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-                if (!module_) return Error{ErrorCategory::Unavailable, "wcx-load:" + std::to_string(GetLastError()), {"wcx"}};
-#define HC_WCX_BIND(Member, Export) Member = reinterpret_cast<decltype(Member)>(GetProcAddress(module_, Export))
-                HC_WCX_BIND(open_, "OpenArchiveW"); HC_WCX_BIND(header_, "ReadHeaderExW"); HC_WCX_BIND(process_, "ProcessFileW");
-                HC_WCX_BIND(close_, "CloseArchive"); HC_WCX_BIND(progress_, "SetProcessDataProcW"); HC_WCX_BIND(volume_, "SetChangeVolProcW");
-#undef HC_WCX_BIND
-                const auto Background = reinterpret_cast<int (__stdcall*)()>(GetProcAddress(module_, "GetBackgroundFlags"));
-                if (!open_ || !header_ || !process_ || !close_ || !progress_ || !volume_ || !Background || !(Background() & BACKGROUND_UNPACK))
-                { FreeLibrary(module_); module_ = nullptr; return Error{ErrorCategory::Unsupported, "wcx-background-unicode-read-required", {"wcx"}}; }
-                return Unit{};
-            }
-        };
         class Cursor final : public IEntryCursor
         {
         public:
@@ -107,10 +60,11 @@ namespace hc::storage
         class WcxProvider final : public IStorageProvider, public std::enable_shared_from_this<WcxProvider>
         {
         public:
-            WcxProvider(std::string Plugin, Locator Root, std::string Temporary)
+            WcxProvider(std::string Plugin, Locator Root, std::string Temporary, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
                 : plugin_(std::move(Plugin)), root_(std::move(Root)), temporary_(std::move(Temporary)),
                 session_(QUuid::createUuid().toString(QUuid::Id128).toStdString() + ":"),
-                native_(MakeNativeReadProvider(root_.root_.starts_with("\\\\") || root_.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local)) {}
+                native_(MakeNativeReadProvider(root_.root_.starts_with("\\\\") || root_.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local)),
+                backend_(Backend ? std::move(Backend) : hc::plugins::MakeInProcessWcxBackend(plugin_)) {}
             ProviderId Id() const override { return {"wcx"}; }
             Task<SupportDecision> Supports(Operation Op, OperationContext Context) override
             {
@@ -191,7 +145,6 @@ namespace hc::storage
             {
                 if (mounted_) { const auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure()); }
                 if (!validLocation(root_)) return Error{ErrorCategory::InvalidRequest, "archive-location"};
-                const auto Loaded = module_.Load(plugin_); if (!Loaded.HasValue()) return Loaded.Failure();
                 auto Archive = native_->Resolve({native_->Id().value_ == "smb" ? LocatorKind::Smb : LocatorKind::Local, root_.root_}, Context).get();
                 if (!Archive.HasValue()) return Archive.Failure();
                 if (Archive.Value().directory_ || Archive.Value().attributes_ & FILE_ATTRIBUTE_REPARSE_POINT || !Archive.Value().id_.revision_)
@@ -200,22 +153,20 @@ namespace hc::storage
                 Context.denyConcurrentMutation_ = true;
                 auto Pin = native_->OpenRead(archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
                 entries_.clear();
-                const auto Scanned = scan(PK_OM_LIST, Context, [&](HANDLE Arc, const tHeaderDataExW& Header, const std::string& Path) -> Result<bool> {
+                const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& Path) -> Result<bool> {
                     if (entries_.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
-                    const bool Directory = Header.FileAttr & FILE_ATTRIBUTE_DIRECTORY;
+                    const bool Directory = Header.directory_;
                     if (entries_.contains(Path) && !(Directory && entries_.at(Path).directory_ && entries_.at(Path).hints_.empty()))
                         return Error{ErrorCategory::InvalidRequest, "duplicate-archive-entry"};
                     auto Entry = makeEntry(Path, Directory);
-                    Entry.attributes_ = Header.FileAttr; Entry.size_ = (static_cast<std::uint64_t>(Header.UnpSizeHigh) << 32) | Header.UnpSize;
-                    const QDate Date(1980 + ((Header.FileTime >> 25) & 127), (Header.FileTime >> 21) & 15, (Header.FileTime >> 16) & 31);
-                    const QTime Time((Header.FileTime >> 11) & 31, (Header.FileTime >> 5) & 63, (Header.FileTime & 31) * 2);
-                    if (Date.isValid() && Time.isValid()) Entry.modifiedUtcMs_ = QDateTime(Date, Time).toMSecsSinceEpoch();
+                    Entry.attributes_ = Header.attributes_; Entry.size_ = Header.size_;
+                    Entry.modifiedUtcMs_ = Header.modifiedUtcMs_;
                     if (Entry.size_ > 64ULL * 1024 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "archive-size-budget"};
-                    Entry.hints_["packedSize"] = std::to_string((static_cast<std::uint64_t>(Header.PackSizeHigh) << 32) | Header.PackSize);
-                    Entry.hints_["crc"] = std::to_string(static_cast<std::uint32_t>(Header.FileCRC));
+                    Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
+                    Entry.hints_["crc"] = std::to_string(Header.crc_);
                     // Deletion must use the plugin's exact directory marker:
                     // some WCX plugins expose directories without a final slash.
-                    Entry.hints_["wcxName"] = QString::fromWCharArray(Header.FileName).toStdString();
+                    Entry.hints_["wcxName"] = Header.name_;
                     Entry.id_.revision_->token_ += ":" + Entry.hints_["crc"] + ":" + std::to_string(Entry.size_);
                     entries_[Path] = std::move(Entry);
                     for (auto Parent = ParentOf(Path); Parent != "/"; Parent = ParentOf(Parent))
@@ -224,7 +175,6 @@ namespace hc::storage
                         if (!entries_.contains(Parent)) entries_[Parent] = makeEntry(Parent, true);
                         if (entries_.size() > Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                     }
-                    const auto Skipped = module_.process_(Arc, PK_SKIP, nullptr, nullptr); if (Skipped) return WcxError(Skipped);
                     return false;
                 });
                 if (!Scanned.HasValue()) { entries_.clear(); return Scanned.Failure(); }
@@ -239,64 +189,41 @@ namespace hc::storage
                 if (It->second.id_ != Resource) return Error{ErrorCategory::StaleRevision, "revision-changed"};
                 return It->second;
             }
-            template<class Visitor> Result<Unit> scan(int Mode, OperationContext Context, Visitor Visit, QString Output = {}, std::uint64_t MaxBytes = 0)
+            template<class Visitor> Result<Unit> scan(OperationContext Context, Visitor Visit)
             {
-                CallbackState Call{Context, std::move(Output), MaxBytes};
-                const auto Previous = Current; Current = &Call; const auto Restore = qScopeGuard([&] { Current = Previous; });
-                auto Path = QDir::toNativeSeparators(QString::fromStdString(root_.root_)).toStdWString();
-                tOpenArchiveDataW Open{}; Open.ArcName = Path.data(); Open.OpenMode = Mode;
-                const auto Arc = module_.open_(&Open); if (!Arc) return WcxError(Open.OpenResult ? Open.OpenResult : E_EOPEN);
-                auto Close = qScopeGuard([&] { module_.close_(Arc); });
-                module_.progress_(Arc, &Progress); module_.volume_(Arc, &Volume);
-                for (std::size_t Count = 0;; ++Count)
+                auto Cursor = backend_->Enumerate(root_.root_, false, Context); if (!Cursor.HasValue()) return Cursor.Failure();
+                for (;;)
                 {
-                    if (const auto Failure = Context.Check(Id())) return *Failure;
-                    tHeaderDataExW Header{}; const auto Code = module_.header_(Arc, &Header);
-                    if (Call.volume_) return Error{ErrorCategory::Unsupported, "archive-volume-required"};
-                    if (Code == E_END_ARCHIVE) break;
-                    if (Code) return WcxError(Code);
-                    if (Count >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
-                    auto Name = EntryPath(Header.FileName); if (!Name.HasValue()) return Name.Failure();
-                    auto Done = Visit(Arc, Header, Name.Value());
-                    if (Call.volume_) return Error{ErrorCategory::Unsupported, "archive-volume-required"};
-                    if (Call.exceeded_) return Error{ErrorCategory::BudgetExceeded, "archive-extraction-budget"};
-                    if (const auto Failure = Context.Check(Id())) return *Failure;
-                    if (!Done.HasValue()) return Done.Failure();
-                    if (Done.Value()) break;
+                    auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context); if (!Page.HasValue()) return Page.Failure();
+                    if (Page.Value().entries_.empty() && !Page.Value().end_) return Error{ErrorCategory::InvalidRequest, "archive-cursor-no-progress"};
+                    for (const auto& Header : Page.Value().entries_)
+                    {
+                        auto Name = EntryPath(Header.name_); if (!Name.HasValue()) return Name.Failure();
+                        auto Done = Visit(Header, Name.Value()); if (!Done.HasValue()) return Done.Failure();
+                        if (Done.Value()) return Unit{};
+                    }
+                    if (Page.Value().end_) return Unit{};
                 }
-                const auto Closed = module_.close_(Arc); Close.dismiss();
-                if (Closed) return WcxError(Closed);
-                return Unit{};
             }
             Result<Unit> extract(const EntrySnapshot& Entry, const std::string& Output, OperationContext Context)
             {
                 Context.denyConcurrentMutation_ = true;
                 auto Pin = native_->OpenRead(archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
-                bool Found = false;
-                auto Destination = QDir::toNativeSeparators(QString::fromStdString(Output)).toStdWString();
-                auto Result = scan(PK_OM_EXTRACT, Context, [&](HANDLE Arc, const tHeaderDataExW& Header, const std::string& Path) -> hc::storage::Result<bool> {
-                    if (Path != Entry.locator_.nesting_.back().entry_)
-                    { const auto Code = module_.process_(Arc, PK_SKIP, nullptr, nullptr); if (Code) return WcxError(Code); return false; }
-                    if (((static_cast<std::uint64_t>(Header.UnpSizeHigh) << 32) | Header.UnpSize) != Entry.size_
-                        || std::to_string(static_cast<std::uint32_t>(Header.FileCRC)) != Entry.hints_.at("crc")) return Error{ErrorCategory::StaleRevision, "archive-entry-changed"};
-                    const auto Code = module_.process_(Arc, PK_EXTRACT, nullptr, Destination.data()); if (Code) return WcxError(Code);
-                    Found = true; return true;
-                }, QString::fromStdString(Output), Entry.size_);
-                if (!Result.HasValue()) return Result;
-                if (!Found) return Error{ErrorCategory::NotFound, "archive-entry-not-found"};
-                return Unit{};
+                hc::plugins::ArchiveHeader Expected; Expected.name_ = Entry.hints_.at("wcxName"); Expected.size_ = Entry.size_;
+                Expected.crc_ = static_cast<std::uint32_t>(std::stoul(Entry.hints_.at("crc")));
+                return backend_->Extract(root_.root_, std::move(Expected), Output, Context);
             }
             std::string plugin_;
             Locator root_;
             std::string temporary_, session_;
             std::shared_ptr<IStorageProvider> native_;
             std::shared_ptr<INativeContentStore> store_;
-            Module module_;
+            std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
             EntrySnapshot archive_;
             std::map<std::string, EntrySnapshot> entries_;
             bool mounted_ = false;
         };
     }
-    std::shared_ptr<IStorageProvider> MakeWcxReadProvider(std::string PluginPath, Locator Root, std::string TemporaryBase)
-    { return std::make_shared<WcxProvider>(std::move(PluginPath), std::move(Root), std::move(TemporaryBase)); }
+    std::shared_ptr<IStorageProvider> MakeWcxReadProvider(std::string PluginPath, Locator Root, std::string TemporaryBase, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
+    { return std::make_shared<WcxProvider>(std::move(PluginPath), std::move(Root), std::move(TemporaryBase), std::move(Backend)); }
 }
