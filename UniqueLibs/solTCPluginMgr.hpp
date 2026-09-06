@@ -205,6 +205,7 @@ public:
     ~CTCPlugInWCX();
 
     TyOsError                           LoadWCX( const TyPlugInWCX& WCX );
+    QString                             PluginPath() const { return wcx_.FileFullPath; }
 
     TyOsValue<bool>                     OpenArchive( const QString& FileFullPath, int Mode = PK_OM_LIST );
     TyOsValue<CPackFSModel*>            CreatePackModel() const;

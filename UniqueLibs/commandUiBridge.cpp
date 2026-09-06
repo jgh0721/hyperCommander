@@ -378,9 +378,11 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         : Invocation.id_ == "hc.file.rename" ? hc::operations::FileOperation::Rename : Invocation.id_ == "hc.file.mkdir" ? hc::operations::FileOperation::MakeDirectory : hc::operations::FileOperation::Delete;
     Request.correlationId_ = Invocation.correlationId_;
     const auto Kind = Invocation.context_.location_.kind_;
-    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb) return Error{ErrorCategory::Unsupported, "native-file-operation-required"};
+    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb
+        && !(Kind == LocatorKind::Archive && Request.operation_ == hc::operations::FileOperation::Copy))
+        return Error{ErrorCategory::Unsupported, "native-file-operation-required"};
     auto Reader = Model->GetRoot()->ReadProvider();
-    auto Writer = MakeNativeWritableStorage(Kind, Reader);
+    auto Writer = Kind == LocatorKind::Archive ? nullptr : MakeNativeWritableStorage(Kind, Reader);
     if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
         for (const auto& Selected : Invocation.context_.selection_)
         {

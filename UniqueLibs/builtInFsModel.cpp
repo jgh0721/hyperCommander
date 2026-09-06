@@ -364,6 +364,7 @@ void CFSModel::doRefresh()
 {
     if (providerEnabled_)
     {
+        GetRoot()->RefreshReadProvider();
         refreshProvider();
         return;
     }

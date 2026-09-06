@@ -35,6 +35,7 @@ namespace hc::storage
         std::size_t maxActiveFiles_ = 64;
         std::size_t maxDepth_ = 8;
         std::uint64_t maxExpansionRatio_ = 1000;
+        bool operator==(const MaterializationLimits&) const = default;
     };
     class IMaterializedFileLease
     {

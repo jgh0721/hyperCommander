@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "wcxStorage.hpp"
 #include "mdlFileSystem.hpp"
 
 #include "cmnHCUtils.hpp"
@@ -503,33 +504,8 @@ namespace nsHC
 
     std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
     {
-        if (readProvider_) return readProvider_;
-        const auto Parsed = Model();
-        if (!Parsed || !Parsed->Root_) return {};
-        std::vector<hc::storage::SnapshotDirectory> Directories;
-        std::function<void(CPackFSModel::Node*, QString)> CopyTree;
-        CopyTree = [&](CPackFSModel::Node* Parent, QString Path) {
-            std::vector<hc::storage::EntrySnapshot> Entries;
-            for (const auto* Child : Parent->Children)
-            {
-                hc::storage::EntrySnapshot Entry;
-                const auto ChildPath = Path + (Path.endsWith('/') ? "" : "/") + Child->FileName;
-                Entry.locator_ = ReadLocation(ChildPath);
-                Entry.name_ = Child->FileName.toStdString();
-                Entry.attributes_ = Child->Attributes;
-                Entry.directory_ = (Child->Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-                Entry.size_ = Child->UncompressedSize;
-                Entry.modifiedUtcMs_ = Child->FileTime.toMSecsSinceEpoch();
-                Entries.push_back(std::move(Entry));
-            }
-            Directories.emplace_back(ReadLocation(Path), std::move(Entries));
-            for (auto* Child : Parent->Children)
-                if (Child->Attributes & FILE_ATTRIBUTE_DIRECTORY)
-                    CopyTree(Child, Path + (Path.endsWith('/') ? "" : "/") + Child->FileName);
-        };
-        CopyTree(Parsed->Root_, "/");
-        readProvider_ = hc::storage::MakeArchiveReadProvider(ReadLocation("/"), std::move(Directories));
+        if (!readProvider_ && WCX_)
+            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"));
         return readProvider_;
     }
-
 } // nsHC

@@ -187,6 +187,24 @@ private slots:
             Model->ChangeDirectory("sub");
             QTRY_VERIFY(!Model->IsLoading());
             QCOMPARE(names(Model), QStringList({QString::fromUtf8("한글.txt")}));
+            if (Enabled)
+            {
+                auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+                const auto Destination = Directory.filePath("extracted"); QVERIFY(QDir().mkdir(Destination));
+                QModelIndex Selected;
+                for (int Row = 0; Row < Model->rowCount(); ++Row)
+                    if (Model->GetName(Model->index(Row, 0)) == QString::fromUtf8("한글.txt")) Selected = Model->index(Row, 0);
+                QVERIFY(Selected.isValid());
+                auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", Destination}}, "test", Selected);
+                QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+                auto Accepted = Copy.get(); QVERIFY(Accepted.HasValue());
+                auto& Scheduler = Bridge->FileJobs()->Scheduler();
+                QTRY_VERIFY(hc::operations::IsTerminal(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_));
+                QCOMPARE(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
+                QFile Copied(Destination + "/한글.txt"); QVERIFY(Copied.open(QIODevice::ReadOnly)); QCOMPARE(Copied.readAll(), QByteArray("한글!\r\n"));
+                QTest::qWait(150); QTRY_VERIFY(!Model->IsLoading());
+                QCOMPARE(names(Model), QStringList({QString::fromUtf8("한글.txt")}));
+            }
             Model->ChangeDirectory("..");
             QTRY_VERIFY(!Model->IsLoading());
             QCOMPARE(names(Model), QStringList({"alpha.txt", "sub"}));

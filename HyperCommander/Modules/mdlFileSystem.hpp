@@ -123,6 +123,7 @@ namespace nsHC
         virtual quint64         GetTotalSize() { return 0; }
         virtual quint64         GetFreeSize() { return 0; }
         virtual std::shared_ptr<hc::storage::IStorageProvider> ReadProvider();
+        virtual void RefreshReadProvider() {}
         virtual hc::storage::Locator ReadLocation(const QString& Path) const;
 
     protected:
@@ -206,6 +207,7 @@ namespace nsHC
         void                    SetParent( const QString& Parent );
 
         CPackFSModel*           Model();
+        void RefreshReadProvider() override { readProvider_.reset(); }
         std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
         hc::storage::Locator ReadLocation(const QString& Path) const override;
     private:

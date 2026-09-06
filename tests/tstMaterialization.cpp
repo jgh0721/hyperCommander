@@ -60,6 +60,33 @@ class MaterializationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void producersShareRootQuotaAndValidateOutput()
+    {
+        QTemporaryDir Directory;
+        MaterializationLimits Limits; Limits.maxTotalBytes_ = 5;
+        auto ManagerResult = MakeNativeMaterializer(Directory.path().toStdString(), Limits); QVERIFY(ManagerResult.HasValue());
+        auto ProducerResult = MakeNativeContentStore(Directory.path().toStdString(), Limits); QVERIFY(ProducerResult.HasValue());
+        auto Manager = std::move(ManagerResult.Value()); auto Store = std::move(ProducerResult.Value());
+        QVERIFY(!MakeNativeContentStore(Directory.path().toStdString()).HasValue());
+        const auto Write = [](const std::string& Path, OperationContext) -> Result<Unit> {
+            QFile File(QString::fromStdString(Path));
+            if (!File.open(QIODevice::WriteOnly) || File.write("hello") != 5) return Error{ErrorCategory::Unavailable, "write-failed"};
+            return Unit{};
+        };
+        auto Produced = Store->Produce(Content("hello")->Describe(), {}, {}, {}, Write); QVERIFY(Produced.HasValue());
+        const auto Full = Manager->Materialize({Content("x")}, {}).get(); QVERIFY(!Full.HasValue()); QCOMPARE(Full.Failure().category_, ErrorCategory::BudgetExceeded);
+        Produced.Value().reset(); QVERIFY(Manager->DrainCleanup().errors_.empty());
+        const auto WrongSize = Store->Produce(Content("1234")->Describe(), {}, {}, {}, Write); QVERIFY(!WrongSize.HasValue()); QCOMPARE(WrongSize.Failure().code_, "invalid-produced-content");
+        const auto Failed = Store->Produce(Content("hello")->Describe(), {}, {}, {}, [](const std::string&, OperationContext) -> Result<Unit> {
+            throw std::runtime_error("producer failure");
+        }); QVERIFY(!Failed.HasValue()); QCOMPARE(Failed.Failure().code_, "content-producer-exception");
+        std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
+        const auto Cancelled = Store->Produce(Content("hello")->Describe(), {}, {}, Context, [&](const std::string& Path, OperationContext Context) {
+            auto Written = Write(Path, Context); Stop.request_stop(); return Written;
+        }); QVERIFY(!Cancelled.HasValue()); QCOMPARE(Cancelled.Failure().category_, ErrorCategory::Cancelled);
+        QVERIFY(Manager->DrainCleanup().errors_.empty()); QVERIFY(LeaseDirectories(Directory.path()).isEmpty());
+        QVERIFY(Manager->Materialize({Content("hello")}, {}).get().HasValue());
+    }
     void sharedLifetimeAndReadOnlyContent()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());

@@ -148,7 +148,7 @@ namespace hc::storage
                 return Error{ErrorCategory::StaleRevision, "lease-directory-replaced"};
             return Dispose(Directory.value_, Item.directory_);
         }
-        class Store : public std::enable_shared_from_this<Store>
+        class Store : public INativeContentStore, public std::enable_shared_from_this<Store>
         {
         public:
             Store(QString Root, std::vector<Handle> Pins, MaterializationLimits Limits)
@@ -158,6 +158,9 @@ namespace hc::storage
                 { std::lock_guard Lock(mutex_); stopping_ = true; }
                 changed_.notify_all(); reclaimer_.join();
             }
+            Result<std::shared_ptr<IMaterializedFileLease>> Produce(EntrySnapshot Entry,
+                std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
+                OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer) override;
             Result<std::unique_ptr<Record>> Create(const EntrySnapshot& Entry)
             {
                 std::lock_guard Maintenance(maintenance_);
@@ -313,6 +316,55 @@ namespace hc::storage
             std::vector<std::shared_ptr<IMaterializedFileLease>> parents_;
             std::size_t depth_;
         };
+        Result<std::shared_ptr<IMaterializedFileLease>> Store::Produce(EntrySnapshot Entry,
+            std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
+            OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer)
+        {
+            if (const auto Failure = Context.Check({"materializer"})) return *Failure;
+            if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400) || Parents.size() > 8)
+                return Error{ErrorCategory::InvalidRequest, "invalid-content-producer"};
+            auto Depth = Entry.locator_.nesting_.size();
+            for (const auto& Parent : Parents)
+            {
+                if (!Parent || Parent->Depth() >= limits_.maxDepth_) return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
+                Depth = std::max(Depth, Parent->Depth() + 1);
+            }
+            if (Depth > limits_.maxDepth_ || Entry.size_ > limits_.maxFileBytes_)
+                return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
+            if (Entry.locator_.kind_ == LocatorKind::Archive && !CompressedBytes)
+                return Error{ErrorCategory::InvalidRequest, "compressed-size-required"};
+            if (CompressedBytes && Entry.size_ && (!*CompressedBytes || (Entry.size_ - 1) / *CompressedBytes >= limits_.maxExpansionRatio_))
+                return Error{ErrorCategory::BudgetExceeded, "materialization-expansion-budget"};
+            auto Created = Create(Entry); if (!Created.HasValue()) return Created.Failure();
+            auto Item = std::move(Created.Value());
+            auto Guard = qScopeGuard([&] { if (Item) Schedule(std::move(Item)); });
+            const auto Fail = [&](Error Failure) -> Result<std::shared_ptr<IMaterializedFileLease>> {
+                Schedule(std::move(Item));
+                const auto Report = Drain();
+                if (!Report.errors_.empty()) Failure.userAction_ = "cleanup-pending:" + Report.errors_.front().userAction_;
+                return Failure;
+            };
+            // WCX opens the destination by path. Keep its parent and ownership
+            // manifest pinned while releasing the initial writable file handle.
+            Item->file_.Close();
+            try
+            {
+                const auto Produced = Producer(Item->content_.toStdString(), Context);
+                if (!Produced.HasValue()) return Fail(Produced.Failure());
+            }
+            catch (...) { return Fail({ErrorCategory::Internal, "content-producer-exception"}); }
+            if (const auto Failure = Context.Check({"materializer"})) return Fail(*Failure);
+            Item->file_ = Handle(CreateFileW(Native(Item->content_).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            if (!Item->file_.Valid()) return Fail(WinError(Item->content_));
+            BY_HANDLE_FILE_INFORMATION Info{};
+            if (!GetFileInformationByHandle(Item->file_.value_, &Info)) return Fail(WinError(Item->content_));
+            const auto Bytes = (static_cast<std::uint64_t>(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
+            if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1 || Bytes != Entry.size_)
+                return Fail({ErrorCategory::InvalidRequest, "invalid-produced-content"});
+            return std::shared_ptr<IMaterializedFileLease>(new Lease(shared_from_this(), std::move(Item), std::move(Entry), std::move(Parents), Depth));
+        }
+
         class MaterializeTask final : public operations::IJobTask
         {
         public:
@@ -444,7 +496,7 @@ namespace hc::storage
             std::vector<std::string> jobs_;
         };
     }
-    Result<std::shared_ptr<IMaterializer>> MakeNativeMaterializer(const std::string& BaseDirectory, MaterializationLimits Limits)
+    static Result<std::shared_ptr<Store>> OpenStore(const std::string& BaseDirectory, MaterializationLimits Limits)
     {
         if (!Limits.maxFileBytes_ || !Limits.maxTotalBytes_ || !Limits.maxActiveFiles_ || Limits.maxActiveFiles_ > 64
             || !Limits.maxDepth_ || Limits.maxDepth_ > 8 || !Limits.maxExpansionRatio_)
@@ -455,6 +507,32 @@ namespace hc::storage
         const auto Root = QDir(Base).filePath("hc-materialized-v1");
         const auto Created = PrivateDirectory(Root, true); if (!Created.HasValue()) return Created.Failure();
         auto RootPins = Pin(Root); if (!RootPins.HasValue()) return RootPins.Failure();
-        return std::shared_ptr<IMaterializer>(new Materializer(std::make_shared<Store>(Root, std::move(RootPins.Value()), Limits)));
+        BY_HANDLE_FILE_INFORMATION Info{};
+        if (!GetFileInformationByHandle(RootPins.Value().back().value_, &Info)) return WinError(Root);
+        static std::mutex RegistryMutex;
+        static std::map<Identity, std::weak_ptr<Store>> Registry;
+        std::lock_guard Lock(RegistryMutex);
+        for (auto It = Registry.begin(); It != Registry.end();) { if (It->second.expired()) It = Registry.erase(It); else ++It; }
+        auto& Slot = Registry[FileIdentity(Info)];
+        if (auto Existing = Slot.lock())
+        {
+            if (Existing->limits_ != Limits) return Error{ErrorCategory::InvalidRequest, "materialization-root-limits-conflict"};
+            return Existing;
+        }
+        auto CreatedStore = std::make_shared<Store>(Root, std::move(RootPins.Value()), Limits);
+        Slot = CreatedStore;
+        return CreatedStore;
+    }
+    Result<std::shared_ptr<INativeContentStore>> MakeNativeContentStore(const std::string& BaseDirectory, MaterializationLimits Limits)
+    {
+        auto Store = OpenStore(BaseDirectory, Limits);
+        if (!Store.HasValue()) return Store.Failure();
+        return std::shared_ptr<INativeContentStore>(std::move(Store.Value()));
+    }
+    Result<std::shared_ptr<IMaterializer>> MakeNativeMaterializer(const std::string& BaseDirectory, MaterializationLimits Limits)
+    {
+        auto Store = OpenStore(BaseDirectory, Limits);
+        if (!Store.HasValue()) return Store.Failure();
+        return std::shared_ptr<IMaterializer>(new Materializer(std::move(Store.Value())));
     }
 }

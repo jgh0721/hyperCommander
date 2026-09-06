@@ -105,6 +105,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/nativeWritableStorage.hpp
         ../UniqueLibs/nativeMaterializer.cpp
         ../UniqueLibs/nativeMaterializer.hpp
+        ../UniqueLibs/wcxStorage.cpp
+        ../UniqueLibs/wcxStorage.hpp
         ../commonLibs/storage/materializedContent.hpp
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp

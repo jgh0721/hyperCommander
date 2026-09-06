@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
@@ -321,6 +322,7 @@ CTCPlugInWCX::~CTCPlugInWCX()
 
 TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 {
+    std::lock_guard Lock(WcxCallMutex());
     TyOsError Err;
 
     do
@@ -360,6 +362,7 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 
 TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode )
 {
+    std::lock_guard Lock(WcxCallMutex());
     TyOsValue<bool> Ret = { false, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
 
     do
@@ -383,6 +386,7 @@ TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode
 
 TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
 {
+    std::lock_guard Lock(WcxCallMutex());
     TyOsValue<CPackFSModel*> Ret;
 
     do
@@ -441,6 +445,7 @@ TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
 
 void CTCPlugInWCX::ExtractFile( const QString& Src, const QString& Dst )
 {
+    std::lock_guard Lock(WcxCallMutex());
     // NOTE: WCX 는 압축을 풀려면 전체에 대한 ReadHeader 를 다시 호출해야 한다. 
     const auto Ret = open( ArchiveFile, PK_OM_EXTRACT );
     if( Ret.Value.has_value() == false || Ret.Value.value() == nullptr )
@@ -494,6 +499,7 @@ void CTCPlugInWCX::ExtractFile( const QString& Src, const QString& Dst )
 
 void CTCPlugInWCX::CloseArchive()
 {
+    std::lock_guard Lock(WcxCallMutex());
     close( Arc );
 
     Arc = nullptr;
@@ -501,6 +507,7 @@ void CTCPlugInWCX::CloseArchive()
 
 void CTCPlugInWCX::CloseWCX()
 {
+    std::lock_guard Lock(WcxCallMutex());
     CloseArchive();
 
     if( wcx_.Funcs.hModule != nullptr )
@@ -512,6 +519,7 @@ void CTCPlugInWCX::CloseWCX()
 
 void CTCPlugInWCX::RetrieveWCXFuncs( const QString& PlugIn, TyPlugInWCXFuncs* TC )
 {
+    std::lock_guard Lock(WcxCallMutex());
     Q_ASSERT( TC != nullptr );
     if( TC == nullptr )
         return;
@@ -566,6 +574,7 @@ void CTCPlugInWCX::RetrieveWCXFuncs( const QString& PlugIn, TyPlugInWCXFuncs* TC
 
 TyOsValue<HANDLE> CTCPlugInWCX::open( const QString& FileFullPath, int Mode )
 {
+    std::lock_guard Lock(WcxCallMutex());
     TyOsValue<HANDLE> Ret = { nullptr, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
 
     if( wcx_.Funcs.hModule == nullptr )
@@ -626,6 +635,7 @@ TyOsValue<HANDLE> CTCPlugInWCX::open( const QString& FileFullPath, int Mode )
 
 int CTCPlugInWCX::close( HANDLE Archive )
 {
+    std::lock_guard Lock(WcxCallMutex());
     if( Archive == nullptr )
         return 0;
 
