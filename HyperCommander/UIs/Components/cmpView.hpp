@@ -10,6 +10,7 @@
 
 class CFsModelT;
 struct ColumnView;
+class QtitanColumnAdapter;
 
 class CViewT : public QWidget
 {
@@ -63,6 +64,8 @@ public:
 
     Qtitan::GridViewBase*           BaseView() const;
     CFsModelT*                      BaseModel() const;
+    QtitanColumnAdapter*            ColumnWidths() const { return columnAdapter_; }
+    void                           ConfigureColumns();
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
@@ -87,6 +90,7 @@ private:
 
     CFsModelT*                      model_ = nullptr;
     QAbstractProxyModel*            proxy_ = nullptr;
+    QtitanColumnAdapter*            columnAdapter_ = nullptr;
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;

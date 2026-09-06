@@ -55,7 +55,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         {"hc.navigate.path", 1, {{"path", {ParameterType::String}}}},
         {"hc.navigate.parent"}, {"hc.navigate.refresh"}, {"hc.navigate.cancel"}, {"hc.navigate.open"},
         {"hc.navigate.provider", 1, {{"enabled", {ParameterType::Boolean}}}},
-        {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}
+        {"hc.tab.new"}, {"hc.tab.close"}, {"hc.tab.next"}, {"hc.tab.previous"}, {"hc.view.columns"}
     };
     for (const auto& Descriptor : Commands)
     {
@@ -220,6 +220,11 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     else if (Id == "hc.tab.close") { Panel->CloseTab(); return CommandOutcome{}; }
     else if (Id == "hc.tab.next") { Panel->NextTab(); return CommandOutcome{}; }
     else if (Id == "hc.tab.previous") { Panel->PrevTab(); return CommandOutcome{}; }
+    else if (Id == "hc.view.columns")
+    {
+        if (const auto View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()))) View->ConfigureColumns();
+        return CommandOutcome{};
+    }
     else return Error{ErrorCategory::NotFound, "unknown-command"};
     return CommandOutcome{Model->IsLoading() ? CommandOutcome::Status::Accepted : CommandOutcome::Status::Completed,
         Model->IsLoading() ? Invocation.correlationId_ : std::string{}};
@@ -234,7 +239,7 @@ void CommandUiBridge::createActions()
     Toolbar->setObjectName("hc.navigationToolbar");
     const std::vector<std::pair<QString, QString>> Actions{
         {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
-        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")}
+        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")}, {"hc.view.columns", tr("컬럼 너비")}
     };
     for (const auto& [Id, Label] : Actions)
     {

@@ -1,0 +1,46 @@
+{
+    "schemaVersion":  1,
+    "componentVersion":  "8.2.0",
+    "solutionVersion":  "2024.2.0",
+    "integration":  [
+                        "HyperCommander/UIs/Components/cmpView.cpp",
+                        "UniqueLibs/qtitanColumnAdapter.cpp"
+                    ],
+    "vendorPatches":  [
+
+                      ],
+    "dependencies":  [
+                         {
+                             "path":  "src/src/grid/grid.pri",
+                             "sha256":  "3cd3fdc775a176473354cc1840cfc15c2330f108c64f7777798e06ad534044f3"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridBase.h",
+                             "sha256":  "490d1a4c1bf930ab58556bf195e612ca1c5b6667be7f1609282277c8583b7e52"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridBase.cpp",
+                             "sha256":  "bc010e8b9e727092417d954c6245f059f92aa568a85ad1ec45fbd10bb2a57ba8"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridTableView.h",
+                             "sha256":  "be64295ce22318aff00d5f6da7c12245bb42ee3545ec8f59f9d5cb213ded0789"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridColumnHeaderLayout.cpp",
+                             "sha256":  "4592c7d1759fb0c43c28e772ee1c5200269f0cc12091ff86a344bb3d3e958805"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridDragObjects.cpp",
+                             "sha256":  "ce7b756adccf3fea6737a7b2c05554410816fe575bfa29f73ae5cacb709f1bc3"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridBandedTableView.cpp",
+                             "sha256":  "1e34c1c099b17df85e87f4cc79b4529e12ae5462aa547818408b847ce1f21b7e"
+                         },
+                         {
+                             "path":  "src/src/grid/QtnGridModelController.cpp",
+                             "sha256":  "32fc58161835a126d7c02f92a86b15579629f0d5756c6c98fc84fa41157b14d7"
+                         }
+                     ]
+}

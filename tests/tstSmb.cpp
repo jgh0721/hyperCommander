@@ -5,6 +5,8 @@
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
+#include "qtitanColumnAdapter.hpp"
+#include <QtitanGrid.h>
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -306,6 +308,150 @@ private slots:
         QTRY_VERIFY(HasTerminal());
         QCOMPARE(Model->GetCurrentPathWithRoot(), unc_);
         QVERIFY(Model->property("hc.correlation").toString().isEmpty());
+    }
+
+    void columnWidthLayoutAndSettings()
+    {
+        using namespace hc::view;
+        auto* View = qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
+        auto* Adapter = View->ColumnWidths();
+        auto* Native = View->BaseView();
+        auto* Grid = Native->grid();
+        QTRY_VERIFY(Adapter->Policies().size() == 4);
+        const auto NameId = Adapter->ColumnId(0);
+        const auto SizeId = Adapter->ColumnId(1);
+        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Fixed, 25}));
+        QVERIFY(Adapter->SetPolicy(SizeId, {WidthUnit::Percent, WidthMode::Flexible, 30, 15, 45}));
+        QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(2), {WidthUnit::Pixels, WidthMode::Flexible, 120}));
+        QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(3), {WidthUnit::Pixels, WidthMode::Flexible, 80}));
+        const auto OriginalSize = main_->size();
+        const auto Reset = qScopeGuard([&] { View->setMinimumWidth(0); View->setMaximumWidth(QWIDGETSIZE_MAX); main_->resize(OriginalSize); });
+        QSignalSpy ModelReset(model(panels_.front()), &QAbstractItemModel::modelReset);
+        const auto FrameWidth = View->width() - Adapter->AvailableWidth();
+        for (int Width : {1000, 800, 1000, 800})
+        {
+            View->setFixedWidth(Width + FrameWidth);
+            QTRY_COMPARE(Adapter->AvailableWidth(), Width);
+            QTRY_COMPARE(Native->getColumnByModelColumn(0)->width(), Width / 4);
+            QCOMPARE(Native->getColumnByModelColumn(2)->width(), 120);
+            QVERIFY(!Native->getColumnByModelColumn(0)->isHorSizingEnabled());
+            QVERIFY(Native->getColumnByModelColumn(1)->isHorSizingEnabled());
+        }
+        QCOMPARE(Adapter->Policies()[NameId].value_, 25.0);
+        QCOMPARE(ModelReset.count(), 0);
+        Grid->viewport()->repaint();
+        QRect Header, Cell;
+        for (const auto& Hit : Grid->hitInfoAll())
+        {
+            if (Hit.columnIndex() != 0) continue;
+            if (Hit.info() == Qtitan::GridHitInfo::Column) Header = Hit.rect();
+            if (Hit.info() == Qtitan::GridHitInfo::Cell) Cell = Hit.rect();
+        }
+        QVERIFY(!Header.isEmpty()); QVERIFY(!Cell.isEmpty());
+        QCOMPARE(Header.left(), Cell.left()); QCOMPARE(Header.width(), Cell.width());
+        QCOMPARE(Header.width(), 200);
+        QRect SizeHeader;
+        for (const auto& Hit : Grid->hitInfoAll())
+            if (Hit.info() == Qtitan::GridHitInfo::Column && Hit.columnIndex() == 1) SizeHeader = Hit.rect();
+        QVERIFY(!SizeHeader.isEmpty());
+        auto* Surface = Grid->viewport();
+        const QPoint Edge(SizeHeader.right(), SizeHeader.center().y());
+        const QPoint Destination = Edge + QPoint(70, 0);
+        QCursor::setPos(Surface->mapToGlobal(Edge));
+        QTest::mouseMove(Surface, Edge);
+        QTest::mousePress(Surface, Qt::LeftButton, Qt::NoModifier, Edge);
+        QCursor::setPos(Surface->mapToGlobal(Destination));
+        QTest::mouseMove(Surface, Destination, 30);
+        QTest::mouseRelease(Surface, Qt::LeftButton, Qt::NoModifier, Destination);
+        QTRY_VERIFY(Adapter->Policies()[SizeId].value_ > 30);
+        const auto Dragged = Adapter->Policies()[SizeId].value_;
+        QVERIFY(Dragged <= 45);
+        View->setFixedWidth(1000 + FrameWidth);
+        QTRY_COMPARE(Native->getColumnByModelColumn(1)->width(), qRound(Dragged * 10));
+        View->setFixedWidth(800 + FrameWidth);
+        QTRY_COMPARE(Native->getColumnByModelColumn(1)->width(), qRound(Dragged * 8));
+        const auto Count = Adapter->ApplyCount();
+        for (int Index = 0; Index < 100; ++Index) Adapter->Request();
+        QTRY_VERIFY(Adapter->ApplyCount() > Count);
+        QVERIFY(Adapter->ApplyCount() - Count <= 3);
+        qInfo() << "Column apply count / last nanoseconds:" << Adapter->ApplyCount() << Adapter->LastApplyNanoseconds();
+        Adapter->Reload();
+        QCOMPARE(Adapter->Policies()[NameId].value_, 25.0);
+        auto Hidden = Adapter->Policies()[NameId]; Hidden.hidden_ = true;
+        QVERIFY(Adapter->SetPolicy(NameId, Hidden));
+        QTRY_VERIFY(!Native->getColumnByModelColumn(0)->isVisible());
+        Hidden.hidden_ = false;
+        QVERIFY(Adapter->SetPolicy(NameId, Hidden));
+        QTRY_VERIFY(Native->getColumnByModelColumn(0)->isVisible());
+        for (int Index = 0; Index < 4; ++Index) QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(Index), {WidthUnit::Percent, WidthMode::Fixed, 40}));
+        QTRY_VERIFY(Native->horizontalScrollBar()->maximum() > 0);
+        for (int Index = 0; Index < 4; ++Index) QCOMPARE(Native->getColumnByModelColumn(Index)->width(), 320);
+        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Fixed, 25}));
+        QVERIFY(Adapter->SetPolicy(SizeId, {WidthUnit::Percent, WidthMode::Flexible, 30, 15, 45}));
+        QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(2), {WidthUnit::Pixels, WidthMode::Flexible, 120}));
+        QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(3), {WidthUnit::Pixels, WidthMode::Flexible, 80}));
+        Native->horizontalScrollBar()->setValue(0);
+        QTRY_COMPARE(Native->getColumnByModelColumn(0)->width(), 200);
+        bool DialogSeen = false;
+        bool InvalidRejected = false;
+        QTimer::singleShot(100, this, [&] {
+            for (auto* Widget : QApplication::topLevelWidgets())
+                if (auto* Dialog = qobject_cast<QDialog*>(Widget); Dialog && Dialog->objectName() == "hc.columnWidthsDialog")
+                {
+                    DialogSeen = Dialog->grab().save(QCoreApplication::applicationDirPath() + "/m3-column-settings.png");
+                    auto* Table = Dialog->findChild<QTableWidget*>();
+                    qobject_cast<QDoubleSpinBox*>(Table->cellWidget(0, 4))->setValue(30);
+                    Dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+                    InvalidRejected = Dialog->isVisible() && !Dialog->findChild<QLabel*>("hc.columnWidths.error")->text().isEmpty();
+                    Dialog->reject();
+                }
+        });
+        View->ConfigureColumns();
+        QVERIFY(DialogSeen);
+        QVERIFY(InvalidRejected);
+        QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/m3-column-layout.png"));
+    }
+
+    void columnResizeVisibilityAndScrollbars()
+    {
+        using namespace hc::view;
+        auto* Panel = panels_.front();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Adapter = View->ColumnWidths();
+        auto* Native = View->BaseView();
+        const auto OriginalSize = main_->size();
+        QTemporaryDir Directory;
+        for (int Index = 0; Index < 100; ++Index) { QFile File(Directory.filePath(QString::number(Index) + ".txt")); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        QTRY_VERIFY(Native->verticalScrollBar()->isVisible());
+        Native->setFocusedRowIndex(1);
+        Native->selectRow(1);
+        const auto Focused = Native->focusedRowIndex();
+        QSignalSpy Reset(model(Panel), &QAbstractItemModel::modelReset);
+        const auto Check = [&] { return Native->getColumnByModelColumn(0)->width() == qRound(Adapter->AvailableWidth() * 0.25); };
+        main_->resize(1400, 800); QTest::qWait(30); QTRY_VERIFY(Check());
+        auto* Splitter = main_->findChild<QSplitter*>("splitter");
+        QVERIFY(Splitter);
+        Splitter->setSizes({350, 700}); QTest::qWait(30); QTRY_VERIFY(Check());
+        main_->showMaximized(); QTest::qWait(30); QTRY_VERIFY(Check());
+        main_->showNormal(); QTest::qWait(30); QTRY_VERIFY(Check());
+        View->hide(); QCOMPARE(Adapter->AvailableWidth(), 0);
+        View->show(); QTest::qWait(30); QTRY_VERIFY(Check());
+        QEvent DpiEvent(QEvent::DevicePixelRatioChange); QCoreApplication::sendEvent(View, &DpiEvent); QTRY_VERIFY(Check());
+        QCOMPARE(Native->focusedRowIndex(), Focused);
+        QVERIFY(Native->modelController()->isRowSelected(Native->getRow(1)));
+        QCOMPARE(Reset.count(), 0);
+        QCOMPARE(Adapter->Policies()[Adapter->ColumnId(0)].value_, 25.0);
+        QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/m3-scrollbar-layout.png"));
+        Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!model(Panel)->IsLoading());
+        Panel->AddTab();
+        auto* NewView = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY(NewView->ColumnWidths()->Policies().contains(NewView->ColumnWidths()->ColumnId(0)));
+        QCOMPARE(NewView->ColumnWidths()->Policies()[NewView->ColumnWidths()->ColumnId(0)].value_, 25.0);
+        QTRY_COMPARE(NewView->BaseView()->getColumnByModelColumn(0)->width(), qRound(NewView->ColumnWidths()->AvailableWidth() * 0.25));
+        Panel->CloseTab(); QTest::qWait(30); QTRY_VERIFY(Check());
+        main_->resize(OriginalSize);
     }
 
 private:

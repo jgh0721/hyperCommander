@@ -4,6 +4,7 @@
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
 #include "commandMgr.hpp"
+#include "qtitanColumnAdapter.hpp"
 #include "Modules/mdlFileModel.hpp"
 
 #include <QtitanGrid.h>
@@ -144,6 +145,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
 
     view_->bestFit( FitToHeaderPercent );
+    columnAdapter_ = new QtitanColumnAdapter(this, grid_, view_);
 }
 
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
@@ -214,6 +216,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
 
     view_->bestFit( FitToHeaderPercent );
     view_->endUpdate();
+    columnAdapter_->Bind(*Columns);
 }
 
 void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
@@ -253,11 +256,12 @@ bool CGridView::IsEditing() const
 
 void CGridView::AdjustSizeToContents() const
 {
-    if( view_ != nullptr )
-        view_->bestFit( FitToHeaderPercent );
+    if (columnAdapter_) columnAdapter_->Request();
 
     CViewT::AdjustSizeToContents();
 }
+
+void CGridView::ConfigureColumns() { if (columnAdapter_) columnAdapter_->ShowSettings(); }
 
 void CGridView::EnsureKeyboardFocusOnView() const
 {
@@ -561,8 +565,7 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 
 void CGridView::resizeEvent( QResizeEvent* event )
 {
-    if( view_ != nullptr )
-        view_->bestFit( FitToHeaderPercent );
+    if (columnAdapter_) columnAdapter_->Request();
 
     CViewT::resizeEvent( event );
 }

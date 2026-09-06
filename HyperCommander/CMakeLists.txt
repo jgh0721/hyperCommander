@@ -99,6 +99,10 @@ set(UNIQUELIBS_SRC
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
         ../UniqueLibs/commandUiBridge.hpp
+        ../commonLibs/view/columnWidthPolicy.hpp
+        ../UniqueLibs/columnWidthSettings.hpp
+        ../UniqueLibs/qtitanColumnAdapter.hpp
+        ../UniqueLibs/qtitanColumnAdapter.cpp
         ../commonLibs/storage/storage.hpp
         ../UniqueLibs/storageProviders.cpp
         ../UniqueLibs/storageProviders.hpp
