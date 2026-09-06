@@ -94,6 +94,8 @@ namespace hc::storage
         std::size_t maxPageItems_ = 256;
         std::size_t maxReadBytes_ = 1024 * 1024;
         std::size_t maxEnumerationEntries_ = 100000;
+        bool denyConcurrentMutation_ = false;
+        bool freshEnumerationMetadata_ = false;
         std::optional<Error> Check(const ProviderId& Provider) const
         {
             if (stopToken_.stop_requested())
@@ -164,6 +166,10 @@ namespace hc::storage
         virtual Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) = 0;
         virtual Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) = 0;
         virtual Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Resource, OperationContext Context) = 0;
+        // Resolve a locator at a new operation boundary. Callers still compare
+        // the captured revision before mutating or reading selected content.
+        virtual Task<EntrySnapshot> Resolve(Locator, OperationContext)
+        { return Ready<EntrySnapshot>(Error{ErrorCategory::Unsupported, "resolve-unavailable", Id()}); }
     };
     class IContentSource
     {

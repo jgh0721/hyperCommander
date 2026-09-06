@@ -539,6 +539,15 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="HyperCommander.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="..\UniqueLibs\storageProviders.cpp" />
+    <ClCompile Include="..\UniqueLibs\nativeWritableStorage.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\operations\jobScheduler.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\commonLibs\operations\fileOperation.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandUiBridge.cpp" />
     <ClCompile Include="..\UniqueLibs\qtitanColumnAdapter.cpp" />
     <None Include="cpp.hint" />
@@ -551,6 +560,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="..\UniqueLibs\storageProviders.hpp" />
     <ClInclude Include="..\commonLibs\storage\storage.hpp" />
+    <ClInclude Include="..\commonLibs\storage\writableStorage.hpp" />
+    <ClInclude Include="..\commonLibs\operations\jobScheduler.hpp" />
+    <ClInclude Include="..\commonLibs\operations\fileOperation.hpp" />
+    <ClInclude Include="..\UniqueLibs\nativeWritableStorage.hpp" />
     <ClInclude Include="..\UniqueLibs\commandUiBridge.hpp" />
     <ClInclude Include="..\commonLibs\commands\commandBus.hpp" />
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />

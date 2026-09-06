@@ -43,6 +43,30 @@ namespace hc::storage
             return {std::to_string(Ticks(Data.ftCreationTime)) + ":" + std::to_string(Ticks(Data.ftLastWriteTime))
                 + ":" + std::to_string(Data.nFileSizeHigh) + ":" + std::to_string(Data.nFileSizeLow)};
         }
+        bool ReadAttributes(const std::wstring& Path, WIN32_FILE_ATTRIBUTE_DATA& Data, ResourceRevision* ActualRevision = nullptr)
+        {
+            // Query the opened object. SMB/NTFS pathname metadata caches can lag
+            // behind a child's deletion and falsely invalidate a directory job.
+            const auto Handle = CreateFileW(Path.c_str(), FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (Handle == INVALID_HANDLE_VALUE) return false;
+            BY_HANDLE_FILE_INFORMATION Info{};
+            const bool Success = GetFileInformationByHandle(Handle, &Info);
+            const auto Code = GetLastError();
+            CloseHandle(Handle);
+            if (!Success) { SetLastError(Code); return false; }
+            Data = {Info.dwFileAttributes, Info.ftCreationTime, Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
+            if (ActualRevision)
+            {
+                // A directory's mtime describes children, not replacement of the
+                // selected directory. SMB may publish that mtime after close.
+                *ActualRevision = (Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                    ? ResourceRevision{"directory:" + std::to_string(Ticks(Info.ftCreationTime)) + ":" + std::to_string(Info.dwVolumeSerialNumber)
+                        + ":" + std::to_string(Info.nFileIndexHigh) + ":" + std::to_string(Info.nFileIndexLow)} : Revision(Data);
+            }
+            return true;
+        }
         EntrySnapshot Entry(const ProviderId& Provider, const std::string& Prefix, const Locator& At,
             std::string Name, const WIN32_FILE_ATTRIBUTE_DATA& Data)
         {
@@ -129,6 +153,20 @@ namespace hc::storage
         public:
             explicit NativeProvider(LocatorKind Kind) : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, session_(Session()) {}
             ProviderId Id() const override { return id_; }
+            Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override
+            {
+                return Run<EntrySnapshot>([At = std::move(At), Context, Id = id_, Prefix = session_, Kind = kind_]() -> Result<EntrySnapshot> {
+                    if (const auto Failure = Context.Check(Id)) return *Failure;
+                    if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
+                    WIN32_FILE_ATTRIBUTE_DATA Data{};
+                    ResourceRevision ActualRevision;
+                    if (!ReadAttributes(Wide(At.root_), Data, &ActualRevision)) return NativeError(GetLastError(), Id);
+                    const auto Separator = At.root_.find_last_of("\\/");
+                    auto Value = Entry(Id, Prefix, At, At.root_.substr(Separator == std::string::npos ? 0 : Separator + 1), Data);
+                    Value.id_.revision_ = std::move(ActualRevision);
+                    return Value;
+                });
+            }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override
             {
                 if (const auto Failure = Context.Check(id_)) return Ready<SupportDecision>(*Failure);
@@ -196,7 +234,15 @@ namespace hc::storage
                                 if (Entries.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
                                 const auto Name = Utf8(Found.cFileName);
                                 WIN32_FILE_ATTRIBUTE_DATA Data{Found.dwFileAttributes, Found.ftCreationTime, Found.ftLastAccessTime, Found.ftLastWriteTime, Found.nFileSizeHigh, Found.nFileSizeLow};
-                                auto Item = Entry(Id, Prefix, {Kind, At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name}, Name, Data);
+                                const auto ChildPath = At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name;
+                                auto ActualRevision = Revision(Data);
+                                // NTFS directory enumeration can retain a cached
+                                // mtime after children change. Use the same metadata
+                                // source as Stat so a fresh snapshot is revalidatable.
+                                if (((Data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || Context.freshEnumerationMetadata_)
+                                    && !ReadAttributes(Wide(ChildPath), Data, &ActualRevision)) return NativeError(GetLastError(), Id);
+                                auto Item = Entry(Id, Prefix, {Kind, ChildPath}, Name, Data);
+                                Item.id_.revision_ = std::move(ActualRevision);
                                 Item.hints_["reparseTag"] = std::to_string(Found.dwReserved0);
                                 Entries.push_back(std::move(Item));
                             } while (FindNextFileW(Handle, &Found));
@@ -216,8 +262,10 @@ namespace hc::storage
                     const auto At = ParseLocator(std::string_view(Resource.key_).substr(Prefix.size()));
                     if (!At.HasValue()) return At.Failure();
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
-                    if (!GetFileAttributesExW(Wide(At.Value().root_).c_str(), GetFileExInfoStandard, &Data)) return NativeError(GetLastError(), Id);
+                    ResourceRevision ActualRevision;
+                    if (!ReadAttributes(Wide(At.Value().root_), Data, &ActualRevision)) return NativeError(GetLastError(), Id);
                     auto Value = Entry(Id, Prefix, At.Value(), QFileInfo(QString::fromUtf8(At.Value().root_)).fileName().toStdString(), Data);
+                    Value.id_.revision_ = std::move(ActualRevision);
                     if (Resource.revision_ && Resource.revision_ != Value.id_.revision_) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
                     return Value;
                 });
@@ -231,7 +279,8 @@ namespace hc::storage
                     if (!At.HasValue()) return At.Failure();
                     auto State = std::make_shared<FileState>();
                     State->provider_ = Id;
-                    State->handle_ = CreateFileW(Wide(At.Value().root_).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    const DWORD Share = Context.denyConcurrentMutation_ ? FILE_SHARE_READ : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+                    State->handle_ = CreateFileW(Wide(At.Value().root_).c_str(), GENERIC_READ, Share,
                         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
                     if (State->handle_ == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
                     BY_HANDLE_FILE_INFORMATION Info{};

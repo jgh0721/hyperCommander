@@ -96,6 +96,13 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../commonLibs/operations/jobScheduler.cpp
+        ../commonLibs/operations/jobScheduler.hpp
+        ../commonLibs/operations/fileOperation.cpp
+        ../commonLibs/operations/fileOperation.hpp
+        ../commonLibs/storage/writableStorage.hpp
+        ../UniqueLibs/nativeWritableStorage.cpp
+        ../UniqueLibs/nativeWritableStorage.hpp
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
         ../UniqueLibs/commandUiBridge.hpp
