@@ -1,5 +1,11 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
+qt_add_executable(hc_job_tests tstJobs.cpp ../commonLibs/operations/jobScheduler.cpp ../commonLibs/operations/jobScheduler.hpp)
+target_include_directories(hc_job_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_options(hc_job_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_job_tests PRIVATE Qt6::Test)
+add_test(NAME hc.jobs COMMAND hc_job_tests)
+set_tests_properties(hc.jobs PROPERTIES TIMEOUT 30)
 add_test(NAME hc.qtitan COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
 set_tests_properties(hc.qtitan PROPERTIES TIMEOUT 30)
 
@@ -73,7 +79,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
@@ -82,11 +88,11 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests HyperCommander
+    DEPENDS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )
 
-foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests)
+foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests)
     hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)
 endforeach()
