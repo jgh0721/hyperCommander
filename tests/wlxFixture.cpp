@@ -34,7 +34,20 @@ namespace
 }
 extern "C" __declspec(dllexport) HWND __stdcall ListLoadW(HWND Parent, wchar_t* File, int)
 {
-    const std::wstring Path(File);
+    std::wstring Path(File);
+    // Materialization preserves the extension, not the original basename.
+    // Fault directives remain private to this test DLL.
+    auto Content = CreateFileW(File, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (Content != INVALID_HANDLE_VALUE)
+    {
+        char Bytes[96]{}; DWORD Count = 0;
+        if (ReadFile(Content, Bytes, sizeof(Bytes) - 1, &Count, nullptr))
+        {
+            const std::string Text(Bytes, Count);
+            if (Text.starts_with("HC-WLX-FAULT:")) Path += std::wstring(Text.begin(), Text.end());
+        }
+        CloseHandle(Content);
+    }
     if (Path.find(L"reject") != std::wstring::npos) return nullptr;
     if (Path.find(L"hang-load") != std::wstring::npos) Sleep(INFINITE);
     WNDCLASSW Class{}; Class.lpfnWndProc = WindowProc; Class.hInstance = instance_; Class.lpszClassName = L"HyperCommander.WlxFixture";

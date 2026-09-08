@@ -37,3 +37,6 @@ target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process hc_wcx_backen
 target_compile_definitions(hc-plugin-host-x64 PRIVATE UNICODE _UNICODE)
 target_compile_options(hc-plugin-host-x64 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-host-x64)
+qt_add_library(hc_wlx_sessions STATIC hostedWlxSession.cpp hostedWlxSession.hpp)
+target_link_libraries(hc_wlx_sessions PUBLIC hc_plugin_process hc_viewer_core)
+target_compile_options(hc_wlx_sessions PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

@@ -1,5 +1,8 @@
 ﻿#include "pluginProcess.hpp"
 #include "pipeChannel.hpp"
+#include "hostedWlxSession.hpp"
+#include "UniqueLibs/nativeMaterializer.hpp"
+#include "memoryStorage.hpp"
 #include <QtTest>
 #include <QApplication>
 #include <QWidget>
@@ -10,6 +13,9 @@
 #include <QTimer>
 #include <future>
 #include <iostream>
+#include <atomic>
+#include <cstring>
+#include <thread>
 
 using namespace hc::plugins;
 using namespace hc::storage;
@@ -25,6 +31,30 @@ namespace
     { return reinterpret_cast<HWND>(static_cast<quintptr>(Reply[Key].toString().toULongLong(nullptr, 16))); }
     QString Title(HWND Window)
     { wchar_t Buffer[256]{}; GetWindowTextW(Window, Buffer, 256); return QString::fromWCharArray(Buffer); }
+    std::shared_ptr<IContentSource> MemoryContent(const QByteArray& Bytes, const std::string& Name = "문서.txt")
+    {
+        auto Provider = std::make_shared<test::MemoryProvider>();
+        std::vector<std::byte> Data(Bytes.size()); if (!Data.empty()) std::memcpy(Data.data(), Bytes.constData(), Bytes.size());
+        const auto Id = Provider->Add(Provider->Root(), Name, std::move(Data));
+        return std::make_shared<ProviderContentSource>(Provider, Provider->Stat(Id, {}).get().Value());
+    }
+    QStringList Leases(const QString& Base)
+    { return QDir(Base + "/hc-materialized-v1").entryList({"hc-lease-v1-*"}, QDir::Dirs | QDir::NoDotAndDotDot); }
+    class WaitingContent final : public IContentSource
+    {
+    public:
+        std::atomic<bool> reading_ = false;
+        EntrySnapshot Describe() const override { return source_->Describe(); }
+        Task<Unit> Verify(OperationContext Context) override { return source_->Verify(Context); }
+        Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext Context) override
+        {
+            reading_ = true;
+            while (!Context.Check({"wlx-test"})) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            return Ready<std::shared_ptr<IReadStream>>(*Context.Check({"wlx-test"}));
+        }
+    private:
+        std::shared_ptr<IContentSource> source_ = MemoryContent("waiting");
+    };
 }
 class HostedWlxTests : public QObject
 {
@@ -47,7 +77,101 @@ private:
         return {{"parent", QString::number(Parent.winId(), 16)}, {"file", Path},
             {"width", qRound(Parent.width() * Parent.devicePixelRatioF())}, {"height", qRound(Parent.height() * Parent.devicePixelRatioF())}, {"flags", 0}};
     }
+    WlxViewerOptions options(const QTemporaryDir& Directory, PluginApproval Approval)
+    {
+        WlxViewerOptions Options; Options.executable_ = host_; Options.manifestPath_ = Directory.filePath("plugin.json");
+        Options.binaryPath_ = Directory.filePath("test.wlx64"); Options.approval_ = std::move(Approval);
+        Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
+    }
 private slots:
+    void sessionMaterializationAndCommands()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        QWidget Parent; Parent.resize(640, 360); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
+        const auto GuiThread = std::this_thread::get_id(); std::atomic<bool> FactoryOnWorker = false;
+        WlxViewerService Service([&] { FactoryOnWorker = std::this_thread::get_id() != GuiThread; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Source = MemoryContent("materialized Unicode content"); const auto Expected = Source->Describe();
+        QElapsedTimer Start; Start.start();
+        auto Opened = Service.Open(options(Directory, Approval), Source, QString::number(Parent.winId(), 16), 640, 360);
+        QVERIFY(Start.elapsed() < 100); QVERIFY(Opened.HasValue()); auto Session = Opened.Value();
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Snapshot().status_ != hc::viewer::ViewerStatus::Loading, 5000);
+        QVERIFY2(Session->Snapshot().status_ == hc::viewer::ViewerStatus::Ready,
+            Session->Snapshot().error_ ? Session->Snapshot().error_->code_.c_str() : "not ready");
+        QVERIFY(FactoryOnWorker); QCOMPARE(Session->Snapshot().source_.id_, Expected.id_); QCOMPARE(Session->Snapshot().bytesRead_, Expected.size_);
+        const auto LeaseNames = Leases(Directory.path()); QCOMPARE(LeaseNames.size(), 1);
+        const auto ContentPath = Directory.path() + "/hc-materialized-v1/" + LeaseNames.front() + "/content.txt";
+        QFile Content(ContentPath); QVERIFY(Content.open(QIODevice::ReadOnly)); QCOMPARE(Content.readAll(), QByteArray("materialized Unicode content")); Content.close();
+        const auto Details = Session->Details(); const auto Child = reinterpret_cast<HWND>(static_cast<quintptr>(Details.child_.toULongLong(nullptr, 16)));
+        for (unsigned Size = 100; Size <= 600; ++Size) QVERIFY(Session->Resize(Size, Size / 2).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(([&] { RECT Rect{}; return GetClientRect(Child, &Rect) && Rect.right == 600 && Rect.bottom == 300; })(), 3000);
+        QVERIFY(Session->Focus().HasValue()); auto Command = Session->SendCommand(3, 0); QVERIFY(Command.HasValue());
+        QTRY_COMPARE_WITH_TIMEOUT(Session->Details().commandSequence_, Command.Value(), 3000); QVERIFY(!Session->Details().commandError_);
+        QElapsedTimer Closing; Closing.start(); Session->Close(); QVERIFY(Closing.elapsed() < 100);
+        QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000); QVERIFY(Session->Details().idle_); QVERIFY(!Session->Details().host_.running_);
+        QVERIFY(!IsWindow(Child)); QVERIFY(Leases(Directory.path()).isEmpty()); QVERIFY(!QFileInfo::exists(ContentPath));
+        QCOMPARE(Session->Snapshot().status_, hc::viewer::ViewerStatus::Closed); QVERIFY(!Session->Resize(1, 1).HasValue()); Service.Collect();
+    }
+    void sessionReadCancellationAndBudget()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval)); QWidget Parent;
+        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, 1);
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Source = std::make_shared<WaitingContent>();
+        auto Opened = Service.Open(options(Directory, Approval), Source, QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Opened.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Source->reading_.load(), 3000);
+        auto Second = Service.Open(options(Directory, Approval), MemoryContent("second"), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(!Second.HasValue()); QCOMPARE(Second.Failure().category_, ErrorCategory::BudgetExceeded);
+        Opened.Value()->Cancel(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000);
+        QCOMPARE(Opened.Value()->Snapshot().status_, hc::viewer::ViewerStatus::Cancelled);
+        QVERIFY(Leases(Directory.path()).isEmpty()); QCOMPARE(Opened.Value()->Details().host_.processId_, 0u);
+        auto Third = Service.Open(options(Directory, Approval), MemoryContent("third"), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Third.HasValue()); QTRY_COMPARE_WITH_TIMEOUT(Third.Value()->Snapshot().status_, hc::viewer::ViewerStatus::Ready, 5000);
+        Third.Value().reset(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000); QVERIFY(Leases(Directory.path()).isEmpty());
+    }
+    void sessionAdmissionBeforeExtraction()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval)); QWidget Parent; std::atomic<unsigned> Factories = 0;
+        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Options = options(Directory, Approval); Options.binaryPath_ = Directory.filePath("wrong.wlx64");
+        auto Opened = Service.Open(Options, MemoryContent("secret"), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Opened.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000);
+        QCOMPARE(Opened.Value()->Snapshot().status_, hc::viewer::ViewerStatus::Failed);
+        QCOMPARE(Opened.Value()->Snapshot().error_->code_, std::string("plugin-configured-binary-mismatch")); QCOMPARE(Factories.load(), 0u);
+        Options = options(Directory, Approval); Options.approval_.granted_.erase(Permission::UserInterface);
+        auto Denied = Service.Open(Options, MemoryContent("secret"), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Denied.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000);
+        QCOMPARE(Denied.Value()->Snapshot().error_->code_, std::string("plugin-permission-denied")); QCOMPARE(Factories.load(), 0u);
+    }
+    void sessionFaultCleanup_data()
+    {
+        QTest::addColumn<QString>("Name");
+        for (const auto Name : {"hang-message", "crash-command", "hang-close", "hang-load"}) QTest::newRow(Name) << QString(Name);
+    }
+    void sessionFaultCleanup()
+    {
+        QFETCH(QString, Name); QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        QWidget Parent; Parent.resize(320, 200); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
+        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        QElapsedTimer Clock; Clock.start(); qint64 Last = 0, Gap = 0; unsigned Ticks = 0;
+        QTimer Beat; Beat.setInterval(10); connect(&Beat, &QTimer::timeout, this, [&] { const auto Now = Clock.elapsed(); Gap = std::max(Gap, Now - Last); Last = Now; ++Ticks; }); Beat.start();
+        auto Opened = Service.Open(options(Directory, Approval), MemoryContent("HC-WLX-FAULT:" + Name.toUtf8()), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Opened.HasValue()); auto Session = Opened.Value();
+        if (Name == "hang-load")
+        { QTRY_VERIFY_WITH_TIMEOUT(Session->Details().host_.processId_ != 0, 3000); Session->Cancel(); }
+        else
+        {
+            QTRY_COMPARE_WITH_TIMEOUT(Session->Snapshot().status_, hc::viewer::ViewerStatus::Ready, 3000);
+            if (Name == "crash-command") QVERIFY(Session->SendCommand(3, 0).HasValue());
+            if (Name == "hang-close") Session->Close();
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 5000); QVERIFY(Leases(Directory.path()).isEmpty()); QVERIFY(!Session->Details().host_.running_);
+        const auto Expected = Name == "hang-load" ? hc::viewer::ViewerStatus::Cancelled : Name == "hang-close" ? hc::viewer::ViewerStatus::Closed : hc::viewer::ViewerStatus::Failed;
+        QCOMPARE(Session->Snapshot().status_, Expected); QVERIFY(Ticks > 2);
+        qInfo() << "Session GUI maximum gap ms" << Gap; QVERIFY(Gap < 200);
+    }
     void admission()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
