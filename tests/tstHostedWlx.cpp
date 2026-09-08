@@ -3,6 +3,7 @@
 #include "hostedWlxSession.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "memoryStorage.hpp"
+#include "UniqueLibs/qtWlxSurface.hpp"
 #include <QtTest>
 #include <QApplication>
 #include <QWidget>
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <cstring>
 #include <thread>
+#include <QVBoxLayout>
 
 using namespace hc::plugins;
 using namespace hc::storage;
@@ -84,6 +86,50 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void qtSurfaceReplacement()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
+        QtWlxController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        auto* Surface = new QtWlxSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
+        const auto Drain = qScopeGuard([&] { Surface->Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
+        QSignalSpy Ready(Surface, &QtWlxSurface::Ready); QSignalSpy Failed(Surface, &QtWlxSurface::Failed);
+        Surface->Open(options(Directory, Approval), MemoryContent("first", "first.txt"));
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 1); QCOMPARE(Failed.size(), 0);
+        QPointer<QWidget> Native = Surface->findChild<QWidget*>("hc.wlx.native-parent"); QVERIFY(Native); const auto Before = Native->winId();
+        auto Slow = std::make_shared<WaitingContent>(); Surface->Open(options(Directory, Approval), Slow);
+        if (Native) QCOMPARE(Native->winId(), Before);
+        QTRY_VERIFY_WITH_TIMEOUT(Slow->reading_.load(), 3000);
+        Surface->Open(options(Directory, Approval), MemoryContent("latest", "latest.txt"));
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 2); QCOMPARE(Failed.size(), 0);
+        QCOMPARE(Surface->Snapshot().source_.name_, std::string("latest.txt"));
+        Main.resize(380, 260); QTest::qWait(100);
+        const auto Screenshots = qEnvironmentVariable("HC_VIEWER_SCREENSHOTS");
+        if (!Screenshots.isEmpty()) { QDir().mkpath(Screenshots); QVERIFY(Main.screen()->grabWindow(Main.winId()).save(Screenshots + "/wlx-surface.png")); }
+        Surface->Close(); QTRY_VERIFY_WITH_TIMEOUT(Controller.IsIdle(), 4000); QVERIFY(Leases(Directory.path()).isEmpty());
+    }
+    void qtSurfaceDestruction_data()
+    {
+        QTest::addColumn<QString>("Name");
+        for (const auto Name : {"ordinary", "hang-message", "hang-close"}) QTest::newRow(Name) << QString(Name);
+    }
+    void qtSurfaceDestruction()
+    {
+        QFETCH(QString, Name); QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
+        QtWlxController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        auto* Surface = new QtWlxSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
+        const auto Drain = qScopeGuard([&] { Controller.CloseAll(); while (!Controller.IsIdle()) QTest::qWait(10); });
+        Surface->Open(options(Directory, Approval), MemoryContent("HC-WLX-FAULT:" + Name.toUtf8()));
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QPointer<QWidget> Native = Surface->findChild<QWidget*>("hc.wlx.native-parent"); QVERIFY(Native); const auto Before = Native->winId();
+        if (Name == "hang-message") QTest::qWait(120);
+        QElapsedTimer Deletion; Deletion.start(); delete Surface;
+        qInfo() << "Qt surface deletion" << Name << "ms" << Deletion.elapsed(); QVERIFY(Deletion.elapsed() < 200);
+        if (Native) { QCOMPARE(Native->winId(), Before); QVERIFY(!Native->isVisible()); }
+        QTRY_VERIFY_WITH_TIMEOUT(Controller.IsIdle(), 4000); QTRY_VERIFY_WITH_TIMEOUT(Native.isNull(), 1000);
+        QVERIFY(Leases(Directory.path()).isEmpty());
+    }
     void sessionMaterializationAndCommands()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
