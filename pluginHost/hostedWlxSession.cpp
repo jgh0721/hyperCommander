@@ -130,7 +130,7 @@ namespace hc::plugins
             auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
             if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
             if (!Lease) return Invalid("viewer-content-lease-required");
-            auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context);
+            auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_);
             if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
             const auto StartedState = Host->Snapshot();
             { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }

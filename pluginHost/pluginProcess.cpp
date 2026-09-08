@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QStandardPaths>
 #include <QUuid>
 #include <thread>
 #include <condition_variable>
@@ -110,7 +111,7 @@ namespace hc::plugins
     PluginProcess::PluginProcess(std::unique_ptr<State> Value) : state_(std::move(Value)) {}
     PluginProcess::~PluginProcess() { Close(); }
     Result<std::unique_ptr<PluginProcess>> PluginProcess::Start(const QString& Executable, const QString& ManifestPath,
-        const PluginApproval& Approval, HostLimits Limits, OperationContext Context)
+        const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath)
     {
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
             || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000 || Limits.memoryBytes_ < 64ULL * 1024 * 1024 || Limits.memoryBytes_ > 4ULL * 1024 * 1024 * 1024)
@@ -160,8 +161,16 @@ namespace hc::plugins
             else if (Error != ERROR_PIPE_CONNECTED) return HostError("host-pipe-connect", Error);
         }
         ULONG Peer = 0; if (!GetNamedPipeClientProcessId(S.pipe_.Get(), &Peer) || Peer != S.pid_) return HostError("host-pipe-peer");
-        const auto Hello = QJsonDocument(QJsonObject{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
-            {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}}).toJson(QJsonDocument::Compact);
+        QJsonObject Declaration{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
+            {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}};
+        if (S.viewer_)
+        {
+            const auto Ini = DefaultIniPath.isEmpty()
+                ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath("lsplugin.ini") : DefaultIniPath;
+            if (!QDir::isAbsolutePath(Ini) || Ini.contains(QChar::Null)) return HostError("host-wlx-config-path");
+            Declaration.insert("defaultIni", QDir::cleanPath(Ini));
+        }
+        const auto Hello = QJsonDocument(Declaration).toJson(QJsonDocument::Compact);
         auto Ready = S.call(WireKind::Hello, Hello, Context); if (!Ready.HasValue()) return Ready.Failure();
         if (!Ready.Value()["inJob"].toBool() || !Ready.Value()["adminDenied"].toBool() || !Ready.Value()["privilegesRemoved"].toBool()) return HostError("host-restriction-verification");
         S.ready_ = true;

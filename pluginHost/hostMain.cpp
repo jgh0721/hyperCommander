@@ -43,7 +43,9 @@ namespace
         ~LoadedPlugin() { viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_); }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
         {
-            if (Hello.size() != 2 || !Hello["manifestPath"].isString() || !Hello["manifest"].isObject()) return HostError("host-hello-fields");
+            const bool HasIni = Hello.contains("defaultIni");
+            if (Hello.size() != (HasIni ? 3 : 2) || !Hello["manifestPath"].isString() || !Hello["manifest"].isObject()
+                || (HasIni && !Hello["defaultIni"].isString())) return HostError("host-hello-fields");
             const auto Path = Hello["manifestPath"].toString();
             auto Expected = ParseManifest(QJsonDocument(Hello["manifest"].toObject()).toJson()); if (!Expected.HasValue()) return Expected.Failure();
             if ((Expected.Value().format_ != PluginFormat::Wcx && Expected.Value().format_ != PluginFormat::Wlx) || Expected.Value().architecture_ != Architecture::X64
@@ -69,7 +71,12 @@ namespace
             if (Inspected.Value().manifest_ != Expected.Value() || Inspected.Value().binaryPath_ != Binary) return HostError("host-manifest-changed");
             module_ = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
             if (!module_) return HostError("host-plugin-load", GetLastError());
-            if (Expected.Value().format_ == PluginFormat::Wlx) viewer_ = std::make_unique<WlxHostService>(module_, ParentProcess);
+            if (Expected.Value().format_ == PluginFormat::Wlx)
+            {
+                viewer_ = std::make_unique<WlxHostService>(module_, ParentProcess);
+                auto Initialized = viewer_->Initialize(Hello["defaultIni"].toString());
+                if (!Initialized.HasValue()) return Initialized.Failure();
+            }
             else archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite));
             return Unit{};
         }

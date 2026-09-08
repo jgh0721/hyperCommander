@@ -122,6 +122,7 @@ std::vector<QtViewerSurface::WlxChoice> QWcxHostSettings::WlxChoices(QSettings& 
         if (Options.binaryPath_.endsWith(".wlx", Qt::CaseInsensitive)) Options.binaryPath_ += "64";
         if (QDir::isRelativePath(Options.binaryPath_)) Options.binaryPath_ = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(Options.binaryPath_);
         Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
+        Options.defaultIniPath_ = QDir(QFileInfo(Settings.fileName()).absolutePath()).filePath("lsplugin.ini");
         Options.manifestPath_ = Settings.value(Prefix + "HostManifest").toString();
         const auto Reviewed = ParseManifest(Settings.value(Prefix + "HostReviewed").toByteArray());
         if (Reviewed.HasValue() && Reviewed.Value().format_ == PluginFormat::Wlx)

@@ -11,7 +11,8 @@ namespace hc::plugins
     public:
         WlxHostService(HMODULE Module, DWORD ParentProcess);
         ~WlxHostService();
-        storage::Result<QJsonObject> Probe() const;
+        storage::Result<storage::Unit> Initialize(const QString& DefaultIniPath);
+        storage::Result<QJsonObject> Probe();
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
     private:
         static LRESULT CALLBACK windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
@@ -31,5 +32,7 @@ namespace hc::plugins
         Close close_ = nullptr;
         Command command_ = nullptr;
         Notification notification_ = nullptr;
+        bool initialized_ = false;
+        std::optional<QByteArray> detectString_;
     };
 }

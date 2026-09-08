@@ -8,7 +8,7 @@ namespace hc::plugins
 {
     struct WlxViewerOptions
     {
-        QString executable_, manifestPath_, binaryPath_;
+        QString executable_, manifestPath_, binaryPath_, defaultIniPath_;
         PluginApproval approval_;
         HostLimits limits_;
         int flags_ = 0;
