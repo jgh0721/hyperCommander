@@ -114,6 +114,7 @@ namespace nsHC
         //virtual TyOsError       SetRoot( const QString& Root );
 
         TyEnFSCate              GetCate() const;
+        virtual bool            IsRemote() const { return cate_ == FS_CATE_REMOTE; }
         TyEnFSFeatures          GetFeatures() const;
         virtual bool            IsRemovable() { return false; }
 
@@ -164,6 +165,17 @@ namespace nsHC
         explicit CFSNtfs( const QString& Root );
 
         QString                 GetVolumeName() override;
+    };
+
+    // A mapped drive keeps drive-letter navigation (FS_CATE_LOCAL), while its
+    // metadata policy is remote. Native read/write locators keep the existing
+    // Local kind for X: paths; FS_CATE_REMOTE selects UNC/server navigation.
+    class CFSNetworkDrive : public CFileSystemT
+    {
+    public:
+        explicit CFSNetworkDrive(const QString& Root);
+        bool IsRemote() const override { return true; }
+        QString GetVolumeName() override { return tr("네트워크 드라이브"); }
     };
 
     class CFSShell : public CFileSystemT

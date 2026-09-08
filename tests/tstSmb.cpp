@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include <QtTest>
+#include <QtConcurrent/QtConcurrentRun>
 #include "HyperCommander.hpp"
 #include "UIs/dlgMain.hpp"
 #include "UIs/dlgOpts.hpp"
@@ -18,6 +19,7 @@
 #include <QtitanGrid.h>
 #include <iostream>
 #include <psapi.h>
+#include "driveProbeFixture.hpp"
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -50,6 +52,8 @@ private:
     std::shared_ptr<GatedProvider> provider_;
 };
 
+static QElapsedTimer StartupTimer;
+
 class SmbTests : public QObject
 {
     Q_OBJECT
@@ -63,7 +67,10 @@ private slots:
         localOnly_ = !LocalRoot.isEmpty();
         unc_ = localOnly_ ? LocalRoot : "\\\\" + server_ + "\\" + share_;
         QVERIFY2(QDir(unc_).exists(), localOnly_ ? "Local UI test root must exist" : "Live SMB share must be accessible before running this suite");
-        if (localOnly_) qInfo("Local UI mode: no SMB coverage; only explicitly allowed local scenarios may run");
+        if (localOnly_)
+            qInfo(qEnvironmentVariableIsSet("HC_TEST_MAPPED_IO")
+                ? "Mapped-drive I/O mode: explicit mapping required; local folder used for recovery"
+                : "Local UI mode: no SMB I/O coverage; only explicitly allowed scenarios may run");
         for (auto* Window : QApplication::topLevelWidgets())
             if (auto* Main = qobject_cast<QMainUI*>(Window))
                 main_ = Main;
@@ -81,9 +88,107 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
+    }
+
+    void networkDriveStartup()
+    {
+        const bool Synthetic = qEnvironmentVariableIsSet("HC_TEST_DISCONNECTED_DRIVE");
+        const auto Root = Synthetic ? DriveProbeFixture::Root() : qEnvironmentVariable("HC_TEST_MAPPED_DRIVE");
+        if (Root.isEmpty()) QSKIP("Run the network-startup fixture or select an existing mapped drive");
+        QVERIFY2(Root.size() == 2 && Root[1] == ':', "Select a mapped drive or the disconnected-drive fixture");
+        qInfo() << "Startup to panel initialization (ms):" << StartupTimer.elapsed()
+                << "mapped drive:" << Root << "synthetic:" << Synthetic;
+        if (Synthetic)
+        {
+            qInfo() << "Synthetic metadata calls:" << DriveProbeFixture::MetadataCalls()
+                    << "on GUI:" << DriveProbeFixture::GuiMetadataCalls();
+            QCOMPARE(DriveProbeFixture::MetadataCalls(), 0);
+            QCOMPARE(DriveProbeFixture::AttributeCalls(), 0);
+        }
+        for (auto* Panel : panels_)
+        {
+            auto* Combo = Panel->findChild<QComboBoxForWidget*>("cbxVolume");
+            QVERIFY(Combo);
+            nsHC::TySpFileSystem Mapped;
+            for (int Index = 0; Index < Combo->GetCount(); ++Index)
+            {
+                auto Fs = Combo->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+                if (Fs && Fs->GetRoot().compare(Root, Qt::CaseInsensitive) == 0) Mapped = Fs;
+            }
+            QVERIFY2(Mapped, "A disconnected drive must remain visible in both panels");
+            QVERIFY(Mapped->IsRemote());
+            QVERIFY(!model(Panel)->GetRoot()->IsRemote());
+            // The native writer distinguishes drive-letter and UNC syntax.
+            QCOMPARE(Mapped->ReadLocation(Root + '\\').kind_, hc::storage::LocatorKind::Local);
+            QVERIFY(Mapped->ReadProvider());
+            for (const auto& Path : QStringList{Root.toLower() + "/folder", "\\\\?\\" + Root + "\\folder"})
+            {
+                auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Path));
+                QVERIFY(Fs && Fs->IsRemote());
+                QCOMPARE(Fs->GetRoot().toUpper(), Root.toUpper());
+            }
+            if (Synthetic)
+            {
+                QElapsedTimer ChangeTimer;
+                ChangeTimer.start();
+                Panel->ChangeVolume(Root);
+                QVERIFY2(ChangeTimer.elapsed() < 300, "Selecting a disconnected drive blocked the GUI");
+                QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+                QVERIFY(static_cast<CFSModel*>(model(Panel))->LastNavigationError().has_value());
+                Panel->ChangeCurrentPath(unc_, {});
+                QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+                QCOMPARE(model(Panel)->GetCurrentPathWithRoot(), unc_);
+                Panel->RefreshVolumeList();
+            }
+            if (!Synthetic && qEnvironmentVariableIsSet("HC_TEST_MAPPED_IO"))
+            {
+                QTemporaryDir Corpus(Root + "/hc-startup-XXXXXX");
+                QVERIFY(Corpus.isValid());
+                qInfo() << "Mapped drive corpus:" << Corpus.path();
+                const QByteArray Payload("mapped drive read/write\r\n");
+                QFile Source(Corpus.filePath("startup.txt"));
+                QVERIFY(Source.open(QIODevice::WriteOnly));
+                QCOMPARE(Source.write(Payload), Payload.size());
+                Source.close();
+                for (bool Enabled : {false, true})
+                {
+                    auto* Model = static_cast<CFSModel*>(model(Panel));
+                    Model->SetProviderEnabled(Enabled);
+                    QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000);
+                    Panel->ChangeCurrentPath(QDir::toNativeSeparators(Corpus.path()), {});
+                    QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+                    QCOMPARE(names(Model), QStringList{"startup.txt"});
+                    if (Enabled)
+                    {
+                        auto Reader = Mapped->ReadProvider();
+                        auto Writer = hc::storage::MakeNativeWritableStorage(hc::storage::LocatorKind::Local, Reader);
+                        const auto Destination = Mapped->ReadLocation(QDir::toNativeSeparators(Corpus.filePath("created")));
+                        auto Created = QtConcurrent::run([Writer, Destination] { return Writer->MakeDirectory(Destination, {}); });
+                        QTRY_VERIFY_WITH_TIMEOUT(Created.isFinished(), 15000);
+                        QVERIFY2(Created.result().HasValue(), "Mapped-drive mutation must retain drive-letter locator semantics");
+                        for (int Row = 0; Row < Model->rowCount(); ++Row)
+                        {
+                            const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+                            if (Entry->Name_ != "startup.txt") continue;
+                            QVERIFY(Entry->storageEntry_.has_value());
+                            auto Opened = Reader->OpenRead(Entry->storageEntry_->id_, {});
+                            QTRY_VERIFY_WITH_TIMEOUT(Opened.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 15000);
+                            auto Stream = Opened.get(); QVERIFY(Stream.HasValue());
+                            auto Read = Stream.Value()->Read(1024, {});
+                            QTRY_VERIFY_WITH_TIMEOUT(Read.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 15000);
+                            auto Chunk = Read.get(); QVERIFY(Chunk.HasValue());
+                            QCOMPARE(QByteArray(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), Chunk.Value().bytes_.size()), Payload);
+                        }
+                    }
+                    Panel->ChangeCurrentPath(unc_, {});
+                    QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000);
+                }
+            }
+        }
+        if (Synthetic) QCOMPARE(DriveProbeFixture::MetadataCalls(), 0);
     }
 
     void shareNavigation_data()
@@ -1395,6 +1500,13 @@ int main(int Argc, char** Argv)
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 #endif
     const auto ComResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    std::unique_ptr<DriveProbeFixture> DriveFixture;
+    if (qEnvironmentVariableIsSet("HC_TEST_DISCONNECTED_DRIVE"))
+    {
+        DriveFixture = std::make_unique<DriveProbeFixture>();
+        if (!DriveFixture->IsInstalled()) return 90;
+    }
+    StartupTimer.start();
     HyperCommanderApp App(Argc, Argv);
     SmbTests Tests;
     const auto Result = QTest::qExec(&Tests, Argc, Argv);

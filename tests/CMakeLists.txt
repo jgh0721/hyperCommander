@@ -251,6 +251,14 @@ add_test(NAME hc.startup
 set_tests_properties(hc.sources PROPERTIES TIMEOUT 30)
 set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 
+if(TARGET hc_smb_tests)
+    add_test(NAME hc.network_startup
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+            -Executable "$<TARGET_FILE:hc_smb_tests>" -NetworkStartupOnly -Dpr 1)
+    set_tests_properties(hc.network_startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+endif()
+
 add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
@@ -268,6 +276,10 @@ add_custom_target(hc_check
     USES_TERMINAL
     VERBATIM
 )
+
+if(TARGET hc_smb_tests)
+    add_dependencies(hc_check hc_smb_tests)
+endif()
 
 foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests)
     hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)

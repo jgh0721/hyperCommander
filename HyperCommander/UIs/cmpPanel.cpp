@@ -44,11 +44,19 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
     OnColorSchemeChanged( StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() ) );
 
     QMetaObject::invokeMethod( this, "RefreshVolumeList", Qt::QueuedConnection );
-    QTimer::singleShot( 100, [this]() {
+    QTimer::singleShot( 100, this, [this]() {
         if( ui.cbxVolume->GetCount() == 0 )
             return;
 
-        ui.cbxVolume->setCurrentIndex( 0 );
+        // A disconnected mapping may sort before C:. Showing the drive list
+        // must not automatically attempt to open that server on first launch.
+        int Initial = 0;
+        for (int Index = 0; Index < ui.cbxVolume->GetCount(); ++Index)
+        {
+            const auto Fs = ui.cbxVolume->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+            if (Fs && !Fs->IsRemote()) { Initial = Index; break; }
+        }
+        ui.cbxVolume->setCurrentIndex( Initial );
     } );
 }
 
@@ -939,6 +947,14 @@ void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem
 
     if( SpFileSystem == nullptr )
         return;
+
+    // Network capacity/labels require server I/O, including mapped X: drives.
+    // Keep selection and startup responsive even when that server is offline.
+    if (SpFileSystem->IsRemote())
+    {
+        ui.lblVolumeStatus->setText(tr("[%1] 네트워크 드라이브").arg(SpFileSystem->GetRoot()));
+        return;
+    }
 
     // NOTE: UNC(SMB) 의 경우에는 \\MyServer\\Share\\ 의 형태로 마지막에 \\ 로 끝나야 한다.
 

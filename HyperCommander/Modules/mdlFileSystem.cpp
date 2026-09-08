@@ -111,6 +111,16 @@ namespace nsHC
 
             // 반드시 \\ 로 끝나야 한다. 
 
+            // Volume metadata can reconnect an unavailable mapped drive and
+            // block for the redirector's timeout. Both panels call this factory
+            // on the GUI thread at startup. Classify first, without probing the
+            // server; actual access belongs to the asynchronous read provider.
+            // GetDriveType can report NO_ROOT_DIR for \\?\X:\ mappings even
+            // when X:\ is DRIVE_REMOTE. Classify the ordinary drive root.
+            const auto DriveRoot = s.mid(Base, 2);
+            if (GetDriveTypeW((DriveRoot + '\\').toStdWString().c_str()) == DRIVE_REMOTE)
+                return new CFSNetworkDrive(DriveRoot);
+
             WCHAR FsName[ MAX_PATH ] = { 0, };
             if( GetVolumeInformationW( RootPath.toStdWString().c_str(), nullptr, 0, nullptr, nullptr, nullptr, FsName, MAX_PATH ) == FALSE )
             {
@@ -222,6 +232,15 @@ namespace nsHC
 
     ////////////////////////////////////////////////////////////////////////////////
     ///
+
+    CFSNetworkDrive::CFSNetworkDrive(const QString& Root)
+        : CFileSystemT(Root)
+    {
+        // These are operation capabilities, not a claim about share permissions
+        // or filesystem-specific ACL/stream support. Access is checked by I/O.
+        features_ = TyEnFSFeatures(FS_FEA_LIST) | FS_FEA_READABLE | FS_FEA_WRITABLE
+            | FS_FEA_MOVABLE | FS_FEA_DELETABLE | FS_FEA_RENAMABLE;
+    }
 
     CFSShell::CFSShell( const LPITEMIDLIST Root )
         : CFileSystemT( "" )

@@ -242,6 +242,7 @@ if(HC_BUILD_SMB_TESTS)
     list(REMOVE_ITEM HC_SMB_SOURCES main.cpp)
     qt_add_executable(hc_smb_tests
         ../tests/tstSmb.cpp
+        ../tests/driveProbeFixture.hpp
         ${HC_SMB_SOURCES}
         ${COMMONLIBS_SRC} ${EXTERNAL_SRC}
         ${PROJECT_MODULE_SRC} ${PROJECT_UI_SRC} ${UNIQUELIBS_SRC}
