@@ -39,6 +39,7 @@ public:
 signals:
     void Ready(const QString& SessionId);
     void Failed(const QString& Code);
+    void CloseRequested();
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
     void focusInEvent(QFocusEvent* Event) override;

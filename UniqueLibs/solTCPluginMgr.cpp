@@ -743,6 +743,9 @@ void CTCPlugInMgr::Refresh()
         Plugin.FileName         = QFileInfo( Plugin.FileFullPath ).baseName();
         Plugin.Detect           = StSettings->value( QString( "%1_Detect" ).arg( Idx ) ).toString();
         Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
+        Plugin.hostEnabled_ = StSettings->value(QString("%1_HostEnabled").arg(Idx), false).toBool();
+        Plugin.hostManifest_ = StSettings->value(QString("%1_HostManifest").arg(Idx)).toString();
+        Plugin.hostReviewed_ = StSettings->value(QString("%1_HostReviewed").arg(Idx)).toByteArray();
         VecWLX.push_back( Plugin );
     }
     StSettings->endGroup();
@@ -802,12 +805,6 @@ void CTCPlugInMgr::SetWLXOpts( quint32 Idx, const TyPlugInWLX& WLX )
     if( Idx >= vecWLX.size() && Idx != UINT_MAX )
         return;
 
-    if( vecWLX.isEmpty() == true && Idx == 0 )
-    {
-        vecWLX.push_back( WLX );
-        return;
-    }
-
     if( Idx == UINT_MAX )
         vecWLX.push_back( WLX );
     else
@@ -838,6 +835,8 @@ quint32 CTCPlugInMgr::ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath
 
     for( auto& Item : vecWLX )
     {
+        // Host opt-in (including revoked approval) excludes legacy execution.
+        if (Item.hostEnabled_) continue;
         const auto File = QString( Item.FileFullPath ).replace( "%COMMANDER_PATH%", QString::fromWCharArray( Buffer ) );
 
         if( File.endsWith( "64" ) == false )
@@ -897,10 +896,13 @@ void CTCPlugInMgr::Save_WLX()
     StSettings->setValue( "Count", vecWLX.size() );
     for( uint32_t Idx = 0; Idx < vecWLX.size(); ++Idx )
     {
-        const auto& WLX = vecWLX[ Idx ];
+        auto& WLX = vecWLX[ Idx ]; WLX.Index = static_cast<int>(Idx);
         StSettings->setValue( QString( "%1_Path" ).arg( Idx ), WLX.FileFullPath );
         StSettings->setValue( QString( "%1_Detect" ).arg( Idx ), WLX.Detect );
         StSettings->setValue( QString( "%1_Support64Bit" ).arg( Idx ), WLX.IsContain64Bit );
+        StSettings->setValue(QString("%1_HostEnabled").arg(Idx), WLX.hostEnabled_);
+        StSettings->setValue(QString("%1_HostManifest").arg(Idx), WLX.hostManifest_);
+        StSettings->setValue(QString("%1_HostReviewed").arg(Idx), WLX.hostReviewed_);
     }
     StSettings->endGroup();
 }

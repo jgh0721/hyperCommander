@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/viewer/viewer.hpp"
+#include "qtWlxSurface.hpp"
 #include <QWidget>
 #include <QUrl>
 
@@ -7,9 +8,12 @@ class QtViewerSurface final : public QWidget
 {
     Q_OBJECT
 public:
+    struct WlxChoice { QString id_, name_; hc::plugins::WlxViewerOptions options_; };
+    using WlxChoices = std::function<std::vector<WlxChoice>()>;
     // Service belongs to the GUI host and outlives this surface.
     explicit QtViewerSurface(hc::viewer::ViewerService& Service, QWidget* Parent = nullptr);
     ~QtViewerSurface() override;
+    void ConfigureWlx(QtWlxController* Controller, WlxChoices Choices);
     void Open(std::shared_ptr<hc::storage::IContentSource> Source,
         hc::viewer::ViewerPurpose Purpose = hc::viewer::ViewerPurpose::FullViewer);
     void Close();
@@ -21,6 +25,7 @@ signals:
     void Ready(const QString& SessionId);
     void Failed(const QString& Code);
     void LinkRequested(const QUrl& Url);
+    void CloseRequested();
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
@@ -33,4 +38,5 @@ private:
     void updateImage();
     void find(bool Backward);
     void fail(const QString& Code);
+    void refreshWlxMenu();
 };

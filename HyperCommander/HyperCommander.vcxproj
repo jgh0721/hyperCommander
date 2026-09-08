@@ -554,6 +554,11 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\qtViewerProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerHost.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\UniqueLibs\qtWlxSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <QtMoc Include="..\UniqueLibs\qtWlxSurface.hpp" />
+    <ClCompile Include="..\pluginHost\hostedWlxSession.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\hostedWlxSession.hpp" />
+    <ClInclude Include="..\pluginHost\wlxWindowMessage.hpp" />
     <ClInclude Include="..\commonLibs\viewer\viewer.hpp" />
     <ClInclude Include="..\UniqueLibs\qtViewerProvider.hpp" />
     <ClInclude Include="..\UniqueLibs\qtViewerHost.hpp" />

@@ -99,4 +99,5 @@ private:
 
     Ui::dlgOpts                         ui;
     QWcxHostSettings* wcxHostSettings_ = nullptr;
+    QWcxHostSettings* wlxHostSettings_ = nullptr;
 };

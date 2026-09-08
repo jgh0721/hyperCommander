@@ -17,8 +17,11 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     : QBaseUI( parent, flags )
 {
     ui.setupUi( this );
+    ui.groupBox_3->setTitle(tr("플러그인 실행 설정"));
     auto* WcxLayout = new QVBoxLayout(ui.groupBox_3);
-    wcxHostSettings_ = new QWcxHostSettings(ui.groupBox_3); WcxLayout->addWidget(wcxHostSettings_);
+    auto* PluginTabs = new QTabWidget(ui.groupBox_3); PluginTabs->setObjectName("pluginHostTabs"); WcxLayout->addWidget(PluginTabs);
+    wcxHostSettings_ = new QWcxHostSettings(PluginTabs); PluginTabs->addTab(wcxHostSettings_, tr("압축 (WCX)"));
+    wlxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wlx, PluginTabs); PluginTabs->addTab(wlxHostSettings_, tr("뷰어 (WLX)"));
 
     initialize();
 
@@ -111,8 +114,9 @@ void QMainOpts::SaveSettings_ColorScheme()
 
 void QMainOpts::SaveSettings_PluginList()
 {
-    wcxHostSettings_->Save(*StSettings);
     TyStPlugInMgr::GetInstance()->SaveSettings();
+    wcxHostSettings_->Save(*StSettings);
+    wlxHostSettings_->Save(*StSettings);
     TyStPlugInMgr::GetInstance()->Refresh();
 }
 
@@ -203,6 +207,7 @@ void QMainOpts::RefreshFileSet( const QString& FileSetName )
 void QMainOpts::RefreshPluginList()
 {
     wcxHostSettings_->Load(*StSettings);
+    wlxHostSettings_->Load(*StSettings);
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
     StPlugInMgr->Refresh();
 
@@ -588,43 +593,20 @@ void QMainOpts::on_btnDelShortcutCMD_clicked( bool checked )
 void QMainOpts::on_btnAddWLX_clicked( bool checked )
 {
     const auto FileFullPath = QFileDialog::getOpenFileName( this, tr( "WLX 플러그인 열기" ), QApplication::applicationDirPath(),
-                                                        tr( "WLX (*.wlx;*.wlx64)" ) );
+                                                        tr( "WLX (*.wlx *.wlx64)" ) );
 
     if( FileFullPath.isEmpty() == true )
         return;
 
-    QFileInfo FileInfo( FileFullPath );
-
     TyPlugInWLX WLX;
-    TyPlugInWLXFuncs WLXFuncs;
-    CTCPlugInWLX::RetrieveWLXFuncs( FileFullPath, &WLXFuncs );
-
-    if( WLXFuncs.hModule == nullptr )
-    {
-        ShowMSGBox( this, QMessageBox::Information, tr( "" ) );
-        return;
-    }
-
-    if( WLXFuncs.ListGetDetectString == nullptr )
-    {
-        ShowMSGBox( this, QMessageBox::Information, tr( "" ) );
-        return;
-    }
-    
-    std::vector< char > Detect( MAX_PATH );
-    WLXFuncs.ListGetDetectString( Detect.data(), MAX_PATH );
-    
+    // Registration records a path only. The manifest review inspects the DLL
+    // asynchronously, and SDK exports are called only by the approved host.
     WLX.FileFullPath = FileFullPath;
-    WLX.IsContain64Bit = true;          // TODO: 64bit OS 라면 무조건 true
-    WLX.Detect = QString::fromUtf8( Detect.data() );
-
-    const auto Row = ui.tblWLX->rowCount();
-    ui.tblWLX->setRowCount( Row + 1 );
-    ui.tblWLX->setItem( Row, 0, new QTableWidgetItem( FileFullPath ) );
-    ui.tblWLX->setItem( Row, 1, new QTableWidgetItem( WLX.Detect ) );
+    WLX.IsContain64Bit = FileFullPath.endsWith("64", Qt::CaseInsensitive);
+    WLX.hostEnabled_ = true;
 
     TyStPlugInMgr::GetInstance()->SetWLXOpts( UINT_MAX, WLX );
-
+    RefreshPluginList();
 }
 
 void QMainOpts::on_btnRemoveWLX_clicked( bool checked )
@@ -635,12 +617,13 @@ void QMainOpts::on_btnRemoveWLX_clicked( bool checked )
 
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
 
-    // TODO: 여러 개라면 큰 수에서 작은 수로 진행하도록 뒤집어야 한다. 
-    for( auto& Row : SelectedRows )
+    auto Rows = SelectedRows.values(); std::sort(Rows.begin(), Rows.end(), std::greater<int>{});
+    for( auto Row : Rows )
     {
         ui.tblWLX->removeRow( Row );
         StPlugInMgr->DelWLXOpts( Row );
     }
+    RefreshPluginList();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

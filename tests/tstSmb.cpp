@@ -81,7 +81,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak"};
+            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -471,25 +471,36 @@ private slots:
     }
     void wcxHostApprovalUi_data()
     {
-        QTest::addColumn<bool>("Approve"); QTest::addColumn<bool>("RevokeDuringConfirmation");
-        QTest::newRow("approve") << true << false;
-        QTest::newRow("decline") << false << false;
-        QTest::newRow("revoke-pending-approval") << true << true;
+        QTest::addColumn<bool>("Approve"); QTest::addColumn<bool>("RevokeDuringConfirmation"); QTest::addColumn<bool>("Wlx");
+        for (const bool Wlx : {false, true})
+        {
+            const QByteArray Prefix = Wlx ? "wlx-" : "wcx-";
+            QTest::newRow(Prefix + "approve") << true << false << Wlx;
+            QTest::newRow(Prefix + "decline") << false << false << Wlx;
+            QTest::newRow(Prefix + "revoke-pending-approval") << true << true << Wlx;
+        }
     }
     void wcxHostApprovalUi()
     {
-        QFETCH(bool, Approve); QFETCH(bool, RevokeDuringConfirmation);
+        QFETCH(bool, Approve); QFETCH(bool, RevokeDuringConfirmation); QFETCH(bool, Wlx);
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
+        if (Wlx)
+        {
+            hc::plugins::WlxViewerOptions Options; QVERIFY(configureWlx(Options, Directory));
+            Spec.FileFullPath = Options.binaryPath_; Spec.hostManifest_ = Options.manifestPath_; Spec.hostApproval_ = Options.approval_;
+        }
         QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
-        Settings.setValue("PackerPlugins/Count", 1); Settings.setValue("PackerPlugins/0_Path", Spec.FileFullPath);
-        Settings.setValue("PackerPlugins/0_Exts", "hcwcx");
-        QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
-        auto* Review = Widget.findChild<QPushButton*>("wcxHostReview"); QVERIFY(Review);
-        auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke);
+        const QString Group = Wlx ? "ListerPlugins/" : "PackerPlugins/"; const QString Prefix = Wlx ? "wlx" : "wcx";
+        Settings.setValue(Group + "Count", 1); Settings.setValue(Group + "0_Path", Spec.FileFullPath);
+        Settings.setValue(Group + (Wlx ? "0_Detect" : "0_Exts"), Wlx ? "EXT=\"TXT\"" : "hcwcx");
+        QWcxHostSettings Widget(Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx);
+        Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+        auto* Review = Widget.findChild<QPushButton*>(Prefix + "HostReview"); QVERIFY(Review);
+        auto* Revoke = Widget.findChild<QPushButton*>(Prefix + "HostRevoke"); QVERIFY(Revoke);
         const bool PreviousNative = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
         const auto Restore = qScopeGuard([&] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, PreviousNative); });
-        bool Chosen = false, Confirmed = false, TimedOut = false, DefaultNo = false;
+        bool Chosen = false, Confirmed = false, TimedOut = false, DefaultNo = false, UiPermission = false;
         QElapsedTimer Elapsed; Elapsed.start(); QTimer Driver; Driver.setInterval(20);
         connect(&Driver, &QTimer::timeout, &Widget, [&] {
             if (Elapsed.elapsed() > 10000)
@@ -498,13 +509,16 @@ private slots:
                 for (auto* Dialog : Widget.findChildren<QDialog*>()) if (Dialog->isVisible()) Dialog->reject();
                 return;
             }
-            for (auto* Dialog : Widget.findChildren<QFileDialog*>()) if (Dialog->isVisible() && !Chosen)
+            for (auto* Dialog : Widget.findChildren<QFileDialog*>()) if (Dialog->isVisible())
             {
-                Chosen = true; Dialog->selectFile(Spec.hostManifest_); QMetaObject::invokeMethod(Dialog, "accept", Qt::DirectConnection);
+                if (!Chosen) { Chosen = true; Dialog->setDirectory(QFileInfo(Spec.hostManifest_).absolutePath()); }
+                if (auto* Name = Dialog->findChild<QLineEdit*>("fileNameEdit")) Name->setText(Spec.hostManifest_);
+                QMetaObject::invokeMethod(Dialog, "accept", Qt::QueuedConnection);
             }
             for (auto* Message : Widget.findChildren<QMessageBox*>()) if (Message->isVisible() && !Confirmed)
             {
                 Confirmed = true; DefaultNo = Message->defaultButton() == Message->button(QMessageBox::No);
+                UiPermission = Message->text().contains("뷰어 화면 표시");
                 if (RevokeDuringConfirmation) Revoke->click();
                 auto* Choice = Message->button(Approve ? QMessageBox::Yes : QMessageBox::No);
                 if (Choice) Choice->click(); else Message->reject();
@@ -513,15 +527,138 @@ private slots:
         Driver.start(); QTest::mouseClick(Review, Qt::LeftButton);
         QTRY_VERIFY_WITH_TIMEOUT(Confirmed || TimedOut, 12000); Driver.stop(); QVERIFY(!TimedOut); QVERIFY(Chosen); QVERIFY(DefaultNo);
         Widget.Save(Settings);
-        const auto Reviewed = Settings.value("PackerPlugins/0_HostReviewed").toByteArray();
+        if (Wlx) QVERIFY(UiPermission);
+        const auto Reviewed = Settings.value(Group + "0_HostReviewed").toByteArray();
         if (Approve && !RevokeDuringConfirmation)
         {
             auto Parsed = hc::plugins::ParseManifest(Reviewed); QVERIFY(Parsed.HasValue());
             QVERIFY(Parsed.Value() == Spec.hostApproval_.reviewed_);
-            QVERIFY(Settings.value("PackerPlugins/0_HostEnabled").toBool());
+            QVERIFY(Settings.value(Group + "0_HostEnabled").toBool());
         }
         else QVERIFY(Reviewed.isEmpty());
-        if (RevokeDuringConfirmation) QVERIFY(Settings.value("PackerPlugins/0_HostEnabled").toBool());
+        if (RevokeDuringConfirmation) QVERIFY(Settings.value(Group + "0_HostEnabled").toBool());
+    }
+    void wlxViewerCommandsUi()
+    {
+        using namespace hc::plugins;
+        QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(configureWlx(Options, Package));
+        StSettings->beginGroup("ListerPlugins"); QVariantMap Original;
+        for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
+        StSettings->endGroup();
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        const auto Restore = qScopeGuard([&] {
+            Host->CloseAll(); while (!Host->IsIdle()) QTest::qWait(10);
+            StSettings->beginGroup("ListerPlugins"); StSettings->remove("");
+            for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
+            StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        });
+        // Install via the actual registration UI. The fixture deliberately has
+        // no ListGetDetectString export: registration must never execute it.
+        StSettings->setValue("ListerPlugins/Count", 1); StSettings->setValue("ListerPlugins/0_Path", "unrelated.wlx64");
+        StSettings->setValue("ListerPlugins/0_HostEnabled", false); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(PAGE_PLUGIN_MGR.first);
+            const bool Previous = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+            const auto RestoreDialogs = qScopeGuard([&] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, Previous); });
+            bool Chosen = false, TimedOut = false; QTimer Driver; Driver.setInterval(20); QElapsedTimer Wait; Wait.start();
+            connect(&Driver, &QTimer::timeout, &Dialog, [&] {
+                for (auto* Picker : Dialog.findChildren<QFileDialog*>()) if (Picker->isVisible())
+                {
+                    if (Wait.elapsed() > 5000)
+                    {
+                        TimedOut = true; qWarning() << "WLX picker timeout" << Picker->directory().absolutePath() << Picker->selectedFiles();
+                        Picker->reject(); continue;
+                    }
+                    if (!Chosen) { Chosen = true; Picker->setDirectory(Package.path()); }
+                    if (auto* Name = Picker->findChild<QLineEdit*>("fileNameEdit")) Name->setText(Options.binaryPath_);
+                    // QFileDialog's directory model loads asynchronously. An
+                    // early accept can be ignored until the selected file exists
+                    // in that model, especially in the optimized product build.
+                    QMetaObject::invokeMethod(Picker, "accept", Qt::QueuedConnection);
+                }
+            });
+            Driver.start(); Dialog.findChild<QPushButton*>("btnAddWLX")->click(); Driver.stop(); QVERIFY(Chosen); QVERIFY(!TimedOut);
+            QCOMPARE(TyStPlugInMgr::GetInstance()->GetWLXCount(), 2u);
+            QVERIFY(StSettings->value("ListerPlugins/1_HostEnabled").toBool());
+            const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
+        }
+        StSettings->setValue("ListerPlugins/1_HostManifest", Options.manifestPath_);
+        StSettings->setValue("ListerPlugins/1_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(PAGE_PLUGIN_MGR.first);
+            Dialog.findChild<QTableWidget*>("tblWLX")->selectRow(0); Dialog.findChild<QPushButton*>("btnRemoveWLX")->click();
+            QCOMPARE(TyStPlugInMgr::GetInstance()->GetWLXCount(), 1u);
+            QCOMPARE(StSettings->value("ListerPlugins/0_Path").toString(), Options.binaryPath_);
+            QVERIFY(StSettings->value("ListerPlugins/0_HostEnabled").toBool());
+            QCOMPARE(StSettings->value("ListerPlugins/0_HostReviewed").toByteArray(), EncodeManifest(Options.approval_.reviewed_));
+        }
+        StSettings->setValue("ListerPlugins/Count", 1); StSettings->setValue("ListerPlugins/0_Path", Options.binaryPath_);
+        StSettings->setValue("ListerPlugins/0_HostManifest", Options.manifestPath_);
+        StSettings->setValue("ListerPlugins/0_HostEnabled", true);
+        StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
+        TyStPlugInMgr::GetInstance()->Refresh();
+        QTemporaryDir Content(QDir(localOnly_ ? QDir::tempPath() : unc_).filePath("hc-wlx-XXXXXX")); QVERIFY(Content.isValid());
+        qInfo() << "WLX product content:" << Content.path() << "SMB:" << !localOnly_;
+        { QFile File(Content.filePath("뷰어.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("WLX product content"), 19); }
+        auto* Source = panels_.front(); auto* Target = panels_.back();
+        for (auto* Panel : panels_)
+        {
+            static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Content.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+        }
+        auto* Model = model(Source); auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
+        QModelIndex Selected;
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+        {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Model->GetName(Index) == "뷰어.txt") { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); QVERIFY(QApplication::focusWidget());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000);
+        QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
+        auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        const auto SelectWlx = [](QtViewerSurface* Surface) {
+            auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); if (!Menu || !Menu->menuAction()->isVisible()) return false;
+            QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection);
+            auto* Choice = Menu->findChild<QAction*>("hc.viewer.plugin.0"); if (!Choice) return false;
+            Choice->trigger(); return true;
+        };
+        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("뷰어.txt"));
+        QVERIFY(Full->screen()->grabWindow(Full->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-full.png"));
+        QVERIFY(sendWlxKey(Surface, VK_ESCAPE, false)); QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        Grid->EnsureKeyboardFocusOnView(); QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
+        QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())), 5000);
+        QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
+        Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QVERIFY(main_->screen()->grabWindow(main_->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-quick.png"));
+        Surface->findChild<QAction*>("hc.viewer.fallback")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("WLX product content"));
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(PAGE_PLUGIN_MGR.first);
+            auto* Tabs = Dialog.findChild<QTabWidget*>("pluginHostTabs"); QVERIFY(Tabs); Tabs->setCurrentIndex(1);
+            auto* Table = Dialog.findChild<QTableWidget*>("wlxHostTable"); QVERIFY(Table); QVERIFY(Table->isVisible()); QCOMPARE(Table->rowCount(), 1);
+            Dialog.findChild<QPushButton*>("wlxHostRevoke")->click();
+            Dialog.SaveSettings(); StSettings->sync();
+            QVERIFY(StSettings->value("ListerPlugins/0_HostReviewed").toByteArray().isEmpty());
+            QVERIFY(StSettings->value("ListerPlugins/0_HostEnabled").toBool());
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/wlx-product-options.png"));
+        }
+        QSignalSpy Failed(Surface, &QtViewerSurface::Failed); QVERIFY(SelectWlx(Surface));
+        QTRY_COMPARE_WITH_TIMEOUT(Failed.size(), 1, 5000); QVERIFY(!Surface->IsReady()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        QMenu Legacy; QCOMPARE(TyStPlugInMgr::GetInstance()->ConstructWLXMenu(&Legacy, Content.filePath("뷰어.txt")), 0u);
+        const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
+        StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
+        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QVERIFY(sendWlxKey(Surface, 'Q', true)); QTRY_VERIFY(Quick.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        for (auto* Panel : panels_) { Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000); }
     }
     void wcxHostSettingsPersistence()
     {
@@ -1146,6 +1283,61 @@ private slots:
     }
 
 private:
+    bool sendWlxKey(QtViewerSurface* Surface, WORD Key, bool Control)
+    {
+        auto* Anchor = Surface->findChild<QWidget*>("hc.wlx.native-parent"); if (!Anchor) return false;
+        const auto Container = GetWindow(reinterpret_cast<HWND>(Anchor->winId()), GW_CHILD);
+        const auto Child = GetWindow(Container, GW_CHILD); DWORD Process = 0;
+        const auto Thread = GetWindowThreadProcessId(Child, &Process); if (!Thread || Process == GetCurrentProcessId()) return false;
+        auto* Top = Surface->window(); Top->raise(); Top->activateWindow();
+        const auto TopWindow = reinterpret_cast<HWND>(Top->winId());
+        const auto ForegroundThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+        const auto TestThread = GetCurrentThreadId();
+        // Test harness only: synchronize activation with the interactive input
+        // queue, then detach before injecting keys. Product code never attaches
+        // to another application's queue. No input is sent until both the
+        // foreground window and native viewer focus are verified below.
+        const bool Attached = ForegroundThread && ForegroundThread != TestThread && AttachThreadInput(TestThread, ForegroundThread, TRUE);
+        SetForegroundWindow(TopWindow);
+        if (Attached) AttachThreadInput(TestThread, ForegroundThread, FALSE);
+        QTest::qWait(50);
+        // Attachment can reset native focus independently of Qt's cached focus.
+        // Re-enter the same focus path as a user selecting the viewer surface.
+        auto* Wlx = Surface->findChild<QtWlxSurface*>(); Wlx->clearFocus(); Wlx->setFocus(Qt::OtherFocusReason);
+        QElapsedTimer Wait; Wait.start();
+        for (;;)
+        {
+            GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+            if (GetGUIThreadInfo(Thread, &Info) && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus))
+                && GetForegroundWindow() == reinterpret_cast<HWND>(Top->winId())) break;
+            if (Wait.elapsed() > 3000)
+            {
+                DWORD ForegroundProcess = 0; GetWindowThreadProcessId(GetForegroundWindow(), &ForegroundProcess);
+                qWarning() << "WLX focus timeout" << quintptr(Child) << quintptr(Info.hwndFocus) << quintptr(GetForegroundWindow())
+                    << quintptr(Top->winId()) << Thread << GetLastError() << "foreground PID" << ForegroundProcess << "test PID" << GetCurrentProcessId(); return false;
+            }
+            QTest::qWait(10);
+        }
+        std::vector<INPUT> Inputs;
+        const auto Add = [&](WORD VirtualKey, bool Up) { INPUT Input{}; Input.type = INPUT_KEYBOARD; Input.ki.wVk = VirtualKey; Input.ki.dwFlags = Up ? KEYEVENTF_KEYUP : 0; Inputs.push_back(Input); };
+        if (Control) Add(VK_CONTROL, false); Add(Key, false); Add(Key, true); if (Control) Add(VK_CONTROL, true);
+        qInfo() << "WLX native keyboard focus verified, PID:" << Process << "key:" << Key << "control:" << Control;
+        return SendInput(static_cast<UINT>(Inputs.size()), Inputs.data(), sizeof(INPUT)) == Inputs.size();
+    }
+    bool configureWlx(hc::plugins::WlxViewerOptions& Options, const QTemporaryDir& Directory)
+    {
+        using namespace hc::plugins;
+        Options.binaryPath_ = Directory.filePath("viewer.wlx64");
+        if (!QFile::copy(QCoreApplication::applicationDirPath() + "/hc_wlx_fixture.wlx64", Options.binaryPath_)) return false;
+        QFile File(Options.binaryPath_); if (!File.open(QIODevice::ReadOnly)) return false;
+        PluginManifest Manifest; Manifest.id_ = "hc.test.product-wlx"; Manifest.version_ = "1"; Manifest.binary_ = "viewer.wlx64";
+        Manifest.format_ = PluginFormat::Wlx; Manifest.extensions_ = {Extension::Viewer}; Manifest.permissions_ = {Permission::ReadContent, Permission::UserInterface};
+        Manifest.sha256_ = QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); File.close();
+        Options.manifestPath_ = Directory.filePath("viewer.json"); Options.approval_.reviewed_ = Manifest;
+        Options.approval_.approved_ = true; Options.approval_.granted_ = Manifest.permissions_;
+        QFile Declaration(Options.manifestPath_); const auto Bytes = EncodeManifest(Manifest);
+        return Declaration.open(QIODevice::WriteOnly) && Declaration.write(Bytes) == Bytes.size();
+    }
     bool configureWcx(TyPlugInWCX& Spec, const QTemporaryDir& Directory, bool Hosted)
     {
         Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";

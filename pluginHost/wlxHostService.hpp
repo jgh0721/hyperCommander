@@ -15,10 +15,14 @@ namespace hc::plugins
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
     private:
         static LRESULT CALLBACK windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
+        static LRESULT CALLBACK inputHook(int Code, WPARAM WParam, LPARAM LParam);
         void close();
         HMODULE module_;
         DWORD parentProcess_;
         HWND container_ = nullptr, viewer_ = nullptr;
+        HHOOK inputHook_ = nullptr;
+        UINT closeMessage_ = 0;
+        static thread_local WlxHostService* inputOwner_;
         using Load = HWND(__stdcall*)(HWND, wchar_t*, int);
         using Close = void(__stdcall*)(HWND);
         using Command = int(__stdcall*)(HWND, int, int);

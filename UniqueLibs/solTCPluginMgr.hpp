@@ -141,6 +141,9 @@ struct TyPlugInWLX : TyTCPlugIn
     QVector< QString >  Exts;
 
     TyPlugInWLXFuncs    Funcs;
+    bool hostEnabled_ = false;
+    QString hostManifest_;
+    QByteArray hostReviewed_;
 };
 
 Q_DECLARE_METATYPE( TyPlugInWLX );

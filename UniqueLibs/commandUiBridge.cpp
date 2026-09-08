@@ -7,6 +7,8 @@
 #include "storageProviders.hpp"
 #include "wcxMutation.hpp"
 #include "qtViewerHost.hpp"
+#include "qtWcxHostSettings.hpp"
+#include "nativeMaterializer.hpp"
 #include "commonLibs/storage/materializedContent.hpp"
 #include <QtitanGrid.h>
 
@@ -90,7 +92,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
-    viewers_ = new QtViewerHost(Main);
+    viewers_ = new QtViewerHost(Main, [Base = QDir::tempPath().toStdString()] { return MakeNativeMaterializer(Base); },
+        [] { return QWcxHostSettings::WlxChoices(*StSettings); });
     auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {

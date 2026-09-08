@@ -1,5 +1,7 @@
 ﻿#include "qtWlxSurface.hpp"
 #include <QEvent>
+#include <qt_windows.h>
+#include "pluginHost/wlxWindowMessage.hpp"
 #include <QFocusEvent>
 #include <QLabel>
 #include <QTimer>
@@ -8,6 +10,28 @@
 using namespace hc::plugins;
 using namespace hc::storage;
 using namespace hc::viewer;
+
+namespace
+{
+    class WlxAnchor final : public QWidget
+    {
+    public:
+        using QWidget::QWidget;
+        std::function<void(quintptr)> closeRequested_;
+    protected:
+        bool nativeEvent(const QByteArray& Type, void* Event, qintptr* Result) override
+        {
+            const auto* Message = static_cast<MSG*>(Event);
+            static const auto CloseMessage = RegisterWindowMessageW(WlxCloseMessage);
+            if (Type == "windows_generic_MSG" && CloseMessage && Message->message == CloseMessage)
+            {
+                if (closeRequested_) closeRequested_(Message->wParam);
+                *Result = 0; return true;
+            }
+            return QWidget::nativeEvent(Type, Event, Result);
+        }
+    };
+}
 
 QtWlxController::QtWlxController(QWidget* Main, WlxViewerService::MaterializerFactory Factory)
     : QObject(Main), service_(std::make_unique<WlxViewerService>(std::move(Factory)))
@@ -71,7 +95,16 @@ void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
     status_->setText(tr("파일을 준비하는 중…")); status_->show();
-    anchor_ = new QWidget(this); anchor_->setObjectName("hc.wlx.native-parent");
+    auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
+    Anchor->closeRequested_ = [this](quintptr Child) {
+        if (!session_ || !ready_ || session_->Details().child_ != QString::number(Child, 16)) return;
+        const auto Id = session_->Snapshot().id_;
+        // The receiver may delete this surface. Leave the native message stack
+        // first, and discard gestures from a replaced or already closed session.
+        QMetaObject::invokeMethod(this, [this, Id] {
+            if (session_ && ready_ && session_->Snapshot().id_ == Id) emit CloseRequested();
+        }, Qt::QueuedConnection);
+    };
     anchor_->setAttribute(Qt::WA_DontCreateNativeAncestors); anchor_->setAttribute(Qt::WA_NativeWindow);
     anchor_->setFocusPolicy(Qt::StrongFocus); anchor_->installEventFilter(this);
     layout()->addWidget(anchor_); anchor_->show(); layout()->activate();
@@ -86,7 +119,11 @@ void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource
 void QtWlxSurface::Close()
 {
     timer_->stop(); ready_ = false;
-    if (anchor_) { anchor_->removeEventFilter(this); layout()->removeWidget(anchor_); }
+    if (anchor_)
+    {
+        static_cast<WlxAnchor*>(anchor_.data())->closeRequested_ = {};
+        anchor_->removeEventFilter(this); layout()->removeWidget(anchor_);
+    }
     if (controller_) controller_->Retire(anchor_, session_);
     else if (session_) session_->Close();
     anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); status_->show();
@@ -104,6 +141,9 @@ void QtWlxSurface::poll()
     if (Details.viewer_.status_ == ViewerStatus::Ready && !ready_)
     {
         ready_ = true; status_->hide(); layout()->activate(); resizeNative();
+        // Focus may arrive while content is still being materialized; replay
+        // the current Qt focus after the worker publishes the native window.
+        if (hasFocus() || (anchor_ && anchor_->hasFocus())) session_->Focus();
         emit Ready(QString::fromStdString(Details.viewer_.id_)); return;
     }
     if (!Details.idle_) return;

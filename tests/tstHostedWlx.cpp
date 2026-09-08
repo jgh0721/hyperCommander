@@ -4,6 +4,11 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "memoryStorage.hpp"
 #include "UniqueLibs/qtWlxSurface.hpp"
+#include "UniqueLibs/qtViewerHost.hpp"
+#include <QAction>
+#include <QDialog>
+#include <QMenu>
+#include <QPlainTextEdit>
 #include <QtTest>
 #include <QApplication>
 #include <QWidget>
@@ -86,16 +91,61 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void viewerHostSelectionAndClose()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        QWidget Main; Main.resize(640, 360); Main.show();
+        bool Approved = true;
+        QtViewerHost Host(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, [&] {
+            auto Options = options(Directory, Approval); Options.approval_.approved_ = Approved;
+            return std::vector<QtViewerSurface::WlxChoice>{{"test", "WLX fixture", Options}};
+        });
+        const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
+        QPointer<QDialog> Full = Host.OpenFull(MemoryContent("content", "host.txt"));
+        auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); QVERIFY(Menu);
+        QVERIFY(QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection));
+        auto* Choice = Menu->findChild<QAction*>("hc.viewer.plugin.test"); QVERIFY(Choice); Choice->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("host.txt"));
+        QVERIFY(!Surface->findChild<QAction*>("hc.viewer.find")->isEnabled());
+        QPointer<QWidget> Anchor = Surface->findChild<QWidget*>("hc.wlx.native-parent"); QVERIFY(Anchor);
+        Surface->findChild<QAction*>("hc.viewer.fallback")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QTRY_VERIFY_WITH_TIMEOUT(Anchor.isNull(), 4000);
+        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("content"));
+        QSignalSpy Failed(Surface, &QtViewerSurface::Failed);
+        // A menu built under approved settings must re-check a later revocation.
+        Approved = false; Choice->trigger(); QTRY_COMPARE_WITH_TIMEOUT(Failed.size(), 1, 5000); QVERIFY(!Surface->IsReady());
+        QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000); QVERIFY(Leases(Directory.path()).isEmpty());
+        Full->close(); QTRY_VERIFY(Full.isNull());
+        Approved = true;
+        Full = Host.OpenFull(MemoryContent("HC-WLX-FAULT:hang-close", "close.txt"));
+        Surface = Full->findChild<QtViewerSurface*>(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); QVERIFY(QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection));
+        Menu->findChild<QAction*>("hc.viewer.plugin.test")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QElapsedTimer Closing; Closing.start(); Main.close(); QVERIFY(Closing.elapsed() < 200);
+        QVERIFY(Main.isVisible()); QTRY_VERIFY_WITH_TIMEOUT(!Main.isVisible(), 4000); QVERIFY(Host.IsIdle());
+        QVERIFY(Leases(Directory.path()).isEmpty());
+    }
     void qtSurfaceReplacement()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
         QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
         QtWlxController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         auto* Surface = new QtWlxSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
+        Main.activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(Main.winId())); Surface->setFocus();
         const auto Drain = qScopeGuard([&] { Surface->Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
         QSignalSpy Ready(Surface, &QtWlxSurface::Ready); QSignalSpy Failed(Surface, &QtWlxSurface::Failed);
         Surface->Open(options(Directory, Approval), MemoryContent("first", "first.txt"));
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 1); QCOMPARE(Failed.size(), 0);
+        const auto Focused = [&] {
+            const auto Container = GetWindow(reinterpret_cast<HWND>(Surface->findChild<QWidget*>("hc.wlx.native-parent")->winId()), GW_CHILD);
+            const auto Child = GetWindow(Container, GW_CHILD); GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+            return GetGUIThreadInfo(GetWindowThreadProcessId(Child, nullptr), &Info) && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Focused(), 3000);
         QPointer<QWidget> Native = Surface->findChild<QWidget*>("hc.wlx.native-parent"); QVERIFY(Native); const auto Before = Native->winId();
         auto Slow = std::make_shared<WaitingContent>(); Surface->Open(options(Directory, Approval), Slow);
         if (Native) QCOMPARE(Native->winId(), Before);

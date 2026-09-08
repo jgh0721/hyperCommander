@@ -1,5 +1,6 @@
 ﻿#include "wlxHostService.hpp"
 #include <QFileInfo>
+#include "wlxWindowMessage.hpp"
 
 namespace hc::plugins
 {
@@ -18,6 +19,7 @@ namespace hc::plugins
         command_ = reinterpret_cast<Command>(GetProcAddress(module_, "ListSendCommand"));
         notification_ = reinterpret_cast<Notification>(GetProcAddress(module_, "ListNotificationReceived"));
     }
+    thread_local WlxHostService* WlxHostService::inputOwner_ = nullptr;
     WlxHostService::~WlxHostService() { close(); }
     Result<QJsonObject> WlxHostService::Probe() const
     {
@@ -26,9 +28,34 @@ namespace hc::plugins
     }
     void WlxHostService::close()
     {
+        if (inputHook_) UnhookWindowsHookEx(std::exchange(inputHook_, nullptr));
+        if (inputOwner_ == this) inputOwner_ = nullptr;
         const auto Viewer = std::exchange(viewer_, nullptr);
         if (Viewer && IsWindow(Viewer)) { if (close_) close_(Viewer); else DestroyWindow(Viewer); }
         if (container_) DestroyWindow(std::exchange(container_, nullptr));
+    }
+    LRESULT CALLBACK WlxHostService::inputHook(int Code, WPARAM WParam, LPARAM LParam)
+    {
+        auto* Self = inputOwner_;
+        if (Code == HC_ACTION && WParam == PM_REMOVE && Self && Self->viewer_)
+        {
+            auto* Message = reinterpret_cast<MSG*>(LParam);
+            if (Message->message == WM_KEYDOWN && (Message->hwnd == Self->viewer_ || IsChild(Self->viewer_, Message->hwnd)))
+            {
+                const bool Control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                const bool Modified = (GetKeyState(VK_MENU) & 0x8000) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                const bool Close = !Modified && ((!Control && Message->wParam == VK_ESCAPE) || (Control && Message->wParam == 'Q'));
+                if (Close)
+                {
+                    // Post to the one granted native parent. Queuing avoids a
+                    // synchronous call into the GUI while it retires this host.
+                    const bool Repeated = (Message->lParam & (1LL << 30)) != 0;
+                    if (!Repeated) PostMessageW(GetParent(Self->container_), Self->closeMessage_, reinterpret_cast<WPARAM>(Self->viewer_), 0);
+                    Message->message = WM_NULL;
+                }
+            }
+        }
+        return CallNextHookEx(nullptr, Code, WParam, LParam);
     }
     LRESULT CALLBACK WlxHostService::windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
@@ -83,6 +110,9 @@ namespace hc::plugins
                 viewer_ = nullptr; close(); return Error{ErrorCategory::Unsupported, "host-viewer-load-rejected", {"wlx"}};
             }
             MoveWindow(viewer_, 0, 0, Request["width"].toInt(), Request["height"].toInt(), TRUE);
+            closeMessage_ = RegisterWindowMessageW(WlxCloseMessage); inputOwner_ = this;
+            inputHook_ = SetWindowsHookExW(WH_GETMESSAGE, inputHook, nullptr, GetCurrentThreadId());
+            if (!closeMessage_ || !inputHook_) { const auto Error = GetLastError(); close(); return HostError("host-viewer-input-hook", Error); }
             ShowWindow(viewer_, SW_SHOW); ShowWindow(container_, SW_SHOW);
             return QJsonObject{{"window", QString::number(reinterpret_cast<quintptr>(container_), 16)},
                 {"viewer", QString::number(reinterpret_cast<quintptr>(viewer_), 16)}, {"processId", qint64(GetCurrentProcessId())}};

@@ -853,6 +853,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
     if (!surface_)
     {
         surface_ = Host.CreateSurface(this); vbox_->addWidget(surface_); setFocusProxy(surface_);
+        connect(surface_, &QtViewerSurface::CloseRequested, this, &CQuickView::CloseRequested);
         auto* Close = new QAction(tr("미리 보기 닫기"), this);
         Close->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q)); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
         connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
