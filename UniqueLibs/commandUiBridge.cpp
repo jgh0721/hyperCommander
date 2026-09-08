@@ -550,8 +550,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
         ArchiveMoveEndpoint Value{Pack->ReadLocation("/"), ArchiveModel->SnapshotProvider()};
         const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
-        Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_](OperationContext Context) {
-            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context));
+        Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_, Backend = Pack->GetWCX()->Backend()](OperationContext Context) {
+            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context), {}, Backend);
         };
         return Value;
     };

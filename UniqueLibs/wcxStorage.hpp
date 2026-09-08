@@ -3,7 +3,7 @@
 #include "commonLibs/plugins/archiveBackend.hpp"
 #include <mutex>
 
-// Legacy and provider calls share this gate until M6 moves WCX to its host.
+// Legacy DLL calls share this gate. Hosted I/O does not hold it in the parent.
 std::recursive_timed_mutex& WcxCallMutex();
 namespace hc::storage
 {

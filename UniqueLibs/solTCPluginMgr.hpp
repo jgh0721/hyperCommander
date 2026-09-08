@@ -4,6 +4,7 @@
 
 #include "cmnTypeDefs.hpp"
 #include "externalLibs/TotalCommander/wcxhead.h"
+#include "pluginHost/approvedWcxBackend.hpp"
 
 class CPackFSModel
 {
@@ -170,6 +171,9 @@ struct TyPlugInWCX : TyTCPlugIn
     QVector< QString >  Exts;
     int                 PackerCaps = 0;     // TyEnWCX_CAPS BitWise OR
     TyPlugInWCXFuncs    Funcs;
+    bool hostEnabled_ = false;
+    QString hostManifest_;
+    hc::plugins::PluginApproval hostApproval_;
 };
 
 Q_DECLARE_METATYPE( TyPlugInWCX );
@@ -206,6 +210,7 @@ public:
 
     TyOsError                           LoadWCX( const TyPlugInWCX& WCX );
     QString                             PluginPath() const { return wcx_.FileFullPath; }
+    std::shared_ptr<hc::plugins::IArchiveBackend> Backend() const { return backend_; }
 
     TyOsValue<bool>                     OpenArchive( const QString& FileFullPath, int Mode = PK_OM_LIST );
     TyOsValue<CPackFSModel*>            CreatePackModel();
@@ -228,6 +233,7 @@ private:
     QString                             ArchiveFile;
 
     TyPlugInWCX                         wcx_;
+    std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
 };
 
 Q_DECLARE_METATYPE( CTCPlugInWCX );

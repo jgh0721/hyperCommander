@@ -2,6 +2,7 @@
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include "pluginHost/hostedArchiveBackend.hpp"
+#include "pluginHost/approvedWcxBackend.hpp"
 #include "pluginHost/archiveCodec.hpp"
 #include "pluginHost/pipeChannel.hpp"
 #include "UniqueLibs/wcxStorage.hpp"
@@ -56,6 +57,71 @@ class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void approvedBackendRechecksEachOperation()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+        Started.Value()->Close(); Started.Value().reset();
+        auto Inspected = InspectManifestFile(Directory.filePath("plugin.json")); QVERIFY(Inspected.HasValue());
+        ApprovedWcxOptions Options; Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
+        Options.manifestPath_ = Directory.filePath("plugin.json"); Options.binaryPath_ = Directory.filePath("fixture.wcx64");
+        Options.approval_.reviewed_ = Inspected.Value().manifest_; Options.approval_.approved_ = true;
+        Options.approval_.granted_ = Options.approval_.reviewed_.permissions_;
+        const auto Path = Directory.filePath("approved.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        auto Backend = MakeApprovedWcxBackend(Options);
+        const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString();
+        QVERIFY(!GetModuleHandleW(Native.c_str()));
+        ArchiveHeader Header;
+        {
+            auto Cursor = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Cursor.HasValue());
+            auto Page = Cursor.Value()->Next(128, {}); QVERIFY(Page.HasValue());
+            QCOMPARE(Page.Value().entries_.size(), 2u); Header = Page.Value().entries_.front();
+        }
+        QVERIFY(Backend->Extract(Path.toStdString(), Header, Directory.filePath("output").toStdString(), {}).HasValue());
+        QCOMPARE(Read(Directory.filePath("output")), QByteArray("alpha"));
+        QVERIFY(Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"alpha.txt"}}, {}).HasValue());
+        QVERIFY(!GetModuleHandleW(Native.c_str()));
+        // A backend retained by a mount must not retain an old approval after a manifest edit.
+        auto Changed = Options.approval_.reviewed_; Changed.version_ = "2";
+        QVERIFY(Put(Options.manifestPath_, EncodeManifest(Changed)));
+        auto Denied = Backend->Enumerate(Path.toStdString(), false, {});
+        QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().category_, ErrorCategory::AccessDenied);
+    }
+    void approvedBackendRejectsUnreviewedAndWrongBinary()
+    {
+        ApprovedWcxOptions Empty; auto Unreviewed = MakeApprovedWcxBackend(Empty);
+        auto Denied = Unreviewed->Enumerate("missing", false, {});
+        QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().code_, std::string("plugin-review-required"));
+        QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue()); Started.Value()->Close();
+        auto Inspected = InspectManifestFile(Directory.filePath("plugin.json")); QVERIFY(Inspected.HasValue());
+        ApprovedWcxOptions Options; Options.manifestPath_ = Directory.filePath("plugin.json");
+        Options.binaryPath_ = Directory.filePath("another.wcx64"); Options.approval_.approved_ = true;
+        Options.approval_.reviewed_ = Inspected.Value().manifest_; Options.approval_.granted_ = Options.approval_.reviewed_.permissions_;
+        QVERIFY(QFile::copy(Directory.filePath("fixture.wcx64"), Options.binaryPath_));
+        auto Wrong = MakeApprovedWcxBackend(Options)->Enumerate("missing", false, {});
+        QVERIFY(!Wrong.HasValue()); QCOMPARE(Wrong.Failure().code_, std::string("plugin-configured-binary-mismatch"));
+    }
+    void hostedProviderDoesNotWaitForLegacyMutex()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+        const auto Path = Directory.filePath("parallel.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        auto Provider = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), MakeHostedArchiveBackend(Started.Value()));
+        std::unique_lock Legacy(WcxCallMutex());
+        auto Pending = Provider->Resolve(At(Path, "/alpha.txt"), {});
+        const auto State = Pending.wait_for(std::chrono::seconds(3));
+        // Always release before waiting/destruction, including a regression failure.
+        Legacy.unlock(); auto Resolved = Pending.get();
+        QCOMPARE(State, std::future_status::ready); QVERIFY(Resolved.HasValue());
+    }
+    void legacyMutexWaitCanBeCancelled()
+    {
+        auto Backend = MakeInProcessWcxBackend("missing.wcx64");
+        std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
+        std::unique_lock Legacy(WcxCallMutex());
+        auto Pending = std::async(std::launch::async, [&] { return Backend->Enumerate("missing", false, Context); });
+        Stop.request_stop(); const auto State = Pending.wait_for(std::chrono::seconds(1));
+        Legacy.unlock(); auto Result = Pending.get();
+        QCOMPARE(State, std::future_status::ready); QVERIFY(!Result.HasValue()); QCOMPARE(Result.Failure().category_, ErrorCategory::Cancelled);
+    }
     void legacyModuleEndsWithCall()
     {
         QTemporaryDir Directory; const auto Binary = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";

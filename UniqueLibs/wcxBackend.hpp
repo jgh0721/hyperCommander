@@ -1,5 +1,9 @@
 ﻿#pragma once
 #include "commonLibs/plugins/archiveBackend.hpp"
+#include <mutex>
+
+// Serializes legacy WCX DLL entry points within this process only.
+std::recursive_timed_mutex& WcxCallMutex();
 
 namespace hc::plugins
 {

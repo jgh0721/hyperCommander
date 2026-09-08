@@ -322,7 +322,9 @@ CTCPlugInWCX::~CTCPlugInWCX()
 
 TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 {
-    std::lock_guard Lock(WcxCallMutex());
+    CloseWCX();
+    std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
+    if (!WCX.hostEnabled_) Lock.lock();
     TyOsError Err;
 
     do
@@ -330,6 +332,19 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
         wcx_ = WCX;
         wcx_.FileFullPath = wcx_.FileFullPath.replace( "%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive );
         wcx_.FileName = QFileInfo( wcx_.FileFullPath ).baseName();
+
+        // Only capture approval on the UI path. File inspection and process
+        // creation run later in the provider's asynchronous worker operation.
+        if (wcx_.hostEnabled_) {
+            if (wcx_.FileFullPath.endsWith(".wcx", Qt::CaseInsensitive)) wcx_.FileFullPath += "64";
+            if (QDir::isRelativePath(wcx_.FileFullPath)) wcx_.FileFullPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(wcx_.FileFullPath);
+            hc::plugins::ApprovedWcxOptions Options;
+            Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
+            Options.manifestPath_ = wcx_.hostManifest_; Options.binaryPath_ = wcx_.FileFullPath; Options.approval_ = wcx_.hostApproval_;
+            Options.limits_.requestMs_ = 30000;
+            backend_ = hc::plugins::MakeApprovedWcxBackend(std::move(Options));
+            break;
+        }
 
 #if defined( _M_IX86 )
         bool IsExist = QFile::exists( wcx_.FileFullPath );
@@ -362,6 +377,10 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 
 TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode )
 {
+    if (backend_) {
+        // A hosted mount is tentative until asynchronous enumeration succeeds.
+        ArchiveFile = FileFullPath; return {true, {TyOsError::OS_WIN32_ERROR, ERROR_SUCCESS}};
+    }
     std::lock_guard Lock(WcxCallMutex());
     CloseArchive();
     TyOsValue<bool> Ret = { false, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
@@ -390,8 +409,10 @@ TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode
 
 TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel()
 {
-    std::lock_guard Lock(WcxCallMutex());
     TyOsValue<CPackFSModel*> Ret;
+    // Hosted plugins use the asynchronous provider, never the legacy UI scan.
+    if (backend_) { Ret.ErrorCode = {TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED}; return Ret; }
+    std::lock_guard Lock(WcxCallMutex());
     const auto Opened = open(ArchiveFile, PK_OM_LIST);
     if (!Opened.Value.has_value() || !Opened.Value.value()) { Ret.ErrorCode = Opened.ErrorCode; return Ret; }
     const auto ArchiveHandle = Opened.Value.value();
@@ -507,6 +528,7 @@ void CTCPlugInWCX::ExtractFile( const QString& Src, const QString& Dst )
 
 void CTCPlugInWCX::CloseArchive()
 {
+    if (!Arc) return;
     std::lock_guard Lock(WcxCallMutex());
     close( Arc );
 
@@ -515,8 +537,10 @@ void CTCPlugInWCX::CloseArchive()
 
 void CTCPlugInWCX::CloseWCX()
 {
+    if (!Arc && !wcx_.Funcs.hModule) { backend_.reset(); return; }
     std::lock_guard Lock(WcxCallMutex());
     CloseArchive();
+    backend_.reset();
 
     if( wcx_.Funcs.hModule != nullptr )
     {
@@ -732,6 +756,13 @@ void CTCPlugInMgr::Refresh()
         Plugin.PackerCaps       = StSettings->value( QString( "%1_Caps" ).arg( Idx ) ).toInt();
         Plugin.Exts             = StSettings->value( QString( "%1_Exts" ).arg( Idx ) ).toString().split( '|' );
         Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
+        Plugin.hostEnabled_ = StSettings->value(QString("%1_HostEnabled").arg(Idx), false).toBool();
+        Plugin.hostManifest_ = StSettings->value(QString("%1_HostManifest").arg(Idx)).toString();
+        auto Reviewed = hc::plugins::ParseManifest(StSettings->value(QString("%1_HostReviewed").arg(Idx)).toByteArray());
+        if (Reviewed.HasValue()) {
+            Plugin.hostApproval_.reviewed_ = std::move(Reviewed.Value()); Plugin.hostApproval_.approved_ = true;
+            Plugin.hostApproval_.granted_ = Plugin.hostApproval_.reviewed_.permissions_;
+        }
         VecWCX.push_back( Plugin );
     }
     StSettings->endGroup();

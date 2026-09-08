@@ -96,6 +96,8 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../UniqueLibs/qtWcxHostSettings.cpp
+        ../UniqueLibs/qtWcxHostSettings.hpp
         ../commonLibs/operations/jobScheduler.cpp
         ../commonLibs/operations/jobScheduler.hpp
         ../commonLibs/operations/fileOperation.cpp
@@ -179,7 +181,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt hc_wcx_backend)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
@@ -220,10 +222,12 @@ target_link_libraries(HyperCommander
         Qt6::WidgetsPrivate
         hc_viewer_qt
         hc_wcx_backend
+        hc_plugin_process
 )
 
 # Keep the application executable immediately runnable from its build directory.
 hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
+add_dependencies(HyperCommander hc-plugin-host-x64)
 
 # Opt-in live integration tests compile the same UI/model sources with a test entry
 # point. They must never run implicitly on developer or CI machines without a NAS.
@@ -250,6 +254,6 @@ if(HC_BUILD_SMB_TESTS)
     )
     get_target_property(HC_PRODUCT_LIBRARIES HyperCommander LINK_LIBRARIES)
     target_link_libraries(hc_smb_tests PRIVATE ${HC_PRODUCT_LIBRARIES} Qt6::Test)
-    add_dependencies(hc_smb_tests hc_wcx_fixture)
+    add_dependencies(hc_smb_tests hc_wcx_fixture hc-plugin-host-x64)
     hc_enable_qt_deployment(hc_smb_tests TEST PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 endif()

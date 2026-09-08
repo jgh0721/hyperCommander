@@ -6,11 +6,20 @@
 #include "externalLibs/TotalCommander/wcxhead.h"
 #include <mutex>
 
+std::recursive_timed_mutex& WcxCallMutex() { static std::recursive_timed_mutex Mutex; return Mutex; }
+
 namespace hc::plugins
 {
     using namespace storage;
     namespace
     {
+        Result<std::unique_lock<std::recursive_timed_mutex>> Enter(OperationContext Context)
+        {
+            std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
+            while (!Lock.try_lock_for(std::chrono::milliseconds(25))) if (const auto Failure = Context.Check({"wcx"})) return *Failure;
+            if (const auto Failure = Context.Check({"wcx"})) return *Failure;
+            return std::move(Lock);
+        }
         Error WcxError(int Code) { return {Code == E_EABORTED ? ErrorCategory::Cancelled : Code == E_NOT_SUPPORTED ? ErrorCategory::Unsupported : ErrorCategory::Unavailable,
             "wcx:" + std::to_string(Code), {"wcx"}}; }
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"wcx"}}; }
@@ -58,7 +67,7 @@ namespace hc::plugins
             int (__stdcall* pack_)(wchar_t*, wchar_t*, wchar_t*, wchar_t*, int) = nullptr;
             int (__stdcall* remove_)(wchar_t*, wchar_t*) = nullptr;
             int background_ = 0, caps_ = 0;
-            ~Module() { if (module_) FreeLibrary(module_); }
+            ~Module() { std::lock_guard Lock(WcxCallMutex()); if (module_) FreeLibrary(module_); }
             Result<Unit> Load(const std::string& Path, bool Background)
             {
                 if (module_) return Unit{};
@@ -94,10 +103,11 @@ namespace hc::plugins
         {
         public:
             Listing(std::shared_ptr<Module> Module, HANDLE Handle, bool Test) : module_(std::move(Module)), handle_(Handle), test_(Test) {}
-            ~Listing() override { if (handle_) { std::lock_guard Lock(module_->mutex_); module_->close_(handle_); } }
+            ~Listing() override { std::lock_guard Gate(WcxCallMutex()); if (handle_) { std::lock_guard Lock(module_->mutex_); module_->close_(handle_); } }
             Result<ArchivePage> Next(std::size_t Count, OperationContext Context) override
             {
                 if (!Count || !Context.maxPageItems_) return Invalid("zero-page-size");
+                auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 std::lock_guard Lock(module_->mutex_); ArchivePage Page; if (!handle_) { Page.end_ = true; return Page; }
                 Callback State{Context}; CallbackScope Scope(State);
                 for (std::size_t Index = 0; Index < std::min({Count, Context.maxPageItems_, std::size_t{256}}); ++Index)
@@ -134,12 +144,14 @@ namespace hc::plugins
             Backend(std::string Path, bool Background) : path_(std::move(Path)), background_(Background) {}
             Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Archive, bool Test, OperationContext Context) override
             {
+                auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Opened = open(Plugin, Archive, Test ? PK_OM_EXTRACT : PK_OM_LIST, Context); if (!Opened.HasValue()) return Opened.Failure();
                 return std::unique_ptr<IArchiveListing>(new Listing(Plugin, Opened.Value(), Test));
             }
             Result<Unit> Extract(std::string Archive, ArchiveHeader Expected, std::string Output, OperationContext Context) override
             {
                 if (!Absolute(Output)) return Invalid("absolute-output-path-required");
+                auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Opened = open(Plugin, Archive, PK_OM_EXTRACT, Context); if (!Opened.HasValue()) return Opened.Failure();
                 const auto Handle = Opened.Value(); auto Cleanup = qScopeGuard([&] { Plugin->close_(Handle); });
                 Callback State{Context, Output, Expected.size_}; CallbackScope Scope(State);
@@ -161,6 +173,7 @@ namespace hc::plugins
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
+                auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_ || Request.maxOutputBytes_ > 256ULL * 1024 * 1024) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;
                 if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE)

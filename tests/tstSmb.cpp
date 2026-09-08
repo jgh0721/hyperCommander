@@ -2,6 +2,7 @@
 #include <QtTest>
 #include "HyperCommander.hpp"
 #include "UIs/dlgMain.hpp"
+#include "UIs/dlgOpts.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
@@ -12,6 +13,8 @@
 #include "storageProviders.hpp"
 #include "qtViewerSurface.hpp"
 #include "qtViewerHost.hpp"
+#include "qtWcxHostSettings.hpp"
+#include "pluginHost/manifestFile.hpp"
 #include <QtitanGrid.h>
 #include <iostream>
 #include <psapi.h>
@@ -78,7 +81,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi"};
+            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -332,8 +335,139 @@ private slots:
         qInfo() << "Viewer product private bytes: before=" << BeforeBytes << "sampledPeak=" << PeakBytes << "afterIdle=" << AfterBytes;
     }
 
+    void configuredHostNavigation()
+    {
+        using namespace hc::plugins; using namespace hc::storage;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
+        const auto ArchivePath = Directory.filePath("configured.hcwcx");
+        { QFile File(ArchivePath); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
+        StSettings->beginGroup("PackerPlugins"); QVariantMap Original;
+        for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
+        StSettings->endGroup();
+        const auto Restore = qScopeGuard([&] {
+            StSettings->beginGroup("PackerPlugins"); StSettings->remove("");
+            for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
+            StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        });
+        StSettings->setValue("PackerPlugins/Count", 1); StSettings->setValue("PackerPlugins/0_Path", Spec.FileFullPath);
+        StSettings->setValue("PackerPlugins/0_Exts", "hcwcx"); StSettings->setValue("PackerPlugins/0_HostEnabled", true);
+        StSettings->setValue("PackerPlugins/0_HostManifest", Spec.hostManifest_);
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        for (bool Approved : {true, false})
+        {
+            StSettings->setValue("PackerPlugins/0_HostReviewed", Approved ? EncodeManifest(Spec.hostApproval_.reviewed_) : QByteArray{});
+            StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+            QModelIndex Selected;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "configured.hcwcx") Selected = Model->index(Row, 0);
+            QVERIFY(Selected.isValid()); Model->ChangeDirectory(Selected); QTRY_VERIFY(!Model->IsLoading());
+            if (Approved) QCOMPARE(names(Model), QStringList({"alpha.txt", "sub"}));
+            else
+            {
+                QVERIFY(Model->LastNavigationError().has_value()); QCOMPARE(Model->LastNavigationError()->category_, ErrorCategory::AccessDenied);
+                QVERIFY(names(Model).contains("configured.hcwcx"));
+            }
+            const auto Native = QDir::toNativeSeparators(Spec.FileFullPath).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
+        }
+        {
+            QMainOpts Options(main_); Options.show(); QCoreApplication::processEvents();
+            auto* Categories = Options.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
+            Categories->setCurrentRow(PAGE_PLUGIN_MGR.first); QCoreApplication::processEvents();
+            auto* Table = Options.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
+            QVERIFY(Table->isVisible()); QVERIFY(Options.grab().save(QCoreApplication::applicationDirPath() + "/wcx-product-options.png"));
+        }
+        Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+    }
+    void wcxHostApprovalUi_data()
+    {
+        QTest::addColumn<bool>("Approve"); QTest::addColumn<bool>("RevokeDuringConfirmation");
+        QTest::newRow("approve") << true << false;
+        QTest::newRow("decline") << false << false;
+        QTest::newRow("revoke-pending-approval") << true << true;
+    }
+    void wcxHostApprovalUi()
+    {
+        QFETCH(bool, Approve); QFETCH(bool, RevokeDuringConfirmation);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
+        QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
+        Settings.setValue("PackerPlugins/Count", 1); Settings.setValue("PackerPlugins/0_Path", Spec.FileFullPath);
+        Settings.setValue("PackerPlugins/0_Exts", "hcwcx");
+        QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+        auto* Review = Widget.findChild<QPushButton*>("wcxHostReview"); QVERIFY(Review);
+        auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke);
+        const bool PreviousNative = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto Restore = qScopeGuard([&] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, PreviousNative); });
+        bool Chosen = false, Confirmed = false, TimedOut = false, DefaultNo = false;
+        QElapsedTimer Elapsed; Elapsed.start(); QTimer Driver; Driver.setInterval(20);
+        connect(&Driver, &QTimer::timeout, &Widget, [&] {
+            if (Elapsed.elapsed() > 10000)
+            {
+                TimedOut = true;
+                for (auto* Dialog : Widget.findChildren<QDialog*>()) if (Dialog->isVisible()) Dialog->reject();
+                return;
+            }
+            for (auto* Dialog : Widget.findChildren<QFileDialog*>()) if (Dialog->isVisible() && !Chosen)
+            {
+                Chosen = true; Dialog->selectFile(Spec.hostManifest_); QMetaObject::invokeMethod(Dialog, "accept", Qt::DirectConnection);
+            }
+            for (auto* Message : Widget.findChildren<QMessageBox*>()) if (Message->isVisible() && !Confirmed)
+            {
+                Confirmed = true; DefaultNo = Message->defaultButton() == Message->button(QMessageBox::No);
+                if (RevokeDuringConfirmation) Revoke->click();
+                auto* Choice = Message->button(Approve ? QMessageBox::Yes : QMessageBox::No);
+                if (Choice) Choice->click(); else Message->reject();
+            }
+        });
+        Driver.start(); QTest::mouseClick(Review, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(Confirmed || TimedOut, 12000); Driver.stop(); QVERIFY(!TimedOut); QVERIFY(Chosen); QVERIFY(DefaultNo);
+        Widget.Save(Settings);
+        const auto Reviewed = Settings.value("PackerPlugins/0_HostReviewed").toByteArray();
+        if (Approve && !RevokeDuringConfirmation)
+        {
+            auto Parsed = hc::plugins::ParseManifest(Reviewed); QVERIFY(Parsed.HasValue());
+            QVERIFY(Parsed.Value() == Spec.hostApproval_.reviewed_);
+            QVERIFY(Settings.value("PackerPlugins/0_HostEnabled").toBool());
+        }
+        else QVERIFY(Reviewed.isEmpty());
+        if (RevokeDuringConfirmation) QVERIFY(Settings.value("PackerPlugins/0_HostEnabled").toBool());
+    }
+    void wcxHostSettingsPersistence()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
+        hc::plugins::PluginManifest Manifest; Manifest.id_ = "hc.test.settings"; Manifest.version_ = "1";
+        Manifest.binary_ = "fixture.wcx64"; Manifest.sha256_ = std::string(64, 'a');
+        Manifest.extensions_ = {hc::plugins::Extension::ArchiveRead}; Manifest.permissions_ = {hc::plugins::Permission::ReadContent};
+        const auto Reviewed = hc::plugins::EncodeManifest(Manifest);
+        Settings.setValue("PackerPlugins/Count", 1); Settings.setValue("PackerPlugins/0_Path", "fixture.wcx64");
+        Settings.setValue("PackerPlugins/0_Exts", "hcwcx"); Settings.setValue("PackerPlugins/0_HostEnabled", true);
+        Settings.setValue("PackerPlugins/0_HostManifest", "plugin.json"); Settings.setValue("PackerPlugins/0_HostReviewed", Reviewed);
+        {
+            QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+            auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
+            auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke);
+            QTest::mouseClick(Revoke, Qt::LeftButton);
+            QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
+            // Closing/cancelling the options UI must not persist its draft.
+        }
+        QCOMPARE(Settings.value("PackerPlugins/0_HostReviewed").toByteArray(), Reviewed);
+        QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+        auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table);
+        auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke); QTest::mouseClick(Revoke, Qt::LeftButton);
+        Widget.Save(Settings); Settings.sync();
+        QSettings Reload(Settings.fileName(), QSettings::IniFormat);
+        QVERIFY(Reload.value("PackerPlugins/0_HostReviewed").toByteArray().isEmpty());
+        QVERIFY(Reload.value("PackerPlugins/0_HostEnabled").toBool());
+        QCOMPARE(Reload.value("PackerPlugins/0_Path").toString(), QString("fixture.wcx64"));
+        Widget.Load(Reload); QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
+        QVERIFY(Widget.grab().save(QCoreApplication::applicationDirPath() + "/wcx-host-settings.png"));
+    }
+    void archiveCommandsAndBatchUi_data()
+    { QTest::addColumn<bool>("Hosted"); QTest::newRow("legacy") << false; QTest::newRow("hosted") << true; }
     void archiveCommandsAndBatchUi()
     {
+        QFETCH(bool, Hosted);
         using namespace hc::storage;
         using namespace hc::operations;
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
@@ -347,7 +481,7 @@ private slots:
         panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
         panels_.back()->ChangeCurrentPath(QDir::toNativeSeparators(SourcePath), {});
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
-        TyPlugInWCX Spec; Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
+        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, Hosted));
         auto Plugin = TySpWCX(new CTCPlugInWCX); QCOMPARE(Plugin->LoadWCX(Spec).ErrorCode, 0u);
         QVERIFY(Plugin->OpenArchive(ArchivePath).Value.value_or(false));
         auto Pack = nsHC::TySpFileSystem(new nsHC::CFSPack(ArchivePath, Plugin));
@@ -422,16 +556,28 @@ private slots:
         QTRY_VERIFY(StaleMove.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
         Rejected = StaleMove.get(); QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, "archive-destination-location-changed");
         panels_.back()->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Right->IsLoading());
-        Left->SetProviderEnabled(false); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
-        Left->Refresh(); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
-        QVERIFY(QFile::remove(ArchivePath)); Left->Refresh(); QVERIFY(names(Left).isEmpty());
+        if (!Hosted) Left->SetProviderEnabled(false);
+        QTRY_VERIFY(!Left->IsLoading()); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        Left->Refresh(); QTRY_VERIFY(!Left->IsLoading()); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        QVERIFY(QFile::remove(ArchivePath)); Left->Refresh(); QTRY_VERIFY(!Left->IsLoading());
+        if (Hosted)
+        {
+            // Failed asynchronous navigation keeps the last accepted snapshot and reports the error.
+            QVERIFY(Left->LastNavigationError().has_value());
+            QCOMPARE(Left->LastNavigationError()->category_, ErrorCategory::NotFound);
+            QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        }
+        else QVERIFY(names(Left).isEmpty());
         Left->SetProviderEnabled(true); QTRY_VERIFY(!Left->IsLoading());
         panels_.front()->ChangeCurrentPath(unc_, {}); panels_.back()->ChangeCurrentPath(unc_, {});
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
     }
 
+    void archiveCrossContainerMovesUi_data()
+    { archiveCommandsAndBatchUi_data(); }
     void archiveCrossContainerMovesUi()
     {
+        QFETCH(bool, Hosted);
         using namespace hc::storage; using namespace hc::operations;
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Native = Directory.filePath("native"); QVERIFY(QDir().mkdir(Native));
@@ -442,8 +588,8 @@ private slots:
         Left->SetProviderEnabled(true); Right->SetProviderEnabled(true);
         panels_.front()->ChangeCurrentPath(Native, {}); panels_.back()->ChangeCurrentPath(Directory.path(), {});
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
+        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, Hosted));
         const auto Mount = [&](CFSModel* Model, const QString& Path) -> bool {
-            TyPlugInWCX Spec; Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
             auto Plugin = TySpWCX(new CTCPlugInWCX);
             if (Plugin->LoadWCX(Spec).ErrorCode || !Plugin->OpenArchive(Path).Value.value_or(false)) return false;
             Model->AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSPack(Path, Plugin))); Model->ChangeDirectory("/"); return true;
@@ -909,6 +1055,23 @@ private slots:
     }
 
 private:
+    bool configureWcx(TyPlugInWCX& Spec, const QTemporaryDir& Directory, bool Hosted)
+    {
+        Spec.FileFullPath = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
+        if (!Hosted) return true;
+        using namespace hc::plugins;
+        const auto Binary = Directory.filePath("fixture.wcx64");
+        if (!QFile::copy(Spec.FileFullPath, Binary)) return false;
+        QFile File(Binary); if (!File.open(QIODevice::ReadOnly)) return false;
+        PluginManifest Manifest; Manifest.id_ = "hc.test.product-wcx"; Manifest.version_ = "1"; Manifest.binary_ = "fixture.wcx64";
+        Manifest.sha256_ = QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); File.close();
+        Manifest.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite};
+        Manifest.permissions_ = {Permission::ReadContent, Permission::WriteContent};
+        Spec.FileFullPath = Binary; Spec.hostEnabled_ = true; Spec.hostManifest_ = Directory.filePath("plugin.json");
+        Spec.hostApproval_.approved_ = true; Spec.hostApproval_.reviewed_ = Manifest; Spec.hostApproval_.granted_ = Manifest.permissions_;
+        QFile Declaration(Spec.hostManifest_); const auto Bytes = EncodeManifest(Manifest);
+        return Declaration.open(QIODevice::WriteOnly) && Declaration.write(Bytes) == Bytes.size();
+    }
     CFsModelT* model(CmpPanel* Panel) const
     {
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));

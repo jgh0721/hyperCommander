@@ -8,6 +8,7 @@
 #include "UniqueLibs/colorSchemeMgr.hpp"
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/commandMgr.hpp"
+#include "UniqueLibs/qtWcxHostSettings.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "fileSetMgr.hpp"
@@ -16,6 +17,8 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     : QBaseUI( parent, flags )
 {
     ui.setupUi( this );
+    auto* WcxLayout = new QVBoxLayout(ui.groupBox_3);
+    wcxHostSettings_ = new QWcxHostSettings(ui.groupBox_3); WcxLayout->addWidget(wcxHostSettings_);
 
     initialize();
 
@@ -108,7 +111,9 @@ void QMainOpts::SaveSettings_ColorScheme()
 
 void QMainOpts::SaveSettings_PluginList()
 {
+    wcxHostSettings_->Save(*StSettings);
     TyStPlugInMgr::GetInstance()->SaveSettings();
+    TyStPlugInMgr::GetInstance()->Refresh();
 }
 
 void QMainOpts::RefreshColorScheme( const QString& SchemeName )
@@ -197,6 +202,7 @@ void QMainOpts::RefreshFileSet( const QString& FileSetName )
 
 void QMainOpts::RefreshPluginList()
 {
+    wcxHostSettings_->Load(*StSettings);
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
     StPlugInMgr->Refresh();
 
@@ -667,6 +673,7 @@ void QMainOpts::initialize()
     ui.lstOptCate->addItem( PAGE_FILESET.second );
     ui.lstOptCate->addItem( PAGE_SHORTCUT.second );
     ui.lstOptCate->addItem( PAGE_CUSTOM_COLUMNS.second );
+    ui.lstOptCate->addItem( PAGE_PLUGIN_MGR.second );
 
     ui.lstOptCate->setResizeMode( QListView::Adjust );
     ui.lstOptCate->setSpacing( 6 );

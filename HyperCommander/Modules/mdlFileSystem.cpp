@@ -512,7 +512,7 @@ namespace nsHC
     std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
     {
         if (!readProvider_ && WCX_)
-            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"));
+            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"), {}, WCX_->Backend());
         return readProvider_;
     }
 } // nsHC

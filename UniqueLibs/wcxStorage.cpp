@@ -9,7 +9,6 @@
 #include <Windows.h>
 #include <set>
 
-std::recursive_timed_mutex& WcxCallMutex() { static std::recursive_timed_mutex Mutex; return Mutex; }
 namespace hc::storage
 {
     namespace
@@ -123,7 +122,7 @@ namespace hc::storage
                 return std::async(std::launch::async, [Self = shared_from_this(), Context, Work = std::move(Work)]() mutable -> Result<T> {
                     try
                     {
-                        std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
+                        std::unique_lock Lock(Self->mutex_, std::defer_lock);
                         while (!Lock.try_lock_for(std::chrono::milliseconds(25))) if (const auto Failure = Context.Check(Self->Id())) return *Failure;
                         if (const auto Failure = Context.Check(Self->Id())) return *Failure;
                         return Work(*Self, Context);
@@ -222,6 +221,7 @@ namespace hc::storage
             EntrySnapshot archive_;
             std::map<std::string, EntrySnapshot> entries_;
             bool mounted_ = false;
+            std::recursive_timed_mutex mutex_;
         };
     }
     std::shared_ptr<IStorageProvider> MakeWcxReadProvider(std::string PluginPath, Locator Root, std::string TemporaryBase, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)

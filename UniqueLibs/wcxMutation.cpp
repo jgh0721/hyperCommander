@@ -316,8 +316,6 @@ namespace hc::storage
                         Removed.push_back(Raw == Item.entry_.hints_.end() ? Path.substr(1) : Raw->second);
                     }
                 const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
-                std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
-                while (!Lock.try_lock_for(std::chrono::milliseconds(25))) if (const auto Failure = Context.Check({"wcx"})) return *Failure;
                 auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_}, Context);
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();

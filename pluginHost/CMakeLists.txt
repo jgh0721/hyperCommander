@@ -18,6 +18,7 @@ target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSV
 hc_enable_qt_deployment(hc-plugin-inspect)
 qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp)
 target_sources(hc_plugin_process PRIVATE archiveCodec.cpp archiveCodec.hpp hostedArchiveBackend.cpp hostedArchiveBackend.hpp)
+target_sources(hc_plugin_process PRIVATE approvedWcxBackend.cpp approvedWcxBackend.hpp)
 target_link_libraries(hc_plugin_process PUBLIC hc_plugin_manifest PRIVATE advapi32)
 target_compile_definitions(hc_plugin_process PRIVATE UNICODE _UNICODE)
 target_compile_options(hc_plugin_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

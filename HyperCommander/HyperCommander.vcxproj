@@ -594,6 +594,24 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\qtitanColumnAdapter.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtWcxHostSettings.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtWcxHostSettings.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\plugins\pluginManifest.hpp" />
+    <ClCompile Include="..\commonLibs\plugins\pluginManifest.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\plugins\pluginWire.hpp" />
+    <ClCompile Include="..\commonLibs\plugins\pluginWire.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\manifestFile.hpp" />
+    <ClCompile Include="..\pluginHost\manifestFile.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\pipeChannel.hpp" />
+    <ClCompile Include="..\pluginHost\pipeChannel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\pluginProcess.hpp" />
+    <ClCompile Include="..\pluginHost\pluginProcess.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\archiveCodec.hpp" />
+    <ClCompile Include="..\pluginHost\archiveCodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\hostedArchiveBackend.hpp" />
+    <ClCompile Include="..\pluginHost\hostedArchiveBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\approvedWcxBackend.hpp" />
+    <ClCompile Include="..\pluginHost\approvedWcxBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">Create</PrecompiledHeader>
@@ -624,4 +642,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   </ImportGroup>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="DeployNativePluginHost" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot;" />
+  </Target>
 </Project>
