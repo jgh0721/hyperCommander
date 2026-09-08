@@ -84,7 +84,7 @@ namespace hc::plugins
             detectString_ = QByteArray(Buffer.data(), End - Buffer.begin());
         }
         return QJsonObject{{"format", "wlx"}, {"unicode", true}, {"commands", command_ != nullptr}, {"processId", qint64(GetCurrentProcessId())},
-            {"detectAvailable", Detect != nullptr}, {"detectStringBytes", QString::fromLatin1(detectString_->toBase64())}};
+            {"detectAvailable", Detect != nullptr}, {"detectStringBytes", QString::fromLatin1(detectString_->toBase64())}, {"ansiCodePage", int(GetACP())}};
     }
     void WlxHostService::close()
     {

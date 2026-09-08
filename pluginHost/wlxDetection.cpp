@@ -142,7 +142,7 @@ namespace hc::plugins
     struct WlxDetectionExpression::Program
     {
         std::vector<Node> nodes_;
-        bool needsPrefix_ = false, multimedia_ = false;
+        bool needsPrefix_ = false, needsExtension_ = false, multimedia_ = false;
     };
     Result<WlxDetectionExpression> WlxDetectionExpression::Parse(const QByteArray& Expression)
     {
@@ -151,11 +151,13 @@ namespace hc::plugins
         for (const auto& Item : Compiled->nodes_)
         {
             Compiled->needsPrefix_ |= Item.op_ == Op::Byte || Item.op_ == Op::Find || Item.op_ == Op::FindI;
+            Compiled->needsExtension_ |= Item.op_ == Op::Extension;
             Compiled->multimedia_ |= Item.op_ == Op::Multimedia;
         }
         return WlxDetectionExpression(std::move(Compiled));
     }
     bool WlxDetectionExpression::NeedsPrefix() const { return program_->needsPrefix_; }
+    bool WlxDetectionExpression::NeedsExtension() const { return program_->needsExtension_; }
     Result<WlxDetectionMatch> WlxDetectionExpression::Evaluate(const WlxDetectionInput& Input) const
     {
         if (Input.extension_.size() > 32768 || Input.extension_.contains('\0')) return Invalid("wlx-detect-extension");

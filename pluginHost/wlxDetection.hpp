@@ -26,6 +26,7 @@ namespace hc::plugins
         static storage::Result<WlxDetectionExpression> Parse(const QByteArray& Expression);
         storage::Result<WlxDetectionMatch> Evaluate(const WlxDetectionInput& Input) const;
         bool NeedsPrefix() const;
+        bool NeedsExtension() const;
     private:
         struct Program;
         explicit WlxDetectionExpression(std::shared_ptr<const Program> Value) : program_(std::move(Value)) {}

@@ -92,6 +92,18 @@ foreach(HC_WLX_DPR IN ITEMS 1 1.5)
         -Executable "$<TARGET_FILE:hc_hosted_wlx_tests>" -Dpr ${HC_WLX_DPR})
     set_tests_properties(hc.hosted_wlx${HC_WLX_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 endforeach()
+qt_add_executable(hc_wlx_selection_tests tstWlxSelection.cpp ../UniqueLibs/nativeMaterializer.cpp)
+target_include_directories(hc_wlx_selection_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hc_wlx_selection_tests PRIVATE hc_wlx_sessions Qt6::Widgets Qt6::Test)
+target_compile_options(hc_wlx_selection_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_wlx_selection_tests hc-plugin-host-x64 hc_wlx_fixture hc_wlx_sdk_fixture)
+hc_enable_qt_deployment(hc_wlx_selection_tests TEST PLUGINS)
+foreach(HC_SELECTION_DPR IN ITEMS 1 1.5)
+    add_test(NAME hc.wlx_selection${HC_SELECTION_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
+        -Executable "$<TARGET_FILE:hc_wlx_selection_tests>" -Dpr ${HC_SELECTION_DPR})
+    set_tests_properties(hc.wlx_selection${HC_SELECTION_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+endforeach()
 qt_add_executable(hc_wcx_tests
     tstWcx.cpp
     ../UniqueLibs/wcxStorage.cpp
@@ -243,7 +255,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
@@ -252,7 +264,7 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
+    DEPENDS hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )

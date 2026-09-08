@@ -20,10 +20,21 @@ namespace hc::plugins
         // Windows adapter tokens only; never interpreted as memory addresses.
         QString window_, child_;
         bool idle_ = false;
+        bool noMatch_ = false;
+        std::optional<std::size_t> selectedCandidate_;
+        struct CandidateFailure { std::size_t index_; storage::Error error_; };
+        std::vector<CandidateFailure> candidateFailures_;
         std::uint64_t commandSequence_ = 0;
         std::optional<storage::Error> commandError_;
     };
     class WlxViewerService;
+    struct WlxAutomaticPolicy
+    {
+        bool force_ = false;
+        // Only MULTIMEDIA candidates override supported builtin multimedia
+        // unless the user explicitly requests forced plugin selection.
+        bool builtinMultimedia_ = false;
+    };
     class HostedWlxSession final : public viewer::IViewerSession
     {
     public:
@@ -57,12 +68,19 @@ namespace hc::plugins
         storage::Result<std::shared_ptr<HostedWlxSession>> Open(WlxViewerOptions Options,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
             std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context = {});
+        storage::Result<std::shared_ptr<HostedWlxSession>> OpenAutomatic(std::vector<WlxViewerOptions> Candidates,
+            std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
+            std::uint32_t Width, std::uint32_t Height, WlxAutomaticPolicy Policy = {}, storage::OperationContext Context = {});
         void CancelAll();
         bool IsIdle() const;
         void Collect();
     private:
         struct Task;
-        static void run(const std::shared_ptr<HostedWlxSession::State>& State, WlxViewerOptions Options,
+        storage::Result<std::shared_ptr<HostedWlxSession>> open(std::vector<WlxViewerOptions> Candidates,
+            std::optional<WlxAutomaticPolicy> Policy, std::shared_ptr<storage::IContentSource> Source,
+            QString ParentWindow, std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context);
+        static void run(const std::shared_ptr<HostedWlxSession::State>& State, std::vector<WlxViewerOptions> Candidates,
+            std::optional<WlxAutomaticPolicy> Policy,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
             MaterializerFactory Factory, storage::OperationContext Context);
         MaterializerFactory factory_;

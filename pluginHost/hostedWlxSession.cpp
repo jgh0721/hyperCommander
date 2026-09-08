@@ -1,5 +1,9 @@
 ﻿#include "hostedWlxSession.hpp"
 #include <QFileInfo>
+#include <QStringDecoder>
+#include "wlxDetection.hpp"
+#include <qt_windows.h>
+#include "externalLibs/TotalCommander/tc_listplug.h"
 #include <QUuid>
 #include <condition_variable>
 #include <deque>
@@ -12,6 +16,46 @@ namespace hc::plugins
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"wlx"}}; }
+        Result<QByteArray> ExtensionBytes(const EntrySnapshot& Entry)
+        {
+            QStringDecoder Decoder(QStringDecoder::Utf8); const QString Name = Decoder(Entry.name_);
+            if (Decoder.hasError() || Name.contains(QChar::Null)) return Invalid("wlx-detect-name-encoding");
+            const auto Text = QFileInfo(Name).suffix().toStdWString();
+            if (Text.empty()) return QByteArray{};
+            if (Text.size() > 32767) return Invalid("wlx-detect-extension");
+            const bool Utf8 = GetACP() == CP_UTF8; BOOL Substituted = FALSE;
+            const auto Flags = Utf8 ? WC_ERR_INVALID_CHARS : WC_NO_BEST_FIT_CHARS;
+            const auto Size = WideCharToMultiByte(CP_ACP, Flags, Text.c_str(), -1, nullptr, 0, nullptr, Utf8 ? nullptr : &Substituted);
+            if (!Size || Substituted) return Error{ErrorCategory::Unsupported, "wlx-detect-extension-encoding", {"wlx"}};
+            QByteArray Bytes(Size, '\0'); Substituted = FALSE;
+            if (!WideCharToMultiByte(CP_ACP, Flags, Text.c_str(), -1, Bytes.data(), Size, nullptr, Utf8 ? nullptr : &Substituted) || Substituted)
+                return Error{ErrorCategory::Unsupported, "wlx-detect-extension-encoding", {"wlx"}};
+            Bytes.chop(1); return Bytes;
+        }
+        Result<QByteArray> ReadDetectionPrefix(IContentSource& Source, const EntrySnapshot& Entry, OperationContext Context)
+        {
+            const auto Required = static_cast<std::size_t>(std::min<std::uint64_t>(Entry.size_, 8192));
+            if (Required > Context.maxReadBytes_) return Error{ErrorCategory::BudgetExceeded, "wlx-detect-read-budget", Entry.id_.providerId_};
+            QByteArray Bytes;
+            if (Required)
+            {
+                auto Opened = Source.OpenRead(Context).get(); if (!Opened.HasValue()) return Opened.Failure();
+                if (!Opened.Value()) return Invalid("wlx-detect-stream-required");
+                while (static_cast<std::size_t>(Bytes.size()) < Required)
+                {
+                    if (const auto Stop = Context.Check(Entry.id_.providerId_)) return *Stop;
+                    const auto Remaining = Required - static_cast<std::size_t>(Bytes.size());
+                    auto Chunk = Opened.Value()->Read(Remaining, Context).get(); if (!Chunk.HasValue()) return Chunk.Failure();
+                    if (Chunk.Value().bytes_.size() > Remaining) return Invalid("wlx-detect-read-overflow");
+                    if (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_) return Invalid("wlx-detect-read-no-progress");
+                    Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), static_cast<qsizetype>(Chunk.Value().bytes_.size()));
+                    if (Chunk.Value().eof_ && static_cast<std::size_t>(Bytes.size()) < Required)
+                        return Error{ErrorCategory::StaleRevision, "wlx-detect-premature-eof", Entry.id_.providerId_, Entry.id_};
+                }
+            }
+            auto Verified = Source.Verify(Context).get(); if (!Verified.HasValue()) return Verified.Failure();
+            return Bytes;
+        }
     }
     struct HostedWlxSession::State
     {
@@ -71,14 +115,23 @@ namespace hc::plugins
     WlxViewerService::~WlxViewerService() { CancelAll(); tasks_.clear(); }
     Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::Open(WlxViewerOptions Options,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, std::uint32_t Width, std::uint32_t Height, OperationContext Context)
+    { return open({std::move(Options)}, {}, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
+    Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::OpenAutomatic(std::vector<WlxViewerOptions> Candidates,
+        std::shared_ptr<IContentSource> Source, QString ParentWindow, std::uint32_t Width, std::uint32_t Height,
+        WlxAutomaticPolicy Policy, OperationContext Context)
+    { return open(std::move(Candidates), Policy, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
+    Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::open(std::vector<WlxViewerOptions> Candidates,
+        std::optional<WlxAutomaticPolicy> Policy, std::shared_ptr<IContentSource> Source, QString ParentWindow,
+        std::uint32_t Width, std::uint32_t Height, OperationContext Context)
     {
-        if (!factory_ || !Source || ParentWindow.isEmpty() || Width > 32768 || Height > 32768 || Options.flags_ < 0 || Options.flags_ > 511)
+        if (!factory_ || !Source || ParentWindow.isEmpty() || Width > 32768 || Height > 32768 || Candidates.size() > 1000
+            || std::any_of(Candidates.begin(), Candidates.end(), [](const auto& Item) { return Item.flags_ < 0 || Item.flags_ > 511; }))
             return Invalid("invalid-wlx-session-request");
         if (!maxSessions_ || maxSessions_ > 16) return Invalid("invalid-wlx-session-budget");
         Collect(); if (tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
         auto State = std::make_shared<HostedWlxSession::State>(); State->size_ = {Width, Height};
         State->details_.viewer_.id_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
-        State->details_.viewer_.provider_ = "wlx." + Options.approval_.reviewed_.id_;
+        State->details_.viewer_.provider_ = Policy ? "wlx.automatic" : "wlx." + Candidates.front().approval_.reviewed_.id_;
         auto Session = std::shared_ptr<HostedWlxSession>(new HostedWlxSession(State));
         auto Task = std::make_unique<WlxViewerService::Task>(); Task->state_ = State;
         // Retain the task before starting it: allocation failure while appending
@@ -86,8 +139,8 @@ namespace hc::plugins
         tasks_.push_back(std::move(Task));
         try
         {
-            tasks_.back()->worker_ = std::jthread([State, Options = std::move(Options), Source = std::move(Source), ParentWindow = std::move(ParentWindow), Factory = factory_, Context]() mutable {
-                run(State, std::move(Options), std::move(Source), std::move(ParentWindow), std::move(Factory), Context);
+            tasks_.back()->worker_ = std::jthread([State, Candidates = std::move(Candidates), Policy, Source = std::move(Source), ParentWindow = std::move(ParentWindow), Factory = factory_, Context]() mutable {
+                run(State, std::move(Candidates), Policy, std::move(Source), std::move(ParentWindow), std::move(Factory), Context);
                 std::lock_guard Lock(State->mutex_); State->details_.idle_ = true;
             });
         }
@@ -104,7 +157,8 @@ namespace hc::plugins
     {
         std::erase_if(tasks_, [](const auto& Task) { std::lock_guard Lock(Task->state_->mutex_); return Task->state_->details_.idle_; });
     }
-    void WlxViewerService::run(const std::shared_ptr<HostedWlxSession::State>& State, WlxViewerOptions Options,
+    void WlxViewerService::run(const std::shared_ptr<HostedWlxSession::State>& State, std::vector<WlxViewerOptions> Candidates,
+        std::optional<WlxAutomaticPolicy> Policy,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, MaterializerFactory Factory, OperationContext Context)
     {
         std::stop_callback External(Context.stopToken_, [&] { State->stop(false); });
@@ -112,41 +166,131 @@ namespace hc::plugins
         std::shared_ptr<IMaterializer> Materializer;
         std::shared_ptr<IMaterializedFileLease> Lease;
         std::unique_ptr<PluginProcess> Host;
+        bool NoMatch = false;
+        const auto CloseHost = [&] {
+            if (!Host) return;
+            Host->Close(); const auto Final = Host->Snapshot();
+            { std::lock_guard Lock(State->mutex_); State->details_.host_ = Final; }
+            Host.reset();
+        };
         const auto Work = [&]() -> Result<Unit> {
             if (const auto Stop = Context.Check({"wlx"})) return *Stop;
-            if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
-            auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-            if (Inspected.Value().manifest_.format_ != PluginFormat::Wlx || Options.approval_.reviewed_ != Inspected.Value().manifest_)
-                return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
-            if (Options.binaryPath_.isEmpty() || QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
-                return Error{ErrorCategory::AccessDenied, "plugin-configured-binary-mismatch", {"wlx"}};
-            HostProfile Profile; Profile.formats_ = {PluginFormat::Wlx}; Profile.extensions_ = {Extension::Viewer}; Profile.supportsIsolation_ = true;
-            auto Admission = Admit(Inspected.Value().manifest_, Options.approval_, Profile); if (!Admission.HasValue()) return Admission.Failure();
-            const auto Entry = Source->Describe();
-            { std::lock_guard Lock(State->mutex_); State->details_.viewer_.source_ = Entry; }
-            if (Entry.directory_) return Error{ErrorCategory::Unsupported, "viewer-directory", {"wlx"}};
-            auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
-            if (!Materializer) return Invalid("viewer-materializer-required");
-            auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
-            if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
-            if (!Lease) return Invalid("viewer-content-lease-required");
-            auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_);
-            if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
-            const auto StartedState = Host->Snapshot();
-            { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
-            auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
-            std::pair<std::uint32_t, std::uint32_t> Size;
-            { std::lock_guard Lock(State->mutex_); Size = *State->size_; State->size_.reset(); }
-            auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
-                {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}}, Context);
-            if (!Opened.HasValue()) return Opened.Failure();
-            auto HostState = Host->Snapshot();
+            if (Policy)
             {
-                std::lock_guard Lock(State->mutex_); State->details_.host_ = HostState;
-                State->details_.window_ = Opened.Value()["window"].toString(); State->details_.child_ = Opened.Value()["viewer"].toString();
-                State->details_.viewer_.bytesRead_ = Lease->Describe().size_; State->details_.viewer_.status_ = ViewerStatus::Ready;
-                State->commands_ = Probe.Value()["commands"].toBool();
+                Context.deadline_ = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(30));
+                Context.denyConcurrentMutation_ = true;
             }
+            std::optional<EntrySnapshot> Entry;
+            WlxDetectionInput Detection; bool PrefixReady = false, ExtensionReady = false, FatalContent = false;
+            const auto Materialize = [&]() -> Result<Unit> {
+                if (Lease) return Unit{};
+                auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
+                if (!Materializer) return Invalid("viewer-materializer-required");
+                auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
+                if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
+                if (!Lease) return Invalid("viewer-content-lease-required");
+                return Unit{};
+            };
+            const auto Attempt = [&](WlxViewerOptions& Options, std::size_t Index) -> Result<bool> {
+                if (const auto Stop = Context.Check({"wlx"})) return *Stop;
+                if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
+                auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+                if (Inspected.Value().manifest_.format_ != PluginFormat::Wlx || Options.approval_.reviewed_ != Inspected.Value().manifest_)
+                    return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
+                if (Options.binaryPath_.isEmpty() || QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
+                    return Error{ErrorCategory::AccessDenied, "plugin-configured-binary-mismatch", {"wlx"}};
+                HostProfile Profile; Profile.formats_ = {PluginFormat::Wlx}; Profile.extensions_ = {Extension::Viewer}; Profile.supportsIsolation_ = true;
+                auto Admission = Admit(Inspected.Value().manifest_, Options.approval_, Profile); if (!Admission.HasValue()) return Admission.Failure();
+                if (!Entry)
+                {
+                    Entry = Source->Describe();
+                    { std::lock_guard Lock(State->mutex_); State->details_.viewer_.source_ = *Entry; }
+                    if (Entry->directory_) { FatalContent = true; return Error{ErrorCategory::Unsupported, "viewer-directory", {"wlx"}}; }
+                    Detection.size_ = Entry->size_; Detection.force_ = Policy && Policy->force_;
+                }
+                if (!Policy)
+                {
+                    auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
+                }
+                auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_);
+                if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
+                const auto StartedState = Host->Snapshot();
+                { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
+                auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
+                if (Policy)
+                {
+                    if (Probe.Value()["ansiCodePage"].toInt(-1) != static_cast<int>(GetACP()))
+                        return Error{ErrorCategory::Unsupported, "wlx-detect-code-page", {"wlx"}};
+                    auto Verified = Source->Verify(Context).get();
+                    if (!Verified.HasValue()) { FatalContent = true; return Verified.Failure(); }
+                    const auto Encoded = Probe.Value()["detectStringBytes"].toString().toLatin1();
+                    const auto Decoded = QByteArray::fromBase64Encoding(Encoded, QByteArray::AbortOnBase64DecodingErrors);
+                    if (!Decoded) return Invalid("wlx-detect-base64");
+                    // ListLoad's SDK contract tries plugins with no definition,
+                    // and proceeds to the next plugin if ListLoad returns NULL.
+                    WlxDetectionMatch Match{true, false};
+                    if (Probe.Value()["detectAvailable"].toBool() && !Decoded.decoded.trimmed().isEmpty())
+                    {
+                        auto Expression = WlxDetectionExpression::Parse(Decoded.decoded); if (!Expression.HasValue()) return Expression.Failure();
+                        if (Expression.Value().NeedsExtension() && !ExtensionReady)
+                        {
+                            auto Extension = ExtensionBytes(*Entry); if (!Extension.HasValue()) return Extension.Failure();
+                            Detection.extension_ = std::move(Extension.Value()); ExtensionReady = true;
+                        }
+                        if (Expression.Value().NeedsPrefix() && !PrefixReady)
+                        {
+                            auto Prefix = ReadDetectionPrefix(*Source, *Entry, Context);
+                            if (!Prefix.HasValue()) { FatalContent = true; return Prefix.Failure(); }
+                            Detection.prefix_ = std::move(Prefix.Value()); PrefixReady = true;
+                        }
+                        auto Evaluated = Expression.Value().Evaluate(Detection); if (!Evaluated.HasValue()) return Evaluated.Failure();
+                        Match = Evaluated.Value();
+                    }
+                    if (Match.matches_ != true || (Policy->builtinMultimedia_ && !Policy->force_ && !Match.multimedia_)) return false;
+                    auto Prepared = Materialize();
+                    if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
+                    Options.flags_ = (Options.flags_ & ~lcp_forceshow) | (Policy->force_ ? lcp_forceshow : 0);
+                }
+                std::pair<std::uint32_t, std::uint32_t> Size;
+                { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
+                auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
+                    {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}}, Context);
+                if (!Opened.HasValue())
+                {
+                    if (Policy && Opened.Failure().code_ == "host-viewer-load-rejected") return false;
+                    return Opened.Failure();
+                }
+                const auto HostState = Host->Snapshot();
+                {
+                    std::lock_guard Lock(State->mutex_); State->details_.host_ = HostState;
+                    if (State->size_ && *State->size_ == Size) State->size_.reset();
+                    State->details_.window_ = Opened.Value()["window"].toString(); State->details_.child_ = Opened.Value()["viewer"].toString();
+                    State->details_.viewer_.bytesRead_ = Lease->Describe().size_; State->details_.viewer_.status_ = ViewerStatus::Ready;
+                    State->details_.viewer_.provider_ = "wlx." + Options.approval_.reviewed_.id_;
+                    State->details_.selectedCandidate_ = Index; State->commands_ = Probe.Value()["commands"].toBool();
+                }
+                return true;
+            };
+            bool Selected = false;
+            for (std::size_t Index = 0; Index < Candidates.size(); ++Index)
+            {
+                auto Tried = Attempt(Candidates[Index], Index);
+                if (Tried.HasValue() && Tried.Value()) { Selected = true; break; }
+                CloseHost();
+                if (!Tried.HasValue())
+                {
+                    if (!Policy || FatalContent) return Tried.Failure();
+                    std::lock_guard Lock(State->mutex_); State->details_.candidateFailures_.push_back({Index, Tried.Failure()});
+                }
+                if (const auto Stop = Context.Check({"wlx"})) return *Stop;
+            }
+            if (!Selected)
+            {
+                std::lock_guard Lock(State->mutex_);
+                if (!State->details_.candidateFailures_.empty()) return State->details_.candidateFailures_.front().error_;
+                NoMatch = true; return Unit{};
+            }
+            auto HostState = Host->Snapshot();
             OperationContext Calls; Calls.stopToken_ = Context.stopToken_;
             while (!State->stop_.stop_requested())
             {
@@ -203,6 +347,7 @@ namespace hc::plugins
         {
             std::lock_guard Lock(State->mutex_); auto& Snapshot = State->details_.viewer_;
             Snapshot.error_ = Failure; State->commands_ = false; State->queue_.clear();
+            State->details_.noMatch_ = NoMatch && !Failure && !State->closed_ && !State->cancelled_;
             Snapshot.status_ = State->closed_ ? ViewerStatus::Closed : State->cancelled_ ? ViewerStatus::Cancelled : Failure ? ViewerStatus::Failed : ViewerStatus::Closed;
         }
     }

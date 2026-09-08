@@ -77,10 +77,10 @@ private slots:
     }
     void inputContract()
     {
-        auto Header = WlxDetectionExpression::Parse("[0]=1"); QVERIFY(Header.HasValue()); QVERIFY(Header.Value().NeedsPrefix());
+        auto Header = WlxDetectionExpression::Parse("[0]=1"); QVERIFY(Header.HasValue()); QVERIFY(Header.Value().NeedsPrefix()); QVERIFY(!Header.Value().NeedsExtension());
         auto Result = Header.Value().Evaluate({{}, QByteArray(1, char(1)), 2});
         QVERIFY(!Result.HasValue()); QCOMPARE(Result.Failure().code_, std::string("wlx-detect-prefix-incomplete"));
-        auto Extension = WlxDetectionExpression::Parse("EXT=\"TXT\""); QVERIFY(Extension.HasValue()); QVERIFY(!Extension.Value().NeedsPrefix());
+        auto Extension = WlxDetectionExpression::Parse("EXT=\"TXT\""); QVERIFY(Extension.HasValue()); QVERIFY(!Extension.Value().NeedsPrefix()); QVERIFY(Extension.Value().NeedsExtension());
         QVERIFY(Extension.Value().Evaluate({"txt", {}, 1000000}).HasValue());
         QVERIFY(!Extension.Value().Evaluate({QByteArray("x\0y", 3), {}, 0}).HasValue());
         for (const auto* Source : {"\"ABC\"", "!(\"A\")", "\"A\" & 1", "0 | \"X\""})
