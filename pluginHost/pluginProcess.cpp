@@ -60,6 +60,8 @@ namespace hc::plugins
         WinHandle pipe_, job_, process_;
         HostLimits limits_;
         DWORD pid_ = 0;
+        bool viewer_ = false;
+        HWND viewerParent_ = nullptr;
         std::uint64_t sequence_ = 0;
         std::optional<Error> failure_;
         bool closed_ = false;
@@ -115,7 +117,8 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx}; Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite}; Profile.supportsIsolation_ = true;
+        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx};
+        Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();
         if (HostPath.isEmpty() || !QFileInfo(HostPath).isFile()) return HostError("host-executable-missing");
@@ -124,6 +127,7 @@ namespace hc::plugins
         auto Pipe = ServerPipe(PipeName); if (!Pipe.HasValue()) return Pipe.Failure();
         auto Owner = std::unique_ptr<PluginProcess>(new PluginProcess(std::make_unique<State>())); auto& S = *Owner->state_;
         S.limits_ = Limits; S.pipe_ = std::move(Pipe.Value()); S.job_.Reset(CreateJobObjectW(nullptr, nullptr));
+        S.viewer_ = Inspected.Value().manifest_.format_ == PluginFormat::Wlx;
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
@@ -187,6 +191,30 @@ namespace hc::plugins
         if (Kind < WireKind::ArchiveOpen || Kind > WireKind::ArchiveUpdateApply) return HostError("host-archive-command");
         std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
+    Result<QJsonObject> PluginProcess::ViewerCall(WireKind Kind, QJsonObject Request, OperationContext Context)
+    {
+        if (Kind < WireKind::ViewerOpen || Kind > WireKind::ViewerClose) return HostError("host-viewer-command");
+        std::lock_guard Lock(state_->mutex_); auto& S = *state_;
+        if (!S.viewer_ || S.closed_ || S.failure_) return HostError("host-viewer-unavailable");
+        if (Kind == WireKind::ViewerOpen)
+        {
+            if (S.viewerParent_) return HostError("host-viewer-already-open");
+            bool Parsed = false; const auto Value = Request["parent"].toString().toULongLong(&Parsed, 16);
+            const auto Parent = reinterpret_cast<HWND>(static_cast<quintptr>(Value)); DWORD Owner = 0;
+            if (!Parsed || !Parent || !GetWindowThreadProcessId(Parent, &Owner) || Owner != GetCurrentProcessId()) return HostError("host-viewer-parent");
+            // Keep HANDLES restrictions and grant only the caller-owned surface.
+            // Do not remove the restriction for all windows on the desktop.
+            if (!UserHandleGrantAccess(Parent, S.job_.Get(), TRUE)) return HostError("host-viewer-parent-grant", GetLastError());
+            S.viewerParent_ = Parent;
+        }
+        auto Result = S.call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
+        if ((Kind == WireKind::ViewerOpen && !Result.HasValue()) || (Kind == WireKind::ViewerClose && Result.HasValue()))
+        {
+            if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
+            S.viewerParent_ = nullptr;
+        }
+        return Result;
+    }
     HostSnapshot PluginProcess::Snapshot() const
     {
         std::lock_guard Lock(state_->mutex_); HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;
@@ -209,6 +237,8 @@ namespace hc::plugins
         if (S.job_.Valid() && S.process_.Valid() && WaitForSingleObject(S.process_.Get(), 0) == WAIT_TIMEOUT)
         { S.forcedTermination_ = true; TerminateJobObject(S.job_.Get(), 0); }
         if (S.process_.Valid()) WaitForSingleObject(S.process_.Get(), 2000);
+        if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
+        S.viewerParent_ = nullptr;
         S.closed_ = true; S.pipe_.Reset(); S.job_.Reset();
     }
 }

@@ -6,7 +6,7 @@ namespace hc::plugins
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"plugin-host"}}; }
-        bool ValidKind(WireKind Kind) { return Kind >= WireKind::Hello && Kind <= WireKind::ArchiveUpdateApply; }
+        bool ValidKind(WireKind Kind) { return Kind >= WireKind::Hello && Kind <= WireKind::ViewerClose; }
     }
     Result<std::vector<std::byte>> EncodeHeader(const WireHeader& Header)
     {

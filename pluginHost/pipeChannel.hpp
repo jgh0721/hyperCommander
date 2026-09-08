@@ -24,7 +24,7 @@ namespace hc::plugins
     };
     struct WireFrame { WireHeader header_; QByteArray payload_; };
     storage::Error HostError(const char* Code, DWORD NativeError = 0);
-    storage::Result<storage::Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, storage::OperationContext Context);
+    storage::Result<storage::Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, storage::OperationContext Context, bool PumpMessages = false);
     storage::Result<storage::Unit> WriteFrame(HANDLE Pipe, HANDLE Peer, WireKind Kind, std::uint64_t Sequence, const QByteArray& Payload, storage::OperationContext Context);
-    storage::Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, storage::OperationContext Context);
+    storage::Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, storage::OperationContext Context, bool PumpMessages = false);
 }
