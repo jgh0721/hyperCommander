@@ -81,7 +81,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation"};
+            const QStringList Allowed{"archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -247,7 +247,9 @@ private slots:
         auto PeakBytes = BeforeBytes;
         QTimer MemorySampler; MemorySampler.setInterval(25);
         connect(&MemorySampler, &QTimer::timeout, this, [&] { PeakBytes = std::max(PeakBytes, PrivateBytes()); }); MemorySampler.start();
-        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto CorpusRoot = localOnly_ ? QDir::tempPath() : unc_;
+        QTemporaryDir Directory(QDir(CorpusRoot).filePath("hc-viewer-XXXXXX")); QVERIFY(Directory.isValid());
+        qInfo() << "Viewer corpus location:" << Directory.path() << "SMB:" << !localOnly_;
         const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("first.txt", "first viewer content")); QVERIFY(Put("second.md", "# Second\n\nMarkdown preview")); QVERIFY(Put("archive.hcwcx", "HCWCX01"));
         QImage Picture(160, 90, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180));
@@ -335,6 +337,95 @@ private slots:
         qInfo() << "Viewer product private bytes: before=" << BeforeBytes << "sampledPeak=" << PeakBytes << "afterIdle=" << AfterBytes;
     }
 
+    void viewerLifetimeSoak()
+    {
+        const int Cycles = qEnvironmentVariableIntValue("HC_VIEWER_SOAK_CYCLES");
+        if (!Cycles) QSKIP("Opt-in product lifetime measurement: set HC_VIEWER_SOAK_CYCLES");
+        QVERIFY(Cycles >= 60 && Cycles <= 2000);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
+        QVERIFY(Put("large.txt", QByteArray("Viewer lifetime UTF-8 한글 text line\n").repeated(8000)));
+        QVERIFY(Put("document.md", QByteArray("# Viewer lifetime\n\n**Markdown** and `code`\n\n").repeated(300)));
+        { QImage Picture(2048, 2048, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180)); QVERIFY(Picture.save(Directory.filePath("picture.png"))); }
+        auto* Source = panels_.front(); auto* Target = panels_.back();
+        for (auto* Panel : panels_)
+        {
+            static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(Panel)->IsLoading());
+        }
+        auto* Model = static_cast<CFSModel*>(model(Source));
+        auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        const QStringList Names{"large.txt", "picture.png", "document.md"};
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+            {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.model() == Model && Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); return Index; }
+            }
+            return QModelIndex{};
+        };
+        const auto Dispatch = [&](const QString& Id, QModelIndex Index) {
+            auto Future = Bridge->Dispatch(Id, {}, "test", Index); QElapsedTimer Wait; Wait.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { if (Wait.elapsed() > 5000) return false; QTest::qWait(10); }
+            return Future.get().HasValue();
+        };
+        struct Sample { quint64 bytes_; DWORD handles_, gdi_, user_; int widgets_; };
+        const auto Measure = [] {
+            PROCESS_MEMORY_COUNTERS_EX Counters{}; Counters.cb = sizeof(Counters); DWORD Handles = 0;
+            const bool Valid = GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&Counters), sizeof(Counters))
+                && GetProcessHandleCount(GetCurrentProcess(), &Handles);
+            return Sample{Valid ? static_cast<quint64>(Counters.PrivateUsage) : 0, Handles,
+                GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS), GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS), static_cast<int>(QApplication::allWidgets().size())};
+        };
+        QFile Samples(QCoreApplication::applicationDirPath() + "/viewer-lifetime.jsonl"); QVERIFY(Samples.open(QIODevice::WriteOnly));
+        QElapsedTimer Elapsed; Elapsed.start(); std::vector<Sample> Values;
+        for (int Cycle = 0; Cycle < Cycles; ++Cycle)
+        {
+            for (const auto& Name : Names)
+            {
+                const auto Index = Focus(Name); QVERIFY(Index.isValid()); QVERIFY(Dispatch("hc.viewer.open", Index));
+                QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full"); QVERIFY(Full);
+                auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 10000);
+                QCOMPARE(QString::fromStdString(Surface->Snapshot().source_.name_), Name);
+                Full->reject(); QTRY_VERIFY(Full.isNull());
+            }
+            QVERIFY(Dispatch("hc.viewer.quick", Focus(Names.front())));
+            QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())); QVERIFY(Quick);
+            auto* Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface);
+            for (const auto& Name : Names)
+            {
+                QVERIFY(Focus(Name).isValid());
+                QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && QString::fromStdString(Surface->Snapshot().source_.name_) == Name, 10000);
+            }
+            QVERIFY(Dispatch("hc.viewer.quick", Focus(Names.back()))); QTRY_VERIFY(Quick.isNull());
+            QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 10000);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QCoreApplication::processEvents();
+            QVERIFY(main_->findChildren<QtViewerSurface*>().isEmpty());
+            const auto Current = Measure(); QVERIFY(Current.bytes_ > 0); Values.push_back(Current);
+            const QJsonObject Record{{"cycle", Cycle + 1}, {"elapsedMs", Elapsed.elapsed()}, {"privateBytes", static_cast<qint64>(Current.bytes_)},
+                {"handles", static_cast<int>(Current.handles_)}, {"gdi", static_cast<int>(Current.gdi_)}, {"user", static_cast<int>(Current.user_)}, {"widgets", Current.widgets_}};
+            const auto Line = QJsonDocument(Record).toJson(QJsonDocument::Compact) + "\r\n"; QCOMPARE(Samples.write(Line), Line.size()); QVERIFY(Samples.flush());
+            if ((Cycle + 1) % 10 == 0) qInfo() << "Viewer lifetime cycle" << Cycle + 1 << "privateBytes" << Current.bytes_ << "handles" << Current.handles_;
+        }
+        // Compare two equally sized windows after warmup; do not trim heaps/caches to mask growth.
+        const auto Median = [&](int Begin, auto Field) {
+            std::vector<quint64> Window;
+            for (int Index = Begin; Index < Begin + 20; ++Index) Window.push_back(Field(Values[Index]));
+            std::sort(Window.begin(), Window.end()); return Window[Window.size() / 2];
+        };
+        const auto Early = Median(10, [](const Sample& Value) { return Value.bytes_; });
+        const auto Late = Median(Cycles - 20, [](const Sample& Value) { return Value.bytes_; });
+        qInfo() << "Viewer lifetime cycles" << Cycles << "milliseconds" << Elapsed.elapsed() << "warm median bytes" << Early << "final median bytes" << Late;
+        QVERIFY2(Late <= Early + 16ULL * 1024 * 1024, "Post-warmup private-byte growth exceeded 16 MiB; inspect viewer-lifetime.jsonl");
+        QVERIFY(Median(Cycles - 20, [](const Sample& Value) { return Value.handles_; }) <= Median(10, [](const Sample& Value) { return Value.handles_; }) + 8);
+        QVERIFY(Median(Cycles - 20, [](const Sample& Value) { return Value.gdi_; }) <= Median(10, [](const Sample& Value) { return Value.gdi_; }) + 4);
+        QVERIFY(Median(Cycles - 20, [](const Sample& Value) { return Value.user_; }) <= Median(10, [](const Sample& Value) { return Value.user_; }) + 4);
+        QCOMPARE(Median(Cycles - 20, [](const Sample& Value) { return Value.widgets_; }), Median(10, [](const Sample& Value) { return Value.widgets_; }));
+        for (auto* Panel : panels_) { Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!model(Panel)->IsLoading()); }
+    }
     void configuredHostNavigation()
     {
         using namespace hc::plugins; using namespace hc::storage;
