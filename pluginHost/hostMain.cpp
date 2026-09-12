@@ -3,6 +3,7 @@
 #include "wcxHostService.hpp"
 #include "wlxHostService.hpp"
 #include "tcDataHostService.hpp"
+#include "dopusVfsHostService.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -41,11 +42,12 @@ namespace
         std::unique_ptr<WcxHostService> archives_;
         std::unique_ptr<WlxHostService> viewer_;
         std::unique_ptr<TcDataHostService> data_;
+        std::unique_ptr<DopusVfsHostService> dopusVfs_;
         std::vector<HMODULE> dependencies_;
         HMODULE module_ = nullptr;
         ~LoadedPlugin()
         {
-            data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
+            dopusVfs_.reset(); data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
             for (auto At = dependencies_.rbegin(); At != dependencies_.rend(); ++At) FreeLibrary(*At);
         }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
@@ -119,6 +121,11 @@ namespace
                 }
                 archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite));
             }
+            else if (Expected.Value().format_ == PluginFormat::DopusVfs)
+            {
+                dopusVfs_ = std::make_unique<DopusVfsHostService>(module_, Expected.Value());
+                auto Initialized = dopusVfs_->Initialize(); if (!Initialized.HasValue()) return Initialized.Failure();
+            }
             else
             {
                 data_ = std::make_unique<TcDataHostService>(module_, Expected.Value());
@@ -131,6 +138,7 @@ namespace
             if (!module_) return HostError("host-plugin-not-loaded");
             if (viewer_) return viewer_->Probe();
             if (data_) return data_->Probe();
+            if (dopusVfs_) return dopusVfs_->Probe();
             for (const auto Name : {"OpenArchiveW", "ReadHeaderExW", "ProcessFileW", "CloseArchive"})
                 if (!GetProcAddress(module_, Name)) return HostError("host-wcx-unicode-exports");
             const auto Caps = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetPackerCaps"));
@@ -187,11 +195,11 @@ int main(int Argc, char** Argv)
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
             Result = Plugin.viewer_->Handle(Header.kind_, Request.object());
         }
-        else if (Ready && Plugin.data_ && Header.kind_ >= WireKind::StorageEnumerate && Header.kind_ <= WireKind::MetadataQuery)
+        else if (Ready && (Plugin.data_ || Plugin.dopusVfs_) && Header.kind_ >= WireKind::StorageEnumerate && Header.kind_ <= WireKind::MetadataQuery)
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
-            Result = Plugin.data_->Handle(Header.kind_, Request.object());
+            Result = Plugin.dopusVfs_ ? Plugin.dopusVfs_->Handle(Header.kind_, Request.object()) : Plugin.data_->Handle(Header.kind_, Request.object());
         }
         const auto Reply = Result.HasValue() ? Result.Value() : QJsonObject{{"code", QString::fromStdString(Result.Failure().code_)},
             {"category", static_cast<int>(Result.Failure().category_)}, {"provider", QString::fromStdString(Result.Failure().provider_.value_)},

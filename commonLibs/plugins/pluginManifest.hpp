@@ -5,7 +5,7 @@
 
 namespace hc::plugins
 {
-    enum class PluginFormat { Wcx, Wlx, Wfx, Wdx };
+    enum class PluginFormat { Wcx, Wlx, Wfx, Wdx, DopusVfs };
     enum class Architecture { X64, X86, Arm64 };
     enum class ExecutionMode { Isolated, TrustedInProcess };
     enum class Permission { ReadContent, WriteContent, Network, UserInterface };

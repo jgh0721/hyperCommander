@@ -18,4 +18,6 @@ namespace hc::plugins
         storage::ProviderId Id, std::shared_ptr<storage::INativeContentStore> Store, bool Writable);
     storage::Result<std::shared_ptr<IMetadataProvider>> MakeHostedWdxProvider(std::shared_ptr<PluginProcess> Process,
         std::shared_ptr<storage::IMaterializer> Materializer);
+    storage::Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process,
+        storage::ProviderId Id, std::shared_ptr<storage::INativeContentStore> Store, bool Writable, const QString& NativeRoot);
 }

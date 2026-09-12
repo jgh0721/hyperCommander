@@ -56,7 +56,8 @@ namespace hc::plugins
         {
         case PluginFormat::Wcx: Allowed = {Extension::ArchiveRead, Extension::ArchiveWrite}; break;
         case PluginFormat::Wlx: Allowed = {Extension::Viewer}; break;
-        case PluginFormat::Wfx: Allowed = {Extension::StorageRead, Extension::StorageWrite}; break;
+        case PluginFormat::Wfx:
+        case PluginFormat::DopusVfs: Allowed = {Extension::StorageRead, Extension::StorageWrite}; break;
         case PluginFormat::Wdx: Allowed = {Extension::Metadata}; break;
         default: return Invalid("plugin-format");
         }

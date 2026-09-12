@@ -36,6 +36,7 @@ target_compile_options(hc_wcx_backend PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:
 target_sources(hc-plugin-host-x64 PRIVATE wcxHostService.cpp wcxHostService.hpp)
 target_sources(hc-plugin-host-x64 PRIVATE wlxHostService.cpp wlxHostService.hpp wlxWindowMessage.hpp)
 target_sources(hc-plugin-host-x64 PRIVATE tcDataHostService.cpp tcDataHostService.hpp)
+target_sources(hc-plugin-host-x64 PRIVATE dopusAbi.hpp dopusVfsHostService.cpp dopusVfsHostService.hpp)
 target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process hc_wcx_backend advapi32)
 target_compile_definitions(hc-plugin-host-x64 PRIVATE UNICODE _UNICODE)
 target_compile_options(hc-plugin-host-x64 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

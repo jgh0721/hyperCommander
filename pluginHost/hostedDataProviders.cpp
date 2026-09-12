@@ -15,10 +15,10 @@ namespace hc::plugins
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"tc-data"}}; }
         Error Unsupported(const char* Code) { return {ErrorCategory::Unsupported, Code, {"tc-data"}}; }
         QString S(const std::string& Text) { return QString::fromStdString(Text); }
-        std::string Root(ProviderId Id) { return "wfx:" + Id.value_ + ":"; }
-        Result<QString> Remote(const Locator& At, ProviderId Id)
+        std::string Root(ProviderId Id, const std::string& Scheme = "wfx") { return Scheme + ":" + Id.value_ + ":"; }
+        Result<QString> Remote(const Locator& At, ProviderId Id, const std::string& Scheme = "wfx")
         {
-            const auto Prefix = Root(Id);
+            const auto Prefix = Root(Id, Scheme);
             if (At.kind_ != LocatorKind::Plugin || !At.nesting_.empty() || !At.root_.starts_with(Prefix)) return Invalid("wfx-locator");
             const auto Name = S(At.root_.substr(Prefix.size()));
             if (!Name.startsWith('\\') || Name.startsWith("\\\\") || Name.size() > 1023 || Name.contains(QChar::Null) || Name.contains('/')) return Invalid("wfx-path");
@@ -98,8 +98,8 @@ namespace hc::plugins
         class WfxProvider final : public IStorageProvider, public IWritableStorage, public std::enable_shared_from_this<WfxProvider>
         {
         public:
-            WfxProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, QSet<QString> Exports, bool Writable)
-                : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), exports_(std::move(Exports)), writable_(Writable) {}
+            WfxProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, QSet<QString> Exports, bool Writable, std::string Scheme = "wfx")
+                : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), exports_(std::move(Exports)), writable_(Writable), scheme_(std::move(Scheme)) {}
             ProviderId Id() const override { return id_; }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override
             {
@@ -109,7 +109,7 @@ namespace hc::plugins
             }
             Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override
             {
-                auto Path = Remote(At, id_); if (!Path.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Path.Failure());
+                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Path.Failure());
                 auto Reply = process_->DataCall(WireKind::StorageEnumerate, {{"action", "open"}, {"path", Path.Value()}}, Context);
                 if (!Reply.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Reply.Failure());
                 const int Handle = Reply.Value()["cursor"].toInt(-1); if (Handle < 0) return Ready<std::unique_ptr<IEntryCursor>>(Invalid("wfx-cursor-envelope"));
@@ -117,7 +117,7 @@ namespace hc::plugins
             }
             Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override
             {
-                auto Path = Remote(At, id_); if (!Path.HasValue()) return Ready<EntrySnapshot>(Path.Failure());
+                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Ready<EntrySnapshot>(Path.Failure());
                 if (Path.Value() == "\\")
                 {
                     if (const auto Stop = Context.Check(id_)) return Ready<EntrySnapshot>(*Stop);
@@ -125,7 +125,7 @@ namespace hc::plugins
                     return Ready<EntrySnapshot>(std::move(Entry));
                 }
                 const auto Slash = At.root_.find_last_of('\\'); const auto Name = At.root_.substr(Slash + 1);
-                Locator Parent = At; Parent.root_.resize(std::max(Slash, Root(id_).size() + 1));
+                Locator Parent = At; Parent.root_.resize(std::max(Slash, Root(id_, scheme_).size() + 1));
                 auto Entries = Enumerate(Parent, Context).get(); if (!Entries.HasValue()) return Ready<EntrySnapshot>(Entries.Failure());
                 for (;;)
                 {
@@ -146,7 +146,7 @@ namespace hc::plugins
                 if (!exports_.contains("FsGetFileW")) return Ready<std::shared_ptr<IReadStream>>(Unsupported("wfx-get-unavailable"));
                 auto Entry = Stat(Resource, Context).get(); if (!Entry.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Entry.Failure());
                 if (Entry.Value().directory_) return Ready<std::shared_ptr<IReadStream>>(Invalid("wfx-read-directory"));
-                auto Path = Remote(Entry.Value().locator_, id_); if (!Path.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Path.Failure());
+                auto Path = Remote(Entry.Value().locator_, id_, scheme_); if (!Path.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Path.Failure());
                 auto Lease = store_->Produce(Entry.Value(), {}, {}, Context, [&](const std::string& Local, OperationContext Operation) -> Result<Unit>
                 {
                     const auto& Item = Entry.Value(); QJsonObject Info{{"size", QString::number(Item.size_)}, {"attributes", qint64(Item.attributes_)},
@@ -161,7 +161,7 @@ namespace hc::plugins
             Result<SupportDecision> Supports(Mutation Request, Locator At, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(id_)) return *Stop;
-                auto Path = Remote(At, id_); if (!Path.HasValue()) return Path.Failure();
+                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Path.Failure();
                 const auto Name = Request == Mutation::CreateContent ? "FsPutFileW" : Request == Mutation::MakeDirectory ? "FsMkDirW" : Request == Mutation::Rename ? "FsRenMovFileW" : "FsDeleteFileW";
                 const bool Available = writable_ && exports_.contains(Name);
                 return SupportDecision{Available ? Availability::Conditional : Availability::Unsupported, Available ? "wfx-no-atomic-revision-commit" : "wfx-write-unavailable",
@@ -183,18 +183,19 @@ namespace hc::plugins
             Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override
             {
                 auto Fresh = Stat(Entry.id_, Context).get(); if (!Fresh.HasValue()) return Fresh.Failure();
-                auto Target = Remote(To, id_); if (!Target.HasValue()) return Target.Failure();
+                auto Target = Remote(To, id_, scheme_); if (!Target.HasValue()) return Target.Failure();
                 return Mutate(Fresh.Value().locator_, {{"action", "rename"}, {"to", Target.Value()}}, Context);
             }
             Result<Unit> Mutate(Locator At, QJsonObject Request, OperationContext Context)
             {
                 if (!writable_) return Error{ErrorCategory::AccessDenied, "wfx-write-denied", id_};
-                auto Path = Remote(At, id_); if (!Path.HasValue()) return Path.Failure(); if (Path.Value() == "\\") return Invalid("wfx-mutate-root");
+                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Path.Failure(); if (Path.Value() == "\\") return Invalid("wfx-mutate-root");
                 Request.insert("path", Path.Value()); auto Reply = process_->DataCall(WireKind::StorageMutate, Request, Context);
                 if (!Reply.HasValue()) return Reply.Failure(); return Unit{};
             }
         private:
             std::shared_ptr<PluginProcess> process_; ProviderId id_; std::shared_ptr<INativeContentStore> store_; QSet<QString> exports_; bool writable_;
+            std::string scheme_;
         };
         class WriteSession final : public IWriteSession
         {
@@ -321,6 +322,30 @@ namespace hc::plugins
         QSet<QString> Exports; for (const auto& Item : Probe.Value()["exports"].toArray()) Exports.insert(Item.toString());
         auto Provider = std::make_shared<WfxProvider>(std::move(Process), Id, std::move(Store), std::move(Exports), Writable);
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id) + "\\"}};
+    }
+    Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id,
+        std::shared_ptr<INativeContentStore> Store, bool Writable, const QString& NativeRoot)
+    {
+        if (!Process || !Store || Id.value_.empty() || Id.value_.find_first_of(":\\/\0", 0, 4) != std::string::npos) return Invalid("dopus-vfs-provider-options");
+        auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure();
+        if (Probe.Value()["format"] != "dopus-vfs" || !Probe.Value()["readOnly"].isBool()) return Invalid("dopus-vfs-provider-format");
+        QSet<QString> Native; for (const auto& Item : Probe.Value()["exports"].toArray()) Native.insert(Item.toString());
+        // Reuse the storage wire protocol and lease/commit implementation. These
+        // names select existing adapter operations; the child calls only VFS_*.
+        QSet<QString> Operations;
+        if (Native.contains("VFS_CreateFileW") && Native.contains("VFS_CloseFile"))
+        {
+            if (Native.contains("VFS_ReadFile")) Operations.insert("FsGetFileW");
+            if (Native.contains("VFS_WriteFile")) Operations.insert("FsPutFileW");
+        }
+        for (const auto& [Dopus, Tc] : std::vector<std::pair<const char*, const char*>>{
+            {"VFS_CreateDirectoryW", "FsMkDirW"}, {"VFS_DeleteFileW", "FsDeleteFileW"}, {"VFS_RemoveDirectoryW", "FsRemoveDirW"},
+            {"VFS_MoveFileW", "FsRenMovFileW"}, {"VFS_SetFileAttrW", "FsSetAttrW"}, {"VFS_SetFileTimeW", "FsSetTimeW"}})
+            if (Native.contains(Dopus)) Operations.insert(Tc);
+        auto Mounted = Process->DataCall(WireKind::StorageEnumerate, {{"action", "mount"}, {"root", NativeRoot}});
+        if (!Mounted.HasValue()) return Mounted.Failure();
+        auto Provider = std::make_shared<WfxProvider>(std::move(Process), Id, std::move(Store), std::move(Operations), Writable && !Probe.Value()["readOnly"].toBool(), "dopus");
+        return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id, "dopus") + "\\"}};
     }
     Result<std::shared_ptr<IMetadataProvider>> MakeHostedWdxProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)
     {

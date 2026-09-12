@@ -1,5 +1,16 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
+qt_add_library(hc_dopus_fixture SHARED dopusFixture.cpp)
+target_include_directories(hc_dopus_fixture PRIVATE "${PROJECT_SOURCE_DIR}")
+target_compile_options(hc_dopus_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+qt_add_executable(hc_hosted_dopus_tests tstHostedDopus.cpp ../UniqueLibs/nativeMaterializer.cpp ../UniqueLibs/storageProviders.cpp)
+target_include_directories(hc_hosted_dopus_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
+target_link_libraries(hc_hosted_dopus_tests PRIVATE hc_plugin_process hc_viewer_core Qt6::Test)
+target_compile_options(hc_hosted_dopus_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_hosted_dopus_tests hc-plugin-host-x64 hc_dopus_fixture)
+add_test(NAME hc.hosted_dopus COMMAND hc_hosted_dopus_tests)
+set_tests_properties(hc.hosted_dopus PROPERTIES TIMEOUT 60)
+hc_enable_qt_deployment(hc_hosted_dopus_tests TEST)
 set(HC_DOPUS_SDK_DIRECTORY "" CACHE PATH "External extracted Opus SDK directory (contains headers)")
 if(HC_DOPUS_SDK_DIRECTORY)
     qt_add_executable(hc_dopus_sdk_abi_tests tstDopusSdkAbi.cpp)
@@ -294,10 +305,13 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_hosted_data_tests hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
+    DEPENDS hc_hosted_dopus_tests hc_hosted_data_tests hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )
+if(TARGET hc_dopus_sdk_abi_tests)
+    add_dependencies(hc_check hc_dopus_sdk_abi_tests)
+endif()
 
 if(TARGET hc_smb_tests)
     add_dependencies(hc_check hc_smb_tests)
