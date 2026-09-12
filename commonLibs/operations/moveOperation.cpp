@@ -185,7 +185,7 @@ namespace hc::operations
             || (Request.sourceArchive_ ? !ValidEndpoint(*Request.sourceArchive_) || Request.sourceArchive_->reader_ != Request.sourceReader_ : !Request.sourceWriter_)
             || (Request.destinationArchive_ ? !ValidEndpoint(*Request.destinationArchive_) || Request.destination_.kind_ != LocatorKind::Archive
                 || Request.destination_.root_ != Request.destinationArchive_->root_.root_ : !Request.destinationWriter_
-                || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)))
+                || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb && Request.destination_.kind_ != LocatorKind::Plugin)))
             return Error{ErrorCategory::InvalidRequest, "invalid-move-operation"};
         if (Request.sourceArchive_ && Request.destinationArchive_
             && PathKey({LocatorKind::Local, Request.sourceArchive_->root_.root_}) == PathKey({LocatorKind::Local, Request.destinationArchive_->root_.root_}))
@@ -196,7 +196,7 @@ namespace hc::operations
             if (Entry.id_.providerId_ != Request.sourceReader_->Id()
                 || (Request.sourceArchive_ ? Entry.locator_.kind_ != LocatorKind::Archive || Entry.locator_.root_ != Request.sourceArchive_->root_.root_
                     || Entry.locator_.nesting_.size() != 1 || Entry.locator_.nesting_[0].provider_ != Request.sourceArchive_->root_.nesting_[0].provider_
-                    : Entry.locator_.kind_ != LocatorKind::Local && Entry.locator_.kind_ != LocatorKind::Smb))
+                    : Entry.locator_.kind_ != LocatorKind::Local && Entry.locator_.kind_ != LocatorKind::Smb && Entry.locator_.kind_ != LocatorKind::Plugin))
                 return Error{ErrorCategory::InvalidRequest, "invalid-move-source"};
             if (!Request.sourceArchive_ && Request.destinationArchive_)
             {

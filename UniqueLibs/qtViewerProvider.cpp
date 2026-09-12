@@ -9,6 +9,13 @@
 namespace hc::viewer
 {
     using namespace storage;
+    bool CanViewBuiltinMultimedia(const EntrySnapshot&, std::span<const std::byte> Prefix)
+    {
+        QByteArray Data(reinterpret_cast<const char*>(Prefix.data()), static_cast<qsizetype>(Prefix.size()));
+        QBuffer Buffer(&Data); Buffer.open(QIODevice::ReadOnly);
+        QImageReader Reader(&Buffer); Reader.setDecideFormatFromContent(true);
+        return Reader.canRead();
+    }
     namespace
     {
         QByteArray Bytes(std::span<const std::byte> Data) { return QByteArray(reinterpret_cast<const char*>(Data.data()), static_cast<qsizetype>(Data.size())); }

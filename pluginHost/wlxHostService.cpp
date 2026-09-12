@@ -83,7 +83,7 @@ namespace hc::plugins
             if (End == Buffer.end()) return Invalid("host-wlx-detect-unterminated");
             detectString_ = QByteArray(Buffer.data(), End - Buffer.begin());
         }
-        return QJsonObject{{"format", "wlx"}, {"unicode", true}, {"commands", command_ != nullptr}, {"processId", qint64(GetCurrentProcessId())},
+        return QJsonObject{{"format", "wlx"}, {"unicode", true}, {"commands", command_ != nullptr}, {"search", bool(GetProcAddress(module_, "ListSearchTextW") || GetProcAddress(module_, "ListSearchText"))}, {"processId", qint64(GetCurrentProcessId())},
             {"detectAvailable", Detect != nullptr}, {"detectStringBytes", QString::fromLatin1(detectString_->toBase64())}, {"ansiCodePage", int(GetACP())}};
     }
     void WlxHostService::close()
@@ -191,6 +191,20 @@ namespace hc::plugins
         if (Kind == WireKind::ViewerCommand)
         {
             const auto Command = Request["command"].toInt(-1), Parameter = Request["parameter"].toInt(-1);
+            if (Command == 5)
+            {
+                const auto Text = Request["text"].toString();
+                if (Request.size() != 3 || Request["command"].toDouble() != 5 || !Request["text"].isString() || Text.isEmpty() || Text.size() > 4096
+                    || Text.contains(QChar::Null) || Parameter < 0 || Parameter > 15 || Request["parameter"].toDouble(-1) != Parameter) return Invalid("host-viewer-search-fields");
+                if (const auto Search = reinterpret_cast<int(__stdcall*)(HWND, wchar_t*, int)>(GetProcAddress(module_, "ListSearchTextW")))
+                { auto Wide = Text.toStdWString(); return QJsonObject{{"result", Search(viewer_, Wide.data(), Parameter)}}; }
+                if (const auto Search = reinterpret_cast<int(__stdcall*)(HWND, char*, int)>(GetProcAddress(module_, "ListSearchText")))
+                {
+                    auto Ansi = Text.toLocal8Bit(); if (QString::fromLocal8Bit(Ansi) != Text) return Error{ErrorCategory::Unsupported, "host-viewer-search-encoding", {"wlx"}};
+                    return QJsonObject{{"result", Search(viewer_, Ansi.data(), Parameter)}};
+                }
+                return Error{ErrorCategory::Unsupported, "host-viewer-search-unavailable", {"wlx"}};
+            }
             if (Request.size() != 2 || !Request["command"].isDouble() || !Request["parameter"].isDouble()
                 || Request["command"].toDouble() != Command || Request["parameter"].toDouble() != Parameter
                 || Command < 1 || Command > 4 || Parameter < 0 || Parameter > (Command == 4 ? 100 : 511)) return Invalid("host-viewer-command-fields");

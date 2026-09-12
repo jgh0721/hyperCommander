@@ -6,6 +6,7 @@
 #include "UniqueLibs/qtWlxSurface.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
 #include <QAction>
+#include <QBuffer>
 #include <QDialog>
 #include <QMenu>
 #include <QPlainTextEdit>
@@ -115,6 +116,124 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void compatibilityPackage()
+    {
+        const auto ManifestPath = qEnvironmentVariable("HC_WLX_MANIFEST");
+        if (ManifestPath.isEmpty()) QSKIP("Set HC_WLX_MANIFEST and HC_WLX_SOURCE for an explicitly selected compatibility package");
+        const auto Source = qEnvironmentVariable("HC_WLX_SOURCE"); QVERIFY(QFileInfo::exists(Source));
+        auto Inspected = Worker([&] { return InspectManifestFile(ManifestPath); });
+        QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
+        PluginApproval Approval{Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_};
+        QWidget Parent; Parent.resize(900, 600); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent)); Activate(Parent);
+        QTemporaryDir Config;
+        auto Started = Worker([&] { return PluginProcess::Start(host_, ManifestPath, Approval, {}, {}, Config.filePath("lsplugin.ini")); });
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });
+        const auto Probe = Worker([&] { return Host->Probe(); }); QVERIFY(Probe.HasValue()); qInfo() << "Compatibility probe" << Probe.Value();
+        QJsonObject Request{{"parent", QString::number(Parent.winId(), 16)}, {"file", Source}, {"width", qRound(900 * Parent.devicePixelRatioF())}, {"height", qRound(600 * Parent.devicePixelRatioF())}, {"flags", 0}};
+        auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
+        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+        const auto Viewer = Window(Opened.Value(), "viewer"); QVERIFY(IsWindow(Viewer)); QVERIFY(IsChild(reinterpret_cast<HWND>(Parent.winId()), Viewer));
+        QTest::qWait(400); Activate(Parent);
+        auto Focus = Worker([&] { return Host->ViewerCall(WireKind::ViewerFocus, {}); }); QVERIFY(Focus.HasValue());
+        auto Resize = Worker([&] { return Host->ViewerCall(WireKind::ViewerResize, {{"width", 800}, {"height", 500}}); }); QVERIFY(Resize.HasValue());
+        const auto Search = qEnvironmentVariable("HC_WLX_SEARCH");
+        if (!Search.isEmpty())
+        {
+            QVERIFY(Probe.Value()["search"].toBool());
+            const auto Found = Worker([&] { return Host->ViewerCall(WireKind::ViewerCommand, {{"command", 5}, {"parameter", 1}, {"text", Search}}); });
+            QVERIFY2(Found.HasValue(), Found.HasValue() ? "" : Found.Failure().code_.c_str()); qInfo() << "Search result" << Found.Value();
+        }
+        QTest::qWait(300);
+        const auto Screenshot = qEnvironmentVariable("HC_WLX_SCREENSHOT");
+        if (!Screenshot.isEmpty()) QVERIFY(Parent.screen()->grabWindow(Parent.winId()).save(Screenshot));
+        QVERIFY(Worker([&] { return Host->ViewerCall(WireKind::ViewerClose, {}); }).HasValue()); QVERIFY(!IsWindow(Viewer));
+        Worker([&] { Host->Close(); }); QVERIFY(!Host->Snapshot().running_); QVERIFY(!Host->Snapshot().forcedTermination_);
+    }
+    void sdkSearch()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval, true));
+        QFile Ini(Directory.filePath("lsplugin.ini")); QVERIFY(Ini.open(QIODevice::WriteOnly)); Ini.write("[fixture]\r\nvalue=123\r\n"); Ini.close();
+        QWidget Parent; Parent.resize(400, 250); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
+        auto Started = Worker([&] { return PluginProcess::Start(host_, Directory.filePath("plugin.json"), Approval, {}, {}, Ini.fileName()); });
+        QVERIFY(Started.HasValue()); auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });
+        const auto Request = request(Parent, Directory.filePath("search.txt"));
+        auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); }); QVERIFY(Opened.HasValue());
+        const auto Found = Worker([&] { return Host->ViewerCall(WireKind::ViewerCommand, {{"command", 5}, {"parameter", 1}, {"text", "한글"}}); }); QVERIFY(Found.HasValue());
+        QVERIFY(Title(Window(Opened.Value(), "viewer")).contains("한글"));
+    }
+    void automaticProductSelection_data()
+    {
+        QTest::addColumn<QString>("Mode");
+        for (const auto Mode : {"match", "no-match", "no-candidates", "denied", "image", "force-image", "multimedia", "cancel", "replace"})
+            QTest::newRow(Mode) << QString::fromLatin1(Mode);
+    }
+    void automaticProductSelection()
+    {
+        QFETCH(QString, Mode);
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval, true));
+        auto Options = options(Directory, Approval); Options.defaultIniPath_ = Directory.filePath("lsplugin.ini");
+        const QByteArray Expression = Mode == "no-match" ? "0" : Mode == "multimedia" ? "MULTIMEDIA" : "1";
+        { QFile Ini(Options.defaultIniPath_); QVERIFY(Ini.open(QIODevice::WriteOnly));
+            QVERIFY(Ini.write("[fixture]\r\nvalue=123\r\nexpression=" + Expression + "\r\n") > 0); }
+        if (Mode == "denied") Options.approval_.approved_ = false;
+        QWidget Main; Main.resize(640, 360); Main.show();
+        using Selection = QtViewerSurface::WlxSelectionMode;
+        auto SelectedMode = Mode == "force-image" ? Selection::Force : Selection::Automatic;
+        QtViewerHost Host(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, [&] {
+            return Mode == "no-candidates" ? std::vector<QtViewerSurface::WlxChoice>{}
+                : std::vector<QtViewerSurface::WlxChoice>{{"sdk", "SDK fixture", Options}};
+        }, [&] { return SelectedMode; });
+        const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
+        auto* Surface = Host.CreateSurface(&Main); Surface->resize(Main.size()); Surface->show();
+        QSignalSpy Failed(Surface, &QtViewerSurface::Failed), Ready(Surface, &QtViewerSurface::Ready);
+        const bool Image = Mode.contains("image") || Mode == "multimedia";
+        QByteArray Bytes = "automatic content";
+        if (Image)
+        {
+            QImage Picture(8, 8, QImage::Format_RGB32); Picture.fill(Qt::green);
+            Bytes.clear(); QBuffer Buffer(&Bytes); QVERIFY(Buffer.open(QIODevice::WriteOnly)); QVERIFY(Picture.save(&Buffer, "PNG"));
+        }
+        if (Mode == "cancel" || Mode == "replace")
+        {
+            auto Slow = std::make_shared<WaitingContent>(); Surface->Open(Slow, hc::viewer::ViewerPurpose::QuickPreview);
+            QTRY_VERIFY_WITH_TIMEOUT(Slow->reading_.load(), 4000);
+            if (Mode == "cancel")
+            {
+                Surface->Execute("cancel"); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000);
+                QCOMPARE(Ready.size(), 0); QCOMPARE(Failed.size(), 0); QVERIFY(!Surface->IsReady());
+                QVERIFY(Leases(Directory.path()).isEmpty()); return;
+            }
+        }
+        // Use a misleading suffix to verify multimedia selection probes bytes.
+        Surface->Open(MemoryContent(Bytes, "latest.txt"), hc::viewer::ViewerPurpose::QuickPreview);
+        if (Mode == "denied")
+        {
+            QTRY_COMPARE_WITH_TIMEOUT(Failed.size(), 1, 5000); QCOMPARE(Ready.size(), 0);
+            QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000); QVERIFY(Leases(Directory.path()).isEmpty()); return;
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 1); QCOMPARE(Failed.size(), 0);
+        const bool Builtin = Mode == "no-match" || Mode == "no-candidates" || Mode == "image";
+        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), !Builtin);
+        QCOMPARE(Surface->Snapshot().source_.name_, std::string("latest.txt"));
+        if (Mode == "image") QCOMPARE(Surface->Snapshot().provider_, std::string("builtin.image"));
+        // Read the changed policy on the next open, including on existing quick views.
+        SelectedMode = Selection::Manual; Surface->Open(MemoryContent("builtin again"));
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QCOMPARE(Surface->Snapshot().provider_, std::string("builtin.text"));
+        if (Mode == "match")
+        {
+            auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); QVERIFY(Menu);
+            QVERIFY(QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection));
+            Options.approval_.approved_ = false;
+            auto* Automatic = Menu->findChild<QAction*>("hc.viewer.plugin.automatic"); QVERIFY(Automatic); Automatic->trigger();
+            QTRY_COMPARE_WITH_TIMEOUT(Failed.size(), 1, 5000); QVERIFY(!Surface->IsReady());
+            Surface->findChild<QAction*>("hc.viewer.fallback")->trigger();
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+            QCOMPARE(Surface->Snapshot().provider_, std::string("builtin.text"));
+        }
+        Surface->Close(); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000); QVERIFY(Leases(Directory.path()).isEmpty());
+    }
     void sdkInitializationAndDetection_data()
     {
         QTest::addColumn<QString>("Mode");

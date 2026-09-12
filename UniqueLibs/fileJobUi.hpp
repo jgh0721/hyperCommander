@@ -36,6 +36,7 @@ private:
     void updateSelection();
     void answer(hc::operations::InteractionChoice Choice);
     std::string selectedId() const;
+    std::shared_ptr<hc::operations::IJobJournal> journal_;
     hc::operations::JobScheduler scheduler_;
     std::map<std::string, hc::operations::JobHandle> pending_;
     std::map<std::string, hc::operations::JobResult> results_;

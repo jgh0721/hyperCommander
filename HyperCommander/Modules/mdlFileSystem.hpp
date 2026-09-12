@@ -6,6 +6,7 @@
 #include "mdlFileSystem.hpp"
 #include "solTCPluginMgr.hpp"
 #include "commonLibs/storage/storage.hpp"
+#include "commonLibs/storage/writableStorage.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -124,6 +125,7 @@ namespace nsHC
         virtual quint64         GetTotalSize() { return 0; }
         virtual quint64         GetFreeSize() { return 0; }
         virtual std::shared_ptr<hc::storage::IStorageProvider> ReadProvider();
+        virtual std::shared_ptr<hc::storage::IWritableStorage> WriteProvider() { return {}; }
         virtual void RefreshReadProvider() {}
         virtual hc::storage::Locator ReadLocation(const QString& Path) const;
 
@@ -227,6 +229,30 @@ namespace nsHC
         TySpWCX                 WCX_;
         QString                 Parent_;
         CPackFSModel*           FsModel_ = nullptr;
+    };
+
+    class CFSPlugin final : public CFileSystemT
+    {
+    public:
+        CFSPlugin(hc::storage::Locator Root, std::shared_ptr<hc::storage::IStorageProvider> Reader,
+            std::shared_ptr<hc::storage::IWritableStorage> Writer)
+            : CFileSystemT(QString::fromStdString(Root.root_).chopped(1)), writer_(std::move(Writer))
+        {
+            cate_ = FS_CATE_VFS; features_ = TyEnFSFeatures(FS_FEA_LIST) | FS_FEA_READABLE;
+            if (writer_) features_ |= TyEnFSFeatures(FS_FEA_WRITABLE) | FS_FEA_MOVABLE | FS_FEA_DELETABLE | FS_FEA_RENAMABLE;
+            readProvider_ = std::move(Reader);
+        }
+        bool IsRemote() const override { return true; }
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override { return readProvider_; }
+        std::shared_ptr<hc::storage::IWritableStorage> WriteProvider() override { return writer_; }
+        hc::storage::Locator ReadLocation(const QString& Path) const override
+        {
+            auto Remote = QDir::toNativeSeparators(Path);
+            if (!Remote.startsWith(root_)) Remote = root_ + (Remote.startsWith('\\') ? Remote : "\\" + Remote);
+            return {hc::storage::LocatorKind::Plugin, Remote.toStdString()};
+        }
+    private:
+        std::shared_ptr<hc::storage::IWritableStorage> writer_;
     };
 
     class CFSVFS : public CFileSystemT

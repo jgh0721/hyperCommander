@@ -30,6 +30,8 @@ namespace hc::plugins
         ProtocolRange protocol_;
         std::set<Extension> extensions_;
         std::set<Permission> permissions_;
+        // Relative package paths and hashes, included in the reviewed identity.
+        std::map<std::string, std::string> dependencies_;
         bool operator==(const PluginManifest&) const = default;
     };
     // Supplied by the application's trust store, never by the plugin manifest.

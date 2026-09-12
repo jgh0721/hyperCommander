@@ -5,7 +5,8 @@ namespace hc::plugins
 {
     enum class WireKind : std::uint16_t { Hello = 1, Ping, Probe, Close, Response, Failure,
         ArchiveOpen, ArchiveNext, ArchiveRelease, ArchiveExtract, ArchiveUpdateBegin, ArchiveUpdateData, ArchiveUpdateApply,
-        ViewerOpen, ViewerResize, ViewerFocus, ViewerCommand, ViewerClose };
+        ViewerOpen, ViewerResize, ViewerFocus, ViewerCommand, ViewerClose,
+        StorageEnumerate, StorageGet, StorageMutate, MetadataQuery };
     constexpr std::size_t WireHeaderBytes = 24;
     constexpr std::uint32_t WirePayloadLimit = 1024 * 1024;
     struct WireHeader

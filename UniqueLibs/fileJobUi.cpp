@@ -1,5 +1,8 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
+#include "qtJobJournal.hpp"
+#include <QtConcurrent>
+#include <QStandardPaths>
 
 using namespace hc::operations;
 using namespace hc::storage;
@@ -33,7 +36,9 @@ namespace
 }
 
 FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events)
-    : QObject(Main), scheduler_(std::move(Events)), main_(Main)
+    : QObject(Main), journal_(MakeFileJobJournal(QDir(QStandardPaths::isTestModeEnabled()
+          ? QCoreApplication::applicationDirPath() : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath("operation-journal"))),
+      scheduler_(std::move(Events), 2, 1024, journal_), main_(Main)
 {
     Main->installEventFilter(this);
     dialog_ = new QDialog(Main);
@@ -70,14 +75,31 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     Buttons->addWidget(pause_); Buttons->addWidget(cancel_);
     auto* Hide = new QPushButton(tr("닫기"), dialog_); Buttons->addWidget(Hide);
     auto* Clear = new QPushButton(tr("완료 이력 지우기"), dialog_); Layout->addWidget(Clear);
-    connect(Clear, &QPushButton::clicked, this, [this] {
-        for (const auto& [Id, Result] : results_)
-        {
-            scheduler_.Forget(Id);
-            const auto Row = jobs_->findData(QString::fromStdString(Id));
-            if (Row >= 0) jobs_->removeItem(Row);
-        }
-        results_.clear(); updateSelection();
+    connect(Clear, &QPushButton::clicked, this, [this, Clear] {
+        std::vector<std::string> Ids;
+        for (const auto& [Id, Result] : results_) Ids.push_back(Id);
+        Clear->setEnabled(false);
+        using EraseResult = std::pair<std::vector<std::string>, std::optional<Error>>;
+        auto* Watcher = new QFutureWatcher<EraseResult>(this);
+        connect(Watcher, &QFutureWatcher<EraseResult>::finished, this, [this, Watcher, Clear] {
+            const auto Result = Watcher->result(); Watcher->deleteLater(); Clear->setEnabled(true);
+            for (const auto& Id : Result.first)
+            {
+                scheduler_.Forget(Id); results_.erase(Id);
+                const auto Row = jobs_->findData(QString::fromStdString(Id)); if (Row >= 0) jobs_->removeItem(Row);
+            }
+            updateSelection();
+            if (Result.second) QMessageBox::warning(dialog_, tr("이력 삭제 실패"), QString::fromStdString(Result.second->code_));
+        });
+        Watcher->setFuture(QtConcurrent::run([Journal = journal_, Ids = std::move(Ids)]() -> EraseResult {
+            EraseResult Result;
+            for (const auto& Id : Ids)
+            {
+                auto Removed = Journal->Forget(Id); if (!Removed.HasValue()) { Result.second = Removed.Failure(); break; }
+                Result.first.push_back(Id);
+            }
+            return Result;
+        }));
     });
     connect(Hide, &QPushButton::clicked, dialog_, &QDialog::hide);
     connect(pause_, &QPushButton::clicked, this, [this] {
@@ -90,6 +112,22 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, [this] { updateJobs(); });
     timer_->start(100);
+    auto* Recovery = new QFutureWatcher<Result<std::vector<JobResult>>>(this);
+    connect(Recovery, &QFutureWatcher<Result<std::vector<JobResult>>>::finished, this, [this, Recovery] {
+        auto Recovered = Recovery->result(); Recovery->deleteLater();
+        if (!Recovered.HasValue())
+        {
+            JobResult Failure; Failure.snapshot_.id_ = "hc-job-journal-recovery"; Failure.snapshot_.state_ = JobState::Failed;
+            Failure.snapshot_.error_ = Recovered.Failure(); Recovered = std::vector<JobResult>{Failure};
+        }
+        for (auto& Item : Recovered.Value())
+        {
+            const auto Id = Item.snapshot_.id_; if (pending_.contains(Id) || results_.contains(Id)) continue;
+            results_.emplace(Id, std::move(Item)); jobs_->addItem(tr("이전 작업 · %1").arg(QString::fromStdString(Id)), QString::fromStdString(Id));
+        }
+        updateSelection();
+    });
+    Recovery->setFuture(QtConcurrent::run([Journal = journal_] { return Journal->Recover(); }));
     updateSelection();
 }
 
@@ -152,7 +190,8 @@ void FileJobUi::updateJobs()
 
 void FileJobUi::updateSelection()
 {
-    const auto Current = scheduler_.Snapshot(selectedId());
+    auto Current = scheduler_.Snapshot(selectedId());
+    if (!Current.HasValue()) if (const auto Found = results_.find(selectedId()); Found != results_.end()) Current = Found->second.snapshot_;
     const bool Valid = Current.HasValue();
     const auto Snapshot = Valid ? Current.Value() : JobSnapshot{};
     const bool Active = Valid && !IsTerminal(Snapshot.state_);

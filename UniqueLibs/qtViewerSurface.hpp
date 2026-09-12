@@ -10,10 +10,12 @@ class QtViewerSurface final : public QWidget
 public:
     struct WlxChoice { QString id_, name_; hc::plugins::WlxViewerOptions options_; };
     using WlxChoices = std::function<std::vector<WlxChoice>()>;
+    enum class WlxSelectionMode { Manual, Automatic, Force };
+    using WlxSelection = std::function<WlxSelectionMode()>;
     // Service belongs to the GUI host and outlives this surface.
     explicit QtViewerSurface(hc::viewer::ViewerService& Service, QWidget* Parent = nullptr);
     ~QtViewerSurface() override;
-    void ConfigureWlx(QtWlxController* Controller, WlxChoices Choices);
+    void ConfigureWlx(QtWlxController* Controller, WlxChoices Choices, WlxSelection Selection = {});
     void Open(std::shared_ptr<hc::storage::IContentSource> Source,
         hc::viewer::ViewerPurpose Purpose = hc::viewer::ViewerPurpose::FullViewer);
     void Close();

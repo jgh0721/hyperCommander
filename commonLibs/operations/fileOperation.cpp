@@ -25,6 +25,7 @@ namespace hc::operations
             const auto End = Path.find_last_of("/\\");
             Path = Path.substr(0, End == 0 ? 1 : End);
             if (Path.size() == 2 && Path[1] == ':') Path += '\\';
+            if (At.kind_ == LocatorKind::Plugin && Path.ends_with(':')) Path += '\\';
             return At;
         }
         std::string NativeKey(std::string Path)
@@ -38,7 +39,7 @@ namespace hc::operations
         }
         bool SameOrWithin(const Locator& To, const Locator& From)
         {
-            if (To.kind_ != From.kind_ || (To.kind_ != LocatorKind::Local && To.kind_ != LocatorKind::Smb)) return false;
+            if (To.kind_ != From.kind_ || (To.kind_ != LocatorKind::Local && To.kind_ != LocatorKind::Smb && To.kind_ != LocatorKind::Plugin)) return false;
             const auto A = NativeKey(To.root_), B = NativeKey(From.root_);
             return A == B || A.starts_with(B + "\\");
         }
@@ -46,6 +47,7 @@ namespace hc::operations
         {
             const auto Path = NativeKey(At.root_);
             if (At.kind_ == LocatorKind::Archive) return "archive:" + Path;
+            if (At.kind_ == LocatorKind::Plugin) return "plugin:" + Path.substr(0, Path.find('\\'));
             if (Path.starts_with("\\\\"))
             {
                 const auto Server = Path.find('\\', 2);

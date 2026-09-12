@@ -34,6 +34,8 @@ namespace hc::plugins
         // Only MULTIMEDIA candidates override supported builtin multimedia
         // unless the user explicitly requests forced plugin selection.
         bool builtinMultimedia_ = false;
+        // Optional worker-only content probe supplied by the builtin adapter.
+        std::function<bool(const storage::EntrySnapshot&, std::span<const std::byte>)> builtinProbe_;
     };
     class HostedWlxSession final : public viewer::IViewerSession
     {
@@ -50,6 +52,7 @@ namespace hc::plugins
         storage::Result<storage::Unit> Focus();
         // Acceptance queues work; Details reports its completion sequence/error.
         storage::Result<std::uint64_t> SendCommand(int Command, int Parameter);
+        storage::Result<std::uint64_t> Search(QString Text, int Flags);
     private:
         struct State;
         explicit HostedWlxSession(std::shared_ptr<State> State);

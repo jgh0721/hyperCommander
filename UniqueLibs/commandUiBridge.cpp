@@ -9,6 +9,8 @@
 #include "qtViewerHost.hpp"
 #include "qtWcxHostSettings.hpp"
 #include "nativeMaterializer.hpp"
+#include "pluginHost/hostedDataProviders.hpp"
+#include <QtConcurrent>
 #include "commonLibs/storage/materializedContent.hpp"
 #include <QtitanGrid.h>
 
@@ -17,6 +19,28 @@ using namespace hc::storage;
 
 namespace
 {
+    template<class T> std::shared_ptr<T> WorkerOwned(std::shared_ptr<T> Value)
+    {
+        auto* Pointer = Value.get();
+        return std::shared_ptr<T>(Pointer, [Owner = std::move(Value)](T*) mutable {
+            (void)QtConcurrent::run([Owner = std::move(Owner)] {});
+        });
+    }
+    QString MetadataText(const Result<hc::plugins::MetadataValue>& Value)
+    {
+        using namespace hc::plugins;
+        if (!Value.HasValue()) return QString::fromStdString(Value.Failure().code_);
+        if (Value.Value().status_ == MetadataStatus::Delayed) return QObject::tr("계산 지연");
+        if (Value.Value().status_ == MetadataStatus::OnDemand) return QObject::tr("요청 시 계산");
+        QString Text;
+        std::visit([&Text](const auto& Item) {
+            using Type = std::decay_t<decltype(Item)>;
+            if constexpr (std::is_same_v<Type, std::string>) Text = QString::fromStdString(Item);
+            else if constexpr (std::is_same_v<Type, bool>) Text = Item ? QObject::tr("예") : QObject::tr("아니요");
+            else if constexpr (!std::is_same_v<Type, std::monostate>) Text = QString::number(Item);
+        }, Value.Value().value_);
+        return Text;
+    }
     class QtExecutor final : public IExecutor
     {
     public:
@@ -93,7 +117,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
     viewers_ = new QtViewerHost(Main, [Base = QDir::tempPath().toStdString()] { return MakeNativeMaterializer(Base); },
-        [] { return QWcxHostSettings::WlxChoices(*StSettings); });
+        [] { return QWcxHostSettings::WlxChoices(*StSettings); },
+        [] { return QWcxHostSettings::WlxSelection(*StSettings); });
     auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
@@ -238,7 +263,12 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     else if (Id == "hc.navigate.refresh") Model->Refresh();
     else if (Id == "hc.navigate.parent") Model->ChangeDirectory("..");
     else if (Id == "hc.navigate.cancel") Model->CancelNavigation();
-    else if (Id == "hc.navigate.provider") Model->SetProviderEnabled(std::get<bool>(Invocation.parameters_.at("enabled")));
+    else if (Id == "hc.navigate.provider")
+    {
+        if (Invocation.context_.location_.kind_ == LocatorKind::Plugin && !std::get<bool>(Invocation.parameters_.at("enabled")))
+            return Error{ErrorCategory::Unsupported, "plugin-requires-provider"};
+        Model->SetProviderEnabled(std::get<bool>(Invocation.parameters_.at("enabled")));
+    }
     else if (Id == "hc.navigate.open")
     {
         if (Invocation.context_.selection_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-selection-required"};
@@ -335,6 +365,117 @@ void CommandUiBridge::createActions()
     }
     auto* Jobs = Files->addAction(tr("작업 목록"));
     connect(Jobs, &QAction::triggered, this, [this] { fileJobs_->Show(); });
+    auto* Plugins = Window->menuBar()->addMenu(tr("플러그인"));
+    auto* Storage = Plugins->addAction(tr("파일 시스템 열기…")); Storage->setObjectName("hc.menu.wfx.open");
+    auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
+    connect(Storage, &QAction::triggered, this, [this] { openDataPlugin(false); });
+    connect(Metadata, &QAction::triggered, this, [this] { openDataPlugin(true); });
+}
+
+void CommandUiBridge::openDataPlugin(bool Metadata)
+{
+    using namespace hc::plugins;
+    const auto Choices = QWcxHostSettings::DataChoices(*StSettings, Metadata ? PluginFormat::Wdx : PluginFormat::Wfx);
+    if (Choices.empty()) { QMessageBox::information(main_, tr("플러그인"), tr("설정의 플러그인 실행 설정에서 플러그인을 추가하고 승인해 주세요.")); return; }
+    const auto Context = captureFiles({}, true);
+    QPointer<CmpPanel> Panel = activePanel_;
+    auto* Model = findModel(Context.tabId_);
+    std::shared_ptr<IContentSource> Source;
+    if (Metadata)
+    {
+        if (!Model || Model->IsLoading() || !Model->ProviderEnabled() || !Model->SnapshotProvider() || Context.selection_.size() != 1) return;
+        for (int Row = 0; Row < Model->rowCount(); ++Row)
+        {
+            const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+            if (Entry && Entry->storageEntry_ && !Entry->storageEntry_->directory_ && Entry->storageEntry_->id_ == Context.selection_.front())
+                Source = std::make_shared<ProviderContentSource>(Model->SnapshotProvider(), *Entry->storageEntry_);
+        }
+        if (!Source) return;
+    }
+    QStringList Names; for (const auto& Choice : Choices) Names << Choice.id_ + " — " + Choice.name_;
+    bool Accepted = false; const auto Name = QInputDialog::getItem(main_, tr("플러그인 선택"), tr("플러그인"), Names, 0, false, &Accepted);
+    if (!Accepted || !Panel) return;
+    const auto Options = Choices[Names.indexOf(Name)].options_;
+    const auto Cache = QDir::tempPath().toStdString();
+    const auto Session = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    auto* Dialog = new QDialog(main_); Dialog->setObjectName("hc.dataPluginDialog"); Dialog->setAttribute(Qt::WA_DeleteOnClose); Dialog->setWindowTitle(Name); Dialog->resize(600, 380);
+    auto* Layout = new QVBoxLayout(Dialog); auto* Status = new QLabel(tr("플러그인 연결 중…"), Dialog); Layout->addWidget(Status);
+    auto* Table = new QTableWidget(0, 2, Dialog); Table->setHorizontalHeaderLabels({tr("항목"), tr("값")}); Table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    Table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); Layout->addWidget(Table); Table->setVisible(Metadata);
+    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog); Layout->addWidget(Buttons); connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::close);
+    auto Stop = std::make_shared<std::stop_source>(); connect(Dialog, &QObject::destroyed, this, [Stop] { Stop->request_stop(); });
+    struct OpenResult { HostedStorage storage_; std::vector<std::pair<QString, QString>> values_; std::shared_ptr<IMetadataProvider> metadata_; std::vector<int> fields_; };
+    auto* Watcher = new QFutureWatcher<Result<OpenResult>>(Dialog);
+    connect(Watcher, &QFutureWatcher<Result<OpenResult>>::finished, Dialog, [this, Watcher, Dialog, Status, Table, Panel, Metadata, Source, Stop] {
+        const auto Result = Watcher->result(); Watcher->deleteLater();
+        if (!Result.HasValue()) { Status->setText(tr("연결 실패: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
+        if (Metadata)
+        {
+            Status->setText(Source->Describe().locator_.kind_ == LocatorKind::Local
+                ? tr("파일 정보 — 항목을 두 번 클릭하면 지연된 값도 계산합니다.")
+                : tr("가상·원격 파일의 임시 복사본 기준 정보입니다. 두 번 클릭하면 지연된 값도 계산합니다."));
+            for (const auto& [Field, Value] : Result.Value().values_)
+            { const auto Row = Table->rowCount(); Table->insertRow(Row); Table->setItem(Row, 0, new QTableWidgetItem(Field)); Table->setItem(Row, 1, new QTableWidgetItem(Value)); }
+            connect(Table, &QTableWidget::cellDoubleClicked, Dialog, [Table, Dialog, Source, Stop, Provider = Result.Value().metadata_, Fields = Result.Value().fields_](int Row, int) {
+                if (Row < 0 || std::size_t(Row) >= Fields.size()) return;
+                Table->setEnabled(false); auto* Query = new QFutureWatcher<hc::storage::Result<MetadataValue>>(Dialog);
+                connect(Query, &QFutureWatcher<hc::storage::Result<MetadataValue>>::finished, Dialog, [Query, Table, Row] {
+                    Table->item(Row, 1)->setText(MetadataText(Query->result())); Table->setEnabled(true); Query->deleteLater();
+                });
+                Query->setFuture(QtConcurrent::run([Provider, Source, Stop, Field = Fields[Row]] {
+                    OperationContext Operation; Operation.stopToken_ = Stop->get_token(); Operation.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+                    return Provider->Query(Source, {Field, 0, false}, Operation).get();
+                }));
+            });
+        }
+        else if (Panel)
+        {
+            Panel->AddTab(); bindModels();
+            if (auto* Target = PanelModel(Panel))
+            {
+                const auto& Storage = Result.Value().storage_;
+                Target->SetRoot(nsHC::TySpFileSystem(new nsHC::CFSPlugin(Storage.root_, Storage.reader_, Storage.writer_)));
+                Target->SetCurrentPath("\\"); Target->SetProviderEnabled(true); Target->Refresh();
+            }
+            Dialog->close();
+        }
+    });
+    Watcher->setFuture(QtConcurrent::run([Options, Cache, Source, Metadata, Stop, Session]() -> Result<OpenResult> {
+        OperationContext Operation; Operation.stopToken_ = Stop->get_token(); Operation.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        auto Inspected = InspectManifestFile(Options.manifestPath_, Operation); if (!Inspected.HasValue()) return Inspected.Failure();
+        if (QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive)) return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch"};
+        auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, {}, Operation, Options.defaultIniPath_);
+        if (!Started.HasValue()) return Started.Failure();
+        // Provider ownership may end when a GUI tab closes. Reap its host on a
+        // worker; active requests retain shared ownership until they return.
+        auto Process = std::shared_ptr<PluginProcess>(Started.Value().release(), [](PluginProcess* Value) {
+            (void)QtConcurrent::run([Value] { delete Value; });
+        });
+        OpenResult Result;
+        if (!Metadata)
+        {
+            auto Store = MakeNativeContentStore(Cache); if (!Store.HasValue()) return Store.Failure();
+            auto Storage = MakeHostedWfxProvider(Process, {Session}, Store.Value(), Options.approval_.granted_.contains(Permission::WriteContent));
+            if (!Storage.HasValue()) return Storage.Failure(); Result.storage_ = std::move(Storage.Value());
+            Result.storage_.reader_ = WorkerOwned(std::move(Result.storage_.reader_));
+            if (Result.storage_.writer_) Result.storage_.writer_ = WorkerOwned(std::move(Result.storage_.writer_));
+        }
+        else
+        {
+            auto Materializer = MakeNativeMaterializer(Cache); if (!Materializer.HasValue()) return Materializer.Failure();
+            auto Provider = MakeHostedWdxProvider(Process, Materializer.Value()); if (!Provider.HasValue()) return Provider.Failure();
+            Result.metadata_ = WorkerOwned(Provider.Value());
+            auto Fields = Provider.Value()->Fields(Operation).get(); if (!Fields.HasValue()) return Fields.Failure();
+            for (const auto& Field : Fields.Value())
+            {
+                if (const auto Failure = Operation.Check({})) return *Failure;
+                auto Value = Provider.Value()->Query(Source, {Field.index_, 0, true}, Operation).get();
+                Result.values_.emplace_back(QString::fromStdString(Field.name_), MetadataText(Value)); Result.fields_.push_back(Field.index_);
+            }
+        }
+        return Result;
+    }));
+    Dialog->show();
 }
 
 void CommandUiBridge::closeQuick()
@@ -471,7 +612,28 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
         bool Accepted = false;
         const auto Input = QInputDialog::getText(main_, Id == "hc.file.move" ? tr("이동") : tr("파일 작업"), Prompt, QLineEdit::Normal, Default, &Accepted);
         if (!Accepted || Input.isEmpty()) return;
-        if (Archive)
+        if (Destination.kind_ == LocatorKind::Plugin)
+        {
+            auto Target = Destination;
+            auto Path = QDir::toNativeSeparators(Input);
+            const auto PrefixEnd = Destination.root_.find('\\');
+            const auto Prefix = QString::fromStdString(Destination.root_.substr(0, PrefixEnd));
+            if (NameOnly)
+            {
+                if (Path.contains('\\') || Path.contains(':') || Path == "." || Path == ".." || Path.contains(QChar::Null)) return;
+                Target.root_ += (Target.root_.ends_with('\\') ? "" : "\\") + Path.toStdString();
+            }
+            else
+            {
+                if (Path.startsWith('\\')) Path = Prefix + Path;
+                if (!Path.startsWith(Prefix + "\\")) return;
+                Target.root_ = Path.toStdString();
+                Invocation.parameters_["destinationTab"] = DestinationTab;
+                Invocation.parameters_["destinationLocation"] = Serialize(Destination);
+            }
+            Invocation.parameters_["destination"] = Serialize(Target);
+        }
+        else if (Archive)
         {
             auto Target = Destination;
             const auto Base = QString::fromStdString(Destination.nesting_.back().entry_);
@@ -498,11 +660,11 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         : Invocation.id_ == "hc.file.rename" ? hc::operations::FileOperation::Rename : Invocation.id_ == "hc.file.mkdir" ? hc::operations::FileOperation::MakeDirectory : hc::operations::FileOperation::Delete;
     Request.correlationId_ = Invocation.correlationId_;
     const auto Kind = Invocation.context_.location_.kind_;
-    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Archive)
+    if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Archive && Kind != LocatorKind::Plugin)
         return Error{ErrorCategory::Unsupported, "file-operation-provider-required"};
     auto Reader = Model->SnapshotProvider();
     if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
-    auto Writer = Kind == LocatorKind::Archive ? nullptr : MakeNativeWritableStorage(Kind, Reader);
+    auto Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider() : Kind == LocatorKind::Archive ? nullptr : MakeNativeWritableStorage(Kind, Reader);
     if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
         for (const auto& Selected : Invocation.context_.selection_)
         {
@@ -583,6 +745,29 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         if (!Target) return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
         return Target;
     };
+    const auto DestinationWriter = [&]() -> Result<std::shared_ptr<IWritableStorage>> {
+            if (Request.destination_.kind_ == LocatorKind::Plugin)
+            {
+                auto* Target = Model;
+                if (Invocation.parameters_.contains("destinationTab"))
+                    Target = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
+                if (!Target || PanelModel(PanelOf(Target)) != Target || Target->IsLoading() || !Target->ProviderEnabled() || !Target->GetRoot()) return Error{ErrorCategory::StaleRevision, "plugin-destination-tab-changed"};
+                const auto Current = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
+                if (Invocation.parameters_.contains("destinationLocation") && Serialize(Current) != std::get<std::string>(Invocation.parameters_.at("destinationLocation")))
+                    return Error{ErrorCategory::StaleRevision, "plugin-destination-location-changed"};
+                if (Current.kind_ != LocatorKind::Plugin || Current.root_.substr(0, Current.root_.find('\\')) != Request.destination_.root_.substr(0, Request.destination_.root_.find('\\')))
+                    return Error{ErrorCategory::InvalidRequest, "plugin-destination-session-mismatch"};
+                auto Writer = Target->GetRoot()->WriteProvider();
+                if (!Writer) return Error{ErrorCategory::Unsupported, "plugin-write-not-approved"};
+                return Writer;
+            }
+            else
+            {
+                if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
+                    return Error{ErrorCategory::Unsupported, "native-destination-required"};
+                return MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
+            }
+    };
     Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
     const bool CrossMove = Request.operation_ == hc::operations::FileOperation::Move && (Kind == LocatorKind::Archive || Request.destination_.kind_ == LocatorKind::Archive)
         && !(Kind == LocatorKind::Archive && Request.destination_.kind_ == LocatorKind::Archive && Request.destination_.root_ == Invocation.context_.location_.root_);
@@ -604,9 +789,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         }
         else
         {
-            if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
-                return Error{ErrorCategory::Unsupported, "native-destination-required"};
-            Move.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
+            auto Writer = DestinationWriter(); if (!Writer.HasValue()) return Writer.Failure(); Move.destinationWriter_ = Writer.Value();
         }
         Started = fileJobs_->Submit(std::move(Move), Invocation.operation_);
     }
@@ -630,9 +813,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     {
         if (Request.operation_ != hc::operations::FileOperation::Delete)
         {
-            if (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
-                return Error{ErrorCategory::Unsupported, "native-destination-required"};
-            Request.destinationWriter_ = MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
+            auto Writer = DestinationWriter(); if (!Writer.HasValue()) return Writer.Failure(); Request.destinationWriter_ = Writer.Value();
         }
         Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
     }

@@ -39,6 +39,15 @@ namespace hc::plugins
         if (!Token(Manifest.id_) || !Token(Manifest.version_)) return Invalid("plugin-manifest-identity");
         if (!BinaryPath(Manifest.binary_)) return Invalid("plugin-binary-path");
         if (Manifest.sha256_.size() != 64 || !std::ranges::all_of(Manifest.sha256_, [](char Ch) { return (Ch >= '0' && Ch <= '9') || (Ch >= 'a' && Ch <= 'f'); })) return Invalid("plugin-binary-hash");
+        if (Manifest.dependencies_.size() > 64) return Invalid("plugin-dependency-budget");
+        std::set<std::string> Paths;
+        auto Fold = [](std::string Path) { for (auto& Ch : Path) if (Ch >= 'A' && Ch <= 'Z') Ch += 'a' - 'A'; return Path; };
+        Paths.insert(Fold(Manifest.binary_));
+        for (const auto& [Path, Hash] : Manifest.dependencies_)
+        {
+            if (!BinaryPath(Path) || !Paths.insert(Fold(Path)).second) return Invalid("plugin-dependency-path");
+            if (Hash.size() != 64 || !std::ranges::all_of(Hash, [](char Ch) { return (Ch >= '0' && Ch <= '9') || (Ch >= 'a' && Ch <= 'f'); })) return Invalid("plugin-dependency-hash");
+        }
         if (!ValidRange(Manifest.protocol_)) return Invalid("plugin-protocol-range");
         if (Manifest.architecture_ != Architecture::X64 && Manifest.architecture_ != Architecture::X86 && Manifest.architecture_ != Architecture::Arm64) return Invalid("plugin-architecture");
         if (Manifest.execution_ != ExecutionMode::Isolated && Manifest.execution_ != ExecutionMode::TrustedInProcess) return Invalid("plugin-execution-mode");

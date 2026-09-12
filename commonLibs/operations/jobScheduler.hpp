@@ -120,10 +120,21 @@ namespace hc::operations
         JobRequest request_;
         std::unique_ptr<IJobTask> task_;
     };
+    class IJobJournal
+    {
+    public:
+        virtual ~IJobJournal() = default;
+        // Synchronous worker checkpoint, before task side effects and before
+        // publishing completion. No passwords or interaction answers are passed.
+        virtual Result<storage::Unit> Checkpoint(const JobResult& Result) = 0;
+        virtual Result<std::vector<JobResult>> Recover() = 0;
+        virtual Result<storage::Unit> Forget(const std::string& Id) = 0;
+    };
     class JobScheduler
     {
     public:
-        explicit JobScheduler(std::shared_ptr<commands::EventHub> Events, std::size_t WorkerCount = 2, std::size_t MaxRetainedJobs = 1024);
+        explicit JobScheduler(std::shared_ptr<commands::EventHub> Events, std::size_t WorkerCount = 2, std::size_t MaxRetainedJobs = 1024,
+            std::shared_ptr<IJobJournal> Journal = {});
         ~JobScheduler();
         JobScheduler(const JobScheduler&) = delete;
         JobScheduler& operator=(const JobScheduler&) = delete;

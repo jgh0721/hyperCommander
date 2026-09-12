@@ -78,9 +78,17 @@ namespace hc::plugins
         QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(Json, &Parse);
         if (Parse.error != QJsonParseError::NoError || !Document.isObject()) return Invalid("plugin-manifest-json");
         if (!UniqueKeys(Json)) return Invalid("plugin-manifest-duplicate-key");
-        const auto Object = Document.object();
+        auto Object = Document.object();
+        const auto Dependencies = Object.take("dependencies");
         if (!ExactKeys(Object, {"schemaVersion", "id", "version", "binary", "sha256", "format", "architecture", "execution", "protocol", "extensions", "permissions"})) return Invalid("plugin-manifest-fields");
         PluginManifest Out;
+        if (!Dependencies.isUndefined())
+        {
+            if (!Dependencies.isObject() || Dependencies.toObject().size() > 64) return Invalid("plugin-dependencies");
+            const auto Items = Dependencies.toObject();
+            for (auto At = Items.begin(); At != Items.end(); ++At)
+            { if (!At.value().isString()) return Invalid("plugin-dependencies"); Out.dependencies_.emplace(At.key().toStdString(), At.value().toString().toStdString()); }
+        }
         if (!Integer(Object["schemaVersion"], Out.schemaVersion_)) return Invalid("plugin-manifest-version");
         for (const auto& Pair : {std::pair{"id", &Out.id_}, {"version", &Out.version_}, {"binary", &Out.binary_}, {"sha256", &Out.sha256_}})
         { if (!Object[Pair.first].isString()) return Invalid("plugin-manifest-string"); *Pair.second = Object[Pair.first].toString().toStdString(); }
@@ -96,10 +104,13 @@ namespace hc::plugins
     QByteArray EncodeManifest(const PluginManifest& Manifest)
     {
         const auto S = [](const std::string& Value) { return QString::fromStdString(Value); };
-        return QJsonDocument(QJsonObject{{"schemaVersion", static_cast<qint64>(Manifest.schemaVersion_)}, {"id", S(Manifest.id_)}, {"version", S(Manifest.version_)},
+        QJsonObject Object{{"schemaVersion", static_cast<qint64>(Manifest.schemaVersion_)}, {"id", S(Manifest.id_)}, {"version", S(Manifest.version_)},
             {"binary", S(Manifest.binary_)}, {"sha256", S(Manifest.sha256_)}, {"format", Name(Manifest.format_, Formats)}, {"architecture", Name(Manifest.architecture_, Architectures)},
             {"execution", Name(Manifest.execution_, Executions)}, {"extensions", Names(Manifest.extensions_, Extensions)}, {"permissions", Names(Manifest.permissions_, Permissions)},
-            {"protocol", QJsonObject{{"major", static_cast<qint64>(Manifest.protocol_.major_)}, {"minimumMinor", static_cast<qint64>(Manifest.protocol_.minimumMinor_)}, {"maximumMinor", static_cast<qint64>(Manifest.protocol_.maximumMinor_)}}}}).toJson();
+            {"protocol", QJsonObject{{"major", static_cast<qint64>(Manifest.protocol_.major_)}, {"minimumMinor", static_cast<qint64>(Manifest.protocol_.minimumMinor_)}, {"maximumMinor", static_cast<qint64>(Manifest.protocol_.maximumMinor_)}}}};
+        if (!Manifest.dependencies_.empty())
+        { QJsonObject Dependencies; for (const auto& [Path, Hash] : Manifest.dependencies_) Dependencies.insert(S(Path), S(Hash)); Object.insert("dependencies", Dependencies); }
+        return QJsonDocument(Object).toJson();
     }
     Result<InspectedPlugin> InspectManifestFile(const QString& Path, OperationContext Context)
     {
@@ -107,7 +118,9 @@ namespace hc::plugins
         QFile ManifestFile(Path); if (!ManifestFile.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-manifest-open", {"plugin"}};
         auto Parsed = ParseManifest(ManifestFile.read(65537)); if (!Parsed.HasValue()) return Parsed.Failure();
         const auto Root = QFileInfo(Path).canonicalPath();
-        const auto Binary = QFileInfo(QDir(Root).filePath(QString::fromStdString(Parsed.Value().binary_))).canonicalFilePath();
+        auto InspectBinary = [&](const std::string& Relative, const std::string& ExpectedHash) -> Result<QString>
+        {
+        const auto Binary = QFileInfo(QDir(Root).filePath(QString::fromStdString(Relative))).canonicalFilePath();
         const auto Prefix = Root.endsWith('/') ? Root : Root + '/';
         if (Root.isEmpty() || Binary.isEmpty() || !Binary.startsWith(Prefix, Qt::CaseInsensitive)) return Invalid("plugin-binary-outside-root");
         QFile File(Binary); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-binary-open", {"plugin"}};
@@ -127,8 +140,23 @@ namespace hc::plugins
             Bytes += Chunk.size(); if (Bytes > Limit) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
             Hash.addData(Chunk);
         }
-        if (Hash.result().toHex().toStdString() != Parsed.Value().sha256_) return Invalid("plugin-binary-hash-mismatch");
+        if (Hash.result().toHex().toStdString() != ExpectedHash) return Invalid("plugin-binary-hash-mismatch");
         if (const auto Stop = Context.Check({"plugin"})) return *Stop;
-        return InspectedPlugin{std::move(Parsed.Value()), Binary};
+        return Binary;
+        };
+        auto Binary = InspectBinary(Parsed.Value().binary_, Parsed.Value().sha256_); if (!Binary.HasValue()) return Binary.Failure();
+        QStringList Dependencies;
+        QSet<QString> Allowed{Binary.Value().toCaseFolded()};
+        for (const auto& [Relative, Hash] : Parsed.Value().dependencies_)
+        {
+            auto Dependency = InspectBinary(Relative, Hash); if (!Dependency.HasValue()) return Dependency.Failure();
+            if (Allowed.contains(Dependency.Value().toCaseFolded())) return Invalid("plugin-dependency-alias");
+            Allowed.insert(Dependency.Value().toCaseFolded()); Dependencies.push_back(Dependency.Value());
+        }
+        // Reject package drift, including a new adjacent DLL after approval.
+        // The host additionally avoids package-directory loader searches.
+        for (const auto& File : QDir(QFileInfo(Binary.Value()).absolutePath()).entryInfoList({"*.dll"}, QDir::Files | QDir::Hidden | QDir::System))
+            if (!Allowed.contains(File.canonicalFilePath().toCaseFolded())) return Invalid("plugin-unreviewed-adjacent-dll");
+        return InspectedPlugin{std::move(Parsed.Value()), Binary.Value(), Dependencies};
     }
 }

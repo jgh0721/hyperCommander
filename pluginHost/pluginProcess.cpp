@@ -118,8 +118,8 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx};
-        Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer}; Profile.supportsIsolation_ = true;
+        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx};
+        Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer, Extension::StorageRead, Extension::StorageWrite, Extension::Metadata}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();
         if (HostPath.isEmpty() || !QFileInfo(HostPath).isFile()) return HostError("host-executable-missing");
@@ -163,10 +163,9 @@ namespace hc::plugins
         ULONG Peer = 0; if (!GetNamedPipeClientProcessId(S.pipe_.Get(), &Peer) || Peer != S.pid_) return HostError("host-pipe-peer");
         QJsonObject Declaration{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
             {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}};
-        if (S.viewer_)
         {
             const auto Ini = DefaultIniPath.isEmpty()
-                ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath("lsplugin.ini") : DefaultIniPath;
+                ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath(S.viewer_ ? "lsplugin.ini" : Inspected.Value().manifest_.format_ == PluginFormat::Wcx ? "pkplugin.ini" : "tc-data.ini") : DefaultIniPath;
             if (!QDir::isAbsolutePath(Ini) || Ini.contains(QChar::Null)) return HostError("host-wlx-config-path");
             Declaration.insert("defaultIni", QDir::cleanPath(Ini));
         }
@@ -223,6 +222,12 @@ namespace hc::plugins
             S.viewerParent_ = nullptr;
         }
         return Result;
+    }
+    Result<QJsonObject> PluginProcess::DataCall(WireKind Kind, QJsonObject Request, OperationContext Context)
+    {
+        if (Kind < WireKind::StorageEnumerate || Kind > WireKind::MetadataQuery) return HostError("host-data-command");
+        if (const auto Stop = Context.Check({"tc-data"})) return *Stop;
+        std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
     HostSnapshot PluginProcess::Snapshot() const
     {

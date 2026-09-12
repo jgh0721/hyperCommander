@@ -616,6 +616,11 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\pluginHost\archiveCodec.hpp" />
     <ClCompile Include="..\pluginHost\archiveCodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\pluginHost\hostedArchiveBackend.hpp" />
+    <ClInclude Include="..\pluginHost\hostedDataProviders.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtJobJournal.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtJobJournal.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\plugins\metadataProvider.hpp" />
+    <ClCompile Include="..\pluginHost\hostedDataProviders.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\pluginHost\hostedArchiveBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\pluginHost\approvedWcxBackend.hpp" />
     <ClCompile Include="..\pluginHost\approvedWcxBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

@@ -2,6 +2,7 @@
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
 #include "wlxHostService.hpp"
+#include "tcDataHostService.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -39,8 +40,14 @@ namespace
         std::vector<WinHandle> locks_;
         std::unique_ptr<WcxHostService> archives_;
         std::unique_ptr<WlxHostService> viewer_;
+        std::unique_ptr<TcDataHostService> data_;
+        std::vector<HMODULE> dependencies_;
         HMODULE module_ = nullptr;
-        ~LoadedPlugin() { viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_); }
+        ~LoadedPlugin()
+        {
+            data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
+            for (auto At = dependencies_.rbegin(); At != dependencies_.rend(); ++At) FreeLibrary(*At);
+        }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
         {
             const bool HasIni = Hello.contains("defaultIni");
@@ -48,7 +55,7 @@ namespace
                 || (HasIni && !Hello["defaultIni"].isString())) return HostError("host-hello-fields");
             const auto Path = Hello["manifestPath"].toString();
             auto Expected = ParseManifest(QJsonDocument(Hello["manifest"].toObject()).toJson()); if (!Expected.HasValue()) return Expected.Failure();
-            if ((Expected.Value().format_ != PluginFormat::Wcx && Expected.Value().format_ != PluginFormat::Wlx) || Expected.Value().architecture_ != Architecture::X64
+            if (Expected.Value().architecture_ != Architecture::X64
                 || Expected.Value().execution_ != ExecutionMode::Isolated
                 || (Expected.Value().format_ == PluginFormat::Wcx && !Expected.Value().extensions_.contains(Extension::ArchiveRead))
                 || Expected.Value().protocol_.major_ != 1 || Expected.Value().protocol_.minimumMinor_ != 0) return HostError("host-unsupported-manifest");
@@ -57,7 +64,10 @@ namespace
             const auto Binary = Inspected.Value().binaryPath_;
             // Deny replacement of the file and its ancestor directory names until
             // unload. Recheck while these handles are held, before any DllMain.
-            auto Directory = QFileInfo(Binary).absolutePath();
+            auto PackageFiles = Inspected.Value().dependencyPaths_; PackageFiles.prepend(Binary);
+            for (const auto& PackageFile : PackageFiles)
+            {
+            auto Directory = QFileInfo(PackageFile).absolutePath();
             for (;;)
             {
                 WinHandle Lock(CreateFileW(reinterpret_cast<LPCWSTR>(Directory.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -65,11 +75,29 @@ namespace
                 if (!Lock.Valid()) return HostError("host-package-lock", GetLastError()); locks_.push_back(std::move(Lock));
                 const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent;
             }
-            WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(Binary.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+            WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(PackageFile.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
             if (!File.Valid()) return HostError("host-binary-lock", GetLastError()); locks_.push_back(std::move(File));
+            }
             Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value() || Inspected.Value().binaryPath_ != Binary) return HostError("host-manifest-changed");
-            module_ = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            auto RecheckedFiles = Inspected.Value().dependencyPaths_; RecheckedFiles.prepend(Binary);
+            if (RecheckedFiles != PackageFiles) return HostError("host-dependency-changed");
+            // Resolve package imports only through pinned, already loaded DLLs.
+            // Never search the writable package directory during loader lookup.
+            // Repeated passes permit an unordered acyclic dependency declaration.
+            auto Pending = Inspected.Value().dependencyPaths_;
+            while (!Pending.isEmpty())
+            {
+                const auto Before = Pending.size();
+                for (qsizetype Index = 0; Index < Pending.size();)
+                {
+                    const auto Dependency = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Pending[Index].utf16()), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    if (!Dependency) { ++Index; continue; }
+                    dependencies_.push_back(Dependency); Pending.removeAt(Index);
+                }
+                if (Pending.size() == Before) return HostError("host-dependency-load", GetLastError());
+            }
+            module_ = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
             if (!module_) return HostError("host-plugin-load", GetLastError());
             if (Expected.Value().format_ == PluginFormat::Wlx)
             {
@@ -77,13 +105,32 @@ namespace
                 auto Initialized = viewer_->Initialize(Hello["defaultIni"].toString());
                 if (!Initialized.HasValue()) return Initialized.Failure();
             }
-            else archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite));
+            else if (Expected.Value().format_ == PluginFormat::Wcx)
+            {
+                struct Defaults { int size_; DWORD low_, high_; char ini_[MAX_PATH]; };
+                const auto Set = reinterpret_cast<void(__stdcall*)(Defaults*)>(GetProcAddress(module_, "PackSetDefaultParams"));
+                if (Set)
+                {
+                    const auto Ini = QDir::toNativeSeparators(Hello["defaultIni"].toString()); const auto Bytes = Ini.toLocal8Bit();
+                    if (!QDir::isAbsolutePath(Ini) || Bytes.size() >= MAX_PATH || QString::fromLocal8Bit(Bytes) != Ini) return HostError("host-wcx-config-encoding");
+                    if (!QDir().mkpath(QFileInfo(Ini).absolutePath())) return HostError("host-wcx-config-directory");
+                    Defaults Parameters{}; Parameters.size_ = sizeof(Parameters); Parameters.high_ = 2; Parameters.low_ = 21;
+                    std::copy(Bytes.begin(), Bytes.end(), Parameters.ini_); Set(&Parameters);
+                }
+                archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite));
+            }
+            else
+            {
+                data_ = std::make_unique<TcDataHostService>(module_, Expected.Value());
+                auto Initialized = data_->Initialize(Hello["defaultIni"].toString()); if (!Initialized.HasValue()) return Initialized.Failure();
+            }
             return Unit{};
         }
         Result<QJsonObject> Probe()
         {
             if (!module_) return HostError("host-plugin-not-loaded");
             if (viewer_) return viewer_->Probe();
+            if (data_) return data_->Probe();
             for (const auto Name : {"OpenArchiveW", "ReadHeaderExW", "ProcessFileW", "CloseArchive"})
                 if (!GetProcAddress(module_, Name)) return HostError("host-wcx-unicode-exports");
             const auto Caps = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetPackerCaps"));
@@ -139,6 +186,12 @@ int main(int Argc, char** Argv)
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
             Result = Plugin.viewer_->Handle(Header.kind_, Request.object());
+        }
+        else if (Ready && Plugin.data_ && Header.kind_ >= WireKind::StorageEnumerate && Header.kind_ <= WireKind::MetadataQuery)
+        {
+            QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
+            if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
+            Result = Plugin.data_->Handle(Header.kind_, Request.object());
         }
         const auto Reply = Result.HasValue() ? Result.Value() : QJsonObject{{"code", QString::fromStdString(Result.Failure().code_)},
             {"category", static_cast<int>(Result.Failure().category_)}, {"provider", QString::fromStdString(Result.Failure().provider_.value_)},

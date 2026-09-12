@@ -109,9 +109,11 @@ extern "C" __declspec(dllexport) int __stdcall CloseArchive(HANDLE Handle) { del
 extern "C" __declspec(dllexport) int __stdcall GetBackgroundFlags() { return BACKGROUND_UNPACK | BACKGROUND_PACK; }
 extern "C" __declspec(dllexport) int __stdcall GetPackerCaps() { return PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE | PK_CAPS_MULTIPLE; }
 extern "C" __declspec(dllexport) void __stdcall SetProcessDataProcW(HANDLE Handle, tProcessDataProcW Callback) {
-    if (Handle) static_cast<ArchiveState*>(Handle)->progress_ = Callback; else PackingProgress = Callback;
+    if (Handle == INVALID_HANDLE_VALUE) PackingProgress = Callback;
+    else if (Handle) static_cast<ArchiveState*>(Handle)->progress_ = Callback;
+    else RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
 }
-extern "C" __declspec(dllexport) void __stdcall SetChangeVolProcW(HANDLE Handle, tChangeVolProcW Callback) { if (Handle) static_cast<ArchiveState*>(Handle)->volume_ = Callback; }
+extern "C" __declspec(dllexport) void __stdcall SetChangeVolProcW(HANDLE Handle, tChangeVolProcW Callback) { if (Handle && Handle != INVALID_HANDLE_VALUE) static_cast<ArchiveState*>(Handle)->volume_ = Callback; }
 extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wchar_t*, wchar_t* Source, wchar_t* List, int)
 {
     ArchiveState State;

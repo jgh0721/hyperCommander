@@ -1,6 +1,7 @@
 ﻿#include "jobScheduler.hpp"
 #include <condition_variable>
 #include <stdexcept>
+#include <random>
 
 namespace hc::operations
 {
@@ -53,6 +54,7 @@ namespace hc::operations
         std::map<std::string, std::size_t> laneLimits_;
         std::map<std::string, std::size_t> occupied_;
         std::shared_ptr<commands::EventHub> events_;
+        std::shared_ptr<IJobJournal> journal_;
         std::deque<commands::EventEnvelope> notifications_;
         bool draining_ = false;
         bool stopping_ = false;
@@ -109,12 +111,13 @@ namespace hc::operations
         }
     };
 
-    JobScheduler::JobScheduler(std::shared_ptr<commands::EventHub> Events, std::size_t WorkerCount, std::size_t MaxRetainedJobs)
+    JobScheduler::JobScheduler(std::shared_ptr<commands::EventHub> Events, std::size_t WorkerCount, std::size_t MaxRetainedJobs, std::shared_ptr<IJobJournal> Journal)
         : state_(std::make_shared<State>())
     {
         if (!Events || !WorkerCount || WorkerCount > 64 || !MaxRetainedJobs || MaxRetainedJobs > 65536)
             throw std::invalid_argument("invalid-scheduler-options");
         state_->events_ = std::move(Events);
+        state_->journal_ = std::move(Journal);
         state_->maxJobs_ = MaxRetainedJobs;
         try { for (std::size_t Index = 0; Index < WorkerCount; ++Index) workers_.emplace_back([Shared = state_] { run(Shared); }); }
         catch (...) { Shutdown(); throw; }
@@ -136,7 +139,8 @@ namespace hc::operations
         Value->task_ = std::move(Task);
         static std::atomic<std::uint64_t> NextId{0};
         auto& Snapshot = Value->result_.snapshot_;
-        Snapshot.id_ = "hc-job-" + std::to_string(++NextId);
+        static const std::string Session = [] { std::random_device Random; return std::to_string(Random()) + "-" + std::to_string(Random()); }();
+        Snapshot.id_ = "hc-job-" + Session + "-" + std::to_string(++NextId);
         Snapshot.correlationId_ = Value->request_.correlationId_.empty() ? Snapshot.id_ : Value->request_.correlationId_;
         Snapshot.submitted_ = std::chrono::steady_clock::now();
         Value->externalStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Value->request_.operation_.stopToken_, [Stop = Value->stop_]() mutable { Stop.request_stop(); });
@@ -330,6 +334,13 @@ namespace hc::operations
             }
             flushEvents(Shared);
             JobStep Step;
+            if (!Abort && Shared->journal_)
+            {
+                JobResult Checkpoint;
+                { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
+                try { auto Saved = Shared->journal_->Checkpoint(Checkpoint); if (!Saved.HasValue()) Abort = Saved.Failure(); }
+                catch (...) { Abort = Error{ErrorCategory::Unavailable, "job-journal-exception"}; }
+            }
             if (Abort) { Step.next_ = Abort->category_ == ErrorCategory::Cancelled ? JobState::Cancelled : JobState::Failed; Step.error_ = Abort; }
             else
             {
@@ -443,6 +454,16 @@ namespace hc::operations
                 catch (...) { Cleanup.push_back({ErrorCategory::Internal, "cleanup-exception"}); }
                 // History retains value results, never live provider/task handles.
                 Value->task_.reset();
+                if (Shared->journal_)
+                {
+                    JobResult Checkpoint;
+                    { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
+                    Checkpoint.snapshot_.state_ = Cleanup.empty() ? Terminal : JobState::Failed;
+                    Checkpoint.cleanupErrors_ = Cleanup;
+                    if (!Cleanup.empty()) Checkpoint.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"};
+                    try { auto Saved = Shared->journal_->Checkpoint(Checkpoint); if (!Saved.HasValue()) Cleanup.push_back(Saved.Failure()); }
+                    catch (...) { Cleanup.push_back({ErrorCategory::Unavailable, "job-journal-exception"}); }
+                }
                 {
                     std::lock_guard Lock(Shared->mutex_);
                     Value->result_.cleanupErrors_ = std::move(Cleanup);

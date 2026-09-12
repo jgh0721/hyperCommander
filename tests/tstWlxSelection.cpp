@@ -105,6 +105,25 @@ private:
         return Ini.open(QIODevice::WriteOnly) && Ini.write("[fixture]\r\nvalue=123\r\nmode=" + Mode + "\r\nexpression=" + Expression + "\r\n") > 0;
     }
 private slots:
+    void builtinProbeRunsOnWorker()
+    {
+        QTemporaryDir Directory; WlxViewerOptions Options;
+        QVERIFY(candidate(Directory.filePath("plugin"), Options, "[0]=\"a\""));
+        QWidget Parent; Parent.resize(320, 200); Parent.show();
+        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Observation = std::make_shared<struct Observation>(); std::atomic<unsigned> Probes = 0;
+        WlxAutomaticPolicy Policy;
+        Policy.builtinProbe_ = [&](const EntrySnapshot& Entry, std::span<const std::byte> Prefix) {
+            Observation->Touch(); ++Probes;
+            return Entry.size_ == 3 && Prefix.size() == 3 && Prefix.front() == std::byte{'a'};
+        };
+        auto Opened = Service.OpenAutomatic({Options}, std::make_shared<ObservedContent>(Observation), QString::number(Parent.winId(), 16), 320, 200, Policy);
+        QVERIFY(Opened.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Opened.Value()->Details().idle_, 5000);
+        QVERIFY(Opened.Value()->Details().noMatch_); QCOMPARE(Probes.load(), 1u);
+        QCOMPARE(Observation->opens_.load(), 1u); QCOMPARE(Observation->bytes_.load(), 3u);
+        QVERIFY(!Observation->onGui_.load()); QVERIFY(Leases(Directory.path()).isEmpty());
+    }
     void selection_data()
     {
         QTest::addColumn<QByteArray>("First"); QTest::addColumn<QByteArray>("Mode"); QTest::addColumn<bool>("Second");

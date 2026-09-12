@@ -36,6 +36,8 @@ set_target_properties(hc_viewer_core PROPERTIES AUTOMOC OFF AUTOUIC OFF)
 target_include_directories(hc_viewer_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_options(hc_viewer_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_library(hc_viewer_qt STATIC
+    UniqueLibs/qtJobJournal.cpp
+    UniqueLibs/qtJobJournal.hpp
     UniqueLibs/qtViewerProvider.cpp
     UniqueLibs/qtViewerProvider.hpp
     UniqueLibs/qtViewerSurface.cpp

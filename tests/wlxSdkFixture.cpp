@@ -52,3 +52,11 @@ extern "C" HWND __stdcall ListLoadW(HWND Parent, wchar_t*, int Flags)
         0, 0, 100, 40, Parent, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 extern "C" void __stdcall ListCloseWindow(HWND Window) { DestroyWindow(Window); }
+extern "C" int __stdcall ListSearchTextW(HWND Window, wchar_t* Text, int Flags)
+{
+    if (!IsWindow(Window) || sdkThread_ != GetCurrentThreadId() || Flags < 0 || Flags > 15) return LISTPLUGIN_ERROR;
+    if (wcscmp(Text, L"crash-search") == 0) Crash();
+    if (wcscmp(Text, L"hang-search") == 0) Sleep(INFINITE);
+    if (wcscmp(Text, L"한글") != 0) return LISTPLUGIN_ERROR;
+    SetWindowTextW(Window, Text); return LISTPLUGIN_OK;
+}

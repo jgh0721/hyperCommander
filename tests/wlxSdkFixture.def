@@ -3,3 +3,4 @@ EXPORTS
     ListGetDetectString
     ListLoadW
     ListCloseWindow
+    ListSearchTextW

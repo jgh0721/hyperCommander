@@ -40,7 +40,7 @@ namespace hc::storage
         bool operator==(const ResourceId&) const = default;
     };
 
-    enum class LocatorKind { Local, Shell, Smb, Archive };
+    enum class LocatorKind { Local, Shell, Smb, Archive, Plugin };
     struct ContainerHop
     {
         std::string provider_;
@@ -266,7 +266,7 @@ namespace hc::storage
         Input.remove_prefix(4);
         std::string Kind;
         Locator Value;
-        if (!TakeField(Input, Kind) || Kind.size() != 1 || Kind[0] < '0' || Kind[0] > '3'
+        if (!TakeField(Input, Kind) || Kind.size() != 1 || Kind[0] < '0' || Kind[0] > '4'
             || !TakeField(Input, Value.root_) || Value.root_.empty())
             return Invalid;
         Value.kind_ = static_cast<LocatorKind>(Kind[0] - '0');

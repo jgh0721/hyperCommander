@@ -8,11 +8,12 @@
 #include <QVBoxLayout>
 
 QtViewerHost::QtViewerHost(QWidget* Main, hc::plugins::WlxViewerService::MaterializerFactory Factory,
-    QtViewerSurface::WlxChoices Choices) : QObject(Main), main_(Main),
+    QtViewerSurface::WlxChoices Choices, QtViewerSurface::WlxSelection Selection) : QObject(Main), main_(Main),
     service_(std::make_unique<hc::viewer::ViewerService>(hc::viewer::MakeBuiltinViewerRegistry()))
 {
     if (Factory) wlx_ = std::make_unique<QtWlxController>(Main, std::move(Factory));
     choices_ = std::move(Choices);
+    selection_ = std::move(Selection);
     setObjectName("hc.viewer.host"); Main->installEventFilter(this);
     closeTimer_ = new QTimer(this); closeTimer_->setInterval(16);
     connect(closeTimer_, &QTimer::timeout, this, [this] {
@@ -31,7 +32,7 @@ QtViewerSurface* QtViewerHost::CreateSurface(QWidget* Parent)
 {
     std::erase_if(surfaces_, [](const auto& Surface) { return Surface.isNull(); });
     auto* Surface = new QtViewerSurface(*service_, Parent); surfaces_.push_back(Surface);
-    if (wlx_) Surface->ConfigureWlx(wlx_.get(), choices_);
+    if (wlx_) Surface->ConfigureWlx(wlx_.get(), choices_, selection_);
     connect(Surface, &QtViewerSurface::LinkRequested, Surface, [Surface](const QUrl& Url) {
         if (!Url.isValid() || (Url.scheme() != "https" && Url.scheme() != "http") || Url.host().isEmpty()) return;
         auto* Prompt = new QMessageBox(QMessageBox::Question, tr("외부 링크 열기"), tr("브라우저에서 다음 주소를 여시겠습니까?"),

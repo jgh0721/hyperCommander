@@ -194,7 +194,10 @@ namespace hc::plugins
                 };
                 auto Removed = Multi(Request.remove_); if (!Removed.HasValue()) return Removed.Failure(); auto Added = Multi(Request.add_); if (!Added.HasValue()) return Added.Failure();
                 Callback State{Context, Request.archive_, Request.maxOutputBytes_}; CallbackScope Scope(State);
-                Plugin->progress_(nullptr, &Progress); Plugin->volume_(nullptr, &Volume);
+                // Packing/deletion has no OpenArchive handle. TC supplies the
+                // INVALID_HANDLE_VALUE sentinel; nullptr can be dereferenced
+                // by plugins that distinguish per-archive callback storage.
+                Plugin->progress_(INVALID_HANDLE_VALUE, &Progress); Plugin->volume_(INVALID_HANDLE_VALUE, &Volume);
                 auto Archive = Native(Request.archive_), Input = Native(Request.inputDirectory_ + '/');
                 if (const auto Stop = Context.Check({"wcx"})) return *Stop;
                 if (!Request.remove_.empty()) { auto Checked = Check(Plugin->remove_(Archive.data(), Removed.Value().data()), State); if (!Checked.HasValue()) return Checked; }

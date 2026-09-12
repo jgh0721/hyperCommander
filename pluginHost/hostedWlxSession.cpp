@@ -63,9 +63,9 @@ namespace hc::plugins
         std::condition_variable changed_;
         std::stop_source stop_;
         WlxSessionDetails details_;
-        bool closed_ = false, cancelled_ = false, commands_ = false, focus_ = false;
+        bool closed_ = false, cancelled_ = false, commands_ = false, search_ = false, focus_ = false;
         std::optional<std::pair<std::uint32_t, std::uint32_t>> size_;
-        struct Command { std::uint64_t sequence_; int command_, parameter_; };
+        struct Command { std::uint64_t sequence_; int command_, parameter_; QString text_; };
         std::deque<Command> queue_;
         std::uint64_t nextCommand_ = 1;
         void stop(bool Close)
@@ -84,7 +84,10 @@ namespace hc::plugins
     ViewerSnapshot HostedWlxSession::Snapshot() const { std::lock_guard Lock(state_->mutex_); return state_->details_.viewer_; }
     WlxSessionDetails HostedWlxSession::Details() const { std::lock_guard Lock(state_->mutex_); return state_->details_; }
     std::vector<std::string> HostedWlxSession::Commands() const
-    { std::lock_guard Lock(state_->mutex_); return state_->commands_ ? std::vector<std::string>{"copy", "wrap", "select-all", "set-percent"} : std::vector<std::string>{}; }
+    {
+        std::lock_guard Lock(state_->mutex_); auto Commands = state_->commands_ ? std::vector<std::string>{"copy", "wrap", "select-all", "set-percent"} : std::vector<std::string>{};
+        if (state_->search_) Commands.push_back("find"); return Commands;
+    }
     void HostedWlxSession::Cancel() { state_->stop(false); }
     void HostedWlxSession::Close() { state_->stop(true); }
     Result<Unit> HostedWlxSession::Resize(std::uint32_t Width, std::uint32_t Height)
@@ -109,6 +112,15 @@ namespace hc::plugins
         if (state_->queue_.size() >= 16) return Error{ErrorCategory::BudgetExceeded, "viewer-command-budget", {"wlx"}};
         const auto Sequence = state_->nextCommand_++; state_->queue_.push_back({Sequence, Command, Parameter});
         state_->changed_.notify_one(); return Sequence;
+    }
+    Result<std::uint64_t> HostedWlxSession::Search(QString Text, int Flags)
+    {
+        if (Text.isEmpty() || Text.size() > 4096 || Text.contains(QChar::Null) || Flags < 0 || Flags > 15) return Invalid("host-viewer-search-fields");
+        std::lock_guard Lock(state_->mutex_);
+        if (state_->stop_.stop_requested() || state_->details_.viewer_.status_ != ViewerStatus::Ready) return Error{ErrorCategory::Unavailable, "viewer-not-ready", {"wlx"}};
+        if (!state_->search_) return Error{ErrorCategory::Unsupported, "host-viewer-search-unavailable", {"wlx"}};
+        if (state_->queue_.size() >= 16) return Error{ErrorCategory::BudgetExceeded, "viewer-command-budget", {"wlx"}};
+        const auto Sequence = state_->nextCommand_++; state_->queue_.push_back({Sequence, 5, Flags, std::move(Text)}); state_->changed_.notify_one(); return Sequence;
     }
     WlxViewerService::WlxViewerService(MaterializerFactory Factory, std::size_t MaxSessions)
         : factory_(std::move(Factory)), maxSessions_(MaxSessions) {}
@@ -207,6 +219,14 @@ namespace hc::plugins
                     { std::lock_guard Lock(State->mutex_); State->details_.viewer_.source_ = *Entry; }
                     if (Entry->directory_) { FatalContent = true; return Error{ErrorCategory::Unsupported, "viewer-directory", {"wlx"}}; }
                     Detection.size_ = Entry->size_; Detection.force_ = Policy && Policy->force_;
+                    if (Policy && Policy->builtinProbe_ && !Policy->force_)
+                    {
+                        auto Prefix = ReadDetectionPrefix(*Source, *Entry, Context);
+                        if (!Prefix.HasValue()) { FatalContent = true; return Prefix.Failure(); }
+                        Detection.prefix_ = std::move(Prefix.Value()); PrefixReady = true;
+                        Policy->builtinMultimedia_ = Policy->builtinProbe_(*Entry,
+                            {reinterpret_cast<const std::byte*>(Detection.prefix_.constData()), static_cast<std::size_t>(Detection.prefix_.size())});
+                    }
                 }
                 if (!Policy)
                 {
@@ -268,6 +288,7 @@ namespace hc::plugins
                     State->details_.viewer_.bytesRead_ = Lease->Describe().size_; State->details_.viewer_.status_ = ViewerStatus::Ready;
                     State->details_.viewer_.provider_ = "wlx." + Options.approval_.reviewed_.id_;
                     State->details_.selectedCandidate_ = Index; State->commands_ = Probe.Value()["commands"].toBool();
+                    State->search_ = Probe.Value()["search"].toBool();
                 }
                 return true;
             };
@@ -311,7 +332,9 @@ namespace hc::plugins
                 if (Focus) { auto Result = Host->ViewerCall(WireKind::ViewerFocus, {}, Calls); if (!Result.HasValue()) return Result.Failure(); }
                 if (Command)
                 {
-                    auto Result = Host->ViewerCall(WireKind::ViewerCommand, {{"command", Command->command_}, {"parameter", Command->parameter_}}, Calls);
+                    QJsonObject Request{{"command", Command->command_}, {"parameter", Command->parameter_}};
+                    if (Command->command_ == 5) Request.insert("text", Command->text_);
+                    auto Result = Host->ViewerCall(WireKind::ViewerCommand, Request, Calls);
                     std::lock_guard Lock(State->mutex_); State->details_.commandSequence_ = Command->sequence_;
                     State->details_.commandError_ = Result.HasValue() ? std::optional<Error>{} : Result.Failure();
                     if (Result.HasValue() && Result.Value()["result"].toInt(-1) != 0) State->details_.commandError_ = Error{ErrorCategory::Unsupported, "host-viewer-command-rejected", {"wlx"}};

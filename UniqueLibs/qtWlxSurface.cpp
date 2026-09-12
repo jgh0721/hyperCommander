@@ -57,6 +57,15 @@ Result<std::shared_ptr<HostedWlxSession>> QtWlxController::Open(QWidget* Anchor,
     if (Opened.HasValue()) records_.push_back({Anchor, Opened.Value()});
     return Opened;
 }
+Result<std::shared_ptr<HostedWlxSession>> QtWlxController::OpenAutomatic(QWidget* Anchor,
+    std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, WlxAutomaticPolicy Policy)
+{
+    if (!Anchor || !service_) return Error{ErrorCategory::InvalidRequest, "viewer-parent-required", {"wlx"}};
+    auto Opened = service_->OpenAutomatic(std::move(Candidates), std::move(Source), QString::number(Anchor->winId(), 16),
+        qRound(Anchor->width() * Anchor->devicePixelRatioF()), qRound(Anchor->height() * Anchor->devicePixelRatioF()), std::move(Policy));
+    if (Opened.HasValue()) records_.push_back({Anchor, Opened.Value()});
+    return Opened;
+}
 void QtWlxController::Retire(QWidget* Anchor, const std::shared_ptr<HostedWlxSession>& Session)
 {
     if (Session) Session->Close();
@@ -91,6 +100,12 @@ QtWlxSurface::QtWlxSurface(QtWlxController* Controller, QWidget* Parent) : QWidg
 }
 QtWlxSurface::~QtWlxSurface() { Close(); }
 void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource> Source)
+{ open({std::move(Options)}, std::move(Source), {}); }
+void QtWlxSurface::OpenAutomatic(std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, WlxAutomaticPolicy Policy)
+{ open(std::move(Candidates), std::move(Source), std::move(Policy)); }
+WlxSessionDetails QtWlxSurface::Details() const
+{ return session_ ? session_->Details() : WlxSessionDetails{}; }
+void QtWlxSurface::open(std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<WlxAutomaticPolicy> Policy)
 {
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
@@ -108,7 +123,8 @@ void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource
     anchor_->setAttribute(Qt::WA_DontCreateNativeAncestors); anchor_->setAttribute(Qt::WA_NativeWindow);
     anchor_->setFocusPolicy(Qt::StrongFocus); anchor_->installEventFilter(this);
     layout()->addWidget(anchor_); anchor_->show(); layout()->activate();
-    auto Opened = controller_->Open(anchor_, std::move(Options), std::move(Source));
+    auto Opened = Policy ? controller_->OpenAutomatic(anchor_, std::move(Candidates), std::move(Source), std::move(*Policy))
+        : controller_->Open(anchor_, std::move(Candidates.front()), std::move(Source));
     if (!Opened.HasValue())
     {
         delete anchor_.data(); status_->setText(tr("뷰어를 열 수 없습니다."));
@@ -118,6 +134,7 @@ void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource
 }
 void QtWlxSurface::Close()
 {
+    lastSearch_.clear();
     timer_->stop(); ready_ = false;
     if (anchor_)
     {
@@ -148,6 +165,9 @@ void QtWlxSurface::poll()
     }
     if (!Details.idle_) return;
     timer_->stop(); ready_ = false; status_->show();
+    // NoMatch is published after host/lease cleanup. Failure and cancellation
+    // must never initiate another read through the builtin fallback.
+    if (Details.noMatch_) { emit NoMatch(); return; }
     if (Details.viewer_.status_ == ViewerStatus::Failed)
     {
         status_->setText(tr("뷰어를 열 수 없습니다. 플러그인 설정과 파일을 확인하세요."));
@@ -176,4 +196,14 @@ void QtWlxSurface::Execute(const QString& Command)
     if (Command == "cancel") { Close(); return; }
     if (Command == "copy") session_->SendCommand(1, 0);
     else if (Command == "select-all") session_->SendCommand(3, 0);
+}
+bool QtWlxSurface::CanSearch() const
+{
+    if (!session_) return false; const auto Commands = session_->Commands(); return std::ranges::find(Commands, "find") != Commands.end();
+}
+void QtWlxSurface::Search(const QString& Text, bool Backward)
+{
+    if (!session_) return; const auto Result = session_->Search(Text, (Backward ? 8 : 0) | (Text != lastSearch_ ? 1 : 0));
+    if (Result.HasValue()) lastSearch_ = Text;
+    if (!Result.HasValue()) status_->setText(QString::fromStdString(Result.Failure().code_));
 }

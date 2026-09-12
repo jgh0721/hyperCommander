@@ -23,6 +23,9 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     wcxHostSettings_ = new QWcxHostSettings(PluginTabs); PluginTabs->addTab(wcxHostSettings_, tr("압축 (WCX)"));
     wlxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wlx, PluginTabs); PluginTabs->addTab(wlxHostSettings_, tr("뷰어 (WLX)"));
 
+    wfxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wfx, PluginTabs); PluginTabs->addTab(wfxHostSettings_, tr("파일 시스템 (WFX)"));
+    wdxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wdx, PluginTabs); PluginTabs->addTab(wdxHostSettings_, tr("파일 정보 (WDX)"));
+
     initialize();
 
     QMetaObject::invokeMethod( this, "LoadSettings", Qt::QueuedConnection );
@@ -117,6 +120,8 @@ void QMainOpts::SaveSettings_PluginList()
     TyStPlugInMgr::GetInstance()->SaveSettings();
     wcxHostSettings_->Save(*StSettings);
     wlxHostSettings_->Save(*StSettings);
+    wfxHostSettings_->Save(*StSettings);
+    wdxHostSettings_->Save(*StSettings);
     TyStPlugInMgr::GetInstance()->Refresh();
 }
 
@@ -208,6 +213,8 @@ void QMainOpts::RefreshPluginList()
 {
     wcxHostSettings_->Load(*StSettings);
     wlxHostSettings_->Load(*StSettings);
+    wfxHostSettings_->Load(*StSettings);
+    wdxHostSettings_->Load(*StSettings);
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
     StPlugInMgr->Refresh();
 

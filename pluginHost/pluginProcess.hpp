@@ -32,6 +32,7 @@ namespace hc::plugins
         storage::Result<QJsonObject> Ping(storage::OperationContext Context = {});
         storage::Result<QJsonObject> ArchiveCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
         storage::Result<QJsonObject> ViewerCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
+        storage::Result<QJsonObject> DataCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
         HostSnapshot Snapshot() const;
         void Close();
     private:

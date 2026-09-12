@@ -88,7 +88,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -643,20 +643,37 @@ private slots:
         else QVERIFY(Reviewed.isEmpty());
         if (RevokeDuringConfirmation) QVERIFY(Settings.value(Group + "0_HostEnabled").toBool());
     }
+    void wlxViewerCommandsUi_data()
+    {
+        QTest::addColumn<bool>("Automatic"); QTest::addColumn<bool>("NativeKeys");
+        QTest::newRow("manual") << false << true; QTest::newRow("automatic") << true << true;
+        // Content/approval coverage remains independent of desktop foreground
+        // availability. The two native-input rows still enforce real key routing.
+        QTest::newRow("automatic-content") << true << false;
+    }
     void wlxViewerCommandsUi()
     {
         using namespace hc::plugins;
+        QFETCH(bool, Automatic); QFETCH(bool, NativeKeys);
         QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(configureWlx(Options, Package));
         StSettings->beginGroup("ListerPlugins"); QVariantMap Original;
         for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
         StSettings->endGroup();
         auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
         const auto Restore = qScopeGuard([&] {
-            Host->CloseAll(); while (!Host->IsIdle()) QTest::qWait(10);
+            Host->CloseAll();
+            // Data rows also need isolation after an assertion fails: otherwise
+            // findChild can select the previous row's closed viewer surface.
+            for (auto* Window : main_->findChildren<QDialog*>("hc.viewer.full")) Window->close();
+            for (auto* Preview : main_->findChildren<CQuickView*>())
+                QMetaObject::invokeMethod(Preview, "CloseRequested", Qt::DirectConnection);
+            while (!Host->IsIdle()) QTest::qWait(10);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             StSettings->beginGroup("ListerPlugins"); StSettings->remove("");
             for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
             StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
         });
+        StSettings->setValue("ListerPlugins/SelectionMode", Automatic ? "automatic" : "manual");
         // Install via the actual registration UI. The fixture deliberately has
         // no ListGetDetectString export: registration must never execute it.
         StSettings->setValue("ListerPlugins/Count", 1); StSettings->setValue("ListerPlugins/0_Path", "unrelated.wlx64");
@@ -726,7 +743,10 @@ private slots:
         QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000);
         QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
-        auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface);
+        QTRY_VERIFY2_WITH_TIMEOUT(Surface->IsReady(), Surface->Snapshot().error_
+            ? Surface->Snapshot().error_->code_.c_str() : "viewer did not become ready", 5000);
+        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), Automatic);
         const auto SelectWlx = [](QtViewerSurface* Surface) {
             auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); if (!Menu || !Menu->menuAction()->isVisible()) return false;
             QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection);
@@ -736,11 +756,14 @@ private slots:
         QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
         QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("뷰어.txt"));
         QVERIFY(Full->screen()->grabWindow(Full->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-full.png"));
-        QVERIFY(sendWlxKey(Surface, VK_ESCAPE, false)); QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        if (NativeKeys) QVERIFY(sendWlxKey(Surface, VK_ESCAPE, false));
+        else Full->close();
+        QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
         Grid->EnsureKeyboardFocusOnView(); QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
         QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())), 5000);
         QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
         Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), Automatic);
         QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
         QVERIFY(main_->screen()->grabWindow(main_->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-quick.png"));
         Surface->findChild<QAction*>("hc.viewer.fallback")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
@@ -762,13 +785,33 @@ private slots:
         const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
         StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
         QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
-        QVERIFY(sendWlxKey(Surface, 'Q', true)); QTRY_VERIFY(Quick.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
+        if (NativeKeys) QVERIFY(sendWlxKey(Surface, 'Q', true));
+        else QVERIFY(QMetaObject::invokeMethod(Surface, "CloseRequested", Qt::DirectConnection));
+        QTRY_VERIFY(Quick.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
         for (auto* Panel : panels_) { Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000); }
     }
     void wcxHostSettingsPersistence()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
+        using Selection = QtViewerSurface::WlxSelectionMode;
+        QCOMPARE(QWcxHostSettings::WlxSelection(Settings), Selection::Manual);
+        {
+            QWcxHostSettings Wlx(hc::plugins::PluginFormat::Wlx); Wlx.Load(Settings);
+            auto* Mode = Wlx.findChild<QComboBox*>("wlxSelectionMode"); QVERIFY(Mode);
+            Mode->setCurrentIndex(1);
+            QCOMPARE(QWcxHostSettings::WlxSelection(Settings), Selection::Manual);
+            Wlx.Save(Settings); Settings.sync();
+            QSettings Reload(Settings.fileName(), QSettings::IniFormat);
+            QCOMPARE(QWcxHostSettings::WlxSelection(Reload), Selection::Automatic);
+            Wlx.Load(Reload); QCOMPARE(Mode->currentIndex(), 1);
+            Mode->setCurrentIndex(2); Wlx.Save(Reload); Reload.sync();
+            QCOMPARE(QWcxHostSettings::WlxSelection(Reload), Selection::Force);
+            Reload.setValue("ListerPlugins/SelectionMode", "unknown"); Wlx.Load(Reload);
+            QCOMPARE(Mode->currentIndex(), 0);
+            Wlx.resize(720, 240); Wlx.show(); QCoreApplication::processEvents();
+            QVERIFY(Wlx.grab().save(QCoreApplication::applicationDirPath() + "/wlx-selection-settings.png"));
+        }
         hc::plugins::PluginManifest Manifest; Manifest.id_ = "hc.test.settings"; Manifest.version_ = "1";
         Manifest.binary_ = "fixture.wcx64"; Manifest.sha256_ = std::string(64, 'a');
         Manifest.extensions_ = {hc::plugins::Extension::ArchiveRead}; Manifest.permissions_ = {hc::plugins::Permission::ReadContent};
@@ -795,6 +838,110 @@ private slots:
         QCOMPARE(Reload.value("PackerPlugins/0_Path").toString(), QString("fixture.wcx64"));
         Widget.Load(Reload); QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
         QVERIFY(Widget.grab().save(QCoreApplication::applicationDirPath() + "/wcx-host-settings.png"));
+    }
+    void dataPluginsUi()
+    {
+        using namespace hc::plugins; using namespace hc::storage; using namespace hc::operations;
+        QTemporaryDir Directory; const auto Binary = Directory.filePath("data.dll");
+        QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_tc_data_fixture.dll", Binary));
+        QFile File(Binary); QVERIFY(File.open(QIODevice::ReadOnly)); const auto Hash = QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); File.close();
+        QStringList SavedKeys; QMap<QString, QVariant> Saved;
+        for (const auto& Key : StSettings->allKeys())
+            if (Key.startsWith("FileSystemPlugins/") || Key.startsWith("ContentPlugins/")) { SavedKeys << Key; Saved[Key] = StSettings->value(Key); }
+        const auto Restore = qScopeGuard([&] {
+            StSettings->remove("FileSystemPlugins"); StSettings->remove("ContentPlugins");
+            for (const auto& Key : SavedKeys) StSettings->setValue(Key, Saved[Key]);
+        });
+        for (const auto Format : {PluginFormat::Wfx, PluginFormat::Wdx})
+        {
+            const auto Group = Format == PluginFormat::Wfx ? QString("FileSystemPlugins/") : QString("ContentPlugins/");
+            PluginManifest Manifest; Manifest.id_ = "hc.test.product-data"; Manifest.version_ = "1"; Manifest.binary_ = "data.dll"; Manifest.sha256_ = Hash; Manifest.format_ = Format;
+            Manifest.extensions_ = Format == PluginFormat::Wfx ? std::set{Extension::StorageRead, Extension::StorageWrite} : std::set{Extension::Metadata};
+            Manifest.permissions_ = {Permission::ReadContent}; if (Format == PluginFormat::Wfx) Manifest.permissions_.insert(Permission::WriteContent);
+            const auto Path = Directory.filePath(Format == PluginFormat::Wfx ? "wfx.json" : "wdx.json");
+            QFile Json(Path); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
+            StSettings->setValue(Group + "Count", 1); StSettings->setValue(Group + "0_Path", Binary); StSettings->setValue(Group + "0_HostEnabled", true);
+            StSettings->setValue(Group + "0_HostManifest", Path); StSettings->setValue(Group + "0_HostReviewed", EncodeManifest(Manifest));
+            QWcxHostSettings Settings(Format); Settings.Load(*StSettings);
+            const auto Prefix = Format == PluginFormat::Wfx ? QString("wfx") : QString("wdx");
+            auto* Table = Settings.findChild<QTableWidget*>(Prefix + "HostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
+            Settings.findChild<QPushButton*>(Prefix + "HostRevoke")->click();
+            QVERIFY(QWcxHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
+            Settings.Load(*StSettings); Settings.Save(*StSettings);
+            QVERIFY(QWcxHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
+        }
+        auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated(); const auto PreviousTab = Panel->CurrentTabIndex();
+        const auto ClosePluginUi = qScopeGuard([&] {
+            for (auto* Dialog : main_->findChildren<QDialog*>("hc.dataPluginDialog")) Dialog->close();
+            if (Panel->CurrentTabIndex() != PreviousTab) Panel->CloseTab();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QThreadPool::globalInstance()->waitForDone();
+        });
+        const auto Pick = [&] {
+            QTimer::singleShot(0, main_, [] {
+                for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Input = qobject_cast<QInputDialog*>(Widget)) Input->accept();
+            });
+        };
+        auto* Open = main_->findChild<QAction*>("hc.menu.wfx.open"); QVERIFY(Open); Pick(); Open->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(Panel->CurrentTabIndex() != PreviousTab, 5000);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000);
+        QVERIFY(Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot()).kind_ == LocatorKind::Plugin);
+        QVERIFY(names(Model).contains("hello.txt")); QVERIFY(Model->GetRoot()->WriteProvider());
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid);
+        QModelIndex Selected;
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+        {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Model->GetName(Index) == "hello.txt") { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", Directory.path()}}, "test", Selected);
+        QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); const auto Accepted = Copy.get(); QVERIFY(Accepted.HasValue());
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_), 5000);
+        QCOMPARE(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_, JobState::Completed);
+        QFile Copied(Directory.filePath("hello.txt")); QVERIFY(Copied.open(QIODevice::ReadOnly)); QCOMPARE(Copied.readAll(), QByteArray("hello from WFX")); Copied.close();
+        QTRY_VERIFY(!Model->IsLoading());
+        Selected = {};
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+        {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Model->GetName(Index) == "hello.txt") { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated();
+        auto* Query = main_->findChild<QAction*>("hc.menu.wdx.query"); QVERIFY(Query); Pick(); Query->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.dataPluginDialog"), 5000);
+        QPointer<QDialog> Info = main_->findChild<QDialog*>("hc.dataPluginDialog"); auto* Values = Info->findChild<QTableWidget*>(); QVERIFY(Values);
+        QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 7, 5000); QCOMPARE(Values->item(3, 1)->text(), QString("한글 metadata"));
+        Values->cellDoubleClicked(6, 1); QTRY_COMPARE_WITH_TIMEOUT(Values->item(6, 1)->text(), QString("resolved"), 5000);
+        QVERIFY(Info->grab().save(QCoreApplication::applicationDirPath() + "/wdx-metadata.png")); Info->close(); QTRY_VERIFY(Info.isNull());
+        const auto ArchivePath = Directory.filePath("data-transfer.hcwcx");
+        { QFile Archive(ArchivePath); QVERIFY(Archive.open(QIODevice::WriteOnly)); Archive.write("HCWCX01"); }
+        QTemporaryDir WcxPackage; TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, WcxPackage, true));
+        auto Plugin = TySpWCX(new CTCPlugInWCX); QCOMPARE(Plugin->LoadWCX(Spec).ErrorCode, 0u); QVERIFY(Plugin->OpenArchive(ArchivePath).Value.value_or(false));
+        auto* Other = panels_.back(); Other->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* ArchiveModel = static_cast<CFSModel*>(model(Other)); QTRY_VERIFY(!ArchiveModel->IsLoading()); ArchiveModel->SetProviderEnabled(true);
+        ArchiveModel->AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSPack(ArchivePath, Plugin))); ArchiveModel->ChangeDirectory("/"); QTRY_VERIFY(!ArchiveModel->IsLoading());
+        const auto SubmitMove = [&](CFSModel* From, CFSModel* To) -> std::string {
+            QModelIndex Index;
+            for (int Row = 0; Row < From->rowCount(); ++Row) if (From->GetName(From->index(Row, 0)) == "hello.txt") { Index = From->index(Row, 0); break; }
+            if (!Index.isValid()) return {};
+            const auto Destination = Serialize(To->GetRoot()->ReadLocation(To->GetCurrentPathWithRoot()));
+            auto Future = Bridge->Dispatch("hc.file.move", {{"destination", QString::fromStdString(Destination)}, {"destinationTab", To->property("hc.tabId").toString()}, {"destinationLocation", QString::fromStdString(Destination)}}, "test", Index);
+            QElapsedTimer Timer; Timer.start(); while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { if (Timer.elapsed() > 5000) return {}; QTest::qWait(10); }
+            const auto Result = Future.get(); if (!Result.HasValue()) { qWarning() << QString::fromStdString(Result.Failure().code_); return {}; } return Result.Value().jobId_;
+        };
+        auto Move = SubmitMove(Model, ArchiveModel); QVERIFY(!Move.empty());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Move).Value().state_), 5000); QCOMPARE(Scheduler.Snapshot(Move).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Model->IsLoading() && !ArchiveModel->IsLoading() && !names(Model).contains("hello.txt") && names(ArchiveModel).contains("hello.txt"));
+        Move = SubmitMove(ArchiveModel, Model); QVERIFY(!Move.empty());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Move).Value().state_), 5000); QCOMPARE(Scheduler.Snapshot(Move).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Model->IsLoading() && !ArchiveModel->IsLoading() && names(Model).contains("hello.txt") && !names(ArchiveModel).contains("hello.txt"));
+        Other->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!ArchiveModel->IsLoading());
+        Panel->CloseTab(); QTRY_VERIFY(Panel->CurrentTabIndex() == PreviousTab); QThreadPool::globalInstance()->waitForDone();
     }
     void archiveCommandsAndBatchUi_data()
     { QTest::addColumn<bool>("Hosted"); QTest::newRow("legacy") << false; QTest::newRow("hosted") << true; }
@@ -1507,6 +1654,9 @@ int main(int Argc, char** Argv)
         if (!DriveFixture->IsInstalled()) return 90;
     }
     StartupTimer.start();
+    // Keep recovery history inside each copied test runtime, separate from the
+    // installed application's persistent journal.
+    QStandardPaths::setTestModeEnabled(true);
     HyperCommanderApp App(Argc, Argv);
     SmbTests Tests;
     const auto Result = QTest::qExec(&Tests, Argc, Argv);
