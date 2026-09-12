@@ -57,6 +57,115 @@ class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void compatibilityPackage()
+    {
+        const auto ManifestPath = qEnvironmentVariable("HC_WCX_MANIFEST");
+        if (ManifestPath.isEmpty()) QSKIP("Set HC_WCX_MANIFEST for an explicitly selected compatibility package");
+        auto Inspected = InspectManifestFile(ManifestPath); QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
+        PluginApproval Approval{Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_}; QTemporaryDir Directory;
+        HostLimits Limits; Limits.requestMs_ = 15000;
+        auto Started = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", ManifestPath, Approval, Limits, {}, Directory.filePath("pkplugin.ini"));
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Host = std::shared_ptr<PluginProcess>(std::move(Started.Value())); auto Backend = MakeHostedArchiveBackend(Host);
+        auto Probe = Host->Probe(); QVERIFY(Probe.HasValue()); qInfo() << "Compatibility probe" << Probe.Value();
+        auto Path = qEnvironmentVariable("HC_WCX_SOURCE");
+        const bool Create = Path.isEmpty();
+        QMap<QString, QByteArray> ExpectedFiles;
+        if (Create)
+        {
+            Path = Directory.filePath("created." + qEnvironmentVariable("HC_WCX_EXTENSION", "sqx"));
+            ExpectedFiles.insert("alpha.txt", "compatibility archive content");
+            ExpectedFiles.insert("한글.txt", "Unicode content");
+            ExpectedFiles.insert("empty.txt", {});
+            QByteArray Repeated;
+            for (int Index = 0; Index < 8192; ++Index) Repeated += QByteArray::number(Index) + " SQX repeated match content 0123456789\r\n";
+            ExpectedFiles.insert("nested/repeated.txt", Repeated);
+            QByteArray Random(256 * 1024, Qt::Uninitialized); QRandomGenerator Generator(0x535158);
+            for (auto& Byte : Random) Byte = char(Generator.generate() & 0xff);
+            ExpectedFiles.insert("nested/random.bin", Random);
+            QVERIFY(QDir().mkpath(Directory.filePath("nested")));
+            std::vector<std::string> Names;
+            for (auto It = ExpectedFiles.cbegin(); It != ExpectedFiles.cend(); ++It)
+            { QVERIFY(Put(Directory.filePath(It.key()), It.value())); Names.push_back(It.key().toStdString()); }
+            const auto Created = Backend->Update({Path.toStdString(), Directory.path().toStdString(), Names}, {});
+            QVERIFY2(Created.HasValue(), Created.HasValue() ? "" : Created.Failure().code_.c_str());
+        }
+        auto Cursor = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        auto Page = Cursor.Value()->Next(256, {}); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str()); QVERIFY(!Page.Value().entries_.empty());
+        const auto Entry = Page.Value().entries_.front(); qInfo() << "Archive entries" << Page.Value().entries_.size(); Cursor.Value().reset();
+        for (const auto& Header : Page.Value().entries_) qInfo() << QString::fromStdString(Header.name_) << Header.size_ << Header.packedSize_;
+        const auto Output = Directory.filePath("extracted.txt");
+        const auto Extracted = Backend->Extract(Path.toStdString(), Entry, Output.toStdString(), {});
+        QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str());
+        if (!Create) QVERIFY(QFileInfo(Output).size() > 0);
+        if (Create)
+        {
+            const auto VerifyContents = [&]() -> bool {
+                auto Listing = Backend->Enumerate(Path.toStdString(), true, {});
+                if (!Listing.HasValue()) { qWarning() << Listing.Failure().code_; return false; }
+                std::vector<ArchiveHeader> Headers;
+                for (;;)
+                {
+                    auto Next = Listing.Value()->Next(2, {});
+                    if (!Next.HasValue()) { qWarning() << Next.Failure().code_; return false; }
+                    Headers.insert(Headers.end(), Next.Value().entries_.begin(), Next.Value().entries_.end());
+                    if (Next.Value().end_) break;
+                }
+                Listing.Value().reset(); QSet<QString> Seen;
+                for (const auto& Header : Headers)
+                {
+                    if (Header.directory_) continue;
+                    auto Name = QString::fromStdString(Header.name_); Name.replace('\\', '/');
+                    if (!ExpectedFiles.contains(Name) || Seen.contains(Name)) return false;
+                    Seen.insert(Name);
+                    // Extract to a fresh staging path. Destination replacement
+                    // belongs to the host's commit layer, not a plugin dialog.
+                    if (QFile::exists(Output) && !QFile::remove(Output)) return false;
+                    const auto Extract = Backend->Extract(Path.toStdString(), Header, Output.toStdString(), {});
+                    if (!Extract.HasValue()) { qWarning() << Name << Extract.Failure().code_; return false; }
+                    if (Read(Output) != ExpectedFiles[Name]) return false;
+                }
+                return Seen.size() == ExpectedFiles.size();
+            };
+            QVERIFY(VerifyContents());
+            ExpectedFiles["alpha.txt"] = "updated SQX payload";
+            QVERIFY(Put(Directory.filePath("alpha.txt"), ExpectedFiles["alpha.txt"]));
+            const auto Updated = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {"alpha.txt"}}, {});
+            QVERIFY2(Updated.HasValue(), Updated.HasValue() ? "" : Updated.Failure().code_.c_str());
+            QVERIFY(VerifyContents());
+            const auto Deleted = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"한글.txt"}}, {});
+            QVERIFY2(Deleted.HasValue(), Deleted.HasValue() ? "" : Deleted.Failure().code_.c_str());
+            ExpectedFiles.remove("한글.txt"); QVERIFY(VerifyContents());
+            qInfo() << "Create, paged list, test, all payloads, replacement and deletion verified";
+            const auto Artifact = qEnvironmentVariable("HC_WCX_CREATED_ARCHIVE");
+            if (!Artifact.isEmpty()) QVERIFY(QFile::copy(Path, Artifact));
+            // Damage payload bytes while keeping readable headers. PK_TEST must
+            // surface the deferred CloseArchive error without a modal dialog.
+            auto DamagedBytes = Read(Path); QVERIFY(DamagedBytes.size() > 4096);
+            DamagedBytes[DamagedBytes.size() / 2] ^= char(0x80);
+            const auto Damaged = Directory.filePath("damaged.sqx"); QVERIFY(Put(Damaged, DamagedBytes));
+            auto DamagedHeaders = Backend->Enumerate(Damaged.toStdString(), false, {}); QVERIFY(DamagedHeaders.HasValue());
+            auto Readable = DamagedHeaders.Value()->Next(256, {}); QVERIFY(Readable.HasValue()); QVERIFY(Readable.Value().end_);
+            DamagedHeaders.Value().reset();
+            auto Integrity = Backend->Enumerate(Damaged.toStdString(), true, {}); QVERIFY(Integrity.HasValue());
+            auto Rejected = Integrity.Value()->Next(256, {}); QVERIFY(!Rejected.HasValue());
+            qInfo() << "Corrupt payload rejected:" << Rejected.Failure().code_;
+            Integrity.Value().reset(); QVERIFY(Host->Ping().HasValue());
+            const auto Corrupt = Directory.filePath("corrupt.sqx"); QVERIFY(Put(Corrupt, Read(Path).left(16)));
+            auto Broken = Backend->Enumerate(Corrupt.toStdString(), false, {});
+            if (Broken.HasValue()) QVERIFY(!Broken.Value()->Next(256, {}).HasValue());
+        }
+        else if (qEnvironmentVariableIsSet("HC_WCX_CHECK_HELPER_DENIAL"))
+        {
+            const auto Before = Read(Path); QVERIFY(Put(Directory.filePath("alpha.txt"), "helper policy probe"));
+            const auto Attempt = Backend->Update({Directory.filePath("helper.7z").toStdString(), Directory.path().toStdString(), {"alpha.txt"}}, {});
+            QVERIFY(!Attempt.HasValue()); qInfo() << "Helper-dependent write unavailable:" << QString::fromStdString(Attempt.Failure().code_);
+            QCOMPARE(Read(Path), Before);
+        }
+        Host->Close(); QVERIFY(!Host->Snapshot().running_);
+        if (!Create && qEnvironmentVariableIsSet("HC_WCX_CHECK_HELPER_DENIAL")) QVERIFY(Host->Snapshot().forcedTermination_);
+        else QVERIFY(!Host->Snapshot().forcedTermination_);
+    }
     void approvedBackendRechecksEachOperation()
     {
         QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
