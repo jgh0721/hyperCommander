@@ -26,6 +26,35 @@ set_target_properties(hc_isoimage_wcx PROPERTIES
 target_link_libraries(hc_isoimage_wcx PRIVATE hc_iso_core)
 target_compile_options(hc_isoimage_wcx PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
+# TC probes legacy exports before choosing the Unicode WCX interface. Keep that
+# compatibility surface separate from the built-in, Unicode-only host adapter.
+qt_add_library(hc_isoimage_tc_wcx SHARED EXCLUDE_FROM_ALL
+    adapters/wcx/wcxExports.cpp
+    adapters/wcx/tcExports.cpp
+)
+set_target_properties(hc_isoimage_tc_wcx PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    CXX_STANDARD 23
+    OUTPUT_NAME "hc_isoimage_tc"
+    SUFFIX ".wcx"
+)
+target_link_libraries(hc_isoimage_tc_wcx PRIVATE hc_iso_core)
+target_compile_options(hc_isoimage_tc_wcx PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
+add_custom_target(hc_iso_tc_package
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCORE=$<TARGET_FILE:hc_iso_core>"
+        "-DWCX=$<TARGET_FILE:hc_isoimage_tc_wcx>"
+        "-DSTAGE=${CMAKE_CURRENT_BINARY_DIR}/tc-package/$<CONFIG>"
+        "-DZIP=${CMAKE_BINARY_DIR}/packages/$<CONFIG>/hc-isoimage-tc-x64.zip"
+        "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/GenerateTcPackage.cmake"
+    DEPENDS hc_iso_core hc_isoimage_tc_wcx
+    BYPRODUCTS "${CMAKE_BINARY_DIR}/packages/$<CONFIG>/hc-isoimage-tc-x64.zip"
+    VERBATIM
+)
+
 file(GLOB_RECURSE HC_ISO_PACKAGE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/*"
