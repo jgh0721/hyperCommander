@@ -126,6 +126,19 @@ extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wcha
         std::erase_if(State.entries_, [&](const Entry& Old) { return Old.name_ == Item.name_; }); State.entries_.push_back(std::move(Item));
     }
     if (!Save(Archive, State)) return E_EWRITE;
+    if (State.mode_ == 'E' || State.mode_ == 'F' || State.mode_ == 'G')
+    {
+        HMODULE Module = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&PackFilesW), &Module);
+        wchar_t ModulePath[32768]{}; GetModuleFileNameW(Module, ModulePath, DWORD(std::size(ModulePath)));
+        const auto Path = std::wstring(ModulePath); const auto Helper = Path.substr(0, Path.find_last_of(L"\\")) + L"\\64\\7zG.exe";
+        auto Command = L"\"" + Helper + L"\" " + std::to_wstring(GetCurrentProcessId()) + L" " + wchar_t(State.mode_);
+        STARTUPINFOW Startup{}; Startup.cb = sizeof(Startup); PROCESS_INFORMATION Child{};
+        if (!CreateProcessW(Helper.c_str(), Command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &Startup, &Child)) return E_ECREATE;
+        CloseHandle(Child.hThread); CloseHandle(Child.hProcess);
+        if (State.mode_ == 'G') { Sleep(200); RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr); }
+    }
     // Host-only fault cases occur after the staged archive has been written.
     if (State.mode_ == 'H' || State.mode_ == 'J') {
         const auto Name = L"Local\\hc-wcx-stage-" + std::to_wstring(GetCurrentProcessId());

@@ -12,6 +12,7 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include <Windows.h>
 #include <thread>
+#include <TlHelp32.h>
 
 using namespace hc::plugins;
 using namespace hc::storage;
@@ -25,7 +26,7 @@ namespace
         auto Provider = MakeNativeReadProvider(LocatorKind::Local); auto Entry = Provider->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get();
         return Entry.HasValue() ? std::make_shared<ProviderContentSource>(Provider, Entry.Value()) : nullptr;
     }
-    Result<std::shared_ptr<PluginProcess>> Start(const QTemporaryDir& Directory, bool Write = true, unsigned RequestMs = 3000, QString Source = {})
+    Result<std::shared_ptr<PluginProcess>> Start(const QTemporaryDir& Directory, bool Write = true, unsigned RequestMs = 3000, QString Source = {}, bool Helper = false, unsigned WriteMs = 0)
     {
         const auto Binary = Directory.filePath("fixture.wcx64");
         if (Source.isEmpty()) Source = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
@@ -34,9 +35,17 @@ namespace
         Manifest.sha256_ = QCryptographicHash::hash(Read(Binary), QCryptographicHash::Sha256).toHex().toStdString();
         Manifest.extensions_ = {Extension::ArchiveRead}; Manifest.permissions_ = {Permission::ReadContent};
         if (Write) { Manifest.extensions_.insert(Extension::ArchiveWrite); Manifest.permissions_.insert(Permission::WriteContent); }
+        if (Helper)
+        {
+            if (!QDir().mkdir(Directory.filePath("64")) || !QFile::copy(Binary, Directory.filePath("64/7z.dll"))
+                || !QFile::copy(QCoreApplication::applicationDirPath() + "/hc_plugin_helper_fixture.exe", Directory.filePath("64/7zG.exe"))) return Error{ErrorCategory::Internal, "copy-helper"};
+            Manifest.compatibility_ = "total7zip"; Manifest.permissions_.insert(Permission::ChildProcess); Manifest.permissions_.insert(Permission::UserInterface);
+            Manifest.dependencies_["64/7z.dll"] = Manifest.sha256_;
+            Manifest.helpers_["64/7zG.exe"] = QCryptographicHash::hash(Read(Directory.filePath("64/7zG.exe")), QCryptographicHash::Sha256).toHex().toStdString();
+        }
         PluginApproval Approval; Approval.reviewed_ = Manifest; Approval.approved_ = true; Approval.granted_ = Manifest.permissions_;
         if (!Put(Directory.filePath("plugin.json"), EncodeManifest(Manifest))) return Error{ErrorCategory::Internal, "write-manifest"};
-        HostLimits Limits; Limits.requestMs_ = RequestMs;
+        HostLimits Limits; Limits.requestMs_ = RequestMs; Limits.archiveWriteMs_ = WriteMs ? WriteMs : RequestMs;
         auto Started = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", Directory.filePath("plugin.json"), Approval, Limits);
         if (!Started.HasValue()) return Started.Failure(); return std::shared_ptr<PluginProcess>(std::move(Started.Value()));
     }
@@ -116,15 +125,16 @@ private slots:
                 {
                     if (Header.directory_) continue;
                     auto Name = QString::fromStdString(Header.name_); Name.replace('\\', '/');
-                    if (!ExpectedFiles.contains(Name) || Seen.contains(Name)) return false;
+                    if (!ExpectedFiles.contains(Name) || Seen.contains(Name)) { qWarning() << "Unexpected entry" << Name; return false; }
                     Seen.insert(Name);
                     // Extract to a fresh staging path. Destination replacement
                     // belongs to the host's commit layer, not a plugin dialog.
                     if (QFile::exists(Output) && !QFile::remove(Output)) return false;
                     const auto Extract = Backend->Extract(Path.toStdString(), Header, Output.toStdString(), {});
                     if (!Extract.HasValue()) { qWarning() << Name << Extract.Failure().code_; return false; }
-                    if (Read(Output) != ExpectedFiles[Name]) return false;
+                    if (Read(Output) != ExpectedFiles[Name]) { qWarning() << "Payload mismatch" << Name; return false; }
                 }
+                if (Seen.size() != ExpectedFiles.size()) qWarning() << "Missing entries" << Seen << ExpectedFiles.keys();
                 return Seen.size() == ExpectedFiles.size();
             };
             QVERIFY(VerifyContents());
@@ -137,8 +147,29 @@ private slots:
             QVERIFY2(Deleted.HasValue(), Deleted.HasValue() ? "" : Deleted.Failure().code_.c_str());
             ExpectedFiles.remove("한글.txt"); QVERIFY(VerifyContents());
             qInfo() << "Create, paged list, test, all payloads, replacement and deletion verified";
+
+            if (!Inspected.Value().manifest_.helpers_.empty())
+            {
+                qInfo() << "Job processes" << Host->Snapshot().activeProcesses_ << Host->Snapshot().totalProcesses_;
+                QVERIFY(Host->Snapshot().totalProcesses_ >= 4);
+                const auto Before = Read(Path);
+                auto Provider = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), Backend);
+                const auto NewFile = Directory.filePath("new file.txt"); QVERIFY(Put(NewFile, "transaction payload"));
+                auto Session = BeginWcxMutation({}, At(Path), Provider, Directory.path().toStdString(), {}, {}, {}, Backend);
+                QVERIFY(Session.HasValue());
+                auto Prepared = Session.Value()->Prepare({{ArchiveChangeKind::Put, "/new file.txt", {}, Content(NewFile)}}, {});
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+                QCOMPARE(Read(Path), Before); QVERIFY(Session.Value()->Commit({}).HasValue());
+                ExpectedFiles["new file.txt"] = "transaction payload"; QVERIFY(VerifyContents());
+                qInfo() << "Prepared archive verified; original preserved until commit";
+            }
             const auto Artifact = qEnvironmentVariable("HC_WCX_CREATED_ARCHIVE");
             if (!Artifact.isEmpty()) QVERIFY(QFile::copy(Path, Artifact));
+            const auto ExpectedDirectory = qEnvironmentVariable("HC_WCX_EXPECTED_DIRECTORY");
+            if (!ExpectedDirectory.isEmpty()) for (auto It = ExpectedFiles.cbegin(); It != ExpectedFiles.cend(); ++It)
+            {
+                const auto File = QDir(ExpectedDirectory).filePath(It.key()); QVERIFY(QDir().mkpath(QFileInfo(File).absolutePath())); QVERIFY(Put(File, It.value()));
+            }
             // Damage payload bytes while keeping readable headers. PK_TEST must
             // surface the deferred CloseArchive error without a modal dialog.
             auto DamagedBytes = Read(Path); QVERIFY(DamagedBytes.size() > 4096);
@@ -159,12 +190,11 @@ private slots:
         {
             const auto Before = Read(Path); QVERIFY(Put(Directory.filePath("alpha.txt"), "helper policy probe"));
             const auto Attempt = Backend->Update({Directory.filePath("helper.7z").toStdString(), Directory.path().toStdString(), {"alpha.txt"}}, {});
-            QVERIFY(!Attempt.HasValue()); qInfo() << "Helper-dependent write unavailable:" << QString::fromStdString(Attempt.Failure().code_);
+            QVERIFY(!Attempt.HasValue()); QCOMPARE(Attempt.Failure().code_, std::string("plugin-helper-required")); QVERIFY(Host->Ping().HasValue()); qInfo() << "Helper-dependent write unavailable:" << QString::fromStdString(Attempt.Failure().code_);
             QCOMPARE(Read(Path), Before);
         }
         Host->Close(); QVERIFY(!Host->Snapshot().running_);
-        if (!Create && qEnvironmentVariableIsSet("HC_WCX_CHECK_HELPER_DENIAL")) QVERIFY(Host->Snapshot().forcedTermination_);
-        else QVERIFY(!Host->Snapshot().forcedTermination_);
+        QVERIFY(!Host->Snapshot().forcedTermination_);
     }
     void approvedBackendRechecksEachOperation()
     {
@@ -335,6 +365,69 @@ private slots:
         QVERIFY(!Session.Value()->Commit({}).HasValue()); QVERIFY(Session.Value()->Abort().empty());
         auto Manager = MakeNativeMaterializer(Directory.path().toStdString()); QVERIFY(Manager.HasValue()); QVERIFY(Manager.Value()->DrainCleanup().errors_.empty());
         QVERIFY(QDir(Directory.filePath("hc-materialized-v1")).entryList({"hc-lease-v1-*"}, QDir::Dirs).isEmpty());
+    }
+    void helperParentDeath()
+    {
+        QTemporaryDir Directory; auto Setup = Start(Directory, true, 3000, {}, true); QVERIFY(Setup.HasValue()); Setup.Value()->Close(); Setup.Value().reset();
+        const auto Path = Directory.filePath("parent.hct"); QVERIFY(Put(Path, "HCWCX01E")); QVERIFY(Put(Directory.filePath("new.txt"), "new"));
+        QProcess Owner; Owner.start(QCoreApplication::applicationDirPath() + "/hc_plugin_owner_fixture.exe",
+            {QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", Directory.filePath("plugin.json"), Path});
+        QVERIFY(Owner.waitForStarted(5000)); QVERIFY(Owner.waitForReadyRead(5000));
+        bool Parsed = false; const auto Pid = Owner.readLine().trimmed().toUInt(&Parsed); QVERIFY(Parsed && Pid);
+        WinHandle Host(OpenProcess(SYNCHRONIZE, FALSE, Pid)); QVERIFY(Host.Valid()); WinHandle Child;
+        const auto FindChild = [&] {
+            WinHandle Processes(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)); PROCESSENTRY32W Entry{}; Entry.dwSize = sizeof(Entry);
+            if (Processes.Valid() && Process32FirstW(Processes.Get(), &Entry)) do {
+                if (Entry.th32ParentProcessID == Pid && _wcsicmp(Entry.szExeFile, L"7zG.exe") == 0)
+                { Child.Reset(OpenProcess(SYNCHRONIZE, FALSE, Entry.th32ProcessID)); break; }
+            } while (Process32NextW(Processes.Get(), &Entry));
+            return Child.Valid();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(FindChild(), 3000); Owner.kill(); QVERIFY(Owner.waitForFinished(3000));
+        QCOMPARE(WaitForSingleObject(Host.Get(), 3000), DWORD(WAIT_OBJECT_0)); QCOMPARE(WaitForSingleObject(Child.Get(), 3000), DWORD(WAIT_OBJECT_0));
+    }
+    void helperLifetime_data()
+    {
+        QTest::addColumn<QByteArray>("Mode"); QTest::addColumn<bool>("Cancel");
+        QTest::newRow("completion") << QByteArray("F") << false;
+        QTest::newRow("timeout") << QByteArray("E") << false;
+        QTest::newRow("cancel") << QByteArray("E") << true;
+        QTest::newRow("host-crash") << QByteArray("G") << false;
+    }
+    void helperLifetime()
+    {
+        QFETCH(QByteArray, Mode); QFETCH(bool, Cancel);
+        QTemporaryDir Directory; auto Started = Start(Directory, true, Mode == "F" ? 500 : 2000, {}, true, 2000);
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Host = Started.Value(); const auto Pid = Host->Snapshot().processId_;
+        const auto EventName = L"Local\\hc-wcx-helper-" + std::to_wstring(Pid);
+        WinHandle Event(CreateEventW(nullptr, TRUE, FALSE, EventName.c_str())); QVERIFY(Event.Valid());
+        // Pinning prevents replacement while a reviewed host can launch the EXE.
+        QFile Helper(Directory.filePath("64/7zG.exe")); QVERIFY(!Helper.open(QIODevice::WriteOnly));
+        std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
+        WinHandle Child;
+        std::jthread Observer([&] {
+            if (WaitForSingleObject(Event.Get(), 3000) != WAIT_OBJECT_0) return;
+            WinHandle Processes(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)); PROCESSENTRY32W Entry{}; Entry.dwSize = sizeof(Entry);
+            if (Processes.Valid() && Process32FirstW(Processes.Get(), &Entry)) do {
+                if (Entry.th32ParentProcessID == Pid && _wcsicmp(Entry.szExeFile, L"7zG.exe") == 0)
+                { Child.Reset(OpenProcess(SYNCHRONIZE, FALSE, Entry.th32ProcessID)); break; }
+            } while (Process32NextW(Processes.Get(), &Entry));
+            if (Cancel) Stop.request_stop();
+        });
+        const auto Path = Directory.filePath("original.hct"); const auto Original = QByteArray("HCWCX01") + Mode; QVERIFY(Put(Path, Original));
+        const auto Input = Directory.filePath("new.txt"); QVERIFY(Put(Input, "helper update"));
+        auto Backend = MakeHostedArchiveBackend(Host); auto Provider = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), Backend);
+        auto Session = BeginWcxMutation({}, At(Path), Provider, Directory.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Session.HasValue());
+        QElapsedTimer Timer; Timer.start();
+        auto Prepared = Session.Value()->Prepare({{ArchiveChangeKind::Put, "/new.txt", {}, Content(Input)}}, Context);
+        Observer.join(); QVERIFY(Child.Valid()); QCOMPARE(Read(Path), Original);
+        if (Mode == "F") { QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Timer.elapsed() >= 650); QVERIFY(Session.Value()->Abort().empty()); }
+        else { QVERIFY(!Prepared.HasValue()); if (Cancel) QCOMPARE(Prepared.Failure().category_, ErrorCategory::Cancelled); QVERIFY(!Session.Value()->Commit({}).HasValue()); }
+        QVERIFY(Timer.elapsed() < 5000); Host->Close(); QCOMPARE(WaitForSingleObject(Child.Get(), 2000), DWORD(WAIT_OBJECT_0));
+        QVERIFY(!Host->Snapshot().running_); QCOMPARE(Read(Path), Original);
+        Host.reset(); Started.Value().reset(); Backend.reset(); Provider.reset(); Session.Value().reset();
+        QVERIFY(Helper.open(QIODevice::WriteOnly));
     }
     void writeApprovalAndChunking()
     {
