@@ -155,9 +155,15 @@ void QPluginHostSettings::review()
         QStringList Permissions{tr("파일 읽기")};
         if (Manifest.permissions_.contains(Permission::WriteContent)) Permissions << tr("파일 변경");
         if (Manifest.permissions_.contains(Permission::Network)) Permissions << tr("네트워크");
-        if (Manifest.permissions_.contains(Permission::UserInterface)) Permissions << tr("뷰어 화면 표시");
-        const auto Message = tr("%1\n요청 권한: %2\n\n별도 프로세스에서 실행합니다. 플러그인은 현재 사용자 권한으로 파일에 접근할 수 있습니다.\n파일이나 선언이 변경되면 다시 승인해야 합니다.")
+        if (Manifest.permissions_.contains(Permission::UserInterface)) Permissions << tr("플러그인 창 표시");
+        if (Manifest.permissions_.contains(Permission::ChildProcess)) Permissions << tr("외부 헬퍼 실행 (검증한 패키지 신뢰)");
+        auto Message = tr("%1\n요청 권한: %2\n\n별도 프로세스에서 실행합니다. 플러그인은 현재 사용자 권한으로 파일에 접근할 수 있습니다.\n파일이나 선언이 변경되면 다시 승인해야 합니다.")
             .arg(QString::fromStdString(Manifest.id_), Permissions.join(", "));
+        if (!Manifest.helpers_.empty())
+        {
+            Message += tr("\n\n외부 헬퍼를 포함한 프로세스 수를 제한합니다. 특정 EXE만 실행하도록 강제하는 정책은 아닙니다.");
+            for (const auto& [Path, Hash] : Manifest.helpers_) Message += "\n" + QString::fromStdString(Path) + "\nSHA-256: " + QString::fromStdString(Hash);
+        }
         if (QMessageBox::question(this, tr("호스트 실행 승인"), Message, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
         if (Generation != generation_) return;
         rows_[Row].manifest_ = ManifestPath; rows_[Row].reviewed_ = EncodeManifest(Manifest);

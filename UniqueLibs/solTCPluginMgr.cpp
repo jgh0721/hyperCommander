@@ -320,6 +320,13 @@ CTCPlugInWCX::~CTCPlugInWCX()
     CloseWCX();
 }
 
+hc::storage::Result<hc::storage::Unit> CTCPlugInWCX::WritePolicy() const
+{
+    if (!wcx_.hostEnabled_) return hc::storage::Unit{};
+    if (!wcx_.hostApproval_.approved_) return hc::storage::Error{hc::storage::ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
+    return hc::plugins::ArchiveWritePolicy(wcx_.hostApproval_.reviewed_);
+}
+
 TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 {
     CloseWCX();

@@ -733,6 +733,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
         const auto Pack = dynamic_cast<nsHC::CFSPack*>(ArchiveModel->GetRoot().get());
         if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
+        const auto Policy = Pack->GetWCX()->WritePolicy(); if (!Policy.HasValue()) return Policy.Failure();
         ArchiveMoveEndpoint Value{Pack->ReadLocation("/"), ArchiveModel->SnapshotProvider()};
         const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
         Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_, Backend = Pack->GetWCX()->Backend()](OperationContext Context) {
