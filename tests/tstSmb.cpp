@@ -88,9 +88,75 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
+    }
+
+    void isoPluginUi_data()
+    {
+        QTest::addColumn<int>("ProfileIndex"); QTest::newRow("joliet-udf") << 2; QTest::newRow("long-name-udf") << 3;
+    }
+    void isoPluginUi()
+    {
+        QFETCH(int, ProfileIndex);
+        using namespace hc::operations;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Output = Directory.filePath("created.iso");
+        { QFile File(Directory.filePath("한글.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("ISO UI input"), 12); }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid);
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated(); return true; }
+            }
+            return false;
+        };
+        QVERIFY(Focus("한글.txt"));
+        auto* Create = main_->findChild<QAction*>("hc.menu.iso.create"); QVERIFY(Create);
+        auto& Scheduler = TyStCommandMgr::GetInstance()->Bridge()->FileJobs()->Scheduler();
+        QSet<QString> ExistingJobs; for (const auto& Job : Scheduler.Snapshots()) ExistingJobs.insert(QString::fromStdString(Job.id_));
+        bool DialogSeen = false;
+        QTimer::singleShot(0, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.iso.create"); if (!Dialog) return;
+            const auto CloseDialog = qScopeGuard([Dialog] { Dialog->accept(); });
+            DialogSeen = true;
+            auto* Path = Dialog->findChild<QLineEdit*>("hc.iso.create.path"); Path->setText(Output);
+            QCOMPARE(Dialog->findChild<QComboBox*>("hc.iso.create.profile")->currentIndex(), 2);
+            Dialog->findChild<QComboBox*>("hc.iso.create.profile")->setCurrentIndex(ProfileIndex);
+            QCOMPARE(Dialog->findChild<QLineEdit*>("hc.iso.create.label")->text(), QString("HYPERCOMMANDER"));
+            QVERIFY(Dialog->rect().contains(Path->mapTo(Dialog, QPoint(0, 0))));
+            QVERIFY(Dialog->grab().save(QDir::current().filePath(QString("iso-create-%1.png").arg(ProfileIndex))));
+            Dialog->accept();
+        });
+        Create->trigger(); QVERIFY(DialogSeen);
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshots().size() > size_t(ExistingJobs.size()), 5000);
+        std::string Job; for (const auto& Value : Scheduler.Snapshots()) if (!ExistingJobs.contains(QString::fromStdString(Value.id_))) Job = Value.id_;
+        QVERIFY(!Job.empty());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Job).Value().state_), 30000);
+        const auto Snapshot = Scheduler.Snapshot(Job).Value();
+        QVERIFY2(Snapshot.state_ == JobState::Completed, Snapshot.error_ ? Snapshot.error_->code_.c_str() : "ISO job failed");
+        for (auto* Dialog : main_->findChildren<QDialog*>("hc.fileJobs")) Dialog->hide();
+        QTRY_VERIFY(!Model->IsLoading()); Model->Refresh(); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("created.iso"));
+        QVERIFY(Focus("created.iso"));
+        auto* Inspect = main_->findChild<QAction*>("hc.menu.iso.inspect"); QVERIFY(Inspect); Inspect->trigger();
+        auto* Dialog = main_->findChild<QDialog*>("hc.iso.inspect"); QVERIFY(Dialog);
+        auto* Status = Dialog->findChild<QLabel*>("hc.iso.inspect.status"); QVERIFY(Status);
+        QTRY_VERIFY_WITH_TIMEOUT(Status->text().contains("구조 확인 완료"), 10000); QVERIFY(Status->text().contains("UDF 1.02"));
+        auto* Table = Dialog->findChild<QTableWidget*>("hc.iso.inspect.entries"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1); QCOMPARE(Table->item(0, 0)->text(), QString("한글.txt"));
+        QCOMPARE(Status->text().contains("Joliet"), ProfileIndex == 2);
+        QVERIFY(Dialog->grab().save(QDir::current().filePath(QString("iso-inspect-%1.png").arg(ProfileIndex))));
+        Dialog->findChild<QPushButton*>("hc.iso.inspect.readAll")->click(); QTRY_VERIFY_WITH_TIMEOUT(Status->text().contains("전체 읽기 검사 완료"), 10000);
+        Dialog->close(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Focus("created.iso"));
+        auto Selected = Grid->BaseView()->focusedRow().modelIndex(0);
+        Panel->ReturnOnCurrentTab(Selected);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot()).kind_ == hc::storage::LocatorKind::Archive, 10000);
+        QVERIFY(names(Model).contains("한글.txt"));
+        qInfo() << "Built-in ISO create, inspect, read test and automatic archive navigation passed";
     }
 
     void networkDriveStartup()

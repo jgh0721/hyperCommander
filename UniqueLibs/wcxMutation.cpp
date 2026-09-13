@@ -400,8 +400,8 @@ namespace hc::storage
     {
         if (!Reader || Reader->Id().value_ != "wcx" || Root.kind_ != LocatorKind::Archive || Root.nesting_.size() != 1
             || Root.nesting_[0].provider_ != "wcx" || Root.nesting_[0].entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
-            || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_ || Limits.maxInputBytes_ > 1024ULL * 1024 * 1024
-            || !Limits.maxArchiveBytes_ || Limits.maxArchiveBytes_ > 256ULL * 1024 * 1024)
+            || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_ || Limits.maxInputBytes_ > 64ULL * 1024 * 1024 * 1024
+            || !Limits.maxArchiveBytes_ || Limits.maxArchiveBytes_ > 128ULL * 1024 * 1024 * 1024)
             return Invalid("invalid-archive-mutation-request");
         const auto Kind = Root.root_.starts_with("\\\\") || Root.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local;
         auto NativeReader = MakeNativeReadProvider(Kind);

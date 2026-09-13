@@ -17,6 +17,7 @@
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <QtInstall Condition="'$(QtInstall)' == ''">D:\Qt\Qt-6.12.0-VC2026-X64-H-MD-2026-09-04</QtInstall>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
+    <HcNativePluginBuild>$(SolutionDir)_build\msbuild-plugin-host-$([System.String]::Copy('$(Configuration)').ToLowerInvariant())</HcNativePluginBuild>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -62,6 +63,11 @@
     <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <OutDir>$(SolutionDir)_build\msbuild-vc2026-qt612\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)_object\msbuild-vc2026-qt612\$(Configuration)\</IntDir>
@@ -550,6 +556,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </ClCompile>
     <ClCompile Include="..\UniqueLibs\commandUiBridge.cpp" />
     <ClCompile Include="..\UniqueLibs\fileJobUi.cpp" />
+    <ClCompile Include="..\BuiltInPlugin\IsoImage\builtinIso.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\BuiltInPlugin\IsoImage\isoJob.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\BuiltInPlugin\IsoImage\builtinIso.hpp" />
+    <ClInclude Include="..\BuiltInPlugin\IsoImage\isoJob.hpp" />
     <ClCompile Include="..\commonLibs\viewer\viewer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -657,5 +667,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   </ImportGroup>
   <Target Name="DeployNativePluginHost" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot;" />
+  </Target>
+  <Target Name="PrepareNativeBuiltinIso" BeforeTargets="ClCompile" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -PrepareOnly" />
   </Target>
 </Project>

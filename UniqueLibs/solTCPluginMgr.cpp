@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
+#include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
 
@@ -776,6 +777,18 @@ void CTCPlugInMgr::Refresh()
         VecWCX.push_back( Plugin );
     }
     StSettings->endGroup();
+
+    // User handlers keep their configured priority. The bundled ISO handler is
+    // appended without writing synthetic entries into the user's settings.
+    const auto BuiltinIso = hc::plugins::BuiltinIsoOptions();
+    if (BuiltinIso.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = BuiltinIso.binaryPath_;
+        Plugin.PackerCaps = PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_MULTIPLE | PK_CAPS_DELETE | PK_CAPS_BY_CONTENT;
+        Plugin.Exts = {QStringLiteral("iso")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = BuiltinIso.manifestPath_; Plugin.hostApproval_ = BuiltinIso.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
 
     qSwap( VecWLX, vecWLX );
     qSwap( VecWCX, vecWCX );

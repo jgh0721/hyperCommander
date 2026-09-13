@@ -1,5 +1,8 @@
 ﻿#include <QtTest>
 #include <QTemporaryDir>
+#include <QCryptographicHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 
 using namespace hc::plugins;
@@ -11,19 +14,88 @@ QByteArray Read(const QString& Path) { QFile File(Path); return File.open(QIODev
 class IsoWcxTests : public QObject {
     Q_OBJECT
 private slots:
+    void externalBridgeImage()
+    {
+        const auto Archive = qEnvironmentVariable("HC_ISO_REFERENCE_IMAGE");
+        const auto Work = qEnvironmentVariable("HC_ISO_REFERENCE_WORK");
+        if (Archive.isEmpty() || Work.isEmpty()) QSKIP("Set HC_ISO_REFERENCE_IMAGE and HC_ISO_REFERENCE_WORK for the large external ISO comparison");
+        const auto Inventory = QJsonDocument::fromJson(Read(QDir(Work).filePath("inventory.json"))).object(); QVERIFY(!Inventory.isEmpty());
+        auto Options = BuiltinIsoOptions(); Options.limits_.requestMs_ = 60000;
+        auto Backend = MakeApprovedWcxBackend(Options);
+        auto Listing = Backend->Enumerate(Archive.toStdString(), true, {});
+        QVERIFY2(Listing.HasValue(), Listing.HasValue() ? "" : Listing.Failure().code_.c_str());
+        std::vector<ArchiveHeader> Headers;
+        for (;;) {
+            auto Page = Listing.Value()->Next(128, {}); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+            Headers.insert(Headers.end(), Page.Value().entries_.begin(), Page.Value().entries_.end());
+            if (Page.Value().end_) break;
+        }
+        Listing.Value().reset(); QCOMPARE(Headers.size(), size_t(Inventory.size()));
+        const auto Destination = QDir(Work).filePath("wcx-extracted"); QVERIFY(!QFileInfo::exists(Destination)); QVERIFY(QDir().mkpath(Destination));
+        uint64_t Bytes = 0; size_t Files = 0;
+        for (const auto& Header : Headers) {
+            const auto Name = QString::fromStdString(Header.name_); QVERIFY(Inventory.contains(Name));
+            const auto Expected = Inventory[Name].toObject(); QCOMPARE(Header.directory_, Expected["directory"].toBool());
+            if (Header.directory_) continue;
+            QCOMPARE(Header.size_, uint64_t(Expected["bytes"].toInteger()));
+            const auto Output = QDir(Destination).filePath(QString::number(Files++));
+            auto Extracted = Backend->Extract(Archive.toStdString(), Header, Output.toStdString(), {});
+            QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str());
+            QFile File(Output); QVERIFY(File.open(QIODevice::ReadOnly)); QCryptographicHash Hash(QCryptographicHash::Sha256); QVERIFY(Hash.addData(&File));
+            QCOMPARE(QString::fromLatin1(Hash.result().toHex()), Expected["sha256"].toString()); Bytes += Header.size_;
+        }
+        qInfo() << "External bridge hosted WCX enumeration/read/extraction" << Files << "files" << Bytes << "bytes, all SHA-256 matched";
+    }
     void configurationProfiles()
     {
         QTemporaryDir Directory; QVERIFY(Put(Directory.filePath("SOURCE.TXT"), "profile"));
-        for (int Profile = 0; Profile < 3; ++Profile) {
+        for (int Profile = 0; Profile < 4; ++Profile) {
             auto Options = BuiltinIsoOptions(); Options.defaultIniPath_ = Directory.filePath("pkplugin.ini");
             QVERIFY(Put(Options.defaultIniPath_, "[IsoImage]\r\nProfile=" + QByteArray::number(Profile) + "\r\nVolumeLabel=PROFILE_TEST\r\n"));
             const auto Target = Directory.filePath(QString("profile-%1.iso").arg(Profile));
             const auto Result = MakeApprovedWcxBackend(Options)->Update({Target.toStdString(), Directory.path().toStdString(), {"SOURCE.TXT"}}, {});
             QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str());
             const auto Bytes = Read(Target); QCOMPARE(Bytes.mid(16 * 2048 + 40, 12), QByteArray("PROFILE_TEST"));
-            QCOMPARE(uint8_t(Bytes[17 * 2048]), Profile == 0 ? uint8_t(255) : uint8_t(2));
-            QCOMPARE(Bytes.mid(20 * 2048 + 1, 5) == QByteArray("NSR02"), Profile == 2);
+            QCOMPARE(uint8_t(Bytes[17 * 2048]), Profile == 0 || Profile == 3 ? uint8_t(255) : uint8_t(2));
+            QCOMPARE(Bytes.mid((Profile == 3 ? 19 : 20) * 2048 + 1, 5) == QByteArray("NSR02"), Profile >= 2);
         }
+    }
+    void externalBridgeWrite()
+    {
+        const auto Work = qEnvironmentVariable("HC_ISO_REFERENCE_WORK");
+        if (Work.isEmpty()) QSKIP("Set HC_ISO_REFERENCE_WORK for large WCX creation and rewrite");
+        const auto Inventory = QJsonDocument::fromJson(Read(QDir(Work).filePath("inventory.json"))).object(); QVERIFY(!Inventory.isEmpty());
+        auto Options = BuiltinIsoOptions(); Options.defaultIniPath_ = QDir(Work).filePath("wcx-profile.ini");
+        QVERIFY(Put(Options.defaultIniPath_, "[IsoImage]\r\nProfile=3\r\nVolumeLabel=CCCOMA_X64FRE_KO-KR_DV9\r\n"));
+        auto Backend = MakeApprovedWcxBackend(Options);
+        const auto Target = QDir(Work).filePath("wcx-created.iso"); QVERIFY(!QFileInfo::exists(Target));
+        ArchiveUpdate Request{Target.toStdString(), QDir(Work).filePath("extracted").toStdString()}; Request.maxOutputBytes_ = 128ull * 1024 * 1024 * 1024;
+        for (auto I = Inventory.begin(); I != Inventory.end(); ++I) Request.add_.push_back((I.key() + (I.value().toObject()["directory"].toBool() ? "/" : "")).toStdString());
+        auto Created = Backend->Update(Request, {}); QVERIFY2(Created.HasValue(), Created.HasValue() ? "" : Created.Failure().code_.c_str());
+        QVERIFY(QFileInfo(Target).size() > 4ll * 1024 * 1024 * 1024);
+        auto Inspected = InspectBuiltinIso(Target, true, {}); QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
+        QCOMPARE(Inspected.Value().files_ + Inspected.Value().directories_, uint64_t(Inventory.size()));
+        QCOMPARE(Inspected.Value().udfRevision_, 0x0102u); QVERIFY(!Inspected.Value().namespaces_.contains("Joliet"));
+        QCOMPARE(Inspected.Value().volumeLabel_, QString("CCCOMA_X64FRE_KO-KR_DV9"));
+        const auto BeforeSize = QFileInfo(Target).size();
+        const auto Marker = QString("hc-iso-validation-marker.txt"); QVERIFY(Put(QDir(Work).filePath(Marker), "rewrite"));
+        ArchiveUpdate Changed{Target.toStdString(), Work.toStdString(), {Marker.toStdString()}, {}, Request.maxOutputBytes_};
+        QVERIFY(Backend->Update(Changed, {}).HasValue());
+        Inspected = InspectBuiltinIso(Target, true, {}); QVERIFY(Inspected.HasValue()); QCOMPARE(Inspected.Value().files_ + Inspected.Value().directories_, uint64_t(Inventory.size() + 1));
+        Changed.add_.clear(); Changed.remove_ = {Marker.toStdString()}; QVERIFY(Backend->Update(Changed, {}).HasValue());
+        QCOMPARE(QFileInfo(Target).size(), BeforeSize);
+        qInfo() << "Large hosted WCX create/add/delete passed" << BeforeSize << "bytes";
+    }
+    void bootMetadataPreventsRewrite()
+    {
+        QTemporaryDir Directory; auto Options = BuiltinIsoOptions(); Options.defaultIniPath_ = Directory.filePath("profile.ini");
+        QVERIFY(Put(Options.defaultIniPath_, "[IsoImage]\r\nProfile=0\r\n")); QVERIFY(Put(Directory.filePath("source.txt"), "preserve"));
+        auto Backend = MakeApprovedWcxBackend(Options); const auto Target = Directory.filePath("boot.iso");
+        ArchiveUpdate Request{Target.toStdString(), Directory.path().toStdString(), {"source.txt"}};
+        QVERIFY(Backend->Update(Request, {}).HasValue());
+        auto Bytes = Read(Target); Bytes.replace(18 * 2048, 2048, Bytes.mid(17 * 2048, 2048)); Bytes[17 * 2048] = 0;
+        QVERIFY(Put(Target, Bytes)); QVERIFY(!Backend->Update(Request, {}).HasValue()); QCOMPARE(Read(Target), Bytes);
+        auto Inspection = InspectBuiltinIso(Target, true, {}); QVERIFY(Inspection.HasValue()); QCOMPARE(Inspection.Value().files_, 1ull);
     }
     void hostedRoundTrip()
     {

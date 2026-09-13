@@ -12,6 +12,11 @@
 #include "pluginHost/hostedDataProviders.hpp"
 #include <QtConcurrent>
 #include "commonLibs/storage/materializedContent.hpp"
+#include "BuiltInPlugin/IsoImage/isoJob.hpp"
+#include "BuiltInPlugin/IsoImage/builtinIso.hpp"
+#include <QFileDialog>
+#include <QFormLayout>
+#include <QDialogButtonBox>
 #include <QtitanGrid.h>
 
 using namespace hc::commands;
@@ -365,6 +370,11 @@ void CommandUiBridge::createActions()
     }
     auto* Jobs = Files->addAction(tr("작업 목록"));
     connect(Jobs, &QAction::triggered, this, [this] { fileJobs_->Show(); });
+    Files->addSeparator();
+    auto* CreateIso = Files->addAction(tr("선택 항목으로 ISO 생성…")); CreateIso->setObjectName("hc.menu.iso.create");
+    auto* InspectIso = Files->addAction(tr("ISO 구조 확인…")); InspectIso->setObjectName("hc.menu.iso.inspect");
+    connect(CreateIso, &QAction::triggered, this, [this] { openIso(false); });
+    connect(InspectIso, &QAction::triggered, this, [this] { openIso(true); });
     auto* Plugins = Window->menuBar()->addMenu(tr("플러그인"));
     auto* Storage = Plugins->addAction(tr("파일 시스템 열기…")); Storage->setObjectName("hc.menu.wfx.open");
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
@@ -374,6 +384,80 @@ void CommandUiBridge::createActions()
     connect(DopusMetadata, &QAction::triggered, this, [this] { openDataPlugin(true, true); });
     connect(Storage, &QAction::triggered, this, [this] { openDataPlugin(false); });
     connect(Metadata, &QAction::triggered, this, [this] { openDataPlugin(true); });
+}
+
+void CommandUiBridge::openIso(bool Inspect)
+{
+    const auto Context = captureFiles({}, false);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
+    auto Reader = Model->SnapshotProvider();
+    std::vector<hc::operations::OperationSource> Sources;
+    for (int Row = 0; Row < Model->rowCount(); ++Row) {
+        const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+        if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
+            Sources.push_back({*Item->storageEntry_, Reader, {}});
+    }
+    const auto CurrentDirectory = QString::fromStdString(Context.location_.root_);
+    if (Inspect) {
+        QString Path;
+        if (Sources.size() == 1 && !Sources[0].entry_.directory_ && (Sources[0].entry_.locator_.kind_ == LocatorKind::Local || Sources[0].entry_.locator_.kind_ == LocatorKind::Smb)) Path = QString::fromStdString(Sources[0].entry_.locator_.root_);
+        if (Path.isEmpty()) Path = QFileDialog::getOpenFileName(main_, tr("ISO 구조 확인"), CurrentDirectory, tr("ISO 이미지 (*.iso)"));
+        if (Path.isEmpty()) return;
+        auto* Dialog = new QDialog(main_); Dialog->setAttribute(Qt::WA_DeleteOnClose); Dialog->setObjectName("hc.iso.inspect"); Dialog->setWindowTitle(tr("ISO 구조 확인")); Dialog->resize(780, 520);
+        auto* Layout = new QVBoxLayout(Dialog);
+        auto* FileLabel = new QLabel(QDir::toNativeSeparators(Path), Dialog); FileLabel->setTextFormat(Qt::PlainText); FileLabel->setWordWrap(true); Layout->addWidget(FileLabel);
+        auto* Status = new QLabel(tr("구조를 확인하고 있습니다…"), Dialog); Status->setTextFormat(Qt::PlainText); Status->setWordWrap(true); Status->setObjectName("hc.iso.inspect.status"); Layout->addWidget(Status);
+        auto* Table = new QTableWidget(0, 3, Dialog); Table->setObjectName("hc.iso.inspect.entries"); Table->setHorizontalHeaderLabels({tr("경로"), tr("종류"), tr("크기")}); Table->setEditTriggers(QAbstractItemView::NoEditTriggers); Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); Layout->addWidget(Table, 1);
+        auto* Note = new QLabel(tr("ISO에는 파일 내용의 기준 체크섬이 없습니다. 전체 읽기 검사는 읽기 오류를 확인하며, 원본과의 일치 여부를 판정하지 않습니다."), Dialog); Note->setWordWrap(true); Layout->addWidget(Note);
+        auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog); Buttons->button(QDialogButtonBox::Close)->setText(tr("닫기")); auto* ReadAll = Buttons->addButton(tr("전체 파일 읽기 검사"), QDialogButtonBox::ActionRole); ReadAll->setObjectName("hc.iso.inspect.readAll"); Layout->addWidget(Buttons);
+        auto Stop = std::make_shared<std::stop_source>(); connect(Dialog, &QDialog::finished, Dialog, [Stop] { Stop->request_stop(); }); connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::close);
+        const auto Run = [Dialog, Table, Status, ReadAll, Stop, Path](bool Full) {
+            ReadAll->setEnabled(false); Status->setText(Full ? QObject::tr("전체 파일을 읽고 있습니다…") : QObject::tr("구조를 확인하고 있습니다…"));
+            using Inspection = Result<hc::plugins::BuiltinIsoInspection>;
+            auto* Watcher = new QFutureWatcher<Inspection>(Dialog);
+            connect(Watcher, &QFutureWatcher<Inspection>::finished, Dialog, [Watcher, Table, Status, ReadAll, Full] {
+                const auto Result = Watcher->result(); Watcher->deleteLater(); ReadAll->setEnabled(true);
+                if (!Result.HasValue()) { Status->setText(QObject::tr("확인하지 못했습니다: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
+                const auto& Value = Result.Value();
+                auto Text = QObject::tr("%1 · 볼륨 %2\n%3\n파일 %4개 · 폴더 %5개 · %6바이트")
+                    .arg(Full ? QObject::tr("전체 읽기 검사 완료") : QObject::tr("구조 확인 완료"), Value.volumeLabel_, Value.namespaces_.join(" + "))
+                    .arg(QLocale().toString(Value.files_), QLocale().toString(Value.directories_), QLocale().toString(Value.bytes_));
+                if (Value.files_ + Value.directories_ > Value.preview_.size()) Text += QObject::tr("\n목록은 처음 5,000개 항목을 표시합니다. 전체 탐색은 파일 패널에서 ISO를 여십시오.");
+                Status->setText(Text); Table->setRowCount(int(Value.preview_.size()));
+                for (int I = 0; I < int(Value.preview_.size()); ++I) { const auto& Entry = Value.preview_[size_t(I)]; Table->setItem(I, 0, new QTableWidgetItem(QString::fromStdString(Entry.name_))); Table->setItem(I, 1, new QTableWidgetItem(Entry.directory_ ? QObject::tr("폴더") : QObject::tr("파일"))); Table->setItem(I, 2, new QTableWidgetItem(Entry.directory_ ? QString{} : QLocale().toString(Entry.size_))); }
+            });
+            Watcher->setFuture(QtConcurrent::run([Path, Stop, Full] { OperationContext Operation; Operation.stopToken_ = Stop->get_token(); return hc::plugins::InspectBuiltinIso(Path, Full, Operation); }));
+        };
+        connect(ReadAll, &QPushButton::clicked, Dialog, [Run] { Run(true); }); Dialog->show(); Run(false); return;
+    }
+    if (Sources.empty()) { QMessageBox::information(main_, tr("ISO 생성"), tr("이미지에 넣을 파일이나 폴더를 먼저 선택하십시오.")); return; }
+    QDialog Dialog(main_); Dialog.setObjectName("hc.iso.create"); Dialog.setWindowTitle(tr("선택 항목으로 ISO 생성")); Dialog.resize(650, 300);
+    auto* Layout = new QVBoxLayout(&Dialog); auto* Form = new QFormLayout; Layout->addLayout(Form);
+    auto* Selection = new QLabel(tr("선택한 %1개 항목과 하위 파일을 이미지에 넣습니다.").arg(Sources.size()), &Dialog); Selection->setWordWrap(true); Form->addRow(Selection);
+    auto* OutputRow = new QWidget(&Dialog); auto* OutputLayout = new QHBoxLayout(OutputRow); OutputLayout->setContentsMargins(0, 0, 0, 0);
+    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("image.iso"), OutputRow); Output->setObjectName("hc.iso.create.path"); Output->setAccessibleName(tr("저장할 ISO 경로"));
+    auto* Browse = new QPushButton(tr("찾아보기…"), OutputRow); OutputLayout->addWidget(Output, 1); OutputLayout->addWidget(Browse); Form->addRow(tr("저장 위치(&P)"), OutputRow);
+    auto* Profile = new QComboBox(&Dialog); Profile->setObjectName("hc.iso.create.profile"); Profile->addItems({tr("ISO 9660"), tr("ISO 9660 + Joliet"), tr("ISO 9660 + Joliet + UDF 1.02"), tr("ISO 9660 + UDF 1.02 (긴 파일 이름)")}); Profile->setCurrentIndex(2); Form->addRow(tr("파일 시스템(&F)"), Profile);
+    auto* Label = new QLineEdit("HYPERCOMMANDER", &Dialog); Label->setObjectName("hc.iso.create.label"); Label->setMaxLength(16); Form->addRow(tr("볼륨 이름(&V)"), Label);
+    auto* Help = new QLabel(&Dialog); Help->setWordWrap(true); Layout->addWidget(Help);
+    const auto UpdateHelp = [Profile, Label, Help] { Label->setMaxLength(Profile->currentIndex() == 0 ? 32 : Profile->currentIndex() == 3 ? 30 : 16); Help->setText(Profile->currentIndex() == 0
+        ? QObject::tr("파일 이름을 ISO용 영문 대문자·숫자·밑줄로 변환합니다. 볼륨 이름은 ASCII 문자로 입력하십시오.")
+        : Profile->currentIndex() == 3 ? QObject::tr("긴 파일 이름을 UDF에 보존합니다. 이름 한 부분은 UDF 인코딩 255바이트까지 지원하며, 볼륨 이름은 ASCII 30자까지 입력할 수 있습니다.")
+        : QObject::tr("한글 파일 이름을 보존합니다. 이름 한 부분은 64 UTF-16 단위까지 지원하며, 볼륨 이름은 ASCII 16자까지 입력할 수 있습니다.")); };
+    connect(Profile, &QComboBox::currentIndexChanged, &Dialog, UpdateHelp); UpdateHelp();
+    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Buttons->button(QDialogButtonBox::Ok)->setText(tr("생성")); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소")); Layout->addWidget(Buttons);
+    connect(Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
+    connect(Browse, &QPushButton::clicked, &Dialog, [this, Output] { const auto Path = QFileDialog::getSaveFileName(main_, tr("ISO 저장 위치"), Output->text(), tr("ISO 이미지 (*.iso)"), nullptr, QFileDialog::DontConfirmOverwrite); if (!Path.isEmpty()) Output->setText(Path); });
+    Output->setFocus(); Output->selectAll(); if (Dialog.exec() != QDialog::Accepted) return;
+    auto Path = QDir::fromNativeSeparators(Output->text()); if (!Path.endsWith(".iso", Qt::CaseInsensitive)) Path += ".iso";
+    hc::iso::CreateRequest Request; Request.sources_ = std::move(Sources); Request.destination_ = {Path.startsWith("//") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+    Request.profile_ = unsigned(Profile->currentIndex()); Request.volumeLabel_ = Label->text(); Request.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    const auto Destination = Request.destination_; auto Prepared = hc::iso::PrepareCreate(std::move(Request));
+    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("ISO 생성"), tr("설정을 확인하십시오: %1").arg(QString::fromStdString(Prepared.Failure().code_))); return; }
+    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("ISO 생성 · %1").arg(QFileInfo(Path).fileName()));
+    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("ISO 생성"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    auto Parent = Destination; Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); affectedLocations_[Submitted.Value().id_] = {Parent};
 }
 
 void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
@@ -736,8 +820,12 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         const auto Policy = Pack->GetWCX()->WritePolicy(); if (!Policy.HasValue()) return Policy.Failure();
         ArchiveMoveEndpoint Value{Pack->ReadLocation("/"), ArchiveModel->SnapshotProvider()};
         const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
-        Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_, Backend = Pack->GetWCX()->Backend()](OperationContext Context) {
-            return BeginWcxMutation(Plugin, Root, Reader, {}, {}, std::move(Context), {}, Backend);
+        if (QDir::cleanPath(Pack->GetWCX()->PluginPath()).compare(QDir::cleanPath(hc::plugins::BuiltinIsoOptions().binaryPath_), Qt::CaseInsensitive) == 0) {
+            Value.limits_.maxInputBytes_ = 64ull * 1024 * 1024 * 1024;
+            Value.limits_.maxArchiveBytes_ = 128ull * 1024 * 1024 * 1024;
+        }
+        Value.begin_ = [Plugin, Root = Value.root_, Reader = Value.reader_, Limits = Value.limits_, Backend = Pack->GetWCX()->Backend()](OperationContext Context) {
+            return BeginWcxMutation(Plugin, Root, Reader, {}, Limits, std::move(Context), {}, Backend);
         };
         return Value;
     };
@@ -812,6 +900,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         {
             auto Writer = DestinationWriter(); if (!Writer.HasValue()) return Writer.Failure(); Move.destinationWriter_ = Writer.Value();
         }
+        Move.maxBytes_ = std::min(Move.sourceArchive_ ? Move.sourceArchive_->limits_.maxInputBytes_ : 64ull * 1024 * 1024 * 1024,
+            Move.destinationArchive_ ? Move.destinationArchive_->limits_.maxInputBytes_ : 64ull * 1024 * 1024 * 1024);
         Started = fileJobs_->Submit(std::move(Move), Invocation.operation_);
     }
     else if (ArchiveMutation)
@@ -827,6 +917,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             return Error{ErrorCategory::InvalidRequest, "archive-destination-container-mismatch"};
         ArchiveOperationRequest Archive;
         Archive.operation_ = Request.operation_; Archive.archive_ = Target.Value().root_; Archive.destination_ = Request.destination_;
+        Archive.limits_ = Target.Value().limits_;
         Archive.sources_ = std::move(Request.sources_); Archive.reader_ = Target.Value().reader_; Archive.begin_ = std::move(Target.Value().begin_); Archive.correlationId_ = Request.correlationId_;
         Started = fileJobs_->Submit(std::move(Archive), Invocation.operation_);
     }

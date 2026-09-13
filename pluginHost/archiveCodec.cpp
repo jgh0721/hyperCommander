@@ -38,7 +38,7 @@ namespace hc::plugins
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
         if (Object.size() != 5 || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
-        auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value() || Limit.Value() > 256ULL * 1024 * 1024) return Invalid();
+        auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value() || Limit.Value() > 128ULL * 1024 * 1024 * 1024) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         for (const auto& [Key, Target] : {std::pair{"add", &Out.add_}, {"remove", &Out.remove_}})
         {

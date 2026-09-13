@@ -12,6 +12,19 @@ add_dependencies(hc_iso_wcx_tests hc-plugin-host-x64)
 add_test(NAME hc.iso_wcx COMMAND hc_iso_wcx_tests)
 set_tests_properties(hc.iso_wcx PROPERTIES TIMEOUT 120)
 hc_enable_qt_deployment(hc_iso_wcx_tests TEST)
+qt_add_executable(hc_iso_job_tests
+    ../BuiltInPlugin/IsoImage/tests/tstIsoJob.cpp
+    ../UniqueLibs/storageProviders.cpp
+    ../UniqueLibs/nativeWritableStorage.cpp
+    ../commonLibs/operations/fileOperation.cpp
+)
+target_include_directories(hc_iso_job_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_iso_job_tests PRIVATE hc_builtin_iso Qt6::Test)
+target_compile_options(hc_iso_job_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_iso_job_tests hc-plugin-host-x64)
+add_test(NAME hc.iso_job COMMAND hc_iso_job_tests)
+set_tests_properties(hc.iso_job PROPERTIES TIMEOUT 120)
+hc_enable_qt_deployment(hc_iso_job_tests TEST)
 find_program(HC_POWERSHELL NAMES powershell REQUIRED)
 qt_add_library(hc_dopus_fixture SHARED dopusFixture.cpp)
 target_include_directories(hc_dopus_fixture PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -304,6 +317,13 @@ set_tests_properties(hc.sources PROPERTIES TIMEOUT 30)
 set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 
 if(TARGET hc_smb_tests)
+    foreach(HC_ISO_DPR IN ITEMS 1 1.5)
+        add_test(NAME hc.iso_ui_${HC_ISO_DPR}
+            COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -IsoOnly -Dpr ${HC_ISO_DPR})
+        set_tests_properties(hc.iso_ui_${HC_ISO_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+    endforeach()
     add_test(NAME hc.data_plugin_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
@@ -320,7 +340,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 # This runs the product and every deployed test executable sequentially. The
@@ -336,6 +356,7 @@ add_custom_target(hc_check
     USES_TERMINAL
     VERBATIM
 )
+add_dependencies(hc_check hc_iso_engine_tests hc_iso_wcx_tests hc_iso_job_tests)
 if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()

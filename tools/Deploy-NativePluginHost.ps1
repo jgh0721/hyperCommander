@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][ValidateSet('Debug', 'Release')][string]$Configuration,
     [Parameter(Mandatory = $true)][string]$QtRoot,
     [Parameter(Mandatory = $true)][string]$Executable,
-    [Parameter(Mandatory = $true)][string]$VisualStudioRoot
+    [Parameter(Mandatory = $true)][string]$VisualStudioRoot,
+    [switch]$PrepareOnly
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path $PSScriptRoot -Parent
@@ -13,10 +14,18 @@ $QtCMake = Join-Path $QtRoot 'bin/qt-cmake.bat'
 & $QtCMake -S $Root -B $BuildDir -G 'Visual Studio 18 2026' -A x64 -T 'v145,host=x64' `
     -DBUILD_TESTING=OFF -DHC_BUILD_SMB_TESTS=OFF
 if ($LASTEXITCODE -ne 0) { throw "Plugin host configure failed: $LASTEXITCODE" }
+& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package --parallel 4
+if ($LASTEXITCODE -ne 0) { throw "Built-in ISO package build failed: $LASTEXITCODE" }
+if ($PrepareOnly) { return }
 & $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Plugin host build failed: $LASTEXITCODE" }
 $Destination = Split-Path ([IO.Path]::GetFullPath($Executable)) -Parent
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-plugin-host-x64.exe") -Destination $Destination
+$BuiltinDestination = Join-Path $Destination 'BuiltInPlugin/IsoImage'
+[IO.Directory]::CreateDirectory($BuiltinDestination) | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $BuildDir "$Configuration/BuiltInPlugin/IsoImage") -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $BuiltinDestination
+}
 $DebugSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
 & $QtCMake "-DHC_DEPLOY_EXE=$Executable" "-DHC_QT_BIN=$QtRoot/bin" `
     "-DHC_GUI_DLL=$QtRoot/bin/Qt6Gui$DebugSuffix.dll" "-DHC_CONFIG=$Configuration" `

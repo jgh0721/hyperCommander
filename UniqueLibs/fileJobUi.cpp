@@ -156,6 +156,14 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
     return track(SubmitMoveOperation(scheduler_, std::move(Request), std::move(Context)), hc::operations::FileOperation::Move, Label);
 }
 
+Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label)
+{
+    if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
+    auto Submitted = track(scheduler_.Submit(std::move(Job.request_), std::move(Job.task_)), hc::operations::FileOperation::Copy, Label.toStdString());
+    if (Submitted.HasValue()) jobs_->setItemText(jobs_->findData(QString::fromStdString(Submitted.Value().id_)), Label);
+    return Submitted;
+}
+
 Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::FileOperation Operation, const std::string& Label)
 {
     const auto OperationLabel = Operation == hc::operations::FileOperation::Copy ? tr("복사")

@@ -184,7 +184,7 @@ namespace hc::plugins
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
-                if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_ || Request.maxOutputBytes_ > 256ULL * 1024 * 1024) return Invalid("invalid-archive-update");
+                if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_ || Request.maxOutputBytes_ > 128ULL * 1024 * 1024 * 1024) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;
                 if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE)
                     || (background_ && !(Plugin->background_ & BACKGROUND_PACK))) return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required", {"wcx"}};

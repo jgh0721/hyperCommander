@@ -211,6 +211,7 @@ namespace hc::operations
             ArchiveOperationRequest Archive;
             Archive.archive_ = Request.destinationArchive_->root_; Archive.reader_ = Request.destinationArchive_->reader_; Archive.begin_ = Request.destinationArchive_->begin_;
             Archive.destination_ = Request.destination_; Archive.sources_ = std::move(Sources); Archive.conflict_ = Request.conflict_; Archive.correlationId_ = Request.correlationId_;
+            Archive.limits_ = Request.destinationArchive_->limits_;
             Archive.limits_.maxEntries_ = Request.maxEntries_; Archive.limits_.maxDepth_ = Request.maxDepth_; Archive.limits_.maxInputBytes_ = Request.maxBytes_;
             Copy = PrepareArchiveOperation(std::move(Archive), Context);
         }

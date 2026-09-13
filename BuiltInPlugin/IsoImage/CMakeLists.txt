@@ -33,20 +33,25 @@ file(GLOB_RECURSE HC_ISO_PACKAGE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/packaging/*"
 )
 set(HC_ISO_PIN_HEADER "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/hcIsoManifest.hpp")
-add_custom_command(OUTPUT "${HC_ISO_PIN_HEADER}"
-    COMMAND "${CMAKE_COMMAND}"
+set(HC_ISO_PACKAGE_COMMAND "${CMAKE_COMMAND}"
         "-DCORE=$<TARGET_FILE:hc_iso_core>"
         "-DWCX=$<TARGET_FILE:hc_isoimage_wcx>"
         "-DOUTPUT=$<TARGET_FILE_DIR:hc_iso_core>/BuiltInPlugin/IsoImage"
         "-DHEADER=${HC_ISO_PIN_HEADER}"
         "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/GeneratePackage.cmake"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/GeneratePackage.cmake")
+add_custom_command(OUTPUT "${HC_ISO_PIN_HEADER}"
+    COMMAND ${HC_ISO_PACKAGE_COMMAND}
     DEPENDS hc_iso_core hc_isoimage_wcx ${HC_ISO_PACKAGE_SOURCES}
     VERBATIM
 )
-add_custom_target(hc_iso_package DEPENDS "${HC_ISO_PIN_HEADER}")
-qt_add_library(hc_builtin_iso STATIC builtinIso.cpp builtinIso.hpp)
+add_custom_target(hc_iso_package
+    COMMAND ${HC_ISO_PACKAGE_COMMAND}
+    DEPENDS "${HC_ISO_PIN_HEADER}"
+    VERBATIM
+)
+qt_add_library(hc_builtin_iso STATIC builtinIso.cpp builtinIso.hpp isoJob.cpp isoJob.hpp)
 target_include_directories(hc_builtin_iso PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
-target_link_libraries(hc_builtin_iso PUBLIC hc_plugin_process)
+target_link_libraries(hc_builtin_iso PUBLIC hc_plugin_process hc_viewer_core)
 target_compile_options(hc_builtin_iso PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_dependencies(hc_builtin_iso hc_iso_package)

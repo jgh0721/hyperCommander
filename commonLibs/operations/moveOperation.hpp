@@ -8,6 +8,7 @@ namespace hc::operations
         storage::Locator root_;
         std::shared_ptr<storage::IStorageProvider> reader_;
         std::function<Result<std::unique_ptr<storage::IArchiveMutationSession>>(storage::OperationContext)> begin_;
+        storage::ArchiveMutationLimits limits_;
     };
     struct MoveOperationRequest
     {

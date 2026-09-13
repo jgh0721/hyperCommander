@@ -23,6 +23,7 @@ public:
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::ArchiveOperationRequest Request,
         hc::storage::OperationContext Context);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
+    hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::PreparedJob Job, const QString& Label);
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
         hc::storage::OperationContext Context);
     void Show();
