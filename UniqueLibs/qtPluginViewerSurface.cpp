@@ -1,4 +1,4 @@
-﻿#include "qtWlxSurface.hpp"
+﻿#include "qtPluginViewerSurface.hpp"
 #include <QEvent>
 #include <qt_windows.h>
 #include "pluginHost/wlxWindowMessage.hpp"
@@ -33,14 +33,14 @@ namespace
     };
 }
 
-QtWlxController::QtWlxController(QWidget* Main, WlxViewerService::MaterializerFactory Factory)
-    : QObject(Main), service_(std::make_unique<WlxViewerService>(std::move(Factory)))
+QtPluginViewerController::QtPluginViewerController(QWidget* Main, PluginViewerService::MaterializerFactory Factory)
+    : QObject(Main), service_(std::make_unique<PluginViewerService>(std::move(Factory)))
 {
     parking_ = new QWidget(Main); parking_->setObjectName("hc.wlx.retiring");
     parking_->setAttribute(Qt::WA_NativeWindow); parking_->resize(1, 1); parking_->hide(); parking_->winId();
-    timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtWlxController::collect); timer_->start();
+    timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtPluginViewerController::collect); timer_->start();
 }
-QtWlxController::~QtWlxController()
+QtPluginViewerController::~QtPluginViewerController()
 {
     CloseAll();
     // Normal host close drains IsIdle first. Direct owner destruction still
@@ -49,7 +49,7 @@ QtWlxController::~QtWlxController()
     for (auto& Record : records_) delete Record.anchor_.data();
     records_.clear(); delete parking_.data();
 }
-Result<std::shared_ptr<HostedWlxSession>> QtWlxController::Open(QWidget* Anchor, WlxViewerOptions Options, std::shared_ptr<IContentSource> Source)
+Result<std::shared_ptr<HostedViewerSession>> QtPluginViewerController::Open(QWidget* Anchor, PluginViewerOptions Options, std::shared_ptr<IContentSource> Source)
 {
     if (!Anchor || !service_) return Error{ErrorCategory::InvalidRequest, "viewer-parent-required", {"wlx"}};
     auto Opened = service_->Open(std::move(Options), std::move(Source), QString::number(Anchor->winId(), 16),
@@ -57,8 +57,8 @@ Result<std::shared_ptr<HostedWlxSession>> QtWlxController::Open(QWidget* Anchor,
     if (Opened.HasValue()) records_.push_back({Anchor, Opened.Value()});
     return Opened;
 }
-Result<std::shared_ptr<HostedWlxSession>> QtWlxController::OpenAutomatic(QWidget* Anchor,
-    std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, WlxAutomaticPolicy Policy)
+Result<std::shared_ptr<HostedViewerSession>> QtPluginViewerController::OpenAutomatic(QWidget* Anchor,
+    std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, PluginViewerSelectionPolicy Policy)
 {
     if (!Anchor || !service_) return Error{ErrorCategory::InvalidRequest, "viewer-parent-required", {"wlx"}};
     auto Opened = service_->OpenAutomatic(std::move(Candidates), std::move(Source), QString::number(Anchor->winId(), 16),
@@ -66,7 +66,7 @@ Result<std::shared_ptr<HostedWlxSession>> QtWlxController::OpenAutomatic(QWidget
     if (Opened.HasValue()) records_.push_back({Anchor, Opened.Value()});
     return Opened;
 }
-void QtWlxController::Retire(QWidget* Anchor, const std::shared_ptr<HostedWlxSession>& Session)
+void QtPluginViewerController::Retire(QWidget* Anchor, const std::shared_ptr<HostedViewerSession>& Session)
 {
     if (Session) Session->Close();
     if (Anchor && parking_)
@@ -76,13 +76,13 @@ void QtWlxController::Retire(QWidget* Anchor, const std::shared_ptr<HostedWlxSes
         Anchor->hide(); Anchor->setParent(parking_);
     }
 }
-void QtWlxController::CloseAll()
+void QtPluginViewerController::CloseAll()
 {
     for (auto& Record : records_) Retire(Record.anchor_, Record.session_);
     if (service_) service_->CancelAll();
 }
-bool QtWlxController::IsIdle() const { return !service_ || service_->IsIdle(); }
-void QtWlxController::collect()
+bool QtPluginViewerController::IsIdle() const { return !service_ || service_->IsIdle(); }
+void QtPluginViewerController::collect()
 {
     for (auto It = records_.begin(); It != records_.end();)
     {
@@ -91,21 +91,21 @@ void QtWlxController::collect()
     }
     service_->Collect();
 }
-QtWlxSurface::QtWlxSurface(QtWlxController* Controller, QWidget* Parent) : QWidget(Parent), controller_(Controller)
+QtPluginViewerSurface::QtPluginViewerSurface(QtPluginViewerController* Controller, QWidget* Parent) : QWidget(Parent), controller_(Controller)
 {
     setObjectName("hc.viewer.wlx"); setFocusPolicy(Qt::StrongFocus);
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
     status_ = new QLabel(tr("뷰어를 닫았습니다."), this); status_->setWordWrap(true); Layout->addWidget(status_);
-    timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtWlxSurface::poll);
+    timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtPluginViewerSurface::poll);
 }
-QtWlxSurface::~QtWlxSurface() { Close(); }
-void QtWlxSurface::Open(WlxViewerOptions Options, std::shared_ptr<IContentSource> Source)
+QtPluginViewerSurface::~QtPluginViewerSurface() { Close(); }
+void QtPluginViewerSurface::Open(PluginViewerOptions Options, std::shared_ptr<IContentSource> Source)
 { open({std::move(Options)}, std::move(Source), {}); }
-void QtWlxSurface::OpenAutomatic(std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, WlxAutomaticPolicy Policy)
+void QtPluginViewerSurface::OpenAutomatic(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, PluginViewerSelectionPolicy Policy)
 { open(std::move(Candidates), std::move(Source), std::move(Policy)); }
-WlxSessionDetails QtWlxSurface::Details() const
-{ return session_ ? session_->Details() : WlxSessionDetails{}; }
-void QtWlxSurface::open(std::vector<WlxViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<WlxAutomaticPolicy> Policy)
+PluginViewerDetails QtPluginViewerSurface::Details() const
+{ return session_ ? session_->Details() : PluginViewerDetails{}; }
+void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<PluginViewerSelectionPolicy> Policy)
 {
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
@@ -132,7 +132,7 @@ void QtWlxSurface::open(std::vector<WlxViewerOptions> Candidates, std::shared_pt
     }
     session_ = std::move(Opened.Value()); timer_->start();
 }
-void QtWlxSurface::Close()
+void QtPluginViewerSurface::Close()
 {
     lastSearch_.clear();
     timer_->stop(); ready_ = false;
@@ -145,13 +145,13 @@ void QtWlxSurface::Close()
     else if (session_) session_->Close();
     anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); status_->show();
 }
-bool QtWlxSurface::IsReady() const { return ready_; }
-ViewerSnapshot QtWlxSurface::Snapshot() const
+bool QtPluginViewerSurface::IsReady() const { return ready_; }
+ViewerSnapshot QtPluginViewerSurface::Snapshot() const
 {
     if (session_) return session_->Snapshot();
     ViewerSnapshot Result; Result.status_ = ViewerStatus::Closed; return Result;
 }
-void QtWlxSurface::poll()
+void QtPluginViewerSurface::poll()
 {
     if (!session_) return;
     const auto Details = session_->Details();
@@ -175,11 +175,11 @@ void QtWlxSurface::poll()
     }
     else status_->setText(tr("뷰어를 닫았습니다."));
 }
-void QtWlxSurface::resizeNative()
+void QtPluginViewerSurface::resizeNative()
 {
     if (session_ && anchor_) session_->Resize(qRound(anchor_->width() * anchor_->devicePixelRatioF()), qRound(anchor_->height() * anchor_->devicePixelRatioF()));
 }
-bool QtWlxSurface::eventFilter(QObject* Object, QEvent* Event)
+bool QtPluginViewerSurface::eventFilter(QObject* Object, QEvent* Event)
 {
     if (Object == anchor_)
     {
@@ -188,20 +188,20 @@ bool QtWlxSurface::eventFilter(QObject* Object, QEvent* Event)
     }
     return QWidget::eventFilter(Object, Event);
 }
-void QtWlxSurface::focusInEvent(QFocusEvent* Event)
+void QtPluginViewerSurface::focusInEvent(QFocusEvent* Event)
 { if (session_) session_->Focus(); QWidget::focusInEvent(Event); }
-void QtWlxSurface::Execute(const QString& Command)
+void QtPluginViewerSurface::Execute(const QString& Command)
 {
     if (!session_) return;
     if (Command == "cancel") { Close(); return; }
     if (Command == "copy") session_->SendCommand(1, 0);
     else if (Command == "select-all") session_->SendCommand(3, 0);
 }
-bool QtWlxSurface::CanSearch() const
+bool QtPluginViewerSurface::CanSearch() const
 {
     if (!session_) return false; const auto Commands = session_->Commands(); return std::ranges::find(Commands, "find") != Commands.end();
 }
-void QtWlxSurface::Search(const QString& Text, bool Backward)
+void QtPluginViewerSurface::Search(const QString& Text, bool Backward)
 {
     if (!session_) return; const auto Result = session_->Search(Text, (Backward ? 8 : 0) | (Text != lastSearch_ ? 1 : 0));
     if (Result.HasValue()) lastSearch_ = Text;

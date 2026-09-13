@@ -14,7 +14,7 @@
 #include "storageProviders.hpp"
 #include "qtViewerSurface.hpp"
 #include "qtViewerHost.hpp"
-#include "qtWcxHostSettings.hpp"
+#include "qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
 #include <QtitanGrid.h>
 #include <iostream>
@@ -88,7 +88,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -591,14 +591,14 @@ private slots:
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
         if (Wlx)
         {
-            hc::plugins::WlxViewerOptions Options; QVERIFY(configureWlx(Options, Directory));
+            hc::plugins::PluginViewerOptions Options; QVERIFY(configureWlx(Options, Directory));
             Spec.FileFullPath = Options.binaryPath_; Spec.hostManifest_ = Options.manifestPath_; Spec.hostApproval_ = Options.approval_;
         }
         QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
         const QString Group = Wlx ? "ListerPlugins/" : "PackerPlugins/"; const QString Prefix = Wlx ? "wlx" : "wcx";
         Settings.setValue(Group + "Count", 1); Settings.setValue(Group + "0_Path", Spec.FileFullPath);
         Settings.setValue(Group + (Wlx ? "0_Detect" : "0_Exts"), Wlx ? "EXT=\"TXT\"" : "hcwcx");
-        QWcxHostSettings Widget(Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx);
+        QPluginHostSettings Widget(Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx);
         Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
         auto* Review = Widget.findChild<QPushButton*>(Prefix + "HostReview"); QVERIFY(Review);
         auto* Revoke = Widget.findChild<QPushButton*>(Prefix + "HostRevoke"); QVERIFY(Revoke);
@@ -655,7 +655,7 @@ private slots:
     {
         using namespace hc::plugins;
         QFETCH(bool, Automatic); QFETCH(bool, NativeKeys);
-        QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(configureWlx(Options, Package));
+        QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(configureWlx(Options, Package));
         StSettings->beginGroup("ListerPlugins"); QVariantMap Original;
         for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
         StSettings->endGroup();
@@ -746,7 +746,7 @@ private slots:
         auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface);
         QTRY_VERIFY2_WITH_TIMEOUT(Surface->IsReady(), Surface->Snapshot().error_
             ? Surface->Snapshot().error_->code_.c_str() : "viewer did not become ready", 5000);
-        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), Automatic);
+        QCOMPARE(Surface->findChild<QtPluginViewerSurface*>()->IsReady(), Automatic);
         const auto SelectWlx = [](QtViewerSurface* Surface) {
             auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); if (!Menu || !Menu->menuAction()->isVisible()) return false;
             QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection);
@@ -754,7 +754,7 @@ private slots:
             Choice->trigger(); return true;
         };
         QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("뷰어.txt"));
+        QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("뷰어.txt"));
         QVERIFY(Full->screen()->grabWindow(Full->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-full.png"));
         if (NativeKeys) QVERIFY(sendWlxKey(Surface, VK_ESCAPE, false));
         else Full->close();
@@ -763,8 +763,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())), 5000);
         QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
         Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), Automatic);
-        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QCOMPARE(Surface->findChild<QtPluginViewerSurface*>()->IsReady(), Automatic);
+        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady());
         QVERIFY(main_->screen()->grabWindow(main_->winId()).save(QCoreApplication::applicationDirPath() + "/wlx-product-quick.png"));
         Surface->findChild<QAction*>("hc.viewer.fallback")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
         QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("WLX product content"));
@@ -784,7 +784,7 @@ private slots:
         QMenu Legacy; QCOMPARE(TyStPlugInMgr::GetInstance()->ConstructWLXMenu(&Legacy, Content.filePath("뷰어.txt")), 0u);
         const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
         StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
-        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady());
         if (NativeKeys) QVERIFY(sendWlxKey(Surface, 'Q', true));
         else QVERIFY(QMetaObject::invokeMethod(Surface, "CloseRequested", Qt::DirectConnection));
         QTRY_VERIFY(Quick.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
@@ -794,19 +794,19 @@ private slots:
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
-        using Selection = QtViewerSurface::WlxSelectionMode;
-        QCOMPARE(QWcxHostSettings::WlxSelection(Settings), Selection::Manual);
+        using Selection = QtViewerSurface::PluginViewerSelectionMode;
+        QCOMPARE(QPluginHostSettings::ViewerSelection(Settings), Selection::Manual);
         {
-            QWcxHostSettings Wlx(hc::plugins::PluginFormat::Wlx); Wlx.Load(Settings);
+            QPluginHostSettings Wlx(hc::plugins::PluginFormat::Wlx); Wlx.Load(Settings);
             auto* Mode = Wlx.findChild<QComboBox*>("wlxSelectionMode"); QVERIFY(Mode);
             Mode->setCurrentIndex(1);
-            QCOMPARE(QWcxHostSettings::WlxSelection(Settings), Selection::Manual);
+            QCOMPARE(QPluginHostSettings::ViewerSelection(Settings), Selection::Manual);
             Wlx.Save(Settings); Settings.sync();
             QSettings Reload(Settings.fileName(), QSettings::IniFormat);
-            QCOMPARE(QWcxHostSettings::WlxSelection(Reload), Selection::Automatic);
+            QCOMPARE(QPluginHostSettings::ViewerSelection(Reload), Selection::Automatic);
             Wlx.Load(Reload); QCOMPARE(Mode->currentIndex(), 1);
             Mode->setCurrentIndex(2); Wlx.Save(Reload); Reload.sync();
-            QCOMPARE(QWcxHostSettings::WlxSelection(Reload), Selection::Force);
+            QCOMPARE(QPluginHostSettings::ViewerSelection(Reload), Selection::Force);
             Reload.setValue("ListerPlugins/SelectionMode", "unknown"); Wlx.Load(Reload);
             QCOMPARE(Mode->currentIndex(), 0);
             Wlx.resize(720, 240); Wlx.show(); QCoreApplication::processEvents();
@@ -820,7 +820,7 @@ private slots:
         Settings.setValue("PackerPlugins/0_Exts", "hcwcx"); Settings.setValue("PackerPlugins/0_HostEnabled", true);
         Settings.setValue("PackerPlugins/0_HostManifest", "plugin.json"); Settings.setValue("PackerPlugins/0_HostReviewed", Reviewed);
         {
-            QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+            QPluginHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
             auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
             auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke);
             QTest::mouseClick(Revoke, Qt::LeftButton);
@@ -828,7 +828,7 @@ private slots:
             // Closing/cancelling the options UI must not persist its draft.
         }
         QCOMPARE(Settings.value("PackerPlugins/0_HostReviewed").toByteArray(), Reviewed);
-        QWcxHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+        QPluginHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
         auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table);
         auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke); QTest::mouseClick(Revoke, Qt::LeftButton);
         Widget.Save(Settings); Settings.sync();
@@ -838,6 +838,91 @@ private slots:
         QCOMPARE(Reload.value("PackerPlugins/0_Path").toString(), QString("fixture.wcx64"));
         Widget.Load(Reload); QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
         QVERIFY(Widget.grab().save(QCoreApplication::applicationDirPath() + "/wcx-host-settings.png"));
+    }
+    void dopusPluginsUi()
+    {
+        using namespace hc::plugins; using namespace hc::storage; using namespace hc::operations;
+        QTemporaryDir Package, Root, Copied; const auto Binary = Package.filePath("dopus.dll");
+        QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_dopus_fixture.dll", Binary));
+        QFile Dll(Binary); QVERIFY(Dll.open(QIODevice::ReadOnly)); const auto Hash = QCryptographicHash::hash(Dll.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); Dll.close();
+        { QFile Input(Root.filePath("sample.bitmap")); QVERIFY(Input.open(QIODevice::WriteOnly)); QCOMPARE(Input.write("dopus product"), 13); }
+        const QStringList Groups{"DopusVfsPlugins", "DopusViewerPlugins", "ListerPlugins"}; QMap<QString, QVariant> Saved;
+        for (const auto& Key : StSettings->allKeys()) for (const auto& Group : Groups) if (Key.startsWith(Group + '/')) Saved[Key] = StSettings->value(Key);
+        auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated(); const auto PreviousTab = Panel->CurrentTabIndex();
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        const auto Restore = qScopeGuard([&] {
+            Host->CloseAll(); for (auto* Dialog : main_->findChildren<QDialog*>("hc.viewer.full")) Dialog->close();
+            for (auto* Dialog : main_->findChildren<QDialog*>("hc.dataPluginDialog")) Dialog->close();
+            while (!Host->IsIdle()) QTest::qWait(5);
+            if (Panel->CurrentTabIndex() != PreviousTab) Panel->CloseTab();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QThreadPool::globalInstance()->waitForDone();
+            for (const auto& Group : Groups) StSettings->remove(Group);
+            for (auto It = Saved.cbegin(); It != Saved.cend(); ++It) StSettings->setValue(It.key(), It.value());
+        });
+        for (const auto Format : {PluginFormat::DopusVfs, PluginFormat::DopusViewer})
+        {
+            const bool Vfs = Format == PluginFormat::DopusVfs; const auto Group = Vfs ? QString("DopusVfsPlugins/") : QString("DopusViewerPlugins/");
+            PluginManifest Manifest; Manifest.id_ = "hc.dopus.product"; Manifest.version_ = "1"; Manifest.binary_ = "dopus.dll"; Manifest.sha256_ = Hash; Manifest.format_ = Format;
+            Manifest.extensions_ = Vfs ? std::set{Extension::StorageRead, Extension::StorageWrite} : std::set{Extension::Viewer, Extension::Metadata};
+            Manifest.permissions_ = {Permission::ReadContent, Vfs ? Permission::WriteContent : Permission::UserInterface};
+            const auto Path = Package.filePath(Vfs ? "vfs.json" : "viewer.json"); QFile Json(Path); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
+            StSettings->setValue(Group + "Count", 1); StSettings->setValue(Group + "0_Path", Binary); StSettings->setValue(Group + "0_HostEnabled", true);
+            StSettings->setValue(Group + "0_HostManifest", Path); StSettings->setValue(Group + "0_HostReviewed", EncodeManifest(Manifest));
+            QPluginHostSettings Settings(Format); Settings.Load(*StSettings); Settings.Save(*StSettings);
+            const auto Choices = QPluginHostSettings::DataChoices(*StSettings, Format); QCOMPARE(Choices.size(), 1u); QVERIFY(Choices.front().options_.approval_.approved_);
+            QCOMPARE(Choices.front().options_.binaryPath_, Binary);
+        }
+        StSettings->setValue("ListerPlugins/Count", 0); StSettings->setValue("ListerPlugins/SelectionMode", "automatic");
+        const auto ViewerChoices = QPluginHostSettings::ViewerChoices(*StSettings); QCOMPARE(ViewerChoices.size(), 1u); QCOMPARE(ViewerChoices.front().id_, QString("dopus-0"));
+        QTimer Driver; Driver.setInterval(10); QElapsedTimer Timeout; Timeout.start();
+        connect(&Driver, &QTimer::timeout, main_, [&] {
+            for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Input = qobject_cast<QInputDialog*>(Widget))
+            {
+                if (!Input->isVisible()) continue;
+                if (Timeout.elapsed() > 5000) { Input->reject(); continue; }
+                if (Input->labelText().contains(tr("전체 경로"))) Input->setTextValue(Root.path());
+                Input->accept();
+            }
+        });
+        Driver.start(); auto* Open = main_->findChild<QAction*>("hc.menu.dopus.open"); QVERIFY(Open); Open->trigger(); Driver.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(Panel->CurrentTabIndex() != PreviousTab, 5000);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000); QVERIFY(names(Model).contains("sample.bitmap"));
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid); QModelIndex Selected;
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+        {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Model->GetName(Index) == "sample.bitmap") { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", Copied.path()}}, "test", Selected);
+        QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); const auto Accepted = Copy.get(); QVERIFY(Accepted.HasValue());
+        auto& Scheduler = Bridge->FileJobs()->Scheduler(); QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_), 5000);
+        QCOMPARE(Scheduler.Snapshot(Accepted.Value().jobId_).Value().state_, JobState::Completed);
+        QFile CopyFile(Copied.filePath("sample.bitmap")); QVERIFY(CopyFile.open(QIODevice::ReadOnly)); QCOMPARE(CopyFile.readAll(), QByteArray("dopus product")); CopyFile.close();
+        // Copy completion refreshes the panel model. Reacquire its index before
+        // invoking a selection-based menu; the pre-copy index is no longer valid.
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000);
+        Selected = {};
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
+        {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Model->GetName(Index) == "sample.bitmap") { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated();
+        Timeout.restart(); Driver.start(); main_->findChild<QAction*>("hc.menu.dopus.query")->trigger(); Driver.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.dataPluginDialog"), 5000); QPointer<QDialog> Info = main_->findChild<QDialog*>("hc.dataPluginDialog");
+        auto* Values = Info->findChild<QTableWidget*>(); QVERIFY(Values); QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 6, 5000);
+        QVERIFY(Values->item(0, 1)->text().contains("fixture metadata")); Info->close(); QTRY_VERIFY(Info.isNull());
+        auto View = Bridge->Dispatch("hc.viewer.open", {}, "test", Selected); QTRY_VERIFY(View.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QVERIFY(View.get().HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000); QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
+        auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QVERIFY(Surface->Snapshot().provider_.starts_with("dopus-viewer.")); QVERIFY(Full->grab().save(QCoreApplication::applicationDirPath() + "/dopus-product.png"));
+        Full->close(); QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 4000);
+        QMainOpts Settings(main_); Settings.show(); QCoreApplication::processEvents();
+        QVERIFY(Settings.findChild<QTableWidget*>("dopus-vfsHostTable")); QVERIFY(Settings.findChild<QTableWidget*>("dopus-viewerHostTable"));
     }
     void dataPluginsUi()
     {
@@ -862,13 +947,13 @@ private slots:
             QFile Json(Path); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
             StSettings->setValue(Group + "Count", 1); StSettings->setValue(Group + "0_Path", Binary); StSettings->setValue(Group + "0_HostEnabled", true);
             StSettings->setValue(Group + "0_HostManifest", Path); StSettings->setValue(Group + "0_HostReviewed", EncodeManifest(Manifest));
-            QWcxHostSettings Settings(Format); Settings.Load(*StSettings);
+            QPluginHostSettings Settings(Format); Settings.Load(*StSettings);
             const auto Prefix = Format == PluginFormat::Wfx ? QString("wfx") : QString("wdx");
             auto* Table = Settings.findChild<QTableWidget*>(Prefix + "HostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
             Settings.findChild<QPushButton*>(Prefix + "HostRevoke")->click();
-            QVERIFY(QWcxHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
+            QVERIFY(QPluginHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
             Settings.Load(*StSettings); Settings.Save(*StSettings);
-            QVERIFY(QWcxHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
+            QVERIFY(QPluginHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
         }
         auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated(); const auto PreviousTab = Panel->CurrentTabIndex();
         const auto ClosePluginUi = qScopeGuard([&] {
@@ -1555,7 +1640,7 @@ private:
         QTest::qWait(50);
         // Attachment can reset native focus independently of Qt's cached focus.
         // Re-enter the same focus path as a user selecting the viewer surface.
-        auto* Wlx = Surface->findChild<QtWlxSurface*>(); Wlx->clearFocus(); Wlx->setFocus(Qt::OtherFocusReason);
+        auto* Wlx = Surface->findChild<QtPluginViewerSurface*>(); Wlx->clearFocus(); Wlx->setFocus(Qt::OtherFocusReason);
         QElapsedTimer Wait; Wait.start();
         for (;;)
         {
@@ -1576,7 +1661,7 @@ private:
         qInfo() << "WLX native keyboard focus verified, PID:" << Process << "key:" << Key << "control:" << Control;
         return SendInput(static_cast<UINT>(Inputs.size()), Inputs.data(), sizeof(INPUT)) == Inputs.size();
     }
-    bool configureWlx(hc::plugins::WlxViewerOptions& Options, const QTemporaryDir& Directory)
+    bool configureWlx(hc::plugins::PluginViewerOptions& Options, const QTemporaryDir& Directory)
     {
         using namespace hc::plugins;
         Options.binaryPath_ = Directory.filePath("viewer.wlx64");

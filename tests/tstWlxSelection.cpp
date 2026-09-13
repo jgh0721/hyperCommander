@@ -9,7 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
-#include "pluginHost/hostedWlxSession.hpp"
+#include "pluginHost/hostedViewerSession.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "memoryStorage.hpp"
 
@@ -86,7 +86,7 @@ class WlxSelectionTests : public QObject
 {
     Q_OBJECT
 private:
-    bool candidate(const QString& Directory, WlxViewerOptions& Options, QByteArray Expression = "EXT=\"TXT\"", QByteArray Mode = "normal", bool Sdk = true)
+    bool candidate(const QString& Directory, PluginViewerOptions& Options, QByteArray Expression = "EXT=\"TXT\"", QByteArray Mode = "normal", bool Sdk = true)
     {
         if (!QDir().mkpath(Directory)) return false;
         const auto Root = QCoreApplication::applicationDirPath(); Options.executable_ = Root + "/hc-plugin-host-x64.exe";
@@ -107,13 +107,13 @@ private:
 private slots:
     void builtinProbeRunsOnWorker()
     {
-        QTemporaryDir Directory; WlxViewerOptions Options;
+        QTemporaryDir Directory; PluginViewerOptions Options;
         QVERIFY(candidate(Directory.filePath("plugin"), Options, "[0]=\"a\""));
         QWidget Parent; Parent.resize(320, 200); Parent.show();
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Observation = std::make_shared<struct Observation>(); std::atomic<unsigned> Probes = 0;
-        WlxAutomaticPolicy Policy;
+        PluginViewerSelectionPolicy Policy;
         Policy.builtinProbe_ = [&](const EntrySnapshot& Entry, std::span<const std::byte> Prefix) {
             Observation->Touch(); ++Probes;
             return Entry.size_ == 3 && Prefix.size() == 3 && Prefix.front() == std::byte{'a'};
@@ -154,14 +154,14 @@ private slots:
     {
         QFETCH(QByteArray, First); QFETCH(QByteArray, Mode); QFETCH(bool, Second); QFETCH(bool, Force);
         QFETCH(bool, Multimedia); QFETCH(int, Expected); QFETCH(int, Failures);
-        QTemporaryDir Directory; QVERIFY(Directory.isValid()); std::vector<WlxViewerOptions> Candidates(Second ? 2 : 1);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); std::vector<PluginViewerOptions> Candidates(Second ? 2 : 1);
         QVERIFY(candidate(Directory.filePath("first"), Candidates[0], First, Mode, Mode != "absent"));
         if (Mode == "revoked") Candidates[0].approval_.approved_ = false;
         if (Second) QVERIFY(candidate(Directory.filePath("second"), Candidates[1], "[1]=\"b\" & EXT=\"TXT\""));
         auto Observation = std::make_shared<struct Observation>(); auto Source = std::make_shared<ObservedContent>(Observation);
         QWidget Parent; Parent.resize(320, 200); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
         std::atomic<unsigned> Factories = 0;
-        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Opened = Service.OpenAutomatic(Candidates, Source, QString::number(Parent.winId(), 16), 320, 200, {Force, Multimedia});
         QVERIFY(Opened.HasValue()); auto Session = Opened.Value();
@@ -199,14 +199,14 @@ private slots:
     void contentFailures()
     {
         QFETCH(QByteArray, Mode); QFETCH(QByteArray, Code);
-        QTemporaryDir Directory; WlxViewerOptions Options;
+        QTemporaryDir Directory; PluginViewerOptions Options;
         QVERIFY(candidate(Directory.filePath("plugin"), Options, Mode == "invalid-detect" ? "BROKEN" : Mode == "nul-name" ? "EXT=\"TXT\"" : "[0]=\"a\""));
         if (Mode == "revoked") Options.approval_.approved_ = false;
         auto Observation = std::make_shared<struct Observation>();
         Observation->noProgress_ = Mode == "no-progress"; Observation->overRead_ = Mode == "over-read";
         Observation->earlyEof_ = Mode == "early-eof"; Observation->stale_ = Mode == "stale";
         QWidget Parent; std::atomic<unsigned> Factories = 0;
-        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         OperationContext Context; if (Mode == "budget") Context.maxReadBytes_ = 2;
         const auto Name = Mode == "nul-name" ? std::string("original.txt\0bin", 16) : std::string("original.txt");
@@ -220,10 +220,10 @@ private slots:
     }
     void cancellationDuringPrefix()
     {
-        QTemporaryDir Directory; WlxViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "[0]=1"));
+        QTemporaryDir Directory; PluginViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "[0]=1"));
         auto Observation = std::make_shared<struct Observation>(); Observation->wait_ = true;
         QWidget Parent; std::atomic<unsigned> Factories = 0;
-        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Opened = Service.OpenAutomatic({Options}, std::make_shared<ObservedContent>(Observation), QString::number(Parent.winId(), 16), 320, 200);
         QVERIFY(Opened.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Observation->reading_.load(), 4000);
@@ -234,7 +234,7 @@ private slots:
     void emptyCandidates()
     {
         QTemporaryDir Directory; QWidget Parent;
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         auto Observation = std::make_shared<struct Observation>();
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Opened = Service.OpenAutomatic({}, std::make_shared<ObservedContent>(Observation), QString::number(Parent.winId(), 16), 320, 200);
@@ -243,9 +243,9 @@ private slots:
     }
     void callerDeadline()
     {
-        QTemporaryDir Directory; WlxViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "1", "hang-detect"));
+        QTemporaryDir Directory; PluginViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "1", "hang-detect"));
         QWidget Parent; std::atomic<unsigned> Factories = 0;
-        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Observation = std::make_shared<struct Observation>();
         OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
@@ -259,9 +259,9 @@ private slots:
     }
     void byteOnlyUnicodeExtension()
     {
-        QTemporaryDir Directory; WlxViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "SIZE=3 & [0]=\"a\""));
+        QTemporaryDir Directory; PluginViewerOptions Options; QVERIFY(candidate(Directory.filePath("plugin"), Options, "SIZE=3 & [0]=\"a\""));
         QWidget Parent; Parent.resize(320, 200); Parent.show();
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Observation = std::make_shared<struct Observation>();
         auto Opened = Service.OpenAutomatic({Options}, std::make_shared<ObservedContent>(Observation, "abc", "원본.😀"), QString::number(Parent.winId(), 16), 320, 200);

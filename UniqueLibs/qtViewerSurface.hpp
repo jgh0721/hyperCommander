@@ -1,6 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/viewer/viewer.hpp"
-#include "qtWlxSurface.hpp"
+#include "qtPluginViewerSurface.hpp"
 #include <QWidget>
 #include <QUrl>
 
@@ -8,14 +8,14 @@ class QtViewerSurface final : public QWidget
 {
     Q_OBJECT
 public:
-    struct WlxChoice { QString id_, name_; hc::plugins::WlxViewerOptions options_; };
-    using WlxChoices = std::function<std::vector<WlxChoice>()>;
-    enum class WlxSelectionMode { Manual, Automatic, Force };
-    using WlxSelection = std::function<WlxSelectionMode()>;
+    struct PluginViewerChoice { QString id_, name_; hc::plugins::PluginViewerOptions options_; };
+    using ViewerChoices = std::function<std::vector<PluginViewerChoice>()>;
+    enum class PluginViewerSelectionMode { Manual, Automatic, Force };
+    using ViewerSelection = std::function<PluginViewerSelectionMode()>;
     // Service belongs to the GUI host and outlives this surface.
     explicit QtViewerSurface(hc::viewer::ViewerService& Service, QWidget* Parent = nullptr);
     ~QtViewerSurface() override;
-    void ConfigureWlx(QtWlxController* Controller, WlxChoices Choices, WlxSelection Selection = {});
+    void ConfigurePlugins(QtPluginViewerController* Controller, ViewerChoices Choices, ViewerSelection Selection = {});
     void Open(std::shared_ptr<hc::storage::IContentSource> Source,
         hc::viewer::ViewerPurpose Purpose = hc::viewer::ViewerPurpose::FullViewer);
     void Close();

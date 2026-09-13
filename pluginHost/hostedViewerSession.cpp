@@ -1,4 +1,4 @@
-﻿#include "hostedWlxSession.hpp"
+﻿#include "hostedViewerSession.hpp"
 #include <QFileInfo>
 #include <QStringDecoder>
 #include "wlxDetection.hpp"
@@ -57,12 +57,12 @@ namespace hc::plugins
             return Bytes;
         }
     }
-    struct HostedWlxSession::State
+    struct HostedViewerSession::State
     {
         mutable std::mutex mutex_;
         std::condition_variable changed_;
         std::stop_source stop_;
-        WlxSessionDetails details_;
+        PluginViewerDetails details_;
         bool closed_ = false, cancelled_ = false, commands_ = false, search_ = false, focus_ = false;
         std::optional<std::pair<std::uint32_t, std::uint32_t>> size_;
         struct Command { std::uint64_t sequence_; int command_, parameter_; QString text_; };
@@ -74,36 +74,36 @@ namespace hc::plugins
             stop_.request_stop(); changed_.notify_all();
         }
     };
-    struct WlxViewerService::Task
+    struct PluginViewerService::Task
     {
-        std::shared_ptr<HostedWlxSession::State> state_;
+        std::shared_ptr<HostedViewerSession::State> state_;
         std::jthread worker_;
     };
-    HostedWlxSession::HostedWlxSession(std::shared_ptr<State> State) : state_(std::move(State)) {}
-    HostedWlxSession::~HostedWlxSession() { Close(); }
-    ViewerSnapshot HostedWlxSession::Snapshot() const { std::lock_guard Lock(state_->mutex_); return state_->details_.viewer_; }
-    WlxSessionDetails HostedWlxSession::Details() const { std::lock_guard Lock(state_->mutex_); return state_->details_; }
-    std::vector<std::string> HostedWlxSession::Commands() const
+    HostedViewerSession::HostedViewerSession(std::shared_ptr<State> State) : state_(std::move(State)) {}
+    HostedViewerSession::~HostedViewerSession() { Close(); }
+    ViewerSnapshot HostedViewerSession::Snapshot() const { std::lock_guard Lock(state_->mutex_); return state_->details_.viewer_; }
+    PluginViewerDetails HostedViewerSession::Details() const { std::lock_guard Lock(state_->mutex_); return state_->details_; }
+    std::vector<std::string> HostedViewerSession::Commands() const
     {
         std::lock_guard Lock(state_->mutex_); auto Commands = state_->commands_ ? std::vector<std::string>{"copy", "wrap", "select-all", "set-percent"} : std::vector<std::string>{};
         if (state_->search_) Commands.push_back("find"); return Commands;
     }
-    void HostedWlxSession::Cancel() { state_->stop(false); }
-    void HostedWlxSession::Close() { state_->stop(true); }
-    Result<Unit> HostedWlxSession::Resize(std::uint32_t Width, std::uint32_t Height)
+    void HostedViewerSession::Cancel() { state_->stop(false); }
+    void HostedViewerSession::Close() { state_->stop(true); }
+    Result<Unit> HostedViewerSession::Resize(std::uint32_t Width, std::uint32_t Height)
     {
         if (Width > 32768 || Height > 32768) return Invalid("host-viewer-size");
         std::lock_guard Lock(state_->mutex_);
         if (state_->stop_.stop_requested() || state_->details_.idle_) return Error{ErrorCategory::Cancelled, "viewer-closed", {"wlx"}};
         state_->size_ = {Width, Height}; state_->changed_.notify_one(); return Unit{};
     }
-    Result<Unit> HostedWlxSession::Focus()
+    Result<Unit> HostedViewerSession::Focus()
     {
         std::lock_guard Lock(state_->mutex_);
         if (state_->stop_.stop_requested() || state_->details_.idle_) return Error{ErrorCategory::Cancelled, "viewer-closed", {"wlx"}};
         state_->focus_ = true; state_->changed_.notify_one(); return Unit{};
     }
-    Result<std::uint64_t> HostedWlxSession::SendCommand(int Command, int Parameter)
+    Result<std::uint64_t> HostedViewerSession::SendCommand(int Command, int Parameter)
     {
         if (Command < 1 || Command > 4 || Parameter < 0 || Parameter > (Command == 4 ? 100 : 511)) return Invalid("host-viewer-command-fields");
         std::lock_guard Lock(state_->mutex_);
@@ -113,7 +113,7 @@ namespace hc::plugins
         const auto Sequence = state_->nextCommand_++; state_->queue_.push_back({Sequence, Command, Parameter});
         state_->changed_.notify_one(); return Sequence;
     }
-    Result<std::uint64_t> HostedWlxSession::Search(QString Text, int Flags)
+    Result<std::uint64_t> HostedViewerSession::Search(QString Text, int Flags)
     {
         if (Text.isEmpty() || Text.size() > 4096 || Text.contains(QChar::Null) || Flags < 0 || Flags > 15) return Invalid("host-viewer-search-fields");
         std::lock_guard Lock(state_->mutex_);
@@ -122,18 +122,18 @@ namespace hc::plugins
         if (state_->queue_.size() >= 16) return Error{ErrorCategory::BudgetExceeded, "viewer-command-budget", {"wlx"}};
         const auto Sequence = state_->nextCommand_++; state_->queue_.push_back({Sequence, 5, Flags, std::move(Text)}); state_->changed_.notify_one(); return Sequence;
     }
-    WlxViewerService::WlxViewerService(MaterializerFactory Factory, std::size_t MaxSessions)
+    PluginViewerService::PluginViewerService(MaterializerFactory Factory, std::size_t MaxSessions)
         : factory_(std::move(Factory)), maxSessions_(MaxSessions) {}
-    WlxViewerService::~WlxViewerService() { CancelAll(); tasks_.clear(); }
-    Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::Open(WlxViewerOptions Options,
+    PluginViewerService::~PluginViewerService() { CancelAll(); tasks_.clear(); }
+    Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::Open(PluginViewerOptions Options,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, std::uint32_t Width, std::uint32_t Height, OperationContext Context)
     { return open({std::move(Options)}, {}, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
-    Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::OpenAutomatic(std::vector<WlxViewerOptions> Candidates,
+    Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::OpenAutomatic(std::vector<PluginViewerOptions> Candidates,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, std::uint32_t Width, std::uint32_t Height,
-        WlxAutomaticPolicy Policy, OperationContext Context)
+        PluginViewerSelectionPolicy Policy, OperationContext Context)
     { return open(std::move(Candidates), Policy, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
-    Result<std::shared_ptr<HostedWlxSession>> WlxViewerService::open(std::vector<WlxViewerOptions> Candidates,
-        std::optional<WlxAutomaticPolicy> Policy, std::shared_ptr<IContentSource> Source, QString ParentWindow,
+    Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::open(std::vector<PluginViewerOptions> Candidates,
+        std::optional<PluginViewerSelectionPolicy> Policy, std::shared_ptr<IContentSource> Source, QString ParentWindow,
         std::uint32_t Width, std::uint32_t Height, OperationContext Context)
     {
         if (!factory_ || !Source || ParentWindow.isEmpty() || Width > 32768 || Height > 32768 || Candidates.size() > 1000
@@ -141,11 +141,11 @@ namespace hc::plugins
             return Invalid("invalid-wlx-session-request");
         if (!maxSessions_ || maxSessions_ > 16) return Invalid("invalid-wlx-session-budget");
         Collect(); if (tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
-        auto State = std::make_shared<HostedWlxSession::State>(); State->size_ = {Width, Height};
+        auto State = std::make_shared<HostedViewerSession::State>(); State->size_ = {Width, Height};
         State->details_.viewer_.id_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
         State->details_.viewer_.provider_ = Policy ? "wlx.automatic" : "wlx." + Candidates.front().approval_.reviewed_.id_;
-        auto Session = std::shared_ptr<HostedWlxSession>(new HostedWlxSession(State));
-        auto Task = std::make_unique<WlxViewerService::Task>(); Task->state_ = State;
+        auto Session = std::shared_ptr<HostedViewerSession>(new HostedViewerSession(State));
+        auto Task = std::make_unique<PluginViewerService::Task>(); Task->state_ = State;
         // Retain the task before starting it: allocation failure while appending
         // must not join an already-running viewer that has never been cancelled.
         tasks_.push_back(std::move(Task));
@@ -159,18 +159,18 @@ namespace hc::plugins
         catch (const std::system_error&) { tasks_.pop_back(); return Error{ErrorCategory::Unavailable, "viewer-worker-unavailable", {"wlx"}}; }
         return Session;
     }
-    void WlxViewerService::CancelAll() { for (auto& Task : tasks_) Task->state_->stop(false); }
-    bool WlxViewerService::IsIdle() const
+    void PluginViewerService::CancelAll() { for (auto& Task : tasks_) Task->state_->stop(false); }
+    bool PluginViewerService::IsIdle() const
     {
         for (const auto& Task : tasks_) { std::lock_guard Lock(Task->state_->mutex_); if (!Task->state_->details_.idle_) return false; }
         return true;
     }
-    void WlxViewerService::Collect()
+    void PluginViewerService::Collect()
     {
         std::erase_if(tasks_, [](const auto& Task) { std::lock_guard Lock(Task->state_->mutex_); return Task->state_->details_.idle_; });
     }
-    void WlxViewerService::run(const std::shared_ptr<HostedWlxSession::State>& State, std::vector<WlxViewerOptions> Candidates,
-        std::optional<WlxAutomaticPolicy> Policy,
+    void PluginViewerService::run(const std::shared_ptr<HostedViewerSession::State>& State, std::vector<PluginViewerOptions> Candidates,
+        std::optional<PluginViewerSelectionPolicy> Policy,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, MaterializerFactory Factory, OperationContext Context)
     {
         std::stop_callback External(Context.stopToken_, [&] { State->stop(false); });
@@ -203,7 +203,7 @@ namespace hc::plugins
                 if (!Lease) return Invalid("viewer-content-lease-required");
                 return Unit{};
             };
-            const auto Attempt = [&](WlxViewerOptions& Options, std::size_t Index) -> Result<bool> {
+            const auto Attempt = [&](PluginViewerOptions& Options, std::size_t Index) -> Result<bool> {
                 if (const auto Stop = Context.Check({"wlx"})) return *Stop;
                 if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
                 auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
@@ -322,7 +322,7 @@ namespace hc::plugins
             while (!State->stop_.stop_requested())
             {
                 std::optional<std::pair<std::uint32_t, std::uint32_t>> Resize;
-                std::optional<HostedWlxSession::State::Command> Command; bool Focus = false;
+                std::optional<HostedViewerSession::State::Command> Command; bool Focus = false;
                 {
                     std::unique_lock Lock(State->mutex_);
                     State->changed_.wait_for(Lock, std::chrono::milliseconds(50), [&] { return State->stop_.stop_requested() || State->size_ || State->focus_ || !State->queue_.empty(); });

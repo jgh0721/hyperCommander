@@ -7,7 +7,7 @@
 #include "storageProviders.hpp"
 #include "wcxMutation.hpp"
 #include "qtViewerHost.hpp"
-#include "qtWcxHostSettings.hpp"
+#include "qtPluginHostSettings.hpp"
 #include "nativeMaterializer.hpp"
 #include "pluginHost/hostedDataProviders.hpp"
 #include <QtConcurrent>
@@ -117,8 +117,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
     viewers_ = new QtViewerHost(Main, [Base = QDir::tempPath().toStdString()] { return MakeNativeMaterializer(Base); },
-        [] { return QWcxHostSettings::WlxChoices(*StSettings); },
-        [] { return QWcxHostSettings::WlxSelection(*StSettings); });
+        [] { return QPluginHostSettings::ViewerChoices(*StSettings); },
+        [] { return QPluginHostSettings::ViewerSelection(*StSettings); });
     auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
@@ -368,14 +368,18 @@ void CommandUiBridge::createActions()
     auto* Plugins = Window->menuBar()->addMenu(tr("플러그인"));
     auto* Storage = Plugins->addAction(tr("파일 시스템 열기…")); Storage->setObjectName("hc.menu.wfx.open");
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
+    auto* DopusStorage = Plugins->addAction(tr("DOpus 파일 시스템 열기…")); DopusStorage->setObjectName("hc.menu.dopus.open");
+    auto* DopusMetadata = Plugins->addAction(tr("DOpus 선택 파일 정보…")); DopusMetadata->setObjectName("hc.menu.dopus.query");
+    connect(DopusStorage, &QAction::triggered, this, [this] { openDataPlugin(false, true); });
+    connect(DopusMetadata, &QAction::triggered, this, [this] { openDataPlugin(true, true); });
     connect(Storage, &QAction::triggered, this, [this] { openDataPlugin(false); });
     connect(Metadata, &QAction::triggered, this, [this] { openDataPlugin(true); });
 }
 
-void CommandUiBridge::openDataPlugin(bool Metadata)
+void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
 {
     using namespace hc::plugins;
-    const auto Choices = QWcxHostSettings::DataChoices(*StSettings, Metadata ? PluginFormat::Wdx : PluginFormat::Wfx);
+    const auto Choices = QPluginHostSettings::DataChoices(*StSettings, Dopus ? (Metadata ? PluginFormat::DopusViewer : PluginFormat::DopusVfs) : (Metadata ? PluginFormat::Wdx : PluginFormat::Wfx));
     if (Choices.empty()) { QMessageBox::information(main_, tr("플러그인"), tr("설정의 플러그인 실행 설정에서 플러그인을 추가하고 승인해 주세요.")); return; }
     const auto Context = captureFiles({}, true);
     QPointer<CmpPanel> Panel = activePanel_;
@@ -396,6 +400,21 @@ void CommandUiBridge::openDataPlugin(bool Metadata)
     bool Accepted = false; const auto Name = QInputDialog::getItem(main_, tr("플러그인 선택"), tr("플러그인"), Names, 0, false, &Accepted);
     if (!Accepted || !Panel) return;
     const auto Options = Choices[Names.indexOf(Name)].options_;
+    QString NativeRoot;
+    if (Dopus && !Metadata)
+    {
+        if (Context.location_.kind_ == LocatorKind::Local && Context.location_.nesting_.empty()) NativeRoot = QString::fromStdString(Context.location_.root_);
+        if (Model && Context.selection_.size() == 1)
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+            {
+                const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+                if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Context.selection_.front()
+                    && Entry->storageEntry_->locator_.kind_ == LocatorKind::Local && Entry->storageEntry_->locator_.nesting_.empty())
+                    NativeRoot = QString::fromStdString(Entry->storageEntry_->locator_.root_);
+            }
+        NativeRoot = QInputDialog::getText(main_, tr("DOpus 파일 시스템"), tr("열 파일 또는 폴더의 전체 경로"), QLineEdit::Normal, NativeRoot, &Accepted);
+        if (!Accepted || NativeRoot.isEmpty() || !Panel) return;
+    }
     const auto Cache = QDir::tempPath().toStdString();
     const auto Session = QUuid::createUuid().toString(QUuid::Id128).toStdString();
     auto* Dialog = new QDialog(main_); Dialog->setObjectName("hc.dataPluginDialog"); Dialog->setAttribute(Qt::WA_DeleteOnClose); Dialog->setWindowTitle(Name); Dialog->resize(600, 380);
@@ -440,7 +459,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata)
             Dialog->close();
         }
     });
-    Watcher->setFuture(QtConcurrent::run([Options, Cache, Source, Metadata, Stop, Session]() -> Result<OpenResult> {
+    Watcher->setFuture(QtConcurrent::run([Options, Cache, Source, Metadata, Dopus, NativeRoot, Stop, Session]() -> Result<OpenResult> {
         OperationContext Operation; Operation.stopToken_ = Stop->get_token(); Operation.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         auto Inspected = InspectManifestFile(Options.manifestPath_, Operation); if (!Inspected.HasValue()) return Inspected.Failure();
         if (QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive)) return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch"};
@@ -455,7 +474,8 @@ void CommandUiBridge::openDataPlugin(bool Metadata)
         if (!Metadata)
         {
             auto Store = MakeNativeContentStore(Cache); if (!Store.HasValue()) return Store.Failure();
-            auto Storage = MakeHostedWfxProvider(Process, {Session}, Store.Value(), Options.approval_.granted_.contains(Permission::WriteContent));
+            auto Storage = Dopus ? MakeHostedDopusVfsProvider(Process, {Session}, Store.Value(), Options.approval_.granted_.contains(Permission::WriteContent), NativeRoot)
+                : MakeHostedWfxProvider(Process, {Session}, Store.Value(), Options.approval_.granted_.contains(Permission::WriteContent));
             if (!Storage.HasValue()) return Storage.Failure(); Result.storage_ = std::move(Storage.Value());
             Result.storage_.reader_ = WorkerOwned(std::move(Result.storage_.reader_));
             if (Result.storage_.writer_) Result.storage_.writer_ = WorkerOwned(std::move(Result.storage_.writer_));
@@ -463,7 +483,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata)
         else
         {
             auto Materializer = MakeNativeMaterializer(Cache); if (!Materializer.HasValue()) return Materializer.Failure();
-            auto Provider = MakeHostedWdxProvider(Process, Materializer.Value()); if (!Provider.HasValue()) return Provider.Failure();
+            auto Provider = Dopus ? MakeHostedDopusMetadataProvider(Process, Materializer.Value()) : MakeHostedWdxProvider(Process, Materializer.Value()); if (!Provider.HasValue()) return Provider.Failure();
             Result.metadata_ = WorkerOwned(Provider.Value());
             auto Fields = Provider.Value()->Fields(Operation).get(); if (!Fields.HasValue()) return Fields.Failure();
             for (const auto& Field : Fields.Value())

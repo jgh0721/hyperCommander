@@ -1,4 +1,4 @@
-﻿#include "wlxHostService.hpp"
+﻿#include "nativeViewerHostService.hpp"
 #include <QFileInfo>
 #include <QDir>
 #include <array>

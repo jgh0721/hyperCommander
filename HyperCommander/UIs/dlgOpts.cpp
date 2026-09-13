@@ -8,7 +8,7 @@
 #include "UniqueLibs/colorSchemeMgr.hpp"
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/commandMgr.hpp"
-#include "UniqueLibs/qtWcxHostSettings.hpp"
+#include "UniqueLibs/qtPluginHostSettings.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "fileSetMgr.hpp"
@@ -20,11 +20,14 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     ui.groupBox_3->setTitle(tr("플러그인 실행 설정"));
     auto* WcxLayout = new QVBoxLayout(ui.groupBox_3);
     auto* PluginTabs = new QTabWidget(ui.groupBox_3); PluginTabs->setObjectName("pluginHostTabs"); WcxLayout->addWidget(PluginTabs);
-    wcxHostSettings_ = new QWcxHostSettings(PluginTabs); PluginTabs->addTab(wcxHostSettings_, tr("압축 (WCX)"));
-    wlxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wlx, PluginTabs); PluginTabs->addTab(wlxHostSettings_, tr("뷰어 (WLX)"));
+    wcxHostSettings_ = new QPluginHostSettings(PluginTabs); PluginTabs->addTab(wcxHostSettings_, tr("압축 (WCX)"));
+    wlxHostSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::Wlx, PluginTabs); PluginTabs->addTab(wlxHostSettings_, tr("뷰어 선택·WLX"));
 
-    wfxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wfx, PluginTabs); PluginTabs->addTab(wfxHostSettings_, tr("파일 시스템 (WFX)"));
-    wdxHostSettings_ = new QWcxHostSettings(hc::plugins::PluginFormat::Wdx, PluginTabs); PluginTabs->addTab(wdxHostSettings_, tr("파일 정보 (WDX)"));
+    wfxHostSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::Wfx, PluginTabs); PluginTabs->addTab(wfxHostSettings_, tr("파일 시스템 (WFX)"));
+    wdxHostSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::Wdx, PluginTabs); PluginTabs->addTab(wdxHostSettings_, tr("파일 정보 (WDX)"));
+
+    dopusVfsSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::DopusVfs, PluginTabs); PluginTabs->addTab(dopusVfsSettings_, tr("DOpus 파일 시스템"));
+    dopusViewerSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::DopusViewer, PluginTabs); PluginTabs->addTab(dopusViewerSettings_, tr("DOpus 뷰어·정보"));
 
     initialize();
 
@@ -122,6 +125,7 @@ void QMainOpts::SaveSettings_PluginList()
     wlxHostSettings_->Save(*StSettings);
     wfxHostSettings_->Save(*StSettings);
     wdxHostSettings_->Save(*StSettings);
+    dopusVfsSettings_->Save(*StSettings); dopusViewerSettings_->Save(*StSettings);
     TyStPlugInMgr::GetInstance()->Refresh();
 }
 
@@ -215,6 +219,7 @@ void QMainOpts::RefreshPluginList()
     wlxHostSettings_->Load(*StSettings);
     wfxHostSettings_->Load(*StSettings);
     wdxHostSettings_->Load(*StSettings);
+    dopusVfsSettings_->Load(*StSettings); dopusViewerSettings_->Load(*StSettings);
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
     StPlugInMgr->Refresh();
 

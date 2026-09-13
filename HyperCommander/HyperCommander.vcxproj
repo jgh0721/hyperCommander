@@ -554,10 +554,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\qtViewerProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerHost.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\UniqueLibs\qtWlxSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <QtMoc Include="..\UniqueLibs\qtWlxSurface.hpp" />
-    <ClCompile Include="..\pluginHost\hostedWlxSession.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClInclude Include="..\pluginHost\hostedWlxSession.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtPluginViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <QtMoc Include="..\UniqueLibs\qtPluginViewerSurface.hpp" />
+    <ClCompile Include="..\pluginHost\hostedViewerSession.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\hostedViewerSession.hpp" />
     <ClInclude Include="..\pluginHost\wlxWindowMessage.hpp" />
     <ClInclude Include="..\commonLibs\viewer\viewer.hpp" />
     <ClInclude Include="..\UniqueLibs\qtViewerProvider.hpp" />
@@ -599,8 +599,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\qtitanColumnAdapter.hpp" />
-    <ClInclude Include="..\UniqueLibs\qtWcxHostSettings.hpp" />
-    <ClCompile Include="..\UniqueLibs\qtWcxHostSettings.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\UniqueLibs\qtPluginHostSettings.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtPluginHostSettings.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\plugins\pluginManifest.hpp" />
     <ClCompile Include="..\commonLibs\plugins\pluginManifest.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\plugins\pluginWire.hpp" />

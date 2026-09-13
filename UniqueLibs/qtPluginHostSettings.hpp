@@ -8,16 +8,16 @@ class QSettings;
 class QTableWidget;
 class QPushButton;
 class QComboBox;
-class QWcxHostSettings final : public QWidget
+class QPluginHostSettings final : public QWidget
 {
 public:
-    explicit QWcxHostSettings(QWidget* Parent = nullptr);
-    QWcxHostSettings(hc::plugins::PluginFormat Format, QWidget* Parent = nullptr);
+    explicit QPluginHostSettings(QWidget* Parent = nullptr);
+    QPluginHostSettings(hc::plugins::PluginFormat Format, QWidget* Parent = nullptr);
     void Load(QSettings& Settings);
     void Save(QSettings& Settings);
-    static std::vector<QtViewerSurface::WlxChoice> WlxChoices(QSettings& Settings);
-    static std::vector<QtViewerSurface::WlxChoice> DataChoices(QSettings& Settings, hc::plugins::PluginFormat Format);
-    static QtViewerSurface::WlxSelectionMode WlxSelection(QSettings& Settings);
+    static std::vector<QtViewerSurface::PluginViewerChoice> ViewerChoices(QSettings& Settings);
+    static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(QSettings& Settings, hc::plugins::PluginFormat Format);
+    static QtViewerSurface::PluginViewerSelectionMode ViewerSelection(QSettings& Settings);
 private:
     struct Row { int index_; QString path_, manifest_; QByteArray reviewed_; };
     void review();

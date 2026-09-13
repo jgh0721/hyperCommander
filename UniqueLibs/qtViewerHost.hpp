@@ -8,8 +8,8 @@ class QtViewerHost final : public QObject
 {
 public:
     explicit QtViewerHost(QWidget* Main,
-        hc::plugins::WlxViewerService::MaterializerFactory Factory = {}, QtViewerSurface::WlxChoices Choices = {},
-        QtViewerSurface::WlxSelection Selection = {});
+        hc::plugins::PluginViewerService::MaterializerFactory Factory = {}, QtViewerSurface::ViewerChoices Choices = {},
+        QtViewerSurface::ViewerSelection Selection = {});
     ~QtViewerHost() override;
     QtViewerSurface* CreateSurface(QWidget* Parent);
     QDialog* OpenFull(std::shared_ptr<hc::storage::IContentSource> Source);
@@ -22,7 +22,7 @@ private:
     std::unique_ptr<hc::viewer::ViewerService> service_;
     std::vector<QPointer<QtViewerSurface>> surfaces_;
     QTimer* closeTimer_ = nullptr;
-    std::unique_ptr<QtWlxController> wlx_;
-    QtViewerSurface::WlxChoices choices_;
-    QtViewerSurface::WlxSelection selection_;
+    std::unique_ptr<QtPluginViewerController> wlx_;
+    QtViewerSurface::ViewerChoices choices_;
+    QtViewerSurface::ViewerSelection selection_;
 };

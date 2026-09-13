@@ -7,7 +7,7 @@
 
 struct TyFileSet;
 struct TyColorScheme;
-class QWcxHostSettings;
+class QPluginHostSettings;
 
 const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
 const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
@@ -98,8 +98,10 @@ private:
     Q_INVOKABLE void                    pickButtonColor( bool checked = false );
 
     Ui::dlgOpts                         ui;
-    QWcxHostSettings* wcxHostSettings_ = nullptr;
-    QWcxHostSettings* wlxHostSettings_ = nullptr;
-    QWcxHostSettings* wfxHostSettings_ = nullptr;
-    QWcxHostSettings* wdxHostSettings_ = nullptr;
+    QPluginHostSettings* wcxHostSettings_ = nullptr;
+    QPluginHostSettings* wlxHostSettings_ = nullptr;
+    QPluginHostSettings* wfxHostSettings_ = nullptr;
+    QPluginHostSettings* wdxHostSettings_ = nullptr;
+    QPluginHostSettings* dopusVfsSettings_ = nullptr;
+    QPluginHostSettings* dopusViewerSettings_ = nullptr;
 };

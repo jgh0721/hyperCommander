@@ -86,13 +86,13 @@ struct QtViewerSurface::State
     std::size_t inserted_ = 0;
     QTextCursor insertion_;
     double imageScale_ = 1;
-    QtWlxSurface* wlx_ = nullptr;
+    QtPluginViewerSurface* wlx_ = nullptr;
     QMenu* wlxMenu_ = nullptr;
-    WlxChoices wlxChoices_;
-    WlxSelection wlxSelection_;
-    std::vector<WlxChoice> automaticChoices_;
+    ViewerChoices wlxChoices_;
+    ViewerSelection wlxSelection_;
+    std::vector<PluginViewerChoice> automaticChoices_;
     bool automaticWlx_ = false;
-    std::optional<WlxChoice> selectedWlx_;
+    std::optional<PluginViewerChoice> selectedWlx_;
     std::vector<QAction*> builtinActions_;
     explicit State(ViewerService& Service) : service_(Service) {}
 };
@@ -161,13 +161,13 @@ QtViewerSurface::QtViewerSurface(ViewerService& Service, QWidget* Parent)
     setFocusProxy(S.text_); S.fit_->setEnabled(false); S.stop_->setEnabled(false);
 }
 QtViewerSurface::~QtViewerSurface() { Close(); }
-void QtViewerSurface::ConfigureWlx(QtWlxController* Controller, WlxChoices Choices, WlxSelection Selection)
+void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, ViewerChoices Choices, ViewerSelection Selection)
 {
     auto& S = *state_; if (S.wlx_) return;
-    S.wlxChoices_ = std::move(Choices); S.wlx_ = new QtWlxSurface(Controller, S.pages_); S.pages_->addWidget(S.wlx_);
+    S.wlxChoices_ = std::move(Choices); S.wlx_ = new QtPluginViewerSurface(Controller, S.pages_); S.pages_->addWidget(S.wlx_);
     S.wlxSelection_ = std::move(Selection);
     S.wlxMenu_->menuAction()->setVisible(true);
-    connect(S.wlx_, &QtWlxSurface::Ready, this, [this](const QString& Id) {
+    connect(S.wlx_, &QtPluginViewerSurface::Ready, this, [this](const QString& Id) {
         auto& S = *state_; if ((!S.selectedWlx_ && !S.automaticWlx_) || QString::fromStdString(S.wlx_->Snapshot().id_) != Id) return;
         if (S.automaticWlx_)
         {
@@ -180,12 +180,12 @@ void QtViewerSurface::ConfigureWlx(QtWlxController* Controller, WlxChoices Choic
         S.status_->setText(tr("%1 · %2").arg(QString::fromStdString(S.wlx_->Snapshot().source_.name_), S.selectedWlx_->name_));
         emit Ready(Id);
     });
-    connect(S.wlx_, &QtWlxSurface::Failed, this, [this](const QString& Code) { if (state_->selectedWlx_ || state_->automaticWlx_) fail(Code); });
-    connect(S.wlx_, &QtWlxSurface::NoMatch, this, [this] {
+    connect(S.wlx_, &QtPluginViewerSurface::Failed, this, [this](const QString& Code) { if (state_->selectedWlx_ || state_->automaticWlx_) fail(Code); });
+    connect(S.wlx_, &QtPluginViewerSurface::NoMatch, this, [this] {
         if (!state_->automaticWlx_) return;
         state_->request_.provider_.clear(); reopen();
     });
-    connect(S.wlx_, &QtWlxSurface::CloseRequested, this, &QtViewerSurface::CloseRequested);
+    connect(S.wlx_, &QtPluginViewerSurface::CloseRequested, this, &QtViewerSurface::CloseRequested);
 }
 void QtViewerSurface::refreshWlxMenu()
 {
@@ -200,7 +200,7 @@ void QtViewerSurface::refreshWlxMenu()
         });
     }
     S.wlxMenu_->addSeparator();
-    const auto Choices = S.wlxChoices_ ? S.wlxChoices_() : std::vector<WlxChoice>{};
+    const auto Choices = S.wlxChoices_ ? S.wlxChoices_() : std::vector<PluginViewerChoice>{};
     for (const auto& Choice : Choices)
     {
         auto* Action = S.wlxMenu_->addAction(Choice.name_); Action->setObjectName("hc.viewer.plugin." + Choice.id_);
@@ -222,9 +222,9 @@ void QtViewerSurface::refreshWlxMenu()
 void QtViewerSurface::Open(std::shared_ptr<hc::storage::IContentSource> Source, ViewerPurpose Purpose)
 {
     state_->request_ = ViewerRequest{}; state_->request_.source_ = std::move(Source); state_->request_.purpose_ = Purpose;
-    const auto Mode = state_->wlxSelection_ ? state_->wlxSelection_() : WlxSelectionMode::Manual;
-    if (state_->wlx_ && Mode != WlxSelectionMode::Manual)
-        state_->request_.provider_ = Mode == WlxSelectionMode::Force ? "wlx-force" : "wlx-auto";
+    const auto Mode = state_->wlxSelection_ ? state_->wlxSelection_() : PluginViewerSelectionMode::Manual;
+    if (state_->wlx_ && Mode != PluginViewerSelectionMode::Manual)
+        state_->request_.provider_ = Mode == PluginViewerSelectionMode::Force ? "wlx-force" : "wlx-auto";
     reopen();
 }
 void QtViewerSurface::reopen()
@@ -235,10 +235,10 @@ void QtViewerSurface::reopen()
         S.automaticWlx_ = true;
         // Capture names and options together; later settings edits must not
         // change the identity associated with the selected candidate index.
-        S.automaticChoices_ = S.wlxChoices_ ? S.wlxChoices_() : std::vector<WlxChoice>{};
-        std::vector<hc::plugins::WlxViewerOptions> Candidates;
+        S.automaticChoices_ = S.wlxChoices_ ? S.wlxChoices_() : std::vector<PluginViewerChoice>{};
+        std::vector<hc::plugins::PluginViewerOptions> Candidates;
         for (const auto& Choice : S.automaticChoices_) Candidates.push_back(Choice.options_);
-        hc::plugins::WlxAutomaticPolicy Policy; Policy.force_ = S.request_.provider_ == "wlx-force";
+        hc::plugins::PluginViewerSelectionPolicy Policy; Policy.force_ = S.request_.provider_ == "wlx-force";
         Policy.builtinProbe_ = CanViewBuiltinMultimedia;
         S.pages_->setCurrentWidget(S.wlx_); setFocusProxy(S.wlx_); S.searchBar_->hide();
         for (auto* Action : S.builtinActions_) Action->setEnabled(false);

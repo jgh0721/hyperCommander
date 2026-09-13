@@ -1,4 +1,4 @@
-﻿#include "pluginHost/hostedWlxSession.hpp"
+﻿#include "pluginHost/hostedViewerSession.hpp"
 #include "pluginHost/hostedDataProviders.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
@@ -43,7 +43,7 @@ class DopusViewerTests : public QObject
 {
     Q_OBJECT
 private:
-    bool prepare(QTemporaryDir& Package, WlxViewerOptions& Options, bool Optional = true)
+    bool prepare(QTemporaryDir& Package, PluginViewerOptions& Options, bool Optional = true)
     {
         Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
         Options.manifestPath_ = Package.filePath("plugin.json"); Options.binaryPath_ = Package.filePath("viewer.dll");
@@ -64,7 +64,7 @@ private slots:
     { QTest::addColumn<QString>("Name"); QTest::newRow("bitmap") << "한글.bitmap"; QTest::newRow("native") << "한글.native"; QTest::newRow("plain-text") << "한글.text"; }
     void nativeAndBitmapLifecycle()
     {
-        QFETCH(QString, Name); QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(prepare(Package, Options));
+        QFETCH(QString, Name); QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
         QWidget Parent; Parent.resize(480, 320); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
         auto Started = Worker([&] { return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_); });
         QVERIFY(Started.HasValue()); auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });
@@ -91,7 +91,7 @@ private slots:
     {
         for (bool Optional : {true, false})
         {
-            QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(prepare(Package, Options, Optional));
+            QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options, Optional));
             auto Started = Worker([&] { return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_); }); QVERIFY(Started.HasValue());
             auto Host = std::shared_ptr<PluginProcess>(std::move(Started.Value())); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host->Close(); }); });
             const auto Path = file(Package, "input.text");
@@ -123,10 +123,10 @@ private slots:
     }
     void automaticSurfaceAndCancellation()
     {
-        QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(prepare(Package, Options));
+        QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
         QWidget Parent; Parent.resize(500, 300); Parent.show();
         QtViewerHost Host(&Parent, [&] { return MakeNativeMaterializer(Package.path().toStdString()); },
-            [&] { return std::vector<QtViewerSurface::WlxChoice>{{"dopus", "DOpus", Options}}; }, [] { return QtViewerSurface::WlxSelectionMode::Automatic; });
+            [&] { return std::vector<QtViewerSurface::PluginViewerChoice>{{"dopus", "DOpus", Options}}; }, [] { return QtViewerSurface::PluginViewerSelectionMode::Automatic; });
         const auto Cleanup = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(5); });
         auto* Surface = Host.CreateSurface(&Parent); Surface->resize(500, 300); Surface->show();
         QSignalSpy Ready(Surface, &QtViewerSurface::Ready), Failed(Surface, &QtViewerSurface::Failed);
@@ -140,7 +140,7 @@ private slots:
     { QTest::addColumn<QString>("Name"); QTest::newRow("crash") << "crash.native"; QTest::newRow("timeout") << "hang.native"; }
     void crashAndTimeout()
     {
-        QFETCH(QString, Name); QTemporaryDir Package; WlxViewerOptions Options; QVERIFY(prepare(Package, Options));
+        QFETCH(QString, Name); QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
         QWidget Parent; Parent.show();
         auto Started = Worker([&] { return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_); }); QVERIFY(Started.HasValue());
         auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });

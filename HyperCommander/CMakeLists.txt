@@ -96,8 +96,8 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
-        ../UniqueLibs/qtWcxHostSettings.cpp
-        ../UniqueLibs/qtWcxHostSettings.hpp
+        ../UniqueLibs/qtPluginHostSettings.cpp
+        ../UniqueLibs/qtPluginHostSettings.hpp
         ../commonLibs/operations/jobScheduler.cpp
         ../commonLibs/operations/jobScheduler.hpp
         ../commonLibs/operations/fileOperation.cpp
@@ -181,7 +181,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt hc_wlx_qt hc_wlx_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)

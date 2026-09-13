@@ -1,15 +1,45 @@
-﻿#include "qtWcxHostSettings.hpp"
+﻿#include "qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
 #include <QtWidgets>
 #include <QtConcurrent>
 
-QWcxHostSettings::QWcxHostSettings(QWidget* Parent) : QWcxHostSettings(hc::plugins::PluginFormat::Wcx, Parent) {}
-QWcxHostSettings::QWcxHostSettings(hc::plugins::PluginFormat Format, QWidget* Parent) : QWidget(Parent), format_(Format)
+namespace
+{
+    using hc::plugins::PluginFormat;
+    bool StandaloneList(PluginFormat Format)
+    { return Format == PluginFormat::Wfx || Format == PluginFormat::Wdx || Format == PluginFormat::DopusVfs || Format == PluginFormat::DopusViewer; }
+    QString SettingsGroup(PluginFormat Format)
+    {
+        switch (Format)
+        {
+        case PluginFormat::Wlx: return "ListerPlugins";
+        case PluginFormat::Wfx: return "FileSystemPlugins";
+        case PluginFormat::Wdx: return "ContentPlugins";
+        case PluginFormat::DopusVfs: return "DopusVfsPlugins";
+        case PluginFormat::DopusViewer: return "DopusViewerPlugins";
+        default: return "PackerPlugins";
+        }
+    }
+    QString FormatToken(PluginFormat Format)
+    {
+        switch (Format)
+        {
+        case PluginFormat::Wlx: return "wlx";
+        case PluginFormat::Wfx: return "wfx";
+        case PluginFormat::Wdx: return "wdx";
+        case PluginFormat::DopusVfs: return "dopus-vfs";
+        case PluginFormat::DopusViewer: return "dopus-viewer";
+        default: return "wcx";
+        }
+    }
+}
+QPluginHostSettings::QPluginHostSettings(QWidget* Parent) : QPluginHostSettings(hc::plugins::PluginFormat::Wcx, Parent) {}
+QPluginHostSettings::QPluginHostSettings(hc::plugins::PluginFormat Format, QWidget* Parent) : QWidget(Parent), format_(Format)
 {
     const bool Wlx = Format == hc::plugins::PluginFormat::Wlx;
-    const bool Data = Format == hc::plugins::PluginFormat::Wfx || Format == hc::plugins::PluginFormat::Wdx;
-    group_ = Wlx ? "ListerPlugins" : Format == hc::plugins::PluginFormat::Wfx ? "FileSystemPlugins" : Format == hc::plugins::PluginFormat::Wdx ? "ContentPlugins" : "PackerPlugins";
-    const QString Prefix = Wlx ? "wlx" : Format == hc::plugins::PluginFormat::Wfx ? "wfx" : Format == hc::plugins::PluginFormat::Wdx ? "wdx" : "wcx";
+    const bool Data = StandaloneList(Format);
+    group_ = SettingsGroup(Format);
+    const QString Prefix = FormatToken(Format);
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
     if (Wlx)
     {
@@ -36,7 +66,7 @@ QWcxHostSettings::QWcxHostSettings(hc::plugins::PluginFormat Format, QWidget* Pa
         auto* Add = new QPushButton(tr("추가…"), this); Add->setObjectName(Prefix + "HostAdd"); Buttons->addWidget(Add);
         auto* Remove = new QPushButton(tr("제거"), this); Remove->setObjectName(Prefix + "HostRemove"); Buttons->addWidget(Remove);
         connect(Add, &QPushButton::clicked, this, [this, Prefix] {
-            const auto Binary = QFileDialog::getOpenFileName(this, tr("x64 플러그인 선택"), {}, QString("%1 (*.%2)").arg(Prefix, Prefix + "64"));
+            const auto Binary = QFileDialog::getOpenFileName(this, tr("x64 플러그인 선택"), {}, Prefix.startsWith("dopus-") ? tr("DOpus 플러그인 (*.dll)") : QString("%1 (*.%2)").arg(Prefix, Prefix + "64"));
             if (Binary.isEmpty()) return;
             ++generation_; const QSignalBlocker Block(table_); const auto At = table_->rowCount();
             rows_.push_back({At, Binary, {}, {}}); table_->insertRow(At);
@@ -58,9 +88,9 @@ QWcxHostSettings::QWcxHostSettings(hc::plugins::PluginFormat Format, QWidget* Pa
     connect(review_, &QPushButton::clicked, this, [this] { review(); }); connect(Revoke, &QPushButton::clicked, this, [this] { revoke(); });
     connect(table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* Item) { if (Item->column() == 2) updateState(Item->row()); });
 }
-void QWcxHostSettings::Load(QSettings& Settings)
+void QPluginHostSettings::Load(QSettings& Settings)
 {
-    if (selection_) selection_->setCurrentIndex(static_cast<int>(WlxSelection(Settings)));
+    if (selection_) selection_->setCurrentIndex(static_cast<int>(ViewerSelection(Settings)));
     ++generation_; review_->setEnabled(true); review_->setText(tr("호스트 실행 승인…")); const QSignalBlocker Block(table_); rows_.clear(); table_->setRowCount(0);
     Settings.beginGroup(group_); const auto Count = std::min(Settings.value("Count").toUInt(), 1000u);
     for (unsigned Index = 0; Index < Count; ++Index)
@@ -76,10 +106,10 @@ void QWcxHostSettings::Load(QSettings& Settings)
     }
     Settings.endGroup(); if (Count) table_->selectRow(0);
 }
-void QWcxHostSettings::Save(QSettings& Settings)
+void QPluginHostSettings::Save(QSettings& Settings)
 {
     Settings.beginGroup(group_);
-    const bool Data = format_ == hc::plugins::PluginFormat::Wfx || format_ == hc::plugins::PluginFormat::Wdx;
+    const bool Data = StandaloneList(format_);
     if (Data) { Settings.remove(""); Settings.setValue("Count", int(rows_.size())); }
     if (selection_) Settings.setValue("SelectionMode", selection_->currentData().toString());
     for (std::size_t Index = 0; Index < rows_.size(); ++Index)
@@ -91,21 +121,21 @@ void QWcxHostSettings::Save(QSettings& Settings)
     }
     Settings.endGroup();
 }
-void QWcxHostSettings::updateState(int Row)
+void QPluginHostSettings::updateState(int Row)
 {
     if (Row < 0 || static_cast<std::size_t>(Row) >= rows_.size() || !table_->item(Row, 3)) return;
-    table_->item(Row, 3)->setText(table_->item(Row, 2)->checkState() != Qt::Checked ? (format_ == hc::plugins::PluginFormat::Wfx || format_ == hc::plugins::PluginFormat::Wdx ? tr("사용 안 함") : tr("기존 방식"))
+    table_->item(Row, 3)->setText(table_->item(Row, 2)->checkState() != Qt::Checked ? (StandaloneList(format_) ? tr("사용 안 함") : tr("기존 방식"))
         : hc::plugins::ParseManifest(rows_[Row].reviewed_).HasValue() ? tr("승인됨") : tr("승인 필요"));
     table_->item(Row, 3)->setToolTip(rows_[Row].manifest_);
 }
-void QWcxHostSettings::revoke()
+void QPluginHostSettings::revoke()
 {
     const auto Row = table_->currentRow(); if (Row < 0) return;
     ++generation_; review_->setEnabled(true); review_->setText(tr("호스트 실행 승인…")); rows_[Row].reviewed_.clear();
     // Revoking trust must not silently switch execution into the application.
     table_->item(Row, 2)->setCheckState(Qt::Checked); updateState(Row);
 }
-void QWcxHostSettings::review()
+void QPluginHostSettings::review()
 {
     using namespace hc::plugins; using namespace hc::storage;
     const auto Row = table_->currentRow(); if (Row < 0) return;
@@ -140,28 +170,28 @@ void QWcxHostSettings::review()
             return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch"};
         PluginApproval Approval; Approval.reviewed_ = Inspected.Value().manifest_; Approval.approved_ = true; Approval.granted_ = Approval.reviewed_.permissions_;
         HostProfile Profile; Profile.formats_ = {Format}; Profile.supportsIsolation_ = true;
-        Profile.extensions_ = Format == PluginFormat::Wlx ? std::set<Extension>{Extension::Viewer} : Format == PluginFormat::Wfx ? std::set<Extension>{Extension::StorageRead, Extension::StorageWrite} : Format == PluginFormat::Wdx ? std::set<Extension>{Extension::Metadata} : std::set<Extension>{Extension::ArchiveRead, Extension::ArchiveWrite};
+        Profile.extensions_ = Format == PluginFormat::DopusViewer ? std::set<Extension>{Extension::Viewer, Extension::Metadata, Extension::ContentConvert} : Format == PluginFormat::DopusVfs ? std::set<Extension>{Extension::StorageRead, Extension::StorageWrite} : Format == PluginFormat::Wlx ? std::set<Extension>{Extension::Viewer} : Format == PluginFormat::Wfx ? std::set<Extension>{Extension::StorageRead, Extension::StorageWrite} : Format == PluginFormat::Wdx ? std::set<Extension>{Extension::Metadata} : std::set<Extension>{Extension::ArchiveRead, Extension::ArchiveWrite};
         const auto Admitted = Admit(Approval.reviewed_, Approval, Profile); if (!Admitted.HasValue()) return Admitted.Failure();
         return Inspected;
     }));
 }
-QtViewerSurface::WlxSelectionMode QWcxHostSettings::WlxSelection(QSettings& Settings)
+QtViewerSurface::PluginViewerSelectionMode QPluginHostSettings::ViewerSelection(QSettings& Settings)
 {
     const auto Mode = Settings.value("ListerPlugins/SelectionMode", "manual").toString();
-    if (Mode == "automatic") return QtViewerSurface::WlxSelectionMode::Automatic;
-    if (Mode == "force") return QtViewerSurface::WlxSelectionMode::Force;
-    return QtViewerSurface::WlxSelectionMode::Manual;
+    if (Mode == "automatic") return QtViewerSurface::PluginViewerSelectionMode::Automatic;
+    if (Mode == "force") return QtViewerSurface::PluginViewerSelectionMode::Force;
+    return QtViewerSurface::PluginViewerSelectionMode::Manual;
 }
-std::vector<QtViewerSurface::WlxChoice> QWcxHostSettings::WlxChoices(QSettings& Settings)
+std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::ViewerChoices(QSettings& Settings)
 {
     using namespace hc::plugins;
-    std::vector<QtViewerSurface::WlxChoice> Choices;
+    std::vector<QtViewerSurface::PluginViewerChoice> Choices;
     Settings.beginGroup("ListerPlugins"); const auto Count = std::min(Settings.value("Count").toUInt(), 1000u);
     for (unsigned Index = 0; Index < Count; ++Index)
     {
         const auto Prefix = QString::number(Index) + '_';
         if (!Settings.value(Prefix + "HostEnabled", false).toBool()) continue;
-        QtViewerSurface::WlxChoice Choice; Choice.id_ = QString::number(Index);
+        QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         auto& Options = Choice.options_; Options.binaryPath_ = Settings.value(Prefix + "Path").toString();
         Options.binaryPath_.replace("%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
         Choice.name_ = QFileInfo(Options.binaryPath_).fileName();
@@ -177,23 +207,30 @@ std::vector<QtViewerSurface::WlxChoice> QWcxHostSettings::WlxChoices(QSettings& 
         // DLL inspection/loading or content I/O occurs while building this menu.
         Choices.push_back(std::move(Choice));
     }
-    Settings.endGroup(); return Choices;
+    Settings.endGroup();
+    auto Dopus = DataChoices(Settings, PluginFormat::DopusViewer);
+    for (auto& Choice : Dopus)
+    {
+        if (Choice.options_.approval_.approved_ && !Choice.options_.approval_.reviewed_.extensions_.contains(Extension::Viewer)) continue;
+        Choice.id_ = "dopus-" + Choice.id_; Choices.push_back(std::move(Choice));
+    }
+    return Choices;
 }
 
-std::vector<QtViewerSurface::WlxChoice> QWcxHostSettings::DataChoices(QSettings& Settings, hc::plugins::PluginFormat Format)
+std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoices(QSettings& Settings, hc::plugins::PluginFormat Format)
 {
     using namespace hc::plugins;
-    std::vector<QtViewerSurface::WlxChoice> Choices;
-    Settings.beginGroup(Format == PluginFormat::Wfx ? "FileSystemPlugins" : "ContentPlugins"); const auto Count = std::min(Settings.value("Count").toUInt(), 1000u);
+    std::vector<QtViewerSurface::PluginViewerChoice> Choices;
+    Settings.beginGroup(SettingsGroup(Format)); const auto Count = std::min(Settings.value("Count").toUInt(), 1000u);
     for (unsigned Index = 0; Index < Count; ++Index)
     {
         const auto Prefix = QString::number(Index) + '_';
         if (!Settings.value(Prefix + "HostEnabled", false).toBool()) continue;
-        QtViewerSurface::WlxChoice Choice; Choice.id_ = QString::number(Index);
+        QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         auto& Options = Choice.options_; Options.binaryPath_ = Settings.value(Prefix + "Path").toString();
         Options.binaryPath_.replace("%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
         Choice.name_ = QFileInfo(Options.binaryPath_).fileName();
-        if (Options.binaryPath_.endsWith((Format == PluginFormat::Wfx ? ".wfx" : ".wdx"), Qt::CaseInsensitive)) Options.binaryPath_ += "64";
+        if ((Format == PluginFormat::Wfx || Format == PluginFormat::Wdx) && Options.binaryPath_.endsWith((Format == PluginFormat::Wfx ? ".wfx" : ".wdx"), Qt::CaseInsensitive)) Options.binaryPath_ += "64";
         if (QDir::isRelativePath(Options.binaryPath_)) Options.binaryPath_ = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(Options.binaryPath_);
         Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
         Options.defaultIniPath_ = QDir(QFileInfo(Settings.fileName()).absolutePath()).filePath((Format == PluginFormat::Wfx ? "fsplugin.ini" : "contentplugin.ini"));

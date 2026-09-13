@@ -1,9 +1,9 @@
 ﻿#include "pluginProcess.hpp"
 #include "pipeChannel.hpp"
-#include "hostedWlxSession.hpp"
+#include "hostedViewerSession.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "memoryStorage.hpp"
-#include "UniqueLibs/qtWlxSurface.hpp"
+#include "UniqueLibs/qtPluginViewerSurface.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
 #include <QAction>
 #include <QBuffer>
@@ -109,9 +109,9 @@ private:
         return {{"parent", QString::number(Parent.winId(), 16)}, {"file", Path},
             {"width", qRound(Parent.width() * Parent.devicePixelRatioF())}, {"height", qRound(Parent.height() * Parent.devicePixelRatioF())}, {"flags", 0}};
     }
-    WlxViewerOptions options(const QTemporaryDir& Directory, PluginApproval Approval)
+    PluginViewerOptions options(const QTemporaryDir& Directory, PluginApproval Approval)
     {
-        WlxViewerOptions Options; Options.executable_ = host_; Options.manifestPath_ = Directory.filePath("plugin.json");
+        PluginViewerOptions Options; Options.executable_ = host_; Options.manifestPath_ = Directory.filePath("plugin.json");
         Options.binaryPath_ = Directory.filePath("test.wlx64"); Options.approval_ = std::move(Approval);
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
@@ -178,11 +178,11 @@ private slots:
             QVERIFY(Ini.write("[fixture]\r\nvalue=123\r\nexpression=" + Expression + "\r\n") > 0); }
         if (Mode == "denied") Options.approval_.approved_ = false;
         QWidget Main; Main.resize(640, 360); Main.show();
-        using Selection = QtViewerSurface::WlxSelectionMode;
+        using Selection = QtViewerSurface::PluginViewerSelectionMode;
         auto SelectedMode = Mode == "force-image" ? Selection::Force : Selection::Automatic;
         QtViewerHost Host(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, [&] {
-            return Mode == "no-candidates" ? std::vector<QtViewerSurface::WlxChoice>{}
-                : std::vector<QtViewerSurface::WlxChoice>{{"sdk", "SDK fixture", Options}};
+            return Mode == "no-candidates" ? std::vector<QtViewerSurface::PluginViewerChoice>{}
+                : std::vector<QtViewerSurface::PluginViewerChoice>{{"sdk", "SDK fixture", Options}};
         }, [&] { return SelectedMode; });
         const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
         auto* Surface = Host.CreateSurface(&Main); Surface->resize(Main.size()); Surface->show();
@@ -214,7 +214,7 @@ private slots:
         }
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 1); QCOMPARE(Failed.size(), 0);
         const bool Builtin = Mode == "no-match" || Mode == "no-candidates" || Mode == "image";
-        QCOMPARE(Surface->findChild<QtWlxSurface*>()->IsReady(), !Builtin);
+        QCOMPARE(Surface->findChild<QtPluginViewerSurface*>()->IsReady(), !Builtin);
         QCOMPARE(Surface->Snapshot().source_.name_, std::string("latest.txt"));
         if (Mode == "image") QCOMPARE(Surface->Snapshot().provider_, std::string("builtin.image"));
         // Read the changed policy on the next open, including on existing quick views.
@@ -312,7 +312,7 @@ private slots:
         auto Options = options(Directory, Approval); Options.defaultIniPath_ = Directory.filePath("lsplugin.ini");
         { QFile File(Options.defaultIniPath_); QVERIFY(File.open(QIODevice::WriteOnly)); QVERIFY(File.write("[fixture]\r\nvalue=123\r\n") > 0); }
         QWidget Main; Main.resize(320, 200); Main.show();
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Opened = Service.Open(Options, MemoryContent("sdk"), QString::number(Main.winId(), 16), 320, 200); QVERIFY(Opened.HasValue());
         auto Session = Opened.Value(); QTRY_COMPARE_WITH_TIMEOUT(Session->Snapshot().status_, hc::viewer::ViewerStatus::Ready, 4000);
@@ -325,7 +325,7 @@ private slots:
         bool Approved = true;
         QtViewerHost Host(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, [&] {
             auto Options = options(Directory, Approval); Options.approval_.approved_ = Approved;
-            return std::vector<QtViewerSurface::WlxChoice>{{"test", "WLX fixture", Options}};
+            return std::vector<QtViewerSurface::PluginViewerChoice>{{"test", "WLX fixture", Options}};
         });
         const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
         QPointer<QDialog> Full = Host.OpenFull(MemoryContent("content", "host.txt"));
@@ -335,7 +335,7 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection));
         auto* Choice = Menu->findChild<QAction*>("hc.viewer.plugin.test"); QVERIFY(Choice); Choice->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("host.txt"));
+        QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady()); QCOMPARE(Surface->Snapshot().source_.name_, std::string("host.txt"));
         QVERIFY(!Surface->findChild<QAction*>("hc.viewer.find")->isEnabled());
         QPointer<QWidget> Anchor = Surface->findChild<QWidget*>("hc.wlx.native-parent"); QVERIFY(Anchor);
         Surface->findChild<QAction*>("hc.viewer.fallback")->trigger();
@@ -351,7 +351,7 @@ private slots:
         Surface = Full->findChild<QtViewerSurface*>(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
         Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); QVERIFY(QMetaObject::invokeMethod(Menu, "aboutToShow", Qt::DirectConnection));
         Menu->findChild<QAction*>("hc.viewer.plugin.test")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QVERIFY(Surface->findChild<QtWlxSurface*>()->IsReady());
+        QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady());
         QElapsedTimer Closing; Closing.start(); Main.close(); QVERIFY(Closing.elapsed() < 200);
         QVERIFY(Main.isVisible()); QTRY_VERIFY_WITH_TIMEOUT(!Main.isVisible(), 4000); QVERIFY(Host.IsIdle());
         QVERIFY(Leases(Directory.path()).isEmpty());
@@ -360,11 +360,11 @@ private slots:
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
         QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
-        QtWlxController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
-        auto* Surface = new QtWlxSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
+        QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
         Activate(Main); QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Main.winId())); Surface->setFocus();
         const auto Drain = qScopeGuard([&] { Surface->Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
-        QSignalSpy Ready(Surface, &QtWlxSurface::Ready); QSignalSpy Failed(Surface, &QtWlxSurface::Failed);
+        QSignalSpy Ready(Surface, &QtPluginViewerSurface::Ready); QSignalSpy Failed(Surface, &QtPluginViewerSurface::Failed);
         Surface->Open(options(Directory, Approval), MemoryContent("first", "first.txt"));
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Ready.size(), 1); QCOMPARE(Failed.size(), 0);
         const auto Focused = [&] {
@@ -394,8 +394,8 @@ private slots:
     {
         QFETCH(QString, Name); QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
         QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
-        QtWlxController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
-        auto* Surface = new QtWlxSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
+        QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
         const auto Drain = qScopeGuard([&] { Controller.CloseAll(); while (!Controller.IsIdle()) QTest::qWait(10); });
         Surface->Open(options(Directory, Approval), MemoryContent("HC-WLX-FAULT:" + Name.toUtf8()));
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
@@ -412,7 +412,7 @@ private slots:
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
         QWidget Parent; Parent.resize(640, 360); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
         const auto GuiThread = std::this_thread::get_id(); std::atomic<bool> FactoryOnWorker = false;
-        WlxViewerService Service([&] { FactoryOnWorker = std::this_thread::get_id() != GuiThread; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { FactoryOnWorker = std::this_thread::get_id() != GuiThread; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Source = MemoryContent("materialized Unicode content"); const auto Expected = Source->Describe();
         QElapsedTimer Start; Start.start();
@@ -438,7 +438,7 @@ private slots:
     void sessionReadCancellationAndBudget()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval)); QWidget Parent;
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, 1);
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); }, 1);
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Source = std::make_shared<WaitingContent>();
         auto Opened = Service.Open(options(Directory, Approval), Source, QString::number(Parent.winId(), 16), 320, 200);
@@ -455,7 +455,7 @@ private slots:
     void sessionAdmissionBeforeExtraction()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval)); QWidget Parent; std::atomic<unsigned> Factories = 0;
-        WlxViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { ++Factories; return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         auto Options = options(Directory, Approval); Options.binaryPath_ = Directory.filePath("wrong.wlx64");
         auto Opened = Service.Open(Options, MemoryContent("secret"), QString::number(Parent.winId(), 16), 320, 200);
@@ -476,7 +476,7 @@ private slots:
     {
         QFETCH(QString, Name); QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
         QWidget Parent; Parent.resize(320, 200); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent));
-        WlxViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
         QElapsedTimer Clock; Clock.start(); qint64 Last = 0, Gap = 0; unsigned Ticks = 0;
         QTimer Beat; Beat.setInterval(10); connect(&Beat, &QTimer::timeout, this, [&] { const auto Now = Clock.elapsed(); Gap = std::max(Gap, Now - Last); Last = Now; ++Ticks; }); Beat.start();

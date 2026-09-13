@@ -1,7 +1,7 @@
 ﻿#include "pipeChannel.hpp"
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
-#include "wlxHostService.hpp"
+#include "nativeViewerHostService.hpp"
 #include "tcDataHostService.hpp"
 #include "dopusVfsHostService.hpp"
 #include <QCoreApplication>

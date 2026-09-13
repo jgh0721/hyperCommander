@@ -6,14 +6,14 @@
 
 namespace hc::plugins
 {
-    struct WlxViewerOptions
+    struct PluginViewerOptions
     {
         QString executable_, manifestPath_, binaryPath_, defaultIniPath_;
         PluginApproval approval_;
         HostLimits limits_;
         int flags_ = 0;
     };
-    struct WlxSessionDetails
+    struct PluginViewerDetails
     {
         viewer::ViewerSnapshot viewer_;
         HostSnapshot host_;
@@ -27,8 +27,8 @@ namespace hc::plugins
         std::uint64_t commandSequence_ = 0;
         std::optional<storage::Error> commandError_;
     };
-    class WlxViewerService;
-    struct WlxAutomaticPolicy
+    class PluginViewerService;
+    struct PluginViewerSelectionPolicy
     {
         bool force_ = false;
         // Only MULTIMEDIA candidates override supported builtin multimedia
@@ -37,17 +37,17 @@ namespace hc::plugins
         // Optional worker-only content probe supplied by the builtin adapter.
         std::function<bool(const storage::EntrySnapshot&, std::span<const std::byte>)> builtinProbe_;
     };
-    class HostedWlxSession final : public viewer::IViewerSession
+    class HostedViewerSession final : public viewer::IViewerSession
     {
     public:
-        ~HostedWlxSession() override;
+        ~HostedViewerSession() override;
         viewer::ViewerSnapshot Snapshot() const override;
         // The native presentation is owned by the host, not a decoded document.
         std::shared_ptr<const viewer::ViewerDocument> Document() const override { return {}; }
         std::vector<std::string> Commands() const override;
         void Cancel() override;
         void Close() override;
-        WlxSessionDetails Details() const;
+        PluginViewerDetails Details() const;
         storage::Result<storage::Unit> Resize(std::uint32_t Width, std::uint32_t Height);
         storage::Result<storage::Unit> Focus();
         // Acceptance queues work; Details reports its completion sequence/error.
@@ -55,35 +55,35 @@ namespace hc::plugins
         storage::Result<std::uint64_t> Search(QString Text, int Flags);
     private:
         struct State;
-        explicit HostedWlxSession(std::shared_ptr<State> State);
+        explicit HostedViewerSession(std::shared_ptr<State> State);
         std::shared_ptr<State> state_;
-        friend class WlxViewerService;
+        friend class PluginViewerService;
     };
-    class WlxViewerService final
+    class PluginViewerService final
     {
     public:
         using MaterializerFactory = std::function<storage::Result<std::shared_ptr<storage::IMaterializer>>()>;
         // Factory and every materializer/host operation run on a worker. The
         // owner drains IsIdle before destroying this service on the GUI thread.
         // Service methods use one owner thread; session methods are thread-safe.
-        explicit WlxViewerService(MaterializerFactory Factory, std::size_t MaxSessions = 8);
-        ~WlxViewerService();
-        storage::Result<std::shared_ptr<HostedWlxSession>> Open(WlxViewerOptions Options,
+        explicit PluginViewerService(MaterializerFactory Factory, std::size_t MaxSessions = 8);
+        ~PluginViewerService();
+        storage::Result<std::shared_ptr<HostedViewerSession>> Open(PluginViewerOptions Options,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
             std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context = {});
-        storage::Result<std::shared_ptr<HostedWlxSession>> OpenAutomatic(std::vector<WlxViewerOptions> Candidates,
+        storage::Result<std::shared_ptr<HostedViewerSession>> OpenAutomatic(std::vector<PluginViewerOptions> Candidates,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
-            std::uint32_t Width, std::uint32_t Height, WlxAutomaticPolicy Policy = {}, storage::OperationContext Context = {});
+            std::uint32_t Width, std::uint32_t Height, PluginViewerSelectionPolicy Policy = {}, storage::OperationContext Context = {});
         void CancelAll();
         bool IsIdle() const;
         void Collect();
     private:
         struct Task;
-        storage::Result<std::shared_ptr<HostedWlxSession>> open(std::vector<WlxViewerOptions> Candidates,
-            std::optional<WlxAutomaticPolicy> Policy, std::shared_ptr<storage::IContentSource> Source,
+        storage::Result<std::shared_ptr<HostedViewerSession>> open(std::vector<PluginViewerOptions> Candidates,
+            std::optional<PluginViewerSelectionPolicy> Policy, std::shared_ptr<storage::IContentSource> Source,
             QString ParentWindow, std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context);
-        static void run(const std::shared_ptr<HostedWlxSession::State>& State, std::vector<WlxViewerOptions> Candidates,
-            std::optional<WlxAutomaticPolicy> Policy,
+        static void run(const std::shared_ptr<HostedViewerSession::State>& State, std::vector<PluginViewerOptions> Candidates,
+            std::optional<PluginViewerSelectionPolicy> Policy,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
             MaterializerFactory Factory, storage::OperationContext Context);
         MaterializerFactory factory_;
