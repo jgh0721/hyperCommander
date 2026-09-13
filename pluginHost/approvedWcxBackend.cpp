@@ -22,6 +22,8 @@ namespace hc::plugins
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
+                if (!options_.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
+                auto Policy = ArchiveWritePolicy(options_.approval_.reviewed_); if (!Policy.HasValue()) return Policy;
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
                 return Host.Value()->Update(std::move(Request), Context);
             }

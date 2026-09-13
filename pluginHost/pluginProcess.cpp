@@ -8,6 +8,8 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <thread>
+#include <QTemporaryDir>
+#include <QXmlStreamWriter>
 #include <condition_variable>
 
 namespace hc::plugins
@@ -60,6 +62,9 @@ namespace hc::plugins
         mutable std::mutex mutex_;
         WinHandle pipe_, job_, process_;
         HostLimits limits_;
+        std::unique_ptr<QTemporaryDir> helperConfig_;
+        bool helpers_ = false;
+        QString helperPath_;
         DWORD pid_ = 0;
         bool viewer_ = false;
         HWND viewerParent_ = nullptr;
@@ -76,14 +81,14 @@ namespace hc::plugins
             if (!failure_) failure_ = std::move(Error);
             // Preserve an OS crash exit code when the broken pipe wins the race
             // with process termination. Hung/live jobs still get bounded teardown.
-            if (job_.Valid() && (!process_.Valid() || WaitForSingleObject(process_.Get(), 100) == WAIT_TIMEOUT))
+            if (job_.Valid() && (helpers_ || !process_.Valid() || WaitForSingleObject(process_.Get(), 100) == WAIT_TIMEOUT))
             { forcedTermination_ = true; TerminateJobObject(job_.Get(), 0xe0000001); }
         }
         Result<QJsonObject> call(WireKind Kind, const QByteArray& Payload, OperationContext Context)
         {
             if (failure_) return *failure_;
             if (closed_) return HostError("host-closed");
-            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : limits_.requestMs_);
+            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply && helpers_ ? limits_.archiveWriteMs_ : limits_.requestMs_));
             const auto Sequence = ++sequence_;
             auto Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
             if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
@@ -93,6 +98,53 @@ namespace hc::plugins
             { fail(HostError("host-response-mismatch")); return *failure_; }
             QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(Reply.Value().payload_, &Parse);
             if (Parse.error != QJsonParseError::NoError || !Document.isObject()) { fail(HostError("host-response-json")); return *failure_; }
+            if (Kind == WireKind::ArchiveUpdateApply && helpers_)
+            {
+                // A WCX return alone is insufficient for a plugin that delegates
+                // updates. Keep staging inputs alive until every helper exits.
+                for (;;)
+                {
+                    if (const auto Stop = Context.Check({"plugin-host"})) { fail(*Stop); return *failure_; }
+                    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
+                    if (!QueryInformationJobObject(job_.Get(), JobObjectBasicAccountingInformation, &Accounting, sizeof(Accounting), nullptr))
+                    { fail(HostError("host-helper-accounting", GetLastError())); return *failure_; }
+                    if (Accounting.ActiveProcesses <= 1) break;
+                    alignas(JOBOBJECT_BASIC_PROCESS_ID_LIST) std::byte Buffer[sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(ULONG_PTR) * 4]{};
+                    auto* Processes = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(Buffer);
+                    if (!QueryInformationJobObject(job_.Get(), JobObjectBasicProcessIdList, Processes, sizeof(Buffer), nullptr))
+                    { fail(HostError("host-helper-process-list", GetLastError())); return *failure_; }
+                    bool Busy = false;
+                    wchar_t System[MAX_PATH]{}; GetSystemDirectoryW(System, MAX_PATH);
+                    const auto Console = QDir::cleanPath(QString::fromWCharArray(System) + "/conhost.exe");
+                    for (DWORD Index = 0; Index < Processes->NumberOfProcessIdsInList; ++Index)
+                    {
+                        const auto Pid = DWORD(Processes->ProcessIdList[Index]); if (Pid == pid_) continue;
+                        WinHandle Child(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, Pid));
+                        if (!Child.Valid()) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; fail(HostError("host-helper-process-open", GetLastError())); return *failure_; }
+                        if (WaitForSingleObject(Child.Get(), 0) == WAIT_OBJECT_0) continue;
+                        wchar_t Path[32768]{}; DWORD Size = DWORD(std::size(Path));
+                        if (!QueryFullProcessImageNameW(Child.Get(), 0, Path, &Size))
+                        { fail(HostError("host-helper-process-path", GetLastError())); return *failure_; }
+                        const auto Image = QDir::fromNativeSeparators(QString::fromWCharArray(Path, Size));
+                        // Total7zip allocates a hidden console that lasts until
+                        // host shutdown. It is infrastructure, not a write task.
+                        if (Image.compare(Console, Qt::CaseInsensitive) == 0) continue;
+                        if (Image.compare(helperPath_, Qt::CaseInsensitive) != 0)
+                        { fail(HostError("host-unexpected-child")); return *failure_; }
+                        Busy = true;
+                    }
+                    if (!Busy) break;
+                    // The WCX call has returned, so the host can answer pings.
+                    // Keep its idle pipe deadline alive during a long helper
+                    // wait and still detect a host that stops responding.
+                    if (std::chrono::steady_clock::now() - lastCall_ >= std::chrono::milliseconds(limits_.heartbeatMs_))
+                    {
+                        auto Alive = call(WireKind::Ping, {}, Bound(Context, limits_.heartbeatMs_));
+                        if (!Alive.HasValue()) return Alive;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+            }
             lastCall_ = std::chrono::steady_clock::now();
             if (Reply.Value().header_.kind_ == WireKind::Failure)
             {
@@ -114,6 +166,7 @@ namespace hc::plugins
         const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath)
     {
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
+            || Limits.archiveWriteMs_ < 100 || Limits.archiveWriteMs_ > 3600000
             || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000 || Limits.memoryBytes_ < 64ULL * 1024 * 1024 || Limits.memoryBytes_ > 4ULL * 1024 * 1024 * 1024)
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
@@ -127,12 +180,18 @@ namespace hc::plugins
         const auto PipeName = "\\\\.\\pipe\\hyperCommander-" + QUuid::createUuid().toString(QUuid::Id128);
         auto Pipe = ServerPipe(PipeName); if (!Pipe.HasValue()) return Pipe.Failure();
         auto Owner = std::unique_ptr<PluginProcess>(new PluginProcess(std::make_unique<State>())); auto& S = *Owner->state_;
+        S.helpers_ = !Inspected.Value().manifest_.helpers_.empty();
+        if (S.helpers_) S.helperPath_ = Inspected.Value().helperPaths_.front();
         S.limits_ = Limits; S.pipe_ = std::move(Pipe.Value()); S.job_.Reset(CreateJobObjectW(nullptr, nullptr));
         S.viewer_ = Inspected.Value().manifest_.format_ == PluginFormat::Wlx || Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-        Job.BasicLimitInformation.ActiveProcessLimit = 1; Job.ProcessMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_);
+        // Opt-in compatibility trusts the reviewed package to spawn its helper.
+        // This bounds concurrency, not executable identity; do not claim an ACL.
+        Job.BasicLimitInformation.ActiveProcessLimit = S.helpers_ ? 3 : 1;
+        if (S.helpers_) { Job.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY; Job.JobMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_); }
+        Job.ProcessMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_);
         if (!SetInformationJobObject(S.job_.Get(), JobObjectExtendedLimitInformation, &Job, sizeof(Job))) return HostError("host-job-limits", GetLastError());
         JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
             | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_EXITWINDOWS};
@@ -142,6 +201,28 @@ namespace hc::plugins
         // overrides. Its DLL search policy is configured before loading a plugin.
         const auto SystemRoot = qEnvironmentVariable("SystemRoot");
         QStringList Variables{"PATH=" + SystemRoot + "/System32", "SystemRoot=" + SystemRoot, "TEMP=" + QDir::tempPath(), "TMP=" + QDir::tempPath()};
+        QString HelperIni;
+        if (S.helpers_)
+        {
+            S.helperConfig_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-total7zip-XXXXXX");
+            if (!S.helperConfig_->isValid()) return HostError("host-helper-config-directory");
+            HelperIni = S.helperConfig_->filePath("wincmd.ini");
+            QFile Ini(HelperIni); if (!Ini.open(QIODevice::WriteOnly)) return HostError("host-helper-config-write");
+            Ini.write("[Configuration]\r\nUseIniInProgramDir=0\r\n"); Ini.close();
+            QFile Config(S.helperConfig_->filePath("Total7zip.xml"));
+            if (!Config.open(QIODevice::WriteOnly)) return HostError("host-helper-config-write");
+            QXmlStreamWriter Xml(&Config); Xml.writeStartDocument(); Xml.writeStartElement("settings");
+            Xml.writeEmptyElement("path64bit");
+            Xml.writeAttribute("path_7zG_exe", QDir::toNativeSeparators(Inspected.Value().helperPaths_.front()));
+            Xml.writeAttribute("path_7z_dll", QDir::toNativeSeparators(QDir(QFileInfo(ManifestPath).absolutePath()).filePath("64/7z.dll")));
+            Xml.writeEmptyElement("compression"); Xml.writeAttribute("save", "0"); Xml.writeAttribute("alwaysWait7zip", "1");
+            Xml.writeAttribute("deleteToRecycleBin", "0"); Xml.writeAttribute("askByContent", "0");
+            Xml.writeEmptyElement("passwords"); Xml.writeAttribute("save", "0");
+            Xml.writeEndElement(); Xml.writeEndDocument();
+            if (Xml.hasError() || !Config.flush()) return HostError("host-helper-config-write");
+            Variables << "COMMANDER_INI=" + QDir::toNativeSeparators(HelperIni)
+                << "COMMANDER_PATH=" + QDir::toNativeSeparators(S.helperConfig_->path());
+        }
         Variables.sort(Qt::CaseInsensitive); std::wstring Environment;
         for (const auto& Variable : Variables) { Environment += Variable.toStdWString(); Environment += L'\0'; } Environment += L'\0';
         STARTUPINFOW Startup{}; Startup.cb = sizeof(Startup); Startup.dwFlags = STARTF_USESHOWWINDOW; Startup.wShowWindow = SW_HIDE;
@@ -164,7 +245,7 @@ namespace hc::plugins
         QJsonObject Declaration{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
             {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}};
         {
-            const auto Ini = DefaultIniPath.isEmpty()
+            const auto Ini = !HelperIni.isEmpty() ? HelperIni : DefaultIniPath.isEmpty()
                 ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath(S.viewer_ ? "lsplugin.ini" : Inspected.Value().manifest_.format_ == PluginFormat::Wcx ? "pkplugin.ini" : "tc-data.ini") : DefaultIniPath;
             if (!QDir::isAbsolutePath(Ini) || Ini.contains(QChar::Null)) return HostError("host-wlx-config-path");
             Declaration.insert("defaultIni", QDir::cleanPath(Ini));
@@ -233,6 +314,9 @@ namespace hc::plugins
     {
         std::lock_guard Lock(state_->mutex_); HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;
         if (state_->process_.Valid()) { DWORD Exit = 0; if (GetExitCodeProcess(state_->process_.Get(), &Exit)) { Snapshot.running_ = WaitForSingleObject(state_->process_.Get(), 0) == WAIT_TIMEOUT; if (!Snapshot.running_) Snapshot.exitCode_ = Exit; } }
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
+        if (state_->job_.Valid() && QueryInformationJobObject(state_->job_.Get(), JobObjectBasicAccountingInformation, &Accounting, sizeof(Accounting), nullptr))
+        { Snapshot.activeProcesses_ = Accounting.ActiveProcesses; Snapshot.totalProcesses_ = Accounting.TotalProcesses; }
         return Snapshot;
     }
     void PluginProcess::Close()
@@ -251,6 +335,18 @@ namespace hc::plugins
         if (S.job_.Valid() && S.process_.Valid() && WaitForSingleObject(S.process_.Get(), 0) == WAIT_TIMEOUT)
         { S.forcedTermination_ = true; TerminateJobObject(S.job_.Get(), 0); }
         if (S.process_.Valid()) WaitForSingleObject(S.process_.Get(), 2000);
+        if (S.helpers_ && S.job_.Valid())
+        {
+            TerminateJobObject(S.job_.Get(), 0);
+            const auto Until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            for (;;)
+            {
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
+                if (!QueryInformationJobObject(S.job_.Get(), JobObjectBasicAccountingInformation, &Accounting, sizeof(Accounting), nullptr)
+                    || !Accounting.ActiveProcesses || std::chrono::steady_clock::now() >= Until) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
         if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
         S.viewerParent_ = nullptr;
         S.closed_ = true; S.pipe_.Reset(); S.job_.Reset();

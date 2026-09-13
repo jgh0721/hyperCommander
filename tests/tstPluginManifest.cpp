@@ -101,6 +101,37 @@ private slots:
         QVERIFY(!Admit(Value, Approval, Host).HasValue()); Approval.allowInProcess_ = true; QVERIFY(Admit(Value, Approval, Host).HasValue());
         Host.extensions_.clear(); QVERIFY(!Admit(Value, Approval, Host).HasValue());
     }
+    void helperApprovalAndPeKinds()
+    {
+        auto Value = Manifest(); Value.compatibility_ = "total7zip";
+        Value.extensions_.insert(Extension::ArchiveWrite); Value.permissions_.insert(Permission::WriteContent);
+        QVERIFY(!Validate(Value).HasValue());
+        Value.helpers_["64/7zG.exe"] = std::string(64, 'b'); Value.dependencies_["64/7z.dll"] = std::string(64, 'c');
+        Value.permissions_.insert(Permission::ChildProcess); Value.permissions_.insert(Permission::UserInterface);
+        QVERIFY(Validate(Value).HasValue()); auto Parsed = ParseManifest(EncodeManifest(Value));
+        QVERIFY(Parsed.HasValue()); QVERIFY(Parsed.Value() == Value);
+        PluginApproval Approval{Value, true, false, Value.permissions_}; HostProfile Host;
+        Host.formats_ = {PluginFormat::Wcx}; Host.extensions_ = Value.extensions_; Host.supportsIsolation_ = true;
+        QVERIFY(Admit(Value, Approval, Host).HasValue());
+        auto Changed = Value; Changed.helpers_.begin()->second[0] = 'd'; QVERIFY(!Admit(Changed, Approval, Host).HasValue());
+        Approval.granted_.erase(Permission::ChildProcess); QVERIFY(!Admit(Value, Approval, Host).HasValue());
+        Changed = Value; Changed.permissions_.erase(Permission::ChildProcess); QVERIFY(!Validate(Changed).HasValue());
+        Changed = Value; Changed.execution_ = ExecutionMode::TrustedInProcess; QVERIFY(!Validate(Changed).HasValue());
+        Changed = Value; Changed.helpers_["../other.exe"] = std::string(64, 'a'); QVERIFY(!Validate(Changed).HasValue());
+        auto Dll = Pe(); auto Exe = Dll; Exe[87] = '\0';
+        auto Span = [](const QByteArray& Bytes) { return std::span(reinterpret_cast<const std::byte*>(Bytes.constData()), Bytes.size()); };
+        QVERIFY(InspectPe(Span(Exe), true).HasValue()); QVERIFY(!InspectPe(Span(Dll), true).HasValue()); QVERIFY(!InspectPe(Span(Exe)).HasValue());
+        QTemporaryDir Directory; QVERIFY(QDir().mkpath(Directory.filePath("64")));
+        QVERIFY(Put(Directory.filePath(Value.binary_.c_str()), Dll)); QVERIFY(Put(Directory.filePath("64/7z.dll"), Dll)); QVERIFY(Put(Directory.filePath("64/7zG.exe"), Exe));
+        Value.sha256_ = QCryptographicHash::hash(Dll, QCryptographicHash::Sha256).toHex().toStdString();
+        Value.dependencies_["64/7z.dll"] = Value.sha256_;
+        Value.helpers_["64/7zG.exe"] = QCryptographicHash::hash(Exe, QCryptographicHash::Sha256).toHex().toStdString();
+        const auto Path = Directory.filePath("plugin.json"); QVERIFY(Put(Path, EncodeManifest(Value))); QVERIFY(InspectManifestFile(Path).HasValue());
+        QVERIFY(Put(Directory.filePath("64/other.dll"), Dll)); QCOMPARE(InspectManifestFile(Path).Failure().code_, std::string("plugin-unreviewed-helper-dll"));
+        QVERIFY(QFile::remove(Directory.filePath("64/other.dll")));
+        QVERIFY(Put(Directory.filePath("64/7zG.exe"), Exe + "changed")); QCOMPARE(InspectManifestFile(Path).Failure().code_, std::string("plugin-binary-hash-mismatch"));
+        QVERIFY(QFile::remove(Directory.filePath("64/7zG.exe"))); QVERIFY(!InspectManifestFile(Path).HasValue());
+    }
     void peHeaderBounds()
     {
         const auto Bytes = Pe(); QCOMPARE(Inspect(Bytes).Value(), Architecture::X64);

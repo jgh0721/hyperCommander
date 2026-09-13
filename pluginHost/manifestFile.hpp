@@ -13,6 +13,7 @@ namespace hc::plugins
         PluginManifest manifest_;
         QString binaryPath_;
         QStringList dependencyPaths_;
+        QStringList helperPaths_;
     };
     // Worker/CLI operation. This is a point-in-time inspection, not a load
     // authorization or a file lease. The future host must revalidate at load.

@@ -47,17 +47,18 @@ namespace hc::plugins
         }
         return Out;
     }
-    QJsonObject EncodeContext(const OperationContext& Context)
+    QJsonObject EncodeContext(const OperationContext& Context, unsigned MaximumMilliseconds)
     {
-        const auto Milliseconds = Context.deadline_ == std::chrono::steady_clock::time_point::max() ? 60000LL
-            : std::clamp(static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count()), 0LL, 60000LL);
+        const auto Maximum = static_cast<long long>(std::min(MaximumMilliseconds, 3600000u));
+        const auto Milliseconds = Context.deadline_ == std::chrono::steady_clock::time_point::max() ? Maximum
+            : std::clamp(static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count()), 0LL, Maximum);
         return {{"maxEntries", QString::number(Context.maxEnumerationEntries_)}, {"pageItems", QString::number(Context.maxPageItems_)}, {"milliseconds", QString::number(Milliseconds)}};
     }
     Result<OperationContext> DecodeContext(const QJsonObject& Object)
     {
         if (Object.size() != 3) return Invalid();
         auto Entries = WireUnsigned(Object["maxEntries"]), Page = WireUnsigned(Object["pageItems"]), Time = WireUnsigned(Object["milliseconds"]);
-        if (!Entries.HasValue() || !Page.HasValue() || !Time.HasValue() || !Entries.Value() || Entries.Value() > 100000 || !Page.Value() || Page.Value() > 100000 || Time.Value() > 60000) return Invalid();
+        if (!Entries.HasValue() || !Page.HasValue() || !Time.HasValue() || !Entries.Value() || Entries.Value() > 100000 || !Page.Value() || Page.Value() > 100000 || Time.Value() > 3600000) return Invalid();
         OperationContext Context; Context.maxEnumerationEntries_ = Entries.Value(); Context.maxPageItems_ = Page.Value();
         Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Time.Value()); return Context;
     }

@@ -33,6 +33,16 @@ namespace hc::plugins
         }
         bool ValidRange(ProtocolRange Range) { return Range.major_ > 0 && Range.minimumMinor_ <= Range.maximumMinor_; }
     }
+    Result<Unit> ArchiveWritePolicy(const PluginManifest& Manifest)
+    {
+        if (!Manifest.extensions_.contains(Extension::ArchiveWrite) || !Manifest.permissions_.contains(Permission::WriteContent))
+            return Error{ErrorCategory::AccessDenied, "host-archive-write-not-approved", {"wcx"}};
+        auto Name = Manifest.binary_.substr(Manifest.binary_.find_last_of('/') + 1);
+        for (auto& Ch : Name) if (Ch >= 'A' && Ch <= 'Z') Ch += 'a' - 'A';
+        if ((Manifest.compatibility_ == "total7zip" || Name == "total7zip.wcx64") && Manifest.helpers_.empty())
+            return Error{ErrorCategory::AccessDenied, "plugin-helper-required", {"wcx"}};
+        return Unit{};
+    }
     Result<Unit> Validate(const PluginManifest& Manifest)
     {
         if (Manifest.schemaVersion_ != 1) return Invalid("plugin-manifest-version");
@@ -48,6 +58,21 @@ namespace hc::plugins
             if (!BinaryPath(Path) || !Paths.insert(Fold(Path)).second) return Invalid("plugin-dependency-path");
             if (Hash.size() != 64 || !std::ranges::all_of(Hash, [](char Ch) { return (Ch >= '0' && Ch <= '9') || (Ch >= 'a' && Ch <= 'f'); })) return Invalid("plugin-dependency-hash");
         }
+        if (Manifest.helpers_.size() > 1) return Invalid("plugin-helper-budget");
+        for (const auto& [Path, Hash] : Manifest.helpers_)
+        {
+            if (!BinaryPath(Path) || !Paths.insert(Fold(Path)).second) return Invalid("plugin-helper-path");
+            if (Hash.size() != 64 || !std::ranges::all_of(Hash, [](char Ch) { return (Ch >= '0' && Ch <= '9') || (Ch >= 'a' && Ch <= 'f'); })) return Invalid("plugin-helper-hash");
+        }
+        if (!Manifest.compatibility_.empty() && Manifest.compatibility_ != "total7zip") return Invalid("plugin-compatibility");
+        const bool Helpers = !Manifest.helpers_.empty();
+        if (Helpers != Manifest.permissions_.contains(Permission::ChildProcess)) return Invalid("plugin-helper-permission");
+        if (Helpers && (Manifest.compatibility_ != "total7zip" || Manifest.format_ != PluginFormat::Wcx
+            || Manifest.execution_ != ExecutionMode::Isolated || !Manifest.extensions_.contains(Extension::ArchiveWrite)
+            || !Manifest.permissions_.contains(Permission::UserInterface)
+            || !Manifest.helpers_.contains("64/7zG.exe") || !Manifest.dependencies_.contains("64/7z.dll"))) return Invalid("plugin-helper-profile");
+        if (Manifest.compatibility_ == "total7zip" && Manifest.extensions_.contains(Extension::ArchiveWrite) && !Helpers)
+            return Invalid("plugin-helper-required");
         if (!ValidRange(Manifest.protocol_)) return Invalid("plugin-protocol-range");
         if (Manifest.architecture_ != Architecture::X64 && Manifest.architecture_ != Architecture::X86 && Manifest.architecture_ != Architecture::Arm64) return Invalid("plugin-architecture");
         if (Manifest.execution_ != ExecutionMode::Isolated && Manifest.execution_ != ExecutionMode::TrustedInProcess) return Invalid("plugin-execution-mode");
@@ -64,7 +89,7 @@ namespace hc::plugins
         }
         if (Manifest.extensions_.empty() || !std::includes(Allowed.begin(), Allowed.end(), Manifest.extensions_.begin(), Manifest.extensions_.end())) return Invalid("plugin-extensions");
         for (auto Value : Manifest.permissions_)
-            if (Value != Permission::ReadContent && Value != Permission::WriteContent && Value != Permission::Network && Value != Permission::UserInterface) return Invalid("plugin-permission");
+            if (Value != Permission::ReadContent && Value != Permission::WriteContent && Value != Permission::Network && Value != Permission::UserInterface && Value != Permission::ChildProcess) return Invalid("plugin-permission");
         if (!Manifest.permissions_.contains(Permission::ReadContent)) return Invalid("plugin-read-permission-required");
         if ((Manifest.extensions_.contains(Extension::ArchiveWrite) || Manifest.extensions_.contains(Extension::StorageWrite)) && !Manifest.permissions_.contains(Permission::WriteContent)) return Invalid("plugin-write-permission-required");
         if (Manifest.extensions_.contains(Extension::Viewer) && !Manifest.permissions_.contains(Permission::UserInterface)) return Invalid("plugin-ui-permission-required");
@@ -93,7 +118,7 @@ namespace hc::plugins
             return Error{ErrorCategory::AccessDenied, "plugin-execution-not-approved", {"plugin"}};
         return PluginAdmission{Version.Value(), Manifest.execution_, Manifest.permissions_};
     }
-    Result<Architecture> InspectPe(std::span<const std::byte> Header)
+    Result<Architecture> InspectPe(std::span<const std::byte> Header, bool Executable)
     {
         const auto U16 = [&](std::size_t At) { return std::to_integer<std::uint32_t>(Header[At]) | (std::to_integer<std::uint32_t>(Header[At + 1]) << 8); };
         const auto U32 = [&](std::size_t At) { return U16(At) | (U16(At + 2) << 16); };
@@ -101,7 +126,7 @@ namespace hc::plugins
         const std::uint64_t Pe = U32(0x3c);
         if (Pe < 64 || Pe + 24 > Header.size() || U32(Pe) != 0x4550) return Invalid("plugin-pe-signature");
         const auto Sections = U16(Pe + 6), Optional = U16(Pe + 20), Flags = U16(Pe + 22);
-        if (!Sections || Sections > 96 || Optional < 96 || Pe + 24 + Optional + 40ULL * Sections > Header.size() || (Flags & 0x2002) != 0x2002) return Invalid("plugin-pe-dll-header");
+        if (!Sections || Sections > 96 || Optional < 96 || Pe + 24 + Optional + 40ULL * Sections > Header.size() || (Flags & 0x2002) != (Executable ? 0x0002u : 0x2002u)) return Invalid("plugin-pe-dll-header");
         const auto Machine = U16(Pe + 4), Magic = U16(Pe + 24);
         if (Machine == 0x14c && Magic == 0x10b) return Architecture::X86;
         if (Optional < 112 || Magic != 0x20b) return Invalid("plugin-pe-optional-header");

@@ -8,11 +8,12 @@ namespace hc::plugins
     struct HostLimits
     {
         std::uint32_t startupMs_ = 5000, requestMs_ = 3000, heartbeatMs_ = 1000;
+        std::uint32_t archiveWriteMs_ = 600000;
         std::uint64_t memoryBytes_ = 512ULL * 1024 * 1024;
     };
     struct HostSnapshot
     {
-        std::uint32_t processId_ = 0;
+        std::uint32_t processId_ = 0, activeProcesses_ = 0, totalProcesses_ = 0;
         bool running_ = false;
         bool forcedTermination_ = false;
         std::optional<std::uint32_t> exitCode_;

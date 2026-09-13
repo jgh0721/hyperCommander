@@ -66,7 +66,7 @@ namespace
             const auto Binary = Inspected.Value().binaryPath_;
             // Deny replacement of the file and its ancestor directory names until
             // unload. Recheck while these handles are held, before any DllMain.
-            auto PackageFiles = Inspected.Value().dependencyPaths_; PackageFiles.prepend(Binary);
+            auto PackageFiles = Inspected.Value().dependencyPaths_; PackageFiles.append(Inspected.Value().helperPaths_); PackageFiles.prepend(Binary);
             for (const auto& PackageFile : PackageFiles)
             {
             auto Directory = QFileInfo(PackageFile).absolutePath();
@@ -82,7 +82,7 @@ namespace
             }
             Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
             if (Inspected.Value().manifest_ != Expected.Value() || Inspected.Value().binaryPath_ != Binary) return HostError("host-manifest-changed");
-            auto RecheckedFiles = Inspected.Value().dependencyPaths_; RecheckedFiles.prepend(Binary);
+            auto RecheckedFiles = Inspected.Value().dependencyPaths_; RecheckedFiles.append(Inspected.Value().helperPaths_); RecheckedFiles.prepend(Binary);
             if (RecheckedFiles != PackageFiles) return HostError("host-dependency-changed");
             // Resolve package imports only through pinned, already loaded DLLs.
             // Never search the writable package directory during loader lookup.
@@ -119,7 +119,8 @@ namespace
                     Defaults Parameters{}; Parameters.size_ = sizeof(Parameters); Parameters.high_ = 2; Parameters.low_ = 21;
                     std::copy(Bytes.begin(), Bytes.end(), Parameters.ini_); Set(&Parameters);
                 }
-                archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), Expected.Value().extensions_.contains(Extension::ArchiveWrite));
+                auto WritePolicy = ArchiveWritePolicy(Expected.Value());
+                archives_ = std::make_unique<WcxHostService>(Binary.toStdString(), WritePolicy.HasValue(), WritePolicy.HasValue() ? "" : WritePolicy.Failure().code_);
             }
             else if (Expected.Value().format_ == PluginFormat::DopusVfs)
             {

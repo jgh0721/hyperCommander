@@ -20,7 +20,7 @@ namespace hc::plugins
         const std::map<QString, ExecutionMode> Executions{{"isolated", ExecutionMode::Isolated}, {"trusted-in-process", ExecutionMode::TrustedInProcess}};
         const std::map<QString, Extension> Extensions{{"archive.read", Extension::ArchiveRead}, {"archive.write", Extension::ArchiveWrite},
             {"storage.read", Extension::StorageRead}, {"storage.write", Extension::StorageWrite}, {"viewer", Extension::Viewer}, {"metadata", Extension::Metadata}, {"content.convert", Extension::ContentConvert}};
-        const std::map<QString, Permission> Permissions{{"content.read", Permission::ReadContent}, {"content.write", Permission::WriteContent}, {"network", Permission::Network}, {"ui", Permission::UserInterface}};
+        const std::map<QString, Permission> Permissions{{"content.read", Permission::ReadContent}, {"content.write", Permission::WriteContent}, {"network", Permission::Network}, {"ui", Permission::UserInterface}, {"process.child", Permission::ChildProcess}};
         bool ExactKeys(const QJsonObject& Object, const QStringList& Keys)
         { return Object.size() == Keys.size() && std::ranges::all_of(Keys, [&](const auto& Key) { return Object.contains(Key); }); }
         bool Integer(const QJsonValue& Value, std::uint32_t& Out)
@@ -80,6 +80,8 @@ namespace hc::plugins
         if (!UniqueKeys(Json)) return Invalid("plugin-manifest-duplicate-key");
         auto Object = Document.object();
         const auto Dependencies = Object.take("dependencies");
+        const auto Helpers = Object.take("helpers");
+        const auto Compatibility = Object.take("compatibility");
         if (!ExactKeys(Object, {"schemaVersion", "id", "version", "binary", "sha256", "format", "architecture", "execution", "protocol", "extensions", "permissions"})) return Invalid("plugin-manifest-fields");
         PluginManifest Out;
         if (!Dependencies.isUndefined())
@@ -89,6 +91,15 @@ namespace hc::plugins
             for (auto At = Items.begin(); At != Items.end(); ++At)
             { if (!At.value().isString()) return Invalid("plugin-dependencies"); Out.dependencies_.emplace(At.key().toStdString(), At.value().toString().toStdString()); }
         }
+        if (!Helpers.isUndefined())
+        {
+            if (!Helpers.isObject() || Helpers.toObject().size() > 1) return Invalid("plugin-helpers");
+            const auto Items = Helpers.toObject();
+            for (auto At = Items.begin(); At != Items.end(); ++At)
+            { if (!At.value().isString()) return Invalid("plugin-helpers"); Out.helpers_.emplace(At.key().toStdString(), At.value().toString().toStdString()); }
+        }
+        if (!Compatibility.isUndefined())
+        { if (!Compatibility.isString()) return Invalid("plugin-compatibility"); Out.compatibility_ = Compatibility.toString().toStdString(); }
         if (!Integer(Object["schemaVersion"], Out.schemaVersion_)) return Invalid("plugin-manifest-version");
         for (const auto& Pair : {std::pair{"id", &Out.id_}, {"version", &Out.version_}, {"binary", &Out.binary_}, {"sha256", &Out.sha256_}})
         { if (!Object[Pair.first].isString()) return Invalid("plugin-manifest-string"); *Pair.second = Object[Pair.first].toString().toStdString(); }
@@ -110,6 +121,9 @@ namespace hc::plugins
             {"protocol", QJsonObject{{"major", static_cast<qint64>(Manifest.protocol_.major_)}, {"minimumMinor", static_cast<qint64>(Manifest.protocol_.minimumMinor_)}, {"maximumMinor", static_cast<qint64>(Manifest.protocol_.maximumMinor_)}}}};
         if (!Manifest.dependencies_.empty())
         { QJsonObject Dependencies; for (const auto& [Path, Hash] : Manifest.dependencies_) Dependencies.insert(S(Path), S(Hash)); Object.insert("dependencies", Dependencies); }
+        if (!Manifest.helpers_.empty())
+        { QJsonObject Helpers; for (const auto& [Path, Hash] : Manifest.helpers_) Helpers.insert(S(Path), S(Hash)); Object.insert("helpers", Helpers); }
+        if (!Manifest.compatibility_.empty()) Object.insert("compatibility", S(Manifest.compatibility_));
         return QJsonDocument(Object).toJson();
     }
     Result<InspectedPlugin> InspectManifestFile(const QString& Path, OperationContext Context)
@@ -118,7 +132,7 @@ namespace hc::plugins
         QFile ManifestFile(Path); if (!ManifestFile.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "plugin-manifest-open", {"plugin"}};
         auto Parsed = ParseManifest(ManifestFile.read(65537)); if (!Parsed.HasValue()) return Parsed.Failure();
         const auto Root = QFileInfo(Path).canonicalPath();
-        auto InspectBinary = [&](const std::string& Relative, const std::string& ExpectedHash) -> Result<QString>
+        auto InspectBinary = [&](const std::string& Relative, const std::string& ExpectedHash, bool Executable = false) -> Result<QString>
         {
         const auto Binary = QFileInfo(QDir(Root).filePath(QString::fromStdString(Relative))).canonicalFilePath();
         const auto Prefix = Root.endsWith('/') ? Root : Root + '/';
@@ -127,7 +141,7 @@ namespace hc::plugins
         constexpr qint64 Limit = 512LL * 1024 * 1024;
         if (File.size() > Limit) return Error{ErrorCategory::BudgetExceeded, "plugin-binary-budget", {"plugin"}};
         const auto Header = File.read(1024 * 1024);
-        auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), Header.size()));
+        auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), Header.size()), Executable);
         if (!Arch.HasValue()) return Arch.Failure();
         if (Arch.Value() != Parsed.Value().architecture_) return Invalid("plugin-binary-architecture-mismatch");
         if (!File.seek(0)) return Error{ErrorCategory::Unavailable, "plugin-binary-read", {"plugin"}};
@@ -153,10 +167,20 @@ namespace hc::plugins
             if (Allowed.contains(Dependency.Value().toCaseFolded())) return Invalid("plugin-dependency-alias");
             Allowed.insert(Dependency.Value().toCaseFolded()); Dependencies.push_back(Dependency.Value());
         }
+        QStringList Helpers;
+        for (const auto& [Relative, Hash] : Parsed.Value().helpers_)
+        {
+            auto Helper = InspectBinary(Relative, Hash, true); if (!Helper.HasValue()) return Helper.Failure();
+            if (Allowed.contains(Helper.Value().toCaseFolded())) return Invalid("plugin-helper-alias");
+            Allowed.insert(Helper.Value().toCaseFolded()); Helpers.push_back(Helper.Value());
+            // The helper has its own loader: also reject unreviewed adjacent DLLs.
+            for (const auto& File : QDir(QFileInfo(Helper.Value()).absolutePath()).entryInfoList({"*.dll"}, QDir::Files | QDir::Hidden | QDir::System))
+                if (!Allowed.contains(File.canonicalFilePath().toCaseFolded())) return Invalid("plugin-unreviewed-helper-dll");
+        }
         // Reject package drift, including a new adjacent DLL after approval.
         // The host additionally avoids package-directory loader searches.
         for (const auto& File : QDir(QFileInfo(Binary.Value()).absolutePath()).entryInfoList({"*.dll"}, QDir::Files | QDir::Hidden | QDir::System))
             if (!Allowed.contains(File.canonicalFilePath().toCaseFolded())) return Invalid("plugin-unreviewed-adjacent-dll");
-        return InspectedPlugin{std::move(Parsed.Value()), Binary.Value(), Dependencies};
+        return InspectedPlugin{std::move(Parsed.Value()), Binary.Value(), Dependencies, Helpers};
     }
 }

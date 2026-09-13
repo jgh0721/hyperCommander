@@ -8,7 +8,7 @@ namespace hc::plugins
     enum class PluginFormat { Wcx, Wlx, Wfx, Wdx, DopusVfs, DopusViewer };
     enum class Architecture { X64, X86, Arm64 };
     enum class ExecutionMode { Isolated, TrustedInProcess };
-    enum class Permission { ReadContent, WriteContent, Network, UserInterface };
+    enum class Permission { ReadContent, WriteContent, Network, UserInterface, ChildProcess };
     enum class Extension { ArchiveRead, ArchiveWrite, StorageRead, StorageWrite, Viewer, Metadata, ContentConvert };
     struct ProtocolRange
     {
@@ -32,6 +32,10 @@ namespace hc::plugins
         std::set<Permission> permissions_;
         // Relative package paths and hashes, included in the reviewed identity.
         std::map<std::string, std::string> dependencies_;
+        // Executables are pinned but never passed to LoadLibrary. Child process
+        // permission trusts the package; a Job process limit is not an EXE ACL.
+        std::map<std::string, std::string> helpers_;
+        std::string compatibility_;
         bool operator==(const PluginManifest&) const = default;
     };
     // Supplied by the application's trust store, never by the plugin manifest.
@@ -59,9 +63,10 @@ namespace hc::plugins
         ExecutionMode execution_;
         std::set<Permission> permissions_;
     };
+    storage::Result<storage::Unit> ArchiveWritePolicy(const PluginManifest& Manifest);
     storage::Result<storage::Unit> Validate(const PluginManifest& Manifest);
     storage::Result<ProtocolVersion> Negotiate(ProtocolRange Client, ProtocolRange Host);
     storage::Result<PluginAdmission> Admit(const PluginManifest& Manifest, const PluginApproval& Approval, const HostProfile& Host);
     // Header inspection only; does not load code or certify SDK compatibility.
-    storage::Result<Architecture> InspectPe(std::span<const std::byte> Header);
+    storage::Result<Architecture> InspectPe(std::span<const std::byte> Header, bool Executable = false);
 }

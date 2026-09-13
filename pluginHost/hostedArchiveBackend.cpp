@@ -65,7 +65,7 @@ namespace hc::plugins
                     if (!Written.HasValue()) return Written.Failure(); auto Received = WireUnsigned(Written.Value()["received"]);
                     if (!Received.HasValue() || Received.Value() != std::uint64_t(std::min(Offset + 48 * 1024, Bytes.size()))) return Invalid();
                 }
-                auto Applied = process_->ArchiveCall(WireKind::ArchiveUpdateApply, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(Context)}}, Context);
+                auto Applied = process_->ArchiveCall(WireKind::ArchiveUpdateApply, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(Context, 3600000)}}, Context);
                 if (!Applied.HasValue()) return Applied.Failure(); Cleanup.dismiss();
                 return Applied.Value().size() == 1 && Applied.Value()["complete"].toBool() ? Result<Unit>(Unit{}) : Result<Unit>(Invalid());
             }

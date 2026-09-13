@@ -8,7 +8,7 @@ namespace hc::plugins
 {
     using namespace storage;
     namespace { Error Invalid(const char* Code = "host-archive-payload") { return {ErrorCategory::InvalidRequest, Code, {"wcx"}}; } }
-    WcxHostService::WcxHostService(std::string Binary, bool Write) : backend_(MakeInProcessWcxBackend(std::move(Binary), false)), write_(Write) {}
+    WcxHostService::WcxHostService(std::string Binary, bool Write, std::string WriteFailure) : backend_(MakeInProcessWcxBackend(std::move(Binary), false)), write_(Write), writeFailure_(std::move(WriteFailure)) {}
     Result<QJsonObject> WcxHostService::Handle(WireKind Kind, const QJsonObject& Request)
     {
         if (!Request["context"].isObject()) return Invalid(); auto Context = DecodeContext(Request["context"].toObject()); if (!Context.HasValue()) return Context.Failure();
@@ -45,7 +45,7 @@ namespace hc::plugins
             auto Extracted = backend_->Extract(Request["archive"].toString().toStdString(), Expected.Value(), Request["output"].toString().toStdString(), Context.Value());
             if (!Extracted.HasValue()) return Extracted.Failure(); return QJsonObject{{"complete", true}};
         }
-        if (!write_) return Error{ErrorCategory::AccessDenied, "host-archive-write-not-approved", {"wcx"}};
+        if (!write_) return Error{ErrorCategory::AccessDenied, writeFailure_, {"wcx"}};
         if (Kind == WireKind::ArchiveUpdateBegin)
         {
             auto Size = WireUnsigned(Request["size"]);
