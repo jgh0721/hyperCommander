@@ -55,3 +55,7 @@ HyperCommander/x64/Debug/
 HyperCommander/x64/Release/
 
 uniqueLibs/cmnTypeDefs_Ver.hpp
+
+# Local instructions and Markdown require review before any explicit inclusion.
+AGENTS.md
+*.md

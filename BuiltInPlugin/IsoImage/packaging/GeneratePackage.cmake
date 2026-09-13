@@ -10,6 +10,5 @@ file(CONFIGURE OUTPUT "${HEADER}" CONTENT "${HEADER_CONTENT}" NEWLINE_STYLE CRLF
 foreach(FILE IN ITEMS COPYING THIRD_PARTY_NOTICES.txt source-lock.json)
     file(COPY_FILE "${SOURCE}/packaging/${FILE}" "${OUTPUT}/${FILE}" ONLY_IF_DIFFERENT)
 endforeach()
-execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${OUTPUT}/hc-iso-source.zip" --format=zip
-    include src adapters packaging CMakeLists.txt
-    WORKING_DIRECTORY "${SOURCE}" COMMAND_ERROR_IS_FATAL ANY)
+include("${CMAKE_CURRENT_LIST_DIR}/GenerateSourcePackage.cmake")
+hc_iso_source_package("${SOURCE}" "${OUTPUT}/hc-iso-source.zip")

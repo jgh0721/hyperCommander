@@ -17,9 +17,8 @@ file(CONFIGURE OUTPUT "${STAGE}/pluginst.inf" CONTENT
 foreach(FILE IN ITEMS COPYING THIRD_PARTY_NOTICES.txt source-lock.json)
     file(COPY_FILE "${SOURCE}/packaging/${FILE}" "${STAGE}/${FILE}" ONLY_IF_DIFFERENT)
 endforeach()
-execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${STAGE}/hc-iso-source.zip" --format=zip
-    include src adapters packaging CMakeLists.txt
-    WORKING_DIRECTORY "${SOURCE}" COMMAND_ERROR_IS_FATAL ANY)
+include("${CMAKE_CURRENT_LIST_DIR}/GenerateSourcePackage.cmake")
+hc_iso_source_package("${SOURCE}" "${STAGE}/hc-iso-source.zip")
 # An explicit list excludes stale files and all user configuration from updates.
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${ZIP}" --format=zip
     pluginst.inf hc_isoimage_tc.wcx hc_isoimage_tc.wcx64 hc_iso_core.dll
