@@ -11,7 +11,7 @@ QtViewerHost::QtViewerHost(QWidget* Main, hc::plugins::PluginViewerService::Mate
     QtViewerSurface::ViewerChoices Choices, QtViewerSurface::ViewerSelection Selection) : QObject(Main), main_(Main),
     service_(std::make_unique<hc::viewer::ViewerService>(hc::viewer::MakeBuiltinViewerRegistry()))
 {
-    if (Factory) wlx_ = std::make_unique<QtPluginViewerController>(Main, std::move(Factory));
+    if (Factory) pluginViewer_ = std::make_unique<QtPluginViewerController>(Main, std::move(Factory));
     choices_ = std::move(Choices);
     selection_ = std::move(Selection);
     setObjectName("hc.viewer.host"); Main->installEventFilter(this);
@@ -32,7 +32,7 @@ QtViewerSurface* QtViewerHost::CreateSurface(QWidget* Parent)
 {
     std::erase_if(surfaces_, [](const auto& Surface) { return Surface.isNull(); });
     auto* Surface = new QtViewerSurface(*service_, Parent); surfaces_.push_back(Surface);
-    if (wlx_) Surface->ConfigurePlugins(wlx_.get(), choices_, selection_);
+    if (pluginViewer_) Surface->ConfigurePlugins(pluginViewer_.get(), choices_, selection_);
     connect(Surface, &QtViewerSurface::LinkRequested, Surface, [Surface](const QUrl& Url) {
         if (!Url.isValid() || (Url.scheme() != "https" && Url.scheme() != "http") || Url.host().isEmpty()) return;
         auto* Prompt = new QMessageBox(QMessageBox::Question, tr("외부 링크 열기"), tr("브라우저에서 다음 주소를 여시겠습니까?"),
@@ -61,9 +61,9 @@ void QtViewerHost::CloseAll()
 {
     for (auto& Surface : surfaces_) if (Surface) Surface->Close();
     service_->CancelAll();
-    if (wlx_) wlx_->CloseAll();
+    if (pluginViewer_) pluginViewer_->CloseAll();
 }
-bool QtViewerHost::IsIdle() const { return service_->IsIdle() && (!wlx_ || wlx_->IsIdle()); }
+bool QtViewerHost::IsIdle() const { return service_->IsIdle() && (!pluginViewer_ || pluginViewer_->IsIdle()); }
 bool QtViewerHost::eventFilter(QObject* Object, QEvent* Event)
 {
     if (Object == main_ && Event->type() == QEvent::Close)

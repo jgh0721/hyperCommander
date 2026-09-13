@@ -40,5 +40,5 @@ private:
     void updateImage();
     void find(bool Backward);
     void fail(const QString& Code);
-    void refreshWlxMenu();
+    void refreshPluginMenu();
 };

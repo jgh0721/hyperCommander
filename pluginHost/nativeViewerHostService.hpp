@@ -2,6 +2,7 @@
 #include "pipeChannel.hpp"
 #include <QJsonObject>
 #include "dopusViewerBackend.hpp"
+#include "wlxViewerBackend.hpp"
 
 namespace hc::plugins
 {
@@ -21,21 +22,12 @@ namespace hc::plugins
         void close();
         PluginManifest manifest_;
         std::unique_ptr<DopusViewerBackend> dopus_;
-        HMODULE module_;
+        std::unique_ptr<WlxViewerBackend> wlx_;
         DWORD parentProcess_;
         HWND container_ = nullptr, viewer_ = nullptr;
         HHOOK inputHook_ = nullptr;
         UINT closeMessage_ = 0;
         static thread_local NativeViewerHostService* inputOwner_;
-        using Load = HWND(__stdcall*)(HWND, wchar_t*, int);
-        using Close = void(__stdcall*)(HWND);
-        using Command = int(__stdcall*)(HWND, int, int);
-        using Notification = int(__stdcall*)(HWND, int, WPARAM, LPARAM);
-        Load load_ = nullptr;
-        Close close_ = nullptr;
-        Command command_ = nullptr;
-        Notification notification_ = nullptr;
-        bool initialized_ = false;
-        std::optional<QByteArray> detectString_;
+
     };
 }

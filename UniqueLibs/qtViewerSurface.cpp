@@ -86,13 +86,13 @@ struct QtViewerSurface::State
     std::size_t inserted_ = 0;
     QTextCursor insertion_;
     double imageScale_ = 1;
-    QtPluginViewerSurface* wlx_ = nullptr;
-    QMenu* wlxMenu_ = nullptr;
-    ViewerChoices wlxChoices_;
-    ViewerSelection wlxSelection_;
+    QtPluginViewerSurface* pluginViewer_ = nullptr;
+    QMenu* pluginMenu_ = nullptr;
+    ViewerChoices pluginChoices_;
+    ViewerSelection pluginSelection_;
     std::vector<PluginViewerChoice> automaticChoices_;
-    bool automaticWlx_ = false;
-    std::optional<PluginViewerChoice> selectedWlx_;
+    bool automaticPlugin_ = false;
+    std::optional<PluginViewerChoice> selectedPlugin_;
     std::vector<QAction*> builtinActions_;
     explicit State(ViewerService& Service) : service_(Service) {}
 };
@@ -155,102 +155,102 @@ QtViewerSurface::QtViewerSurface(ViewerService& Service, QWidget* Parent)
     S.timer_ = new QTimer(this); S.timer_->setInterval(16); connect(S.timer_, &QTimer::timeout, this, &QtViewerSurface::poll);
     S.builtinActions_ = {findChild<QAction*>("hc.viewer.find"), findChild<QAction*>("hc.viewer.zoom-out"),
         findChild<QAction*>("hc.viewer.zoom-in"), S.wrap_, S.source_, Original};
-    S.wlxMenu_ = Menu->addMenu(tr("플러그인으로 열기")); S.wlxMenu_->setObjectName("hc.viewer.plugins");
-    S.wlxMenu_->menuAction()->setVisible(false);
-    connect(S.wlxMenu_, &QMenu::aboutToShow, this, &QtViewerSurface::refreshWlxMenu);
+    S.pluginMenu_ = Menu->addMenu(tr("플러그인으로 열기")); S.pluginMenu_->setObjectName("hc.viewer.plugins");
+    S.pluginMenu_->menuAction()->setVisible(false);
+    connect(S.pluginMenu_, &QMenu::aboutToShow, this, &QtViewerSurface::refreshPluginMenu);
     setFocusProxy(S.text_); S.fit_->setEnabled(false); S.stop_->setEnabled(false);
 }
 QtViewerSurface::~QtViewerSurface() { Close(); }
 void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, ViewerChoices Choices, ViewerSelection Selection)
 {
-    auto& S = *state_; if (S.wlx_) return;
-    S.wlxChoices_ = std::move(Choices); S.wlx_ = new QtPluginViewerSurface(Controller, S.pages_); S.pages_->addWidget(S.wlx_);
-    S.wlxSelection_ = std::move(Selection);
-    S.wlxMenu_->menuAction()->setVisible(true);
-    connect(S.wlx_, &QtPluginViewerSurface::Ready, this, [this](const QString& Id) {
-        auto& S = *state_; if ((!S.selectedWlx_ && !S.automaticWlx_) || QString::fromStdString(S.wlx_->Snapshot().id_) != Id) return;
-        if (S.automaticWlx_)
+    auto& S = *state_; if (S.pluginViewer_) return;
+    S.pluginChoices_ = std::move(Choices); S.pluginViewer_ = new QtPluginViewerSurface(Controller, S.pages_); S.pages_->addWidget(S.pluginViewer_);
+    S.pluginSelection_ = std::move(Selection);
+    S.pluginMenu_->menuAction()->setVisible(true);
+    connect(S.pluginViewer_, &QtPluginViewerSurface::Ready, this, [this](const QString& Id) {
+        auto& S = *state_; if ((!S.selectedPlugin_ && !S.automaticPlugin_) || QString::fromStdString(S.pluginViewer_->Snapshot().id_) != Id) return;
+        if (S.automaticPlugin_)
         {
-            const auto Selected = S.wlx_->Details().selectedCandidate_;
+            const auto Selected = S.pluginViewer_->Details().selectedCandidate_;
             if (!Selected || *Selected >= S.automaticChoices_.size()) { fail("viewer-selection-invalid"); return; }
-            S.selectedWlx_ = S.automaticChoices_[*Selected];
+            S.selectedPlugin_ = S.automaticChoices_[*Selected];
         }
         S.ready_ = true; S.stop_->setEnabled(false);
-        if (auto* Find = findChild<QAction*>("hc.viewer.find")) Find->setEnabled(S.wlx_->CanSearch());
-        S.status_->setText(tr("%1 · %2").arg(QString::fromStdString(S.wlx_->Snapshot().source_.name_), S.selectedWlx_->name_));
+        if (auto* Find = findChild<QAction*>("hc.viewer.find")) Find->setEnabled(S.pluginViewer_->CanSearch());
+        S.status_->setText(tr("%1 · %2").arg(QString::fromStdString(S.pluginViewer_->Snapshot().source_.name_), S.selectedPlugin_->name_));
         emit Ready(Id);
     });
-    connect(S.wlx_, &QtPluginViewerSurface::Failed, this, [this](const QString& Code) { if (state_->selectedWlx_ || state_->automaticWlx_) fail(Code); });
-    connect(S.wlx_, &QtPluginViewerSurface::NoMatch, this, [this] {
-        if (!state_->automaticWlx_) return;
+    connect(S.pluginViewer_, &QtPluginViewerSurface::Failed, this, [this](const QString& Code) { if (state_->selectedPlugin_ || state_->automaticPlugin_) fail(Code); });
+    connect(S.pluginViewer_, &QtPluginViewerSurface::NoMatch, this, [this] {
+        if (!state_->automaticPlugin_) return;
         state_->request_.provider_.clear(); reopen();
     });
-    connect(S.wlx_, &QtPluginViewerSurface::CloseRequested, this, &QtViewerSurface::CloseRequested);
+    connect(S.pluginViewer_, &QtPluginViewerSurface::CloseRequested, this, &QtViewerSurface::CloseRequested);
 }
-void QtViewerSurface::refreshWlxMenu()
+void QtViewerSurface::refreshPluginMenu()
 {
-    auto& S = *state_; S.wlxMenu_->clear();
+    auto& S = *state_; S.pluginMenu_->clear();
     for (const bool Force : {false, true})
     {
-        auto* Action = S.wlxMenu_->addAction(Force ? tr("플러그인 우선으로 자동 선택") : tr("자동 선택"));
+        auto* Action = S.pluginMenu_->addAction(Force ? tr("플러그인 우선으로 자동 선택") : tr("자동 선택"));
         Action->setObjectName(Force ? "hc.viewer.plugin.force" : "hc.viewer.plugin.automatic");
         Action->setEnabled(static_cast<bool>(S.request_.source_));
         connect(Action, &QAction::triggered, this, [this, Force] {
             state_->request_.provider_ = Force ? "wlx-force" : "wlx-auto"; reopen();
         });
     }
-    S.wlxMenu_->addSeparator();
-    const auto Choices = S.wlxChoices_ ? S.wlxChoices_() : std::vector<PluginViewerChoice>{};
+    S.pluginMenu_->addSeparator();
+    const auto Choices = S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
     for (const auto& Choice : Choices)
     {
-        auto* Action = S.wlxMenu_->addAction(Choice.name_); Action->setObjectName("hc.viewer.plugin." + Choice.id_);
+        auto* Action = S.pluginMenu_->addAction(Choice.name_); Action->setObjectName("hc.viewer.plugin." + Choice.id_);
         Action->setEnabled(static_cast<bool>(S.request_.source_));
         connect(Action, &QAction::triggered, this, [this, Id = Choice.id_] {
             // Re-read approval when executing: the menu may predate revocation.
-            const auto Current = state_->wlxChoices_();
+            const auto Current = state_->pluginChoices_();
             const auto It = std::find_if(Current.begin(), Current.end(), [&](const auto& Item) { return Item.id_ == Id; });
             if (It == Current.end())
             {
                 auto Request = state_->request_; Close(); state_->request_ = std::move(Request);
                 fail("viewer-plugin-unavailable"); return;
             }
-            state_->selectedWlx_ = *It; state_->request_.provider_ = "wlx"; reopen();
+            state_->selectedPlugin_ = *It; state_->request_.provider_ = "wlx"; reopen();
         });
     }
-    if (Choices.empty()) S.wlxMenu_->addAction(tr("호스트 사용으로 설정된 플러그인이 없습니다."))->setEnabled(false);
+    if (Choices.empty()) S.pluginMenu_->addAction(tr("호스트 사용으로 설정된 플러그인이 없습니다."))->setEnabled(false);
 }
 void QtViewerSurface::Open(std::shared_ptr<hc::storage::IContentSource> Source, ViewerPurpose Purpose)
 {
     state_->request_ = ViewerRequest{}; state_->request_.source_ = std::move(Source); state_->request_.purpose_ = Purpose;
-    const auto Mode = state_->wlxSelection_ ? state_->wlxSelection_() : PluginViewerSelectionMode::Manual;
-    if (state_->wlx_ && Mode != PluginViewerSelectionMode::Manual)
+    const auto Mode = state_->pluginSelection_ ? state_->pluginSelection_() : PluginViewerSelectionMode::Manual;
+    if (state_->pluginViewer_ && Mode != PluginViewerSelectionMode::Manual)
         state_->request_.provider_ = Mode == PluginViewerSelectionMode::Force ? "wlx-force" : "wlx-auto";
     reopen();
 }
 void QtViewerSurface::reopen()
 {
-    auto Request = state_->request_; auto Wlx = state_->selectedWlx_; Close(); state_->request_ = std::move(Request); auto& S = *state_;
-    if (S.wlx_ && (S.request_.provider_ == "wlx-auto" || S.request_.provider_ == "wlx-force"))
+    auto Request = state_->request_; auto SelectedPlugin = state_->selectedPlugin_; Close(); state_->request_ = std::move(Request); auto& S = *state_;
+    if (S.pluginViewer_ && (S.request_.provider_ == "wlx-auto" || S.request_.provider_ == "wlx-force"))
     {
-        S.automaticWlx_ = true;
+        S.automaticPlugin_ = true;
         // Capture names and options together; later settings edits must not
         // change the identity associated with the selected candidate index.
-        S.automaticChoices_ = S.wlxChoices_ ? S.wlxChoices_() : std::vector<PluginViewerChoice>{};
+        S.automaticChoices_ = S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
         std::vector<hc::plugins::PluginViewerOptions> Candidates;
         for (const auto& Choice : S.automaticChoices_) Candidates.push_back(Choice.options_);
         hc::plugins::PluginViewerSelectionPolicy Policy; Policy.force_ = S.request_.provider_ == "wlx-force";
         Policy.builtinProbe_ = CanViewBuiltinMultimedia;
-        S.pages_->setCurrentWidget(S.wlx_); setFocusProxy(S.wlx_); S.searchBar_->hide();
+        S.pages_->setCurrentWidget(S.pluginViewer_); setFocusProxy(S.pluginViewer_); S.searchBar_->hide();
         for (auto* Action : S.builtinActions_) Action->setEnabled(false);
         S.status_->setText(tr("뷰어를 자동 선택하는 중…")); S.stop_->setEnabled(true);
-        S.wlx_->OpenAutomatic(std::move(Candidates), S.request_.source_, std::move(Policy)); return;
+        S.pluginViewer_->OpenAutomatic(std::move(Candidates), S.request_.source_, std::move(Policy)); return;
     }
-    if (S.request_.provider_ == "wlx" && Wlx && S.wlx_)
+    if (S.request_.provider_ == "wlx" && SelectedPlugin && S.pluginViewer_)
     {
-        S.selectedWlx_ = std::move(Wlx); S.pages_->setCurrentWidget(S.wlx_); setFocusProxy(S.wlx_);
+        S.selectedPlugin_ = std::move(SelectedPlugin); S.pages_->setCurrentWidget(S.pluginViewer_); setFocusProxy(S.pluginViewer_);
         S.searchBar_->hide(); for (auto* Action : S.builtinActions_) Action->setEnabled(false);
         S.status_->setText(tr("플러그인으로 여는 중…")); S.stop_->setEnabled(true);
-        S.wlx_->Open(S.selectedWlx_->options_, S.request_.source_); return;
+        S.pluginViewer_->Open(S.selectedPlugin_->options_, S.request_.source_); return;
     }
     for (auto* Action : S.builtinActions_) Action->setEnabled(true);
     S.pages_->setCurrentWidget(S.text_); setFocusProxy(S.text_);
@@ -262,8 +262,8 @@ void QtViewerSurface::reopen()
 void QtViewerSurface::Close()
 {
     auto& S = *state_; S.timer_->stop(); S.ready_ = false;
-    if (S.wlx_) S.wlx_->Close(); S.selectedWlx_.reset();
-    S.automaticWlx_ = false; S.automaticChoices_.clear();
+    if (S.pluginViewer_) S.pluginViewer_->Close(); S.selectedPlugin_.reset();
+    S.automaticPlugin_ = false; S.automaticChoices_.clear();
     S.text_->document()->setLayoutEnabled(false);
     if (S.inserting_) S.insertion_.endEditBlock();
     S.inserting_ = false; S.insertion_ = QTextCursor{};
@@ -275,7 +275,7 @@ void QtViewerSurface::Close()
 bool QtViewerSurface::IsReady() const { return state_->ready_; }
 ViewerSnapshot QtViewerSurface::Snapshot() const
 {
-    if ((state_->selectedWlx_ || state_->automaticWlx_) && state_->wlx_) return state_->wlx_->Snapshot();
+    if ((state_->selectedPlugin_ || state_->automaticPlugin_) && state_->pluginViewer_) return state_->pluginViewer_->Snapshot();
     if (state_->handle_) return state_->handle_->session_->Snapshot();
     ViewerSnapshot Closed; Closed.status_ = ViewerStatus::Closed; return Closed;
 }
@@ -356,7 +356,7 @@ void QtViewerSurface::updateImage()
 }
 void QtViewerSurface::find(bool Backward)
 {
-    if (state_->ready_ && state_->selectedWlx_ && state_->wlx_) { state_->wlx_->Search(state_->search_->text(), Backward); return; }
+    if (state_->ready_ && state_->selectedPlugin_ && state_->pluginViewer_) { state_->pluginViewer_->Search(state_->search_->text(), Backward); return; }
     auto& S = *state_; if (!S.ready_ || !S.document_ || S.search_->text().isEmpty() || S.document_->kind_ == ViewerKind::Image) return;
     const auto Flags = Backward ? QTextDocument::FindBackward : QTextDocument::FindFlags{};
     const auto Find = [&] { return S.pages_->currentWidget() == S.text_ ? S.text_->find(S.search_->text(), Flags) : S.markdown_->find(S.search_->text(), Flags); };
@@ -370,7 +370,7 @@ void QtViewerSurface::Execute(const QString& Command)
     auto& S = *state_;
     if (Command == "cancel") { Close(); return; }
     if (Command == "find") { S.searchBar_->show(); S.search_->setFocus(); S.search_->selectAll(); return; }
-    if (S.selectedWlx_ && S.wlx_) { S.wlx_->Execute(Command); return; }
+    if (S.selectedPlugin_ && S.pluginViewer_) { S.pluginViewer_->Execute(Command); return; }
     if (!S.document_) return;
     if (Command == "source") { S.source_->toggle(); return; }
     if (Command == "wrap") { S.wrap_->toggle(); return; }

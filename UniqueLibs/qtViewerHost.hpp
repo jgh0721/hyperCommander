@@ -22,7 +22,7 @@ private:
     std::unique_ptr<hc::viewer::ViewerService> service_;
     std::vector<QPointer<QtViewerSurface>> surfaces_;
     QTimer* closeTimer_ = nullptr;
-    std::unique_ptr<QtPluginViewerController> wlx_;
+    std::unique_ptr<QtPluginViewerController> pluginViewer_;
     QtViewerSurface::ViewerChoices choices_;
     QtViewerSurface::ViewerSelection selection_;
 };
