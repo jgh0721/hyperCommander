@@ -36,7 +36,7 @@ namespace hc::plugins
                 const auto ExpectedBinary = QFileInfo(options_.binaryPath_).canonicalFilePath();
                 if (ExpectedBinary.isEmpty() || ExpectedBinary.compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
                     return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch", {"wcx"}};
-                auto Started = PluginProcess::Start(options_.executable_, options_.manifestPath_, options_.approval_, options_.limits_, Context);
+                auto Started = PluginProcess::Start(options_.executable_, options_.manifestPath_, options_.approval_, options_.limits_, Context, options_.defaultIniPath_);
                 if (!Started.HasValue()) return Started.Failure();
                 return MakeHostedArchiveBackend(std::shared_ptr<PluginProcess>(std::move(Started.Value())));
             }

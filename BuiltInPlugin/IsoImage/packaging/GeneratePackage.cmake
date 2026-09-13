@@ -1,0 +1,15 @@
+file(MAKE_DIRECTORY "${OUTPUT}")
+file(COPY_FILE "${CORE}" "${OUTPUT}/hc_iso_core.dll" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${WCX}" "${OUTPUT}/hc_isoimage_wcx.wcx64" ONLY_IF_DIFFERENT)
+file(SHA256 "${CORE}" CORE_HASH)
+file(SHA256 "${WCX}" WCX_HASH)
+set(MANIFEST "{\n  \"schemaVersion\": 1,\n  \"id\": \"hc.builtin.isoimage\",\n  \"version\": \"1.0.0\",\n  \"binary\": \"hc_isoimage_wcx.wcx64\",\n  \"sha256\": \"${WCX_HASH}\",\n  \"format\": \"wcx\",\n  \"architecture\": \"x64\",\n  \"execution\": \"isolated\",\n  \"protocol\": {\"major\": 1, \"minimumMinor\": 0, \"maximumMinor\": 0},\n  \"extensions\": [\"archive.read\", \"archive.write\"],\n  \"permissions\": [\"content.read\", \"content.write\"],\n  \"dependencies\": {\"hc_iso_core.dll\": \"${CORE_HASH}\"}\n}\n")
+file(CONFIGURE OUTPUT "${OUTPUT}/isoimage.json" CONTENT "${MANIFEST}" NEWLINE_STYLE CRLF)
+set(HEADER_CONTENT "// Generated build identity. Do not approve a runtime manifest as its own trust source.\n#pragma once\ninline constexpr char HcBuiltinIsoManifest[] = R\"hciso(${MANIFEST})hciso\";\n")
+file(CONFIGURE OUTPUT "${HEADER}" CONTENT "${HEADER_CONTENT}" NEWLINE_STYLE CRLF)
+foreach(FILE IN ITEMS COPYING THIRD_PARTY_NOTICES.txt source-lock.json)
+    file(COPY_FILE "${SOURCE}/packaging/${FILE}" "${OUTPUT}/${FILE}" ONLY_IF_DIFFERENT)
+endforeach()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${OUTPUT}/hc-iso-source.zip" --format=zip
+    include src adapters packaging CMakeLists.txt
+    WORKING_DIRECTORY "${SOURCE}" COMMAND_ERROR_IS_FATAL ANY)

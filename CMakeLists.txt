@@ -49,6 +49,7 @@ target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core hc_plugin_viewer_qt Qt6
 target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 add_subdirectory(pluginHost)
+add_subdirectory(BuiltInPlugin)
 add_subdirectory(HyperCommander)
 
 include(CTest)

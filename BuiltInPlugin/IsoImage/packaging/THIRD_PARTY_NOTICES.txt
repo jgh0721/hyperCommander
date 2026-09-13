@@ -1,0 +1,28 @@
+# ISO engine notices
+
+The `hc_iso_core` library is a C++ port of selected parts of PyCdlib 1.20.0.
+
+Original copyright: Copyright (C) 2015–2022 Chris Lalancette <clalancette@gmail.com>.
+The upstream path table module carries 2015–2021 and the UDF module 2018–2022.
+The original notices remain applicable to the translated work.
+
+C++ translation and modifications: Copyright (C) 2026 HyperCommander contributors.
+The engine, its public ABI header and its internal source are distributed under
+the GNU Lesser General Public License, version 2.1 only. See `COPYING`.
+This library is distributed without any warranty, including the implied warranties
+of merchantability or fitness for a particular purpose.
+
+The WCX adapter dynamically links the engine. No Python interpreter, Python module,
+subprocess bridge or embedded Python runtime is part of the product package.
+The source package contains the complete modified engine source, public ABI and
+build instructions. Rebuilding and replacing the engine DLL is supported. A
+modified package must be registered as an external plugin with a new manifest and
+reviewed hashes; the application's compiled trust pins intentionally do not approve
+modified binaries automatically. Users may modify the library for their own use
+and reverse engineer the linked work to debug modifications to this library.
+
+The source lock records the original release archive and its SHA-256. The archive
+is used only by development comparison tests. It is available from the recorded
+public URL; product execution does not download it.
+
+The engine source package excludes QtitanDataGrid and all commercial components.
