@@ -28,6 +28,7 @@ Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(Path, std::io
         if (std::memcmp(Data.data() + 1, "CD001", 5) == 0 && !End) {
             Require(Data[6] == 1, "Unsupported ISO descriptor version", HC_ISO_UNSUPPORTED);
             if (Data[0] == 1) Primary = Data;
+            if (Data[0] == 0) info_.features_ |= 1;
             if (Data[0] == 2 && Data[88] == '%' && Data[89] == '/' && (Data[90] == '@' || Data[90] == 'C' || Data[90] == 'E')) Joliet = Data;
             if (Data[0] == 255) End = true;
         }
@@ -35,6 +36,9 @@ Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(Path, std::io
     }
     Require(!Primary.empty() && End, "Missing ISO primary descriptor or terminator");
     Require(Paired(Primary, 128, 2) == Block && uint64_t(Paired(Primary, 80, 4)) * Block <= info_.imageBytes_, "Invalid ISO volume extent");
+    const auto PrimaryRoot = ReadAt(uint64_t(Paired(Primary, 158, 4)) * Block, Block);
+    Require(PrimaryRoot[0] >= 34, "Missing primary root self record");
+    if (PrimaryRoot[0] > 34 && std::any_of(PrimaryRoot.begin() + 34, PrimaryRoot.begin() + PrimaryRoot[0], [](auto B) { return B != 0; })) info_.features_ |= 2;
     std::string Label(reinterpret_cast<const char*>(Primary.data() + 40), 32);
     while (!Label.empty() && Label.back() == ' ') Label.pop_back();
     std::memcpy(info_.volumeLabel_, Label.data(), Label.size());
@@ -163,6 +167,7 @@ void Reader::readUdf()
         const size_t Header = Extended ? 216 : 176;
         const auto EaLength = Get(Fe, Header - 8, 4), AdLength = Get(Fe, Header - 4, 4);
         Require(EaLength <= Block - Header && AdLength <= Block - Header - EaLength, "Invalid UDF allocation length");
+        Require(Get(Fe, 10, 2) >= Header - 16 + EaLength + AdLength, "UDF CRC excludes allocation descriptors");
         const auto Ads = std::span(Fe).subspan(Header + size_t(EaLength), size_t(AdLength));
         const auto Kind = Get(Fe, 34, 2) & 7;
         if (Kind == 3) { Require(Item.size_ <= Ads.size(), "Embedded UDF file truncated"); Item.embedded_.assign(Ads.begin(), Ads.begin() + size_t(Item.size_)); }
@@ -198,6 +203,7 @@ void Reader::readUdf()
                 for (const auto& Ext : Item.extents_) { if (Position < Ext.size_) { TagLocation = uint32_t((Ext.offset_ + Position) / Block - Start); break; } Position -= Ext.size_; }
             }
             CheckTag(Tail.first(Size), TagLocation, 257);
+            Require(Get(Tail, 10, 2) >= Size - 16, "UDF CRC excludes file identifier");
             Require(Get(Tail, 16, 2) == 1 && Get(Tail, 28, 2) == 0, "Invalid UDF FID version/partition");
             Offset += Size;
             if (Tail[18] & (4 | 8)) continue;

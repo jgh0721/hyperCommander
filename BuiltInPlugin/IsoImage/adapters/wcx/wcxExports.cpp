@@ -109,7 +109,10 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
     std::string Label = "HYPERCOMMANDER";
     if (Exists) {
         auto Image = Open(Target); HcIsoInfo Info{}; Info.structSize_ = sizeof(Info); Check(hcIsoGetInfo(Image.get(), &Info));
-        Profile = Info.namespaces_ & (1u << HC_ISO_UDF) ? HC_ISO_UDF_BRIDGE : Info.namespaces_ & (1u << HC_ISO_JOLIET) ? HC_ISO_9660_JOLIET : HC_ISO_9660;
+        // A full rebuild must not silently discard boot catalogs or Rock Ridge.
+        Require(Info.features_ == 0, E_NOT_SUPPORTED);
+        const bool Joliet = (Info.namespaces_ & (1u << HC_ISO_JOLIET)) != 0;
+        Profile = Info.namespaces_ & (1u << HC_ISO_UDF) ? (Joliet ? HC_ISO_UDF_BRIDGE : HC_ISO_UDF_NO_JOLIET) : Joliet ? HC_ISO_9660_JOLIET : HC_ISO_9660;
         Label = Info.volumeLabel_;
         uint64_t Bytes = 0;
         for (uint64_t I = 0; I < Info.entryCount_; ++I) {
@@ -134,7 +137,7 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
         Profile = GetPrivateProfileIntW(L"IsoImage", L"Profile", HC_ISO_UDF_BRIDGE, DefaultIni.c_str());
         wchar_t Buffer[64]{}; GetPrivateProfileStringW(L"IsoImage", L"VolumeLabel", L"HYPERCOMMANDER", Buffer, 64, DefaultIni.c_str()); Label = Utf8(Buffer);
     }
-    Require(Profile <= HC_ISO_UDF_BRIDGE, E_NOT_SUPPORTED);
+    Require(Profile <= HC_ISO_UDF_NO_JOLIET, E_NOT_SUPPORTED);
     std::vector<HcIsoSource> Sources; for (const auto& [Key, Value] : Items) Sources.push_back({Value.disk_.empty() ? nullptr : Value.disk_.c_str(), Value.path_.c_str(), uint32_t(Value.directory_)});
     // Staging beside the destination keeps the final rename on the same volume.
     const auto Stage = Target.parent_path() / (Target.filename().wstring() + L".hc-" + Temp.path_.filename().wstring());

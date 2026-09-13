@@ -88,6 +88,8 @@ public:
     void Write(const fs::path& Path);
 private:
     void inventory(const HcIsoSource* Sources, uint64_t Count);
+    bool hasJoliet() const { return options_.profile_ == HC_ISO_9660_JOLIET || options_.profile_ == HC_ISO_UDF_BRIDGE; }
+    bool hasUdf() const { return options_.profile_ == HC_ISO_UDF_BRIDGE || options_.profile_ == HC_ISO_UDF_NO_JOLIET; }
     void layout();
     Bytes directory(size_t Index, bool Joliet);
     Bytes pathTable(bool Joliet, bool Big);

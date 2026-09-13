@@ -14,6 +14,20 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void udfWithoutJolietLongNames()
+    {
+        QTemporaryDir Directory; const auto Target = Directory.filePath("image.iso").toUtf8();
+        const auto Disk = Directory.filePath("source").toUtf8(); QVERIFY(Put(QString::fromUtf8(Disk), "long-name-payload"));
+        const auto Name = QByteArray(200, 'a') + ".dll"; const HcIsoSource Input{Disk.constData(), Name.constData(), 0};
+        auto Settings = Options(); QCOMPARE(hcIsoBuild(Target.constData(), &Input, 1, &Settings), HC_ISO_UNSUPPORTED);
+        Settings.profile_ = HC_ISO_UDF_NO_JOLIET; Settings.volumeLabel_ = "CCCOMA_X64FRE_KO-KR_DV9";
+        QCOMPARE(hcIsoBuild(Target.constData(), &Input, 1, &Settings), HC_ISO_OK);
+        const auto Bytes = Read(QString::fromUtf8(Target)); QCOMPARE(Bytes.mid(18 * 2048 + 1, 5), QByteArray("BEA01")); QCOMPARE(Bytes.mid(19 * 2048 + 1, 5), QByteArray("NSR02"));
+        HcIsoImage* Raw = nullptr; QCOMPARE(hcIsoOpen(Target.constData(), HC_ISO_AUTO, &Raw), HC_ISO_OK); ImagePtr Image(Raw);
+        HcIsoInfo Info{sizeof(HcIsoInfo)}; QCOMPARE(hcIsoGetInfo(Image.get(), &Info), HC_ISO_OK);
+        QCOMPARE(Info.namespaces_, (1u << HC_ISO_PRIMARY) | (1u << HC_ISO_UDF)); QCOMPARE(Info.udfRevision_, 0x0102u);
+        HcIsoEntry Entry{sizeof(HcIsoEntry)}; QCOMPARE(hcIsoGetEntry(Image.get(), 0, &Entry), HC_ISO_OK); QCOMPARE(QByteArray(Entry.path_), Name);
+    }
     void profiles_data() { QTest::addColumn<int>("Profile"); QTest::newRow("iso9660") << 0; QTest::newRow("joliet") << 1; QTest::newRow("udf") << 2; }
     void profiles()
     {
@@ -58,6 +72,18 @@ private slots:
         auto Tag = Valid; Tag[256 * 2048 + 4] ^= 1; QVERIFY(Reject(Tag, HC_ISO_UDF));
         auto Crc = Valid; Crc[35 * 2048 + 212] ^= 1; QVERIFY(Reject(Crc, HC_ISO_UDF));
         auto Fsd = Valid; Fsd[257 * 2048 + 404] ^= 1; QVERIFY(Reject(Fsd, HC_ISO_UDF));
+        // A correct checksum over only the FE header must not leave allocation
+        // locations outside the descriptor CRC's coverage.
+        auto ShortCrc = Valid; const qsizetype RootFe = 259 * 2048;
+        ShortCrc[RootFe + 10] = char(160); ShortCrc[RootFe + 11] = 0;
+        uint16_t CrcValue = 0;
+        for (qsizetype I = 16; I < 176; ++I) {
+            CrcValue ^= uint16_t(uint8_t(ShortCrc[RootFe + I])) << 8;
+            for (int Bit = 0; Bit < 8; ++Bit) CrcValue = uint16_t((CrcValue << 1) ^ ((CrcValue & 0x8000) ? 0x1021 : 0));
+        }
+        ShortCrc[RootFe + 8] = char(CrcValue); ShortCrc[RootFe + 9] = char(CrcValue >> 8);
+        uint8_t Sum = 0; for (qsizetype I = 0; I < 16; ++I) if (I != 4) Sum += uint8_t(ShortCrc[RootFe + I]);
+        ShortCrc[RootFe + 4] = char(Sum); QVERIFY(Reject(ShortCrc, HC_ISO_UDF));
     }
     void cancellationAndInputChange()
     {

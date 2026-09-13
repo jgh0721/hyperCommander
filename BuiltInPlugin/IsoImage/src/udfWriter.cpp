@@ -45,7 +45,9 @@ void Writer::udfLayout()
 void Writer::udfWrite(std::ofstream& Stream)
 {
     for (uint32_t I = 0; I < 3; ++I) {
-        Bytes Data(Block); Text(Data, 1, I == 0 ? "BEA01" : I == 1 ? "NSR02" : "TEA01", 5); Data[6] = 1; writeAt(Stream, 19 + I, Data);
+        // VRS follows the ISO terminator immediately; a zero-filled gap makes
+        // Windows and PyCdlib stop before recognizing the UDF namespace.
+        Bytes Data(Block); Text(Data, 1, I == 0 ? "BEA01" : I == 1 ? "NSR02" : "TEA01", 5); Data[6] = 1; writeAt(Stream, (hasJoliet() ? 19 : 18) + I, Data);
     }
     for (const uint32_t Base : {32u, 48u}) {
         Bytes Pvd(Block); Put(Pvd, 16, 0, 4); Dstring(Pvd, 24, 32, label_);

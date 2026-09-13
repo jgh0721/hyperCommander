@@ -20,7 +20,8 @@ extern "C" {
 typedef struct HcIsoImage HcIsoImage;
 enum HcIsoStatus { HC_ISO_OK, HC_ISO_INVALID, HC_ISO_IO, HC_ISO_UNSUPPORTED, HC_ISO_CANCELLED };
 enum HcIsoNamespace { HC_ISO_AUTO, HC_ISO_PRIMARY, HC_ISO_JOLIET, HC_ISO_UDF };
-enum HcIsoProfile { HC_ISO_9660, HC_ISO_9660_JOLIET, HC_ISO_UDF_BRIDGE };
+// HC_ISO_UDF_BRIDGE includes Joliet; NO_JOLIET preserves longer UDF names.
+enum HcIsoProfile { HC_ISO_9660, HC_ISO_9660_JOLIET, HC_ISO_UDF_BRIDGE, HC_ISO_UDF_NO_JOLIET };
 // Returning zero cancels. Callbacks run synchronously on the calling thread.
 typedef int (*HcIsoProgress)(void* Context, uint64_t Completed, uint64_t Total);
 typedef struct HcIsoSource {
@@ -31,7 +32,7 @@ typedef struct HcIsoSource {
 typedef struct HcIsoOptions {
     uint32_t structSize_;
     uint32_t profile_;
-    const char* volumeLabel_; // ASCII, 1..32 characters
+    const char* volumeLabel_; // ASCII, max 32 ISO / 16 Joliet / 30 UDF without Joliet
     uint64_t maxImageBytes_; // zero selects 128 GiB
     int64_t timestampUtc_; // seconds since epoch; zero selects a reproducible epoch
     HcIsoProgress progress_;
@@ -45,6 +46,7 @@ typedef struct HcIsoInfo {
     uint64_t imageBytes_;
     uint64_t entryCount_;
     char volumeLabel_[129];
+    uint32_t features_; // bit 0: boot record; bit 1: primary system-use metadata
 } HcIsoInfo;
 typedef struct HcIsoEntry {
     uint32_t structSize_;
