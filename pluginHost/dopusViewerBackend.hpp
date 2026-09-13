@@ -14,7 +14,7 @@ namespace hc::plugins
         ~DopusViewerBackend();
         storage::Result<storage::Unit> Initialize();
         storage::Result<QJsonObject> Probe();
-        storage::Result<HWND> Open(HWND Parent, const QString& File, int Width, int Height);
+        storage::Result<HWND> Open(HWND Parent, const QString& File, int Width, int Height, bool Preview);
         void Close();
         void Resize(int Width, int Height);
         storage::Result<QJsonObject> Data(WireKind Kind, const QJsonObject& Request);
@@ -26,6 +26,7 @@ namespace hc::plugins
         static LRESULT CALLBACK bitmapProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
         HMODULE module_;
         WinHandle abort_;
+        bool preview_ = false;
         bool initialized_ = false, unicode_ = false, native_ = false, com_ = false;
         HWND window_ = nullptr;
         QJsonObject probe_;

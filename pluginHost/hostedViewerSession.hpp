@@ -12,6 +12,7 @@ namespace hc::plugins
         PluginApproval approval_;
         HostLimits limits_;
         int flags_ = 0;
+        viewer::ViewerPurpose purpose_ = viewer::ViewerPurpose::FullViewer;
     };
     struct PluginViewerDetails
     {

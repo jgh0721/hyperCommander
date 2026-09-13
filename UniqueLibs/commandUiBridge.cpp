@@ -383,7 +383,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     if (Choices.empty()) { QMessageBox::information(main_, tr("플러그인"), tr("설정의 플러그인 실행 설정에서 플러그인을 추가하고 승인해 주세요.")); return; }
     const auto Context = captureFiles({}, true);
     QPointer<CmpPanel> Panel = activePanel_;
-    auto* Model = findModel(Context.tabId_);
+    QPointer<CFSModel> Model = findModel(Context.tabId_);
     std::shared_ptr<IContentSource> Source;
     if (Metadata)
     {

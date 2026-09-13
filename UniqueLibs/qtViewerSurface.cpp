@@ -237,7 +237,8 @@ void QtViewerSurface::reopen()
         // change the identity associated with the selected candidate index.
         S.automaticChoices_ = S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
         std::vector<hc::plugins::PluginViewerOptions> Candidates;
-        for (const auto& Choice : S.automaticChoices_) Candidates.push_back(Choice.options_);
+        for (const auto& Choice : S.automaticChoices_)
+        { auto Options = Choice.options_; Options.purpose_ = S.request_.purpose_; Candidates.push_back(std::move(Options)); }
         hc::plugins::PluginViewerSelectionPolicy Policy; Policy.force_ = S.request_.provider_ == "wlx-force";
         Policy.builtinProbe_ = CanViewBuiltinMultimedia;
         S.pages_->setCurrentWidget(S.pluginViewer_); setFocusProxy(S.pluginViewer_); S.searchBar_->hide();
@@ -250,7 +251,8 @@ void QtViewerSurface::reopen()
         S.selectedPlugin_ = std::move(SelectedPlugin); S.pages_->setCurrentWidget(S.pluginViewer_); setFocusProxy(S.pluginViewer_);
         S.searchBar_->hide(); for (auto* Action : S.builtinActions_) Action->setEnabled(false);
         S.status_->setText(tr("플러그인으로 여는 중…")); S.stop_->setEnabled(true);
-        S.pluginViewer_->Open(S.selectedPlugin_->options_, S.request_.source_); return;
+        auto Options = S.selectedPlugin_->options_; Options.purpose_ = S.request_.purpose_;
+        S.pluginViewer_->Open(std::move(Options), S.request_.source_); return;
     }
     for (auto* Action : S.builtinActions_) Action->setEnabled(true);
     S.pages_->setCurrentWidget(S.text_); setFocusProxy(S.text_);

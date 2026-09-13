@@ -39,6 +39,7 @@ HC_OFFSET(VfsReadDirectoryData, files_, VFSREADDIRDATAW, lpFileData);
 HC_OFFSET(LoadTextData<wchar_t>, abort_, DVPLOADTEXTDATAW, hAbortEvent);
 static_assert(VfsReadOnly == VFSCAPABILITY_READONLY);
 static_assert(ViewerResize == DVPLUGINMSG_RESIZE && ViewerLoadW == DVPLUGINMSG_LOADW);
+static_assert(ViewerPreview == DVPCVF_Preview && ViewerSetAbort == DVPLUGINMSG_SETABORTEVENT);
 static_assert(std::is_same_v<VfsCreate, PFNVFSCREATE>);
 static_assert(std::is_same_v<VfsOpenFile, PFNVFSCREATEFILEW>);
 static_assert(std::is_same_v<VfsReadFile, PFNVFSREADFILE>);

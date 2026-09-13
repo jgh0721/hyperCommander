@@ -123,6 +123,8 @@ namespace hc::plugins::dopus
     inline constexpr UINT ViewerLoadA = WM_APP + 0xf01;
     inline constexpr UINT ViewerLoadW = WM_APP + 0xf02;
     inline constexpr UINT ViewerResize = WM_APP + 0xf08;
+    inline constexpr UINT ViewerSetAbort = WM_APP + 0xf19;
+    inline constexpr DWORD ViewerPreview = 1u << 2;
 
     using Init = BOOL (*)(InitData*);
     using Uninit = void (*)();

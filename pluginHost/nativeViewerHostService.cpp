@@ -65,11 +65,14 @@ namespace hc::plugins
             Self = static_cast<NativeViewerHostService*>(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams);
             SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Self));
         }
+        // Plugins can request the background while constructing their window,
+        // before Open has returned the child HWND.
+        if (Self && Self->dopus_ && Message == WM_NOTIFY && LParam
+            && reinterpret_cast<NMHDR*>(LParam)->code == UINT(0 - 2000)) return RGB(32, 32, 32);
         if (Self && Self->viewer_)
         {
             if (Message == WM_SIZE) { if (Self->dopus_) Self->dopus_->Resize(LOWORD(LParam), HIWORD(LParam)); else MoveWindow(Self->viewer_, 0, 0, LOWORD(LParam), HIWORD(LParam), TRUE); return 0; }
             if (Message == WM_SETFOCUS) { SetFocus(Self->viewer_); return 0; }
-            if (Self->dopus_ && Message == WM_NOTIFY && LParam && reinterpret_cast<NMHDR*>(LParam)->code == UINT(0 - 2000)) return RGB(32, 32, 32);
             if ((Message == WM_COMMAND || Message == WM_NOTIFY) && Self->wlx_)
                 if (const auto Result = Self->wlx_->Notify(Self->viewer_, Message, WParam, LParam)) return *Result;
         }
@@ -90,7 +93,8 @@ namespace hc::plugins
         if (Kind == WireKind::ViewerOpen)
         {
             if (container_) return Invalid("host-viewer-already-open");
-            if (Request.size() != 5 || !Request["parent"].isString() || !Request["file"].isString()
+            if ((Request.size() != 5 && Request.size() != 6) || (Request.size() == 6 && !Request["preview"].isBool())
+                || !Request["parent"].isString() || !Request["file"].isString()
                 || !Dimension(Request["width"]) || !Dimension(Request["height"])) return Invalid("host-viewer-open-fields");
             const auto Flags = Request["flags"].toInt(-1);
             if (!Request["flags"].isDouble() || Flags < 0 || Flags > 511 || Request["flags"].toDouble() != Flags) return Invalid("host-viewer-flags");
@@ -111,7 +115,7 @@ namespace hc::plugins
             if (!container_) return HostError("host-viewer-container", GetLastError());
             if (dopus_)
             {
-                auto Opened = dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt());
+                auto Opened = dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt(), Request["preview"].toBool());
                 if (!Opened.HasValue()) { close(); return Opened.Failure(); } viewer_ = Opened.Value();
             }
             else viewer_ = wlx_->Open(container_, File, Flags);

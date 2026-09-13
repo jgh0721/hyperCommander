@@ -143,7 +143,8 @@ namespace hc::plugins
         Collect(); if (tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
         auto State = std::make_shared<HostedViewerSession::State>(); State->size_ = {Width, Height};
         State->details_.viewer_.id_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
-        State->details_.viewer_.provider_ = Policy ? "wlx.automatic" : "wlx." + Candidates.front().approval_.reviewed_.id_;
+        State->details_.viewer_.provider_ = Policy ? "plugin-viewer.automatic"
+            : std::string(Candidates.front().approval_.reviewed_.format_ == PluginFormat::DopusViewer ? "dopus-viewer." : "wlx.") + Candidates.front().approval_.reviewed_.id_;
         auto Session = std::shared_ptr<HostedViewerSession>(new HostedViewerSession(State));
         auto Task = std::make_unique<PluginViewerService::Task>(); Task->state_ = State;
         // Retain the task before starting it: allocation failure while appending
@@ -280,7 +281,7 @@ namespace hc::plugins
                 std::pair<std::uint32_t, std::uint32_t> Size;
                 { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
                 auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
-                    {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}}, Context);
+                    {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}, {"preview", Options.purpose_ == ViewerPurpose::QuickPreview}}, Context);
                 if (!Opened.HasValue())
                 {
                     if (Policy && Opened.Failure().code_ == "host-viewer-load-rejected") return false;

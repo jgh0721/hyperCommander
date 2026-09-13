@@ -84,9 +84,11 @@ namespace hc::plugins
         if (native_) SendMessageW(window_, dopus::ViewerResize, 0, MAKELPARAM(Width, Height));
         else InvalidateRect(window_, nullptr, FALSE);
     }
-    Result<HWND> DopusViewerBackend::Open(HWND Parent, const QString& File, int Width, int Height)
+    Result<HWND> DopusViewerBackend::Open(HWND Parent, const QString& File, int Width, int Height, bool Preview)
     {
-        Close(); ResetEvent(abort_.Get());
+        Close();
+        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        preview_ = Preview;
         auto Result = unicode_ ? process<wchar_t>(Parent, File, Width, Height, true, false) : process<char>(Parent, File, Width, Height, true, false);
         if (!Result.HasValue()) { Close(); return Result.Failure(); } return window_;
     }
@@ -117,7 +119,7 @@ namespace hc::plugins
         }
         std::array<Char, 4096> Description{};
         dopus::ViewerFileInfo<Char> Info{}; Info.size_ = sizeof(Info); Info.fileSize_ = QFileInfo(File).size();
-        Info.description_ = Description.data(); Info.descriptionCapacity_ = Description.size(); if (!View) Info.flags_ = 1u << 6;
+        Info.description_ = Description.data(); Info.descriptionCapacity_ = Description.size(); if (!View && !Convert) Info.flags_ = 1u << 6;
         const bool Identified = FromStream ? IdentifyFromStream(Parent, Stream, Name.data(), &Info, 0) : Identify(Parent, Name.data(), &Info, abort_.Get());
         if (!Identified) return Unsupported("host-viewer-load-rejected");
         if (std::find(Description.begin(), Description.end(), Char{}) == Description.end()) return Invalid("dopus-viewer-description-unterminated");
@@ -146,11 +148,11 @@ namespace hc::plugins
         if ((Info.flags_ & dopus::ViewerWindow) && GetProcAddress(module_, "DVP_CreateViewer"))
         {
             auto Create = Export<dopus::CreateViewer>(module_, "DVP_CreateViewer"); if (!Create) return Unsupported("dopus-viewer-create-export");
-            RECT Rect{0, 0, Width, Height}; auto Window = Create(Parent, &Rect, 0); DWORD Process = 0;
+            RECT Rect{0, 0, Width, Height}; auto Window = Create(Parent, &Rect, preview_ ? dopus::ViewerPreview : 0); DWORD Process = 0;
             if (!Window || !GetWindowThreadProcessId(Window, &Process) || Process != GetCurrentProcessId() || !IsChild(Parent, Window)) return Invalid("dopus-viewer-window-parent");
             window_ = Window; native_ = true;
             if (Stream) { Stream->AddRef(); input_ = Stream; }
-            SendMessageW(Window, WM_APP + 0xf19, 0, reinterpret_cast<LPARAM>(abort_.Get()));
+            SendMessageW(Window, dopus::ViewerSetAbort, 0, reinterpret_cast<LPARAM>(abort_.Get()));
             const auto Loaded = FromStream ? SendMessageW(Window, std::is_same_v<Char, wchar_t> ? WM_APP + 0xf04 : WM_APP + 0xf03, reinterpret_cast<WPARAM>(Name.data()), reinterpret_cast<LPARAM>(Stream))
                 : SendMessageW(Window, std::is_same_v<Char, wchar_t> ? dopus::ViewerLoadW : dopus::ViewerLoadA, 0, reinterpret_cast<LPARAM>(Name.data()));
             if (!Loaded) return Unsupported("host-viewer-load-rejected");
@@ -204,6 +206,9 @@ namespace hc::plugins
         const bool Convert = Kind == WireKind::ContentConvert;
         if ((!Convert && (Request.size() != 5 || Action != "value" || Request["unit"].toInt(-1) != 0 || !Request["defer"].isBool()))
             || (Convert && Request.size() != 1) || !Request["path"].isString()) return Invalid("dopus-viewer-data-fields");
+        // Close signals the event before native destruction. Each subsequent
+        // synchronous data operation starts with a fresh cancellation state.
+        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
         auto Info = unicode_ ? process<wchar_t>(nullptr, Request["path"].toString(), 0, 0, false, Convert) : process<char>(nullptr, Request["path"].toString(), 0, 0, false, Convert);
         if (!Info.HasValue()) return Info.Failure(); if (Convert) return Info;
         const auto Field = Request["field"].toInt(-1); const QStringList Names{"description", "width", "height", "bits", "majorType", "minorType"};

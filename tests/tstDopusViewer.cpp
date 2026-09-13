@@ -10,6 +10,8 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QScopeGuard>
+#include <QMenu>
+#include <QAction>
 #include <future>
 #include <cstring>
 
@@ -61,7 +63,13 @@ private:
     { QFile Value(Directory.filePath(Name)); if (!Value.open(QIODevice::WriteOnly) || Value.write("x") != 1) return {}; return Value.fileName(); }
 private slots:
     void nativeAndBitmapLifecycle_data()
-    { QTest::addColumn<QString>("Name"); QTest::newRow("bitmap") << "한글.bitmap"; QTest::newRow("native") << "한글.native"; QTest::newRow("plain-text") << "한글.text"; }
+    {
+        QTest::addColumn<QString>("Name");
+        QTest::newRow("bitmap") << "한글.bitmap";
+        QTest::newRow("native") << "full-한글.native";
+        QTest::newRow("preview") << "preview-한글.native";
+        QTest::newRow("plain-text") << "한글.text";
+    }
     void nativeAndBitmapLifecycle()
     {
         QFETCH(QString, Name); QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
@@ -72,7 +80,9 @@ private slots:
         auto Probe = Worker([&] { return Host->Probe(); }); QVERIFY(Probe.HasValue()); QCOMPARE(Probe.Value()["format"].toString(), QString("dopus-viewer"));
         for (int Index = 0; Index < 8; ++Index)
         {
-            auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, {{"parent", QString::number(Parent.winId(), 16)}, {"file", Path}, {"width", 480}, {"height", 320}, {"flags", 0}}); });
+            QJsonObject Request{{"parent", QString::number(Parent.winId(), 16)}, {"file", Path}, {"width", 480}, {"height", 320}, {"flags", 0}};
+            if (Name.startsWith("preview")) Request["preview"] = true;
+            auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
             QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
             const auto Child = Window(Opened.Value(), "viewer"); QVERIFY(IsWindow(Child)); QVERIFY(IsChild(reinterpret_cast<HWND>(Parent.winId()), Child));
             QVERIFY(Worker([&] { return Host->ViewerCall(WireKind::ViewerResize, {{"width", 300}, {"height", 200}}); }).HasValue());
@@ -84,7 +94,30 @@ private slots:
                 QVERIFY(QString::fromWCharArray(Text).contains(Name.endsWith(".native") ? Name : QString("converted fixture text")));
             }
             QVERIFY(Worker([&] { return Host->ViewerCall(WireKind::ViewerClose, {}); }).HasValue()); QVERIFY(!IsWindow(Child));
+            // Native destruction must see a signalled abort; a later metadata
+            // query in the same process must see it reset by the host.
+            auto Value = Worker([&] { return Host->DataCall(WireKind::MetadataQuery,
+                {{"action", "value"}, {"path", Path}, {"field", 1}, {"unit", 0}, {"defer", false}}); });
+            QVERIFY(Value.HasValue()); QCOMPARE(Value.Value()["value"].toString(), QString("2"));
         }
+        Worker([&] { Host->Close(); }); QVERIFY(!Host->Snapshot().forcedTermination_); QCOMPARE(Host->Snapshot().exitCode_.value_or(1), 0u);
+    }
+    void rejectedOpenAndConversionRecovery()
+    {
+        QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
+        QWidget Parent; Parent.show();
+        auto Started = Worker([&] { return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_); }); QVERIFY(Started.HasValue());
+        auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });
+        const auto Path = file(Package, "reject.native");
+        QJsonObject Request{{"parent", QString::number(Parent.winId(), 16)}, {"file", Path}, {"width", 100}, {"height", 100}, {"flags", 0}, {"preview", "invalid"}};
+        auto Invalid = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
+        QVERIFY(!Invalid.HasValue()); QCOMPARE(Invalid.Failure().category_, ErrorCategory::InvalidRequest);
+        Request["preview"] = false;
+        auto Rejected = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
+        QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, std::string("host-viewer-load-rejected"));
+        const auto Text = file(Package, "recovery.text");
+        auto Converted = Worker([&] { return Host->DataCall(WireKind::ContentConvert, {{"path", Text}}); });
+        QVERIFY(Converted.HasValue()); QCOMPARE(QByteArray::fromBase64(Converted.Value()["bytes"].toString().toLatin1()), QByteArray("converted fixture text"));
         Worker([&] { Host->Close(); }); QVERIFY(!Host->Snapshot().forcedTermination_); QCOMPARE(Host->Snapshot().exitCode_.value_or(1), 0u);
     }
     void optionalServicesAndDenial()
@@ -125,16 +158,28 @@ private slots:
     {
         QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
         QWidget Parent; Parent.resize(500, 300); Parent.show();
+        auto Mode = QtViewerSurface::PluginViewerSelectionMode::Automatic;
         QtViewerHost Host(&Parent, [&] { return MakeNativeMaterializer(Package.path().toStdString()); },
-            [&] { return std::vector<QtViewerSurface::PluginViewerChoice>{{"dopus", "DOpus", Options}}; }, [] { return QtViewerSurface::PluginViewerSelectionMode::Automatic; });
+            [&] { return std::vector<QtViewerSurface::PluginViewerChoice>{{"dopus", "DOpus", Options}}; }, [&] { return Mode; });
         const auto Cleanup = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(5); });
         auto* Surface = Host.CreateSurface(&Parent); Surface->resize(500, 300); Surface->show();
         QSignalSpy Ready(Surface, &QtViewerSurface::Ready), Failed(Surface, &QtViewerSurface::Failed);
         Surface->Open(Content("sample.bitmap"), hc::viewer::ViewerPurpose::QuickPreview);
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QCOMPARE(Failed.size(), 0); QCOMPARE(Ready.size(), 1);
         Surface->Close(); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000);
-        Surface->Open(Content("sample.native"), hc::viewer::ViewerPurpose::FullViewer);
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); Surface->Execute("cancel"); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000);
+        for (const auto Selection : {QtViewerSurface::PluginViewerSelectionMode::Automatic, QtViewerSurface::PluginViewerSelectionMode::Manual})
+            for (const auto Purpose : {hc::viewer::ViewerPurpose::QuickPreview, hc::viewer::ViewerPurpose::FullViewer})
+            {
+                Mode = Selection;
+                Surface->Open(Content(Purpose == hc::viewer::ViewerPurpose::QuickPreview ? "preview.native" : "full.native"), Purpose);
+                if (Selection == QtViewerSurface::PluginViewerSelectionMode::Manual)
+                {
+                    auto* Menu = Surface->findChild<QMenu*>("hc.viewer.plugins"); QVERIFY(Menu); Menu->aboutToShow();
+                    auto* Action = Menu->findChild<QAction*>("hc.viewer.plugin.dopus"); QVERIFY(Action); Action->trigger();
+                }
+                QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->Snapshot().provider_.starts_with("dopus-viewer."));
+                Surface->Execute("cancel"); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 4000);
+            }
     }
     void crashAndTimeout_data()
     { QTest::addColumn<QString>("Name"); QTest::newRow("crash") << "crash.native"; QTest::newRow("timeout") << "hang.native"; }

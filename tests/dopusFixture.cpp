@@ -2,6 +2,7 @@
 #include <string>
 #include <algorithm>
 #include <vector>
+#include <commctrl.h>
 
 using namespace hc::plugins::dopus;
 #define API extern "C" __declspec(dllexport)
@@ -24,16 +25,32 @@ namespace
 {
     bool ViewerInitialized = false;
     unsigned ViewerWindows = 0;
+    struct NativeViewerState { DWORD flags_; HANDLE abort_ = nullptr; };
     LRESULT CALLBACK ViewerProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
-        if (Message == WM_CREATE) ++ViewerWindows;
-        if (Message == WM_DESTROY) --ViewerWindows;
+        if (Message == WM_CREATE)
+        {
+            auto* State = new NativeViewerState{DWORD(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams ? ViewerPreview : 0)};
+            SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(State)); ++ViewerWindows;
+            NMHDR Notification{Window, 0, UINT(0 - 2000)};
+            Require(SendMessageW(GetParent(Window), WM_NOTIFY, 0, reinterpret_cast<LPARAM>(&Notification)) == RGB(32, 32, 32));
+        }
+        auto* State = reinterpret_cast<NativeViewerState*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
+        if (Message == ViewerSetAbort) { Require(State); State->abort_ = reinterpret_cast<HANDLE>(LParam); return TRUE; }
+        if (Message == WM_DESTROY)
+        {
+            Require(State && State->abort_ && WaitForSingleObject(State->abort_, 0) == WAIT_OBJECT_0);
+            delete State; SetWindowLongPtrW(Window, GWLP_USERDATA, 0); --ViewerWindows;
+        }
         if (Message == ViewerLoadW)
         {
             auto* Name = reinterpret_cast<wchar_t*>(LParam); Fail(Name);
+            Require(State && State->abort_ && WaitForSingleObject(State->abort_, 0) == WAIT_TIMEOUT);
+            if (wcsstr(Name, L"preview")) Require(State->flags_ == ViewerPreview);
+            if (wcsstr(Name, L"full")) Require(State->flags_ == 0);
             SetWindowTextW(Window, Name); return wcsstr(Name, L"reject") ? FALSE : TRUE;
         }
-        if (Message == ViewerResize) { SetWindowLongPtrW(Window, GWLP_USERDATA, LParam); return TRUE; }
+        if (Message == ViewerResize) return TRUE;
         return DefWindowProcW(Window, Message, WParam, LParam);
     }
 }
@@ -48,7 +65,7 @@ API BOOL DVP_IdentifyW(ViewerInfo<wchar_t>* Info)
 }
 API BOOL DVP_IdentifyFileW(HWND, wchar_t* Name, ViewerFileInfo<wchar_t>* Info, HANDLE Abort)
 {
-    Require(ViewerInitialized && Info->size_ == sizeof(*Info) && Abort); Fail(Name);
+    Require(ViewerInitialized && Info->size_ == sizeof(*Info) && Abort && WaitForSingleObject(Abort, 0) == WAIT_TIMEOUT); Fail(Name);
     if (wcsstr(Name, L"unknown")) return FALSE;
     Info->flags_ = wcsstr(Name, L".native") ? ViewerWindow : wcsstr(Name, L".text") ? ViewerText : ViewerBitmap;
     Info->imageSize_ = {2, 2}; Info->bits_ = 32; Info->majorType_ = 1; Info->minorType_ = 42;
@@ -64,12 +81,12 @@ API HBITMAP DVP_LoadBitmapW(HWND, wchar_t*, ViewerFileInfo<wchar_t>* Info, SIZE*
 }
 API HWND DVP_CreateViewer(HWND Parent, RECT* Rect, DWORD Flags)
 {
-    Require(ViewerInitialized && Flags == 0); WNDCLASSW Class{}; Class.lpfnWndProc = ViewerProc; Class.hInstance = Module; Class.lpszClassName = L"HC.Dopus.Fixture";
-    RegisterClassW(&Class); return CreateWindowExW(0, Class.lpszClassName, L"", WS_CHILD, Rect->left, Rect->top, Rect->right - Rect->left, Rect->bottom - Rect->top, Parent, nullptr, Module, nullptr);
+    Require(ViewerInitialized && (Flags == 0 || Flags == ViewerPreview)); WNDCLASSW Class{}; Class.lpfnWndProc = ViewerProc; Class.hInstance = Module; Class.lpszClassName = L"HC.Dopus.Fixture";
+    RegisterClassW(&Class); return CreateWindowExW(0, Class.lpszClassName, L"", WS_CHILD, Rect->left, Rect->top, Rect->right - Rect->left, Rect->bottom - Rect->top, Parent, nullptr, Module, reinterpret_cast<void*>(ULONG_PTR(Flags)));
 }
 API BOOL DVP_LoadTextW(LoadTextData<wchar_t>* Data)
 {
-    Require(ViewerInitialized && Data->size_ == sizeof(*Data) && !Data->output_);
+    Require(ViewerInitialized && Data->size_ == sizeof(*Data) && !Data->output_ && WaitForSingleObject(Data->abort_, 0) == WAIT_TIMEOUT);
     if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &Data->output_))) return FALSE;
     const bool Large = wcsstr(Data->file_, L"large");
     std::string Bytes = Large ? std::string(600 * 1024, 'x') : "converted fixture text";
