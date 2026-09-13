@@ -88,7 +88,9 @@ namespace hc::plugins
         {
             if (failure_) return *failure_;
             if (closed_) return HostError("host-closed");
-            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply && helpers_ ? limits_.archiveWriteMs_ : limits_.requestMs_));
+            // In-process WCX writers also stream and verify multi-GiB images.
+            // The write budget is independent of permission to spawn helpers.
+            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : limits_.requestMs_));
             const auto Sequence = ++sequence_;
             auto Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
             if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }

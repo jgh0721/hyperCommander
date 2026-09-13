@@ -126,6 +126,7 @@ extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wcha
         std::erase_if(State.entries_, [&](const Entry& Old) { return Old.name_ == Item.name_; }); State.entries_.push_back(std::move(Item));
     }
     if (!Save(Archive, State)) return E_EWRITE;
+    if (State.mode_ == 'L') Sleep(1000); // Synchronous writer exceeding an ordinary RPC budget.
     if (State.mode_ == 'E' || State.mode_ == 'F' || State.mode_ == 'G')
     {
         HMODULE Module = nullptr;

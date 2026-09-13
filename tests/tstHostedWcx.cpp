@@ -66,6 +66,15 @@ class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void inProcessWriteBudget()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 300, {}, false, 5000); QVERIFY(Started.HasValue());
+        const auto Path = Directory.filePath("slow.hct"); QVERIFY(Put(Path, "HCWCX01L")); QVERIFY(Put(Directory.filePath("added.txt"), "payload"));
+        auto Backend = MakeHostedArchiveBackend(Started.Value()); QElapsedTimer Timer; Timer.start();
+        auto Result = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {"added.txt"}}, {});
+        QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str()); QVERIFY(Timer.elapsed() >= 800);
+        QVERIFY(Started.Value()->Ping().HasValue());
+    }
     void compatibilityPackage()
     {
         const auto ManifestPath = qEnvironmentVariable("HC_WCX_MANIFEST");
