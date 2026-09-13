@@ -3,6 +3,9 @@
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLibrary>
+#include <QtCore/qt_windows.h>
+#include "externalLibs/TotalCommander/wcxhead.h"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 
 using namespace hc::plugins;
@@ -14,6 +17,31 @@ QByteArray Read(const QString& Path) { QFile File(Path); return File.open(QIODev
 class IsoWcxTests : public QObject {
     Q_OBJECT
 private slots:
+    void windowsHeaderPaths()
+    {
+        QTemporaryDir Directory; QVERIFY(QDir().mkpath(Directory.filePath("한글")));
+        QVERIFY(Put(Directory.filePath("한글/test.txt"), "nested"));
+        const auto Options = BuiltinIsoOptions(); const auto Archive = Directory.filePath("image.iso");
+        QVERIFY(MakeApprovedWcxBackend(Options)->Update({Archive.toStdString(), Directory.path().toStdString(), {"한글/test.txt"}}, {}).HasValue());
+        // Check the raw ABI independently of a consumer's path normalization:
+        // TC displays slash-separated children at the archive root.
+        QLibrary Library(Options.binaryPath_); QVERIFY2(Library.load(), qPrintable(Library.errorString()));
+        const auto Open = reinterpret_cast<HANDLE (__stdcall*)(tOpenArchiveDataW*)>(Library.resolve("OpenArchiveW"));
+        const auto Header = reinterpret_cast<int (__stdcall*)(HANDLE, tHeaderDataExW*)>(Library.resolve("ReadHeaderExW"));
+        const auto Process = reinterpret_cast<int (__stdcall*)(HANDLE, int, wchar_t*, wchar_t*)>(Library.resolve("ProcessFileW"));
+        const auto Close = reinterpret_cast<int (__stdcall*)(HANDLE)>(Library.resolve("CloseArchive"));
+        QVERIFY(Open && Header && Process && Close);
+        auto Path = Archive.toStdWString(); tOpenArchiveDataW Data{}; Data.ArcName = Path.data();
+        const auto Handle = Open(&Data); QVERIFY(Handle); const auto Guard = qScopeGuard([&] { Close(Handle); });
+        QStringList Names; int Status = 0;
+        for (;;) {
+            tHeaderDataExW Entry{}; Status = Header(Handle, &Entry); if (Status != 0) break;
+            Names.push_back(QString::fromWCharArray(Entry.FileName));
+            QCOMPARE(Process(Handle, PK_SKIP, nullptr, nullptr), 0);
+        }
+        QCOMPARE(Status, E_END_ARCHIVE); QVERIFY(Names.contains(QStringLiteral("한글\\test.txt")));
+        for (const auto& Name : Names) QVERIFY(!Name.contains('/'));
+    }
     void externalBridgeImage()
     {
         const auto Archive = qEnvironmentVariable("HC_ISO_REFERENCE_IMAGE");
@@ -34,7 +62,7 @@ private slots:
         const auto Destination = QDir(Work).filePath("wcx-extracted"); QVERIFY(!QFileInfo::exists(Destination)); QVERIFY(QDir().mkpath(Destination));
         uint64_t Bytes = 0; size_t Files = 0;
         for (const auto& Header : Headers) {
-            const auto Name = QString::fromStdString(Header.name_); QVERIFY(Inventory.contains(Name));
+            const auto Name = QString::fromStdString(Header.name_).replace('\\', '/'); QVERIFY(Inventory.contains(Name));
             const auto Expected = Inventory[Name].toObject(); QCOMPARE(Header.directory_, Expected["directory"].toBool());
             if (Header.directory_) continue;
             QCOMPARE(Header.size_, uint64_t(Expected["bytes"].toInteger()));
@@ -114,7 +142,7 @@ private slots:
             for (;;) { auto Page = Cursor.Value()->Next(2, {}); if (!Page.HasValue()) { qWarning() << Page.Failure().code_; return false; } Headers.insert(Headers.end(), Page.Value().entries_.begin(), Page.Value().entries_.end()); if (Page.Value().end_) break; }
             Cursor.Value().reset(); QSet<QString> Seen;
             for (const auto& Header : Headers) {
-                if (Header.directory_) continue; const auto Name = QString::fromStdString(Header.name_); if (!Expected.contains(Name)) { qWarning() << "Unexpected file" << Name; return false; }
+                if (Header.directory_) continue; const auto Name = QString::fromStdString(Header.name_).replace('\\', '/'); if (!Expected.contains(Name)) { qWarning() << "Unexpected file" << Name; return false; }
                 const auto Output = Directory.filePath("extract-" + QString::number(Seen.size())); QFile::remove(Output);
                 const auto Result = Backend->Extract(Archive.toStdString(), Header, Output.toStdString(), {});
                 if (!Result.HasValue()) { qWarning() << Result.Failure().code_; return false; }

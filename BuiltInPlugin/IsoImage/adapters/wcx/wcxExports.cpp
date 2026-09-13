@@ -166,7 +166,9 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
     return Boundary([&] {
         auto* Value = static_cast<State*>(Handle); Require(Value && Header); Require(Value->index_ < Value->count_, E_END_ARCHIVE);
         HcIsoEntry Entry{}; Entry.structSize_ = sizeof(Entry); Check(hcIsoGetEntry(Value->image_.get(), Value->index_, &Entry));
-        const auto Path = Name(Wide(Entry.path_)); Require(Path.size() < std::size(Header->FileName), E_SMALL_BUF);
+        auto Path = Name(Wide(Entry.path_)); Require(Path.size() < std::size(Header->FileName), E_SMALL_BUF);
+        // TC builds its archive directory tree from Windows path separators.
+        std::replace(Path.begin(), Path.end(), L'/', L'\\');
         *Header = {}; std::copy(Path.begin(), Path.end(), Header->FileName);
         Header->FileAttr = Entry.directory_ ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
         Header->UnpSize = Header->PackSize = uint32_t(Entry.size_); Header->UnpSizeHigh = Header->PackSizeHigh = uint32_t(Entry.size_ >> 32);
