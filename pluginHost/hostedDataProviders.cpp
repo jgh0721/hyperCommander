@@ -12,29 +12,29 @@ namespace hc::plugins
     using namespace storage;
     namespace
     {
-        Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"tc-data"}}; }
-        Error Unsupported(const char* Code) { return {ErrorCategory::Unsupported, Code, {"tc-data"}}; }
+        Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"hosted-data"}}; }
+        Error Unsupported(const char* Code) { return {ErrorCategory::Unsupported, Code, {"hosted-data"}}; }
         QString S(const std::string& Text) { return QString::fromStdString(Text); }
         std::string Root(ProviderId Id, const std::string& Scheme = "wfx") { return Scheme + ":" + Id.value_ + ":"; }
         Result<QString> Remote(const Locator& At, ProviderId Id, const std::string& Scheme = "wfx")
         {
             const auto Prefix = Root(Id, Scheme);
-            if (At.kind_ != LocatorKind::Plugin || !At.nesting_.empty() || !At.root_.starts_with(Prefix)) return Invalid("wfx-locator");
+            if (At.kind_ != LocatorKind::Plugin || !At.nesting_.empty() || !At.root_.starts_with(Prefix)) return Invalid("hosted-storage-locator");
             const auto Name = S(At.root_.substr(Prefix.size()));
-            if (!Name.startsWith('\\') || Name.startsWith("\\\\") || Name.size() > 1023 || Name.contains(QChar::Null) || Name.contains('/')) return Invalid("wfx-path");
-            for (const auto& Part : Name.split('\\')) if (Part == "." || Part == "..") return Invalid("wfx-path-traversal");
+            if (!Name.startsWith('\\') || Name.startsWith("\\\\") || Name.size() > 1023 || Name.contains(QChar::Null) || Name.contains('/')) return Invalid("hosted-storage-path");
+            for (const auto& Part : Name.split('\\')) if (Part == "." || Part == "..") return Invalid("hosted-storage-path-traversal");
             return Name;
         }
         Result<EntrySnapshot> DecodeEntry(QJsonObject Object, Locator Parent, ProviderId Id)
         {
             const auto Name = Object["name"].toString();
-            if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('\\') || Name.contains('/') || Name.contains(QChar::Null)) return Invalid("wfx-entry-name");
+            if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('\\') || Name.contains('/') || Name.contains(QChar::Null)) return Invalid("hosted-storage-entry-name");
             EntrySnapshot Entry; Entry.name_ = Name.toStdString(); Entry.locator_ = Parent;
             if (!Entry.locator_.root_.ends_with('\\')) Entry.locator_.root_ += '\\'; Entry.locator_.root_ += Entry.name_;
             Entry.id_ = {Id, Entry.locator_.root_, IdentityScope::NavigationSession};
-            bool Parsed = false; Entry.size_ = Object["size"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("wfx-entry-size");
-            const auto Modified = Object["modified"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("wfx-entry-time");
-            const auto Created = Object["created"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("wfx-entry-time");
+            bool Parsed = false; Entry.size_ = Object["size"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("hosted-storage-entry-size");
+            const auto Modified = Object["modified"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("hosted-storage-entry-time");
+            const auto Created = Object["created"].toString().toULongLong(&Parsed); if (!Parsed) return Invalid("hosted-storage-entry-time");
             Entry.attributes_ = std::uint32_t(Object["attributes"].toInteger()); Entry.directory_ = (Entry.attributes_ & 16) != 0;
             Entry.modifiedUtcMs_ = std::int64_t(Modified / 10000) - 11644473600000LL;
             Entry.createdUtcMs_ = std::int64_t(Created / 10000) - 11644473600000LL;
@@ -50,15 +50,15 @@ namespace hc::plugins
             Task<EntryPage> Next(std::size_t MaxItems, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(id_)) return Ready<EntryPage>(*Stop);
-                if (!MaxItems || !Context.maxPageItems_) return Ready<EntryPage>(Invalid("wfx-page-size"));
+                if (!MaxItems || !Context.maxPageItems_) return Ready<EntryPage>(Invalid("hosted-storage-page-size"));
                 EntryPage Page; Page.end_ = !handle_ || end_; if (Page.end_) return Ready<EntryPage>(std::move(Page));
                 auto Reply = process_->DataCall(WireKind::StorageEnumerate, {{"action", "next"}, {"cursor", handle_},
                     {"count", int(std::min({MaxItems, Context.maxPageItems_, std::size_t(256)}))}}, Context);
                 if (!Reply.HasValue()) return Ready<EntryPage>(Reply.Failure());
-                if (!Reply.Value()["entries"].isArray() || !Reply.Value()["end"].isBool()) return Ready<EntryPage>(Invalid("wfx-page-envelope"));
+                if (!Reply.Value()["entries"].isArray() || !Reply.Value()["end"].isBool()) return Ready<EntryPage>(Invalid("hosted-storage-page-envelope"));
                 for (const auto& Item : Reply.Value()["entries"].toArray())
                 {
-                    if (++seen_ > std::min(budget_, Context.maxEnumerationEntries_)) return Ready<EntryPage>(Error{ErrorCategory::BudgetExceeded, "wfx-enumeration-budget", id_});
+                    if (++seen_ > std::min(budget_, Context.maxEnumerationEntries_)) return Ready<EntryPage>(Error{ErrorCategory::BudgetExceeded, "hosted-storage-enumeration-budget", id_});
                     auto Entry = DecodeEntry(Item.toObject(), at_, id_); if (!Entry.HasValue()) return Ready<EntryPage>(Entry.Failure());
                     Page.entries_.push_back(std::move(Entry.Value()));
                 }
@@ -79,40 +79,41 @@ namespace hc::plugins
             {
                 if (const auto Stop = Context.Check(lease_->Describe().id_.providerId_)) return Ready<ReadChunk>(*Stop);
                 const auto Count = std::min({MaxBytes, Context.maxReadBytes_, std::size_t(1024 * 1024)});
-                if (!Count) return Ready<ReadChunk>(Invalid("wfx-read-size"));
+                if (!Count) return Ready<ReadChunk>(Invalid("hosted-storage-read-size"));
                 QFile File(S(lease_->LocalPath()));
-                if (!File.open(QIODevice::ReadOnly) || !File.seek(qint64(offset_))) return Ready<ReadChunk>(Error{ErrorCategory::Unavailable, "wfx-lease-read"});
-                const auto Bytes = File.read(qint64(Count)); if (File.error() != QFileDevice::NoError) return Ready<ReadChunk>(Error{ErrorCategory::Unavailable, "wfx-lease-read"});
+                if (!File.open(QIODevice::ReadOnly) || !File.seek(qint64(offset_))) return Ready<ReadChunk>(Error{ErrorCategory::Unavailable, "hosted-storage-lease-read"});
+                const auto Bytes = File.read(qint64(Count)); if (File.error() != QFileDevice::NoError) return Ready<ReadChunk>(Error{ErrorCategory::Unavailable, "hosted-storage-lease-read"});
                 ReadChunk Chunk; Chunk.bytes_.resize(Bytes.size()); std::memcpy(Chunk.bytes_.data(), Bytes.constData(), Bytes.size());
                 offset_ += Bytes.size(); Chunk.eof_ = offset_ >= lease_->Describe().size_; return Ready<ReadChunk>(std::move(Chunk));
             }
             Task<Unit> Seek(std::uint64_t Offset, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(lease_->Describe().id_.providerId_)) return Ready<Unit>(*Stop);
-                if (Offset > lease_->Describe().size_) return Ready<Unit>(Invalid("wfx-seek")); offset_ = Offset; return Ready<Unit>(Unit{});
+                if (Offset > lease_->Describe().size_) return Ready<Unit>(Invalid("hosted-storage-seek")); offset_ = Offset; return Ready<Unit>(Unit{});
             }
         private:
             std::shared_ptr<IMaterializedFileLease> lease_;
             std::uint64_t offset_ = 0;
         };
-        class WfxProvider final : public IStorageProvider, public IWritableStorage, public std::enable_shared_from_this<WfxProvider>
+        enum class StorageFeature { ReadFile, WriteFile, CreateDirectory, DeleteFile, RemoveDirectory, Rename, Attributes, Modified };
+        class HostedStorageProvider final : public IStorageProvider, public IWritableStorage, public std::enable_shared_from_this<HostedStorageProvider>
         {
         public:
-            WfxProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, QSet<QString> Exports, bool Writable, std::string Scheme = "wfx")
-                : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), exports_(std::move(Exports)), writable_(Writable), scheme_(std::move(Scheme)) {}
+            HostedStorageProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, std::set<StorageFeature> Features, bool Writable, std::string Scheme = "wfx")
+                : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), features_(std::move(Features)), writable_(Writable), scheme_(std::move(Scheme)) {}
             ProviderId Id() const override { return id_; }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(id_)) return Ready<SupportDecision>(*Stop);
-                const bool Available = Request != Operation::Write && (Request != Operation::OpenRead || exports_.contains("FsGetFileW"));
-                return Ready<SupportDecision>(SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "" : "wfx-capability-unavailable", Request == Operation::OpenRead});
+                const bool Available = Request != Operation::Write && (Request != Operation::OpenRead || features_.contains(StorageFeature::ReadFile));
+                return Ready<SupportDecision>(SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "" : "hosted-storage-capability-unavailable", Request == Operation::OpenRead});
             }
             Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override
             {
                 auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Path.Failure());
                 auto Reply = process_->DataCall(WireKind::StorageEnumerate, {{"action", "open"}, {"path", Path.Value()}}, Context);
                 if (!Reply.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Reply.Failure());
-                const int Handle = Reply.Value()["cursor"].toInt(-1); if (Handle < 0) return Ready<std::unique_ptr<IEntryCursor>>(Invalid("wfx-cursor-envelope"));
+                const int Handle = Reply.Value()["cursor"].toInt(-1); if (Handle < 0) return Ready<std::unique_ptr<IEntryCursor>>(Invalid("hosted-storage-cursor-envelope"));
                 return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(std::make_unique<Cursor>(process_, id_, std::move(At), Handle, Context.maxEnumerationEntries_)));
             }
             Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override
@@ -131,21 +132,21 @@ namespace hc::plugins
                 {
                     auto Page = Entries.Value()->Next(256, Context).get(); if (!Page.HasValue()) return Ready<EntrySnapshot>(Page.Failure());
                     for (auto& Entry : Page.Value().entries_) if (Entry.name_ == Name) return Ready<EntrySnapshot>(std::move(Entry));
-                    if (Page.Value().end_) return Ready<EntrySnapshot>(Error{ErrorCategory::NotFound, "wfx-entry-missing", id_});
+                    if (Page.Value().end_) return Ready<EntrySnapshot>(Error{ErrorCategory::NotFound, "hosted-storage-entry-missing", id_});
                 }
             }
             Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) override
             {
-                if (Resource.providerId_ != id_) return Ready<EntrySnapshot>(Invalid("wfx-resource-provider"));
+                if (Resource.providerId_ != id_) return Ready<EntrySnapshot>(Invalid("hosted-storage-resource-provider"));
                 auto Fresh = Resolve({LocatorKind::Plugin, Resource.key_}, Context).get(); if (!Fresh.HasValue()) return Ready<EntrySnapshot>(Fresh.Failure());
-                if (Resource.revision_ && Resource.revision_ != Fresh.Value().id_.revision_) return Ready<EntrySnapshot>(Error{ErrorCategory::StaleRevision, "wfx-resource-changed", id_, Resource});
+                if (Resource.revision_ && Resource.revision_ != Fresh.Value().id_.revision_) return Ready<EntrySnapshot>(Error{ErrorCategory::StaleRevision, "hosted-storage-resource-changed", id_, Resource});
                 return Ready<EntrySnapshot>(std::move(Fresh.Value()));
             }
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Resource, OperationContext Context) override
             {
-                if (!exports_.contains("FsGetFileW")) return Ready<std::shared_ptr<IReadStream>>(Unsupported("wfx-get-unavailable"));
+                if (!features_.contains(StorageFeature::ReadFile)) return Ready<std::shared_ptr<IReadStream>>(Unsupported("hosted-storage-get-unavailable"));
                 auto Entry = Stat(Resource, Context).get(); if (!Entry.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Entry.Failure());
-                if (Entry.Value().directory_) return Ready<std::shared_ptr<IReadStream>>(Invalid("wfx-read-directory"));
+                if (Entry.Value().directory_) return Ready<std::shared_ptr<IReadStream>>(Invalid("hosted-storage-read-directory"));
                 auto Path = Remote(Entry.Value().locator_, id_, scheme_); if (!Path.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Path.Failure());
                 auto Lease = store_->Produce(Entry.Value(), {}, {}, Context, [&](const std::string& Local, OperationContext Operation) -> Result<Unit>
                 {
@@ -162,9 +163,9 @@ namespace hc::plugins
             {
                 if (const auto Stop = Context.Check(id_)) return *Stop;
                 auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Path.Failure();
-                const auto Name = Request == Mutation::CreateContent ? "FsPutFileW" : Request == Mutation::MakeDirectory ? "FsMkDirW" : Request == Mutation::Rename ? "FsRenMovFileW" : "FsDeleteFileW";
-                const bool Available = writable_ && exports_.contains(Name);
-                return SupportDecision{Available ? Availability::Conditional : Availability::Unsupported, Available ? "wfx-no-atomic-revision-commit" : "wfx-write-unavailable",
+                const auto Feature = Request == Mutation::CreateContent ? StorageFeature::WriteFile : Request == Mutation::MakeDirectory ? StorageFeature::CreateDirectory : Request == Mutation::Rename ? StorageFeature::Rename : StorageFeature::DeleteFile;
+                const bool Available = writable_ && features_.contains(Feature);
+                return SupportDecision{Available ? Availability::Conditional : Availability::Unsupported, Available ? "hosted-storage-no-atomic-revision-commit" : "hosted-storage-write-unavailable",
                     Request == Mutation::CreateContent, false, {"remote provider has no atomic compare-and-swap or rollback"}};
             }
             Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override
@@ -188,47 +189,52 @@ namespace hc::plugins
             }
             Result<Unit> Mutate(Locator At, QJsonObject Request, OperationContext Context)
             {
-                if (!writable_) return Error{ErrorCategory::AccessDenied, "wfx-write-denied", id_};
-                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Path.Failure(); if (Path.Value() == "\\") return Invalid("wfx-mutate-root");
+                if (!writable_) return Error{ErrorCategory::AccessDenied, "hosted-storage-write-denied", id_};
+                auto Path = Remote(At, id_, scheme_); if (!Path.HasValue()) return Path.Failure(); if (Path.Value() == "\\") return Invalid("hosted-storage-mutate-root");
+                const auto Action = Request["action"].toString();
+                const auto Feature = Action == "put" ? StorageFeature::WriteFile : Action == "mkdir" ? StorageFeature::CreateDirectory
+                    : Action == "rmdir" ? StorageFeature::RemoveDirectory : Action == "delete" ? StorageFeature::DeleteFile
+                    : Action == "rename" ? StorageFeature::Rename : Action == "attributes" ? StorageFeature::Attributes : StorageFeature::Modified;
+                if (!features_.contains(Feature)) return Unsupported("hosted-storage-operation-unavailable");
                 Request.insert("path", Path.Value()); auto Reply = process_->DataCall(WireKind::StorageMutate, Request, Context);
                 if (!Reply.HasValue()) return Reply.Failure(); return Unit{};
             }
         private:
-            std::shared_ptr<PluginProcess> process_; ProviderId id_; std::shared_ptr<INativeContentStore> store_; QSet<QString> exports_; bool writable_;
+            std::shared_ptr<PluginProcess> process_; ProviderId id_; std::shared_ptr<INativeContentStore> store_; std::set<StorageFeature> features_; bool writable_;
             std::string scheme_;
         };
         class WriteSession final : public IWriteSession
         {
         public:
-            WriteSession(std::shared_ptr<WfxProvider> Provider, Locator At, DestinationExpectation Expected)
+            WriteSession(std::shared_ptr<HostedStorageProvider> Provider, Locator At, DestinationExpectation Expected)
                 : provider_(std::move(Provider)), at_(std::move(At)), expected_(std::move(Expected)) {}
             Result<Unit> Open()
             {
-                if (!directory_.isValid()) return Error{ErrorCategory::Unavailable, "wfx-stage-create"};
+                if (!directory_.isValid()) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-create"};
                 file_.setFileName(directory_.filePath("upload"));
-                if (!file_.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return Error{ErrorCategory::Unavailable, "wfx-stage-create"}; return Unit{};
+                if (!file_.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-create"}; return Unit{};
             }
             Result<Unit> Append(std::span<const std::byte> Bytes, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(provider_->Id())) return *Stop;
-                if (done_ || !file_.isOpen()) return Invalid("wfx-write-closed");
-                if (Bytes.size() > Context.maxReadBytes_ || std::uint64_t(file_.size()) + Bytes.size() > 256ULL * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "wfx-write-budget"};
-                if (file_.write(reinterpret_cast<const char*>(Bytes.data()), qint64(Bytes.size())) != qint64(Bytes.size())) return Error{ErrorCategory::Unavailable, "wfx-stage-write"}; return Unit{};
+                if (done_ || !file_.isOpen()) return Invalid("hosted-storage-write-closed");
+                if (Bytes.size() > Context.maxReadBytes_ || std::uint64_t(file_.size()) + Bytes.size() > 256ULL * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "hosted-storage-write-budget"};
+                if (file_.write(reinterpret_cast<const char*>(Bytes.data()), qint64(Bytes.size())) != qint64(Bytes.size())) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-write"}; return Unit{};
             }
             Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(provider_->Id())) return *Stop;
-                if (done_) return Invalid("wfx-write-closed");
-                if (Metadata.modifiedUtcMs_ && (*Metadata.modifiedUtcMs_ < -11644473600000LL || *Metadata.modifiedUtcMs_ > 900000000000000LL)) return Invalid("wfx-metadata-time");
+                if (done_) return Invalid("hosted-storage-write-closed");
+                if (Metadata.modifiedUtcMs_ && (*Metadata.modifiedUtcMs_ < -11644473600000LL || *Metadata.modifiedUtcMs_ > 900000000000000LL)) return Invalid("hosted-storage-metadata-time");
                 metadata_ = Metadata; return Unit{};
             }
             Result<WriteReceipt> Commit(OperationContext Context) override
             {
-                if (done_ || !file_.isOpen()) return Invalid("wfx-write-closed");
+                if (done_ || !file_.isOpen()) return Invalid("hosted-storage-write-closed");
                 auto Existing = provider_->Inspect(at_, Context); if (!Existing.HasValue()) return Existing.Failure();
                 if (bool(Existing.Value()) != expected_.exists_ || (expected_.exists_ && (!expected_.revision_ || Existing.Value()->id_.revision_ != expected_.revision_)))
-                    return Error{ErrorCategory::StaleRevision, "wfx-destination-changed", provider_->Id()};
-                if (!file_.flush()) return Error{ErrorCategory::Unavailable, "wfx-stage-flush"}; file_.close();
+                    return Error{ErrorCategory::StaleRevision, "hosted-storage-destination-changed", provider_->Id()};
+                if (!file_.flush()) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-flush"}; file_.close();
                 // The SDK owns the remote commit. Failure may mean a partial
                 // remote write; never retry or delete the destination blindly.
                 done_ = true;
@@ -247,14 +253,14 @@ namespace hc::plugins
                 }
                 return Receipt;
             }
-            Result<Unit> Abort() override { done_ = true; file_.close(); if (!file_.fileName().isEmpty() && QFile::exists(file_.fileName()) && !file_.remove()) return Error{ErrorCategory::Unavailable, "wfx-stage-cleanup"}; return Unit{}; }
+            Result<Unit> Abort() override { done_ = true; file_.close(); if (!file_.fileName().isEmpty() && QFile::exists(file_.fileName()) && !file_.remove()) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-cleanup"}; return Unit{}; }
         private:
-            std::shared_ptr<WfxProvider> provider_; Locator at_; DestinationExpectation expected_; QTemporaryDir directory_; QFile file_; FileMetadata metadata_; bool done_ = false;
+            std::shared_ptr<HostedStorageProvider> provider_; Locator at_; DestinationExpectation expected_; QTemporaryDir directory_; QFile file_; FileMetadata metadata_; bool done_ = false;
         };
-        Result<std::unique_ptr<IWriteSession>> WfxProvider::BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context)
+        Result<std::unique_ptr<IWriteSession>> HostedStorageProvider::BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context)
         {
             auto Support = Supports(Mutation::CreateContent, At, Context); if (!Support.HasValue()) return Support.Failure();
-            if (Support.Value().availability_ == Availability::Unsupported) return Unsupported("wfx-write-unavailable");
+            if (Support.Value().availability_ == Availability::Unsupported) return Unsupported("hosted-storage-write-unavailable");
             auto Session = std::make_unique<WriteSession>(shared_from_this(), std::move(At), std::move(Expected)); auto Opened = Session->Open(); if (!Opened.HasValue()) return Opened.Failure();
             return std::unique_ptr<IWriteSession>(std::move(Session));
         }
@@ -320,7 +326,14 @@ namespace hc::plugins
         if (!Process || !Store || Id.value_.empty() || Id.value_.find_first_of(":\\/\0", 0, 4) != std::string::npos) return Invalid("wfx-provider-options");
         auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure(); if (Probe.Value()["format"] != "wfx") return Invalid("wfx-provider-format");
         QSet<QString> Exports; for (const auto& Item : Probe.Value()["exports"].toArray()) Exports.insert(Item.toString());
-        auto Provider = std::make_shared<WfxProvider>(std::move(Process), Id, std::move(Store), std::move(Exports), Writable);
+        std::set<StorageFeature> Features;
+        for (const auto& [Name, Feature] : std::initializer_list<std::pair<const char*, StorageFeature>>{
+            {"FsGetFileW", StorageFeature::ReadFile}, {"FsPutFileW", StorageFeature::WriteFile},
+            {"FsMkDirW", StorageFeature::CreateDirectory}, {"FsDeleteFileW", StorageFeature::DeleteFile},
+            {"FsRemoveDirW", StorageFeature::RemoveDirectory}, {"FsRenMovFileW", StorageFeature::Rename},
+            {"FsSetAttrW", StorageFeature::Attributes}, {"FsSetTimeW", StorageFeature::Modified}})
+            if (Exports.contains(Name)) Features.insert(Feature);
+        auto Provider = std::make_shared<HostedStorageProvider>(std::move(Process), Id, std::move(Store), std::move(Features), Writable);
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id) + "\\"}};
     }
     Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id,
@@ -330,21 +343,22 @@ namespace hc::plugins
         auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure();
         if (Probe.Value()["format"] != "dopus-vfs" || !Probe.Value()["readOnly"].isBool()) return Invalid("dopus-vfs-provider-format");
         QSet<QString> Native; for (const auto& Item : Probe.Value()["exports"].toArray()) Native.insert(Item.toString());
-        // Reuse the storage wire protocol and lease/commit implementation. These
-        // names select existing adapter operations; the child calls only VFS_*.
-        QSet<QString> Operations;
+        // Only the SDK boundary interprets export names. Shared storage code
+        // receives neutral features and never treats a DOpus export as a TC ABI.
+        std::set<StorageFeature> Features;
         if (Native.contains("VFS_CreateFileW") && Native.contains("VFS_CloseFile"))
         {
-            if (Native.contains("VFS_ReadFile")) Operations.insert("FsGetFileW");
-            if (Native.contains("VFS_WriteFile")) Operations.insert("FsPutFileW");
+            if (Native.contains("VFS_ReadFile")) Features.insert(StorageFeature::ReadFile);
+            if (Native.contains("VFS_WriteFile")) Features.insert(StorageFeature::WriteFile);
         }
-        for (const auto& [Dopus, Tc] : std::vector<std::pair<const char*, const char*>>{
-            {"VFS_CreateDirectoryW", "FsMkDirW"}, {"VFS_DeleteFileW", "FsDeleteFileW"}, {"VFS_RemoveDirectoryW", "FsRemoveDirW"},
-            {"VFS_MoveFileW", "FsRenMovFileW"}, {"VFS_SetFileAttrW", "FsSetAttrW"}, {"VFS_SetFileTimeW", "FsSetTimeW"}})
-            if (Native.contains(Dopus)) Operations.insert(Tc);
+        for (const auto& [Name, Feature] : std::initializer_list<std::pair<const char*, StorageFeature>>{
+            {"VFS_CreateDirectoryW", StorageFeature::CreateDirectory}, {"VFS_DeleteFileW", StorageFeature::DeleteFile},
+            {"VFS_RemoveDirectoryW", StorageFeature::RemoveDirectory}, {"VFS_MoveFileW", StorageFeature::Rename},
+            {"VFS_SetFileAttrW", StorageFeature::Attributes}, {"VFS_SetFileTimeW", StorageFeature::Modified}})
+            if (Native.contains(Name)) Features.insert(Feature);
         auto Mounted = Process->DataCall(WireKind::StorageEnumerate, {{"action", "mount"}, {"root", NativeRoot}});
         if (!Mounted.HasValue()) return Mounted.Failure();
-        auto Provider = std::make_shared<WfxProvider>(std::move(Process), Id, std::move(Store), std::move(Operations), Writable && !Probe.Value()["readOnly"].toBool(), "dopus");
+        auto Provider = std::make_shared<HostedStorageProvider>(std::move(Process), Id, std::move(Store), std::move(Features), Writable && !Probe.Value()["readOnly"].toBool(), "dopus");
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id, "dopus") + "\\"}};
     }
     Result<std::shared_ptr<IMetadataProvider>> MakeHostedWdxProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)
