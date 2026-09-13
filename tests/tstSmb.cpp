@@ -919,7 +919,11 @@ private slots:
         auto View = Bridge->Dispatch("hc.viewer.open", {}, "test", Selected); QTRY_VERIFY(View.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QVERIFY(View.get().HasValue());
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000); QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
         auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QVERIFY(Surface->Snapshot().provider_.starts_with("dopus-viewer.")); QVERIFY(Full->grab().save(QCoreApplication::applicationDirPath() + "/dopus-product.png"));
+        QVERIFY(Surface->Snapshot().provider_.starts_with("dopus-viewer."));
+        // QWidget::grab renders Qt children only. Capture the native window so
+        // the separate plugin process is included in the visual evidence.
+        QTest::qWait(300);
+        QVERIFY(Full->screen()->grabWindow(Full->winId()).save(QCoreApplication::applicationDirPath() + "/dopus-product.png"));
         Full->close(); QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 4000);
         QMainOpts Settings(main_); Settings.show(); QCoreApplication::processEvents();
         QVERIFY(Settings.findChild<QTableWidget*>("dopus-vfsHostTable")); QVERIFY(Settings.findChild<QTableWidget*>("dopus-viewerHostTable"));

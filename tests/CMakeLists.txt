@@ -307,7 +307,10 @@ add_test(NAME hc.deployment
         -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
-set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+# This runs the product and every deployed test executable sequentially. The
+# added DOpus suites bring the measured Debug total close to one minute; keep
+# process-level limits while allowing deployment/copy and startup overhead.
+set_tests_properties(hc.deployment PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
 
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
 add_custom_target(hc_check
