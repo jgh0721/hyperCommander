@@ -489,8 +489,33 @@ namespace hc::storage
         class Materializer final : public IMaterializer
         {
         public:
-            explicit Materializer(std::shared_ptr<Store> Store) : store_(std::move(Store)), scheduler_(std::make_shared<commands::EventHub>(), 2, 128) {}
-            ~Materializer() { scheduler_.Shutdown(); store_->Drain(); }
+            explicit Materializer(std::shared_ptr<Store> Store) : store_(std::move(Store))
+            {
+                // Shared providers may release their last reference on another
+                // Qt pool thread. Keep scheduler construction and shutdown on
+                // one owner without weakening JobScheduler's self-join guard.
+                std::promise<void> Ready;
+                auto Started = Ready.get_future();
+                owner_ = std::jthread([this, &Ready](std::stop_token Stop) {
+                    try
+                    {
+                        scheduler_ = std::make_unique<operations::JobScheduler>(std::make_shared<commands::EventHub>(), 2, 128);
+                        Ready.set_value();
+                    }
+                    catch (...) { Ready.set_exception(std::current_exception()); return; }
+                    std::unique_lock Lock(ownerMutex_);
+                    ownerChanged_.wait(Lock, Stop, [] { return false; });
+                    Lock.unlock();
+                    scheduler_.reset();
+                });
+                Started.get();
+            }
+            ~Materializer()
+            {
+                owner_.request_stop();
+                owner_.join();
+                store_->Drain();
+            }
             Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest Request, OperationContext Context) override
             {
                 if (!Request.source_ || !Context.maxReadBytes_ || Request.parents_.size() > 8)
@@ -498,14 +523,14 @@ namespace hc::storage
                 std::lock_guard Lock(mutex_);
                 for (auto It = jobs_.begin(); It != jobs_.end();)
                 {
-                    const auto Status = scheduler_.Snapshot(*It);
-                    if (Status.HasValue() && operations::IsTerminal(Status.Value().state_) && scheduler_.Forget(*It).HasValue()) It = jobs_.erase(It);
+                    const auto Status = scheduler_->Snapshot(*It);
+                    if (Status.HasValue() && operations::IsTerminal(Status.Value().state_) && scheduler_->Forget(*It).HasValue()) It = jobs_.erase(It);
                     else ++It;
                 }
                 auto Promise = std::make_shared<std::promise<Result<std::shared_ptr<IMaterializedFileLease>>>>();
                 auto Future = Promise->get_future();
                 operations::JobRequest Job; Job.operation_ = Context;
-                auto Started = scheduler_.Submit(std::move(Job), std::make_unique<MaterializeTask>(store_, std::move(Request), Promise, std::move(Context)));
+                auto Started = scheduler_->Submit(std::move(Job), std::make_unique<MaterializeTask>(store_, std::move(Request), Promise, std::move(Context)));
                 if (!Started.HasValue()) Promise->set_value(Started.Failure()); else jobs_.push_back(Started.Value().id_);
                 return Future;
             }
@@ -513,9 +538,12 @@ namespace hc::storage
             MaterializationCleanup DrainCleanup() override { return store_->Drain(); }
         private:
             std::shared_ptr<Store> store_;
-            operations::JobScheduler scheduler_;
+            std::unique_ptr<operations::JobScheduler> scheduler_;
             std::mutex mutex_;
             std::vector<std::string> jobs_;
+            std::mutex ownerMutex_;
+            std::condition_variable_any ownerChanged_;
+            std::jthread owner_;
         };
     }
     static Result<std::shared_ptr<Store>> OpenStore(const std::string& BaseDirectory, MaterializationLimits Limits)

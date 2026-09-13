@@ -21,7 +21,8 @@ namespace hc::storage
     Result<std::shared_ptr<INativeContentStore>> MakeNativeContentStore(const std::string& BaseDirectory,
         MaterializationLimits Limits = {});
     // BaseDirectory must exist on a local volume. Creates a private managed child.
-    // Like JobScheduler, create and destroy the service on its owner thread.
+    // The scheduler has a dedicated owner. The service may be released on a
+    // different caller worker; destruction waits for jobs and cleanup to drain.
     Result<std::shared_ptr<IMaterializer>> MakeNativeMaterializer(const std::string& BaseDirectory,
         MaterializationLimits Limits = {});
 }

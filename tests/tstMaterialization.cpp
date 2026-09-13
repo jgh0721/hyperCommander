@@ -60,6 +60,27 @@ class MaterializationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void lastReferenceReleasedOnDifferentThread()
+    {
+        QTemporaryDir Directory;
+        for (int Index = 0; Index < 8; ++Index)
+        {
+            auto Service = Manager(Directory.path()); QVERIFY(Service);
+            auto Made = Service->Materialize({Content("cross-thread lifetime")}, {}).get(); QVERIFY(Made.HasValue());
+            auto Lease = std::move(Made.Value());
+            const auto Path = QString::fromStdString(Lease->LocalPath());
+            const auto Creator = std::this_thread::get_id();
+            auto Destroyed = std::async(std::launch::async, [Owned = std::move(Service), Creator]() mutable {
+                const bool Different = std::this_thread::get_id() != Creator;
+                Owned.reset(); return Different;
+            });
+            QVERIFY(Destroyed.get());
+            QFile File(Path); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("cross-thread lifetime")); File.close();
+            Lease.reset();
+            auto Cleanup = Manager(Directory.path()); QVERIFY(Cleanup);
+            QVERIFY(Cleanup->DrainCleanup().errors_.empty()); QVERIFY(LeaseDirectories(Directory.path()).isEmpty());
+        }
+    }
     void failedProducerWorkspacePreservesManifest()
     {
         QTemporaryDir Directory;
