@@ -102,7 +102,7 @@ namespace hc::plugins
         class Listing final : public IArchiveListing
         {
         public:
-            Listing(std::shared_ptr<Module> Module, HANDLE Handle, bool Test) : module_(std::move(Module)), handle_(Handle), test_(Test) {}
+            Listing(std::shared_ptr<Module> Module, HANDLE Handle, bool Test, std::uint64_t ArchiveBytes) : module_(std::move(Module)), handle_(Handle), test_(Test), archiveBytes_(ArchiveBytes) {}
             ~Listing() override { std::lock_guard Gate(WcxCallMutex()); if (handle_) { std::lock_guard Lock(module_->mutex_); module_->close_(handle_); } }
             Result<ArchivePage> Next(std::size_t Count, OperationContext Context) override
             {
@@ -121,10 +121,19 @@ namespace hc::plugins
                     auto Header = Decode(Raw); if (!Header.HasValue()) return Header.Failure();
                     // Reject expansion bombs before PK_TEST asks the plugin to
                     // decompress candidate content for integrity verification.
-                    if (test_ && !Header.Value().directory_ && Header.Value().size_
-                        && (Header.Value().size_ > 64ULL * 1024 * 1024 * 1024 || !Header.Value().packedSize_
-                            || (Header.Value().size_ - 1) / Header.Value().packedSize_ >= 1000))
-                        return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget", {"wcx"}};
+                    if (test_ && !Header.Value().directory_ && Header.Value().size_)
+                    {
+                        // Solid archives report a shared block's packed bytes on
+                        // its first member and zero on subsequent members. Bound
+                        // both each member and the cumulative expansion, using
+                        // the physical archive when a member has no own size.
+                        const auto Packed = Header.Value().packedSize_ ? Header.Value().packedSize_ : archiveBytes_;
+                        if (Header.Value().size_ > 64ULL * 1024 * 1024 * 1024 - testedBytes_ || !Packed
+                            || (Header.Value().size_ - 1) / Packed >= 1000 || !archiveBytes_
+                            || (testedBytes_ + Header.Value().size_ - 1) / archiveBytes_ >= 1000)
+                            return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget", {"wcx"}};
+                        testedBytes_ += Header.Value().size_;
+                    }
                     Checked = Check(module_->process_(handle_, test_ && !Header.Value().directory_ ? PK_TEST : PK_SKIP, nullptr, nullptr), State);
                     if (!Checked.HasValue()) return Checked.Failure(); Page.entries_.push_back(std::move(Header.Value()));
                 }
@@ -135,6 +144,7 @@ namespace hc::plugins
             HANDLE handle_;
             bool test_;
             std::size_t count_ = 0;
+            std::uint64_t archiveBytes_ = 0, testedBytes_ = 0;
         };
         class Backend final : public IArchiveBackend
         {
@@ -146,7 +156,7 @@ namespace hc::plugins
             {
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Opened = open(Plugin, Archive, Test ? PK_OM_EXTRACT : PK_OM_LIST, Context); if (!Opened.HasValue()) return Opened.Failure();
-                return std::unique_ptr<IArchiveListing>(new Listing(Plugin, Opened.Value(), Test));
+                return std::unique_ptr<IArchiveListing>(new Listing(Plugin, Opened.Value(), Test, std::uint64_t(QFileInfo(QString::fromStdString(Archive)).size())));
             }
             Result<Unit> Extract(std::string Archive, ArchiveHeader Expected, std::string Output, OperationContext Context) override
             {

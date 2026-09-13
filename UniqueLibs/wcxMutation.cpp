@@ -200,7 +200,8 @@ namespace hc::storage
                         ExpandedBytes += Item.entry_.size_;
                         if (Item.entry_.hints_.contains("packedSize"))
                         {
-                            const auto Packed = std::stoull(Item.entry_.hints_.at("packedSize"));
+                            const auto Reported = std::stoull(Item.entry_.hints_.at("packedSize"));
+                            const auto Packed = Reported ? Reported : original_.size_;
                             if (Item.entry_.size_ && (!Packed || (Item.entry_.size_ - 1) / Packed >= 1000)) return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
                         }
                     }
@@ -330,7 +331,7 @@ namespace hc::storage
                         const auto Path = "/" + Name.toStdString();
                         if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
                         const auto& Expected = draft_.at(Path).entry_;
-                        const auto Packed = Header.packedSize_;
+                        const auto Packed = Header.packedSize_ ? Header.packedSize_ : std::uint64_t(QFileInfo(Output).size());
                         if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
                             return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
                         if (Expected.directory_ != Header.directory_ || (!Expected.directory_ && (Expected.size_ != Header.size_
