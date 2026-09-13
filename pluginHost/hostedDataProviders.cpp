@@ -269,15 +269,15 @@ namespace hc::plugins
             switch (Sdk) { case 1: case 2: return MetadataType::Integer; case 3: return MetadataType::Real; case 4: return MetadataType::Date;
             case 5: return MetadataType::Time; case 6: return MetadataType::Boolean; case 9: case 12: return MetadataType::FullText; case 10: return MetadataType::Timestamp; default: return MetadataType::Text; }
         }
-        class WdxProvider final : public IMetadataProvider
+        class HostedMetadataProvider final : public IMetadataProvider
         {
         public:
-            WdxProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer) : process_(std::move(Process)), materializer_(std::move(Materializer)) {}
+            HostedMetadataProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer) : process_(std::move(Process)), materializer_(std::move(Materializer)) {}
             Task<std::vector<MetadataField>> Fields(OperationContext Context) override
             {
                 auto Reply = process_->DataCall(WireKind::MetadataQuery, {{"action", "fields"}}, Context);
                 if (!Reply.HasValue()) return Ready<std::vector<MetadataField>>(Reply.Failure());
-                if (!Reply.Value()["fields"].isArray()) return Ready<std::vector<MetadataField>>(Invalid("wdx-fields-envelope"));
+                if (!Reply.Value()["fields"].isArray()) return Ready<std::vector<MetadataField>>(Invalid("hosted-metadata-fields-envelope"));
                 std::vector<MetadataField> Fields;
                 for (const auto& Item : Reply.Value()["fields"].toArray())
                 {
@@ -289,7 +289,7 @@ namespace hc::plugins
             }
             Task<MetadataValue> Query(std::shared_ptr<IContentSource> Source, MetadataRequest Request, OperationContext Context) override
             {
-                if (!Source || Request.field_ < 0 || Request.field_ > 255 || Request.unit_ < 0) return Ready<MetadataValue>(Invalid("wdx-query"));
+                if (!Source || Request.field_ < 0 || Request.field_ > 255 || Request.unit_ < 0) return Ready<MetadataValue>(Invalid("hosted-metadata-query"));
                 auto Verified = Source->Verify(Context).get(); if (!Verified.HasValue()) return Ready<MetadataValue>(Verified.Failure());
                 // Materialization changes names and attributes. Local metadata
                 // uses the verified original; virtual metadata uses a copy.
@@ -308,10 +308,10 @@ namespace hc::plugins
                 Verified = Source->Verify(Context).get(); if (!Verified.HasValue()) return Ready<MetadataValue>(Verified.Failure());
                 const int Sdk = Reply.Value()["type"].toInt(-99); MetadataValue Out;
                 if (Sdk == -3 || Sdk == -4 || Sdk == 0) { Out.status_ = Sdk == -3 ? MetadataStatus::Empty : Sdk == -4 ? MetadataStatus::OnDemand : MetadataStatus::Delayed; return Ready<MetadataValue>(Out); }
-                if (Sdk < 1 || Sdk > 12) return Ready<MetadataValue>(Invalid("wdx-value-envelope"));
+                if (Sdk < 1 || Sdk > 12) return Ready<MetadataValue>(Invalid("hosted-metadata-value-envelope"));
                 Out.status_ = MetadataStatus::Value; Out.type_ = Type(Sdk); const auto Value = Reply.Value()["value"];
                 if (Out.type_ == MetadataType::Integer || Out.type_ == MetadataType::Timestamp)
-                { bool Parsed; Out.value_ = std::int64_t(Value.toString().toLongLong(&Parsed)); if (!Parsed) return Ready<MetadataValue>(Invalid("wdx-integer-envelope")); }
+                { bool Parsed; Out.value_ = std::int64_t(Value.toString().toLongLong(&Parsed)); if (!Parsed) return Ready<MetadataValue>(Invalid("hosted-metadata-integer-envelope")); }
                 else if (Out.type_ == MetadataType::Real) Out.value_ = Value.toDouble();
                 else if (Out.type_ == MetadataType::Boolean) Out.value_ = Value.toBool();
                 else Out.value_ = Value.toString().toStdString();
@@ -358,6 +358,9 @@ namespace hc::plugins
             if (Native.contains(Name)) Features.insert(Feature);
         auto Mounted = Process->DataCall(WireKind::StorageEnumerate, {{"action", "mount"}, {"root", NativeRoot}});
         if (!Mounted.HasValue()) return Mounted.Failure();
+        if (Mounted.Value()["batchAdd"].toBool()) Features.insert(StorageFeature::WriteFile);
+        if (Mounted.Value()["batchExtract"].toBool()) Features.insert(StorageFeature::ReadFile);
+        if (Mounted.Value()["batchDelete"].toBool()) Features.insert(StorageFeature::DeleteFile);
         auto Provider = std::make_shared<HostedStorageProvider>(std::move(Process), Id, std::move(Store), std::move(Features), Writable && !Probe.Value()["readOnly"].toBool(), "dopus");
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id, "dopus") + "\\"}};
     }
@@ -365,6 +368,49 @@ namespace hc::plugins
     {
         if (!Process || !Materializer) return Invalid("wdx-provider-options");
         auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure(); if (Probe.Value()["format"] != "wdx") return Invalid("wdx-provider-format");
-        return std::shared_ptr<IMetadataProvider>(std::make_shared<WdxProvider>(std::move(Process), std::move(Materializer)));
+        return std::shared_ptr<IMetadataProvider>(std::make_shared<HostedMetadataProvider>(std::move(Process), std::move(Materializer)));
     }
+    Result<std::shared_ptr<IMetadataProvider>> MakeHostedDopusMetadataProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)
+    {
+        if (!Process || !Materializer) return Invalid("dopus-metadata-provider-options");
+        auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure();
+        if (Probe.Value()["format"] != "dopus-viewer") return Invalid("dopus-metadata-provider-format");
+        return std::shared_ptr<IMetadataProvider>(std::make_shared<HostedMetadataProvider>(std::move(Process), std::move(Materializer)));
+    }
+    namespace
+    {
+        class HostedConverter final : public IContentConverter
+        {
+        public:
+            HostedConverter(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)
+                : process_(std::move(Process)), materializer_(std::move(Materializer)) {}
+            Task<ConvertedContent> Convert(std::shared_ptr<IContentSource> Source, OperationContext Context) override
+            {
+                if (!Source) return Ready<ConvertedContent>(Invalid("hosted-convert-source"));
+                auto Lease = materializer_->Materialize({Source}, Context).get(); if (!Lease.HasValue()) return Ready<ConvertedContent>(Lease.Failure());
+                auto Reply = process_->DataCall(WireKind::ContentConvert, {{"path", S(Lease.Value()->LocalPath())}}, Context);
+                if (!Reply.HasValue()) return Ready<ConvertedContent>(Reply.Failure());
+                auto Verified = Source->Verify(Context).get(); if (!Verified.HasValue()) return Ready<ConvertedContent>(Verified.Failure());
+                const auto Type = Reply.Value()["textType"].toInt(-1);
+                if (Type < 0 || Type > 2 || Reply.Value()["textType"].toDouble() != Type || !Reply.Value()["bytes"].isString())
+                    return Ready<ConvertedContent>(Invalid("hosted-convert-envelope"));
+                auto Bytes = QByteArray::fromBase64Encoding(Reply.Value()["bytes"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+                if (!Bytes) return Ready<ConvertedContent>(Invalid("hosted-convert-encoding"));
+                if (std::uint64_t(Bytes.decoded.size()) > Context.maxReadBytes_) return Ready<ConvertedContent>(Error{ErrorCategory::BudgetExceeded, "hosted-convert-budget"});
+                ConvertedContent Out{static_cast<ConvertedTextType>(Type)}; Out.bytes_.resize(Bytes.decoded.size());
+                if (!Out.bytes_.empty()) std::memcpy(Out.bytes_.data(), Bytes.decoded.constData(), Out.bytes_.size());
+                return Ready<ConvertedContent>(std::move(Out));
+            }
+        private:
+            std::shared_ptr<PluginProcess> process_; std::shared_ptr<IMaterializer> materializer_;
+        };
+    }
+    Result<std::shared_ptr<IContentConverter>> MakeHostedDopusConverter(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)
+    {
+        if (!Process || !Materializer) return Invalid("dopus-converter-options");
+        auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure();
+        if (Probe.Value()["format"] != "dopus-viewer") return Invalid("dopus-converter-format");
+        return std::shared_ptr<IContentConverter>(std::make_shared<HostedConverter>(std::move(Process), std::move(Materializer)));
+    }
+
 }

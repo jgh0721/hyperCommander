@@ -40,7 +40,7 @@ namespace
     {
         std::vector<WinHandle> locks_;
         std::unique_ptr<WcxHostService> archives_;
-        std::unique_ptr<WlxHostService> viewer_;
+        std::unique_ptr<NativeViewerHostService> viewer_;
         std::unique_ptr<TcDataHostService> data_;
         std::unique_ptr<DopusVfsHostService> dopusVfs_;
         std::vector<HMODULE> dependencies_;
@@ -101,9 +101,9 @@ namespace
             }
             module_ = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Binary.utf16()), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
             if (!module_) return HostError("host-plugin-load", GetLastError());
-            if (Expected.Value().format_ == PluginFormat::Wlx)
+            if (Expected.Value().format_ == PluginFormat::Wlx || Expected.Value().format_ == PluginFormat::DopusViewer)
             {
-                viewer_ = std::make_unique<WlxHostService>(module_, ParentProcess);
+                viewer_ = std::make_unique<NativeViewerHostService>(module_, ParentProcess, Expected.Value());
                 auto Initialized = viewer_->Initialize(Hello["defaultIni"].toString());
                 if (!Initialized.HasValue()) return Initialized.Failure();
             }
@@ -189,7 +189,7 @@ int main(int Argc, char** Argv)
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
             Result = Plugin.archives_->Handle(Header.kind_, Request.object());
         }
-        else if (Ready && Plugin.viewer_ && Header.kind_ >= WireKind::ViewerOpen && Header.kind_ <= WireKind::ViewerClose)
+        else if (Ready && Plugin.viewer_ && ((Header.kind_ >= WireKind::ViewerOpen && Header.kind_ <= WireKind::ViewerClose) || Header.kind_ == WireKind::MetadataQuery || Header.kind_ == WireKind::ContentConvert))
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;

@@ -55,6 +55,7 @@ namespace hc::plugins
         switch (Manifest.format_)
         {
         case PluginFormat::Wcx: Allowed = {Extension::ArchiveRead, Extension::ArchiveWrite}; break;
+        case PluginFormat::DopusViewer: Allowed = {Extension::Viewer, Extension::Metadata, Extension::ContentConvert}; break;
         case PluginFormat::Wlx: Allowed = {Extension::Viewer}; break;
         case PluginFormat::Wfx:
         case PluginFormat::DopusVfs: Allowed = {Extension::StorageRead, Extension::StorageWrite}; break;

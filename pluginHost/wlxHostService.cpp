@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <commctrl.h>
 #include "externalLibs/TotalCommander/tc_listplug.h"
 #include "wlxWindowMessage.hpp"
 
@@ -30,17 +31,19 @@ namespace hc::plugins
             Bytes.chop(1); return Bytes;
         }
     }
-    WlxHostService::WlxHostService(HMODULE Module, DWORD ParentProcess) : module_(Module), parentProcess_(ParentProcess)
+    NativeViewerHostService::NativeViewerHostService(HMODULE Module, DWORD ParentProcess, const PluginManifest& Manifest) : manifest_(Manifest), module_(Module), parentProcess_(ParentProcess)
     {
+        if (Manifest.format_ == PluginFormat::DopusViewer) { dopus_ = std::make_unique<DopusViewerBackend>(Module); return; }
         load_ = reinterpret_cast<Load>(GetProcAddress(module_, "ListLoadW"));
         close_ = reinterpret_cast<Close>(GetProcAddress(module_, "ListCloseWindow"));
         command_ = reinterpret_cast<Command>(GetProcAddress(module_, "ListSendCommand"));
         notification_ = reinterpret_cast<Notification>(GetProcAddress(module_, "ListNotificationReceived"));
     }
-    thread_local WlxHostService* WlxHostService::inputOwner_ = nullptr;
-    WlxHostService::~WlxHostService() { close(); }
-    Result<Unit> WlxHostService::Initialize(const QString& DefaultIniPath)
+    thread_local NativeViewerHostService* NativeViewerHostService::inputOwner_ = nullptr;
+    NativeViewerHostService::~NativeViewerHostService() { close(); }
+    Result<Unit> NativeViewerHostService::Initialize(const QString& DefaultIniPath)
     {
+        if (dopus_) return dopus_->Initialize();
         if (initialized_) return Invalid("host-wlx-already-initialized");
         const auto Defaults = reinterpret_cast<void(__stdcall*)(ListDefaultParamStruct*)>(GetProcAddress(module_, "ListSetDefaultParams"));
         if (Defaults)
@@ -70,8 +73,9 @@ namespace hc::plugins
         }
         initialized_ = true; return Unit{};
     }
-    Result<QJsonObject> WlxHostService::Probe()
+    Result<QJsonObject> NativeViewerHostService::Probe()
     {
+        if (dopus_) return dopus_->Probe();
         if (!initialized_) return Invalid("host-wlx-not-initialized");
         if (!load_) return Error{ErrorCategory::Unsupported, "host-wlx-unicode-exports", {"wlx"}};
         const auto Detect = reinterpret_cast<void(__stdcall*)(char*, int)>(GetProcAddress(module_, "ListGetDetectString"));
@@ -86,15 +90,16 @@ namespace hc::plugins
         return QJsonObject{{"format", "wlx"}, {"unicode", true}, {"commands", command_ != nullptr}, {"search", bool(GetProcAddress(module_, "ListSearchTextW") || GetProcAddress(module_, "ListSearchText"))}, {"processId", qint64(GetCurrentProcessId())},
             {"detectAvailable", Detect != nullptr}, {"detectStringBytes", QString::fromLatin1(detectString_->toBase64())}, {"ansiCodePage", int(GetACP())}};
     }
-    void WlxHostService::close()
+    void NativeViewerHostService::close()
     {
         if (inputHook_) UnhookWindowsHookEx(std::exchange(inputHook_, nullptr));
         if (inputOwner_ == this) inputOwner_ = nullptr;
         const auto Viewer = std::exchange(viewer_, nullptr);
-        if (Viewer && IsWindow(Viewer)) { if (close_) close_(Viewer); else DestroyWindow(Viewer); }
+        if (dopus_) dopus_->Close();
+        else if (Viewer && IsWindow(Viewer)) { if (close_) close_(Viewer); else DestroyWindow(Viewer); }
         if (container_) DestroyWindow(std::exchange(container_, nullptr));
     }
-    LRESULT CALLBACK WlxHostService::inputHook(int Code, WPARAM WParam, LPARAM LParam)
+    LRESULT CALLBACK NativeViewerHostService::inputHook(int Code, WPARAM WParam, LPARAM LParam)
     {
         auto* Self = inputOwner_;
         if (Code == HC_ACTION && WParam == PM_REMOVE && Self && Self->viewer_)
@@ -117,18 +122,19 @@ namespace hc::plugins
         }
         return CallNextHookEx(nullptr, Code, WParam, LParam);
     }
-    LRESULT CALLBACK WlxHostService::windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
+    LRESULT CALLBACK NativeViewerHostService::windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
-        auto* Self = reinterpret_cast<WlxHostService*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
+        auto* Self = reinterpret_cast<NativeViewerHostService*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
         if (Message == WM_NCCREATE)
         {
-            Self = static_cast<WlxHostService*>(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams);
+            Self = static_cast<NativeViewerHostService*>(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams);
             SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Self));
         }
         if (Self && Self->viewer_)
         {
-            if (Message == WM_SIZE) { MoveWindow(Self->viewer_, 0, 0, LOWORD(LParam), HIWORD(LParam), TRUE); return 0; }
+            if (Message == WM_SIZE) { if (Self->dopus_) Self->dopus_->Resize(LOWORD(LParam), HIWORD(LParam)); else MoveWindow(Self->viewer_, 0, 0, LOWORD(LParam), HIWORD(LParam), TRUE); return 0; }
             if (Message == WM_SETFOCUS) { SetFocus(Self->viewer_); return 0; }
+            if (Self->dopus_ && Message == WM_NOTIFY && LParam && reinterpret_cast<NMHDR*>(LParam)->code == UINT(0 - 2000)) return RGB(32, 32, 32);
             if ((Message == WM_COMMAND || Message == WM_NOTIFY) && Self->notification_)
                 return Self->notification_(Self->viewer_, Message, WParam, LParam);
         }
@@ -137,12 +143,19 @@ namespace hc::plugins
         if (Message == WM_CLOSE) return 0;
         return DefWindowProcW(Window, Message, WParam, LParam);
     }
-    Result<QJsonObject> WlxHostService::Handle(WireKind Kind, const QJsonObject& Request)
+    Result<QJsonObject> NativeViewerHostService::Handle(WireKind Kind, const QJsonObject& Request)
     {
+        if (Kind == WireKind::MetadataQuery || Kind == WireKind::ContentConvert)
+        {
+            const auto Required = Kind == WireKind::MetadataQuery ? Extension::Metadata : Extension::ContentConvert;
+            if (!dopus_ || !manifest_.extensions_.contains(Required)) return Error{ErrorCategory::AccessDenied, "host-viewer-data-denied", {"plugin"}};
+            return dopus_->Data(Kind, Request);
+        }
+        if (!manifest_.extensions_.contains(Extension::Viewer)) return Error{ErrorCategory::AccessDenied, "host-viewer-denied", {"plugin"}};
         if (Kind == WireKind::ViewerOpen)
         {
             if (container_) return Invalid("host-viewer-already-open");
-            if (!load_) return Probe();
+            if (!load_ && !dopus_) return Probe();
             if (Request.size() != 5 || !Request["parent"].isString() || !Request["file"].isString()
                 || !Dimension(Request["width"]) || !Dimension(Request["height"])) return Invalid("host-viewer-open-fields");
             const auto Flags = Request["flags"].toInt(-1);
@@ -162,7 +175,12 @@ namespace hc::plugins
             container_ = CreateWindowExW(0, WindowClass, L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                 0, 0, Request["width"].toInt(), Request["height"].toInt(), Parent, nullptr, Class.hInstance, this);
             if (!container_) return HostError("host-viewer-container", GetLastError());
-            auto NativePath = File.toStdWString(); viewer_ = load_(container_, NativePath.data(), Flags);
+            if (dopus_)
+            {
+                auto Opened = dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt());
+                if (!Opened.HasValue()) { close(); return Opened.Failure(); } viewer_ = Opened.Value();
+            }
+            else { auto NativePath = File.toStdWString(); viewer_ = load_(container_, NativePath.data(), Flags); }
             DWORD ViewerProcess = 0;
             if (!viewer_ || !GetWindowThreadProcessId(viewer_, &ViewerProcess) || ViewerProcess != GetCurrentProcessId() || !IsChild(container_, viewer_))
             {
@@ -190,6 +208,7 @@ namespace hc::plugins
         { if (!Request.isEmpty()) return Invalid("host-viewer-focus-fields"); SetFocus(viewer_); return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}}; }
         if (Kind == WireKind::ViewerCommand)
         {
+            if (dopus_) return Error{ErrorCategory::Unsupported, "host-viewer-command-unsupported", {"dopus-viewer"}};
             const auto Command = Request["command"].toInt(-1), Parameter = Request["parameter"].toInt(-1);
             if (Command == 5)
             {

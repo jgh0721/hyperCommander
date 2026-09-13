@@ -207,11 +207,12 @@ namespace hc::plugins
                 if (const auto Stop = Context.Check({"wlx"})) return *Stop;
                 if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
                 auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-                if (Inspected.Value().manifest_.format_ != PluginFormat::Wlx || Options.approval_.reviewed_ != Inspected.Value().manifest_)
+                const bool Dopus = Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
+                if ((!Dopus && Inspected.Value().manifest_.format_ != PluginFormat::Wlx) || !Inspected.Value().manifest_.extensions_.contains(Extension::Viewer) || Options.approval_.reviewed_ != Inspected.Value().manifest_)
                     return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
                 if (Options.binaryPath_.isEmpty() || QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
                     return Error{ErrorCategory::AccessDenied, "plugin-configured-binary-mismatch", {"wlx"}};
-                HostProfile Profile; Profile.formats_ = {PluginFormat::Wlx}; Profile.extensions_ = {Extension::Viewer}; Profile.supportsIsolation_ = true;
+                HostProfile Profile; Profile.formats_ = {PluginFormat::Wlx, PluginFormat::DopusViewer}; Profile.extensions_ = {Extension::Viewer, Extension::Metadata, Extension::ContentConvert}; Profile.supportsIsolation_ = true;
                 auto Admission = Admit(Inspected.Value().manifest_, Options.approval_, Profile); if (!Admission.HasValue()) return Admission.Failure();
                 if (!Entry)
                 {
@@ -237,7 +238,7 @@ namespace hc::plugins
                 const auto StartedState = Host->Snapshot();
                 { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
                 auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
-                if (Policy)
+                if (Policy && !Dopus)
                 {
                     if (Probe.Value()["ansiCodePage"].toInt(-1) != static_cast<int>(GetACP()))
                         return Error{ErrorCategory::Unsupported, "wlx-detect-code-page", {"wlx"}};
@@ -271,6 +272,11 @@ namespace hc::plugins
                     if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
                     Options.flags_ = (Options.flags_ & ~lcp_forceshow) | (Policy->force_ ? lcp_forceshow : 0);
                 }
+                if (Policy && Dopus)
+                {
+                    if (Policy->builtinMultimedia_ && !Policy->force_ && !(Probe.Value()["flags"].toInteger() & (1u << 15))) return false;
+                    auto Prepared = Materialize(); if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
+                }
                 std::pair<std::uint32_t, std::uint32_t> Size;
                 { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
                 auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
@@ -286,7 +292,7 @@ namespace hc::plugins
                     if (State->size_ && *State->size_ == Size) State->size_.reset();
                     State->details_.window_ = Opened.Value()["window"].toString(); State->details_.child_ = Opened.Value()["viewer"].toString();
                     State->details_.viewer_.bytesRead_ = Lease->Describe().size_; State->details_.viewer_.status_ = ViewerStatus::Ready;
-                    State->details_.viewer_.provider_ = "wlx." + Options.approval_.reviewed_.id_;
+                    State->details_.viewer_.provider_ = std::string(Dopus ? "dopus-viewer." : "wlx.") + Options.approval_.reviewed_.id_;
                     State->details_.selectedCandidate_ = Index; State->commands_ = Probe.Value()["commands"].toBool();
                     State->search_ = Probe.Value()["search"].toBool();
                 }

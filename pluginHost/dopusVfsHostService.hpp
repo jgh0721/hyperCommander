@@ -21,6 +21,8 @@ namespace hc::plugins
         storage::Result<std::wstring> path(const QJsonValue& Remote);
         storage::Result<QJsonObject> enumerate(const QJsonObject& Request);
         storage::Result<QJsonObject> transfer(const QJsonObject& Request, bool Write);
+        bool batchAvailable(std::wstring Path, UINT Operation, std::wstring Destination = {});
+        storage::Result<bool> batch(std::wstring Path, const std::vector<std::wstring>& Files, UINT Operation, std::wstring Destination = {});
         HMODULE module_;
         PluginManifest manifest_;
         HANDLE instance_ = nullptr;

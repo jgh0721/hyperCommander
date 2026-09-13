@@ -1,6 +1,8 @@
 ﻿#include "dopusVfsHostService.hpp"
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QJsonArray>
 #include <array>
 
@@ -48,7 +50,7 @@ namespace hc::plugins
         Info.description_ = Text[3].data(); Info.copyright_ = Text[4].data(); Info.url_ = Text[5].data();
         Info.prefixCapacity_ = Info.extensionsCapacity_ = Info.nameCapacity_ = Info.descriptionCapacity_ = Info.copyrightCapacity_ = Info.urlCapacity_ = 1024;
         const auto Identified = Export<dopus::VfsIdentify>(module_, "VFS_IdentifyW")(&Info);
-        if (Info.smallIcon_) DestroyIcon(Info.smallIcon_); if (Info.largeIcon_) DestroyIcon(Info.largeIcon_);
+        if (Info.smallIcon_) DestroyIcon(Info.smallIcon_); if (Info.largeIcon_ && Info.largeIcon_ != Info.smallIcon_) DestroyIcon(Info.largeIcon_);
         if (!Identified) return Unsupported("dopus-vfs-identify");
         for (const auto& Value : Text) if (std::find(Value.begin(), Value.end(), L'\0') == Value.end()) return Invalid("dopus-vfs-info-termination");
         if (Info.flags_ & (1u << 2)) return Unsupported("dopus-vfs-multiple-formats");
@@ -84,7 +86,9 @@ namespace hc::plugins
             if (!Local(Root)) return Invalid("dopus-vfs-mount-root");
             Root = QDir::toNativeSeparators(QDir::cleanPath(Root));
             while (Root.endsWith('\\')) Root.chop(1);
-            if (Root.isEmpty()) return Invalid("dopus-vfs-mount-root"); root_ = Root; return QJsonObject{};
+            if (Root.isEmpty()) return Invalid("dopus-vfs-mount-root"); root_ = Root;
+            return QJsonObject{{"batchAdd", batchAvailable(root_.toStdWString(), 1)}, {"batchExtract", batchAvailable(root_.toStdWString(), 2)},
+                {"batchDelete", batchAvailable(root_.toStdWString(), 3)}};
         }
         if (Action == "open" && Request.size() == 2)
         {
@@ -135,6 +139,46 @@ namespace hc::plugins
         }
         return QJsonObject{{"entries", Entries}, {"end", Cursor.next_ == Cursor.entries_.size()}};
     }
+    bool DopusVfsHostService::batchAvailable(std::wstring Path, UINT Operation, std::wstring Destination)
+    {
+        if (!GetProcAddress(module_, "VFS_BatchOperationW")) return false;
+        if (const auto Query = Export<dopus::VfsProperty>(module_, "VFS_PropGetW"))
+        {
+            DWORD Value = 0;
+            if (!Query(instance_, dopus::VfsBatchProperty, &Value, Path.data(), Destination.empty() ? nullptr : Destination.data(), reinterpret_cast<void*>(ULONG_PTR(Operation)))) return false;
+            return (Value & ~4096u) == 2;
+        }
+        return true;
+    }
+    Result<bool> DopusVfsHostService::batch(std::wstring Path, const std::vector<std::wstring>& Files, UINT Operation, std::wstring Destination)
+    {
+        if (Files.empty() || Files.size() > 256) return Invalid("dopus-vfs-batch-count");
+        if (!batchAvailable(Path, Operation, Destination)) return false;
+        const auto Call = Export<dopus::VfsBatch>(module_, "VFS_BatchOperationW");
+        for (std::size_t First = 0; First < Files.size();)
+        {
+            std::vector<wchar_t> Names;
+            for (auto Index = First; Index < Files.size(); ++Index)
+            { Names.insert(Names.end(), Files[Index].begin(), Files[Index].end()); Names.push_back(0); }
+            Names.push_back(0);
+            // A plugin must positively report each processed entry. Missing
+            // result writes cannot turn partial archive changes into success.
+            // The supplied RAR sample uses -1 to recognize unprocessed files.
+            std::vector<int> Results(Files.size() - First, -1);
+            dopus::VfsBatchData Data{sizeof(Data), nullptr, abort_.Get(), Operation, int(Results.size()), Names.data(), Results.data(),
+                Destination.empty() ? nullptr : Destination.data(), Operation == 3 ? (1u << 11) | (1u << 12) : 0, nullptr};
+            const auto Code = Call(instance_, nullptr, Path.data(), &Data);
+            const auto Result = Code & ~4096u;
+            if (Result == 0 && First == 0) return false;
+            if (Result == 3) return Error{ErrorCategory::Cancelled, "dopus-vfs-batch-aborted", {"dopus-vfs"}};
+            if (Result != 2 && Result != 4) return Error{ErrorCategory::Unavailable, "dopus-vfs-batch-incomplete", {"dopus-vfs"}};
+            const auto Count = Result == 4 ? Results.size() : std::size_t(1);
+            for (std::size_t Index = 0; Index < Count; ++Index)
+                if (Results[Index] != 0) return Error{ErrorCategory::Unavailable, "dopus-vfs-batch-entry:" + std::to_string(First + Index) + ":" + std::to_string(Results[Index]), {"dopus-vfs"}};
+            First += Count;
+        }
+        return true;
+    }
     Result<QJsonObject> DopusVfsHostService::transfer(const QJsonObject& Request, bool Write)
     {
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
@@ -142,6 +186,30 @@ namespace hc::plugins
         const auto Open = Export<dopus::VfsOpenFile>(module_, "VFS_CreateFileW");
         const auto Close = Export<dopus::VfsCloseFile>(module_, "VFS_CloseFile");
         const auto Read = Export<dopus::VfsReadFile>(module_, "VFS_ReadFile"); const auto Put = Export<dopus::VfsWriteFile>(module_, "VFS_WriteFile");
+        // Batch add can implement archive rewriting without CreateFile/WriteFile.
+        // Preserve the destination basename in the private staging directory;
+        // SDK ADD takes local filenames, not a separate rename argument.
+        const auto Separator = Name.Value().find_last_of(L'\\'); const auto Parent = Name.Value().substr(0, Separator);
+        if (batchAvailable(Parent, Write ? 1 : 2))
+        {
+            QTemporaryDir Stage; if (!Stage.isValid()) return HostError("dopus-vfs-batch-stage");
+            const auto Leaf = QString::fromStdWString(Name.Value().substr(Separator + 1));
+            const auto Staged = Stage.filePath(Leaf);
+            if (Write && (QFileInfo(Request["local"].toString()).size() > 256LL * 1024 * 1024 || !QFile::copy(Request["local"].toString(), Staged))) return HostError("dopus-vfs-batch-stage-copy");
+            auto Done = batch(Parent, {Write ? QDir::toNativeSeparators(Staged).toStdWString() : Name.Value()}, Write ? 1 : 2, Write ? std::wstring{} : QDir::toNativeSeparators(Stage.path()).toStdWString());
+            if (!Done.HasValue()) return Done.Failure();
+            if (Done.Value())
+            {
+                if (!Write)
+                {
+                    QFile Input(Staged), Output(Request["local"].toString());
+                    if (!Input.open(QIODevice::ReadOnly) || Input.size() > 256LL * 1024 * 1024 || !Output.open(QIODevice::WriteOnly | QIODevice::Truncate)) return HostError("dopus-vfs-batch-extract-output");
+                    while (!Input.atEnd()) { const auto Bytes = Input.read(256 * 1024); if (Bytes.isEmpty() || Output.write(Bytes) != Bytes.size()) return HostError("dopus-vfs-batch-extract-copy"); }
+                    if (!Output.flush()) return HostError("dopus-vfs-batch-extract-flush");
+                }
+                return QJsonObject{};
+            }
+        }
         if (!Open || !Close || (Write ? !Put : !Read)) return Unsupported("dopus-vfs-transfer-exports");
         QFile LocalFile(Request["local"].toString());
         // The content store reserves this output file before invoking its
@@ -189,6 +257,14 @@ namespace hc::plugins
         if (!manifest_.extensions_.contains(Extension::StorageWrite) || !manifest_.permissions_.contains(Permission::WriteContent)) return Error{ErrorCategory::AccessDenied, "dopus-vfs-write-denied"};
         if (capabilities_ & dopus::VfsReadOnly) return Unsupported("dopus-vfs-read-only");
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
+        if (Request["action"] == "batch-delete" && Request.size() == 3 && Request["files"].isArray())
+        {
+            std::vector<std::wstring> Files;
+            for (const auto& Item : Request["files"].toArray())
+            { if (!Item.isString() || Item.toString() == "\\") return Invalid("dopus-vfs-batch-file"); auto File = path(Item); if (!File.HasValue()) return File.Failure(); Files.push_back(std::move(File.Value())); }
+            auto Done = batch(Name.Value(), Files, 3); if (!Done.HasValue()) return Done.Failure();
+            if (!Done.Value()) return Unsupported("dopus-vfs-batch-declined"); return QJsonObject{{"processed", int(Files.size())}};
+        }
         if (Request["path"] == "\\") return Invalid("dopus-vfs-mutate-root");
         const auto Action = Request["action"].toString();
         if (Action == "put" && Request.size() == 4 && Request["replace"].isBool()) return transfer(Request, true);
@@ -200,6 +276,8 @@ namespace hc::plugins
         }
         else if (Action == "delete" && Request.size() == 2)
         {
+            auto Done = batch(Name.Value().substr(0, Name.Value().find_last_of(L'\\')), {Name.Value()}, 3);
+            if (!Done.HasValue()) return Done.Failure(); if (Done.Value()) return QJsonObject{};
             const auto Call = Export<dopus::VfsDeleteFile>(module_, "VFS_DeleteFileW"); if (!Call) return Unsupported("dopus-vfs-delete");
             Result = Call(instance_, nullptr, Name.Value().data(), 0, 0);
         }

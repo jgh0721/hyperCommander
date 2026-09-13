@@ -118,8 +118,8 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx, PluginFormat::DopusVfs};
-        Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer, Extension::StorageRead, Extension::StorageWrite, Extension::Metadata}; Profile.supportsIsolation_ = true;
+        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx, PluginFormat::DopusVfs, PluginFormat::DopusViewer};
+        Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer, Extension::StorageRead, Extension::StorageWrite, Extension::Metadata, Extension::ContentConvert}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();
         if (HostPath.isEmpty() || !QFileInfo(HostPath).isFile()) return HostError("host-executable-missing");
@@ -128,7 +128,7 @@ namespace hc::plugins
         auto Pipe = ServerPipe(PipeName); if (!Pipe.HasValue()) return Pipe.Failure();
         auto Owner = std::unique_ptr<PluginProcess>(new PluginProcess(std::make_unique<State>())); auto& S = *Owner->state_;
         S.limits_ = Limits; S.pipe_ = std::move(Pipe.Value()); S.job_.Reset(CreateJobObjectW(nullptr, nullptr));
-        S.viewer_ = Inspected.Value().manifest_.format_ == PluginFormat::Wlx;
+        S.viewer_ = Inspected.Value().manifest_.format_ == PluginFormat::Wlx || Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
@@ -225,8 +225,8 @@ namespace hc::plugins
     }
     Result<QJsonObject> PluginProcess::DataCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
-        if (Kind < WireKind::StorageEnumerate || Kind > WireKind::MetadataQuery) return HostError("host-data-command");
-        if (const auto Stop = Context.Check({"tc-data"})) return *Stop;
+        if (Kind < WireKind::StorageEnumerate || Kind > WireKind::ContentConvert) return HostError("host-data-command");
+        if (const auto Stop = Context.Check({"hosted-data"})) return *Stop;
         std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
     HostSnapshot PluginProcess::Snapshot() const

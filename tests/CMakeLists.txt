@@ -3,6 +3,7 @@ find_program(HC_POWERSHELL NAMES powershell REQUIRED)
 qt_add_library(hc_dopus_fixture SHARED dopusFixture.cpp)
 target_include_directories(hc_dopus_fixture PRIVATE "${PROJECT_SOURCE_DIR}")
 target_compile_options(hc_dopus_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_dopus_fixture PRIVATE ole32 gdi32 user32)
 qt_add_executable(hc_hosted_dopus_tests tstHostedDopus.cpp ../UniqueLibs/nativeMaterializer.cpp ../UniqueLibs/storageProviders.cpp)
 target_include_directories(hc_hosted_dopus_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
 target_link_libraries(hc_hosted_dopus_tests PRIVATE hc_plugin_process hc_viewer_core Qt6::Test)
@@ -11,6 +12,13 @@ add_dependencies(hc_hosted_dopus_tests hc-plugin-host-x64 hc_dopus_fixture)
 add_test(NAME hc.hosted_dopus COMMAND hc_hosted_dopus_tests)
 set_tests_properties(hc.hosted_dopus PROPERTIES TIMEOUT 60)
 hc_enable_qt_deployment(hc_hosted_dopus_tests TEST)
+qt_add_executable(hc_dopus_viewer_tests tstDopusViewer.cpp ../UniqueLibs/nativeMaterializer.cpp)
+target_link_libraries(hc_dopus_viewer_tests PRIVATE hc_viewer_qt Qt6::Test)
+target_compile_options(hc_dopus_viewer_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_dopus_viewer_tests hc-plugin-host-x64 hc_dopus_fixture)
+add_test(NAME hc.dopus_viewer COMMAND hc_dopus_viewer_tests)
+set_tests_properties(hc.dopus_viewer PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+hc_enable_qt_deployment(hc_dopus_viewer_tests TEST PLUGINS)
 set(HC_DOPUS_SDK_DIRECTORY "" CACHE PATH "External extracted Opus SDK directory (contains headers)")
 if(HC_DOPUS_SDK_DIRECTORY)
     qt_add_executable(hc_dopus_sdk_abi_tests tstDopusSdkAbi.cpp)
@@ -106,7 +114,7 @@ target_link_libraries(hc_wlx_sdk_fixture PRIVATE user32)
 target_compile_options(hc_wlx_sdk_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set_target_properties(hc_wlx_sdk_fixture PROPERTIES SUFFIX ".wlx64")
 if(TARGET hc_smb_tests)
-    add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture)
+    add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
 qt_add_executable(hc_hosted_wlx_tests tstHostedWlx.cpp)
 target_sources(hc_hosted_wlx_tests PRIVATE ../UniqueLibs/nativeMaterializer.cpp)
@@ -296,7 +304,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
@@ -305,7 +313,7 @@ set_tests_properties(hc.deployment PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS hc_hosted_dopus_tests hc_hosted_data_tests hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
+    DEPENDS hc_dopus_viewer_tests hc_hosted_dopus_tests hc_hosted_data_tests hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
     USES_TERMINAL
     VERBATIM
 )

@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "pluginProcess.hpp"
 #include "commonLibs/plugins/metadataProvider.hpp"
+#include "commonLibs/plugins/contentConverter.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 
@@ -20,4 +21,8 @@ namespace hc::plugins
         std::shared_ptr<storage::IMaterializer> Materializer);
     storage::Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process,
         storage::ProviderId Id, std::shared_ptr<storage::INativeContentStore> Store, bool Writable, const QString& NativeRoot);
+    storage::Result<std::shared_ptr<IMetadataProvider>> MakeHostedDopusMetadataProvider(std::shared_ptr<PluginProcess> Process,
+        std::shared_ptr<storage::IMaterializer> Materializer);
+    storage::Result<std::shared_ptr<IContentConverter>> MakeHostedDopusConverter(std::shared_ptr<PluginProcess> Process,
+        std::shared_ptr<storage::IMaterializer> Materializer);
 }

@@ -8,9 +8,9 @@ namespace
 {
     bool Put(const QString& Path, QByteArray Bytes) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); }
     QByteArray Read(const QString& Path) { QFile File(Path); return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{}; }
-    Result<std::shared_ptr<PluginProcess>> Start(QTemporaryDir& Directory, bool Write = true, bool ReadOnly = false, unsigned RequestMs = 3000)
+    Result<std::shared_ptr<PluginProcess>> Start(QTemporaryDir& Directory, bool Write = true, bool ReadOnly = false, unsigned RequestMs = 3000, bool Batch = false)
     {
-        const auto Name = ReadOnly ? "readonly.dll" : "fixture.dll"; const auto Binary = Directory.filePath(Name);
+        const auto Name = ReadOnly ? "readonly.dll" : Batch ? "batch.dll" : "fixture.dll"; const auto Binary = Directory.filePath(Name);
         if (!QFile::copy(QCoreApplication::applicationDirPath() + "/hc_dopus_fixture.dll", Binary)) return Error{ErrorCategory::Internal, "fixture-copy"};
         PluginManifest Manifest; Manifest.id_ = "hc.test.dopus"; Manifest.version_ = "1"; Manifest.binary_ = Name; Manifest.format_ = PluginFormat::DopusVfs;
         Manifest.sha256_ = QCryptographicHash::hash(Read(Binary), QCryptographicHash::Sha256).toHex().toStdString();
@@ -26,6 +26,30 @@ class HostedDopusTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void batchWritesAndPerFileResults()
+    {
+        QTemporaryDir Package, Root, Cache; auto Process = Start(Package, true, false, 3000, true); QVERIFY(Process.HasValue());
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"batch"}, Store.Value(), true, Root.path()); QVERIFY(Mounted.HasValue());
+        auto To = Mounted.Value().root_; To.root_ += "한글.txt";
+        auto Write = Mounted.Value().writer_->BeginWrite(To, {}, {}); QVERIFY(Write.HasValue());
+        const std::string Bytes = "batch content"; QVERIFY(Write.Value()->Append(std::as_bytes(std::span(Bytes)), {}).HasValue());
+        QVERIFY(Write.Value()->Commit({}).HasValue()); QCOMPARE(Read(Root.filePath("한글.txt")), QByteArray::fromStdString(Bytes));
+        auto Entry = Mounted.Value().reader_->Resolve(To, {}).get(); QVERIFY(Entry.HasValue());
+        auto Input = Mounted.Value().reader_->OpenRead(Entry.Value().id_, {}).get(); QVERIFY2(Input.HasValue(), Input.HasValue() ? "" : Input.Failure().code_.c_str());
+        auto ReadResult = Input.Value()->Read(100, {}).get(); QVERIFY(ReadResult.HasValue()); QCOMPARE(ReadResult.Value().bytes_.size(), Bytes.size());
+        QVERIFY(Mounted.Value().writer_->Remove(Entry.Value(), {}).HasValue()); QVERIFY(!QFileInfo::exists(Root.filePath("한글.txt")));
+        for (const auto* Name : {"batch-each-a", "batch-each-b", "batch-partial", "batch-skip"}) QVERIFY(Put(Root.filePath(Name), "x"));
+        auto Deleted = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "batch-delete"}, {"path", "\\"}, {"files", QJsonArray{"\\batch-each-a", "\\batch-each-b"}}});
+        QVERIFY(Deleted.HasValue()); QCOMPARE(Deleted.Value()["processed"].toInt(), 2);
+        QVERIFY(!QFileInfo::exists(Root.filePath("batch-each-a"))); QVERIFY(!QFileInfo::exists(Root.filePath("batch-each-b")));
+        for (const auto* Name : {"batch-partial", "batch-skip"})
+        {
+            auto Failed = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "batch-delete"}, {"path", "\\"}, {"files", QJsonArray{QString("\\") + Name}}});
+            QVERIFY(!Failed.HasValue()); QVERIFY(QFileInfo::exists(Root.filePath(Name)));
+        }
+        Process.Value()->Close(); QVERIFY(!Process.Value()->Snapshot().forcedTermination_); QCOMPARE(Process.Value()->Snapshot().exitCode_.value_or(1), 0u);
+    }
     void officialVfsSample()
     {
         const auto ManifestPath = qEnvironmentVariable("HC_DOPUS_VFS_MANIFEST");

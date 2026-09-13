@@ -94,6 +94,22 @@ namespace hc::plugins::dopus
         HANDLE abort_, heap_;
         VfsFileHeader* files_;
     };
+    struct VfsBatchData
+    {
+        UINT size_;
+        HWND parent_;
+        HANDLE abort_;
+        UINT operation_;
+        int count_;
+        wchar_t* files_;
+        int* results_;
+        wchar_t* destination_;
+        DWORD flags_;
+        void* functionData_;
+    };
+    inline constexpr int VfsBatchProperty = 15;
+    using VfsProperty = BOOL (*)(HANDLE, int, void*, void*, void*, void*);
+    using VfsBatch = UINT (*)(HANDLE, void*, wchar_t*, VfsBatchData*);
 
     inline constexpr DWORD VfsReadOnly = 1u << 29;
     inline constexpr DWORD VfsRandomSeek = 1u << 11;

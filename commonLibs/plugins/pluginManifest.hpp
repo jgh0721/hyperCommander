@@ -5,11 +5,11 @@
 
 namespace hc::plugins
 {
-    enum class PluginFormat { Wcx, Wlx, Wfx, Wdx, DopusVfs };
+    enum class PluginFormat { Wcx, Wlx, Wfx, Wdx, DopusVfs, DopusViewer };
     enum class Architecture { X64, X86, Arm64 };
     enum class ExecutionMode { Isolated, TrustedInProcess };
     enum class Permission { ReadContent, WriteContent, Network, UserInterface };
-    enum class Extension { ArchiveRead, ArchiveWrite, StorageRead, StorageWrite, Viewer, Metadata };
+    enum class Extension { ArchiveRead, ArchiveWrite, StorageRead, StorageWrite, Viewer, Metadata, ContentConvert };
     struct ProtocolRange
     {
         std::uint32_t major_ = 1, minimumMinor_ = 0, maximumMinor_ = 0;
