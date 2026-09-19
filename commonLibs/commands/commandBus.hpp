@@ -187,6 +187,22 @@ namespace hc::commands
         Status status_ = Status::Completed;
         std::string jobId_;
     };
+    inline Result<Unit> ValidateInvocation(const CommandDescriptor& Descriptor, const CommandInvocation& Invocation)
+    {
+        if (Invocation.id_ != Descriptor.id_ || Invocation.schemaVersion_ != Descriptor.schemaVersion_)
+            return Error{ErrorCategory::InvalidRequest, "schema-version"};
+        if (!Descriptor.permission_.empty() && !Invocation.permissions_.contains(Descriptor.permission_))
+            return Error{ErrorCategory::AccessDenied, "permission-required"};
+        for (const auto& [Name, Spec] : Descriptor.parameters_)
+            if (Spec.required_ && !Invocation.parameters_.contains(Name)) return Error{ErrorCategory::InvalidRequest, "missing-parameter:" + Name};
+        for (const auto& [Name, Value] : Invocation.parameters_)
+        {
+            const auto Spec = Descriptor.parameters_.find(Name);
+            if (Spec == Descriptor.parameters_.end() || Value.index() != static_cast<std::size_t>(Spec->second.type_))
+                return Error{ErrorCategory::InvalidRequest, "parameter-type:" + Name};
+        }
+        return Unit{};
+    }
     struct CommandHandler
     {
         std::function<storage::SupportDecision(const CommandInvocation&)> canExecute_;
@@ -246,17 +262,8 @@ namespace hc::commands
             if (!Found.HasValue()) return storage::Ready<CommandOutcome>(Found.Failure());
             const auto Command = Found.Value();
             const auto& Descriptor = Command->descriptor_;
-            if (Invocation.schemaVersion_ != Descriptor.schemaVersion_) return storage::Ready<CommandOutcome>(Error{ErrorCategory::InvalidRequest, "schema-version"});
-            if (!Descriptor.permission_.empty() && !Invocation.permissions_.contains(Descriptor.permission_))
-                return storage::Ready<CommandOutcome>(Error{ErrorCategory::AccessDenied, "permission-required"});
-            for (const auto& [Name, Spec] : Descriptor.parameters_)
-                if (Spec.required_ && !Invocation.parameters_.contains(Name)) return storage::Ready<CommandOutcome>(Error{ErrorCategory::InvalidRequest, "missing-parameter:" + Name});
-            for (const auto& [Name, Value] : Invocation.parameters_)
-            {
-                const auto Spec = Descriptor.parameters_.find(Name);
-                if (Spec == Descriptor.parameters_.end() || Value.index() != static_cast<std::size_t>(Spec->second.type_))
-                    return storage::Ready<CommandOutcome>(Error{ErrorCategory::InvalidRequest, "parameter-type:" + Name});
-            }
+            const auto Valid = ValidateInvocation(Descriptor, Invocation);
+            if (!Valid.HasValue()) return storage::Ready<CommandOutcome>(Valid.Failure());
             if (Invocation.correlationId_.empty()) Invocation.correlationId_ = "command-" + std::to_string(++nextId_);
             auto Completion = std::make_shared<detail::Completion>();
             auto Future = Completion->promise_.get_future();

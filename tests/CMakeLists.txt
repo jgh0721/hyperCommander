@@ -1,4 +1,10 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+qt_add_executable(hc_script_api_tests tstScriptApi.cpp ../commonLibs/scripting/scriptApi.cpp)
+target_link_libraries(hc_script_api_tests PRIVATE Qt6::Test)
+target_compile_options(hc_script_api_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.script_api COMMAND hc_script_api_tests)
+set_tests_properties(hc.script_api PROPERTIES TIMEOUT 30)
+hc_enable_qt_deployment(hc_script_api_tests TEST)
 qt_add_executable(hc_automation_tests tstAutomation.cpp
     ../commonLibs/commands/automation.cpp ../UniqueLibs/qtAutomation.cpp ../UniqueLibs/qtAutomationCompiler.cpp ../UniqueLibs/qtAutomationLibrary.cpp)
 target_include_directories(hc_automation_tests PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -407,7 +413,7 @@ add_custom_target(hc_check
     VERBATIM
 )
 add_dependencies(hc_check hc_iso_engine_tests hc_iso_wcx_tests hc_iso_job_tests)
-add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests)
+add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
 if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()

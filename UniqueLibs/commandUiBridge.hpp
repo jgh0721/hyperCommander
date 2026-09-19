@@ -5,6 +5,7 @@
 #include <QVariantMap>
 #include "commonLibs/commands/commandBus.hpp"
 #include "commonLibs/commands/automation.hpp"
+#include "commonLibs/scripting/scriptApi.hpp"
 
 class QWidget;
 class CmpPanel;
@@ -28,6 +29,7 @@ public:
     FileJobUi* FileJobs() const { return fileJobs_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
     hc::automation::Host AutomationHost();
+    std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
 private:
     void bindModels();
     void createActions();

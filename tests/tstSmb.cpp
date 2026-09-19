@@ -240,10 +240,33 @@ private slots:
         QTRY_VERIFY(QFileInfo(DirectPath).isDir());
         const auto Job = Accepted.Value().jobId_;
         QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Job) && !Model->IsLoading());
+        using ScriptValue = hc::script::ScriptValue;
+        using ScriptObject = ScriptValue::Object;
+        auto Api = Bridge->ScriptApi({"file-write", "navigation"});
+        auto Snapshot = Api->Call("capture", ScriptObject{}); QVERIFY(Snapshot.HasValue());
+        const auto ContextHandle = std::get<ScriptObject>(Snapshot.Value().data_).at("context");
+        const auto ApiPath = Directory.filePath("api-created");
+        auto ApiJob = Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.file.mkdir"},
+            {"parameters", ScriptObject{{"destination", ApiPath.toStdString()}}}}); QVERIFY(ApiJob.HasValue());
+        const auto ApiDone = [&] {
+            auto Result = Api->Call("poll", ScriptObject{{"handle", ApiJob.Value()}});
+            return Result.HasValue() && std::get<bool>(std::get<ScriptObject>(Result.Value().data_).at("done").data_);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(ApiDone(), 10000); QVERIFY(QFileInfo(ApiPath).isDir());
+        const auto CancelPath = Directory.filePath("api-cancelled");
+        auto CancelJob = Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.file.mkdir"},
+            {"parameters", ScriptObject{{"destination", CancelPath.toStdString()}}}}); QVERIFY(CancelJob.HasValue());
+        QVERIFY(Api->Call("cancel", ScriptObject{{"handle", CancelJob.Value()}}).HasValue());
+        const auto RetryPath = Directory.filePath("api-after-cancel");
+        ApiJob = Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.file.mkdir"},
+            {"parameters", ScriptObject{{"destination", RetryPath.toStdString()}}}}); QVERIFY(ApiJob.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(ApiDone(), 10000); QVERIFY(QFileInfo(RetryPath).isDir()); QVERIFY(!QFileInfo::exists(CancelPath));
         Execution Closed(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "closed-tab");
         Execution Queued(Compile("invoke \"hc.file.mkdir\" {\"destination\":\"" + Directory.filePath("must-not-create") + "\"}").Value(), Bridge->AutomationHost(), {"file-write"}, "queued-tab");
         Queued.Tick(); // Recreate the same persistent tab ID before dispatch runs.
         Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        QVERIFY(!Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.navigate.refresh"}, {"parameters", ScriptObject{}}}).HasValue());
+        Api->Close();
         Closed.Tick(); QCOMPARE(Closed.Status(), State::Cancelled); QCOMPARE(Closed.Failure()->code_, std::string("automation-tab-closed"));
         QTRY_VERIFY((Queued.Tick(), Queued.Status() != State::Running)); QCOMPARE(Queued.Status(), State::Cancelled);
         QVERIFY(!QFileInfo::exists(Directory.filePath("must-not-create")));

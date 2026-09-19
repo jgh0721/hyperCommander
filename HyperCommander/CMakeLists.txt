@@ -102,6 +102,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/qtSearch.hpp
         ../commonLibs/commands/automation.cpp
         ../commonLibs/commands/automation.hpp
+        ../commonLibs/scripting/scriptApi.cpp
+        ../commonLibs/scripting/scriptApi.hpp
         ../UniqueLibs/qtAutomation.cpp
         ../UniqueLibs/qtAutomationCompiler.cpp
         ../UniqueLibs/qtAutomationLibrary.cpp

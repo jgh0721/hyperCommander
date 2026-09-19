@@ -218,6 +218,11 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
 
 Task<CommandOutcome> CommandUiBridge::DispatchInvocation(CommandInvocation Invocation) { return dispatcher_->Dispatch(std::move(Invocation)); }
 
+std::shared_ptr<hc::script::IScriptHostApi> CommandUiBridge::ScriptApi(std::set<std::string> Permissions)
+{
+    return std::make_shared<hc::script::CommandScriptApi>(AutomationHost(),std::move(Permissions));
+}
+
 hc::automation::Host CommandUiBridge::AutomationHost()
 {
     static const std::set<std::string> Exposed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.open",
@@ -227,7 +232,9 @@ hc::automation::Host CommandUiBridge::AutomationHost()
     struct Binding {
         QPointer<CFSModel> model_;
         std::stop_source stop_;
+        std::stop_source commandStop_;
         std::unique_ptr<std::stop_callback<std::function<void()>>> runStop_;
+        std::unique_ptr<std::stop_callback<std::function<void()>>> ownerStop_;
         QMetaObject::Connection destroyed_;
         ~Binding() { QObject::disconnect(destroyed_); }
     };
@@ -252,9 +259,12 @@ hc::automation::Host CommandUiBridge::AutomationHost()
         if (!Exposed.contains(Invocation.id_)) return Ready<CommandOutcome>(Error{ErrorCategory::Unsupported, "automation-command-not-exposed"});
         // The saved workspace may recreate the same tab ID before a queued
         // dispatch executes. Cancel that dispatch when its original model dies.
+        Lifetime->runStop_.reset(); Lifetime->ownerStop_.reset(); Lifetime->commandStop_ = std::stop_source{};
         Lifetime->runStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Invocation.operation_.stopToken_,
-            [Stop = Lifetime->stop_]() mutable { Stop.request_stop(); });
-        Invocation.operation_.stopToken_ = Lifetime->stop_.get_token();
+            [Stop = Lifetime->commandStop_]() mutable { Stop.request_stop(); });
+        Lifetime->ownerStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Lifetime->stop_.get_token(),
+            [Stop = Lifetime->commandStop_]() mutable { Stop.request_stop(); });
+        Invocation.operation_.stopToken_ = Lifetime->commandStop_.get_token();
         return Guard->DispatchInvocation(std::move(Invocation));
     };
     Host.poll_ = [Guard, Lifetime](const CommandInvocation& Invocation, const CommandOutcome& Outcome) -> Result<bool> {

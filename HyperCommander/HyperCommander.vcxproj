@@ -180,6 +180,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\qtAutomationCompiler.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtAutomationLibrary.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\UniqueLibs\qtAutomation.hpp" />
+    <ClCompile Include="..\commonLibs\scripting\scriptApi.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\scripting\scriptApi.hpp" />
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />
