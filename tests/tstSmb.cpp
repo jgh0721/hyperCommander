@@ -20,6 +20,7 @@
 #include <iostream>
 #include <psapi.h>
 #include "driveProbeFixture.hpp"
+#include "qtitanRegression.hpp"
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -88,10 +89,13 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
+
+    void qtitanCacheAndSortUi() { hc::tests::GridCacheAndSortRegression(); }
+    void qtitanFileManagerUi() { hc::tests::GridFileManagerRegression(); }
 
     void workspaceRestoreUi()
     {
@@ -1686,6 +1690,12 @@ private slots:
 
     void columnWidthLayoutAndSettings()
     {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("column-layout.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("columns"); File.close();
+        panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!model(panels_.front())->IsLoading(), 5000);
+        QTRY_VERIFY(model(panels_.front())->rowCount() > 0);
+        main_->activateWindow();
         using namespace hc::view;
         auto* View = qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
         auto* Adapter = View->ColumnWidths();

@@ -158,6 +158,11 @@ if(TARGET hc_smb_tests)
                 -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
                 -Executable "$<TARGET_FILE:hc_smb_tests>" -WorkspaceOnly -Dpr ${HC_WORKSPACE_DPR})
         set_tests_properties(hc.workspace_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+        add_test(NAME hc.qtitan_ui_${HC_WORKSPACE_DPR}
+            COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -QtitanOnly -Dpr ${HC_WORKSPACE_DPR} -TimeoutSeconds 90)
+        set_tests_properties(hc.qtitan_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     endforeach()
     add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
