@@ -91,11 +91,14 @@ private slots:
         QJsonArray Paths{Path, Dir.path() + "-outside/escape.txt", Dir.filePath("removed.txt"), Path};
         { QFile Fixture(Dir.filePath("index.json")); QVERIFY(Fixture.open(QIODevice::WriteOnly)); Fixture.write(QJsonDocument(Paths).toJson()); }
         qputenv("HC_SEARCH_TEST_HELPER", "1");
-        const auto Factory = hc::search::MakeEverythingSearch(QCoreApplication::applicationFilePath());
+        const auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        const auto Factory = hc::search::MakeEverythingSearch(QCoreApplication::applicationFilePath(), Reader);
         auto Cursor = Factory->Search({{LocatorKind::Local, Dir.path().toStdString()}}, [](const auto&) { return true; }); QVERIFY(Cursor.HasValue());
         auto Page = Cursor.Value()->Next(2, {}).get(); QVERIFY(Page.HasValue());
         QCOMPARE(Page.Value().freshness_, SearchFreshness::IndexUnverified); QCOMPARE(Page.Value().matches_.size(), 1u);
         QCOMPARE(Page.Value().matches_[0].size_, 5u); QVERIFY(Page.Value().partial_); QVERIFY(!Page.Value().end_);
+        const auto Original = Reader->Resolve({LocatorKind::Local, QDir::toNativeSeparators(Path).toStdString()}, {}).get(); QVERIFY(Original.HasValue());
+        QCOMPARE(Page.Value().matches_[0].id_, Original.Value().id_); // Reuse the tab's provider session for metadata identity.
         Page = Cursor.Value()->Next(2, {}).get(); QVERIFY(Page.HasValue()); QVERIFY(Page.Value().end_); QVERIFY(Page.Value().partial_); QVERIFY(Page.Value().matches_.empty());
         Cursor = Factory->Search({{LocatorKind::Local, Dir.path().toStdString()}}, [](const auto&) { return true; });
         qputenv("HC_SEARCH_TEST_HELPER", "slow"); std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
@@ -103,6 +106,34 @@ private slots:
         QVERIFY(Pending.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
         QCOMPARE(Pending.get().Failure().category_, ErrorCategory::Cancelled);
         qunsetenv("HC_SEARCH_TEST_HELPER");
+    }
+    void externalProviders() {
+        const auto Local = qEnvironmentVariable("HC_SEARCH_LIVE_SCOPE"), Smb = qEnvironmentVariable("HC_SEARCH_LIVE_SMB");
+        if (Local.isEmpty() && Smb.isEmpty()) QSKIP("Opt-in real Everything/SMB environment validation");
+        OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        if (!Local.isEmpty()) {
+            auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+            auto Search = hc::search::MakeEverythingSearch(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", Reader);
+            auto Open = Search->Search({{LocatorKind::Local, Local.toStdString()}}, hc::search::Compile("ext:txt").Value()); QVERIFY(Open.HasValue());
+            std::set<std::string> Names; bool End = false, Unicode = false;
+            for (int I = 0; I < 20 && !End; ++I) {
+                auto Page = Open.Value()->Next(64, Context).get(); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+                QCOMPARE(Page.Value().freshness_, SearchFreshness::IndexUnverified); QVERIFY(!Page.Value().partial_);
+                for (const auto& Entry : Page.Value().matches_) {
+                    QVERIFY(Names.insert(Serialize(Entry.locator_)).second); QVERIFY(Reader->Stat(Entry.id_, Context).get().HasValue());
+                    if (Entry.name_ == "한글.txt") Unicode = true;
+                }
+                End = Page.Value().end_;
+            }
+            QVERIFY(End); QCOMPARE(Names.size(), 301u); QVERIFY(Unicode); qInfo() << "Real Everything: 301 files, paged, unique, revision checked";
+        }
+        if (!Smb.isEmpty()) {
+            auto Search = MakeEnumeratingSearch(MakeNativeReadProvider(LocatorKind::Smb));
+            auto Open = Search->Search({{LocatorKind::Smb, Smb.toStdString()}, false, 0, 256}, [](const auto&) { return true; }); QVERIFY(Open.HasValue());
+            auto Page = Open.Value()->Next(32, Context).get(); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+            QVERIFY(Page.Value().matches_.size() <= 32); QCOMPARE(Page.Value().freshness_, SearchFreshness::Enumerated);
+            qInfo() << "Real SMB read-only search:" << Page.Value().matches_.size() << "results";
+        }
     }
 };
 int main(int Argc, char** Argv) {
@@ -113,7 +144,7 @@ int main(int Argc, char** Argv) {
         const auto All = QJsonDocument::fromJson(Fixture.readAll()).array(); QJsonArray Page;
         const int Offset = App.arguments()[2].toInt(), Limit = App.arguments()[3].toInt();
         for (int I = Offset; I < All.size() && I < Offset + Limit; ++I) Page.append(All[I]);
-        QFile Output; Output.open(stdout, QIODevice::WriteOnly);
+        QFile Output; if (!Output.open(stdout, QIODevice::WriteOnly)) return 3;
         Output.write(QJsonDocument(QJsonObject{{"paths", Page}, {"total", All.size()}}).toJson()); return 0;
     }
     QApplication App(Argc, Argv); SearchTests Tests; return QTest::qExec(&Tests, Argc, Argv);

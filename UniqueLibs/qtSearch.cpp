@@ -60,8 +60,8 @@ Result<SearchMatcher> Compile(const QString& Query, MetadataSnapshot Metadata)
 namespace {
 class IndexCursor final : public ISearchCursor, public std::enable_shared_from_this<IndexCursor> {
 public:
-    IndexCursor(QString Executable, SearchScope Scope, SearchMatcher Matcher)
-        : executable_(std::move(Executable)), scope_(std::move(Scope)), matcher_(std::move(Matcher)), reader_(MakeNativeReadProvider(LocatorKind::Local)) {}
+    IndexCursor(QString Executable, SearchScope Scope, SearchMatcher Matcher, std::shared_ptr<IStorageProvider> Reader)
+        : executable_(std::move(Executable)), scope_(std::move(Scope)), matcher_(std::move(Matcher)), reader_(Reader ? std::move(Reader) : MakeNativeReadProvider(LocatorKind::Local)) {}
     Task<SearchPage> Next(std::size_t MaxItems, OperationContext Context) override {
         auto Self = shared_from_this();
         return std::async(std::launch::async, [Self, MaxItems, Context] { return Self->next(MaxItems, Context); });
@@ -130,16 +130,17 @@ private:
 };
 class IndexSearch final : public ISearchProvider {
 public:
-    explicit IndexSearch(QString Executable) : executable_(std::move(Executable)) {}
+    IndexSearch(QString Executable, std::shared_ptr<IStorageProvider> Reader) : executable_(std::move(Executable)), reader_(std::move(Reader)) {}
     Result<std::shared_ptr<ISearchCursor>> Search(SearchScope Scope, SearchMatcher Matcher) override {
         if (Scope.root_.kind_ != LocatorKind::Local || !Scope.root_.nesting_.empty() || !QDir::isAbsolutePath(QString::fromStdString(Scope.root_.root_)))
             return Error{ErrorCategory::Unsupported, "search-index-local-only"};
         if (!Matcher || !Scope.maxVisited_ || Scope.maxVisited_ > 1000000 || Scope.maxDepth_ > 128)
             return Error{ErrorCategory::InvalidRequest, "search-scope"};
-        return std::shared_ptr<ISearchCursor>(new IndexCursor(executable_, std::move(Scope), std::move(Matcher)));
+        return std::shared_ptr<ISearchCursor>(new IndexCursor(executable_, std::move(Scope), std::move(Matcher), reader_));
     }
 private:
     QString executable_;
+    std::shared_ptr<IStorageProvider> reader_;
 };
 class SearchDialog final : public QDialog {
 public:
@@ -173,7 +174,7 @@ private:
         if (busy_) return;
         cancel(); auto Matcher = Compile(query_->text(), metadata_);
         if (!Matcher.HasValue()) { status_->setText(QString::fromStdString(Matcher.Failure().code_)); return; }
-        auto Provider = engine_->currentIndex() == 0 ? MakeEnumeratingSearch(provider_) : MakeEverythingSearch(QCoreApplication::applicationDirPath() + "/hc-search-index.exe");
+        auto Provider = engine_->currentIndex() == 0 ? MakeEnumeratingSearch(provider_) : MakeEverythingSearch(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", provider_);
         auto Open = Provider->Search({root_, recursive_->isChecked()}, Matcher.Value());
         if (!Open.HasValue()) { status_->setText(QString::fromStdString(Open.Failure().code_)); return; }
         cursor_ = std::move(Open.Value()); stop_ = std::stop_source(); entries_.clear(); results_->clear();
@@ -219,7 +220,7 @@ private:
     QPushButton* start_;
 };
 }
-std::shared_ptr<ISearchProvider> MakeEverythingSearch(const QString& Executable) { return std::make_shared<IndexSearch>(Executable); }
+std::shared_ptr<ISearchProvider> MakeEverythingSearch(const QString& Executable, std::shared_ptr<IStorageProvider> Reader) { return std::make_shared<IndexSearch>(Executable, std::move(Reader)); }
 void Show(QWidget* Parent, std::shared_ptr<IStorageProvider> Provider, Locator Root, MetadataSnapshot Metadata, std::function<void(const EntrySnapshot&)> Activate)
 { (new SearchDialog(Parent, std::move(Provider), std::move(Root), std::move(Metadata), std::move(Activate)))->show(); }
 }
