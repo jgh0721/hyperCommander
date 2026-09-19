@@ -57,6 +57,8 @@ class CmpPanel : public QWidget
         quint64                     SelectedSize = 0;
         int                         SelectedFileCount = 0;
         int                         SelectedDirectoryCount = 0;
+        hc::workspace::TabState     workspace_;
+        bool                       pending_ = false, restoreSelection_ = false;
 
         CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }
         QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
@@ -72,7 +74,9 @@ public:
 
     Q_INVOKABLE void                RefreshVolumeList() const;
 
-    void                            AddTab();
+    void                            AddTab(bool Navigate = true);
+    hc::workspace::PaneState        CaptureWorkspace() const;
+    void                            RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults = {});
     void                            PrevTab();
     void                            NextTab();
     void                            CloseTab();
@@ -111,6 +115,8 @@ private:
     void                            resizeEvent( QResizeEvent* event ) override;
 
     void                            initializeUIs();
+    void                            restoreTab(int Index);
+    void                            updateWorkspaceStatus();
 
     CViewT*                         createGridView();
     int                             retrieveCurrentIndex() const;
@@ -129,6 +135,11 @@ private:
 
     // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
     QVector< TySpTabState >         vecTabStates;
+    bool                            workspaceRestored_ = false;
+    QLineEdit*                      search_ = nullptr;
+    QLabel*                         workspaceStatus_ = nullptr;
+    QPushButton*                    retry_ = nullptr;
+    QComboBox*                      history_ = nullptr;
 };
 
 //class CmpPanel : public QWidget

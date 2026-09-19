@@ -288,6 +288,13 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
         switch( Role )
         {
+            case Qt::ToolTipRole: {
+                if (Item->storageEntry_) {
+                    QStringList Lines; const auto Values = index_.Metadata(*Item->storageEntry_);
+                    for (auto It = Values.begin(); It != Values.end(); ++It) Lines.append(It.key() + ": " + It.value());
+                    RoleWith.setData(Lines.join('\n'));
+                }
+            } break;
             case Qt::DisplayRole:
             case Qt::EditRole: {
                 if( Item->VecContent.isEmpty() == true || Col >= Item->VecContent.size() )
@@ -362,6 +369,8 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
 void CFSModel::doRefresh()
 {
+    if (placeholder_ && !GetRoot()) { emit RetryRequested(); return; }
+    placeholder_.reset();
     if (const auto Root = GetRoot()) Root->RefreshReadProvider();
     if (providerEnabled_)
     {
@@ -528,6 +537,50 @@ void CFSModel::doRefresh()
     }
 }
 
+CFSModel::CFSModel()
+{
+    connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
+        if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) Refresh();
+    });
+}
+
+hc::storage::Locator CFSModel::WorkspaceLocation() const
+{
+    if (placeholder_) return *placeholder_;
+    const auto Root = GetRoot();
+    return Root ? Root->ReadLocation(GetCurrentPathWithRoot()) : hc::storage::Locator{};
+}
+
+void CFSModel::SetWatchEnabled(bool Enabled)
+{
+    watchEnabled_ = Enabled;
+    const auto Location = WorkspaceLocation();
+    const auto Root = GetRoot();
+    // Registering a native watcher on an unreachable server can block the GUI.
+    const auto Native = Root && !Root->IsRemote() && Location.kind_ == hc::storage::LocatorKind::Local
+        && Location.nesting_.empty() ? QString::fromStdString(Location.root_) : QString{};
+    tracker_.SetLocation(Enabled && Root && providerEnabled_ ? hc::workspace::LocationKey(Location) : QString{}, Native);
+}
+
+void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason)
+{
+    CancelNavigation(); tracker_.SetLocation({});
+    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
+    vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
+    placeholder_ = Location; index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
+    endResetModel();
+    navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Unavailable, Reason.toStdString(), {}, {}, true, "retry"};
+    emit sigNavigationFailed(Reason); emit sigRefreshCompleted();
+}
+
+void CFSModel::ClearPlaceholder() { placeholder_.reset(); navigationError_.reset(); }
+
+bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation)
+{
+    if (!index_.Put(Entry, Values, Generation)) return false;
+    emit MetadataChanged(); return true;
+}
+
 CFSModel::~CFSModel()
 {
     navigationStop_.request_stop();
@@ -543,6 +596,8 @@ CFSModel::~CFSModel()
 
 void CFSModel::CancelNavigation()
 {
+    setProperty("hc.restoreTicket", QString{}); setProperty("hc.restorePending", false);
+    emit NavigationCancelled();
     navigationStop_.request_stop();
     ++generation_;
     if (loading_)
@@ -566,6 +621,9 @@ void CFSModel::SetProviderEnabled(bool Enabled)
         QThreadPool::globalInstance()->waitForDone();
     }
     providerEnabled_ = Enabled;
+    // The compatibility path performs synchronous legacy I/O. Automatic
+    // rescans belong only to the asynchronous provider path.
+    index_.Publish({}); SetWatchEnabled(watchEnabled_);
     acceptedRoots_ = vecFs_;
     acceptedPath_ = path_;
     if (GetRoot()) Refresh();
@@ -593,9 +651,11 @@ void CFSModel::refreshProvider()
     OperationContext Context;
     Context.requestId_ = std::to_string(Generation);
     Context.stopToken_ = navigationStop_.get_token();
+    Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    Context.freshEnumerationMetadata_ = true;
     using ReadResult = Result<std::vector<EntrySnapshot>>;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location] {
         const auto Result = Watcher->result();
         Watcher->deleteLater();
         if (Generation != generation_) return;
@@ -613,6 +673,8 @@ void CFSModel::refreshProvider()
         acceptedPath_ = TargetPath;
         acceptedProvider_ = Provider;
         publishProvider(Result.Value());
+        setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
+        SetWatchEnabled(watchEnabled_);
         emit sigRefreshCompleted();
         const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
             ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
@@ -646,6 +708,7 @@ void CFSModel::refreshProvider()
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 {
+    index_.Publish(Entries);
     QVector<nsHC::TySpFileSource> Items;
     if (GetRoot()->ReadLocation(GetCurrentPathWithRoot()).kind_ != hc::storage::LocatorKind::Shell || GetRootCount() > 1)
     {
@@ -985,8 +1048,10 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
     if( Index.isValid() && !source_parent.isValid() )
     {
         const auto Attr = Index.data( CFSModel::USR_ROLE_ATTRIBUTE ).toUInt();
-        if( ( FlagOn( Attr, FILE_ATTRIBUTE_HIDDEN ) ) || ( FlagOn( Attr, FILE_ATTRIBUTE_SYSTEM ) ) )
-            return IsShowHiddenSystem_;
+        if (!IsShowHiddenSystem_ && (FlagOn(Attr, FILE_ATTRIBUTE_HIDDEN) || FlagOn(Attr, FILE_ATTRIBUTE_SYSTEM))) return false;
+        const auto Model = qobject_cast<const CFSModel*>(sourceModel());
+        const auto Item = Model ? Model->GetFileInfo(Index) : nsHC::TySpFileSource{};
+        if (Item && Item->storageEntry_ && !Model->MatchesSearch(*Item->storageEntry_, search_)) return false;
     }
 
     return QSortFilterProxyModel::filterAcceptsRow( source_row, source_parent );

@@ -71,9 +71,14 @@ void DirectoryIndex::Publish(const std::vector<storage::EntrySnapshot>& Entries)
     records_ = std::move(Next); ++generation_;
 }
 bool DirectoryIndex::Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation) {
-    if (Generation != generation_) return false;
+    // A refresh may finish while metadata is being queried. An unchanged
+    // revision still describes the same content; unversioned entries require
+    // the exact snapshot generation to prevent delayed results being reused.
+    if (Generation == 0 || Generation > generation_ || (Generation != generation_ && !Entry.id_.revision_)) return false;
     auto Found = records_.find(SelectionKey(Entry));
-    if (Found == records_.end() || Found->entry_.id_ != Entry.id_ || Found->entry_.locator_ != Entry.locator_) return false;
+    if (Found == records_.end() || Found->entry_.id_ != Entry.id_ || Found->entry_.locator_ != Entry.locator_
+        || Found->entry_.size_ != Entry.size_ || Found->entry_.modifiedUtcMs_ != Entry.modifiedUtcMs_
+        || Found->entry_.attributes_ != Entry.attributes_) return false;
     for (auto It = Values.begin(); It != Values.end(); ++It) Found->values_.insert(It.key(), It.value());
     return true;
 }

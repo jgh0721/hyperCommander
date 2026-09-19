@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "UniqueLibs/commandMgr_Defs.hpp"
+#include "UniqueLibs/qtWorkspaceState.hpp"
 
 #include "ui_dlgMain.h"
 
@@ -11,6 +12,9 @@ class QMainUI : public QMainWindow
     Q_OBJECT
 public:
     QMainUI( QWidget* parent = nullptr, Qt::WindowFlags flags = Qt::WindowFlags() );
+    hc::workspace::State CaptureWorkspace() const;
+    void RestoreWorkspace(const hc::workspace::State& State);
+    bool SaveWorkspace();
 
 public slots:
 
@@ -78,4 +82,6 @@ private:
     int                                 currentPanelIndex = 0; // 0 = Left, 1 = Right
 
     Ui::dlgMain                         ui;
-}; 
+    hc::workspace::Loaded              workspace_;
+    bool                               workspaceLoaded_ = false;
+};

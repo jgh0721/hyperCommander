@@ -31,11 +31,15 @@ private slots:
         QVERIFY(Index.Put(Entry, {{"author", "Kim"}}, Generation));
         QVERIFY(Index.Matches(Entry, "ext:txt author:kim")); QVERIFY(!Index.Matches(Entry, "ext:png"));
         Index.Publish({Entry}); QCOMPARE(Index.Metadata(Entry).value("author"), QString("Kim"));
-        QVERIFY(!Index.Put(Entry, {{"author", "stale"}}, Generation));
+        QVERIFY(Index.Put(Entry, {{"author", "Kim"}}, Generation));
+        const auto Old = Entry;
         Entry.id_.revision_->token_ = "v2"; Index.Publish({Entry}); QVERIFY(Index.Metadata(Entry).isEmpty());
+        QVERIFY(!Index.Put(Old, {{"author", "stale"}}, Generation));
         QVERIFY(!Index.Matches(Entry, "author:kim"));
         Entry.id_.revision_.reset(); Index.Publish({Entry}); QVERIFY(Index.Put(Entry, {{"author", "Lee"}}, Index.Generation()));
+        const auto UnversionedGeneration = Index.Generation();
         Index.Publish({Entry}); QVERIFY(Index.Metadata(Entry).isEmpty());
+        QVERIFY(!Index.Put(Entry, {{"author", "stale"}}, UnversionedGeneration));
         Index.Publish({}); QVERIFY(!Index.Put(Entry, {{"author", "gone"}}, Index.Generation()));
     }
     void pluginSelectionSurvivesHostRestart() {

@@ -444,6 +444,8 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 
 void QMainUI::closeEvent( QCloseEvent* Event )
 {
+    if (workspaceLoaded_ && workspace_.writable_ && !SaveWorkspace())
+        QMessageBox::warning(this, tr("작업공간 저장"), tr("작업공간을 저장하지 못했습니다. 기존 설정은 유지됩니다.\n%1").arg(workspace_.error_));
     StSettings->beginGroup( OPT_SEC_WINDOW );
     StSettings->setValue( "geometry", saveGeometry() );
     StSettings->endGroup();
@@ -486,6 +488,33 @@ void QMainUI::initialize()
 
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );
+
+    workspace_ = hc::workspace::Load(*StSettings); workspaceLoaded_ = true;
+    if (workspace_.exists_ && workspace_.writable_) RestoreWorkspace(workspace_.state_);
+    else if (!workspace_.writable_) statusBar()->showMessage(tr("저장된 작업공간을 읽을 수 없어 원본을 보존합니다: %1").arg(workspace_.error_));
+}
+
+hc::workspace::State QMainUI::CaptureWorkspace() const
+{
+    auto State = workspace_.state_;
+    State.left_ = ui.cmpLeftPanel->CaptureWorkspace(); State.right_ = ui.cmpRightPanel->CaptureWorkspace();
+    State.activePane_ = currentPanelIndex; State.geometry_ = saveGeometry(); State.layout_ = ui.splitter->saveState();
+    return State;
+}
+
+void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
+{
+    ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_); ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
+    if (!State.geometry_.isEmpty()) restoreGeometry(State.geometry_);
+    if (!State.layout_.isEmpty()) ui.splitter->restoreState(State.layout_);
+    currentPanelIndex = State.activePane_ == 1 ? 1 : 0;
+    const auto Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
+    Panel->SetFocusView(Panel->CurrentTabIndex()); emit Panel->sig_NotifyPanelActivated();
+}
+
+bool QMainUI::SaveWorkspace()
+{
+    return workspaceLoaded_ && hc::workspace::Save(*StSettings, workspace_, CaptureWorkspace());
 }
 
 CmpPanel* QMainUI::retrieveSrcPanel() const

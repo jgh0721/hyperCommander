@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpView.hpp"
+#include "UniqueLibs/qtWorkspaceState.hpp"
 
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
@@ -178,7 +179,17 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     // an invalid GridRow, and old row positions must not target different files.
     disconnect(selectionReset_);
     selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
-        this, [this] { view_->deselectAll(); }, Qt::DirectConnection);
+        this, [this] {
+            resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
+            resetPath_ = model_->property("hc.snapshotLocation").toString();
+            view_->deselectAll();
+        }, Qt::DirectConnection);
+    disconnect(selectionRestore_);
+    selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
+        if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString())
+            RestoreSelection(resetSelection_, resetFocus_);
+        resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear();
+    });
     model_->SetColumnView( *Columns );
 
     if( Proxy != nullptr )
@@ -269,6 +280,98 @@ void CGridView::AdjustSizeToContents() const
 }
 
 void CGridView::ConfigureColumns() { if (columnAdapter_) columnAdapter_->ShowSettings(); }
+
+QJsonObject CGridView::CaptureWorkspaceView() const
+{
+    QJsonArray Columns;
+    for (int Index = 0; Index < model_->columnCount(); ++Index)
+        if (auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index)))
+        {
+            int Priority = -1;
+            const auto Rules = view_->modelController()->sortRules();
+            for (int Rule = 0; Rule < Rules->sortRulesCount(); ++Rule)
+                if (Rules->sortRule(Rule)->dataBinding == Column->dataBinding()) { Priority = Rule; break; }
+            Columns.append(QJsonObject{{"id", columnAdapter_->ColumnId(Index)}, {"position", Column->visualIndex()},
+                {"sort", int(Column->sortOrder())}, {"priority", Priority}});
+        }
+    const auto Proxy = qobject_cast<CFSProxyModel*>(proxy_);
+    return {{"mode", "details"}, {"widths", columnAdapter_->WorkspaceOverrides()}, {"columns", Columns},
+        {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
+}
+
+void CGridView::RestoreWorkspaceView(const QJsonObject& View)
+{
+    columnAdapter_->SetWorkspaceOverrides(View.value("widths").toObject());
+    QList<QJsonObject> Sorted;
+    for (const auto& Value : View.value("columns").toArray()) Sorted.append(Value.toObject());
+    std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {
+        return A.value("priority").toInt(-1) < B.value("priority").toInt(-1);
+    });
+    view_->beginUpdate();
+    if (!Sorted.isEmpty())
+        for (int Index = 0; Index < model_->columnCount(); ++Index)
+            if (auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))) Column->setSortOrder(Qtitan::SortNone);
+    for (const auto& Value : Sorted)
+        for (int Index = 0; Index < model_->columnCount(); ++Index)
+        {
+            if (columnAdapter_->ColumnId(Index) != Value.value("id").toString()) continue;
+            auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+            if (!Column) continue;
+            const auto Position = Value.value("position").toInt(-1);
+            if (Position >= 0 && Position < model_->columnCount()) Column->setVisualIndex(Position);
+            const auto Sort = Value.value("sort").toInt(-1);
+            if (Sort == Qtitan::SortAscending || Sort == Qtitan::SortDescending)
+                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), true);
+        }
+    view_->endUpdate();
+    if (auto* Proxy = qobject_cast<CFSProxyModel*>(proxy_))
+    { Proxy->SetHiddenSystem(View.value("hiddenSystem").toBool()); Proxy->SetSearch(View.value("search").toString()); }
+}
+
+QStringList CGridView::CaptureSelection() const
+{
+    QStringList Result;
+    if (!model_ || !view_) return Result;
+    for (const auto Row : view_->selection()->selectedRowIndexes())
+    {
+        auto Index = view_->getRow(Row).modelIndex(0);
+        if (!Index.isValid()) continue;
+        if (proxy_) Index = proxy_->mapToSource(Index);
+        const auto Item = model_->GetFileInfo(Index);
+        if (Item && Item->storageEntry_) Result.append(hc::workspace::SelectionKey(*Item->storageEntry_));
+    }
+    return Result;
+}
+
+QString CGridView::CaptureFocus() const
+{
+    if (!model_ || !view_) return {};
+    auto Index = view_->focusedRow().modelIndex(0);
+    if (!Index.isValid()) return {};
+    if (proxy_) Index = proxy_->mapToSource(Index);
+    const auto Item = model_->GetFileInfo(Index);
+    return Item && Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : QString{};
+}
+
+void CGridView::RestoreSelection(const QStringList& Selection, const QString& Focus)
+{
+    const QSet<QString> Keys(Selection.begin(), Selection.end());
+    view_->deselectAll();
+    for (int Index = 0; Index < model_->rowCount(); ++Index)
+    {
+        const auto Source = model_->index(Index, 0);
+        const auto Item = model_->GetFileInfo(Source);
+        if (!Item || !Item->storageEntry_) continue;
+        const auto Key = hc::workspace::SelectionKey(*Item->storageEntry_);
+        if (!Keys.contains(Key) && Key != Focus) continue;
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+        if (!Visible.isValid()) continue;
+        const auto Row = view_->getRow(Visible);
+        if (!Row.isValid()) continue;
+        if (Keys.contains(Key)) view_->selectRow(Row.rowIndex(), Qtitan::Select);
+        if (Key == Focus) view_->setFocusedRowIndex(Row.rowIndex());
+    }
+}
 
 void CGridView::EnsureKeyboardFocusOnView() const
 {

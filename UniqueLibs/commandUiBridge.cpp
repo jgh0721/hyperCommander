@@ -178,10 +178,10 @@ CommandContext CommandUiBridge::Capture(const QModelIndex& Index)
     bindModels();
     const auto Source = SourceIndex(Index);
     auto* Model = Source.isValid() ? qobject_cast<CFSModel*>(const_cast<QAbstractItemModel*>(Source.model())) : PanelModel(activePanel_);
-    if (!Model || !Model->GetRoot()) return {};
+    if (!Model) return {};
     CommandContext Context;
     Context.tabId_ = Model->property("hc.tabId").toString().toStdString();
-    Context.location_ = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
+    Context.location_ = Model->WorkspaceLocation();
     if (Source.isValid())
     {
         const auto Entry = Model->GetFileInfo(Source);
@@ -239,7 +239,9 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     { closeQuick(); return CommandOutcome{}; }
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model) return Error{ErrorCategory::Cancelled, "tab-closed"};
-    if (!Model->GetRoot()) return Error{ErrorCategory::Unavailable, "tab-not-ready"};
+    if (!Model->GetRoot() && (Invocation.id_.starts_with("hc.file.") || Invocation.id_.starts_with("hc.viewer.")
+        || Invocation.id_ == "hc.navigate.parent" || Invocation.id_ == "hc.navigate.open"))
+        return Error{ErrorCategory::Unavailable, "tab-not-ready"};
     auto* Panel = PanelOf(Model);
     if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
     const auto& Id = Invocation.id_;
@@ -251,7 +253,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-path-required"};
         Path = QDir::toNativeSeparators(QDir::cleanPath(Path));
     }
-    if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot())))
+    if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
     if (Id.starts_with("hc.viewer.")) return executeViewer(Invocation, Model);
@@ -468,6 +470,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     const auto Context = captureFiles({}, true);
     QPointer<CmpPanel> Panel = activePanel_;
     QPointer<CFSModel> Model = findModel(Context.tabId_);
+    const auto MetadataGeneration = Model ? Model->MetadataGeneration() : 0;
     std::shared_ptr<IContentSource> Source;
     if (Metadata)
     {
@@ -507,23 +510,27 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     Table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); Layout->addWidget(Table); Table->setVisible(Metadata);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog); Layout->addWidget(Buttons); connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::close);
     auto Stop = std::make_shared<std::stop_source>(); connect(Dialog, &QObject::destroyed, this, [Stop] { Stop->request_stop(); });
-    struct OpenResult { HostedStorage storage_; std::vector<std::pair<QString, QString>> values_; std::shared_ptr<IMetadataProvider> metadata_; std::vector<int> fields_; };
+    struct OpenResult { HostedStorage storage_; std::vector<std::pair<QString, QString>> values_; std::shared_ptr<IMetadataProvider> metadata_; std::vector<int> fields_; QMap<QString, QString> searchable_; };
     auto* Watcher = new QFutureWatcher<Result<OpenResult>>(Dialog);
-    connect(Watcher, &QFutureWatcher<Result<OpenResult>>::finished, Dialog, [this, Watcher, Dialog, Status, Table, Panel, Metadata, Source, Stop] {
+    connect(Watcher, &QFutureWatcher<Result<OpenResult>>::finished, Dialog, [this, Watcher, Dialog, Status, Table, Panel, Metadata, Source, Stop, Model, MetadataGeneration, Options, NativeRoot] {
         const auto Result = Watcher->result(); Watcher->deleteLater();
         if (!Result.HasValue()) { Status->setText(tr("연결 실패: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
         if (Metadata)
         {
+            if (Model) Model->PutMetadata(Source->Describe(), Result.Value().searchable_, MetadataGeneration);
             Status->setText(Source->Describe().locator_.kind_ == LocatorKind::Local
                 ? tr("파일 정보 — 항목을 두 번 클릭하면 지연된 값도 계산합니다.")
                 : tr("가상·원격 파일의 임시 복사본 기준 정보입니다. 두 번 클릭하면 지연된 값도 계산합니다."));
             for (const auto& [Field, Value] : Result.Value().values_)
             { const auto Row = Table->rowCount(); Table->insertRow(Row); Table->setItem(Row, 0, new QTableWidgetItem(Field)); Table->setItem(Row, 1, new QTableWidgetItem(Value)); }
-            connect(Table, &QTableWidget::cellDoubleClicked, Dialog, [Table, Dialog, Source, Stop, Provider = Result.Value().metadata_, Fields = Result.Value().fields_](int Row, int) {
+            connect(Table, &QTableWidget::cellDoubleClicked, Dialog, [Table, Dialog, Source, Stop, Model, MetadataGeneration, Provider = Result.Value().metadata_, Fields = Result.Value().fields_](int Row, int) {
                 if (Row < 0 || std::size_t(Row) >= Fields.size()) return;
                 Table->setEnabled(false); auto* Query = new QFutureWatcher<hc::storage::Result<MetadataValue>>(Dialog);
-                connect(Query, &QFutureWatcher<hc::storage::Result<MetadataValue>>::finished, Dialog, [Query, Table, Row] {
-                    Table->item(Row, 1)->setText(MetadataText(Query->result())); Table->setEnabled(true); Query->deleteLater();
+                connect(Query, &QFutureWatcher<hc::storage::Result<MetadataValue>>::finished, Dialog, [Query, Table, Row, Model, Source, MetadataGeneration] {
+                    const auto Value = Query->result(); const auto Text = MetadataText(Value);
+                    Table->item(Row, 1)->setText(Text); Table->setEnabled(true); Query->deleteLater();
+                    if (Model && Value.HasValue() && Value.Value().status_ == MetadataStatus::Value)
+                        Model->PutMetadata(Source->Describe(), {{Table->item(Row, 0)->text(), Text}}, MetadataGeneration);
                 });
                 Query->setFuture(QtConcurrent::run([Provider, Source, Stop, Field = Fields[Row]] {
                     OperationContext Operation; Operation.stopToken_ = Stop->get_token(); Operation.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -533,10 +540,12 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
         }
         else if (Panel)
         {
-            Panel->AddTab(); bindModels();
+            Panel->AddTab(false); bindModels();
             if (auto* Target = PanelModel(Panel))
             {
                 const auto& Storage = Result.Value().storage_;
+                Target->setProperty("hc.workspaceProvider", Options.manifestPath_);
+                Target->setProperty("hc.workspaceNativeRoot", NativeRoot);
                 Target->SetRoot(nsHC::TySpFileSystem(new nsHC::CFSPlugin(Storage.root_, Storage.reader_, Storage.writer_)));
                 Target->SetCurrentPath("\\"); Target->SetProviderEnabled(true); Target->Refresh();
             }
@@ -575,6 +584,8 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
                 if (const auto Failure = Operation.Check({})) return *Failure;
                 auto Value = Provider.Value()->Query(Source, {Field.index_, 0, true}, Operation).get();
                 Result.values_.emplace_back(QString::fromStdString(Field.name_), MetadataText(Value)); Result.fields_.push_back(Field.index_);
+                if (Value.HasValue() && Value.Value().status_ == MetadataStatus::Value)
+                    Result.searchable_.insert(QString::fromStdString(Field.name_), MetadataText(Value));
             }
         }
         return Result;

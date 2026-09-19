@@ -51,6 +51,7 @@ void QtitanColumnAdapter::Bind(const ColumnView& Columns)
 void QtitanColumnAdapter::Reload()
 {
     if (ids_.isEmpty()) return;
+    if (workspaceOwned_) { Request(); return; }
     QString Pane = "default";
     for (auto* Parent = owner_.data(); Parent; Parent = Parent->parentWidget())
         if (Parent->objectName() == "cmpLeftPanel" || Parent->objectName() == "cmpRightPanel") { Pane = Parent->objectName(); break; }
@@ -130,7 +131,27 @@ bool QtitanColumnAdapter::SetPolicy(const QString& Id, const ColumnWidthPolicy& 
     return true;
 }
 
-bool QtitanColumnAdapter::save() { return !profile_.isEmpty() && SaveWidths(*StSettings, profile_, settings_); }
+bool QtitanColumnAdapter::save() { return workspaceOwned_ || (!profile_.isEmpty() && SaveWidths(*StSettings, profile_, settings_)); }
+
+void QtitanColumnAdapter::SetWorkspaceOverrides(const QJsonObject& Columns)
+{
+    if (!workspaceOwned_) { Reload(); inherited_ = settings_.columns_; workspaceOwned_ = true; }
+    settings_.columns_ = inherited_;
+    for (auto It = Columns.begin(); It != Columns.end(); ++It) {
+        const auto Policy = It.value().isObject() ? DecodeWidth(It.value().toObject()) : std::nullopt;
+        if (Policy && legacy_.contains(It.key())) settings_.columns_[It.key()] = *Policy;
+    }
+    Request();
+}
+
+QJsonObject QtitanColumnAdapter::WorkspaceOverrides() const
+{
+    QJsonObject Result;
+    for (auto It = settings_.columns_.begin(); It != settings_.columns_.end(); ++It)
+        if (!inherited_.contains(It.key()) || EncodeWidth(inherited_.value(It.key())) != EncodeWidth(It.value()))
+            Result[It.key()] = EncodeWidth(It.value());
+    return Result;
+}
 
 void QtitanColumnAdapter::captureDrag()
 {

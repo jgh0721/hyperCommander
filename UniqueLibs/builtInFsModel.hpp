@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "columnMgr.hpp"
+#include "qtWorkspaceState.hpp"
+#include "qtDirectoryTracker.hpp"
 #include "cmnTypeDefs.hpp"
 
 #include "Modules/mdlFileModel.hpp"
@@ -63,7 +65,16 @@ public:
     ////////////////////////////////////////////////////////////////////////////
     ///
 
+    CFSModel();
     ~CFSModel() override;
+    void SetWatchEnabled(bool Enabled);
+    void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason);
+    hc::storage::Locator WorkspaceLocation() const;
+    void ClearPlaceholder();
+    bool HasPlaceholder() const { return placeholder_.has_value(); }
+    quint64 MetadataGeneration() const { return index_.Generation(); }
+    bool PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
+    bool MatchesSearch(const hc::storage::EntrySnapshot& Entry, const QString& Query) const { return index_.Matches(Entry, Query); }
     void                            SetProviderEnabled(bool Enabled);
     bool                            ProviderEnabled() const { return providerEnabled_; }
     bool                            IsLoading() const override { return loading_; }
@@ -98,6 +109,10 @@ public:
     // Another tab may refresh the provider cached by a shared filesystem root.
     std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return acceptedProvider_; }
 
+signals:
+    void NavigationCancelled();
+    void RetryRequested();
+    void MetadataChanged();
 protected:
     void                            doRefresh() override;
 
@@ -111,6 +126,10 @@ private:
     void                            refreshProvider();
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
     bool                            providerEnabled_ = true;
+    QtDirectoryTracker              tracker_;
+    bool                            watchEnabled_ = false;
+    std::optional<hc::storage::Locator> placeholder_;
+    hc::workspace::DirectoryIndex   index_;
     bool                            loading_ = false;
     std::uint64_t                   generation_ = 0;
     std::stop_source                navigationStop_;
@@ -139,10 +158,13 @@ public:
 
     Q_INVOKABLE void                    SetHiddenSystem( bool IsShow );
     Q_INVOKABLE bool                    GetHiddenSystem() const;
+    void SetSearch(const QString& Query) { search_ = Query.left(4096); invalidateFilter(); }
+    QString Search() const { return search_; }
 
     bool                                filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const override;
 
 private:
 
     bool                                IsShowHiddenSystem_ = false;
+    QString                             search_;
 };

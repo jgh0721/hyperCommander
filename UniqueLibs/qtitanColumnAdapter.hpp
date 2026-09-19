@@ -18,6 +18,8 @@ public:
     void Apply();
     void Reload();
     void ShowSettings();
+    void SetWorkspaceOverrides(const QJsonObject& Columns);
+    QJsonObject WorkspaceOverrides() const;
     bool SetPolicy(const QString& Id, const hc::view::ColumnWidthPolicy& Policy, bool Persist = true);
     const QMap<QString, hc::view::ColumnWidthPolicy>& Policies() const { return settings_.columns_; }
     QString ColumnId(int ModelColumn) const { return ids_.value(ModelColumn); }
@@ -42,6 +44,8 @@ private:
     QString viewId_;
     bool applying_ = false;
     bool dragging_ = false;
+    bool workspaceOwned_ = false;
+    QMap<QString, hc::view::ColumnWidthPolicy> inherited_;
     int lastWidth_ = 0;
     quint64 applyCount_ = 0;
     qint64 lastApplyNs_ = 0;

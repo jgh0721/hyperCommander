@@ -96,6 +96,12 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../UniqueLibs/qtWorkspaceState.cpp
+        ../UniqueLibs/qtWorkspaceState.hpp
+        ../UniqueLibs/qtWorkspaceRestore.cpp
+        ../UniqueLibs/qtWorkspaceRestore.hpp
+        ../UniqueLibs/qtDirectoryTracker.cpp
+        ../UniqueLibs/qtDirectoryTracker.hpp
         ../UniqueLibs/qtPluginHostSettings.cpp
         ../UniqueLibs/qtPluginHostSettings.hpp
         ../commonLibs/operations/jobScheduler.cpp

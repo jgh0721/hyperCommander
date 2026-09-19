@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "UniqueLibs/qtWorkspaceRestore.hpp"
 #include "dlgGridStyle.hpp"
 #include "dlgViewer.hpp"
 
@@ -45,7 +46,7 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
     QMetaObject::invokeMethod( this, "RefreshVolumeList", Qt::QueuedConnection );
     QTimer::singleShot( 100, this, [this]() {
-        if( ui.cbxVolume->GetCount() == 0 )
+        if( workspaceRestored_ || ui.cbxVolume->GetCount() == 0 )
             return;
 
         // A disconnected mapping may sort before C:. Showing the drive list
@@ -135,52 +136,158 @@ void CmpPanel::RefreshVolumeList() const
     
 }
 
-void CmpPanel::AddTab()
+
+void CmpPanel::AddTab(bool Navigate)
 {
-    const auto TabCount = ui.tabWidget->count();
-    const auto TabCurrent = ui.tabWidget->currentIndex();
-
-    // TODO: 중복제거 필요함
-    // 탭에 어떠한 뷰도 없으므로, 기보값으로 GridView 를 추가한다.
-    const auto StColumnMgr = TyStColumnMgr::GetInstance();
-    auto ColumnView = StColumnMgr->GetColumnView( 0 );
-
-    const auto DefaultView = static_cast< CGridView* >( createGridView() );
-    if( DefaultView == nullptr )
-        return;
-
-    ui.tabWidget->blockSignals( true );
-    const auto TabIndex = ui.tabWidget->addTab( DefaultView, "" );
-    ui.tabWidget->setCurrentIndex( -1 );
-    ui.tabWidget->blockSignals( false );
-
-    connect( DefaultView, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated );
-
-    const auto FsModel = new CFSModel;
-    const auto ProxyModel = new CFSProxyModel;
-    connect( FsModel, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory );
-
-    DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
-
-    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, nullptr, FsModel, ProxyModel );
-    vecTabStates.push_back( State );
-
-    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-    OnColorSchemeChanged( StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() ) );
-
-    const auto Fs = ui.cbxVolume->GetItem( ui.cbxVolume->currentIndex() )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
-
-    ui.tabWidget->setCurrentIndex( TabCount );
-
-    State->Model->SetRoot( Fs );
-    State->Model->SetCurrentPath( "\\" );
-    State->Model->ChangeDirectory( QModelIndex() );
-
-    State->View->AdjustSizeToContents();
-    SetFocusView( TabCount );
-
-    QTimer::singleShot( 0, [State]() {State->View->EnsureKeyboardFocusOnView(); } );
+    if (vecTabStates.size() >= 64) return;
+    const auto Previous = CaptureWorkspace();
+    auto Columns = TyStColumnMgr::GetInstance()->GetColumnView(0);
+    auto* View = static_cast<CGridView*>(createGridView());
+    auto* Model = new CFSModel; auto* Proxy = new CFSProxyModel;
+    View->SetModel(Model, Proxy, &Columns);
+    const auto State = std::make_shared<TyTabState>(int(vecTabStates.size()), View, nullptr, Model, Proxy);
+    State->workspace_.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    Model->setProperty("hc.tabId", State->workspace_.id_);
+    vecTabStates.append(State);
+    connect(View, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated);
+    connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);
+    connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search()); });
+    connect(Model, &CFSModel::RetryRequested, this, [this, Model] {
+        for (int Index = 0; Index < vecTabStates.size(); ++Index)
+            if (vecTabStates[Index]->Model == Model) { restoreTab(Index); break; }
+    });
+    connect(Model, &CFSModel::sigRefreshCompleted, this, [this, Model] {
+        for (const auto& Tab : vecTabStates) {
+            if (Tab->Model != Model) continue;
+            if (Tab->restoreSelection_ && !Model->LastNavigationError()) {
+                static_cast<CGridView*>(Tab->View)->RestoreSelection(Tab->workspace_.selection_, Tab->workspace_.focus_);
+                Tab->restoreSelection_ = false;
+            }
+            const auto Selection = static_cast<CGridView*>(Tab->View)->CaptureSelection();
+            const QSet<QString> Keys(Selection.begin(), Selection.end());
+            Tab->SelectedSize = 0; Tab->SelectedFileCount = Tab->SelectedDirectoryCount = 0;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+                if (!Item || !Item->storageEntry_ || !Keys.contains(hc::workspace::SelectionKey(*Item->storageEntry_))) continue;
+                if (Item->storageEntry_->directory_) ++Tab->SelectedDirectoryCount;
+                else { ++Tab->SelectedFileCount; Tab->SelectedSize += Item->storageEntry_->size_; }
+            }
+            break;
+        }
+        updateWorkspaceStatus();
+    });
+    { QSignalBlocker Blocker(ui.tabWidget);
+      ui.tabWidget->addTab(View, tr("새 탭")); ui.tabWidget->setCurrentIndex(vecTabStates.size() - 1); }
+    // uic assigns the pane objectName after its constructor returns. Defer the
+    // initial M3 profile lookup until that stable pane identity is available.
+    if (objectName().isEmpty()) QTimer::singleShot(0, View, [View] { View->RestoreWorkspaceView({}); });
+    else View->RestoreWorkspaceView({});
+    const auto Color = TyStColorSchemeMgr::GetInstance();
+    View->ApplyColorScheme(Color->GetColorScheme(Color->GetCurrentColorScheme()));
+    if (Navigate) {
+        if (!Previous.tabs_.isEmpty()) {
+            auto Saved = Previous.tabs_.value(Previous.active_); Saved.id_ = State->workspace_.id_;
+            State->workspace_ = Saved; State->restoreSelection_ = true;
+            View->RestoreWorkspaceView(Saved.view_); restoreTab(vecTabStates.size() - 1);
+        } else if (const auto Item = ui.cbxVolume->GetItem(ui.cbxVolume->currentIndex())) {
+            Model->SetRoot(Item->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>());
+            Model->SetCurrentPath("\\"); Model->Refresh();
+        }
+    }
+    on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
+    View->AdjustSizeToContents();
 }
+
+hc::workspace::PaneState CmpPanel::CaptureWorkspace() const
+{
+    hc::workspace::PaneState Result; Result.active_ = std::max(0, ui.tabWidget->currentIndex());
+    for (const auto& State : vecTabStates) {
+        auto Tab = State->workspace_;
+        const auto Model = static_cast<CFSModel*>(State->Model);
+        const auto View = static_cast<CGridView*>(State->View);
+        if (!State->pending_) {
+            Tab.location_ = Model->WorkspaceLocation();
+            if (!Model->GetRoot() && !Model->HasPlaceholder() && Tab.location_.root_.empty())
+                Tab.location_ = {hc::storage::LocatorKind::Local, QDir::toNativeSeparators(QDir::homePath()).toStdString()};
+            if (Tab.location_.kind_ == hc::storage::LocatorKind::Plugin || Tab.location_.kind_ == hc::storage::LocatorKind::Archive) {
+                Tab.provider_ = Model->property("hc.workspaceProvider").toString();
+                Tab.nativeRoot_ = Model->property("hc.workspaceNativeRoot").toString();
+                if (const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); Pack && Pack->GetWCX())
+                    for (const auto& Choice : TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Pack->GetRoot()).suffix()))
+                        if (Choice.FileFullPath.compare(Pack->GetWCX()->PluginPath(), Qt::CaseInsensitive) == 0) { Tab.provider_ = Choice.hostManifest_; break; }
+            } else { Tab.provider_.clear(); Tab.nativeRoot_.clear(); }
+            if (!State->restoreSelection_) { Tab.selection_ = View->CaptureSelection(); Tab.focus_ = View->CaptureFocus(); }
+        }
+        if (Tab.location_.kind_ == hc::storage::LocatorKind::Plugin) {
+            const auto Path = hc::workspace::PluginPath(Tab.location_);
+            if (!Path.isEmpty()) Tab.location_.root_ = Path.toStdString();
+        }
+        Tab.view_ = View->CaptureWorkspaceView(); Result.tabs_.append(std::move(Tab));
+    }
+    return Result;
+}
+
+void CmpPanel::RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults)
+{
+    if (Pane.tabs_.isEmpty() || Pane.tabs_.size() > 64 || Pane.active_ < 0 || Pane.active_ >= Pane.tabs_.size()) return;
+    workspaceRestored_ = true;
+    // A preview temporarily replaces its grid in QTabWidget. Restore that grid
+    // first so replacing a workspace also destroys its hidden model/watchers.
+    for (int Index = 0; Index < vecTabStates.size(); ++Index)
+        if (vecTabStates[Index]->QuickView) CloseQuickView(Index);
+    { QSignalBlocker Blocker(ui.tabWidget);
+      while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; }
+      vecTabStates.clear(); }
+    for (const auto& Tab : Pane.tabs_) {
+        AddTab(false); const auto State = vecTabStates.back();
+        State->workspace_ = Tab; State->pending_ = true; State->restoreSelection_ = true;
+        State->Model->setProperty("hc.tabId", Tab.id_);
+        static_cast<CGridView*>(State->View)->RestoreWorkspaceView(hc::workspace::MergeView(Defaults, Tab.view_));
+        ui.tabWidget->setTabText(vecTabStates.size() - 1, QString::fromStdString(Tab.location_.root_));
+    }
+    { QSignalBlocker Blocker(ui.tabWidget); ui.tabWidget->setCurrentIndex(Pane.active_); }
+    on_tabWidget_currentChanged(Pane.active_);
+}
+
+void CmpPanel::restoreTab(int Index)
+{
+    if (Index < 0 || Index >= vecTabStates.size()) return;
+    const auto State = vecTabStates[Index]; State->pending_ = false;
+    // Reuse discovered volumes, retaining their cached labels and capabilities
+    // without another filesystem-information query during workspace restore.
+    nsHC::TySpFileSystem Native;
+    const auto Path = QDir::toNativeSeparators(QString::fromStdString(State->workspace_.location_.root_));
+    for (int Volume = 0; Volume < ui.cbxVolume->GetCount(); ++Volume) {
+        const auto Fs = ui.cbxVolume->GetItem(Volume)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+        if (Fs && !Fs->GetRoot().isEmpty() && Path.startsWith(Fs->GetRoot(), Qt::CaseInsensitive)) { Native = Fs; break; }
+    }
+    RestoreWorkspaceLocation(static_cast<CFSModel*>(State->Model), State->workspace_, Native);
+}
+
+void CmpPanel::updateWorkspaceStatus()
+{
+    if (!workspaceStatus_ || ui.tabWidget->currentIndex() < 0 || ui.tabWidget->currentIndex() >= vecTabStates.size()) return;
+    const auto Model = static_cast<CFSModel*>(vecTabStates[ui.tabWidget->currentIndex()]->Model);
+    const auto Location = Model->WorkspaceLocation();
+    int Volume = -1;
+    if (Location.kind_ == hc::storage::LocatorKind::Local || Location.kind_ == hc::storage::LocatorKind::Smb || Location.kind_ == hc::storage::LocatorKind::Archive) {
+        const auto Path = QDir::toNativeSeparators(QString::fromStdString(Location.root_));
+        for (int Index = 0; Index < ui.cbxVolume->GetCount(); ++Index) {
+            const auto Fs = ui.cbxVolume->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+            if (Fs && !Fs->GetRoot().isEmpty() && Path.startsWith(Fs->GetRoot(), Qt::CaseInsensitive)) { Volume = Index; break; }
+        }
+    }
+    if (ui.cbxVolume->currentIndex() != Volume) {
+        QSignalBlocker Blocker(ui.cbxVolume); ui.cbxVolume->setCurrentIndex(Volume);
+        ui.lblVolumeStatus->setText(Model->GetRoot() ? Model->GetRoot()->GetRoot() : QString{});
+    }
+    const auto Error = Model->LastNavigationError();
+    workspaceStatus_->setText(Error ? tr("%1 · %2").arg(QString::fromStdString(Model->WorkspaceLocation().root_), QString::fromStdString(Error->code_)) : QString{});
+    workspaceStatus_->setVisible(bool(Error)); retry_->setVisible(bool(Error));
+    retry_->setEnabled(!Model->property("hc.restorePending").toBool());
+    processPanelStatusText();
+}
+
 
 void CmpPanel::PrevTab()
 {
@@ -233,6 +340,7 @@ void CmpPanel::CloseTab()
         ui.tabWidget->setCurrentIndex(std::min(Current, ui.tabWidget->count() - 1));
     }
     delete Closing;
+    on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
     SetFocusView(ui.tabWidget->currentIndex());
 }
 
@@ -619,51 +727,38 @@ void CmpPanel::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
     int a = 0;
 }
 
-void CmpPanel::OnChangedDirectory( const QString& CurrentPath )
+
+void CmpPanel::OnChangedDirectory(const QString& CurrentPath)
 {
-    qDebug() << __FUNCTION__ << " : " << CurrentPath;
-
-    if( CurrentPath.isEmpty() == true )
-    {
-        // TODO: Model 에서 해당 이름을 전달해줄 수 있어야 한다. 
-        ui.tabWidget->setTabText( retrieveCurrentIndex(), "\\내 PC" );
-        return;
+    int Index = ui.tabWidget->currentIndex();
+    if (sender()) for (int Candidate = 0; Candidate < vecTabStates.size(); ++Candidate)
+        if (vecTabStates[Candidate]->Model == sender()) { Index = Candidate; break; }
+    if (Index < 0 || Index >= vecTabStates.size()) return;
+    const auto State = vecTabStates[Index]; const auto Model = static_cast<CFSModel*>(State->Model);
+    auto Location = Model->WorkspaceLocation();
+    if (Location.kind_ == hc::storage::LocatorKind::Plugin) Location.root_ = hc::workspace::PluginPath(Location).toStdString();
+    if (State->workspace_.history_.isEmpty() || State->workspace_.history_.back() != Location) {
+        State->workspace_.history_.append(Location);
+        if (State->workspace_.history_.size() > 64) State->workspace_.history_.removeFirst();
     }
-
-    QDir dir( CurrentPath );
-    if( dir.exists() == true )
-    {
-        const auto Current = ui.cbxVolume->GetItem( ui.cbxVolume->currentIndex() );
-        const auto Fs = Current->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
-
-        if( CurrentPath.contains( Fs->GetRoot() ) == false )
-        {
-            // NOTE: 볼륨이 설정과 달라졌다면 cbxVolume 을 찾아서 변경해야 한다.
-            for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
-            {
-                const auto Item = ui.cbxVolume->GetItem( idx );
-                const auto ItemFs = Item->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
-                if( CurrentPath.contains( ItemFs->GetRoot() ) == false )
-                    continue;
-
-                QSignalBlocker locker( ui.cbxVolume );
-                ui.cbxVolume->setCurrentIndex( idx );
-                processVolumeStatusText( ItemFs );
-                break;
-            }
-        }
-
-        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath.left( 2 ) + dir.dirName() );
+    const auto Current = CaptureWorkspace().tabs_[Index];
+    State->workspace_.historyConnections_.insert(hc::workspace::LocationKey(Location), QJsonObject{{"provider", Current.provider_}, {"nativeRoot", Current.nativeRoot_}});
+    QSet<QString> Retained;
+    for (const auto& Item : State->workspace_.history_) Retained.insert(hc::workspace::LocationKey(Item));
+    for (const auto& Key : State->workspace_.historyConnections_.keys())
+        if (!Retained.contains(Key)) State->workspace_.historyConnections_.remove(Key);
+    // Labels are lexical: no existence/volume probe on the UI thread.
+    auto Label = QDir::fromNativeSeparators(CurrentPath).section('/', -1);
+    ui.tabWidget->setTabText(Index, Label.isEmpty() ? CurrentPath : Label); ui.tabWidget->setTabToolTip(Index, CurrentPath);
+    if (Index != ui.tabWidget->currentIndex()) return;
+    if (history_) {
+        QSignalBlocker Blocker(history_); history_->clear();
+        for (const auto& Item : State->workspace_.history_) history_->addItem(QString::fromStdString(Item.root_));
+        history_->setCurrentIndex(history_->count() - 1);
     }
-    else
-    {
-        ui.tabWidget->setTabText( ui.tabWidget->currentIndex(), CurrentPath );
-    }
-
-    processPanelStatusText();
-
-    emit sig_NotifyCurrentDirectory( CurrentPath );
+    processPanelStatusText(); updateWorkspaceStatus(); emit sig_NotifyCurrentDirectory(CurrentPath);
 }
+
 
 void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path )
 {
@@ -698,114 +793,69 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path 
     processVolumeStatusText( Fs );
 }
 
-void CmpPanel::on_tabWidget_currentChanged( int Index )
+
+void CmpPanel::on_tabWidget_currentChanged(int Index)
 {
-    // TODO: 모든 탭을 검사하여 기존에 탭 중에 QuickView 모드인 것이 있다면 닫아야 한다.
-
-    if( Index < 0 )
-        return;
-    
-    if( vecTabStates.isEmpty() == true )
-        return;
-
-    if( Index >= vecTabStates.size() )
-        return;
-
-    // TODO: 해당 탭에 설정된 Root 의 볼륨으로 cbxVolume
-    // TODO: VolumeStatus
-    // TODO: DirectoryStatus
-
-    const auto View = vecTabStates.value( Index )->View;
-
-    // retrieveFocusState();
-
-    //QTimer::singleShot( 0, [View]() {
-    //    View->grid()->setFocus();
-    //    View->grid()->viewport()->setFocus( Qt::MouseFocusReason );
-    //    View->grid()->viewport()->raise();
-    //    View->grid()->viewport()->activateWindow();
-
-    //    if( View->getRowCount() > 0 )
-    //    {
-    //        if( View->focusedRowIndex() == View->modelController()->getGridRowCount() - 1 )
-    //        {
-    //            // 가장 마지막임
-    //            View->navigateUp();
-    //            View->navigateDown();
-    //        }
-    //        else
-    //        {
-    //            View->navigateDown();
-    //            View->navigateUp();
-    //        }
-    //    }
-    //} );
+    if (Index < 0 || Index >= vecTabStates.size()) return;
+    emit sig_NotifyPanelActivated();
+    const auto State = vecTabStates[Index];
+    if (State->pending_) restoreTab(Index);
+    for (int Candidate = 0; Candidate < vecTabStates.size(); ++Candidate)
+        static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->SetWatchEnabled(Candidate == Index);
+    if (search_) { QSignalBlocker Blocker(search_); search_->setText(State->ProxyModel->Search()); }
+    if (history_) {
+        QSignalBlocker Blocker(history_); history_->clear();
+        for (const auto& Location : State->workspace_.history_) history_->addItem(QString::fromStdString(Location.root_));
+        history_->setCurrentIndex(history_->count() - 1);
+    }
+    updateWorkspaceStatus();
 }
 
-//////////////////////////////////////////////////////////////////////////////
-/// Private
 
-bool CmpPanel::eventFilter( QObject* Object, QEvent* Event )
-{
-////
-////    // 이름 변경 편집기가 활성화된 상태에서 위/아래 화살표를 누르면 이동한다.
-////    if( Event->type() == QEvent::KeyPress && 
-////        Object->objectName() == "edtFieldOnList" )
-////    {
-////        const auto KeyEvent = dynamic_cast< QKeyEvent* >( Event );
-////        const auto Pressed = KeyEvent->keyCombination().key();
-////        if( Pressed == Qt::Key_Up || Pressed == Qt::Key_Down )
-////        {
-////            const auto View = retrieveFocusView();
-////            if( View->activeEditor() != nullptr )
-////                View->closeEditor();
-////
-////            QMetaObject::invokeMethod( this, "RenameFileName", Qt::QueuedConnection, Q_ARG( const QModelIndex&, QModelIndex() ) );
-////            return true;
-////        }
-////    }
-////
-
-    return false;
-}
 
 void CmpPanel::resizeEvent( QResizeEvent* event )
 {
     QWidget::resizeEvent( event );
 }
 
+bool CmpPanel::eventFilter(QObject* Object, QEvent* Event)
+{
+    return QWidget::eventFilter(Object, Event);
+}
+
+
 void CmpPanel::initializeUIs()
 {
-    ui.cbxVolume->setMinimumHeight( 32 );
-    ui.cbxVolume->view()->setMinimumWidth( 160 );
-
-    while( ui.tabWidget->count() > 0 )
-        ui.tabWidget->removeTab( 0 );
-
-    // 탭에 어떠한 뷰도 없으므로, 기보값으로 GridView 를 추가한다.
-    const auto StColumnMgr = TyStColumnMgr::GetInstance();
-    auto ColumnView = StColumnMgr->GetColumnView( 0 );
-
-    const auto DefaultView = static_cast< CGridView* >( createGridView() );
-    if( DefaultView == nullptr )
-        return;
-
-    ui.tabWidget->blockSignals( true );
-    const auto TabIndex = ui.tabWidget->addTab( DefaultView, "" );
-    ui.tabWidget->setCurrentIndex( -1 );
-    ui.tabWidget->blockSignals( false );
-
-    connect( DefaultView, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated );
-
-    const auto FsModel = new CFSModel;
-    const auto ProxyModel = new CFSProxyModel;
-    connect( FsModel, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory );
-
-    DefaultView->SetModel( FsModel, ProxyModel, &ColumnView );
-
-    const auto State = std::make_shared< TyTabState >( TabIndex, DefaultView, nullptr, FsModel, ProxyModel );
-    vecTabStates.push_back( State );
+    ui.cbxVolume->setMinimumHeight(32); ui.cbxVolume->view()->setMinimumWidth(160);
+    while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; }
+    auto* Controls = new QWidget(this); auto* Layout = new QHBoxLayout(Controls); Layout->setContentsMargins(0, 0, 0, 0);
+    history_ = new QComboBox(Controls); history_->setObjectName("hc.workspaceHistory"); history_->setToolTip(tr("방문 기록"));
+    history_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); history_->setMinimumContentsLength(12);
+    search_ = new QLineEdit(Controls); search_->setObjectName("hc.workspaceSearch"); search_->setClearButtonEnabled(true);
+    search_->setPlaceholderText(tr("현재 폴더 검색 · name:문자 ext:확장자"));
+    search_->setToolTip(tr("공백으로 구분한 조건을 모두 만족하는 항목을 표시합니다. 플러그인에서 조회한 정보도 필드명:값으로 검색할 수 있습니다."));
+    Layout->addWidget(history_, 1); Layout->addWidget(search_, 2); ui.verticalLayout->insertWidget(1, Controls);
+    auto* Notice = new QWidget(this); auto* NoticeLayout = new QHBoxLayout(Notice); NoticeLayout->setContentsMargins(0, 0, 0, 0);
+    workspaceStatus_ = new QLabel(Notice); workspaceStatus_->setWordWrap(true); workspaceStatus_->setTextFormat(Qt::PlainText);
+    retry_ = new QPushButton(tr("다시 시도"), Notice); retry_->setObjectName("hc.workspaceRetry");
+    NoticeLayout->addWidget(workspaceStatus_, 1); NoticeLayout->addWidget(retry_); ui.verticalLayout->insertWidget(2, Notice);
+    workspaceStatus_->hide(); retry_->hide();
+    connect(search_, &QLineEdit::textChanged, this, [this](const QString& Text) {
+        emit sig_NotifyPanelActivated();
+        const auto Index = ui.tabWidget->currentIndex(); if (Index >= 0 && Index < vecTabStates.size()) vecTabStates[Index]->ProxyModel->SetSearch(Text);
+    });
+    connect(retry_, &QPushButton::clicked, this, [this] { RefreshSource(ui.tabWidget->currentIndex()); });
+    connect(history_, &QComboBox::activated, this, [this](int Index) {
+        emit sig_NotifyPanelActivated();
+        const auto State = retrieveFocusState(); if (Index < 0 || Index >= State->workspace_.history_.size()) return;
+        auto Saved = CaptureWorkspace().tabs_[ui.tabWidget->currentIndex()]; Saved.location_ = State->workspace_.history_[Index];
+        const auto Connection = Saved.historyConnections_.value(hc::workspace::LocationKey(Saved.location_)).toObject();
+        Saved.provider_ = Connection.value("provider").toString(); Saved.nativeRoot_ = Connection.value("nativeRoot").toString();
+        Saved.selection_.clear(); Saved.focus_.clear(); State->workspace_ = Saved; restoreTab(ui.tabWidget->currentIndex());
+    });
+    AddTab(false);
 }
+
 
 CViewT* CmpPanel::createGridView()
 {

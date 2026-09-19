@@ -69,6 +69,11 @@ public:
     CFsModelT*                      BaseModel() const;
     QtitanColumnAdapter*            ColumnWidths() const { return columnAdapter_; }
     void                           ConfigureColumns();
+    QJsonObject                    CaptureWorkspaceView() const;
+    void                           RestoreWorkspaceView(const QJsonObject& View);
+    QStringList                    CaptureSelection() const;
+    QString                        CaptureFocus() const;
+    void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
@@ -95,6 +100,9 @@ private:
     QAbstractProxyModel*            proxy_ = nullptr;
     QtitanColumnAdapter*            columnAdapter_ = nullptr;
     QMetaObject::Connection         selectionReset_;
+    QMetaObject::Connection         selectionRestore_;
+    QStringList                    resetSelection_;
+    QString                        resetFocus_, resetPath_;
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;
