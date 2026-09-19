@@ -65,7 +65,20 @@ target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/u
 
 add_subdirectory(pluginHost)
 add_subdirectory(BuiltInPlugin)
+qt_add_executable(hc-search-index tools/searchIndexMain.cpp)
+target_link_libraries(hc-search-index PRIVATE Qt6::Core "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/lib/Everything64.lib")
+target_compile_options(hc-search-index PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_custom_command(TARGET hc-search-index POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll" "$<TARGET_FILE_DIR:hc-search-index>"
+    VERBATIM
+)
+hc_enable_qt_deployment(hc-search-index)
 add_subdirectory(HyperCommander)
+add_dependencies(HyperCommander hc-search-index)
+if(TARGET hc_smb_tests)
+    add_dependencies(hc_smb_tests hc-search-index)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)

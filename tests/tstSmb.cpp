@@ -18,6 +18,7 @@
 #include "pluginHost/manifestFile.hpp"
 #include <QtitanGrid.h>
 #include <iostream>
+#include <QTreeWidget>
 #include <psapi.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
@@ -89,7 +90,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -187,6 +188,25 @@ private slots:
         Search->setText("ext:txt name:renamed");
         const auto Saved = Panel->CaptureWorkspace(); QCOMPARE(Saved.tabs_[0].view_.value("search").toString(), Search->text());
         qInfo() << "M7 workspace restore, watch resync, stable selection and metadata invalidation passed";
+    }
+
+    void scopedSearchUi()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QDir(Directory.path()).mkdir("nested");
+        { QFile File(Directory.filePath("nested/found.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("result"); }
+        auto* Panel = panels_.front(); hc::workspace::TabState Tab; Tab.id_ = "m7-search";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("nested"));
+        Panel->sig_NotifyPanelActivated();
+        auto* Action = main_->findChild<QAction*>("hc.menu.search"); QVERIFY(Action); Action->trigger();
+        auto* Dialog = main_->findChild<QDialog*>("hc.searchDialog"); QVERIFY(Dialog);
+        Dialog->findChild<QLineEdit*>("hc.search.query")->setText("ext:txt");
+        Dialog->findChild<QPushButton*>("hc.search.start")->click();
+        auto* Results = Dialog->findChild<QTreeWidget*>("hc.search.results"); QTRY_COMPARE(Results->topLevelItemCount(), 1);
+        QMetaObject::invokeMethod(Results, "itemDoubleClicked", Q_ARG(QTreeWidgetItem*, Results->topLevelItem(0)), Q_ARG(int, 0));
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("found.txt"));
+        QPointer<QDialog> Guard(Dialog); Dialog->close(); QTRY_VERIFY(Guard.isNull());
     }
 
     void workspaceSmbRestore()

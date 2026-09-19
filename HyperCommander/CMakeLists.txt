@@ -96,6 +96,10 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../commonLibs/storage/search.cpp
+        ../commonLibs/storage/search.hpp
+        ../UniqueLibs/qtSearch.cpp
+        ../UniqueLibs/qtSearch.hpp
         ../UniqueLibs/qtWorkspaceState.cpp
         ../UniqueLibs/qtWorkspaceState.hpp
         ../UniqueLibs/qtWorkspaceRestore.cpp

@@ -170,6 +170,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     </QtMoc>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\commonLibs\storage\search.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\storage\search.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtSearch.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\UniqueLibs\qtSearch.hpp" />
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />
     <ClCompile Include="..\commonLibs\cmnPath.cpp" />

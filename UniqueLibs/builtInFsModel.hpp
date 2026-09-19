@@ -73,6 +73,7 @@ public:
     void ClearPlaceholder();
     bool HasPlaceholder() const { return placeholder_.has_value(); }
     quint64 MetadataGeneration() const { return index_.Generation(); }
+    auto SearchMetadata() const { return index_.SearchMetadata(); }
     bool PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
     bool MatchesSearch(const hc::storage::EntrySnapshot& Entry, const QString& Query) const { return index_.Matches(Entry, Query); }
     void                            SetProviderEnabled(bool Enabled);

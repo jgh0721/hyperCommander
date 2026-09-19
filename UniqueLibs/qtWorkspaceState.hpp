@@ -55,6 +55,12 @@ public:
     void Publish(const std::vector<storage::EntrySnapshot>& Entries);
     bool Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
     QMap<QString, QString> Metadata(const storage::EntrySnapshot& Entry) const;
+    QMap<QString, QMap<QString, QString>> SearchMetadata() const {
+        QMap<QString, QMap<QString, QString>> Result;
+        for (const auto& Record : records_)
+            if (!Record.values_.isEmpty()) Result.insert(QString::fromStdString(storage::Serialize(Record.entry_.id_)), Record.values_);
+        return Result;
+    }
     bool Matches(const storage::EntrySnapshot& Entry, const QString& Query) const;
     quint64 Generation() const { return generation_; }
 private:

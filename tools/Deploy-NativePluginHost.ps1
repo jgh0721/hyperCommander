@@ -17,10 +17,11 @@ if ($LASTEXITCODE -ne 0) { throw "Plugin host configure failed: $LASTEXITCODE" }
 & $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Built-in ISO package build failed: $LASTEXITCODE" }
 if ($PrepareOnly) { return }
-& $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 --parallel 4
+& $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 hc-search-index --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Plugin host build failed: $LASTEXITCODE" }
 $Destination = Split-Path ([IO.Path]::GetFullPath($Executable)) -Parent
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-plugin-host-x64.exe") -Destination $Destination
+Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-search-index.exe") -Destination $Destination
 $BuiltinDestination = Join-Path $Destination 'BuiltInPlugin/IsoImage'
 [IO.Directory]::CreateDirectory($BuiltinDestination) | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $BuildDir "$Configuration/BuiltInPlugin/IsoImage") -File | ForEach-Object {

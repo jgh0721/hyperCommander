@@ -5,6 +5,8 @@
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
+#include "qtSearch.hpp"
+#include "qtWorkspaceRestore.hpp"
 #include "wcxMutation.hpp"
 #include "qtViewerHost.hpp"
 #include "qtPluginHostSettings.hpp"
@@ -380,6 +382,8 @@ void CommandUiBridge::createActions()
     auto* Plugins = Window->menuBar()->addMenu(tr("플러그인"));
     auto* Storage = Plugins->addAction(tr("파일 시스템 열기…")); Storage->setObjectName("hc.menu.wfx.open");
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
+    auto* Search = Menu->addAction(tr("범위 검색…")); Search->setObjectName("hc.menu.search");
+    connect(Search, &QAction::triggered, this, [this] { openSearch(); });
     auto* DopusStorage = Plugins->addAction(tr("DOpus 파일 시스템 열기…")); DopusStorage->setObjectName("hc.menu.dopus.open");
     auto* DopusMetadata = Plugins->addAction(tr("DOpus 선택 파일 정보…")); DopusMetadata->setObjectName("hc.menu.dopus.query");
     connect(DopusStorage, &QAction::triggered, this, [this] { openDataPlugin(false, true); });
@@ -460,6 +464,24 @@ void CommandUiBridge::openIso(bool Inspect)
     auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("ISO 생성 · %1").arg(QFileInfo(Path).fileName()));
     if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("ISO 생성"), QString::fromStdString(Submitted.Failure().code_)); return; }
     auto Parent = Destination; Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); affectedLocations_[Submitted.Value().id_] = {Parent};
+}
+
+void CommandUiBridge::openSearch()
+{
+    auto* Model = PanelModel(activePanel_);
+    if (!Model || Model->IsLoading() || !Model->SnapshotProvider()) return;
+    hc::workspace::TabState State; State.location_ = Model->WorkspaceLocation();
+    State.provider_ = Model->property("hc.workspaceProvider").toString(); State.nativeRoot_ = Model->property("hc.workspaceNativeRoot").toString();
+    hc::search::Show(main_, WorkerOwned(Model->SnapshotProvider()), State.location_, Model->SearchMetadata(),
+        [Model = QPointer<CFSModel>(Model), State](const EntrySnapshot& Entry) mutable {
+            if (!Model || PanelModel(PanelOf(Model)) != Model) return;
+            State.location_ = Entry.locator_;
+            if (!Entry.directory_) {
+                auto& Path = State.location_.nesting_.empty() ? State.location_.root_ : State.location_.nesting_.back().entry_;
+                const auto Last = Path.find_last_of("/\\"); if (Last == std::string::npos) return; Path.resize(Last + 1);
+            }
+            RestoreWorkspaceLocation(Model, State);
+        });
 }
 
 void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
