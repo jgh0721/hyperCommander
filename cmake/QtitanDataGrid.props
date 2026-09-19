@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\externalLibs\QtitanDataGrid\src\include;$(MSBuildThisFileDirectory)..\externalLibs\QtitanDataGrid\src\src\base;$(MSBuildThisFileDirectory)..\externalLibs\QtitanDataGrid\src\src\styles\dc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>QTN_NAMESPACE;QTITAN_LIBRARY_STATIC;QTN_PRIVATE_HEADERS;QTN_DC_STYLE;QTN_VERSION_DATAGRID=9.3.0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

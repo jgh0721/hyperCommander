@@ -12,7 +12,7 @@
     },
     {
       "name": "QtitanDataGrid",
-      "version": "NOASSERTION",
+      "version": "9.3.0 with local HC-QTN-006/007/008 extensions",
       "license": "LicenseRef-Commercial-QtitanDataGrid",
       "source": "https://www.devmachines.com/qtitandatagrid-overview.html",
       "root": "externalLibs/QtitanDataGrid",

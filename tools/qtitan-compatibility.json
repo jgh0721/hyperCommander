@@ -1,46 +1,118 @@
 {
-    "schemaVersion":  1,
-    "componentVersion":  "8.2.0",
-    "solutionVersion":  "2024.2.0",
-    "integration":  [
-                        "HyperCommander/UIs/Components/cmpView.cpp",
-                        "UniqueLibs/qtitanColumnAdapter.cpp"
-                    ],
-    "vendorPatches":  [
-
-                      ],
-    "dependencies":  [
-                         {
-                             "path":  "src/src/grid/grid.pri",
-                             "sha256":  "3cd3fdc775a176473354cc1840cfc15c2330f108c64f7777798e06ad534044f3"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridBase.h",
-                             "sha256":  "490d1a4c1bf930ab58556bf195e612ca1c5b6667be7f1609282277c8583b7e52"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridBase.cpp",
-                             "sha256":  "bc010e8b9e727092417d954c6245f059f92aa568a85ad1ec45fbd10bb2a57ba8"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridTableView.h",
-                             "sha256":  "be64295ce22318aff00d5f6da7c12245bb42ee3545ec8f59f9d5cb213ded0789"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridColumnHeaderLayout.cpp",
-                             "sha256":  "4592c7d1759fb0c43c28e772ee1c5200269f0cc12091ff86a344bb3d3e958805"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridDragObjects.cpp",
-                             "sha256":  "ce7b756adccf3fea6737a7b2c05554410816fe575bfa29f73ae5cacb709f1bc3"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridBandedTableView.cpp",
-                             "sha256":  "1e34c1c099b17df85e87f4cc79b4529e12ae5462aa547818408b847ce1f21b7e"
-                         },
-                         {
-                             "path":  "src/src/grid/QtnGridModelController.cpp",
-                             "sha256":  "32fc58161835a126d7c02f92a86b15579629f0d5756c6c98fc84fa41157b14d7"
-                         }
-                     ]
+  "schemaVersion": 1,
+  "componentVersion": "9.3.0",
+  "solutionVersion": "2026.2.0",
+  "integration": [
+    "HyperCommander/UIs/Components/cmpView.cpp",
+    "UniqueLibs/qtitanColumnAdapter.cpp"
+  ],
+  "vendorPatches": [
+    {
+      "id": "HC-QTN-006",
+      "purpose": "File manager navigation, full-row cursor, independent marks, palette inversion, persistent cut state, legacy decoration opacity and natural filename sorting"
+    },
+    {
+      "id": "HC-QTN-007",
+      "purpose": "Bounded cell/role cache, configured sort-role prefetch, unchanged-key skip, incremental/group refresh and configurable bulk fallback"
+    },
+    {
+      "id": "HC-QTN-008",
+      "purpose": "Declare Windows SDK RtlGetVersion types explicitly"
+    }
+  ],
+  "dependencies": [
+    {
+      "path": "src/src/base/QtnPlatform_win.h",
+      "sha256": "9c55a3e1199469cf2772ee040d5ab5f9c68f63485e3825ae444f14259500acd5",
+      "upstreamSha256": "95dbda28de3a5f255a987a8fe94dc59e9ae9fc2066657a2a5bf70e844082907e"
+    },
+    {
+      "path": "src/src/base/base.pri",
+      "sha256": "3b3816a4e25b5638170699fb696c4525ecf7c3d3b1d8a24a861f9b8060f6a133",
+      "upstreamSha256": "3b3816a4e25b5638170699fb696c4525ecf7c3d3b1d8a24a861f9b8060f6a133"
+    },
+    {
+      "path": "src/src/grid/QtnGridBandedTableView.cpp",
+      "sha256": "da11bbbd40b6029e46d0c0aaca37e91ac3be97aa84c4f7f4d55284d0a5cc76aa",
+      "upstreamSha256": "da11bbbd40b6029e46d0c0aaca37e91ac3be97aa84c4f7f4d55284d0a5cc76aa"
+    },
+    {
+      "path": "src/src/grid/QtnGridBase.cpp",
+      "sha256": "a2e88b1ef88c6c324e8571b03367febaaeeeb8814dd65c56fab54a0f03d08ae1",
+      "upstreamSha256": "33df37d4197d2ef9e04f21ef9aee13117228e4e41b8dbd2ce0f3a0e2ef431d3d"
+    },
+    {
+      "path": "src/src/grid/QtnGridBase.h",
+      "sha256": "fb3993bb46aa25966d289fa521800b990a2909d9a2481e7b71dce84bc1b2164e",
+      "upstreamSha256": "f69ae3260574d0d2eec32e1932a8a57771d7f1e7a80f3673ec5076c76488a6c4"
+    },
+    {
+      "path": "src/src/grid/QtnGridColumnHeaderLayout.cpp",
+      "sha256": "038ae35899bb5c80f72088d0555ea3e917775c363db0211ed97de6f2a17a68b2",
+      "upstreamSha256": "038ae35899bb5c80f72088d0555ea3e917775c363db0211ed97de6f2a17a68b2"
+    },
+    {
+      "path": "src/src/grid/QtnGridDragObjects.cpp",
+      "sha256": "f83f34a69f95efa2a42d4c1c380fb1a06bb7157304fb61f2c615338bb6fc092d",
+      "upstreamSha256": "f83f34a69f95efa2a42d4c1c380fb1a06bb7157304fb61f2c615338bb6fc092d"
+    },
+    {
+      "path": "src/src/grid/QtnGridModelController.cpp",
+      "sha256": "bcb82b660eaf6afe51ee14270f8b3ac321d4e905b94d0fc23a6c194d7abfe7ec",
+      "upstreamSha256": "fb520c0fa8177cdb8030c47cc24d7e068e5891b60f4b4834c3b18a329369ffc5"
+    },
+    {
+      "path": "src/src/grid/QtnGridModelController.h",
+      "sha256": "5c9968d07de91be156c9e15b2bc5289e71c0f8547bbf65d3a728e23fffe61924",
+      "upstreamSha256": "0846cfde3e70706f317a73da4dad18ce38802625a074d2f0db3701cb149b1567"
+    },
+    {
+      "path": "src/src/grid/QtnGridModelControllerPrivate.h",
+      "sha256": "f72cce627157226674e11524369b39ac60556794b3c91df2cf0394879ea06432",
+      "upstreamSha256": "5d72836ab7283cd3a44c269bd529aaa4514f6fd20e517cc269091bb6c2f8db25"
+    },
+    {
+      "path": "src/src/grid/QtnGridRowsLayout.cpp",
+      "sha256": "d9afac3a54c698a3b3f987d1c46759a9425331991f565552c8f9e45815f33ff6",
+      "upstreamSha256": "84504abf3a95276cb996fe6188c648f43df42faa85cfe5699865e97a7c2c6f1c"
+    },
+    {
+      "path": "src/src/grid/QtnGridTableView.h",
+      "sha256": "3c1670aa82b2719388553ae622a0391dc45a363914c9596565dfffc61b213603",
+      "upstreamSha256": "3c1670aa82b2719388553ae622a0391dc45a363914c9596565dfffc61b213603"
+    },
+    {
+      "path": "src/src/grid/QtnGridTableViewPrivate.cpp",
+      "sha256": "e5468b054a2554c23ef6a4f174ff6a407cc1a91b83a82a47f27c8666dd8d0da3",
+      "upstreamSha256": "068d4493a9db6eaa9a6dd864afbee70e9f07811a9068319fdd2332e944f25109"
+    },
+    {
+      "path": "src/src/grid/QtnGridViewGraphics.cpp",
+      "sha256": "b6341cc2d9adb13c38c2f64400848e434f233914bc0ef6e080ba3165172df70c",
+      "upstreamSha256": "f2d0c6c8d6b58e2f8af620b3c7a40bd8c8da4ab3114f63f6fe6985d56e9a99db"
+    },
+    {
+      "path": "src/src/grid/grid.pri",
+      "sha256": "dc0928b162e52375a1488ddf7f7297761a01933f3ec1503637117580d4ec08b6",
+      "upstreamSha256": "dc0928b162e52375a1488ddf7f7297761a01933f3ec1503637117580d4ec08b6"
+    },
+    {
+      "path": "src/src/styles/dc/dc.pri",
+      "sha256": "144597474f6ce0d8c5968b43049e163d8ad7070786015ee1e1c75e07169830f5",
+      "upstreamSha256": "144597474f6ce0d8c5968b43049e163d8ad7070786015ee1e1c75e07169830f5"
+    },
+    {
+      "path": "src/src/styles/styles.pri",
+      "sha256": "c3a0cdce9a497546cb06757aa8fc0e6f9f1ab274e58fd8f9bd248debd5d52cb7",
+      "upstreamSha256": "c3a0cdce9a497546cb06757aa8fc0e6f9f1ab274e58fd8f9bd248debd5d52cb7"
+    }
+  ],
+  "package": {
+    "directory": "QtitanDataGrid9.3.0",
+    "sha256": "c4ca7df6131c63ca5d3374cbbd9877c3e30166052fb0683860741087f725ee67"
+  },
+  "privatePatch": {
+    "path": "externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip",
+    "sha256": "e9a1bd05eaeacae65382313cb1807bfe247d7585deb39ae7a26a6a8c4c1e8147"
+  }
 }

@@ -106,7 +106,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     BaseOpts.setFocusFrameEnabled( false );
     BaseOpts.setShowFocusDecoration( true );
     BaseOpts.setKeepFocusedRow( true );
-    BaseOpts.setRowFocusMode( true );
+    view_->setFileManagerMode(true);
     BaseOpts.setRowFocusColor( QColor( 51, 79, 102 ) );
     
     BaseOpts.setDragEnabled( true );
@@ -146,7 +146,8 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     setLayout( vbox_ );
     setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
 
-    view_->bestFit( FitToHeaderPercent );
+    // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
+    view_->bestFit( FitToHeader );
     columnAdapter_ = new QtitanColumnAdapter(this, grid_, view_);
 }
 
@@ -232,7 +233,8 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         }
     }
 
-    view_->bestFit( FitToHeaderPercent );
+    // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
+    view_->bestFit( FitToHeader );
     view_->endUpdate();
     columnAdapter_->Bind(*Columns);
 }

@@ -1,4 +1,4 @@
-﻿include_directories( ${CMAKE_CURRENT_LIST_DIR} )
+include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 
 set(EXTERNAL_SRC "")
 
@@ -18,10 +18,21 @@ set( EXTERNAL_SRC ${EXTERNAL_SRC}
 # QTitanDataGrid
 add_compile_definitions( QTN_NAMESPACE )
 add_compile_definitions( QTITAN_LIBRARY_STATIC )
-add_compile_definitions( QTN_PRIVATE_HEADERS )
+add_compile_definitions( QTN_PRIVATE_HEADERS QTN_DC_STYLE )
 
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/QtitanDataGrid/src/include )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/QtitanDataGrid/src/src/base )
+include_directories( ${CMAKE_CURRENT_LIST_DIR}/QtitanDataGrid/src/src/styles/dc )
+
+# qmake supplied this version macro; keep the embedded library's runtime version accurate.
+set(HC_QTITAN_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/QtitanDataGrid/src/src/grid/grid.pri")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${HC_QTITAN_VERSION_FILE}")
+file(STRINGS "${HC_QTITAN_VERSION_FILE}" HC_QTITAN_VERSION_LINE REGEX "^QTN_COMPONENT_VERSION =")
+string(REGEX REPLACE "^QTN_COMPONENT_VERSION = *" "" HC_QTITAN_VERSION "${HC_QTITAN_VERSION_LINE}")
+set_source_files_properties(
+    "${CMAKE_CURRENT_LIST_DIR}/QtitanDataGrid/src/src/grid/QtnGridDef.cpp"
+    PROPERTIES COMPILE_DEFINITIONS "QTN_VERSION_DATAGRID=${HC_QTITAN_VERSION}"
+)
 
 set( EXTERNAL_SRC ${EXTERNAL_SRC}
         ../externalLibs/QtitanDataGrid/src/src/base/QtitanDef.h
@@ -125,17 +136,6 @@ set( EXTERNAL_SRC ${EXTERNAL_SRC}
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnAdobePhotoshopStyle.cpp
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnAdobePhotoshopStyle.h
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnAdobePhotoshopStyle.qrc
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnFluentDesignStyle.cpp
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnFluentDesignStyle.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnFluentDesignStylePrivate.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2007Style.cpp
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2007Style.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2007Style.qrc
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2007StylePrivate.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2010Style.cpp
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2010Style.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2010Style.qrc
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2010StylePrivate.h
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2013Style.cpp
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2013Style.h
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnOffice2013Style.qrc
@@ -152,10 +152,43 @@ set( EXTERNAL_SRC ${EXTERNAL_SRC}
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnVisualStudio2019Style.h
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnVisualStudio2019Style.qrc
         ../externalLibs/QtitanDataGrid/src/src/styles/QtnVisualStudio2019StylePrivate.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindows7ScenicStyle.cpp
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindows7ScenicStyle.h
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindows7ScenicStyle.qrc
-        ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindows7ScenicStylePrivate.h
+)
+
+set(EXTERNAL_SRC ${EXTERNAL_SRC}
+    ../externalLibs/QtitanDataGrid/src/src/base/QtnFluentSystemIcons.cpp
+    ../externalLibs/QtitanDataGrid/src/src/base/QtnFluentSystemIcons.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyle.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyle.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyleIcons.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyleIcons.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyleIconsPrivate.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStylePrivate.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyleResource.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnDCStyleResource.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindowsUIStyle.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindowsUIStyle.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindowsUIStyle.qrc
+    ../externalLibs/QtitanDataGrid/src/src/styles/QtnWindowsUIStylePrivate.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObject.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObject.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectLayout.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectLayout.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectPaintInfo.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectPaintInfo.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectPainter.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectPainter.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectProperties.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectProperties.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectReader.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectReader.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectRenderer.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectRenderer.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectTheme.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectTheme.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectTree.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectTree.h
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectXML.cpp
+    ../externalLibs/QtitanDataGrid/src/src/styles/dc/DCStyleObjectXML.h
 )
 
 # TotalCommander

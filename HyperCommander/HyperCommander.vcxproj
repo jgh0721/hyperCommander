@@ -53,13 +53,13 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
-    <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
+    <Import Project="..\cmake\QtitanDataGrid.props" />
     <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
-    <Import Project="..\externalLibs\QtitanDataGrid\script\QtitanDataGrid_Static.props" />
+    <Import Project="..\cmake\QtitanDataGrid.props" />
     <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -677,4 +677,61 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   <Target Name="PrepareNativeBuiltinIso" BeforeTargets="ClCompile" Condition="'$(DesignTimeBuild)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -PrepareOnly" />
   </Target>
+  <ItemGroup>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyle.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyle.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIcons.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIcons.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIconsPrivate.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStylePrivate.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleResource.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleResource.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.h" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.qrc" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStylePrivate.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObject.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObject.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectLayout.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectLayout.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPaintInfo.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPaintInfo.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPainter.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPainter.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectProperties.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectProperties.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectReader.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectReader.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectRenderer.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectRenderer.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTheme.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTheme.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTree.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTree.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectXML.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectXML.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.h" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.qrc" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.h" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.qrc" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013StylePrivate.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.h" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.qrc" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStyle.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStyle.h" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStylePrivate.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnStyleDef.cpp" />
+    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnStyleDef.h" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.cpp" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.h" />
+    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.qrc" />
+    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019StylePrivate.h" />
+  </ItemGroup>
 </Project>

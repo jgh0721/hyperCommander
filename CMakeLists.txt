@@ -25,6 +25,21 @@ include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
 include(cmake/QtDeployment.cmake)
 
+set(HC_QTITAN_PACKAGE "" CACHE FILEPATH "Licensed QtitanDataGrid 9.3.0 ZIP for local reprovisioning")
+set(HC_QTITAN_PRIVATE_PATCH "${PROJECT_SOURCE_DIR}/externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip"
+    CACHE FILEPATH "Private Qtitan extension package; never distribute or commit")
+if(HC_QTITAN_PACKAGE)
+    find_program(HC_QTITAN_POWERSHELL NAMES powershell REQUIRED)
+    add_custom_target(hc_install_qtitan
+        COMMAND "${HC_QTITAN_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Install-QtitanDataGrid.ps1"
+            -PackagePath "${HC_QTITAN_PACKAGE}" -PrivatePatchPath "${HC_QTITAN_PRIVATE_PATCH}"
+        COMMENT "Provision licensed Qtitan source and verified private extensions locally"
+        VERBATIM
+    )
+endif()
+
+
 qt_add_library(hc_viewer_core STATIC
     commonLibs/viewer/viewer.cpp
     commonLibs/viewer/viewer.hpp
