@@ -152,6 +152,13 @@ target_link_libraries(hc_wlx_sdk_fixture PRIVATE user32)
 target_compile_options(hc_wlx_sdk_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set_target_properties(hc_wlx_sdk_fixture PROPERTIES SUFFIX ".wlx64")
 if(TARGET hc_smb_tests)
+    foreach(HC_WORKSPACE_DPR IN ITEMS 1 1.5)
+        add_test(NAME hc.workspace_ui_${HC_WORKSPACE_DPR}
+            COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -WorkspaceOnly -Dpr ${HC_WORKSPACE_DPR})
+        set_tests_properties(hc.workspace_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+    endforeach()
     add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
 qt_add_executable(hc_hosted_wlx_tests tstHostedWlx.cpp)

@@ -88,9 +88,137 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
+    }
+
+    void workspaceRestoreUi()
+    {
+        using namespace hc::workspace;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"alpha.txt", "beta.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Name); }
+        auto* Panel = panels_.front();
+        TabState Tab; Tab.id_ = "m7-active"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        Tab.view_ = {{"hiddenSystem", true}};
+        auto Missing = Tab; Missing.id_ = "m7-missing"; Missing.location_ = {hc::storage::LocatorKind::Plugin, "wfx://missing/saved-folder"}; Missing.provider_ = Directory.filePath("removed.json");
+        PaneState Pane; Pane.tabs_ = {Tab, Missing}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        auto* Inactive = qobject_cast<CGridView*>(Panel->GetFocusView(1)); QVERIFY(Inactive);
+        QVERIFY(!Inactive->BaseModel()->GetRoot()); // Lazy restore does not launch inactive providers.
+        hc::storage::EntrySnapshot Selected;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            if (Item && Item->Name_ == "beta.txt") Selected = *Item->storageEntry_;
+        }
+        const auto Key = SelectionKey(Selected); View->RestoreSelection({Key}, Key);
+        auto Policy = View->ColumnWidths()->Policies().value(View->ColumnWidths()->ColumnId(0));
+        Policy.value_ = 35; Policy.unit_ = hc::view::WidthUnit::Percent;
+        QVERIFY(View->ColumnWidths()->SetPolicy(View->ColumnWidths()->ColumnId(0), Policy));
+        auto* Column = static_cast<Qtitan::GridTableColumn*>(View->BaseView()->getColumnByModelColumn(0));
+        Column->setSortOrder(Qtitan::SortDescending, true);
+        const auto Saved = Panel->CaptureWorkspace(); QCOMPARE(Saved.tabs_[0].selection_, QStringList{Key});
+        QPointer<CGridView> OldGrid = View;
+        Panel->OpenQuickView(0, {}); QPointer<CViewT> OldPreview = Panel->GetFocusView(0);
+        Panel->RestoreWorkspace(Saved);
+        QVERIFY(OldGrid.isNull()); QTRY_VERIFY(OldPreview.isNull());
+        Model = static_cast<CFSModel*>(model(Panel)); View = qobject_cast<CGridView*>(Panel->GetFocusView(0));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("beta.txt"), 10000);
+        QCOMPARE(View->CaptureSelection(), QStringList{Key}); QCOMPARE(View->CaptureFocus(), Key);
+        QCOMPARE(View->ColumnWidths()->Policies()[View->ColumnWidths()->ColumnId(0)].value_, 35.0);
+        QCOMPARE(static_cast<Qtitan::GridTableColumn*>(View->BaseView()->getColumnByModelColumn(0))->sortOrder(), Qtitan::SortDescending);
+        QVERIFY(main_->SaveWorkspace());
+        QProcess Restart; auto Environment = QProcessEnvironment::systemEnvironment();
+        Environment.insert("HC_WORKSPACE_BOOT_ID", Tab.id_); Restart.setProcessEnvironment(Environment);
+        Restart.start(QCoreApplication::applicationFilePath(), {"workspaceBootUi", "-o", "workspace-restart.txt,txt"});
+        QVERIFY(Restart.waitForStarted(5000));
+        QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
+        QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
+        auto* Tabs = Panel->findChild<QTabWidget*>("tabWidget"); Tabs->setCurrentIndex(1);
+        Model = static_cast<CFSModel*>(model(Panel)); QVERIFY(Model->HasPlaceholder()); QCOMPARE(Model->rowCount(), 0);
+        QCOMPARE(Model->WorkspaceLocation(), Saved.tabs_[1].location_);
+        QTest::mouseClick(Panel->findChild<QPushButton*>("hc.workspaceRetry"), Qt::LeftButton);
+        QVERIFY(Model->HasPlaceholder()); QCOMPARE(Panel->CaptureWorkspace().tabs_[1].provider_, Missing.provider_);
+        Tabs->setCurrentIndex(0); Panel->CloseTab(); // Closing active tab updates watches and placeholder status.
+        QVERIFY(static_cast<CFSModel*>(model(Panel))->HasPlaceholder());
+    }
+
+    void workspaceWatchAndMetadataUi()
+    {
+        using namespace hc::workspace;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Path = Directory.filePath("watched.txt");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("one"); }
+        TabState Tab; Tab.id_ = "m7-watch"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("watched.txt"), 10000);
+        hc::storage::EntrySnapshot Entry;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0)); if (Item && Item->storageEntry_) Entry = *Item->storageEntry_;
+        }
+        const auto Key = SelectionKey(Entry); View->RestoreSelection({Key}, Key);
+        const auto Generation = Model->MetadataGeneration();
+        QVERIFY(Model->PutMetadata(Entry, {{"author", "Kim"}}, Generation));
+        QVERIFY(Model->MatchesSearch(Entry, "author:kim ext:txt"));
+        auto* Search = Panel->findChild<QLineEdit*>("hc.workspaceSearch"); Search->setText("author:kim");
+        QCOMPARE(View->BaseView()->getRowCount(), 2); // Parent plus matching entry.
+        Search->clear(); View->RestoreSelection({Key}, Key);
+        { QFile File(Directory.filePath("created.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("new"); }
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("created.txt"), 10000);
+        QCOMPARE(View->CaptureSelection(), QStringList{Key}); QCOMPARE(View->CaptureFocus(), Key);
+        QVERIFY(Model->MatchesSearch(Entry, "author:kim"));
+        { QFile File(Path); QVERIFY(File.open(QIODevice::Append)); File.write("changed"); }
+        Model->Refresh(); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QVERIFY(!Model->MatchesSearch(Entry, "author:kim"));
+        QVERIFY(!Model->PutMetadata(Entry, {{"author", "stale"}}, Generation));
+        QVERIFY(QFile::rename(Path, Directory.filePath("renamed.txt")));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("renamed.txt"), 10000);
+        // Native enumeration deliberately uses session/path identity to avoid a
+        // per-entry handle open. External renames must not select another row.
+        QCOMPARE(Entry.id_.scope_, hc::storage::IdentityScope::NavigationSession);
+        QVERIFY(View->CaptureSelection().isEmpty());
+        Search->setText("ext:txt name:renamed");
+        const auto Saved = Panel->CaptureWorkspace(); QCOMPARE(Saved.tabs_[0].view_.value("search").toString(), Search->text());
+        qInfo() << "M7 workspace restore, watch resync, stable selection and metadata invalidation passed";
+    }
+
+    void workspaceSmbRestore()
+    {
+        if (localOnly_) QSKIP("Requires the authorized live SMB share");
+        using namespace hc::workspace;
+        TabState Tab; Tab.id_ = "m7-smb"; Tab.location_ = {hc::storage::LocatorKind::Smb, unc_.toStdString()};
+        PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = panels_.front();
+        QElapsedTimer Timer; Timer.start(); Panel->RestoreWorkspace(Pane);
+        qInfo() << "SMB workspace restore UI call (ms):" << Timer.elapsed(); QVERIFY(Timer.elapsed() < 500);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        QVERIFY(!Model->LastNavigationError()); QVERIFY(Model->GetRoot()->IsRemote());
+        QCOMPARE(Model->WorkspaceLocation().kind_, hc::storage::LocatorKind::Smb);
+        const auto Expected = names(Model); const auto Saved = Panel->CaptureWorkspace();
+        Panel->RestoreWorkspace(Saved); Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(!Model->LastNavigationError()); QCOMPARE(names(Model), Expected);
+        auto Missing = Saved; Missing.tabs_[0].location_.root_ += "\\__hc_m7_missing_" + QUuid::createUuid().toString(QUuid::Id128).toStdString();
+        Panel->RestoreWorkspace(Missing); Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->rowCount(), 0);
+        QCOMPARE(Model->WorkspaceLocation(), Missing.tabs_[0].location_);
+        Panel->RestoreWorkspace(Saved); Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(!Model->LastNavigationError()); QCOMPARE(names(Model), Expected);
+    }
+
+    void workspaceBootUi()
+    {
+        const auto Expected = qEnvironmentVariable("HC_WORKSPACE_BOOT_ID");
+        if (Expected.isEmpty()) QSKIP("Invoked by workspace restart test");
+        auto* Panel = panels_.front(); const auto Saved = Panel->CaptureWorkspace();
+        QCOMPARE(Saved.tabs_.size(), 2); QCOMPARE(Saved.tabs_[0].id_, Expected);
+        QCOMPARE(Saved.active_, 0); QCOMPARE(Saved.tabs_[0].selection_.size(), 1);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0));
+        QCOMPARE(View->CaptureSelection(), Saved.tabs_[0].selection_);
+        QCOMPARE(View->ColumnWidths()->Policies()[View->ColumnWidths()->ColumnId(0)].value_, 35.0);
+        QVERIFY(!qobject_cast<CGridView*>(Panel->GetFocusView(1))->BaseModel()->GetRoot());
     }
 
     void isoPluginUi_data()
@@ -981,7 +1109,9 @@ private slots:
         Timeout.restart(); Driver.start(); main_->findChild<QAction*>("hc.menu.dopus.query")->trigger(); Driver.stop();
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.dataPluginDialog"), 5000); QPointer<QDialog> Info = main_->findChild<QDialog*>("hc.dataPluginDialog");
         auto* Values = Info->findChild<QTableWidget*>(); QVERIFY(Values); QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 6, 5000);
-        QVERIFY(Values->item(0, 1)->text().contains("fixture metadata")); Info->close(); QTRY_VERIFY(Info.isNull());
+        QVERIFY(Values->item(0, 1)->text().contains("fixture metadata"));
+        QVERIFY(Model->MatchesSearch(*Model->GetFileInfo(Selected)->storageEntry_, "fixture"));
+        Info->close(); QTRY_VERIFY(Info.isNull());
         auto View = Bridge->Dispatch("hc.viewer.open", {}, "test", Selected); QTRY_VERIFY(View.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QVERIFY(View.get().HasValue());
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000); QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
         auto* Surface = Full->findChild<QtViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
@@ -991,6 +1121,10 @@ private slots:
         QTest::qWait(300);
         QVERIFY(Full->screen()->grabWindow(Full->winId()).save(QCoreApplication::applicationDirPath() + "/dopus-product.png"));
         Full->close(); QTRY_VERIFY(Full.isNull()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 4000);
+        const auto WorkspaceSaved = Panel->CaptureWorkspace(); QVERIFY(!WorkspaceSaved.tabs_[WorkspaceSaved.active_].provider_.isEmpty());
+        Panel->RestoreWorkspace(WorkspaceSaved); Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(Model->GetRoot() && !Model->IsLoading() && names(Model).contains("sample.bitmap"), 10000);
+        QVERIFY(Model->GetRoot()->WriteProvider());
         QMainOpts Settings(main_); Settings.show(); QCoreApplication::processEvents();
         QVERIFY(Settings.findChild<QTableWidget*>("dopus-vfsHostTable")); QVERIFY(Settings.findChild<QTableWidget*>("dopus-viewerHostTable"));
     }
@@ -1072,6 +1206,7 @@ private slots:
         QPointer<QDialog> Info = main_->findChild<QDialog*>("hc.dataPluginDialog"); auto* Values = Info->findChild<QTableWidget*>(); QVERIFY(Values);
         QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 7, 5000); QCOMPARE(Values->item(3, 1)->text(), QString("한글 metadata"));
         Values->cellDoubleClicked(6, 1); QTRY_COMPARE_WITH_TIMEOUT(Values->item(6, 1)->text(), QString("resolved"), 5000);
+        QVERIFY(Model->MatchesSearch(*Model->GetFileInfo(Selected)->storageEntry_, "resolved"));
         QVERIFY(Info->grab().save(QCoreApplication::applicationDirPath() + "/wdx-metadata.png")); Info->close(); QTRY_VERIFY(Info.isNull());
         const auto ArchivePath = Directory.filePath("data-transfer.hcwcx");
         { QFile Archive(ArchivePath); QVERIFY(Archive.open(QIODevice::WriteOnly)); Archive.write("HCWCX01"); }
@@ -1096,6 +1231,10 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Move).Value().state_), 5000); QCOMPARE(Scheduler.Snapshot(Move).Value().state_, JobState::Completed);
         QTRY_VERIFY(!Model->IsLoading() && !ArchiveModel->IsLoading() && names(Model).contains("hello.txt") && !names(ArchiveModel).contains("hello.txt"));
         Other->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!ArchiveModel->IsLoading());
+        const auto WorkspaceSaved = Panel->CaptureWorkspace(); QVERIFY(!WorkspaceSaved.tabs_[WorkspaceSaved.active_].provider_.isEmpty());
+        Panel->RestoreWorkspace(WorkspaceSaved); Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(Model->GetRoot() && !Model->IsLoading() && names(Model).contains("hello.txt"), 10000);
+        QVERIFY(Model->GetRoot()->WriteProvider());
         Panel->CloseTab(); QTRY_VERIFY(Panel->CurrentTabIndex() == PreviousTab); QThreadPool::globalInstance()->waitForDone();
     }
     void archiveCommandsAndBatchUi_data()
