@@ -6,6 +6,7 @@
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
 #include "qtSearch.hpp"
+#include "qtAutomation.hpp"
 #include "qtWorkspaceRestore.hpp"
 #include "wcxMutation.hpp"
 #include "qtViewerHost.hpp"
@@ -160,6 +161,8 @@ void CommandUiBridge::bindModels()
             Event.id_ = Success ? "navigation.completed" : "navigation.failed";
             Event.producer_ = "qt-navigation";
             Event.correlationId_ = Model->property("hc.correlation").toString().toStdString();
+            Model->setProperty("hc.lastNavigationCorrelation", QString::fromStdString(Event.correlationId_));
+            Model->setProperty("hc.lastNavigationError", Success ? QString() : Code);
             Model->setProperty("hc.correlation", QVariant{});
             Event.causationId_ = Event.correlationId_;
             Event.payload_ = {{"tab", Model->property("hc.tabId").toString().toStdString()},
@@ -214,6 +217,87 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
 }
 
 Task<CommandOutcome> CommandUiBridge::DispatchInvocation(CommandInvocation Invocation) { return dispatcher_->Dispatch(std::move(Invocation)); }
+
+hc::automation::Host CommandUiBridge::AutomationHost()
+{
+    const auto Initial = captureFiles({}, false);
+    const auto Guard = QPointer<CommandUiBridge>(this);
+    struct Binding {
+        QPointer<CFSModel> model_;
+        std::stop_source stop_;
+        std::unique_ptr<std::stop_callback<std::function<void()>>> runStop_;
+        QMetaObject::Connection destroyed_;
+        ~Binding() { QObject::disconnect(destroyed_); }
+    };
+    auto Lifetime = std::make_shared<Binding>(); Lifetime->model_ = findModel(Initial.tabId_);
+    if (Lifetime->model_) Lifetime->destroyed_ = connect(Lifetime->model_, &QObject::destroyed,
+        [Stop = Lifetime->stop_]() mutable { Stop.request_stop(); });
+    hc::automation::Host Host;
+    Host.capture_ = [Guard, Initial, Lifetime]() -> Result<CommandContext> {
+        auto* Model = Guard ? Guard->findModel(Initial.tabId_) : nullptr;
+        if (!Model || Model != Lifetime->model_) return Error{ErrorCategory::Cancelled, "automation-tab-closed"};
+        if (PanelModel(PanelOf(Model)) != Model) return Error{ErrorCategory::Cancelled, "automation-tab-not-active"};
+        auto Context = Initial; Context.location_ = Model->WorkspaceLocation();
+        // Selection handles are captured once, never rebound to a later UI selection.
+        if (!(Context.location_ == Initial.location_)) Context.selection_.clear();
+        return Context;
+    };
+    Host.dispatch_ = [Guard, Lifetime](CommandInvocation Invocation) -> Task<CommandOutcome> {
+        if (!Guard) return Ready<CommandOutcome>(Error{ErrorCategory::Cancelled, "automation-window-closed"});
+        if (!Lifetime->model_) return Ready<CommandOutcome>(Error{ErrorCategory::Cancelled, "automation-tab-closed"});
+        // Interactive dialogs, tab switching and viewers need separate lifetime
+        // facades. This first DSL stage exposes navigation and M4 file jobs only.
+        const std::set<std::string> Allowed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.open",
+            "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete"};
+        if (!Allowed.contains(Invocation.id_)) return Ready<CommandOutcome>(Error{ErrorCategory::Unsupported, "automation-command-not-exposed"});
+        // The saved workspace may recreate the same tab ID before a queued
+        // dispatch executes. Cancel that dispatch when its original model dies.
+        Lifetime->runStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Invocation.operation_.stopToken_,
+            [Stop = Lifetime->stop_]() mutable { Stop.request_stop(); });
+        Invocation.operation_.stopToken_ = Lifetime->stop_.get_token();
+        return Guard->DispatchInvocation(std::move(Invocation));
+    };
+    Host.poll_ = [Guard, Lifetime](const CommandInvocation& Invocation, const CommandOutcome& Outcome) -> Result<bool> {
+        if (!Guard) return Error{ErrorCategory::Cancelled, "automation-window-closed"};
+        auto* Model = Guard->findModel(Invocation.context_.tabId_);
+        if (!Model || Model != Lifetime->model_) return Error{ErrorCategory::Cancelled, "automation-tab-closed"};
+        if (Invocation.id_.starts_with("hc.file.")) {
+            const auto Job = Guard->fileJobs_->Scheduler().Snapshot(Outcome.jobId_);
+            if (!Job.HasValue()) return Job.Failure();
+            const auto& Snapshot = Job.Value();
+            if (Snapshot.correlationId_ != Invocation.correlationId_) return Error{ErrorCategory::StaleRevision, "automation-job-changed"};
+            if (!hc::operations::IsTerminal(Snapshot.state_)) return false;
+            if (Snapshot.error_) return *Snapshot.error_;
+            if (Snapshot.state_ == hc::operations::JobState::Cancelled) return Error{ErrorCategory::Cancelled, "automation-job-cancelled"};
+            if (Snapshot.state_ != hc::operations::JobState::Completed || Snapshot.failedItems_ || Snapshot.skippedItems_)
+                return Error{ErrorCategory::Internal, "automation-job-incomplete"};
+            if (Guard->fileJobs_->IsUiPending(Outcome.jobId_) || Model->IsLoading()) return false;
+            return true;
+        }
+        const auto Current = Model->property("hc.correlation").toString().toStdString();
+        if (Model->IsLoading() && Current != Outcome.jobId_)
+            return Error{ErrorCategory::Cancelled, "automation-navigation-replaced"};
+        if (Model->property("hc.lastNavigationCorrelation").toString().toStdString() == Outcome.jobId_) {
+            const auto Code = Model->property("hc.lastNavigationError").toString();
+            if (!Code.isEmpty()) return Error{ErrorCategory::Unavailable, Code.toStdString()};
+            return true;
+        }
+        if (Current != Outcome.jobId_)
+            return Error{ErrorCategory::Cancelled, "automation-navigation-replaced"};
+        return false;
+    };
+    Host.cancel_ = [Guard](const CommandInvocation& Invocation, const CommandOutcome& Outcome) {
+        if (!Guard) return;
+        if (Invocation.id_.starts_with("hc.file.") && !Outcome.jobId_.empty()) {
+            const auto Job = Guard->fileJobs_->Scheduler().Snapshot(Outcome.jobId_);
+            if (Job.HasValue() && Job.Value().correlationId_ == Invocation.correlationId_) Guard->fileJobs_->Scheduler().Cancel(Outcome.jobId_);
+        } else if (Invocation.id_.starts_with("hc.navigate.")) {
+            auto* Model = Guard->findModel(Invocation.context_.tabId_);
+            if (Model && Model->property("hc.correlation").toString().toStdString() == Invocation.correlationId_) Model->CancelNavigation();
+        }
+    };
+    return Host;
+}
 
 bool CommandUiBridge::DispatchFolder(const QModelIndex& Index)
 {
@@ -384,6 +468,10 @@ void CommandUiBridge::createActions()
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
     auto* Search = Menu->addAction(tr("범위 검색…")); Search->setObjectName("hc.menu.search");
     connect(Search, &QAction::triggered, this, [this] { openSearch(); });
+    auto* Automation = Menu->addAction(tr("명령 자동화…")); Automation->setObjectName("hc.menu.automation");
+    connect(Automation, &QAction::triggered, this, [this] {
+        hc::automation::Show(main_, [Guard = QPointer<CommandUiBridge>(this)] { return Guard ? Guard->AutomationHost() : hc::automation::Host{}; });
+    });
     auto* DopusStorage = Plugins->addAction(tr("DOpus 파일 시스템 열기…")); DopusStorage->setObjectName("hc.menu.dopus.open");
     auto* DopusMetadata = Plugins->addAction(tr("DOpus 선택 파일 정보…")); DopusMetadata->setObjectName("hc.menu.dopus.query");
     connect(DopusStorage, &QAction::triggered, this, [this] { openDataPlugin(false, true); });

@@ -100,6 +100,10 @@ set(UNIQUELIBS_SRC
         ../commonLibs/storage/search.hpp
         ../UniqueLibs/qtSearch.cpp
         ../UniqueLibs/qtSearch.hpp
+        ../commonLibs/commands/automation.cpp
+        ../commonLibs/commands/automation.hpp
+        ../UniqueLibs/qtAutomation.cpp
+        ../UniqueLibs/qtAutomation.hpp
         ../UniqueLibs/qtWorkspaceState.cpp
         ../UniqueLibs/qtWorkspaceState.hpp
         ../UniqueLibs/qtWorkspaceRestore.cpp

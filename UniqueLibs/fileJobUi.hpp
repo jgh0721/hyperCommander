@@ -23,6 +23,7 @@ public:
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::ArchiveOperationRequest Request,
         hc::storage::OperationContext Context);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
+    bool IsUiPending(const std::string& Id) const { return pending_.contains(Id); }
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::PreparedJob Job, const QString& Label);
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
         hc::storage::OperationContext Context);

@@ -19,6 +19,7 @@
 #include <QtitanGrid.h>
 #include <iostream>
 #include <QTreeWidget>
+#include "qtAutomation.hpp"
 #include <psapi.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
@@ -90,7 +91,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -207,6 +208,61 @@ private slots:
         QMetaObject::invokeMethod(Results, "itemDoubleClicked", Q_ARG(QTreeWidgetItem*, Results->topLevelItem(0)), Q_ARG(int, 0));
         QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("found.txt"));
         QPointer<QDialog> Guard(Dialog); Dialog->close(); QTRY_VERIFY(Guard.isNull());
+    }
+
+    void automationCommandsUi()
+    {
+        using namespace hc::automation;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Panel = panels_.front(); hc::workspace::TabState Tab; Tab.id_ = "m8-automation";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->GetRoot());
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        const auto Statement = [](QString Id, QJsonObject Parameters) { return "invoke \"" + Id + "\" " + QString::fromUtf8(QJsonDocument(Parameters).toJson(QJsonDocument::Compact)) + '\n'; };
+        auto* Action = main_->findChild<QAction*>("hc.menu.automation"); QVERIFY(Action); Action->trigger();
+        auto* Dialog = main_->findChild<QDialog*>("hc.automationDialog"); QVERIFY(Dialog);
+        const auto Created = Directory.filePath("script-created");
+        auto* Source = Dialog->findChild<QPlainTextEdit*>("hc.automation.source");
+        auto* Run = Dialog->findChild<QPushButton*>("hc.automation.run"); auto* Status = Dialog->findChild<QLabel*>("hc.automation.status");
+        Source->setPlainText(Statement("hc.file.mkdir", {{"destination", Created}})); Run->click();
+        QTRY_VERIFY(Run->isEnabled()); QVERIFY(Status->text().contains("permission-required")); QVERIFY(!QFileInfo::exists(Created));
+        Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true);
+        Source->setPlainText(Statement("hc.file.mkdir", {{"destination", Created}})
+            + Statement("hc.navigate.path", {{"path", Created}}) + Statement("hc.navigate.refresh", {}));
+        Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 10000);
+        QVERIFY2(Status->text().startsWith(QString::fromUtf8("완료")), qPrintable(Status->text()));
+        QVERIFY(QFileInfo(Created).isDir()); QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Created);
+        // A direct UI invocation and DSL invocation use the same file job path.
+        const auto DirectPath = Directory.filePath("direct-created");
+        auto Direct = Bridge->Dispatch("hc.file.mkdir", {{"destination", DirectPath}}, "test");
+        QTRY_VERIFY(Direct.wait_for(std::chrono::seconds(0)) == std::future_status::ready); auto Accepted = Direct.get(); QVERIFY(Accepted.HasValue());
+        QTRY_VERIFY(QFileInfo(DirectPath).isDir());
+        const auto Job = Accepted.Value().jobId_;
+        QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Job) && !Model->IsLoading());
+        Execution Closed(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "closed-tab");
+        Execution Queued(Compile("invoke \"hc.file.mkdir\" {\"destination\":\"" + Directory.filePath("must-not-create") + "\"}").Value(), Bridge->AutomationHost(), {"file-write"}, "queued-tab");
+        Queued.Tick(); // Recreate the same persistent tab ID before dispatch runs.
+        Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        Closed.Tick(); QCOMPARE(Closed.Status(), State::Cancelled); QCOMPARE(Closed.Failure()->code_, std::string("automation-tab-closed"));
+        QTRY_VERIFY((Queued.Tick(), Queued.Status() != State::Running)); QCOMPARE(Queued.Status(), State::Cancelled);
+        QVERIFY(!QFileInfo::exists(Directory.filePath("must-not-create")));
+        QPointer<QDialog> Guard(Dialog); Dialog->close(); QTRY_VERIFY(Guard.isNull());
+        Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading());
+        auto Provider = std::make_shared<GatedProvider>(); auto Release = qScopeGuard([&] { Provider->release_.set_value(); });
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\");
+        Execution Cancelled(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "cancel-navigation");
+        Cancelled.Tick(); QTRY_VERIFY(Provider->started_.load()); QVERIFY(Model->IsLoading());
+        // Cancel before the execution consumes the Accepted future as well.
+        Cancelled.Cancel(); QCOMPARE(Cancelled.Status(), State::Cancelled); QVERIFY(!Model->IsLoading());
+        QVERIFY(Model->property("hc.correlation").toString().isEmpty());
+        Execution Replaced(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "replaced-navigation");
+        Replaced.Tick(); QTRY_VERIFY(Model->IsLoading());
+        auto Manual = Bridge->Dispatch("hc.navigate.refresh", {}, "test");
+        QTRY_VERIFY(Manual.wait_for(std::chrono::seconds(0)) == std::future_status::ready); QVERIFY(Manual.get().HasValue());
+        Replaced.Tick(); QCOMPARE(Replaced.Status(), State::Cancelled);
+        QVERIFY(Model->IsLoading()); // Script cleanup must not cancel the user's replacement request.
+        Model->CancelNavigation();
     }
 
     void workspaceSmbRestore()

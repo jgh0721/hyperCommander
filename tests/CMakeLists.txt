@@ -1,4 +1,12 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+qt_add_executable(hc_automation_tests tstAutomation.cpp
+    ../commonLibs/commands/automation.cpp ../UniqueLibs/qtAutomation.cpp)
+target_include_directories(hc_automation_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_link_libraries(hc_automation_tests PRIVATE Qt6::Test Qt6::Widgets)
+target_compile_options(hc_automation_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.automation COMMAND hc_automation_tests)
+set_tests_properties(hc.automation PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+hc_enable_qt_deployment(hc_automation_tests TEST PLUGINS)
 qt_add_executable(hc_search_tests
     tstSearch.cpp
     ../commonLibs/storage/search.cpp
@@ -165,6 +173,11 @@ target_link_libraries(hc_wlx_sdk_fixture PRIVATE user32)
 target_compile_options(hc_wlx_sdk_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set_target_properties(hc_wlx_sdk_fixture PROPERTIES SUFFIX ".wlx64")
 if(TARGET hc_smb_tests)
+    add_test(NAME hc.automation_ui
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+            -Executable "$<TARGET_FILE:hc_smb_tests>" -AutomationOnly -Dpr 1)
+    set_tests_properties(hc.automation_ui PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
     foreach(HC_WORKSPACE_DPR IN ITEMS 1 1.5)
         add_test(NAME hc.workspace_ui_${HC_WORKSPACE_DPR}
             COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
@@ -377,7 +390,7 @@ add_test(NAME hc.deployment
     COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
         -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
+        -TestExecutables "$<TARGET_FILE:hc_automation_tests>|$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 # This runs the product and every deployed test executable sequentially. The
@@ -394,7 +407,7 @@ add_custom_target(hc_check
     VERBATIM
 )
 add_dependencies(hc_check hc_iso_engine_tests hc_iso_wcx_tests hc_iso_job_tests)
-add_dependencies(hc_check hc_workspace_tests hc_search_tests)
+add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests)
 if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()

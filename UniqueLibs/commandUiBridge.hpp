@@ -4,6 +4,7 @@
 #include <QModelIndex>
 #include <QVariantMap>
 #include "commonLibs/commands/commandBus.hpp"
+#include "commonLibs/commands/automation.hpp"
 
 class QWidget;
 class CmpPanel;
@@ -26,6 +27,7 @@ public:
     void PromptFileOperation(const QString& Id, const QString& Source, const QModelIndex& Index = {});
     FileJobUi* FileJobs() const { return fileJobs_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
+    hc::automation::Host AutomationHost();
 private:
     void bindModels();
     void createActions();
