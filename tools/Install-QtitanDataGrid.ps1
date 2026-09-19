@@ -45,6 +45,8 @@ foreach ($Entry in $Manifest.dependencies) {
     if ((Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash -ne $Entry.sha256) { throw "Prepared source differs: $($Entry.path)" }
 }
 # Both paths are fixed children of the checked repository. Keep the old installation for rollback.
+# A fresh checkout has no ignored commercial component directory yet.
+[IO.Directory]::CreateDirectory((Split-Path $Vendor -Parent)) | Out-Null
 if (Test-Path -LiteralPath $Vendor) { Move-Item -LiteralPath $Vendor -Destination $Backup }
 try { Move-Item -LiteralPath $Prepared -Destination $Vendor }
 catch {
