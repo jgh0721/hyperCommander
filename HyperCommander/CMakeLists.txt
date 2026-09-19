@@ -103,6 +103,8 @@ set(UNIQUELIBS_SRC
         ../commonLibs/commands/automation.cpp
         ../commonLibs/commands/automation.hpp
         ../UniqueLibs/qtAutomation.cpp
+        ../UniqueLibs/qtAutomationCompiler.cpp
+        ../UniqueLibs/qtAutomationLibrary.cpp
         ../UniqueLibs/qtAutomation.hpp
         ../UniqueLibs/qtWorkspaceState.cpp
         ../UniqueLibs/qtWorkspaceState.hpp

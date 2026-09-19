@@ -220,6 +220,8 @@ Task<CommandOutcome> CommandUiBridge::DispatchInvocation(CommandInvocation Invoc
 
 hc::automation::Host CommandUiBridge::AutomationHost()
 {
+    static const std::set<std::string> Exposed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.open",
+        "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete"};
     const auto Initial = captureFiles({}, false);
     const auto Guard = QPointer<CommandUiBridge>(this);
     struct Binding {
@@ -247,9 +249,7 @@ hc::automation::Host CommandUiBridge::AutomationHost()
         if (!Lifetime->model_) return Ready<CommandOutcome>(Error{ErrorCategory::Cancelled, "automation-tab-closed"});
         // Interactive dialogs, tab switching and viewers need separate lifetime
         // facades. This first DSL stage exposes navigation and M4 file jobs only.
-        const std::set<std::string> Allowed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.open",
-            "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete"};
-        if (!Allowed.contains(Invocation.id_)) return Ready<CommandOutcome>(Error{ErrorCategory::Unsupported, "automation-command-not-exposed"});
+        if (!Exposed.contains(Invocation.id_)) return Ready<CommandOutcome>(Error{ErrorCategory::Unsupported, "automation-command-not-exposed"});
         // The saved workspace may recreate the same tab ID before a queued
         // dispatch executes. Cancel that dispatch when its original model dies.
         Lifetime->runStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Invocation.operation_.stopToken_,
@@ -295,6 +295,21 @@ hc::automation::Host CommandUiBridge::AutomationHost()
             auto* Model = Guard->findModel(Invocation.context_.tabId_);
             if (Model && Model->property("hc.correlation").toString().toStdString() == Invocation.correlationId_) Model->CancelNavigation();
         }
+    };
+    Host.schema_ = [Registry = registry_](const std::string& Id) -> Result<CommandDescriptor> {
+        if (!Exposed.contains(Id)) return Error{ErrorCategory::Unsupported, "automation-command-not-exposed"};
+        const auto Registered = Registry->Resolve(Id); if (!Registered.HasValue()) return Registered.Failure();
+        return Registered.Value()->descriptor_;
+    };
+    Host.output_ = [Guard, Lifetime](const CommandInvocation& Invocation, const CommandOutcome& Outcome) -> Result<Parameters> {
+        if (!Guard || !Lifetime->model_) return Error{ErrorCategory::Cancelled, "automation-tab-closed"};
+        Parameters Values{{"path", Lifetime->model_->WorkspaceLocation().root_}};
+        if (const auto Destination = Invocation.parameters_.find("destination"); Destination != Invocation.parameters_.end()) Values["destination"] = Destination->second;
+        if (Invocation.id_.starts_with("hc.file.") && !Outcome.jobId_.empty()) {
+            const auto Job = Guard->fileJobs_->Scheduler().Snapshot(Outcome.jobId_); if (!Job.HasValue()) return Job.Failure();
+            Values["completedItems"] = std::int64_t(Job.Value().completedItems_);
+        }
+        return Values;
     };
     return Host;
 }
@@ -468,10 +483,7 @@ void CommandUiBridge::createActions()
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
     auto* Search = Menu->addAction(tr("범위 검색…")); Search->setObjectName("hc.menu.search");
     connect(Search, &QAction::triggered, this, [this] { openSearch(); });
-    auto* Automation = Menu->addAction(tr("명령 자동화…")); Automation->setObjectName("hc.menu.automation");
-    connect(Automation, &QAction::triggered, this, [this] {
-        hc::automation::Show(main_, [Guard = QPointer<CommandUiBridge>(this)] { return Guard ? Guard->AutomationHost() : hc::automation::Host{}; });
-    });
+    hc::automation::Install(Window,*StSettings,[Guard = QPointer<CommandUiBridge>(this)] { return Guard ? Guard->AutomationHost() : hc::automation::Host{}; });
     auto* DopusStorage = Plugins->addAction(tr("DOpus 파일 시스템 열기…")); DopusStorage->setObjectName("hc.menu.dopus.open");
     auto* DopusMetadata = Plugins->addAction(tr("DOpus 선택 파일 정보…")); DopusMetadata->setObjectName("hc.menu.dopus.query");
     connect(DopusStorage, &QAction::triggered, this, [this] { openDataPlugin(false, true); });

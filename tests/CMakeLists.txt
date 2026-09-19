@@ -1,6 +1,6 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 qt_add_executable(hc_automation_tests tstAutomation.cpp
-    ../commonLibs/commands/automation.cpp ../UniqueLibs/qtAutomation.cpp)
+    ../commonLibs/commands/automation.cpp ../UniqueLibs/qtAutomation.cpp ../UniqueLibs/qtAutomationCompiler.cpp ../UniqueLibs/qtAutomationLibrary.cpp)
 target_include_directories(hc_automation_tests PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc_automation_tests PRIVATE Qt6::Test Qt6::Widgets)
 target_compile_options(hc_automation_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
