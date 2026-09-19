@@ -18,6 +18,10 @@
     {
       "id": "HC-QTN-008",
       "purpose": "Declare Windows SDK RtlGetVersion types explicitly"
+    },
+    {
+      "id": "HC-QTN-009",
+      "purpose": "Per-row key change relocation, persistent key snapshots, incremental group interval split/merge, expansion ancestry and visible subtree preservation"
     }
   ],
   "dependencies": [
@@ -58,17 +62,17 @@
     },
     {
       "path": "src/src/grid/QtnGridModelController.cpp",
-      "sha256": "bcb82b660eaf6afe51ee14270f8b3ac321d4e905b94d0fc23a6c194d7abfe7ec",
+      "sha256": "7fb1c39e4c56be969ce0d10bc8f02b88f6a40257ca9003ae13f5e666b3c86c28",
       "upstreamSha256": "fb520c0fa8177cdb8030c47cc24d7e068e5891b60f4b4834c3b18a329369ffc5"
     },
     {
       "path": "src/src/grid/QtnGridModelController.h",
-      "sha256": "5c9968d07de91be156c9e15b2bc5289e71c0f8547bbf65d3a728e23fffe61924",
+      "sha256": "1e52f475be8c3561e3c70ecd3547d3ef0b74aa104f245ba0bf75e63badddf0f4",
       "upstreamSha256": "0846cfde3e70706f317a73da4dad18ce38802625a074d2f0db3701cb149b1567"
     },
     {
       "path": "src/src/grid/QtnGridModelControllerPrivate.h",
-      "sha256": "f72cce627157226674e11524369b39ac60556794b3c91df2cf0394879ea06432",
+      "sha256": "b366ded7a7b3022cf0d08be8c41f1bdd56faf5301749a424a94874deeb0de49f",
       "upstreamSha256": "5d72836ab7283cd3a44c269bd529aaa4514f6fd20e517cc269091bb6c2f8db25"
     },
     {
@@ -113,6 +117,6 @@
   },
   "privatePatch": {
     "path": "externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip",
-    "sha256": "e9a1bd05eaeacae65382313cb1807bfe247d7585deb39ae7a26a6a8c4c1e8147"
+    "sha256": "f25a82a70ed8ce92960223cd5d7bedca6e0aa52c8e15a9e967d59d2a78b8e808"
   }
 }
