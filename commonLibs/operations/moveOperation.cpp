@@ -187,8 +187,9 @@ namespace hc::operations
                 || !SameArchiveContainer(Request.destination_, Request.destinationArchive_->root_) : !Request.destinationWriter_
                 || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb && Request.destination_.kind_ != LocatorKind::Plugin)))
             return Error{ErrorCategory::InvalidRequest, "invalid-move-operation"};
-        if (Request.sourceArchive_ && Request.destinationArchive_
-            && PathKey({LocatorKind::Local, Request.sourceArchive_->root_.root_}) == PathKey({LocatorKind::Local, Request.destinationArchive_->root_.root_}))
+        const bool SharedOuter = Request.sourceArchive_ && Request.destinationArchive_
+            && PathKey({LocatorKind::Local, Request.sourceArchive_->root_.root_}) == PathKey({LocatorKind::Local, Request.destinationArchive_->root_.root_});
+        if (SharedOuter && SameArchiveContainer(Request.sourceArchive_->root_, Request.destinationArchive_->root_))
             return Error{ErrorCategory::InvalidRequest, "use-in-container-move"};
         std::vector<OperationSource> Sources;
         for (const auto& Entry : Request.sources_)
@@ -204,6 +205,29 @@ namespace hc::operations
             }
             Sources.push_back({Entry, Request.sourceReader_, Request.sourceWriter_});
         }
+        if (SharedOuter)
+        {
+            // Never remove/replace an archive which contains the other branch.
+            // This also covers a selected directory containing that archive.
+            const auto& SourceRoot = Request.sourceArchive_->root_;
+            const auto& TargetRoot = Request.destinationArchive_->root_;
+            const auto Encloses = [](const Locator& Ancestor, const Locator& Descendant) {
+                if (Ancestor.nesting_.size() >= Descendant.nesting_.size()) return false;
+                auto Prefix = Descendant; Prefix.nesting_.resize(Ancestor.nesting_.size()); Prefix.nesting_.back().entry_ = "/";
+                return SameArchiveContainer(Ancestor, Prefix);
+            };
+            for (const auto& Entry : Request.sources_)
+            {
+                if (Encloses(SourceRoot, TargetRoot) && Within(TargetRoot.nesting_[SourceRoot.nesting_.size() - 1].entry_, Entry.locator_.nesting_.back().entry_))
+                    return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
+                if (Encloses(TargetRoot, SourceRoot))
+                {
+                    auto Path = Request.destination_.nesting_.back().entry_; if (!Path.ends_with('/')) Path += '/'; Path += Entry.name_;
+                    const auto& Container = SourceRoot.nesting_[TargetRoot.nesting_.size() - 1].entry_;
+                    if (Within(Container, Path) || Within(Path, Container)) return Error{ErrorCategory::InvalidRequest, "move-destination-overlaps-container"};
+                }
+            }
+        }
         Result<PreparedJob> Copy = Error{ErrorCategory::Internal, "move-copy-required"};
         if (Request.destinationArchive_)
         {
@@ -212,6 +236,7 @@ namespace hc::operations
             Archive.destination_ = Request.destination_; Archive.sources_ = std::move(Sources); Archive.conflict_ = Request.conflict_; Archive.correlationId_ = Request.correlationId_;
             Archive.limits_ = Request.destinationArchive_->limits_;
             Archive.limits_.maxEntries_ = Request.maxEntries_; Archive.limits_.maxDepth_ = Request.maxDepth_; Archive.limits_.maxInputBytes_ = Request.maxBytes_;
+            if (SharedOuter) Archive.beginRemoval_ = Request.sourceArchive_->begin_;
             Copy = PrepareArchiveOperation(std::move(Archive), Context);
         }
         else
@@ -222,6 +247,7 @@ namespace hc::operations
             Copy = PrepareFileOperation(std::move(Native), Context);
         }
         if (!Copy.HasValue()) return Copy.Failure();
+        if (SharedOuter) return Scheduler.Submit(std::move(Copy.Value().request_), std::move(Copy.Value().task_));
         return Scheduler.Submit(std::move(Copy.Value().request_), std::make_unique<MoveTask>(std::move(Request), std::move(Copy.Value().task_)));
     }
 }

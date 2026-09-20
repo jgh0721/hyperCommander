@@ -381,8 +381,13 @@ namespace hc::storage
             if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1
                 || (Size == ProducedSize::Exact ? Bytes != Entry.size_ : Bytes > Entry.size_))
                 return Fail({ErrorCategory::InvalidRequest, "invalid-produced-content"});
-            // A bounded producer reserves its ceiling until lease release, but
-            // describes the actual content size to consumers.
+            // The immutable read handle now denies write/delete. Release unused
+            // reservation so a chain of small candidates does not consume one
+            // full archive ceiling per level; actual live bytes remain charged.
+            if (Size == ProducedSize::Bounded)
+            {
+                std::lock_guard Lock(mutex_); bytes_ -= Item->bytes_ - Bytes; Item->bytes_ = Bytes;
+            }
             Entry.size_ = Bytes;
             return std::shared_ptr<IMaterializedFileLease>(new Lease(shared_from_this(), std::move(Item), std::move(Entry), std::move(Parents), Depth));
         }

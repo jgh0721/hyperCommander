@@ -41,7 +41,7 @@ namespace hc::operations
                     if (!Context.answer_) return failed({ErrorCategory::Internal, "archive-conflict-answer-required"});
                     if (Context.answer_->choice_ == InteractionChoice::Skip)
                     {
-                        auto Step = progress(); Step.item_ = outcome(ItemOutcome::Status::Skipped); phase_ = Phase::Plan; return Step;
+                        return skip();
                     }
                     if (Context.answer_->choice_ == InteractionChoice::Rename)
                     {
@@ -61,12 +61,12 @@ namespace hc::operations
                 }
                 if (phase_ == Phase::Prepare)
                 {
-                    if (!changes_.empty())
+                    if (!changes_.empty() || (request_.beginRemoval_ && !outcomes_.empty()))
                     {
                         auto Opened = request_.begin_(Context.operation_); if (!Opened.HasValue()) return failed(Opened.Failure());
                         batch_ = std::move(Opened.Value());
                         if (!batch_) return failed({ErrorCategory::Internal, "archive-batch-required"});
-                        const auto Prepared = batch_->Prepare(std::move(changes_), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
+                        const auto Prepared = prepareBatch(Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
                     }
                     phase_ = Phase::Commit;
                     auto Step = progress(); Step.next_ = JobState::Committing; return Step;
@@ -90,6 +90,8 @@ namespace hc::operations
                     auto Outcome = outcomes_[reported_++];
                     Outcome.destinationCommitted_ = Outcome.destinationCommitted_ || (committed_ && request_.operation_ != FileOperation::Delete);
                     Outcome.sourceRemoved_ = committed_ && (request_.operation_ == FileOperation::Delete || request_.operation_ == FileOperation::Rename || request_.operation_ == FileOperation::Move);
+                    if (committed_ && request_.beginRemoval_ && Outcome.source_)
+                        Outcome.sourceRemoved_ = !Outcome.source_->directory_ || !preserved_.contains(Outcome.source_->locator_.nesting_.back().entry_);
                     Step.item_ = std::move(Outcome);
                 }
                 if (reported_ == outcomes_.size())
@@ -119,6 +121,37 @@ namespace hc::operations
             {
                 JobStep Step{phase_ == Phase::Plan ? JobState::Preparing : JobState::Running};
                 Step.progress_ = JobProgress{0, {}, current_.source_.entry_.name_.empty() ? current_.destination_ : current_.source_.entry_.name_}; return Step;
+            }
+            JobStep skip()
+            {
+                if (request_.beginRemoval_)
+                    for (auto Path = Parent(current_.source_.entry_.locator_.nesting_.back().entry_); Path != "/"; Path = Parent(Path)) preserved_.insert(Path);
+                auto Step = progress(); Step.item_ = outcome(ItemOutcome::Status::Skipped); phase_ = Phase::Plan; return Step;
+            }
+            Result<Unit> prepareBatch(OperationContext Context)
+            {
+                if (!request_.beginRemoval_) return batch_->Prepare(std::move(changes_), Context);
+                std::vector<ArchiveChange> Removes;
+                std::set<std::string> Covered;
+                auto Items = outcomes_;
+                std::stable_sort(Items.begin(), Items.end(), [](const auto& A, const auto& B) {
+                    return A.source_->locator_.nesting_.back().entry_.size() < B.source_->locator_.nesting_.back().entry_.size();
+                });
+                for (const auto& Item : Items)
+                {
+                    const auto& Entry = *Item.source_; const auto& Path = Entry.locator_.nesting_.back().entry_;
+                    if (Entry.directory_ && preserved_.contains(Path)) continue;
+                    if (std::ranges::any_of(Covered, [&](const auto& Root) { return Within(Path, Root); })) continue;
+                    Removes.push_back({ArchiveChangeKind::Remove, Path, {}, {}, Entry.id_});
+                    if (Entry.directory_) Covered.insert(Path);
+                }
+                if (Removes.empty())
+                {
+                    if (changes_.empty()) { batch_.reset(); return Unit{}; }
+                    return batch_->Prepare(std::move(changes_), Context);
+                }
+                auto Removal = request_.beginRemoval_(Context); if (!Removal.HasValue()) return Removal.Failure();
+                return batch_->PrepareTogether(std::move(changes_), std::move(Removal.Value()), std::move(Removes), Context);
             }
             JobStep failed(Error Failure) const { JobStep Step{JobState::Failed}; Step.error_ = std::move(Failure); return Step; }
             JobStep plan(OperationContext Context)
@@ -186,7 +219,7 @@ namespace hc::operations
                     expected_ = {true, Existing.Value().id_.revision_};
                     replaceAllowed_ = request_.operation_ == FileOperation::Copy && !Existing.Value().directory_ && !current_.source_.entry_.directory_;
                     if (request_.operation_ == FileOperation::Copy && request_.conflict_ == ConflictPolicy::Skip)
-                    { auto Step = progress(); Step.item_ = outcome(ItemOutcome::Status::Skipped); phase_ = Phase::Plan; return Step; }
+                    { return skip(); }
                     if (replaceAllowed_ && request_.conflict_ == ConflictPolicy::Replace) return accept(Context);
                     phase_ = Phase::Conflict; auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                     Step.interaction_ = InteractionRequest{"", InteractionKind::Overwrite, "archive-destination-exists", {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value().id_};
@@ -222,7 +255,7 @@ namespace hc::operations
             std::deque<Item> pending_;
             Item current_, enumerating_;
             std::unique_ptr<IEntryCursor> cursor_;
-            std::set<std::string> seen_, destinations_;
+            std::set<std::string> seen_, destinations_, preserved_;
             std::vector<ArchiveChange> changes_;
             std::vector<ItemOutcome> outcomes_;
             DestinationExpectation expected_;
@@ -241,6 +274,7 @@ namespace hc::operations
             || !Request.limits_.maxEntries_ || Request.limits_.maxEntries_ > 100000 || !Request.limits_.maxDepth_ || Request.limits_.maxDepth_ > 32
             || !Request.limits_.maxInputBytes_ || Request.sources_.size() > Request.limits_.maxEntries_
             || (Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Delete && Request.operation_ != FileOperation::Rename && Request.operation_ != FileOperation::MakeDirectory && Request.operation_ != FileOperation::Move)
+            || (Request.beginRemoval_ && Request.operation_ != FileOperation::Copy)
             || (Request.operation_ != FileOperation::Delete && !ValidLocation(Request.destination_))
             || (Request.operation_ == FileOperation::MakeDirectory ? !Request.sources_.empty() : Request.sources_.empty())
             || (Request.operation_ == FileOperation::Rename && Request.sources_.size() != 1) || !Context.maxReadBytes_ || !Context.maxPageItems_)
@@ -248,6 +282,8 @@ namespace hc::operations
         for (const auto& Source : Request.sources_)
         {
             if (!Source.reader_ || !SafeName(Source.entry_.name_)) return Error{ErrorCategory::InvalidRequest, "invalid-archive-source"};
+            if (Request.beginRemoval_ && (Source.entry_.locator_.kind_ != LocatorKind::Archive || Source.entry_.locator_.nesting_.empty()))
+                return Error{ErrorCategory::InvalidRequest, "invalid-joint-archive-source"};
             if (Request.operation_ != FileOperation::Copy && (!ValidLocation(Source.entry_.locator_) || Source.reader_ != Request.reader_))
                 return Error{ErrorCategory::InvalidRequest, "foreign-archive-source"};
             if ((Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move) && ValidLocation(Source.entry_.locator_)

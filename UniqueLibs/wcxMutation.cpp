@@ -62,6 +62,91 @@ namespace hc::storage
                   limits_(Limits), original_(std::move(Original)), native_(std::move(NativeReader)), writer_(std::move(Writer)),
                   backend_(Backend ? std::move(Backend) : hc::plugins::MakeInProcessWcxBackend(plugin_)) {}
             ~Session() { Abort(); }
+            Result<Unit> PrepareTogether(std::vector<ArchiveChange> Changes, std::unique_ptr<IArchiveMutationSession> Other,
+                std::vector<ArchiveChange> OtherChanges, OperationContext Context) override
+            {
+                auto* Peer = dynamic_cast<Session*>(Other.get());
+                if (state_ != State::New || !Peer || Peer->state_ != State::New
+                    || root_.root_ != Peer->root_.root_ || SameArchiveContainer(root_, Peer->root_))
+                    return Invalid("archive-joint-session-mismatch");
+                state_ = State::Preparing;
+                try
+                {
+                    if (Changes.empty())
+                    {
+                        parent_ = std::move(Other);
+                        auto Prepared = parent_->Prepare(std::move(OtherChanges), Context);
+                        if (Prepared.HasValue()) { state_ = State::Prepared; return Unit{}; }
+                        const auto Failure = Prepared.Failure(); Abort(); return Failure;
+                    }
+                    struct Branch { Session* session_; std::unique_ptr<IArchiveMutationSession> owner_; std::vector<ArchiveChange> changes_; };
+                    Branch Left{this, {}, std::move(Changes)}, Right{Peer, std::move(Other), std::move(OtherChanges)};
+                    std::vector<std::shared_ptr<IMaterializedFileLease>> Leases;
+                    const auto Promote = [&](Branch& Branch) -> Result<Unit> {
+                        auto& Current = *Branch.session_;
+                        if (Current.root_.nesting_.size() <= 1) return Invalid("archive-joint-root-mismatch");
+                        auto Candidate = Current.prepareCandidate(std::move(Branch.changes_), Context);
+                        if (!Candidate.HasValue()) return Candidate.Failure();
+                        Leases.push_back(Candidate.Value());
+                        auto Container = ResolveWcxContainer(Current.native_, Context); if (!Container.HasValue()) return Container.Failure();
+                        auto ParentRoot = Current.original_.locator_; ParentRoot.nesting_.back().entry_ = "/";
+                        auto Parent = BeginWcxMutation({}, ParentRoot, Current.native_, Current.temporary_, Current.limits_, Context, Current.writer_, Container.Value().backend_);
+                        if (!Parent.HasValue()) return Parent.Failure();
+                        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+                        auto Local = LocalReader->Resolve({LocatorKind::Local, Candidate.Value()->LocalPath()}, Context).get(); if (!Local.HasValue()) return Local.Failure();
+                        ArchiveChange Change{ArchiveChangeKind::Put, Current.original_.locator_.nesting_.back().entry_, {},
+                            std::make_shared<ProviderContentSource>(LocalReader, Local.Value()), {}, {true, Current.original_.id_.revision_}};
+                        auto Fresh = Current.native_->Stat(Current.original_.id_, Context).get(); if (!Fresh.HasValue()) return Fresh.Failure();
+                        Branch.owner_ = std::move(Parent.Value()); Branch.session_ = static_cast<Session*>(Branch.owner_.get());
+                        Branch.changes_ = {std::move(Change)}; return Unit{};
+                    };
+                    Result<Unit> Prepared = Unit{};
+                    while (!SameArchiveContainer(Left.session_->root_, Right.session_->root_))
+                    {
+                        Prepared = Promote(Left.session_->root_.nesting_.size() >= Right.session_->root_.nesting_.size() ? Left : Right);
+                        if (!Prepared.HasValue()) break;
+                    }
+                    if (Prepared.HasValue())
+                    {
+                        if (Left.session_->original_.locator_ != Right.session_->original_.locator_
+                            || Left.session_->original_.id_.revision_ != Right.session_->original_.id_.revision_)
+                            Prepared = Error{ErrorCategory::StaleRevision, "archive-joint-base-changed"};
+                        else
+                        {
+                            // Both child candidates replace members of the same
+                            // original container. A single batch checks and lifts
+                            // their combined result through the remaining parents.
+                            auto& Target = Left.session_ == this ? Left : Right.session_ == this ? Right : Left;
+                            auto& Source = &Target == &Left ? Right : Left;
+                            for (auto& Change : Source.changes_)
+                            {
+                                if (!Change.source_) continue;
+                                auto At = Target.session_->root_; At.nesting_.back().entry_ = Change.path_;
+                                auto Selected = Source.session_->reader_->Stat(*Change.source_, Context).get();
+                                if (!Selected.HasValue()) return Selected.Failure();
+                                auto Fresh = Target.session_->reader_->Resolve(At, Context).get();
+                                if (!Fresh.HasValue()) return Fresh.Failure();
+                                if (Fresh.Value().locator_ != Selected.Value().locator_ || Fresh.Value().id_.revision_ != Change.source_->revision_)
+                                    return Error{ErrorCategory::StaleRevision, "archive-joint-source-changed"};
+                                Change.source_ = Fresh.Value().id_;
+                            }
+                            Target.changes_.insert(Target.changes_.end(), std::make_move_iterator(Source.changes_.begin()), std::make_move_iterator(Source.changes_.end()));
+                            if (Target.session_ == this) Prepared = prepare(std::move(Target.changes_), Context);
+                            else
+                            {
+                                parent_ = std::move(Target.owner_);
+                                Prepared = parent_->Prepare(std::move(Target.changes_), Context);
+                            }
+                        }
+                    }
+                    if (Prepared.HasValue()) { state_ = State::Prepared; return Unit{}; }
+                    auto Failure = Prepared.Failure(); const auto Errors = Abort();
+                    if (!Errors.empty()) Failure.userAction_ = "cleanup-pending:" + Errors.front().userAction_;
+                    return Failure;
+                }
+                catch (...) { const auto Errors = Abort(); auto Failure = Error{ErrorCategory::Internal, "archive-joint-prepare-exception"};
+                    if (!Errors.empty()) Failure.userAction_ = "cleanup-pending:" + Errors.front().userAction_; return Failure; }
+            }
             Result<Unit> Prepare(std::vector<ArchiveChange> Changes, OperationContext Context) override
             {
                 if (state_ != State::New) return Invalid("archive-session-not-new");
@@ -357,19 +442,23 @@ namespace hc::storage
                 if (!Errors.empty()) return Errors.front();
                 return Unit{};
             }
-            Result<Unit> prepare(std::vector<ArchiveChange> Changes, OperationContext Context)
+            Result<std::shared_ptr<IMaterializedFileLease>> prepareCandidate(std::vector<ArchiveChange> Changes, OperationContext Context)
             {
                 if (const auto Failure = Context.Check({"wcx"})) return *Failure;
                 if (!Context.maxReadBytes_ || !Context.maxPageItems_) return Invalid("archive-zero-io-budget");
                 Context.maxEnumerationEntries_ = std::min(Context.maxEnumerationEntries_, limits_.maxEntries_);
-                auto Initial = snapshot(Context); if (!Initial.HasValue()) return Initial;
-                auto Planned = plan(Changes, Context); if (!Planned.HasValue()) return Planned;
+                auto Initial = snapshot(Context); if (!Initial.HasValue()) return Initial.Failure();
+                auto Planned = plan(Changes, Context); if (!Planned.HasValue()) return Planned.Failure();
                 auto Store = MakeNativeContentStore(temporary_); if (!Store.HasValue()) return Store.Failure();
                 auto Output = original_; Output.size_ = limits_.maxArchiveBytes_;
                 // build() independently bounds and integrity-tests expansion.
-                auto Lease = Store.Value()->Produce(Output, {}, Output.size_, Context, [&](const std::string& Path, OperationContext Context) {
+                return Store.Value()->Produce(Output, {}, Output.size_, Context, [&](const std::string& Path, OperationContext Context) {
                     return build(QString::fromStdString(Path), Context);
                 }, ProducedSize::Bounded);
+            }
+            Result<Unit> prepare(std::vector<ArchiveChange> Changes, OperationContext Context)
+            {
+                auto Lease = prepareCandidate(std::move(Changes), Context);
                 if (!Lease.HasValue()) return Lease.Failure();
                 if (root_.nesting_.size() > 1)
                 {

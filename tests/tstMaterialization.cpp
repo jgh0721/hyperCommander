@@ -117,8 +117,10 @@ private slots:
             QFile File(QString::fromStdString(Path)); if (!File.open(QIODevice::WriteOnly) || File.write("x") != 1) return Error{ErrorCategory::Unavailable, "write-failed"};
             return Unit{};
         }, ProducedSize::Bounded); QVERIFY(Bounded.HasValue()); QCOMPARE(Bounded.Value()->Describe().size_, 1u);
-        const auto CeilingReserved = Manager->Materialize({Content("x")}, {}).get(); QVERIFY(!CeilingReserved.HasValue());
-        QCOMPARE(CeilingReserved.Failure().category_, ErrorCategory::BudgetExceeded);
+        auto Remaining = Manager->Materialize({Content("1234")}, {}).get(); QVERIFY(Remaining.HasValue());
+        const auto ActualFull = Manager->Materialize({Content("x")}, {}).get(); QVERIFY(!ActualFull.HasValue());
+        QCOMPARE(ActualFull.Failure().category_, ErrorCategory::BudgetExceeded);
+        Remaining.Value().reset();
         Bounded.Value().reset(); QVERIFY(Manager->DrainCleanup().errors_.empty());
         const auto CeilingExceeded = Store->Produce(Content("1234")->Describe(), {}, {}, {}, Write, ProducedSize::Bounded);
         QVERIFY(!CeilingExceeded.HasValue()); QCOMPARE(CeilingExceeded.Failure().code_, "invalid-produced-content");

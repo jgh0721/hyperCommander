@@ -14,6 +14,9 @@ namespace hc::operations
         std::shared_ptr<storage::IStorageProvider> reader_;
         std::vector<OperationSource> sources_;
         std::function<Result<std::unique_ptr<storage::IArchiveMutationSession>>(storage::OperationContext)> begin_;
+        // Copy planning with atomic removal in a sibling/ancestor container.
+        // Supplied only by the shared-outer-archive move coordinator.
+        std::function<Result<std::unique_ptr<storage::IArchiveMutationSession>>(storage::OperationContext)> beginRemoval_;
         ConflictPolicy conflict_ = ConflictPolicy::Ask;
         bool confirmDelete_ = true;
         storage::ArchiveMutationLimits limits_;

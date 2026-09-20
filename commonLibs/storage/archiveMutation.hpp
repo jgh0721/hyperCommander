@@ -27,6 +27,11 @@ namespace hc::storage
         // One worker owns the session. Prepare may perform archive I/O and
         // remains cancellable; it never replaces the original archive.
         virtual Result<Unit> Prepare(std::vector<ArchiveChange> Changes, OperationContext Context) = 0;
+        // Both branches must be published by this session's single Commit.
+        // Providers without a shared-container transaction reject before writing.
+        virtual Result<Unit> PrepareTogether(std::vector<ArchiveChange>, std::unique_ptr<IArchiveMutationSession>,
+            std::vector<ArchiveChange>, OperationContext)
+        { return Error{ErrorCategory::Unsupported, "archive-joint-mutation-unavailable"}; }
         // The scheduler must enter its commit boundary before calling Commit.
         // A successful receipt means the entire prepared batch was published.
         virtual Result<WriteReceipt> Commit(OperationContext Context) = 0;

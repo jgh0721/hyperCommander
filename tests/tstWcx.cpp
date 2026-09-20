@@ -109,7 +109,8 @@ namespace
             bool commitFailure_;
         };
     public:
-        explicit FailedDestination(bool CommitFailure, bool RemoveFailure = false) : inner_(MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local))), commitFailure_(CommitFailure), removeFailure_(RemoveFailure) {}
+        explicit FailedDestination(bool CommitFailure, bool RemoveFailure = false, LocatorKind Kind = LocatorKind::Local)
+            : inner_(MakeNativeWritableStorage(Kind, MakeNativeReadProvider(Kind))), commitFailure_(CommitFailure), removeFailure_(RemoveFailure) {}
         ProviderId Id() const override { return inner_->Id(); }
         Result<SupportDecision> Supports(Mutation Op, Locator At, OperationContext Context) override { return inner_->Supports(Op, At, Context); }
         Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return inner_->Inspect(At, Context); }
@@ -178,6 +179,118 @@ private slots:
             }
             QVERIFY(Batch.Value()->Abort().empty()); QCOMPARE(FileBytes(Path), Failure == 3 ? QByteArray("external change") : Original);
         }
+    }
+    void nestedBranchMove_data()
+    {
+        QTest::addColumn<int>("Depth"); QTest::addColumn<bool>("Skip");
+        QTest::addColumn<int>("Layout");
+        for (int Depth : {1, 2, 3, 7}) for (bool Skip : {false, true})
+            QTest::newRow(qPrintable(QString("depth-%1-%2").arg(Depth).arg(Skip ? "skip" : "replace"))) << Depth << Skip << 0;
+        QTest::newRow("shared-nested-parent") << 2 << false << 1;
+        QTest::newRow("move-to-ancestor") << 3 << false << 2;
+        QTest::newRow("skip-preserves-directory") << 1 << true << 3;
+    }
+    void nestedJointFailurePreservesRoot()
+    {
+        for (int Failure : {0, 1, 2, 3, 4, 5})
+        {
+            QTemporaryDir Directory;
+            const auto Share = qEnvironmentVariable("HC_WCX_SMB_ROOT");
+            QTemporaryDir Data(Share.isEmpty() ? QDir::tempPath() + "/hc-joint-XXXXXX" : Share + "/hc-joint-XXXXXX");
+            QVERIFY(Data.isValid()); const auto Path = Data.filePath("outer.hct");
+            auto Original = NestedFixture("HCWCX01", Failure == 4 ? 'P' : 0);
+            const quint32 Count = 3; std::memcpy(Original.data() + 8, &Count, 4);
+            const QString TargetName("target.hct");
+            const auto Number = [&](quint32 Value) { Original.append(reinterpret_cast<const char*>(&Value), 4); };
+            Number(TargetName.size()); Number(7); Number(0); Original.append(reinterpret_cast<const char*>(TargetName.utf16()), TargetName.size() * 2); Original += "HCWCX01";
+            QVERIFY(Put(Path, Original));
+            auto SourceRoot = Location(Path, "/inner.hct"); SourceRoot.nesting_.push_back({"wcx", "/"});
+            auto TargetRoot = Location(Path, "/target.hct"); TargetRoot.nesting_.push_back({"wcx", "/"});
+            auto Source = MakeWcxReadProvider(Fixture().toStdString(), SourceRoot, Directory.path().toStdString());
+            auto Target = MakeWcxReadProvider(Fixture().toStdString(), TargetRoot, Directory.path().toStdString());
+            auto Alpha = SourceRoot; Alpha.nesting_.back().entry_ = "/alpha.txt"; auto Entry = Source->Resolve(Alpha, {}).get(); QVERIFY(Entry.HasValue());
+            auto Removal = BeginWcxMutation(Fixture().toStdString(), SourceRoot, Source, Directory.path().toStdString()); QVERIFY(Removal.HasValue());
+            std::shared_ptr<IWritableStorage> Writer; if (Failure < 2) Writer = std::make_shared<FailedDestination>(Failure == 1, false, Share.isEmpty() ? LocatorKind::Local : LocatorKind::Smb);
+            auto Batch = BeginWcxMutation(Fixture().toStdString(), TargetRoot, Target, Directory.path().toStdString(), {}, {}, Writer); QVERIFY(Batch.HasValue());
+            auto Prepared = Batch.Value()->PrepareTogether({{ArchiveChangeKind::Put, "/moved.txt", {}, std::make_shared<ProviderContentSource>(Source, Entry.Value())}},
+                std::move(Removal.Value()), {{ArchiveChangeKind::Remove, "/alpha.txt", {}, {}, Entry.Value().id_}}, {});
+            QCOMPARE(FileBytes(Path), Original);
+            if (Failure == 0 || Failure == 4) QVERIFY(!Prepared.HasValue());
+            else
+            {
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+                if (Failure == 1) QVERIFY(!Batch.Value()->Commit({}).HasValue());
+                if (Failure == 2) { std::stop_source Stop; Stop.request_stop(); OperationContext Context; Context.stopToken_ = Stop.get_token(); QVERIFY(!Batch.Value()->Commit(Context).HasValue()); }
+                if (Failure == 3) { QVERIFY(Put(Path, "external change")); QVERIFY(!Batch.Value()->Commit({}).HasValue()); }
+            }
+            QVERIFY(Batch.Value()->Abort().empty()); QCOMPARE(FileBytes(Path), Failure == 3 ? QByteArray("external change") : Original);
+        }
+    }
+    void nestedBranchMove()
+    {
+        QFETCH(int, Depth); QFETCH(bool, Skip); QFETCH(int, Layout);
+        const auto Share = qEnvironmentVariable("HC_WCX_SMB_ROOT");
+        QTemporaryDir Directory;
+        QTemporaryDir Data(Share.isEmpty() ? QDir::tempPath() + "/hc-branch-XXXXXX" : Share + "/hc-branch-XXXXXX");
+        QVERIFY(Directory.isValid()); QVERIFY(Data.isValid()); const auto Path = Data.filePath("outer.hct");
+        auto SourceBytes = QByteArray("HCWCX01");
+        for (int Index = 1; Index < Depth; ++Index) SourceBytes = NestedFixture(SourceBytes);
+        // Different depths force the deeper branch to be lifted first.
+        auto OuterBytes = NestedFixture(SourceBytes); const quint32 Count = 3; std::memcpy(OuterBytes.data() + 8, &Count, 4);
+        const QString TargetName("target.hct");
+        const auto Number = [&](quint32 Value) { OuterBytes.append(reinterpret_cast<const char*>(&Value), 4); };
+        Number(TargetName.size()); Number(7); Number(0); OuterBytes.append(reinterpret_cast<const char*>(TargetName.utf16()), TargetName.size() * 2); OuterBytes += "HCWCX01";
+        auto SourceRoot = Location(Path, "/inner.hct"); SourceRoot.nesting_.push_back({"wcx", "/"});
+        for (int Index = 1; Index < Depth; ++Index) { SourceRoot.nesting_.back().entry_ = "/inner.hct"; SourceRoot.nesting_.push_back({"wcx", "/"}); }
+        auto TargetRoot = Location(Path, "/target.hct"); TargetRoot.nesting_.push_back({"wcx", "/"});
+        if (Layout == 1) {
+            OuterBytes = NestedFixture(OuterBytes);
+            SourceRoot.nesting_.insert(SourceRoot.nesting_.begin(), {"wcx", "/inner.hct"});
+            TargetRoot.nesting_.insert(TargetRoot.nesting_.begin(), {"wcx", "/inner.hct"});
+        }
+        QVERIFY(Put(Path, OuterBytes));
+        if (Layout == 2) TargetRoot = Location(Path);
+        const auto Endpoint = [&](Locator Root) {
+            ArchiveMoveEndpoint Value; Value.root_ = Root;
+            Value.reader_ = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString());
+            Value.begin_ = [Root, Reader = Value.reader_, Base = Directory.path().toStdString()](OperationContext Context) {
+                return BeginWcxMutation(Fixture().toStdString(), Root, Reader, Base, {}, Context);
+            }; return Value;
+        };
+        if (Layout == 3) {
+            QVERIFY(Put(Directory.filePath("extra.txt"), "extra"));
+            auto Source = Endpoint(SourceRoot); auto Additional = Source.begin_({});
+            QVERIFY2(Additional.HasValue(), Additional.HasValue() ? "" : Additional.Failure().code_.c_str());
+            QVERIFY(Additional.Value()->Prepare({{ArchiveChangeKind::Put, "/sub/extra.txt", {}, Content(Directory.filePath("extra.txt"))}}, {}).HasValue());
+            QVERIFY(Additional.Value()->Commit({}).HasValue());
+        }
+        MoveOperationRequest Request; Request.sourceArchive_ = Endpoint(SourceRoot); Request.destinationArchive_ = Endpoint(TargetRoot);
+        Request.sourceReader_ = Request.sourceArchive_->reader_; Request.destination_ = TargetRoot;
+        Request.conflict_ = Skip ? ConflictPolicy::Skip : ConflictPolicy::Replace;
+        for (const auto* Name : {"/alpha.txt", "/sub"}) {
+            auto At = SourceRoot; At.nesting_.back().entry_ = Name; auto Entry = Request.sourceReader_->Resolve(At, {}).get();
+            QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str()); Request.sources_.push_back(Entry.Value());
+        }
+        const auto Original = FileBytes(Path);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY2(Submitted.HasValue(), Submitted.HasValue() ? "" : Submitted.Failure().code_.c_str());
+        QTRY_VERIFY_WITH_TIMEOUT(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 30000);
+        const auto Result = Submitted.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "not completed");
+        auto FreshSource = Endpoint(SourceRoot).reader_; auto Alpha = SourceRoot; Alpha.nesting_.back().entry_ = "/alpha.txt";
+        QCOMPARE(FreshSource->Resolve(Alpha, {}).get().HasValue(), Skip);
+        auto FreshTarget = Endpoint(TargetRoot).reader_; Alpha = TargetRoot; Alpha.nesting_.back().entry_ = "/alpha.txt";
+        auto Copied = FreshTarget->Resolve(Alpha, {}).get(); QVERIFY(Copied.HasValue());
+        auto Stream = FreshTarget->OpenRead(Copied.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+        auto Read = Stream.Value()->Read(1024, {}).get(); QVERIFY(Read.HasValue()); QCOMPARE(Bytes(Read.Value()), QByteArray("alpha"));
+        if (Layout == 3) {
+            auto Child = SourceRoot; Child.nesting_.back().entry_ = "/sub/extra.txt"; QVERIFY(!FreshSource->Resolve(Child, {}).get().HasValue());
+            Child.nesting_.back().entry_ = "/sub/한글.txt"; QVERIFY(FreshSource->Resolve(Child, {}).get().HasValue());
+            Child = TargetRoot; Child.nesting_.back().entry_ = "/sub/extra.txt"; QVERIFY(FreshTarget->Resolve(Child, {}).get().HasValue());
+            for (const auto& Item : Result.items_) if (Item.source_ && Item.source_->directory_) QVERIFY(!Item.sourceRemoved_);
+        }
+        else if (Skip) QCOMPARE(FileBytes(Path), Original);
+        else for (const auto& Item : Result.items_) QVERIFY(Item.destinationCommitted_ && Item.sourceRemoved_);
     }
     void crossProviderMove_data()
     {
@@ -660,6 +773,35 @@ private slots:
             auto Renamed = Fresh->Resolve(Alpha, {}).get(); QVERIFY(Renamed.HasValue()); auto Read = Fresh->OpenRead(Renamed.Value().id_, {}).get(); QVERIFY(Read.HasValue());
             auto Content = Read.Value()->Read(32, {}).get(); QVERIFY(Content.HasValue()); QCOMPARE(Bytes(Content.Value()), QByteArray("alpha"));
         }
+        const auto JointMove = [&](const QString& Base) {
+            const auto OuterPath = QDir(Base).filePath("joint.7z");
+            QVERIFY(QFile::copy(QString::fromStdWString(Archive), Directory.filePath("target.7z")));
+            auto Outer = QDir::toNativeSeparators(OuterPath).toStdWString(); wchar_t Members[] = L"real.7z\0target.7z\0";
+            Progress(nullptr, &Continue); QCOMPARE(Pack(Outer.data(), nullptr, Source.data(), Members, PK_PACK_SAVE_PATHS), 0);
+            QVERIFY(QFile::remove(Directory.filePath("target.7z")));
+            const auto Endpoint = [&](const char* Member) {
+                ArchiveMoveEndpoint Value; Value.root_ = Location(OuterPath, Member); Value.root_.nesting_.push_back({"wcx", "/"});
+                Value.reader_ = MakeWcxReadProvider(Plugin.toStdString(), Value.root_, Directory.path().toStdString());
+                Value.begin_ = [Root = Value.root_, Reader = Value.reader_, Base = Directory.path().toStdString(), Binary = Plugin.toStdString()](OperationContext Context) {
+                    return BeginWcxMutation(Binary, Root, Reader, Base, {}, Context);
+                }; return Value;
+            };
+            MoveOperationRequest Request; Request.sourceArchive_ = Endpoint("/real.7z"); Request.destinationArchive_ = Endpoint("/target.7z");
+            Request.sourceReader_ = Request.sourceArchive_->reader_; Request.destination_ = Request.destinationArchive_->root_; Request.conflict_ = ConflictPolicy::Replace;
+            auto Alpha = Request.sourceArchive_->root_; Alpha.nesting_.back().entry_ = "/alpha.txt";
+            auto Entry = Request.sourceReader_->Resolve(Alpha, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_ = {Entry.Value()};
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1); auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY(Submitted.HasValue());
+            QTRY_VERIFY_WITH_TIMEOUT(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 30000);
+            const auto Result = Submitted.Value().completion_.get();
+            QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "not completed");
+            QVERIFY(!Endpoint("/real.7z").reader_->Resolve(Alpha, {}).get().HasValue());
+            auto Target = Endpoint("/target.7z"); Alpha = Target.root_; Alpha.nesting_.back().entry_ = "/alpha.txt";
+            Entry = Target.reader_->Resolve(Alpha, {}).get(); QVERIFY(Entry.HasValue());
+            auto Read = Target.reader_->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Read.HasValue());
+            auto Chunk = Read.Value()->Read(100, {}).get(); QVERIFY(Chunk.HasValue()); QCOMPARE(Bytes(Chunk.Value()), QByteArray("alpha"));
+            for (const auto& Item : Result.items_) QVERIFY(Item.destinationCommitted_ && Item.sourceRemoved_);
+        };
+        JointMove(Directory.path());
         const auto Mutate = [&](const QString& ArchivePath) {
             auto Read = MakeWcxReadProvider(Plugin.toStdString(), Location(ArchivePath), Directory.path().toStdString());
             auto Alpha = Read->Resolve(Location(ArchivePath, "/alpha.txt"), {}).get(); QVERIFY(Alpha.HasValue());
@@ -742,6 +884,7 @@ private slots:
             auto RemoteChunk = RemoteStream.Value()->Read(32, {}).get(); QVERIFY(RemoteChunk.HasValue()); QCOMPARE(Bytes(RemoteChunk.Value()), QByteArray("한글!\r\n"));
             Mutate(RemoteArchive);
             ExerciseMoves(Remote.path());
+            JointMove(Remote.path());
         }
         Mutate(QString::fromStdWString(Archive));
     }
