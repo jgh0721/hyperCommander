@@ -5,6 +5,7 @@ using namespace hc::script;
 using Object = ScriptValue::Object;
 class EchoApi final : public IScriptHostApi {
 public:
+    std::uint32_t ApiVersion() const override { return version_; }
     Result<ScriptValue> Call(std::string_view Method, const ScriptValue& Arguments) override {
         if (closed_) return Error{ErrorCategory::Cancelled, "closed"};
         ++calls_; ownerCorrect_ = ownerCorrect_ && owner_ == std::this_thread::get_id();
@@ -13,11 +14,20 @@ public:
     }
     void Close() override { closed_ = true; }
     int calls_ = 0; bool closed_ = false, ownerCorrect_ = true;
+    std::uint32_t version_ = 1;
     std::thread::id owner_ = std::this_thread::get_id();
 };
 class LuaTests : public QObject {
     Q_OBJECT
 private slots:
+    void rejectedVersionAndFinalizerRevocation() {
+        auto Future = std::make_shared<EchoApi>(); Future->version_ = 2;
+        ScriptExecution Rejected(Future, "hc.capture()"); QVERIFY(!Rejected.IsRunning());
+        QCOMPARE(Rejected.Outcome()->Failure().code_, std::string("api-version")); QVERIFY(Future->closed_); QCOMPARE(Future->calls_,0);
+        auto Api = std::make_shared<EchoApi>(); auto Runtime = MakeLuaRuntime(); QVERIFY(Runtime->Load(Api,{}).HasValue());
+        QVERIFY(Runtime->Evaluate("finalizer=setmetatable({}, {__gc=function() hc.call('echo',{}) end}); return true").HasValue());
+        Runtime->Unload(); QVERIFY(Api->closed_); QCOMPARE(Api->calls_,0);
+    }
     void nativeValuesAndRestrictedLibraries() {
         auto Runtime = MakeLuaRuntime(); auto Api = std::make_shared<EchoApi>();
         QVERIFY(Runtime->Load(Api, {}).HasValue());

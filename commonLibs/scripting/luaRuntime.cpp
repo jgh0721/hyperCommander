@@ -139,6 +139,7 @@ private:
         Hc["null"] = sol::make_object(State, Unit{});
         Hc.set_function("call", [Self, State](const std::string& Method, const sol::object& Arguments) {
             Self->check();
+            if (Method.empty() || Method.size() > 128 || Method.find('\0') != std::string::npos) throw std::runtime_error("script-method");
             if (++Self->calls_ > Self->limits_.hostCalls_) { Self->quota_ = true; throw std::runtime_error("runtime-host-calls"); }
             ValueBudget Budget; auto Value = Read(Arguments, Budget);
             auto Valid = Validate(Value); if (!Valid.HasValue()) throw std::runtime_error(Valid.Failure().code_);
@@ -171,6 +172,18 @@ function hc.release(handle) return request('release', {handle=handle}) end
 hc.job = {}
 function hc.job.poll(handle) return request('poll', {handle=handle}) end
 function hc.job.cancel(handle) return request('cancel', {handle=handle}) end
+function hc.job.snapshot(handle) return request('job.snapshot', {handle=handle}) end
+hc.workspace = {}
+function hc.workspace.snapshot() return request('workspace.snapshot') end
+hc.viewer = {}
+function hc.viewer.open(resource) return request('viewer.open', {resource=resource}) end
+function hc.viewer.snapshot(handle) return request('viewer.snapshot', {handle=handle}) end
+function hc.viewer.execute(handle, command) return request('viewer.execute', {handle=handle, command=command}) end
+function hc.viewer.close(handle) return request('viewer.close', {handle=handle}) end
+hc.events = {}
+function hc.events.subscribe(event) return request('events.subscribe', {event=event}) end
+function hc.events.poll(handle) return request('events.poll', {handle=handle}) end
+function hc.events.unsubscribe(handle) return request('events.unsubscribe', {handle=handle}) end
 function hc.job.await(handle)
     while true do
         local result = request('poll', {handle=handle})
@@ -178,6 +191,16 @@ function hc.job.await(handle)
         sleep(10)
     end
 end
+hc.commands = {invoke=hc.invoke}
+hc.selection = {snapshot=hc.capture}
+hc.fs = {}
+function hc.fs.resource(handle) return request('resource', {handle=handle}) end
+local invoke = hc.invoke
+for _, name in ipairs({'copy', 'move', 'rename', 'mkdir', 'delete'}) do
+    local command = 'hc.file.' .. name
+    hc.fs[name] = function(context, parameters) return invoke(context, command, parameters or {}) end
+end
+hc.jobs = hc.job
 )lua", sol::script_pass_on_error);
         if (!Bootstrap.valid()) { sol::error Failure = Bootstrap; return luaL_error(State, "%s", Failure.what()); }
         return 0;

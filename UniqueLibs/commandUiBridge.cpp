@@ -242,6 +242,72 @@ hc::automation::Host CommandUiBridge::AutomationHost()
     if (Lifetime->model_) Lifetime->destroyed_ = connect(Lifetime->model_, &QObject::destroyed,
         [Stop = Lifetime->stop_]() mutable { Stop.request_stop(); });
     hc::automation::Host Host;
+    Host.script_ = std::make_shared<hc::script::Services>();
+    Host.script_->events_ = events_;
+    Host.script_->workspace_ = [Guard]() -> Result<hc::script::ScriptValue> {
+        using Value = hc::script::ScriptValue;
+        if (!Guard || !Guard->main_) return Error{ErrorCategory::Cancelled, "script-workspace-closed"};
+        Value::Array Panes;
+        for (auto* Panel : Guard->main_->findChildren<CmpPanel*>()) {
+            const auto Snapshot = Panel->CaptureWorkspace(); Value::Array Tabs;
+            for (const auto& Tab : Snapshot.tabs_) Tabs.emplace_back(Value::Object{{"id", Tab.id_.toStdString()},
+                {"path", Tab.location_.root_}, {"location", Serialize(Tab.location_)}, {"provider", Tab.provider_.toStdString()}});
+            Panes.emplace_back(Value::Object{{"active", Panel == Guard->activePanel_},
+                {"activeTab", std::int64_t(Snapshot.active_ + 1)}, {"tabs", std::move(Tabs)}});
+        }
+        return Value(Value::Object{{"panes", std::move(Panes)}});
+    };
+    Host.script_->job_ = [Guard](const CommandInvocation& Invocation, const CommandOutcome& Outcome) -> Result<Parameters> {
+        if (!Guard) return Error{ErrorCategory::Cancelled, "script-window-closed"};
+        if (!Invocation.id_.starts_with("hc.file.")) return Parameters{{"state", std::string("running")}};
+        auto Snapshot = Guard->fileJobs_->Scheduler().Snapshot(Outcome.jobId_); if (!Snapshot.HasValue()) return Snapshot.Failure();
+        const auto& Job = Snapshot.Value();
+        if (Job.correlationId_ != Invocation.correlationId_) return Error{ErrorCategory::StaleRevision, "script-job-changed"};
+        return Parameters{{"state", std::string(hc::operations::StateName(Job.state_))}, {"bytes", std::int64_t(Job.progress_.bytesDone_)},
+            {"completed", std::int64_t(Job.completedItems_)}, {"failed", std::int64_t(Job.failedItems_)},
+            {"skipped", std::int64_t(Job.skippedItems_)}, {"waitingForUser", Job.interaction_.has_value()}};
+    };
+    Host.script_->viewer_ = [Guard, Lifetime](const CommandContext& Context, const ResourceId& Id) -> Result<hc::script::ViewerAccess> {
+        using Value = hc::script::ScriptValue;
+        auto* Model = Guard ? Guard->findModel(Context.tabId_) : nullptr;
+        if (!Model || Model != Lifetime->model_ || Model->WorkspaceLocation() != Context.location_)
+            return Error{ErrorCategory::StaleRevision, "script-context-changed"};
+        auto Reader = Model->SnapshotProvider();
+        if (Model->IsLoading() || !Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unavailable, "script-viewer-source"};
+        std::optional<EntrySnapshot> Selected;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+            if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Id) { Selected = *Entry->storageEntry_; break; }
+        }
+        if (!Selected || Selected->directory_) return Error{ErrorCategory::StaleRevision, "script-viewer-resource"};
+        QPointer<QDialog> Window = Guard->viewers_->OpenFull(std::make_shared<ProviderContentSource>(std::move(Reader), *Selected));
+        QPointer<QtViewerSurface> Surface = Window->findChild<QtViewerSurface*>();
+        if (!Surface) { Window->close(); return Error{ErrorCategory::Internal, "script-viewer-surface"}; }
+        const auto Session = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+        const auto Publish = [Events = Guard->events_, Session](std::string Id, std::string Code = {}) {
+            EventEnvelope Event; Event.id_ = std::move(Id); Event.producer_ = "script-viewer"; Event.correlationId_ = Session;
+            Event.payload_ = {{"session", Session}, {"code", std::move(Code)}}; Events->Publish(std::move(Event));
+        };
+        connect(Surface, &QtViewerSurface::Ready, Window, [Publish](const QString&) { Publish("viewer.ready"); });
+        connect(Surface, &QtViewerSurface::Failed, Window, [Publish](const QString& Code) { Publish("viewer.failed", Code.toStdString()); });
+        connect(Window, &QDialog::finished, Window, [Publish](int) { Publish("viewer.closed"); });
+        hc::script::ViewerAccess Access;
+        Access.snapshot_ = [Surface, Window, Session]() -> Result<Value> {
+            if (!Surface || !Window || !Window->isVisible()) return Error{ErrorCategory::StaleRevision, "script-viewer-closed"};
+            const auto Snapshot = Surface->Snapshot();
+            const auto Status = Surface->IsReady() ? "ready" : Snapshot.status_ == hc::viewer::ViewerStatus::Failed ? "failed"
+                : Snapshot.status_ == hc::viewer::ViewerStatus::Cancelled || Snapshot.status_ == hc::viewer::ViewerStatus::Closed ? "closed" : "loading";
+            return Value(Value::Object{{"session", Session}, {"state", Status}, {"name", Snapshot.source_.name_},
+                {"provider", Snapshot.provider_}, {"bytes", std::int64_t(Snapshot.bytesRead_)}, {"error", Snapshot.error_ ? Snapshot.error_->code_ : std::string{}}});
+        };
+        Access.execute_ = [Surface, Window](std::string_view Command) -> Result<Unit> {
+            if (!Surface || !Window || !Window->isVisible()) return Error{ErrorCategory::StaleRevision, "script-viewer-closed"};
+            if (!Surface->IsReady()) return Error{ErrorCategory::Unavailable, "script-viewer-not-ready"};
+            Surface->Execute(QString::fromUtf8(Command.data(), Command.size())); return Unit{};
+        };
+        Access.close_ = [Window] { if (Window) Window->close(); };
+        return Access;
+    };
     Host.capture_ = [Guard, Initial, Lifetime]() -> Result<CommandContext> {
         auto* Model = Guard ? Guard->findModel(Initial.tabId_) : nullptr;
         if (!Model || Model != Lifetime->model_) return Error{ErrorCategory::Cancelled, "automation-tab-closed"};

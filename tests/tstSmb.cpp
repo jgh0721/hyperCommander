@@ -261,6 +261,59 @@ private slots:
         ApiJob = Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.file.mkdir"},
             {"parameters", ScriptObject{{"destination", RetryPath.toStdString()}}}}); QVERIFY(ApiJob.HasValue());
         QTRY_VERIFY_WITH_TIMEOUT(ApiDone(), 10000); QVERIFY(QFileInfo(RetryPath).isDir()); QVERIFY(!QFileInfo::exists(CancelPath));
+        // Execute the selected runtime through the real editor, command bus,
+        // scheduler and product event hub, not a benchmark host.
+        Dialog->findChild<QComboBox*>("hc.automation.language")->setCurrentIndex(1);
+        const QString LuaSource = R"lua(
+local workspace = hc.workspace.snapshot()
+assert(#workspace.panes >= 2)
+local subscription = hc.events.subscribe('job.completed')
+local c = hc.selection.snapshot()
+local job = hc.fs.mkdir(c.context, {destination=c.path .. '/lua-created'})
+local first = hc.job.snapshot(job)
+assert(first.state ~= nil)
+hc.job.await(job)
+local events = hc.events.poll(subscription)
+assert(events.dropped == 0 and #events.events >= 1)
+hc.events.unsubscribe(subscription)
+hc.release(job)
+)lua";
+        Source->setPlainText(LuaSource); Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
+        QVERIFY(Status->text().contains("permission-required")); QVERIFY(!QFileInfo::exists(Created + "/lua-created"));
+        Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true); Run->click();
+        QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000); QVERIFY2(Status->text().contains("Lua 실행 완료"),qPrintable(Status->text()));
+        QVERIFY(QFileInfo(Created + "/lua-created").isDir());
+        QFile TextFile(Created + "/lua-viewer.txt"); QVERIFY(TextFile.open(QIODevice::WriteOnly)); TextFile.write("Lua viewer integration\n"); TextFile.close();
+        auto Refresh = Bridge->Dispatch("hc.navigate.refresh",{},"test");
+        QTRY_VERIFY(Refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready); QVERIFY(Refresh.get().HasValue());
+        QTRY_VERIFY(!Model->IsLoading());
+        auto* Grid = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid);
+        bool Selected = false;
+        for (int Row=0;Row<Grid->BaseView()->modelController()->getGridRowCount();++Row) {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            const auto Entry = Model->GetFileInfo(Index);
+            if (Entry && Entry->Name_ == "lua-viewer.txt") { Selected = true; break; }
+        }
+        QVERIFY(Selected);
+        Source->setPlainText(R"lua(
+local c = hc.capture()
+assert(#c.selection == 1)
+assert(hc.fs.resource(c.selection[1]).provider ~= nil)
+local sub = hc.events.subscribe('viewer.ready')
+local viewer = hc.viewer.open(c.selection[1])
+while hc.viewer.snapshot(viewer).state == 'loading' do hc.sleep(10) end
+assert(hc.viewer.snapshot(viewer).state == 'ready')
+hc.viewer.execute(viewer, 'zoom-in')
+local batch = hc.events.poll(sub)
+assert(#batch.events >= 1)
+hc.viewer.close(viewer)
+assert(not hc.call('viewer.snapshot',{handle=viewer}).ok)
+hc.events.unsubscribe(sub)
+)lua");
+        Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
+        QVERIFY2(Status->text().contains("Lua 실행 완료"),qPrintable(Status->text()));
+        QTRY_VERIFY(main_->findChildren<QDialog*>("hc.viewer.full").isEmpty());
         Execution Closed(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "closed-tab");
         Execution Queued(Compile("invoke \"hc.file.mkdir\" {\"destination\":\"" + Directory.filePath("must-not-create") + "\"}").Value(), Bridge->AutomationHost(), {"file-write"}, "queued-tab");
         Queued.Tick(); // Recreate the same persistent tab ID before dispatch runs.

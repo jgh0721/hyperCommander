@@ -59,6 +59,49 @@ ScriptValue FromParameters(const commands::Parameters& Parameters) {
 HandleTable::HandleTable() {
     static std::atomic<std::uint64_t> Next{0}; prefix_="h"+std::to_string(++Next)+":";
 }
+struct CommandScriptApi::Subscription {
+    commands::EventSubscription token_;
+    std::mutex mutex_;
+    std::deque<ScriptValue> queue_;
+    std::int64_t dropped_ = 0;
+};
+namespace {
+class QueueExecutor final : public commands::IExecutor {
+public:
+    // Publish only copies into a locked bounded queue; it never executes Lua or UI.
+    bool Post(std::function<void()> Work) override { Work(); return true; }
+};
+}
+Result<ScriptValue> CommandScriptApi::subscribe(const ScriptValue::Object& Arguments) {
+    const auto* Event = Text(Arguments, "event");
+    static const std::set<std::string> Allowed{"command.started", "command.accepted", "command.completed", "command.failed",
+        "navigation.completed", "navigation.failed", "job.changed", "job.progress", "job.retry", "job.completed", "job.failed", "job.cancelled",
+        "viewer.ready", "viewer.failed", "viewer.closed"};
+    if (Arguments.size() != 1 || !Event || !Allowed.contains(*Event)) return Invalid("script-event-filter");
+    if (!host_.script_ || !host_.script_->events_) return Error{ErrorCategory::Unsupported, "script-events-unavailable"};
+    if (subscriptions_.size() >= 16 || handles_.Size() >= 256) return Error{ErrorCategory::BudgetExceeded, "script-subscription-limit"};
+    auto State = std::make_shared<Subscription>();
+    auto Token = host_.script_->events_->Subscribe(*Event, std::make_shared<QueueExecutor>(), [Weak = std::weak_ptr(State)](const commands::EventEnvelope& Event) {
+        auto State = Weak.lock(); if (!State) return;
+        // Bound individual envelopes as well as queue count; consumers use snapshots
+        // after loss rather than treating events as authoritative completion records.
+        std::size_t Bytes = Event.id_.size() + Event.correlationId_.size();
+        for (const auto& [Key, Data] : Event.payload_) {
+            Bytes += Key.size() + 16;
+            if (const auto* String = std::get_if<std::string>(&Data)) Bytes += String->size();
+        }
+        std::lock_guard Lock(State->mutex_);
+        if (Bytes > 16384 || Event.payload_.size() > 64) { ++State->dropped_; return; }
+        auto Value = ScriptValue(ScriptValue::Object{{"event", Event.id_}, {"sequence", std::to_string(Event.sequence_)},
+            {"correlation", Event.correlationId_}, {"payload", FromParameters(Event.payload_)}});
+        if (!Validate(Value).HasValue()) { ++State->dropped_; return; }
+        if (State->queue_.size() == 32) { State->queue_.pop_front(); ++State->dropped_; }
+        State->queue_.push_back(std::move(Value));
+    }, 32);
+    if (!Token.HasValue()) return Token.Failure(); State->token_ = std::move(Token.Value());
+    auto Handle = handles_.Insert(HandleKind::Subscription, State); if (!Handle.HasValue()) return Handle.Failure();
+    subscriptions_.emplace(Handle.Value(), State); return ScriptValue(Handle.Value());
+}
 CommandScriptApi::CommandScriptApi(automation::Host Host, std::set<std::string> Permissions)
     : host_(std::move(Host)), permissions_(std::move(Permissions)) {}
 CommandScriptApi::~CommandScriptApi() { Close(); }
@@ -71,6 +114,12 @@ void CommandScriptApi::cancel(Pending& Pending) {
 void CommandScriptApi::Close() {
     if(closed_) return; closed_=true;
     for(auto& [Id,Job]:jobs_) cancel(*Job);
+    // Reset tokens explicitly: a publisher may still hold the queue state while
+    // copying an envelope, so shared_ptr destruction alone cannot revoke now.
+    for (auto& [Id, Subscription] : subscriptions_) Subscription->token_.Reset();
+    subscriptions_.clear();
+    for (auto& [Id, Viewer] : viewers_) try { if (Viewer->close_) Viewer->close_(); } catch (...) {}
+    viewers_.clear();
     jobs_.clear(); handles_.Close(); host_={};
 }
 Result<Unit> CommandScriptApi::checkContext(const storage::CommandContext& Context) {
@@ -83,6 +132,7 @@ Result<Unit> CommandScriptApi::checkContext(const storage::CommandContext& Conte
 Result<ScriptValue> CommandScriptApi::Call(std::string_view Method, const ScriptValue& Arguments) {
     if(thread_!=std::this_thread::get_id()) return Invalid("script-owner-thread");
     if(closed_) return Error{ErrorCategory::Cancelled,"script-session-closed"};
+    if(Method.empty() || Method.size()>128 || Method.find('\0')!=std::string_view::npos) return Invalid("script-method");
     auto Valid=Validate(Arguments); if(!Valid.HasValue()) return Valid.Failure();
     const auto* Object=std::get_if<ScriptValue::Object>(&Arguments.data_); if(!Object) return Invalid("script-arguments-object");
     try {
@@ -91,6 +141,37 @@ Result<ScriptValue> CommandScriptApi::Call(std::string_view Method, const Script
     } catch(...) { return Error{ErrorCategory::Internal,"script-host-exception"}; }
 }
 Result<ScriptValue> CommandScriptApi::call(std::string_view Method, const ScriptValue::Object& Arguments) {
+    if (Method == "workspace.snapshot" || Method.starts_with("viewer.") || Method.starts_with("events.")) {
+        if (!permissions_.contains("navigation")) return Error{ErrorCategory::AccessDenied, "permission-required"};
+    }
+    if (Method == "workspace.snapshot") {
+        if (!Arguments.empty()) return Invalid("script-workspace-arguments");
+        if (!host_.script_ || !host_.script_->workspace_) return Error{ErrorCategory::Unsupported, "script-workspace-unavailable"};
+        auto Context = host_.capture_(); if (!Context.HasValue()) return Context.Failure();
+        return host_.script_->workspace_();
+    }
+    if (Method == "events.subscribe") return subscribe(Arguments);
+    if (Method == "viewer.open") {
+        const auto* Id = Text(Arguments, "resource"); if (Arguments.size() != 1 || !Id) return Invalid("script-viewer-arguments");
+        auto Resource = handles_.Resolve<CommandScriptApi::Resource>(*Id, HandleKind::Resource); if (!Resource.HasValue()) return Resource.Failure();
+        auto Current = checkContext(Resource.Value()->context_); if (!Current.HasValue()) return Current.Failure();
+        if (!host_.script_ || !host_.script_->viewer_) return Error{ErrorCategory::Unsupported, "script-viewer-unavailable"};
+        if (viewers_.size() >= 8 || handles_.Size() >= 256) return Error{ErrorCategory::BudgetExceeded, "script-viewer-limit"};
+        auto Opened = host_.script_->viewer_(Resource.Value()->context_, Resource.Value()->id_); if (!Opened.HasValue()) return Opened.Failure();
+        auto Viewer = std::make_shared<ViewerAccess>(std::move(Opened.Value()));
+        auto Handle = handles_.Insert(HandleKind::Viewer, Viewer);
+        if (!Handle.HasValue()) { if (Viewer->close_) Viewer->close_(); return Handle.Failure(); }
+        viewers_.emplace(Handle.Value(), Viewer); return ScriptValue(Handle.Value());
+    }
+    if (Method == "viewer.execute") {
+        const auto* Id = Text(Arguments, "handle"); const auto* Command = Text(Arguments, "command");
+        if (Arguments.size() != 2 || !Id || !Command) return Invalid("script-viewer-arguments");
+        static const std::set<std::string> Allowed{"zoom-in", "zoom-out", "fit", "original-size", "wrap", "source"};
+        if (!Allowed.contains(*Command)) return Error{ErrorCategory::Unsupported, "script-viewer-command"};
+        auto Viewer = handles_.Resolve<std::shared_ptr<ViewerAccess>>(*Id, HandleKind::Viewer); if (!Viewer.HasValue()) return Viewer.Failure();
+        if (!(*Viewer.Value())->execute_) return Error{ErrorCategory::Unsupported, "script-viewer-command"};
+        auto Result = (*Viewer.Value())->execute_(*Command); if (!Result.HasValue()) return Result.Failure(); return ScriptValue{};
+    }
     if(Method=="capture") {
         if(!Arguments.empty() || !host_.capture_) return Invalid("script-capture-arguments");
         auto Context=host_.capture_(); if(!Context.HasValue()) return Context.Failure();
@@ -128,16 +209,50 @@ Result<ScriptValue> CommandScriptApi::call(std::string_view Method, const Script
     const auto* Id=Text(Arguments,"handle"); if(!Id || Arguments.size()!=1) return Invalid("script-handle-arguments");
     if(Method=="release") {
         const auto It=jobs_.find(*Id); if(It!=jobs_.end()) { cancel(*It->second); jobs_.erase(It); }
+        const auto Viewer = viewers_.find(*Id);
+        if (Viewer != viewers_.end()) { if (Viewer->second->close_) Viewer->second->close_(); viewers_.erase(Viewer); }
+        const auto Subscription = subscriptions_.find(*Id);
+        if (Subscription != subscriptions_.end()) { Subscription->second->token_.Reset(); subscriptions_.erase(Subscription); }
         if(!handles_.Release(*Id)) return Error{ErrorCategory::StaleRevision,"script-stale-handle"}; return ScriptValue{};
+    }
+    if (Method == "viewer.snapshot" || Method == "viewer.close") {
+        auto Viewer = handles_.Resolve<std::shared_ptr<ViewerAccess>>(*Id, HandleKind::Viewer); if (!Viewer.HasValue()) return Viewer.Failure();
+        if (Method == "viewer.close") {
+            if ((*Viewer.Value())->close_) (*Viewer.Value())->close_(); viewers_.erase(*Id); handles_.Release(*Id); return ScriptValue{};
+        }
+        return (*Viewer.Value())->snapshot_ ? (*Viewer.Value())->snapshot_() : Result<ScriptValue>(Error{ErrorCategory::Unsupported, "script-viewer-snapshot"});
+    }
+    if (Method == "events.poll" || Method == "events.unsubscribe") {
+        auto Subscription = handles_.Resolve<std::shared_ptr<CommandScriptApi::Subscription>>(*Id, HandleKind::Subscription);
+        if (!Subscription.HasValue()) return Subscription.Failure(); auto State = *Subscription.Value();
+        if (Method == "events.unsubscribe") {
+            State->token_.Reset(); subscriptions_.erase(*Id); handles_.Release(*Id); return ScriptValue{};
+        }
+        std::lock_guard Lock(State->mutex_); ScriptValue::Array Events;
+        while (!State->queue_.empty()) { Events.push_back(std::move(State->queue_.front())); State->queue_.pop_front(); }
+        auto Dropped = State->dropped_; State->dropped_ = 0;
+        return ScriptValue(ScriptValue::Object{{"events", std::move(Events)}, {"dropped", Dropped}});
     }
     if(Method=="resource") {
         auto Resource=handles_.Resolve<CommandScriptApi::Resource>(*Id,HandleKind::Resource); if(!Resource.HasValue()) return Resource.Failure();
         auto Current=checkContext(Resource.Value()->context_); if(!Current.HasValue()) return Current.Failure();
         return ScriptValue(ScriptValue::Object{{"provider",Resource.Value()->id_.providerId_.value_},{"key",Resource.Value()->id_.key_}});
     }
-    if(Method!="poll" && Method!="cancel") return Error{ErrorCategory::Unsupported,"script-method"};
+    if(Method!="poll" && Method!="cancel" && Method!="job.snapshot") return Error{ErrorCategory::Unsupported,"script-method"};
     auto Job=handles_.Resolve<std::shared_ptr<Pending>>(*Id,HandleKind::Job); if(!Job.HasValue()) return Job.Failure();
     if(Method=="cancel") { cancel(**Job.Value()); return ScriptValue{}; }
+    if (Method == "job.snapshot") {
+        auto& Pending = **Job.Value(); auto Polled = poll(Pending);
+        if (!Polled.HasValue()) return ScriptValue(ScriptValue::Object{{"state", Polled.Failure().category_ == ErrorCategory::Cancelled ? "cancelled" : "failed"}, {"error", Polled.Failure().code_}});
+        if (Pending.outcome_ && host_.script_ && host_.script_->job_) {
+            auto Snapshot = host_.script_->job_(Pending.invocation_, *Pending.outcome_);
+            if (!Snapshot.HasValue()) return Snapshot.Failure();
+            Snapshot.Value()["done"] = Pending.terminal_.has_value();
+            if (Pending.terminal_) Snapshot.Value()["state"] = std::string("completed");
+            return FromParameters(Snapshot.Value());
+        }
+        return ScriptValue(ScriptValue::Object{{"state", Pending.terminal_ ? "completed" : "running"}, {"done", Pending.terminal_.has_value()}});
+    }
     return poll(**Job.Value());
 }
 Result<ScriptValue> CommandScriptApi::poll(Pending& Pending) {

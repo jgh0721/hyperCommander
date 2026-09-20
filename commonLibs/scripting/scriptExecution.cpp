@@ -25,6 +25,10 @@ struct ScriptExecution::Mailbox final : IScriptHostApi {
 ScriptExecution::ScriptExecution(std::shared_ptr<IScriptHostApi> Api, std::string Source, RuntimeLimits Limits)
     : mailbox_(std::make_shared<Mailbox>()), api_(std::move(Api)), runtime_(MakeLuaRuntime()),
       deadline_(std::chrono::steady_clock::now() + Limits.wallTime_) {
+    if (!api_ || api_->ApiVersion() != 1) {
+        mailbox_->outcome_ = Error{ErrorCategory::InvalidRequest, "api-version"};
+        closed_ = true; if (api_) api_->Close(); return;
+    }
     worker_ = std::jthread([this, Source = std::move(Source), Limits] {
         Result<ScriptValue> Outcome = Error{ErrorCategory::Internal, "runtime-worker"};
         try {

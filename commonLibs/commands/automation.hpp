@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "commandBus.hpp"
 
+namespace hc::script { struct Services; }
+
 namespace hc::automation {
 using namespace storage;
 using namespace commands;
@@ -41,6 +43,7 @@ struct Host {
     std::function<void(const CommandInvocation&, const CommandOutcome&)> cancel_;
     std::function<Result<Parameters>(const CommandInvocation&, const CommandOutcome&)> output_;
     SchemaLookup schema_;
+    std::shared_ptr<script::Services> script_;
 };
 enum class State { Running, Completed, CompletedWithErrors, Failed, Cancelled };
 struct StepFailure { std::size_t line_; Error error_; };

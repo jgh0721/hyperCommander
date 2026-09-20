@@ -62,6 +62,19 @@ public:
     virtual Result<ScriptValue> Call(std::string_view Method, const ScriptValue& Arguments) = 0;
     virtual void Close() = 0;
 };
+struct ViewerAccess {
+    std::function<Result<ScriptValue>()> snapshot_;
+    std::function<Result<Unit>(std::string_view)> execute_;
+    std::function<void()> close_;
+};
+// UI-owned callbacks never escape to the language runtime. Handles retain only
+// guarded capabilities; observations are copies and cannot select a native object.
+struct Services {
+    std::function<Result<ScriptValue>()> workspace_;
+    std::function<Result<ViewerAccess>(const storage::CommandContext&, const storage::ResourceId&)> viewer_;
+    std::function<Result<commands::Parameters>(const commands::CommandInvocation&, const commands::CommandOutcome&)> job_;
+    std::shared_ptr<commands::EventHub> events_;
+};
 class CommandScriptApi final : public IScriptHostApi {
 public:
     CommandScriptApi(automation::Host Host, std::set<std::string> Permissions);
@@ -81,11 +94,15 @@ private:
     Result<Unit> checkContext(const storage::CommandContext& Context);
     Result<ScriptValue> poll(Pending& Pending);
     void cancel(Pending& Pending);
+    struct Subscription;
+    Result<ScriptValue> subscribe(const ScriptValue::Object& Arguments);
     automation::Host host_;
     std::set<std::string> permissions_;
     std::thread::id thread_ = std::this_thread::get_id();
     HandleTable handles_;
     std::map<std::string,std::shared_ptr<Pending>> jobs_;
+    std::map<std::string,std::shared_ptr<ViewerAccess>> viewers_;
+    std::map<std::string,std::shared_ptr<Subscription>> subscriptions_;
     bool closed_ = false;
 };
 

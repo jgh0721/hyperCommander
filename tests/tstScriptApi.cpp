@@ -8,6 +8,62 @@ using Object=ScriptValue::Object;
 class ScriptApiTests : public QObject {
     Q_OBJECT
 private slots:
+    void subscriptionCloseDuringPublication() {
+        hc::automation::Host Host; Host.script_ = std::make_shared<Services>(); Host.script_->events_ = std::make_shared<EventHub>();
+        const auto Events = Host.script_->events_; std::atomic<bool> Stop{false};
+        std::thread Publisher([&] {
+            while (!Stop.load()) { EventEnvelope Event; Event.id_="job.progress"; Event.payload_={{"value",std::string(8000,'x')}}; Events->Publish(std::move(Event)); }
+        });
+        bool Revoked = true;
+        for (int I=0;I<100;++I) {
+            CommandScriptApi Api(Host,{"navigation"});
+            const auto Sub = Api.Call("events.subscribe",Object{{"event","job.progress"}});
+            if (!Sub.HasValue()) { Revoked=false; break; }
+            if (I%2) Api.Call("release",Object{{"handle",Sub.Value()}}); else Api.Close();
+            EventEnvelope Event; Event.id_="job.progress";
+            Revoked = Revoked && Events->Publish(std::move(Event)).accepted_==0;
+        }
+        Stop=true; Publisher.join(); QVERIFY(Revoked);
+    }
+    void workspaceViewerAndEvents() {
+        hc::automation::Host Host; int Opened = 0, Closed = 0, Commands = 0; bool Alive = true;
+        Host.capture_ = []() -> Result<CommandContext> { return CommandContext{"tab",{LocatorKind::Local,"C:/Temp"},{{{"local"},"text.txt"}}}; };
+        Host.script_ = std::make_shared<Services>(); Host.script_->events_ = std::make_shared<EventHub>();
+        Host.script_->workspace_ = []() -> Result<ScriptValue> { return ScriptValue(Object{{"panes",ScriptValue::Array{Object{{"active",true}}}}}); };
+        Host.script_->viewer_ = [&](const auto&,const auto&) -> Result<ViewerAccess> {
+            ++Opened; ViewerAccess Access;
+            Access.snapshot_ = [&]() -> Result<ScriptValue> { if (!Alive) return Error{ErrorCategory::StaleRevision,"closed"}; return ScriptValue(Object{{"state","ready"}}); };
+            Access.execute_ = [&](std::string_view) -> Result<Unit> { ++Commands; return Unit{}; };
+            Access.close_ = [&] { ++Closed; }; return Access;
+        };
+        CommandScriptApi Api(Host,{"navigation"}), Foreign(Host,{"navigation"}), Denied(Host,{});
+        QVERIFY(Api.Call("workspace.snapshot",Object{}).HasValue()); QVERIFY(!Denied.Call("workspace.snapshot",Object{}).HasValue());
+        auto Context = Api.Call("capture",Object{}); QVERIFY(Context.HasValue());
+        auto Resource = std::get<ScriptValue::Array>(std::get<Object>(Context.Value().data_).at("selection").data_)[0];
+        auto Viewer = Api.Call("viewer.open",Object{{"resource",Resource}}); QVERIFY(Viewer.HasValue()); QCOMPARE(Opened,1);
+        QVERIFY(Api.Call("viewer.snapshot",Object{{"handle",Viewer.Value()}}).HasValue());
+        QVERIFY(!Foreign.Call("viewer.close",Object{{"handle",Viewer.Value()}}).HasValue());
+        QVERIFY(!Api.Call("viewer.execute",Object{{"handle",Viewer.Value()},{"command","copy"}}).HasValue());
+        QVERIFY(Api.Call("viewer.execute",Object{{"handle",Viewer.Value()},{"command","zoom-in"}}).HasValue()); QCOMPARE(Commands,1);
+        Alive = false; QVERIFY(!Api.Call("viewer.snapshot",Object{{"handle",Viewer.Value()}}).HasValue());
+        QVERIFY(Api.Call("release",Object{{"handle",Viewer.Value()}}).HasValue()); QCOMPARE(Closed,1);
+        QVERIFY(!Api.Call("viewer.snapshot",Object{{"handle",Viewer.Value()}}).HasValue());
+        Viewer = Api.Call("viewer.open",Object{{"resource",Resource}}); QVERIFY(Viewer.HasValue());
+        auto Sub = Api.Call("events.subscribe",Object{{"event","job.progress"}}); QVERIFY(Sub.HasValue());
+        QVERIFY(!Api.Call("events.subscribe",Object{{"event",""}}).HasValue());
+        std::thread Producer([&] { for(int I=0;I<10000;++I) { EventEnvelope Event; Event.id_="job.progress"; Event.payload_={{"index",std::int64_t(I)}}; Host.script_->events_->Publish(std::move(Event)); } }); Producer.join();
+        auto Batch = Api.Call("events.poll",Object{{"handle",Sub.Value()}}); QVERIFY(Batch.HasValue());
+        const auto Data = std::get<Object>(Batch.Value().data_);
+        QCOMPARE(std::get<ScriptValue::Array>(Data.at("events").data_).size(),32u); QCOMPARE(std::get<std::int64_t>(Data.at("dropped").data_),9968);
+        QVERIFY(!Foreign.Call("events.poll",Object{{"handle",Sub.Value()}}).HasValue());
+        QVERIFY(!Api.Call("events.unsubscribe",Object{{"handle",Viewer.Value()}}).HasValue());
+        QVERIFY(Api.Call("release",Object{{"handle",Sub.Value()}}).HasValue());
+        EventEnvelope Event; Event.id_="job.progress"; QCOMPARE(Host.script_->events_->Publish(Event).accepted_,0u);
+        Sub = Api.Call("events.subscribe",Object{{"event","job.progress"}}); QVERIFY(Sub.HasValue());
+        for (int I=1;I<16;++I) QVERIFY(Api.Call("events.subscribe",Object{{"event","job.progress"}}).HasValue());
+        QVERIFY(!Api.Call("events.subscribe",Object{{"event","job.progress"}}).HasValue());
+        Api.Close(); QCOMPARE(Closed,2); QCOMPARE(Host.script_->events_->Publish(Event).accepted_,0u);
+    }
     void valuesAndHandles() {
         ScriptValue Tree=Object{{"한글",ScriptValue::Array{true,std::int64_t(INT64_MAX),"value",ScriptValue{}}}};
         QVERIFY(Validate(Tree).HasValue()); QVERIFY(!ToParameters(Tree).HasValue());
