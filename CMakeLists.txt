@@ -92,6 +92,10 @@ option(HC_BUILD_SCRIPT_COMPARISON "Build optional runtime comparison executables
 if(HC_BUILD_SCRIPT_COMPARISON)
     add_subdirectory(tools/runtimeComparison)
 endif()
+option(HC_BUILD_READINESS_P0 "Build the isolated Qlementine/Qtitan readiness experiment" OFF)
+if(HC_BUILD_READINESS_P0)
+    add_subdirectory(tools/readinessP0)
+endif()
 hc_finalize_qt_deployment()
 add_dependencies(hc_deploy hc_iso_package)
 add_custom_command(TARGET hc_deploy POST_BUILD
