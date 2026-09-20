@@ -90,11 +90,35 @@ namespace hc::plugins
             if (closed_) return HostError("host-closed");
             // In-process WCX writers also stream and verify multi-GiB images.
             // The write budget is independent of permission to spawn helpers.
-            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : limits_.requestMs_));
+            const auto RequestBudget = Context.passwordPrompt_ ? std::max(limits_.requestMs_, 180000u) : limits_.requestMs_;
+            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : RequestBudget));
             const auto Sequence = ++sequence_;
             auto Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
             if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
             auto Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
+            unsigned Prompts = 0;
+            while (Reply.HasValue() && Reply.Value().header_.kind_ == WireKind::ArchivePassword)
+            {
+                if (Kind < WireKind::ArchiveOpen || Kind > WireKind::ArchiveUpdateApply || Reply.Value().header_.sequence_ != Sequence
+                    || ++Prompts > (Kind == WireKind::ArchiveNext ? 384u : Kind == WireKind::ArchiveUpdateApply ? 6u : 3u))
+                { fail(HostError("host-password-envelope")); return *failure_; }
+                const auto Query = QJsonDocument::fromJson(Reply.Value().payload_).object();
+                if (Query.size() != 2 || !Query["archive"].isString() || Query["archive"].toString().size() > 32768
+                    || Query["archive"].toString().contains(QChar::Null) || Query["attempt"].toInt() < 1 || Query["attempt"].toInt() > 3)
+                { fail(HostError("host-password-payload")); return *failure_; }
+                Result<Password> Answer = Error{ErrorCategory::AccessDenied, "archive-password-required", {"wcx"}, {}, true};
+                if (Context.passwordPrompt_) {
+                    try { Answer = Context.passwordPrompt_(Query["archive"].toString().toStdString(), unsigned(Query["attempt"].toInt()), Context); }
+                    catch (...) { Answer = Error{ErrorCategory::Internal, "archive-password-callback-failed", {"wcx"}}; }
+                }
+                if (!Answer.HasValue()) { fail(Answer.Failure()); return *failure_; }
+                auto Text = QString::fromStdString(Answer.Value().Value());
+                if (Text.size() > 4096 || Text.contains(QChar::Null)) { Text.fill(QChar::Null); fail(HostError("host-password-size")); return *failure_; }
+                auto Bytes = QJsonDocument(QJsonObject{{"accepted", true}, {"password", Text}}).toJson(QJsonDocument::Compact); Text.fill(QChar::Null);
+                Sent = WriteFrame(pipe_.Get(), process_.Get(), WireKind::ArchivePassword, Sequence, Bytes, Context); Bytes.fill(0);
+                if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
+                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
+            }
             if (!Reply.HasValue()) { fail(Reply.Failure()); return *failure_; }
             if (Reply.Value().header_.sequence_ != Sequence || (Reply.Value().header_.kind_ != WireKind::Response && Reply.Value().header_.kind_ != WireKind::Failure))
             { fail(HostError("host-response-mismatch")); return *failure_; }

@@ -188,7 +188,21 @@ int main(int Argc, char** Argv)
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
-            Result = Plugin.archives_->Handle(Header.kind_, Request.object());
+            Result = Plugin.archives_->Handle(Header.kind_, Request.object(), [&](const std::string& Archive, unsigned Attempt, const OperationContext& Context) -> hc::storage::Result<Password> {
+                const auto Query = QJsonDocument(QJsonObject{{"archive", QString::fromStdString(Archive)}, {"attempt", int(Attempt)}}).toJson(QJsonDocument::Compact);
+                auto Sent = WriteFrame(Pipe.Get(), Parent.Get(), WireKind::ArchivePassword, Header.sequence_, Query, Context);
+                if (!Sent.HasValue()) return Sent.Failure();
+                auto Reply = ReadFrame(Pipe.Get(), Parent.Get(), Context); if (!Reply.HasValue()) return Reply.Failure();
+                if (Reply.Value().header_.sequence_ != Header.sequence_ || Reply.Value().header_.kind_ != WireKind::ArchivePassword)
+                    return HostError("host-password-envelope");
+                auto Document = QJsonDocument::fromJson(Reply.Value().payload_); Reply.Value().payload_.fill(0);
+                auto Object = Document.object(); Document = {};
+                if (Object.size() != 2 || !Object["accepted"].isBool() || !Object["password"].isString()) return HostError("host-password-payload");
+                auto Text = Object["password"].toString(); const bool Accepted = Object["accepted"].toBool(); Object = {};
+                if (!Accepted) { Text.fill(QChar::Null); return hc::storage::Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}}; }
+                if (Text.size() > 4096 || Text.contains(QChar::Null)) { Text.fill(QChar::Null); return HostError("host-password-size"); }
+                Password Value(Text.toStdString()); Text.fill(QChar::Null); return Value;
+            });
         }
         else if (Ready && Plugin.viewer_ && ((Header.kind_ >= WireKind::ViewerOpen && Header.kind_ <= WireKind::ViewerClose) || Header.kind_ == WireKind::MetadataQuery || Header.kind_ == WireKind::ContentConvert))
         {

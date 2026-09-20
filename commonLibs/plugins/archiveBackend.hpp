@@ -10,6 +10,7 @@ namespace hc::plugins
         std::uint32_t attributes_ = 0, crc_ = 0;
         std::int64_t modifiedUtcMs_ = 0;
         bool directory_ = false;
+        bool encrypted_ = false;
     };
     struct ArchivePage { std::vector<ArchiveHeader> entries_; bool end_ = false; };
     class IArchiveListing
@@ -24,6 +25,7 @@ namespace hc::plugins
         std::string archive_, inputDirectory_;
         std::vector<std::string> add_, remove_;
         std::uint64_t maxOutputBytes_ = 256ULL * 1024 * 1024;
+        bool encrypt_ = false;
     };
     class IArchiveBackend
     {

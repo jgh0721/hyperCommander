@@ -9,6 +9,7 @@ namespace hc::plugins
         PluginApproval approval_;
         HostLimits limits_;
         QString defaultIniPath_;
+        storage::PasswordPrompt passwordPrompt_;
     };
     // Construction/destruction performs no I/O. Each worker call opens a host;
     // enumeration keeps that host only for the returned listing's lifetime.

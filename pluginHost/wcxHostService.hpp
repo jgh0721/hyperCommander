@@ -8,7 +8,7 @@ namespace hc::plugins
     {
     public:
         WcxHostService(std::string Binary, bool Write, std::string WriteFailure = "host-archive-write-not-approved");
-        storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
+        storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request, storage::PasswordPrompt Prompt = {});
     private:
         std::shared_ptr<IArchiveBackend> backend_;
         bool write_;

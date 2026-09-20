@@ -9,9 +9,10 @@ namespace hc::plugins
     using namespace storage;
     namespace { Error Invalid(const char* Code = "host-archive-payload") { return {ErrorCategory::InvalidRequest, Code, {"wcx"}}; } }
     WcxHostService::WcxHostService(std::string Binary, bool Write, std::string WriteFailure) : backend_(MakeInProcessWcxBackend(std::move(Binary), false)), write_(Write), writeFailure_(std::move(WriteFailure)) {}
-    Result<QJsonObject> WcxHostService::Handle(WireKind Kind, const QJsonObject& Request)
+    Result<QJsonObject> WcxHostService::Handle(WireKind Kind, const QJsonObject& Request, PasswordPrompt Prompt)
     {
         if (!Request["context"].isObject()) return Invalid(); auto Context = DecodeContext(Request["context"].toObject()); if (!Context.HasValue()) return Context.Failure();
+        Context.Value().passwordPrompt_ = std::move(Prompt);
         if (const auto Stop = Context.Value().Check({"wcx"})) return *Stop;
         if (Kind == WireKind::ArchiveOpen)
         {

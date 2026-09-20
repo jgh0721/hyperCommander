@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -54,6 +55,15 @@ namespace hc::storage
         std::vector<ContainerHop> nesting_;
         bool operator==(const Locator&) const = default;
     };
+    inline bool SameArchiveContainer(const Locator& Left, const Locator& Right)
+    {
+        if (Left.kind_ != LocatorKind::Archive || Right.kind_ != LocatorKind::Archive || Left.root_ != Right.root_
+            || Left.nesting_.empty() || Left.nesting_.size() != Right.nesting_.size()) return false;
+        for (std::size_t Index = 0; Index < Left.nesting_.size(); ++Index)
+            if (Left.nesting_[Index].provider_ != Right.nesting_[Index].provider_
+                || (Index + 1 < Left.nesting_.size() && Left.nesting_[Index].entry_ != Right.nesting_[Index].entry_)) return false;
+        return true;
+    }
 
     enum class ErrorCategory { InvalidRequest, NotFound, AccessDenied, Unavailable, Cancelled, StaleRevision, Unsupported, BudgetExceeded, Internal };
     struct Error
@@ -86,6 +96,21 @@ namespace hc::storage
         return Promise.get_future();
     }
 
+    // Passwords are transient values, never part of locators, job events or journals.
+    class Password final
+    {
+    public:
+        explicit Password(std::string Value = {}) : value_(std::move(Value)) {}
+        Password(Password&& Other) noexcept { value_.swap(Other.value_); }
+        Password& operator=(Password&& Other) noexcept { clear(); value_.swap(Other.value_); return *this; }
+        ~Password() { clear(); }
+        const std::string& Value() const { return value_; }
+    private:
+        void clear() { volatile char* Bytes = value_.data(); for (std::size_t Index = 0; Index < value_.size(); ++Index) Bytes[Index] = 0; value_.clear(); }
+        std::string value_;
+    };
+    struct OperationContext;
+    using PasswordPrompt = std::function<Result<Password>(const std::string& Archive, unsigned Attempt, const OperationContext& Context)>;
     struct OperationContext
     {
         std::string requestId_;
@@ -96,6 +121,7 @@ namespace hc::storage
         std::size_t maxEnumerationEntries_ = 100000;
         bool denyConcurrentMutation_ = false;
         bool freshEnumerationMetadata_ = false;
+        PasswordPrompt passwordPrompt_;
         std::optional<Error> Check(const ProviderId& Provider) const
         {
             if (stopToken_.stop_requested())

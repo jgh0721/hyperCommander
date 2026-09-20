@@ -31,8 +31,53 @@ namespace hc::plugins
             std::string output_;
             std::uint64_t limit_ = 0;
             bool volume_ = false, exceeded_ = false;
+            unsigned attempts_ = 0;
+            std::optional<Error> passwordFailure_;
         };
         thread_local Callback* Current = nullptr;
+        // NO_UI must never open a dialog. This adapter deliberately has no
+        // persistent password store; plugins may ask again with LOAD_PASSWORD.
+        int __stdcall CryptW(int, int Mode, wchar_t* Archive, wchar_t* Buffer, int MaxLength)
+        {
+            if (!Current) return E_EABORTED;
+            if (Mode == PK_CRYPT_LOAD_PASSWORD_NO_UI) return E_NO_FILES;
+            if (Mode != PK_CRYPT_LOAD_PASSWORD) return E_NOT_SUPPORTED;
+            try
+            {
+                auto& State = *Current;
+                if (const auto Stop = State.context_.Check({"wcx"})) { State.passwordFailure_ = *Stop; return E_EABORTED; }
+                if (!Archive || wcsnlen_s(Archive, 32768) == 32768 || !Buffer || MaxLength <= 0 || MaxLength > 65536) return E_SMALL_BUF;
+                Buffer[0] = 0;
+                if (!State.context_.passwordPrompt_) { State.passwordFailure_ = Error{ErrorCategory::AccessDenied, "archive-password-required", {"wcx"}, {}, true}; return E_EABORTED; }
+                if (++State.attempts_ > 3) { State.passwordFailure_ = Error{ErrorCategory::AccessDenied, "archive-password-attempt-limit", {"wcx"}}; return E_EABORTED; }
+                auto Reply = State.context_.passwordPrompt_(QString::fromWCharArray(Archive).toStdString(), State.attempts_, State.context_);
+                if (!Reply.HasValue()) { State.passwordFailure_ = Reply.Failure(); return E_EABORTED; }
+                if (const auto Stop = State.context_.Check({"wcx"})) { State.passwordFailure_ = *Stop; return E_EABORTED; }
+                auto Text = QString::fromStdString(Reply.Value().Value());
+                auto Erase = qScopeGuard([&] { Text.fill(QChar::Null); });
+                if (Text.contains(QChar::Null) || Text.size() >= MaxLength || Text.size() > 4096) return E_SMALL_BUF;
+                std::copy_n(reinterpret_cast<const wchar_t*>(Text.utf16()), Text.size(), Buffer); Buffer[Text.size()] = 0;
+                return 0;
+            }
+            catch (...) { Current->passwordFailure_ = Error{ErrorCategory::Internal, "archive-password-callback-failed", {"wcx"}}; return E_EABORTED; }
+        }
+        int __stdcall CryptA(int Number, int Mode, char* Archive, char* Buffer, int MaxLength)
+        {
+            if (Mode != PK_CRYPT_LOAD_PASSWORD) return Mode == PK_CRYPT_LOAD_PASSWORD_NO_UI ? E_NO_FILES : E_NOT_SUPPORTED;
+            if (!Archive || strnlen_s(Archive, 32768) == 32768 || !Buffer || MaxLength <= 0 || MaxLength > 65536) return E_SMALL_BUF;
+            Buffer[0] = 0;
+            try
+            {
+            auto Name = QString::fromLocal8Bit(Archive).toStdWString(); wchar_t Wide[4097]{};
+            auto Erase = qScopeGuard([&] { SecureZeroMemory(Wide, sizeof(Wide)); });
+            const auto Code = CryptW(Number, Mode, Name.data(), Wide, 4097); if (Code) return Code;
+            auto Text = QString::fromWCharArray(Wide); auto Bytes = Text.toLocal8Bit();
+            auto Clear = qScopeGuard([&] { Text.fill(QChar::Null); Bytes.fill(0); });
+            if (QString::fromLocal8Bit(Bytes) != Text || Bytes.size() >= MaxLength) return E_SMALL_BUF;
+            std::copy_n(Bytes.constData(), Bytes.size(), Buffer); Buffer[Bytes.size()] = 0; return 0;
+            }
+            catch (...) { if (Current) Current->passwordFailure_ = Error{ErrorCategory::Internal, "archive-password-callback-failed", {"wcx"}}; return E_EABORTED; }
+        }
         int __stdcall Progress(wchar_t*, int)
         {
             if (!Current || Current->context_.Check({"wcx"})) return 0;
@@ -49,6 +94,7 @@ namespace hc::plugins
         };
         Result<Unit> Check(int Code, const Callback& State)
         {
+            if (State.passwordFailure_) return *State.passwordFailure_;
             if (State.volume_) return Error{ErrorCategory::Unsupported, "archive-volume-required", {"wcx"}};
             if (State.exceeded_) return Error{ErrorCategory::BudgetExceeded, "archive-extraction-budget", {"wcx"}};
             if (const auto Stop = State.context_.Check({"wcx"})) return *Stop;
@@ -81,6 +127,10 @@ namespace hc::plugins
                 const auto Flags = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetBackgroundFlags"));
                 const auto Caps = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetPackerCaps"));
                 background_ = Flags ? Flags() : 0; caps_ = Caps ? Caps() : 0;
+                const auto CryptWide = reinterpret_cast<void(__stdcall*)(tPkCryptProcW, int, int)>(GetProcAddress(module_, "PkSetCryptCallbackW"));
+                const auto CryptAnsi = reinterpret_cast<void(__stdcall*)(tPkCryptProc, int, int)>(GetProcAddress(module_, "PkSetCryptCallback"));
+                if (CryptWide) CryptWide(&CryptW, 1, 0);
+                else if (CryptAnsi) CryptAnsi(&CryptA, 1, 0);
                 if (!open_ || !header_ || !process_ || !close_ || !progress_ || !volume_ || (Background && !(background_ & BACKGROUND_UNPACK)))
                 { FreeLibrary(module_); module_ = nullptr; return Error{ErrorCategory::Unsupported, "wcx-background-unicode-read-required", {"wcx"}}; }
                 return Unit{};
@@ -92,6 +142,7 @@ namespace hc::plugins
             if (!Length || Length == 1024) return Invalid("invalid-archive-name");
             const auto Name = QString::fromWCharArray(Header.FileName, Length);
             ArchiveHeader Out; Out.name_ = Name.toStdString(); Out.attributes_ = Header.FileAttr; Out.directory_ = !!(Header.FileAttr & FILE_ATTRIBUTE_DIRECTORY);
+            Out.encrypted_ = (Header.Flags & 4) != 0;
             Out.size_ = (std::uint64_t(Header.UnpSizeHigh) << 32) | Header.UnpSize; Out.packedSize_ = (std::uint64_t(Header.PackSizeHigh) << 32) | Header.PackSize;
             Out.crc_ = static_cast<std::uint32_t>(Header.FileCRC);
             const QDate Date(1980 + ((Header.FileTime >> 25) & 127), (Header.FileTime >> 21) & 15, (Header.FileTime >> 16) & 31);
@@ -113,6 +164,7 @@ namespace hc::plugins
                 for (std::size_t Index = 0; Index < std::min({Count, Context.maxPageItems_, std::size_t{256}}); ++Index)
                 {
                     if (const auto Stop = Context.Check({"wcx"})) return *Stop;
+                    State.attempts_ = 0;
                     tHeaderDataExW Raw{}; const auto Code = module_->header_(handle_, &Raw);
                     auto Checked = Check(Code == E_END_ARCHIVE ? 0 : Code, State); if (!Checked.HasValue()) return Checked.Failure();
                     if (Code == E_END_ARCHIVE)
@@ -168,6 +220,7 @@ namespace hc::plugins
                 for (std::size_t Count = 0;; ++Count)
                 {
                     if (const auto Stop = Context.Check({"wcx"})) return *Stop;
+                    State.attempts_ = 0;
                     tHeaderDataExW Raw{}; const auto Code = Plugin->header_(Handle, &Raw); auto Checked = Check(Code == E_END_ARCHIVE ? 0 : Code, State);
                     if (!Checked.HasValue()) return Checked; if (Code == E_END_ARCHIVE) return Error{ErrorCategory::NotFound, "archive-entry-not-found", {"wcx"}};
                     if (Count >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
@@ -211,8 +264,9 @@ namespace hc::plugins
                 auto Archive = Native(Request.archive_), Input = Native(Request.inputDirectory_ + '/');
                 if (const auto Stop = Context.Check({"wcx"})) return *Stop;
                 if (!Request.remove_.empty()) { auto Checked = Check(Plugin->remove_(Archive.data(), Removed.Value().data()), State); if (!Checked.HasValue()) return Checked; }
+                State.attempts_ = 0;
                 if (const auto Stop = Context.Check({"wcx"})) return *Stop;
-                if (!Request.add_.empty()) { auto Checked = Check(Plugin->pack_(Archive.data(), nullptr, Input.data(), Added.Value().data(), PK_PACK_SAVE_PATHS), State); if (!Checked.HasValue()) return Checked; }
+                if (!Request.add_.empty()) { auto Checked = Check(Plugin->pack_(Archive.data(), nullptr, Input.data(), Added.Value().data(), PK_PACK_SAVE_PATHS | (Request.encrypt_ ? PK_PACK_ENCRYPT : 0)), State); if (!Checked.HasValue()) return Checked; }
                 if (QFileInfo(QString::fromStdString(Request.archive_)).size() > static_cast<qint64>(Request.maxOutputBytes_)) return Error{ErrorCategory::BudgetExceeded, "archive-output-budget", {"wcx"}};
                 return Check(0, State);
             }
@@ -224,7 +278,8 @@ namespace hc::plugins
                 auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded.Failure();
                 Callback State{Context}; CallbackScope Scope(State); auto Path = Native(Archive);
                 tOpenArchiveDataW Open{}; Open.ArcName = Path.data(); Open.OpenMode = Mode; const auto Handle = Plugin->open_(&Open);
-                if (!Handle) return WcxError(Open.OpenResult ? Open.OpenResult : E_EOPEN);
+                auto Checked = Check(Handle ? 0 : Open.OpenResult ? Open.OpenResult : E_EOPEN, State);
+                if (!Checked.HasValue()) { if (Handle) Plugin->close_(Handle); return Checked.Failure(); }
                 Plugin->progress_(Handle, &Progress); Plugin->volume_(Handle, &Volume); return Handle;
             }
             std::string path_;

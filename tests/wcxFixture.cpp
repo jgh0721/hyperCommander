@@ -16,6 +16,20 @@ struct ArchiveState {
     tChangeVolProcW volume_ = nullptr;
 };
 thread_local tProcessDataProcW PackingProgress = nullptr;
+thread_local tPkCryptProcW PasswordCallback = nullptr;
+int CheckPassword(wchar_t* Archive)
+{
+    if (!PasswordCallback) return E_NOT_SUPPORTED;
+    wchar_t Password[128]{};
+    if (PasswordCallback(1, PK_CRYPT_LOAD_PASSWORD_NO_UI, Archive, Password, 128) != E_NO_FILES) return E_BAD_DATA;
+    for (int Attempt = 0; Attempt < 4; ++Attempt) {
+        const auto Code = PasswordCallback(1, PK_CRYPT_LOAD_PASSWORD, Archive, Password, 128);
+        const bool Correct = wcscmp(Password, L"비밀-pass") == 0; SecureZeroMemory(Password, sizeof(Password));
+        if (Code) return Code; if (Correct) return 0;
+    }
+    return E_BAD_DATA;
+}
+extern "C" __declspec(dllexport) void __stdcall PkSetCryptCallbackW(tPkCryptProcW Callback, int, int) { PasswordCallback = Callback; }
 std::string ReadBytes(const wchar_t* Path)
 {
     const auto File = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -68,6 +82,7 @@ extern "C" __declspec(dllexport) HANDLE __stdcall OpenArchiveW(tOpenArchiveDataW
 {
     auto State = new ArchiveState;
     if (!Load(Open->ArcName, *State)) { delete State; Open->OpenResult = E_UNKNOWN_FORMAT; return nullptr; }
+    if (State->mode_ == 'U') { Open->OpenResult = CheckPassword(Open->ArcName); if (Open->OpenResult) { delete State; return nullptr; } }
     return State;
 }
 extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHeaderDataExW* Header)
@@ -79,6 +94,7 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
     if (State->mode_ == 'T') wcscpy_s(Header->FileName, L"../escape.txt");
     if (State->mode_ == 'D') wcscpy_s(Header->FileName, L"alpha.txt");
     Header->FileAttr = Item.directory_ ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    if (State->mode_ == 'Q' || State->mode_ == 'R') Header->Flags |= 4;
     Header->UnpSize = static_cast<unsigned int>(Item.bytes_.size()); Header->PackSize = Header->UnpSize;
     Header->FileCRC = Crc(Item.bytes_); Header->FileTime = (46 << 25) | (9 << 21) | (7 << 16);
     return 0;
@@ -90,6 +106,7 @@ extern "C" __declspec(dllexport) int __stdcall ProcessFileW(HANDLE Handle, int O
     const auto& Item = State->entries_[State->index_];
     if (Operation == PK_EXTRACT || Operation == PK_TEST)
     {
+        if (State->mode_ == 'Q') { wchar_t Name[] = L"encrypted.hct"; const auto Code = CheckPassword(Name); if (Code) return Code; }
         if (State->mode_ == 'V' && State->volume_) { State->volume_(nullptr, PK_VOL_ASK); return E_EABORTED; }
         if (State->progress_ && !State->progress_(nullptr, 0)) return E_EABORTED;
         if (Operation == PK_EXTRACT) {
@@ -114,10 +131,11 @@ extern "C" __declspec(dllexport) void __stdcall SetProcessDataProcW(HANDLE Handl
     else RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
 }
 extern "C" __declspec(dllexport) void __stdcall SetChangeVolProcW(HANDLE Handle, tChangeVolProcW Callback) { if (Handle && Handle != INVALID_HANDLE_VALUE) static_cast<ArchiveState*>(Handle)->volume_ = Callback; }
-extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wchar_t*, wchar_t* Source, wchar_t* List, int)
+extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wchar_t*, wchar_t* Source, wchar_t* List, int Flags)
 {
     ArchiveState State;
     if (GetFileAttributesW(Archive) != INVALID_FILE_ATTRIBUTES && !Load(Archive, State)) return E_UNKNOWN_FORMAT;
+    if (State.mode_ == 'R' || (State.mode_ == 'Q' && !(Flags & PK_PACK_ENCRYPT))) State.mode_ = 0;
     for (auto Name = List; *Name; Name += wcslen(Name) + 1) {
         if (PackingProgress && !PackingProgress(nullptr, 0)) return E_EABORTED;
         Entry Item; Item.name_ = Normalize(Name); const auto Path = std::wstring(Source) + Name;

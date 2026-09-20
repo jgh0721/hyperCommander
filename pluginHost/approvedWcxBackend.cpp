@@ -6,22 +6,36 @@ namespace hc::plugins
     using namespace storage;
     namespace
     {
+        class PromptListing final : public IArchiveListing
+        {
+        public:
+            PromptListing(std::unique_ptr<IArchiveListing> Inner, PasswordPrompt Prompt) : inner_(std::move(Inner)), prompt_(std::move(Prompt)) {}
+            Result<ArchivePage> Next(std::size_t Count, OperationContext Context) override
+            { if (!Context.passwordPrompt_) Context.passwordPrompt_ = prompt_; return inner_->Next(Count, std::move(Context)); }
+        private:
+            std::unique_ptr<IArchiveListing> inner_;
+            PasswordPrompt prompt_;
+        };
         class Backend final : public IArchiveBackend
         {
         public:
             explicit Backend(ApprovedWcxOptions Options) : options_(std::move(Options)) {}
             Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Archive, bool Test, OperationContext Context) override
             {
+                if (!Context.passwordPrompt_) Context.passwordPrompt_ = options_.passwordPrompt_;
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
-                return Host.Value()->Enumerate(std::move(Archive), Test, Context);
+                auto Listed = Host.Value()->Enumerate(std::move(Archive), Test, Context); if (!Listed.HasValue()) return Listed.Failure();
+                return std::unique_ptr<IArchiveListing>(new PromptListing(std::move(Listed.Value()), Context.passwordPrompt_));
             }
             Result<Unit> Extract(std::string Archive, ArchiveHeader Expected, std::string Output, OperationContext Context) override
             {
+                if (!Context.passwordPrompt_) Context.passwordPrompt_ = options_.passwordPrompt_;
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
                 return Host.Value()->Extract(std::move(Archive), std::move(Expected), std::move(Output), Context);
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
+                if (!Context.passwordPrompt_) Context.passwordPrompt_ = options_.passwordPrompt_;
                 if (!options_.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
                 auto Policy = ArchiveWritePolicy(options_.approval_.reviewed_); if (!Policy.HasValue()) return Policy;
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
