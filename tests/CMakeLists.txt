@@ -386,6 +386,11 @@ if(TARGET hc_smb_tests)
                 -Executable "$<TARGET_FILE:hc_smb_tests>" -IsoOnly -Dpr ${HC_ISO_DPR})
         set_tests_properties(hc.iso_ui_${HC_ISO_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
     endforeach()
+    add_test(NAME hc.archive_ui
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+            -Executable "$<TARGET_FILE:hc_smb_tests>" -ArchiveOnly -Dpr 1 -TimeoutSeconds 120)
+    set_tests_properties(hc.archive_ui PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
     add_test(NAME hc.data_plugin_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"

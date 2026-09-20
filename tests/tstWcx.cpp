@@ -18,6 +18,17 @@ namespace
     QByteArray Bytes(const ReadChunk& Chunk) { return QByteArray(reinterpret_cast<const char*>(Chunk.bytes_.data()), Chunk.bytes_.size()); }
     int __stdcall Continue(wchar_t*, int) { return 1; }
     QByteArray FileBytes(const QString& Path) { QFile File(Path); return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{}; }
+    QByteArray NestedFixture(const QByteArray& Inner, char Mode = 0)
+    {
+        QByteArray Data("HCWCX02", 7); Data += Mode;
+        const auto Number = [&](quint32 Value) { Data.append(reinterpret_cast<const char*>(&Value), 4); };
+        Number(2);
+        for (const auto& Pair : {qMakePair(QString("inner.hct"), Inner), qMakePair(QString("sibling.txt"), QByteArray("keep"))}) {
+            Number(Pair.first.size()); Number(Pair.second.size()); Number(0);
+            Data.append(reinterpret_cast<const char*>(Pair.first.utf16()), Pair.first.size() * 2); Data += Pair.second;
+        }
+        return Data;
+    }
     std::shared_ptr<IContentSource> Content(const QString& Path)
     {
         auto Reader = MakeNativeReadProvider(LocatorKind::Local);
@@ -119,6 +130,55 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void nestedMutation()
+    {
+        for (int Depth : {2, 3}) {
+            QTemporaryDir Directory; const auto Path = Directory.filePath("outer.hct");
+            QByteArray Original("HCWCX01"); auto Root = Location(Path);
+            for (int Level = 1; Level < Depth; ++Level) { Original = NestedFixture(Original); Root.nesting_.back().entry_ = "/inner.hct"; Root.nesting_.push_back({"wcx", "/"}); }
+            QVERIFY(Put(Path, Original)); QVERIFY(Put(Directory.filePath("new.txt"), "new payload"));
+            auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString());
+            auto Alpha = Root; Alpha.nesting_.back().entry_ = "/alpha.txt";
+            auto Entry = Reader->Resolve(Alpha, {}).get(); QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str());
+            auto Batch = BeginWcxMutation(Fixture().toStdString(), Root, Reader, Directory.path().toStdString()); QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/alpha.txt", "/renamed.txt", {}, Entry.Value().id_},
+                {ArchiveChangeKind::Put, "/new.txt", {}, Content(Directory.filePath("new.txt"))}}, {});
+            QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QCOMPARE(FileBytes(Path), Original);
+            auto Committed = Batch.Value()->Commit({}); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+            QVERIFY(!Batch.Value()->Commit({}).HasValue()); QVERIFY(!Reader->Stat(Entry.Value().id_, {}).get().HasValue());
+            auto Fresh = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString()); auto Added = Root; Added.nesting_.back().entry_ = "/new.txt";
+            auto New = Fresh->Resolve(Added, {}).get(); QVERIFY(New.HasValue()); auto Stream = Fresh->OpenRead(New.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+            auto Chunk = Stream.Value()->Read(1024, {}).get(); QVERIFY(Chunk.HasValue()); QCOMPARE(Bytes(Chunk.Value()), QByteArray("new payload"));
+            QVERIFY(!Fresh->Resolve(Alpha, {}).get().HasValue());
+            for (int Level = 1; Level < Depth; ++Level) {
+                auto Parent = Root; Parent.nesting_.resize(Level); Parent.nesting_.back().entry_ = "/sibling.txt";
+                auto ParentRoot = Parent; ParentRoot.nesting_.back().entry_ = "/";
+                auto Provider = MakeWcxReadProvider(Fixture().toStdString(), ParentRoot, Directory.path().toStdString());
+                auto Sibling = Provider->Resolve(Parent, {}).get(); QVERIFY(Sibling.HasValue()); auto Read = Provider->OpenRead(Sibling.Value().id_, {}).get(); QVERIFY(Read.HasValue());
+                auto Keep = Read.Value()->Read(1024, {}).get(); QVERIFY(Keep.HasValue()); QCOMPARE(Bytes(Keep.Value()), QByteArray("keep"));
+            }
+        }
+    }
+    void nestedFailurePreservesRoot()
+    {
+        for (int Failure : {0, 1, 2, 3, 4, 5}) {
+            QTemporaryDir Directory; const auto Path = Directory.filePath("outer.hct"); const auto Original = NestedFixture("HCWCX01", Failure == 4 ? 'P' : 0);
+            QVERIFY(Put(Path, Original)); QVERIFY(Put(Directory.filePath("new.txt"), "new"));
+            auto Root = Location(Path, "/inner.hct"); Root.nesting_.push_back({"wcx", "/"});
+            auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString());
+            std::shared_ptr<IWritableStorage> Writer; if (Failure <= 1) Writer = std::make_shared<FailedDestination>(Failure == 1);
+            auto Batch = BeginWcxMutation(Fixture().toStdString(), Root, Reader, Directory.path().toStdString(), {}, {}, Writer); QVERIFY(Batch.HasValue());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Put, "/new.txt", {}, Content(Directory.filePath("new.txt"))}}, {});
+            if (Failure == 0 || Failure == 4) QVERIFY(!Prepared.HasValue());
+            else {
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+                if (Failure == 2) { std::stop_source Stop; Stop.request_stop(); OperationContext Context; Context.stopToken_ = Stop.get_token(); QVERIFY(!Batch.Value()->Commit(Context).HasValue()); }
+                else if (Failure == 3) { QVERIFY(Put(Path, "external change")); QVERIFY(!Batch.Value()->Commit({}).HasValue()); }
+                else if (Failure == 1) QVERIFY(!Batch.Value()->Commit({}).HasValue());
+            }
+            QVERIFY(Batch.Value()->Abort().empty()); QCOMPARE(FileBytes(Path), Failure == 3 ? QByteArray("external change") : Original);
+        }
+    }
     void crossProviderMove_data()
     {
         QTest::addColumn<bool>("SourceArchive"); QTest::addColumn<bool>("DestinationArchive"); QTest::addColumn<bool>("Skip");
@@ -584,6 +644,22 @@ private slots:
         QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str());
         auto Stream = Provider->OpenRead(Entry.Value().id_, {}).get(); QVERIFY2(Stream.HasValue(), Stream.HasValue() ? "" : Stream.Failure().code_.c_str());
         auto Chunk = Stream.Value()->Read(32, {}).get(); QVERIFY(Chunk.HasValue()); QCOMPARE(Bytes(Chunk.Value()), QByteArray("한글!\r\n"));
+        {
+            auto Outer = QDir::toNativeSeparators(Directory.filePath("outer.7z")).toStdWString(); wchar_t NestedList[] = L"real.7z\0";
+            Progress(nullptr, &Continue); QCOMPARE(Pack(Outer.data(), nullptr, Source.data(), NestedList, PK_PACK_SAVE_PATHS), 0);
+            auto Root = Location(QString::fromStdWString(Outer), "/real.7z"); Root.nesting_.push_back({"wcx", "/"});
+            auto Nested = MakeWcxReadProvider(Plugin.toStdString(), Root, Directory.path().toStdString());
+            auto Alpha = Root; Alpha.nesting_.back().entry_ = "/alpha.txt"; auto Selected = Nested->Resolve(Alpha, {}).get();
+            QVERIFY2(Selected.HasValue(), Selected.HasValue() ? "" : Selected.Failure().code_.c_str());
+            const auto Before = FileBytes(QString::fromStdWString(Outer));
+            auto Batch = BeginWcxMutation(Plugin.toStdString(), Root, Nested, Directory.path().toStdString()); QVERIFY(Batch.HasValue());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/alpha.txt", "/nested-renamed.txt", {}, Selected.Value().id_}}, {});
+            QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QCOMPARE(FileBytes(QString::fromStdWString(Outer)), Before);
+            QVERIFY(Batch.Value()->Commit({}).HasValue());
+            auto Fresh = MakeWcxReadProvider(Plugin.toStdString(), Root, Directory.path().toStdString()); Alpha.nesting_.back().entry_ = "/nested-renamed.txt";
+            auto Renamed = Fresh->Resolve(Alpha, {}).get(); QVERIFY(Renamed.HasValue()); auto Read = Fresh->OpenRead(Renamed.Value().id_, {}).get(); QVERIFY(Read.HasValue());
+            auto Content = Read.Value()->Read(32, {}).get(); QVERIFY(Content.HasValue()); QCOMPARE(Bytes(Content.Value()), QByteArray("alpha"));
+        }
         const auto Mutate = [&](const QString& ArchivePath) {
             auto Read = MakeWcxReadProvider(Plugin.toStdString(), Location(ArchivePath), Directory.path().toStdString());
             auto Alpha = Read->Resolve(Location(ArchivePath, "/alpha.txt"), {}).get(); QVERIFY(Alpha.HasValue());

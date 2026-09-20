@@ -66,6 +66,76 @@ class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void nestedHostedMutation()
+    {
+        for (const char Mode : {char(0), 'P', 'J'}) {
+            QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+            const auto Path = Directory.filePath("outer.hct"); QByteArray Original("HCWCX02", 7); Original += Mode;
+            const QString Name("inner.hct"); const auto Number = [&](quint32 Value) { Original.append(reinterpret_cast<const char*>(&Value), 4); };
+            Number(1); Number(Name.size()); Number(7); Number(0); Original.append(reinterpret_cast<const char*>(Name.utf16()), Name.size() * 2); Original += "HCWCX01";
+            QVERIFY(Put(Path, Original)); auto Root = At(Path, "/inner.hct"); Root.nesting_.push_back({"wcx", "/"});
+            auto Backend = MakeHostedArchiveBackend(Started.Value()); auto Reader = MakeWcxReadProvider({}, Root, Directory.path().toStdString(), Backend);
+            auto Session = BeginWcxMutation({}, Root, Reader, Directory.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Session.HasValue());
+            auto Prepared = Session.Value()->Prepare({{ArchiveChangeKind::MakeDirectory, "/created"}}, {}); QCOMPARE(Read(Path), Original);
+            if (Mode) { QVERIFY(!Prepared.HasValue()); QVERIFY(Session.Value()->Abort().empty()); QCOMPARE(Read(Path), Original); }
+            else { QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Session.Value()->Commit({}).HasValue());
+                auto Fresh = MakeWcxReadProvider({}, Root, Directory.path().toStdString(), Backend); Root.nesting_.back().entry_ = "/created";
+                auto Added = Fresh->Resolve(Root, {}).get(); QVERIFY(Added.HasValue()); QVERIFY(Added.Value().directory_); }
+        }
+    }
+    void encryptedMutationPreservesEncryption()
+    {
+        for (const char Mode : {'Q', 'R'}) {
+            QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+            const auto Path = Directory.filePath("encrypted.hct"); const auto Original = QByteArray("HCWCX01") + Mode; QVERIFY(Put(Path, Original));
+            auto Backend = MakeHostedArchiveBackend(Started.Value()); auto Provider = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), Backend);
+            OperationContext Context; Context.passwordPrompt_ = [](const std::string&, unsigned, const OperationContext&) -> Result<Password> { return Password("비밀-pass"); };
+            auto Entry = Provider->Resolve(At(Path, "/alpha.txt"), Context).get(); QVERIFY(Entry.HasValue());
+            auto Session = BeginWcxMutation({}, At(Path), Provider, Directory.path().toStdString(), {}, Context, {}, Backend); QVERIFY(Session.HasValue());
+            auto Prepared = Session.Value()->Prepare({{ArchiveChangeKind::Rename, "/alpha.txt", "/renamed.txt", {}, Entry.Value().id_}}, Context);
+            QCOMPARE(Read(Path), Original);
+            if (Mode == 'R') { QVERIFY(!Prepared.HasValue()); QCOMPARE(Prepared.Failure().code_, std::string("archive-output-encryption-lost")); }
+            else { QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Session.Value()->Commit(Context).HasValue());
+                auto Fresh = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), Backend); auto Renamed = Fresh->Resolve(At(Path, "/renamed.txt"), Context).get();
+                QVERIFY(Renamed.HasValue()); QVERIFY(Renamed.Value().hints_.contains("encrypted")); }
+        }
+    }
+    void passwordCallbacks()
+    {
+        for (const bool Hosted : {false, true}) for (const char Mode : {'U', 'Q'}) {
+            QTemporaryDir Directory; const auto Path = Directory.filePath("encrypted.hct"); QVERIFY(Put(Path, QByteArray("HCWCX01") + Mode));
+            std::shared_ptr<IArchiveBackend> Backend; std::shared_ptr<PluginProcess> Host;
+            if (Hosted) { auto Started = Start(Directory); QVERIFY(Started.HasValue()); Host = Started.Value(); Backend = MakeHostedArchiveBackend(Host); }
+            else Backend = MakeInProcessWcxBackend((QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64").toStdString());
+            unsigned Prompts = 0; OperationContext Context;
+            Context.passwordPrompt_ = [&](const std::string&, unsigned Attempt, const OperationContext&) -> Result<Password> {
+                ++Prompts; return Password(Attempt == 1 ? "wrong" : "비밀-pass");
+            };
+            auto Cursor = Backend->Enumerate(Path.toStdString(), true, Context); QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+            auto Page = Cursor.Value()->Next(128, Context); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+            QCOMPARE(Page.Value().entries_.size(), 2); QVERIFY(Prompts >= 2); QCOMPARE(Read(Path), QByteArray("HCWCX01") + Mode);
+        }
+    }
+    void passwordCancellationAndRetryLimit()
+    {
+        for (const int Mode : {0, 1, 2, 3}) {
+            QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+            const auto Path = Directory.filePath("encrypted.hct"); QVERIFY(Put(Path, "HCWCX01U"));
+            auto Backend = MakeHostedArchiveBackend(Started.Value()); OperationContext Context; unsigned Prompts = 0;
+            if (Mode) Context.passwordPrompt_ = [&](const std::string&, unsigned, const OperationContext& Call) -> Result<Password> {
+                ++Prompts;
+                if (Mode == 1) return Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}};
+                if (Mode == 3) { while (!Call.Check({"wcx"})) std::this_thread::sleep_for(std::chrono::milliseconds(5)); return *Call.Check({"wcx"}); }
+                return Password("wrong");
+            };
+            if (Mode == 3) Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
+            auto Result = Backend->Enumerate(Path.toStdString(), false, Context); QVERIFY(!Result.HasValue());
+            if (Mode == 0) QCOMPARE(Result.Failure().code_, std::string("archive-password-required"));
+            if (Mode == 1) QCOMPARE(Result.Failure().category_, ErrorCategory::Cancelled);
+            if (Mode == 2) { QCOMPARE(Result.Failure().code_, std::string("archive-password-attempt-limit")); QCOMPARE(Prompts, 3u); }
+            QCOMPARE(Read(Path), QByteArray("HCWCX01U"));
+        }
+    }
     void inProcessWriteBudget()
     {
         QTemporaryDir Directory; auto Started = Start(Directory, true, 300, {}, false, 5000); QVERIFY(Started.HasValue());
