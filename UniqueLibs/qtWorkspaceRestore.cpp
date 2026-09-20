@@ -67,21 +67,36 @@ void RestoreWorkspaceLocation(CFSModel* Model, const hc::workspace::TabState& Ta
         Model->SetRoot(nsHC::TySpFileSystem(new WorkspaceShell(Location))); Model->SetCurrentPath("\\");
         Model->ClearPlaceholder(); Model->Refresh(); return;
     }
-    if (Location.kind_ == LocatorKind::Archive && Location.nesting_.size() == 1 && Location.nesting_[0].provider_ == "wcx") {
+    if (Location.kind_ == LocatorKind::Archive && !Location.nesting_.empty() && Location.nesting_.size() <= 8
+        && std::ranges::all_of(Location.nesting_, [](const ContainerHop& Hop) { return Hop.provider_ == "wcx"; })) {
         const auto Path = QString::fromStdString(Location.root_);
         if (!QDir::isAbsolutePath(Path)) { Model->SetPlaceholder(Location, QObject::tr("전체 경로가 필요합니다.")); return; }
-        const auto Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Path).suffix());
-        for (const auto& Choice : Choices) {
-            if (!Choice.hostEnabled_ || (!Tab.provider_.isEmpty() && Choice.hostManifest_.compare(Tab.provider_, Qt::CaseInsensitive))) continue;
-            const auto Wcx = TySpWCX(new CTCPlugInWCX);
-            if (Wcx->LoadWCX(Choice).ErrorCode != ERROR_SUCCESS) continue;
+        std::vector<TySpWCX> Plugins; QString LastManifest;
+        for (std::size_t Level = 0; Level < Location.nesting_.size(); ++Level) {
+            const auto Name = Level ? QString::fromStdString(Location.nesting_[Level - 1].entry_) : Path;
+            const auto Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Name).suffix());
+            for (const auto& Choice : Choices) {
+                if (!Choice.hostEnabled_ || (Level + 1 == Location.nesting_.size() && !Tab.provider_.isEmpty() && Choice.hostManifest_.compare(Tab.provider_, Qt::CaseInsensitive))) continue;
+                const auto Wcx = TySpWCX(new CTCPlugInWCX);
+                if (Wcx->LoadWCX(Choice).ErrorCode != ERROR_SUCCESS) continue;
+                Plugins.push_back(Wcx); LastManifest = Choice.hostManifest_; break;
+            }
+            if (Plugins.size() != Level + 1) break;
+        }
+        if (Plugins.size() == Location.nesting_.size()) {
             auto Parent = Location; Parent.kind_ = Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local;
-            Parent.nesting_.clear(); Parent.root_ = QFileInfo(Path).absolutePath().toStdString();
-            NativeRoot(Model, Parent, Native);
-            auto* Pack = new nsHC::CFSPack(Path, Wcx); Pack->SetParent(Model->GetCurrentPath());
-            Model->AppendRoot(nsHC::TySpFileSystem(Pack)); Model->SetCurrentPath(QString::fromStdString(Location.nesting_[0].entry_));
-            Model->setProperty("hc.workspaceProvider", Choice.hostManifest_);
-            Model->ClearPlaceholder(); Model->Refresh(); return;
+            Parent.nesting_.clear(); Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); NativeRoot(Model, Parent, Native);
+            nsHC::CFSPack* Previous = nullptr; QString Display = Path;
+            for (std::size_t Level = 0; Level < Plugins.size(); ++Level) {
+                auto* Pack = new nsHC::CFSPack(Display, Plugins[Level]); Pack->SetParent(Model->GetCurrentPath());
+                auto Root = Location; Root.nesting_.resize(Level + 1); Root.nesting_.back().entry_ = "/";
+                if (Previous) Pack->SetArchiveChain(std::move(Root), Previous->ArchiveBackends());
+                Model->AppendRoot(nsHC::TySpFileSystem(Pack));
+                const auto Internal = QString::fromStdString(Location.nesting_[Level].entry_);
+                Model->SetCurrentPath(Level + 1 == Plugins.size() ? Internal : QFileInfo(Internal).path());
+                Display += Internal; Previous = Pack;
+            }
+            Model->setProperty("hc.workspaceProvider", LastManifest); Model->ClearPlaceholder(); Model->Refresh(); return;
         }
     }
     if (Location.kind_ != LocatorKind::Plugin || Tab.provider_.isEmpty() || !Location.nesting_.empty()) {

@@ -27,7 +27,7 @@ namespace hc::operations
         public:
             explicit ArchiveTask(ArchiveOperationRequest Request) : request_(std::move(Request))
             {
-                const auto Destination = request_.destination_.nesting_.empty() ? "/" : request_.destination_.nesting_[0].entry_;
+                const auto Destination = request_.destination_.nesting_.empty() ? "/" : request_.destination_.nesting_.back().entry_;
                 for (const auto& Source : request_.sources_)
                     pending_.push_back({Source, request_.operation_ == FileOperation::Rename ? Destination : Child(Destination, Source.entry_.name_)});
                 if (request_.operation_ == FileOperation::MakeDirectory) pending_.push_back({{}, Destination});
@@ -107,7 +107,7 @@ namespace hc::operations
             }
         private:
             enum class Phase { Plan, Conflict, Confirm, Prepare, Commit, Report };
-            Locator at(const std::string& Path) const { auto At = request_.archive_; At.nesting_[0].entry_ = Path; return At; }
+            Locator at(const std::string& Path) const { auto At = request_.archive_; At.nesting_.back().entry_ = Path; return At; }
             std::string itemLocator() const { return Serialize(current_.source_.reader_ ? current_.source_.entry_.locator_ : at(current_.destination_)); }
             ItemOutcome outcome(ItemOutcome::Status Status = ItemOutcome::Status::Completed) const
             {
@@ -169,7 +169,7 @@ namespace hc::operations
                 }
                 if (request_.operation_ == FileOperation::Delete)
                 {
-                    changes_.push_back({ArchiveChangeKind::Remove, current_.source_.entry_.locator_.nesting_[0].entry_, {}, {}, current_.source_.entry_.id_});
+                    changes_.push_back({ArchiveChangeKind::Remove, current_.source_.entry_.locator_.nesting_.back().entry_, {}, {}, current_.source_.entry_.id_});
                     outcomes_.push_back(outcome()); return progress();
                 }
                 return destination(Context);
@@ -201,7 +201,7 @@ namespace hc::operations
             {
                 destinations_.insert(current_.destination_);
                 if (request_.operation_ == FileOperation::Rename || request_.operation_ == FileOperation::Move)
-                    changes_.push_back({ArchiveChangeKind::Rename, current_.source_.entry_.locator_.nesting_[0].entry_, current_.destination_, {}, current_.source_.entry_.id_, expected_});
+                    changes_.push_back({ArchiveChangeKind::Rename, current_.source_.entry_.locator_.nesting_.back().entry_, current_.destination_, {}, current_.source_.entry_.id_, expected_});
                 else if (request_.operation_ == FileOperation::MakeDirectory || current_.source_.entry_.directory_)
                 {
                     if (!MergeDirectory) changes_.push_back({ArchiveChangeKind::MakeDirectory, current_.destination_});
@@ -235,10 +235,9 @@ namespace hc::operations
     }
     Result<PreparedJob> PrepareArchiveOperation(ArchiveOperationRequest Request, OperationContext Context)
     {
-        const auto ValidLocation = [&](const Locator& At) { return At.kind_ == LocatorKind::Archive && At.root_ == Request.archive_.root_
-            && At.nesting_.size() == 1 && At.nesting_[0].provider_ == Request.archive_.nesting_[0].provider_ && At.nesting_[0].entry_.starts_with('/'); };
+        const auto ValidLocation = [&](const Locator& At) { return SameArchiveContainer(At, Request.archive_) && At.nesting_.back().entry_.starts_with('/'); };
         if (!Request.reader_ || !Request.begin_ || Request.archive_.kind_ != LocatorKind::Archive || Request.archive_.root_.empty()
-            || Request.archive_.nesting_.size() != 1 || Request.archive_.nesting_[0].entry_ != "/"
+            || (Request.archive_.nesting_.empty() || Request.archive_.nesting_.size() > 8) || Request.archive_.nesting_.back().entry_ != "/"
             || !Request.limits_.maxEntries_ || Request.limits_.maxEntries_ > 100000 || !Request.limits_.maxDepth_ || Request.limits_.maxDepth_ > 32
             || !Request.limits_.maxInputBytes_ || Request.sources_.size() > Request.limits_.maxEntries_
             || (Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Delete && Request.operation_ != FileOperation::Rename && Request.operation_ != FileOperation::MakeDirectory && Request.operation_ != FileOperation::Move)
@@ -252,7 +251,7 @@ namespace hc::operations
             if (Request.operation_ != FileOperation::Copy && (!ValidLocation(Source.entry_.locator_) || Source.reader_ != Request.reader_))
                 return Error{ErrorCategory::InvalidRequest, "foreign-archive-source"};
             if ((Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move) && ValidLocation(Source.entry_.locator_)
-                && Within(Child(Request.destination_.nesting_[0].entry_, Source.entry_.name_), Source.entry_.locator_.nesting_[0].entry_))
+                && Within(Child(Request.destination_.nesting_.back().entry_, Source.entry_.name_), Source.entry_.locator_.nesting_.back().entry_))
                 return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
         }
         JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context; Job.maxItemResults_ = Request.limits_.maxEntries_;

@@ -1052,13 +1052,13 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
                 if (!Expected.HasValue() || Expected.Value() != Current)
                     return Error{ErrorCategory::StaleRevision, "archive-destination-location-changed"};
             }
-            if (Current.kind_ != LocatorKind::Archive || Current.root_ != Request.destination_.root_)
+            if (!SameArchiveContainer(Current, Request.destination_))
                 return Error{ErrorCategory::StaleRevision, "archive-destination-container-changed"};
         }
         else
             for (auto* Candidate : main_->findChildren<CFSModel*>())
                 if (Candidate->GetRoot() && Candidate->GetRoot()->ReadLocation(Candidate->GetCurrentPathWithRoot()).kind_ == LocatorKind::Archive
-                    && Candidate->GetRoot()->GetRoot().toStdString() == Request.destination_.root_)
+                    && SameArchiveContainer(Candidate->GetRoot()->ReadLocation("/"), Request.destination_))
                 { Target = Candidate; break; }
         if (!Target) return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
         return Target;
@@ -1088,7 +1088,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     };
     Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
     const bool CrossMove = Request.operation_ == hc::operations::FileOperation::Move && (Kind == LocatorKind::Archive || Request.destination_.kind_ == LocatorKind::Archive)
-        && !(Kind == LocatorKind::Archive && Request.destination_.kind_ == LocatorKind::Archive && Request.destination_.root_ == Invocation.context_.location_.root_);
+        && !SameArchiveContainer(Request.destination_, Invocation.context_.location_);
     const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
         || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
     if (CrossMove)
@@ -1122,7 +1122,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             if (Request.operation_ == hc::operations::FileOperation::Copy) ArchiveModel = Target.Value();
         }
         auto Target = Endpoint(ArchiveModel); if (!Target.HasValue()) return Target.Failure();
-        if (Request.operation_ != hc::operations::FileOperation::Delete && Request.destination_.root_ != Target.Value().root_.root_)
+        if (Request.operation_ != hc::operations::FileOperation::Delete && !SameArchiveContainer(Request.destination_, Target.Value().root_))
             return Error{ErrorCategory::InvalidRequest, "archive-destination-container-mismatch"};
         ArchiveOperationRequest Archive;
         Archive.operation_ = Request.operation_; Archive.archive_ = Target.Value().root_; Archive.destination_ = Request.destination_;

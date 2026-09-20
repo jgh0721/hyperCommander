@@ -79,10 +79,10 @@ namespace hc::storage
             }
             Result<WriteReceipt> Commit(OperationContext Context) override
             {
-                if (state_ != State::Prepared || !output_) return Invalid("archive-session-not-prepared");
+                if (state_ != State::Prepared || (!output_ && !parent_)) return Invalid("archive-session-not-prepared");
                 if (const auto Failure = Context.Check({"wcx"})) return *Failure;
-                auto Result = output_->Commit(Context);
-                if (Result.HasValue()) { state_ = State::Committed; output_.reset(); }
+                auto Result = parent_ ? parent_->Commit(Context) : output_->Commit(Context);
+                if (Result.HasValue()) { state_ = State::Committed; output_.reset(); parent_.reset(); }
                 else
                 {
                     auto Failure = Result.Failure(); const auto Errors = Abort();
@@ -94,6 +94,7 @@ namespace hc::storage
             std::vector<Error> Abort() override
             {
                 std::vector<Error> Errors;
+                if (parent_) { Errors = parent_->Abort(); parent_.reset(); }
                 if (output_) { const auto Result = output_->Abort(); if (!Result.HasValue()) Errors.push_back(Result.Failure()); output_.reset(); }
                 if (state_ != State::Committed) state_ = State::Aborted;
                 return Errors;
@@ -114,10 +115,10 @@ namespace hc::storage
                         for (const auto& Entry : Page.Value().entries_)
                         {
                             if (Entry.locator_.kind_ != LocatorKind::Archive || Entry.locator_.root_ != root_.root_
-                                || Entry.locator_.nesting_.size() != 1 || Entry.locator_.nesting_[0].provider_ != "wcx"
+                                || !SameArchiveContainer(Entry.locator_, root_)
                                 || Entry.id_.providerId_ != reader_->Id()) return Invalid("archive-provider-entry-mismatch");
-                            const auto Path = SafePath(Entry.locator_.nesting_[0].entry_, limits_.maxDepth_); if (!Path.HasValue()) return Path.Failure();
-                            if (Parent(Path.Value()) != At.nesting_[0].entry_ || Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)
+                            const auto Path = SafePath(Entry.locator_.nesting_.back().entry_, limits_.maxDepth_); if (!Path.HasValue()) return Path.Failure();
+                            if (Parent(Path.Value()) != At.nesting_.back().entry_ || Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)
                                 return Invalid("archive-provider-entry-parent");
                             if (!draft_.emplace(Path.Value(), DraftEntry{Entry}).second) return Invalid("duplicate-archive-entry");
                             if (draft_.size() > limits_.maxEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
@@ -183,6 +184,7 @@ namespace hc::storage
                             Item.content_ = Change.content_; Item.entry_ = Item.content_->Describe();
                             if (Item.entry_.directory_ || Item.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Invalid("archive-file-content-required");
                         }
+                        if (draft_.contains(Change.path_) && draft_.at(Change.path_).entry_.hints_.contains("encrypted")) Item.entry_.hints_["encrypted"] = "1";
                         draft_[Change.path_] = std::move(Item);
                     }
                     else return Invalid("archive-change-kind");
@@ -285,10 +287,12 @@ namespace hc::storage
                     return Unit{};
                 };
                 std::uint64_t Total = 0;
+                bool Encrypt = false;
                 std::vector<std::string> Added, Removed;
                 for (auto& [Path, Item] : draft_)
                 {
                     if (!Item.changed_) continue;
+                    Encrypt = Encrypt || Item.entry_.hints_.contains("encrypted");
                     const auto Made = MakeParents(Path, Item.entry_.directory_); if (!Made.HasValue()) return Made;
                     if (!Item.entry_.directory_)
                     {
@@ -317,7 +321,7 @@ namespace hc::storage
                         Removed.push_back(Raw == Item.entry_.hints_.end() ? Path.substr(1) : Raw->second);
                     }
                 const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
-                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_}, Context);
+                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt}, Context);
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 std::set<std::string> Seen;
@@ -331,6 +335,7 @@ namespace hc::storage
                         const auto Path = "/" + Name.toStdString();
                         if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
                         const auto& Expected = draft_.at(Path).entry_;
+                        if (Expected.hints_.contains("encrypted") && !Header.encrypted_) return Invalid("archive-output-encryption-lost");
                         const auto Packed = Header.packedSize_ ? Header.packedSize_ : std::uint64_t(QFileInfo(Output).size());
                         if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
                             return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
@@ -361,10 +366,26 @@ namespace hc::storage
                 auto Planned = plan(Changes, Context); if (!Planned.HasValue()) return Planned;
                 auto Store = MakeNativeContentStore(temporary_); if (!Store.HasValue()) return Store.Failure();
                 auto Output = original_; Output.size_ = limits_.maxArchiveBytes_;
-                auto Lease = Store.Value()->Produce(Output, {}, {}, Context, [&](const std::string& Path, OperationContext Context) {
+                // build() independently bounds and integrity-tests expansion.
+                auto Lease = Store.Value()->Produce(Output, {}, Output.size_, Context, [&](const std::string& Path, OperationContext Context) {
                     return build(QString::fromStdString(Path), Context);
                 }, ProducedSize::Bounded);
                 if (!Lease.HasValue()) return Lease.Failure();
+                if (root_.nesting_.size() > 1)
+                {
+                    // Prepare outward, but publish only at the native root. No
+                    // intermediate archive is committed to its original parent.
+                    auto Container = ResolveWcxContainer(native_, Context); if (!Container.HasValue()) return Container.Failure();
+                    auto ParentRoot = original_.locator_; ParentRoot.nesting_.back().entry_ = "/";
+                    auto Session = BeginWcxMutation({}, ParentRoot, native_, temporary_, limits_, Context, writer_, Container.Value().backend_);
+                    if (!Session.HasValue()) return Session.Failure(); parent_ = std::move(Session.Value());
+                    auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+                    auto Local = LocalReader->Resolve({LocatorKind::Local, Lease.Value()->LocalPath()}, Context).get(); if (!Local.HasValue()) return Local.Failure();
+                    ArchiveChange Change; Change.kind_ = ArchiveChangeKind::Put; Change.path_ = original_.locator_.nesting_.back().entry_;
+                    Change.content_ = std::make_shared<ProviderContentSource>(LocalReader, Local.Value()); Change.destination_ = {true, original_.id_.revision_};
+                    auto Prepared = parent_->Prepare({std::move(Change)}, Context); if (!Prepared.HasValue()) return Prepared;
+                    const auto Fresh = native_->Stat(original_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure());
+                }
                 auto Written = writer_->BeginWrite(original_.locator_, {true, original_.id_.revision_}, Context); if (!Written.HasValue()) return Written.Failure();
                 output_ = std::move(Written.Value());
                 QFile File(QString::fromStdString(Lease.Value()->LocalPath())); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "archive-prepared-open"};
@@ -390,6 +411,7 @@ namespace hc::storage
             std::shared_ptr<IWritableStorage> writer_;
             std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
             std::unique_ptr<IWriteSession> output_;
+            std::unique_ptr<IArchiveMutationSession> parent_;
             std::map<std::string, DraftEntry> draft_, before_;
             State state_ = State::New;
         };
@@ -398,18 +420,27 @@ namespace hc::storage
         std::shared_ptr<IStorageProvider> Reader, std::string TemporaryBase, ArchiveMutationLimits Limits,
         OperationContext Context, std::shared_ptr<IWritableStorage> DestinationWriter, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
     {
-        if (!Reader || Reader->Id().value_ != "wcx" || Root.kind_ != LocatorKind::Archive || Root.nesting_.size() != 1
-            || Root.nesting_[0].provider_ != "wcx" || Root.nesting_[0].entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
+        if (!Reader || Reader->Id().value_ != "wcx" || Root.kind_ != LocatorKind::Archive || Root.nesting_.empty() || Root.nesting_.size() > 8
+            || !std::ranges::all_of(Root.nesting_, [](const ContainerHop& Hop) { return Hop.provider_ == "wcx"; })
+            || Root.nesting_.back().entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
             || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_ || Limits.maxInputBytes_ > 64ULL * 1024 * 1024 * 1024
             || !Limits.maxArchiveBytes_ || Limits.maxArchiveBytes_ > 128ULL * 1024 * 1024 * 1024)
             return Invalid("invalid-archive-mutation-request");
         const auto Kind = Root.root_.starts_with("\\\\") || Root.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local;
         auto NativeReader = MakeNativeReadProvider(Kind);
-        auto Original = NativeReader->Resolve({Kind, Root.root_}, Context).get(); if (!Original.HasValue()) return Original.Failure();
+        Result<EntrySnapshot> Original = Error{ErrorCategory::Internal, "archive-container-required"};
+        if (Root.nesting_.size() > 1) {
+            auto Container = ResolveWcxContainer(Reader, Context); if (!Container.HasValue()) return Container.Failure();
+            if (!SameArchiveContainer(Root, Container.Value().root_)) return Invalid("archive-container-mismatch");
+            NativeReader = Container.Value().reader_; Original = Container.Value().entry_;
+            Backend = Container.Value().backend_;
+        }
+        else Original = NativeReader->Resolve({Kind, Root.root_}, Context).get();
+        if (!Original.HasValue()) return Original.Failure();
         if (Original.Value().directory_ || Original.Value().attributes_ & FILE_ATTRIBUTE_REPARSE_POINT || !Original.Value().id_.revision_)
             return Invalid("archive-native-file-required");
         if (Original.Value().size_ > Limits.maxArchiveBytes_) return Error{ErrorCategory::BudgetExceeded, "archive-original-size-budget"};
-        if (!DestinationWriter) DestinationWriter = MakeNativeWritableStorage(Kind, NativeReader);
+        if (!DestinationWriter && Root.nesting_.size() == 1) DestinationWriter = MakeNativeWritableStorage(Kind, NativeReader);
         if (TemporaryBase.empty()) TemporaryBase = QDir::tempPath().toStdString();
         return std::unique_ptr<IArchiveMutationSession>(new Session(std::move(PluginPath), std::move(Root), std::move(Reader),
             std::move(TemporaryBase), Limits, std::move(Original.Value()), std::move(NativeReader), std::move(DestinationWriter), std::move(Backend)));

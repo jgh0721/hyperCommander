@@ -59,11 +59,18 @@ namespace hc::storage
         class WcxProvider final : public IStorageProvider, public std::enable_shared_from_this<WcxProvider>
         {
         public:
-            WcxProvider(std::string Plugin, Locator Root, std::string Temporary, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
+            WcxProvider(std::string Plugin, Locator Root, std::string Temporary, std::shared_ptr<hc::plugins::IArchiveBackend> Backend, WcxBackends Ancestors)
                 : plugin_(std::move(Plugin)), root_(std::move(Root)), temporary_(std::move(Temporary)),
                 session_(QUuid::createUuid().toString(QUuid::Id128).toStdString() + ":"),
                 native_(MakeNativeReadProvider(root_.root_.starts_with("\\\\") || root_.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local)),
-                backend_(Backend ? std::move(Backend) : hc::plugins::MakeInProcessWcxBackend(plugin_)) {}
+                backend_(Backend ? std::move(Backend) : hc::plugins::MakeInProcessWcxBackend(plugin_)), ancestors_(std::move(Ancestors)) {}
+            Task<WcxContainer> Container(OperationContext Context)
+            {
+                return run<WcxContainer>(Context, [](WcxProvider& Self, OperationContext Context) -> Result<WcxContainer> {
+                    auto Mounted = Self.mount(Context); if (!Mounted.HasValue()) return Mounted.Failure();
+                    return WcxContainer{Self.root_, Self.archive_, Self.native_, Self.backend_};
+                });
+            }
             ProviderId Id() const override { return {"wcx"}; }
             Task<SupportDecision> Supports(Operation Op, OperationContext Context) override
             {
@@ -131,7 +138,12 @@ namespace hc::storage
                 });
             }
             bool validLocation(const Locator& At) const
-            { return At.kind_ == LocatorKind::Archive && At.root_ == root_.root_ && At.nesting_.size() == 1 && At.nesting_.front().provider_ == "wcx"; }
+            {
+                if (At.kind_ != LocatorKind::Archive || At.root_ != root_.root_ || At.nesting_.empty() || At.nesting_.size() > 8 || At.nesting_.size() != root_.nesting_.size()) return false;
+                for (std::size_t Index = 0; Index < At.nesting_.size(); ++Index)
+                    if (At.nesting_[Index].provider_ != "wcx" || (Index + 1 < At.nesting_.size() && At.nesting_[Index] != root_.nesting_[Index])) return false;
+                return true;
+            }
             EntrySnapshot makeEntry(const std::string& Path, bool Directory) const
             {
                 EntrySnapshot Entry; Entry.locator_ = root_; Entry.locator_.nesting_.back().entry_ = Path;
@@ -144,13 +156,44 @@ namespace hc::storage
             {
                 if (mounted_) { const auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure()); }
                 if (!validLocation(root_)) return Error{ErrorCategory::InvalidRequest, "archive-location"};
-                auto Archive = native_->Resolve({native_->Id().value_ == "smb" ? LocatorKind::Smb : LocatorKind::Local, root_.root_}, Context).get();
+                Locator Container{native_->Id().value_ == "smb" ? LocatorKind::Smb : LocatorKind::Local, root_.root_};
+                archivePath_ = root_.root_;
+                if (root_.nesting_.size() > 1)
+                {
+                    if (!ancestors_.empty() && ancestors_.size() + 1 != root_.nesting_.size()) return Error{ErrorCategory::InvalidRequest, "archive-backend-chain"};
+                    Container = root_; Container.nesting_.pop_back();
+                    auto ParentRoot = Container; ParentRoot.nesting_.back().entry_ = "/";
+                    auto Parents = ancestors_; auto Backend = backend_;
+                    if (!Parents.empty()) { Backend = Parents.back(); Parents.pop_back(); if (!Backend) return Error{ErrorCategory::InvalidRequest, "archive-backend-required"}; }
+                    native_ = MakeWcxReadProvider(plugin_, ParentRoot, temporary_, std::move(Backend), std::move(Parents));
+                }
+                auto Archive = native_->Resolve(Container, Context).get();
                 if (!Archive.HasValue()) return Archive.Failure();
                 if (Archive.Value().directory_ || Archive.Value().attributes_ & FILE_ATTRIBUTE_REPARSE_POINT || !Archive.Value().id_.revision_)
                     return Error{ErrorCategory::Unsupported, "archive-native-file-required"};
                 archive_ = std::move(Archive.Value());
                 Context.denyConcurrentMutation_ = true;
                 auto Pin = native_->OpenRead(archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
+                if (root_.nesting_.size() > 1)
+                {
+                    auto Store = MakeNativeContentStore(temporary_.empty() ? QDir::tempPath().toStdString() : temporary_); if (!Store.HasValue()) return Store.Failure();
+                    // OpenRead already enforces the parent's expansion ratio;
+                    // this producer copies those uncompressed bytes verbatim.
+                    auto Lease = Store.Value()->Produce(archive_, {}, archive_.size_, Context, [&](const std::string& Path, OperationContext Context) -> Result<Unit> {
+                        QFile File(QString::fromStdString(Path)); if (!File.open(QIODevice::WriteOnly)) return Error{ErrorCategory::Unavailable, "nested-archive-stage-open"};
+                        std::uint64_t Written = 0;
+                        for (;;) {
+                            auto Chunk = Pin.Value()->Read(std::min(Context.maxReadBytes_, std::size_t{1024 * 1024}), Context).get(); if (!Chunk.HasValue()) return Chunk.Failure();
+                            if (Written > archive_.size_ || Chunk.Value().bytes_.size() > archive_.size_ - Written) return Error{ErrorCategory::BudgetExceeded, "nested-archive-size"};
+                            if (File.write(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), Chunk.Value().bytes_.size()) != qint64(Chunk.Value().bytes_.size())) return Error{ErrorCategory::Unavailable, "nested-archive-stage-write"};
+                            Written += Chunk.Value().bytes_.size(); if (Chunk.Value().eof_) break;
+                            if (Chunk.Value().bytes_.empty()) return Error{ErrorCategory::InvalidRequest, "nested-archive-no-progress"};
+                        }
+                        if (Written != archive_.size_ || !File.flush()) return Error{ErrorCategory::Unavailable, "nested-archive-stage-size"};
+                        auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure());
+                    });
+                    if (!Lease.HasValue()) return Lease.Failure(); containerLease_ = std::move(Lease.Value()); archivePath_ = containerLease_->LocalPath();
+                }
                 entries_.clear();
                 const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& Path) -> Result<bool> {
                     if (entries_.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
@@ -163,6 +206,7 @@ namespace hc::storage
                     if (Entry.size_ > 64ULL * 1024 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "archive-size-budget"};
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
+                    if (Header.encrypted_) Entry.hints_["encrypted"] = "1";
                     // Deletion must use the plugin's exact directory marker:
                     // some WCX plugins expose directories without a final slash.
                     Entry.hints_["wcxName"] = Header.name_;
@@ -190,7 +234,7 @@ namespace hc::storage
             }
             template<class Visitor> Result<Unit> scan(OperationContext Context, Visitor Visit)
             {
-                auto Cursor = backend_->Enumerate(root_.root_, false, Context); if (!Cursor.HasValue()) return Cursor.Failure();
+                auto Cursor = backend_->Enumerate(archivePath_, false, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 for (;;)
                 {
                     auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context); if (!Page.HasValue()) return Page.Failure();
@@ -210,7 +254,7 @@ namespace hc::storage
                 auto Pin = native_->OpenRead(archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
                 hc::plugins::ArchiveHeader Expected; Expected.name_ = Entry.hints_.at("wcxName"); Expected.size_ = Entry.size_;
                 Expected.crc_ = static_cast<std::uint32_t>(std::stoul(Entry.hints_.at("crc")));
-                return backend_->Extract(root_.root_, std::move(Expected), Output, Context);
+                return backend_->Extract(archivePath_, std::move(Expected), Output, Context);
             }
             std::string plugin_;
             Locator root_;
@@ -218,12 +262,21 @@ namespace hc::storage
             std::shared_ptr<IStorageProvider> native_;
             std::shared_ptr<INativeContentStore> store_;
             std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
+            WcxBackends ancestors_;
+            std::shared_ptr<IMaterializedFileLease> containerLease_;
+            std::string archivePath_;
             EntrySnapshot archive_;
             std::map<std::string, EntrySnapshot> entries_;
             bool mounted_ = false;
             std::recursive_timed_mutex mutex_;
         };
     }
-    std::shared_ptr<IStorageProvider> MakeWcxReadProvider(std::string PluginPath, Locator Root, std::string TemporaryBase, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
-    { return std::make_shared<WcxProvider>(std::move(PluginPath), std::move(Root), std::move(TemporaryBase), std::move(Backend)); }
+    std::shared_ptr<IStorageProvider> MakeWcxReadProvider(std::string PluginPath, Locator Root, std::string TemporaryBase, std::shared_ptr<hc::plugins::IArchiveBackend> Backend, WcxBackends Ancestors)
+    { return std::make_shared<WcxProvider>(std::move(PluginPath), std::move(Root), std::move(TemporaryBase), std::move(Backend), std::move(Ancestors)); }
+    Result<WcxContainer> ResolveWcxContainer(const std::shared_ptr<IStorageProvider>& Reader, OperationContext Context)
+    {
+        auto Wcx = std::dynamic_pointer_cast<WcxProvider>(Reader);
+        if (!Wcx) return Error{ErrorCategory::InvalidRequest, "wcx-container-provider-required"};
+        return Wcx->Container(std::move(Context)).get();
+    }
 }

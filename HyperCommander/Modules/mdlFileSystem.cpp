@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "wcxStorage.hpp"
+#include "wcxBackend.hpp"
 #include "mdlFileSystem.hpp"
 
 #include "cmnHCUtils.hpp"
@@ -525,13 +526,20 @@ namespace nsHC
     {
         auto Entry = QDir::fromNativeSeparators(Path);
         if (!Entry.startsWith('/')) Entry.prepend('/');
-        return {hc::storage::LocatorKind::Archive, root_.toStdString(), {{"wcx", Entry.toStdString()}}};
+        auto Location = archiveLocation_.nesting_.empty() ? hc::storage::Locator{hc::storage::LocatorKind::Archive, root_.toStdString(), {{"wcx", "/"}}} : archiveLocation_;
+        Location.nesting_.back().entry_ = Entry.toStdString(); return Location;
     }
+
+    void CFSPack::SetArchiveChain(hc::storage::Locator Location, std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> Ancestors)
+    { archiveLocation_ = std::move(Location); ancestors_ = std::move(Ancestors); RefreshReadProvider(); }
+
+    std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> CFSPack::ArchiveBackends() const
+    { auto Backends = ancestors_; Backends.push_back(WCX_->Backend() ? WCX_->Backend() : hc::plugins::MakeInProcessWcxBackend(WCX_->PluginPath().toStdString())); return Backends; }
 
     std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
     {
         if (!readProvider_ && WCX_)
-            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"), {}, WCX_->Backend());
+            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"), {}, WCX_->Backend(), ancestors_);
         return readProvider_;
     }
 } // nsHC

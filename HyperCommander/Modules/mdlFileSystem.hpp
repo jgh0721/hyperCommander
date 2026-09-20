@@ -229,6 +229,11 @@ namespace nsHC
         TySpWCX                 WCX_;
         QString                 Parent_;
         CPackFSModel*           FsModel_ = nullptr;
+        hc::storage::Locator archiveLocation_;
+        std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> ancestors_;
+    public:
+        void SetArchiveChain(hc::storage::Locator Location, std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> Ancestors);
+        std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> ArchiveBackends() const;
     };
 
     class CFSPlugin final : public CFileSystemT

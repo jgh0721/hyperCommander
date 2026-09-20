@@ -178,13 +178,13 @@ namespace hc::operations
     {
         const auto ValidEndpoint = [](const ArchiveMoveEndpoint& Endpoint) {
             return Endpoint.reader_ && Endpoint.begin_ && Endpoint.root_.kind_ == LocatorKind::Archive && !Endpoint.root_.root_.empty()
-                && Endpoint.root_.nesting_.size() == 1 && Endpoint.root_.nesting_[0].entry_ == "/";
+                && !Endpoint.root_.nesting_.empty() && Endpoint.root_.nesting_.size() <= 8 && Endpoint.root_.nesting_.back().entry_ == "/";
         };
         if (!Request.sourceReader_ || Request.sources_.empty() || !Request.maxEntries_ || Request.maxEntries_ > 100000
             || Request.sources_.size() > Request.maxEntries_ || !Request.maxDepth_ || Request.maxDepth_ > 32 || !Request.maxBytes_
             || (Request.sourceArchive_ ? !ValidEndpoint(*Request.sourceArchive_) || Request.sourceArchive_->reader_ != Request.sourceReader_ : !Request.sourceWriter_)
             || (Request.destinationArchive_ ? !ValidEndpoint(*Request.destinationArchive_) || Request.destination_.kind_ != LocatorKind::Archive
-                || Request.destination_.root_ != Request.destinationArchive_->root_.root_ : !Request.destinationWriter_
+                || !SameArchiveContainer(Request.destination_, Request.destinationArchive_->root_) : !Request.destinationWriter_
                 || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb && Request.destination_.kind_ != LocatorKind::Plugin)))
             return Error{ErrorCategory::InvalidRequest, "invalid-move-operation"};
         if (Request.sourceArchive_ && Request.destinationArchive_
@@ -194,8 +194,7 @@ namespace hc::operations
         for (const auto& Entry : Request.sources_)
         {
             if (Entry.id_.providerId_ != Request.sourceReader_->Id()
-                || (Request.sourceArchive_ ? Entry.locator_.kind_ != LocatorKind::Archive || Entry.locator_.root_ != Request.sourceArchive_->root_.root_
-                    || Entry.locator_.nesting_.size() != 1 || Entry.locator_.nesting_[0].provider_ != Request.sourceArchive_->root_.nesting_[0].provider_
+                || (Request.sourceArchive_ ? !SameArchiveContainer(Entry.locator_, Request.sourceArchive_->root_)
                     : Entry.locator_.kind_ != LocatorKind::Local && Entry.locator_.kind_ != LocatorKind::Smb && Entry.locator_.kind_ != LocatorKind::Plugin))
                 return Error{ErrorCategory::InvalidRequest, "invalid-move-source"};
             if (!Request.sourceArchive_ && Request.destinationArchive_)

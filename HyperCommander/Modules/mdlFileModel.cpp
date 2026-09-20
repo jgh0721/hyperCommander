@@ -171,12 +171,22 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
                 if( SpWCX->LoadWCX( WCX ).ErrorCode != ERROR_SUCCESS )
                     continue;
 
-                const auto Ret = SpWCX->OpenArchive( GetFileFullPath( Child ), PK_OM_LIST );
-                if( Ret.Value.has_value() == false || Ret.Value.value() == false )
-                    continue;
+                const auto ParentPack = dynamic_cast<nsHC::CFSPack*>(GetRoot().get());
+                if (ParentPack) {
+                    // Nested bytes are materialized by the read provider on its
+                    // worker. Never pass an archive-internal path to Win32 I/O.
+                    if (!Node->storageEntry_ || Node->storageEntry_->locator_.nesting_.size() >= 8) continue;
+                } else {
+                    const auto Ret = SpWCX->OpenArchive(GetFileFullPath(Child), PK_OM_LIST);
+                    if (!Ret.Value.has_value() || !Ret.Value.value()) continue;
+                }
 
                 const auto Packer = new nsHC::CFSPack( GetFileFullPath( Child ), SpWCX );
                 Packer->SetParent( GetCurrentPath() );
+                if (ParentPack) {
+                    auto Location = Node->storageEntry_->locator_; Location.nesting_.push_back({"wcx", "/"});
+                    Packer->SetArchiveChain(std::move(Location), ParentPack->ArchiveBackends());
+                }
                 
                 // CFSPack 에 TySpWCX 와 압축파일 이름을 넣고, FS 스택 위에 넣는다.
                 const auto Fs = nsHC::TySpFileSystem( Packer );
