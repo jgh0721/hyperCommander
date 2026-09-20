@@ -3,6 +3,12 @@
   "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
   "configurePresets": [
     {
+      "name": "vc2026-readiness-p1",
+      "displayName": "Product Qlementine integration validation",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/readiness-p1"
+    },
+    {
       "hidden": true,
       "name": "Qt",
       "cacheVariables": {
@@ -26,6 +32,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "vc2026-readiness-p1-debug", "configurePreset": "vc2026-readiness-p1", "configuration": "Debug", "targets": ["HyperCommander", "hc_qlementine_tests"] },
+    { "name": "vc2026-readiness-p1-release", "configurePreset": "vc2026-readiness-p1", "configuration": "Release", "targets": ["HyperCommander", "hc_qlementine_tests"] },
     { "name": "vc2026-debug", "configurePreset": "vc2026-qt612", "configuration": "Debug" },
     { "name": "vc2026-release", "configurePreset": "vc2026-qt612", "configuration": "Release" }
   ]

@@ -14,6 +14,7 @@
 #include "externalEditorMgr.hpp"
 #include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
+#include <oclero/qlementine/resources/ResourceInitialization.hpp>
 #include "solFavoriteDirMgr.hpp"
 #include "solTCPluginMgr.hpp"
 #include "Modules/mdlFileSystem.hpp"
@@ -23,6 +24,8 @@
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    // Anchor the statically linked themes, SVGs, and font resources. Theme selection follows in P3.
+    oclero::qlementine::resources::initializeResources();
     Qtitan::CommonStyle::ensureStyle();
     QSettings::setDefaultFormat( QSettings::IniFormat );
 

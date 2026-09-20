@@ -63,6 +63,15 @@
       "root": "UniqueLibs",
       "inputs": ["cmnHCUtils.hpp", "cmnHCUtils.cpp"],
       "note": "License identifier records the embedded notice; original revision and distribution review remain unresolved."
+    },
+    {
+      "name": "Qlementine",
+      "version": "1.5.0.0+209e549c415f",
+      "license": "MIT; bundled Inter: OFL-1.1; bundled Roboto Mono 3.000: Apache-2.0",
+      "source": "https://github.com/oclero/qlementine/tree/209e549c415f1d828883f9f21a633eb535f9d67d",
+      "root": "externalLibs/qlementine",
+      "inputs": ["lib", "cmake", "CMakeLists.txt", "LICENSE", "UPSTREAM.txt", "upstream.json", "licenses"],
+      "note": "Static product dependency; no style plugin. UPSTREAM.txt records the local patch and font identification."
     }
   ]
 }

@@ -227,6 +227,7 @@ set_target_properties(HyperCommander
 target_link_libraries(HyperCommander
         PRIVATE
         hc_script_runtime
+        qlementine::qlementine
         Qt::Core
         Qt::Concurrent
         Qt::Gui
@@ -250,6 +251,7 @@ add_custom_command(TARGET HyperCommander POST_BUILD
         "${PROJECT_SOURCE_DIR}/commonLibs/scripting/ThirdPartyNotices.txt"
         "$<TARGET_FILE_DIR:HyperCommander>/LuaThirdPartyNotices.txt"
     VERBATIM)
+hc_deploy_qlementine_notices(HyperCommander)
 hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 add_dependencies(HyperCommander hc-plugin-host-x64)
 

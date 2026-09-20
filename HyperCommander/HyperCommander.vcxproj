@@ -38,11 +38,11 @@
     <Import Project="$(QtMsBuild)\qt_defaults.props" />
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
-    <QtModules>core;core-private;gui;gui-private;network;widgets;widgets-private;concurrent;printsupport;sql;uitools</QtModules>
+    <QtModules>core;core-private;gui;gui-private;network;widgets;widgets-private;concurrent;printsupport;sql;uitools;svg</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
-    <QtModules>core;core-private;gui;gui-private;network;widgets;widgets-private;concurrent;printsupport;sql;uitools</QtModules>
+    <QtModules>core;core-private;gui;gui-private;network;widgets;widgets-private;concurrent;printsupport;sql;uitools;svg</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
@@ -62,13 +62,16 @@
     <Import Project="..\cmake\QtitanDataGrid.props" />
     <Import Project="..\externalLibs\Everything\script\EverythingSDK.props" />
   </ImportGroup>
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <HcQlementineSuffix Condition="'$(Configuration)' == 'Debug'">_debug</HcQlementineSuffix>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)externalLibs\qlementine\lib\include;$(HcNativePluginBuild)\qlementine\lib\include;$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>QLEMENTINE_STATIC_DEFINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_script_runtime.lib;$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_lua_engine.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(HcNativePluginBuild)\qlementine\lib\$(Configuration)\qlementine$(HcQlementineSuffix).lib;$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_script_runtime.lib;$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_lua_engine.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
@@ -692,64 +695,64 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <Target Name="DeployNativePluginHost" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot;" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot;" />
   </Target>
   <Target Name="PrepareNativeBuiltinIso" BeforeTargets="ClCompile" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -PrepareOnly" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot; -PrepareOnly" />
   </Target>
   <ItemGroup>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyle.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyle.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIcons.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIcons.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIcons.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleIconsPrivate.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStylePrivate.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleResource.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleResource.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnDCStyleResource.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.h" />
     <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStyle.qrc" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnWindowsUIStylePrivate.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObject.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObject.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObject.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectLayout.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectLayout.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectLayout.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPaintInfo.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPaintInfo.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPaintInfo.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPainter.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPainter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectPainter.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectProperties.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectProperties.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectProperties.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectReader.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectReader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectReader.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectRenderer.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectRenderer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectRenderer.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTheme.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTheme.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTheme.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTree.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTree.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectTree.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectXML.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectXML.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\dc\DCStyleObjectXML.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.h" />
     <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnAdobePhotoshopStyle.qrc" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.h" />
     <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013Style.qrc" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2013StylePrivate.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.h" />
     <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOffice2016Style.qrc" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStyle.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStyle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStyle.h" />
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnOfficeStylePrivate.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnStyleDef.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnStyleDef.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnStyleDef.h" />
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.cpp" />
+    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.h" />
     <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019Style.qrc" />
     <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\styles\QtnVisualStudio2019StylePrivate.h" />

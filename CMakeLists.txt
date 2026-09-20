@@ -13,6 +13,7 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS
     Gui
     GuiPrivate
     Sql
+    Svg
     Network
     UiTools
     PrintSupport
@@ -23,6 +24,7 @@ qt_standard_project_setup(REQUIRES 6.12)
 
 include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
+include(cmake/HyperCommanderQlementine.cmake)
 include(cmake/QtDeployment.cmake)
 set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
 add_subdirectory(commonLibs/scripting)
@@ -92,3 +94,9 @@ if(HC_BUILD_SCRIPT_COMPARISON)
 endif()
 hc_finalize_qt_deployment()
 add_dependencies(hc_deploy hc_iso_package)
+add_custom_command(TARGET hc_deploy POST_BUILD
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHC_QLEMENTINE_ROOT=${PROJECT_SOURCE_DIR}/externalLibs/qlementine"
+        "-DHC_QLEMENTINE_DESTINATION=$<TARGET_FILE_DIR:HyperCommander>/licenses/qlementine"
+        -P "${PROJECT_SOURCE_DIR}/cmake/DeployQlementine.cmake"
+    VERBATIM)
