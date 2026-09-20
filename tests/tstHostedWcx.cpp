@@ -83,6 +83,37 @@ private slots:
                 auto Added = Fresh->Resolve(Root, {}).get(); QVERIFY(Added.HasValue()); QVERIFY(Added.Value().directory_); }
         }
     }
+    void nestedHostedJointMutation()
+    {
+        for (const char Mode : {char(0), 'P', 'J'}) {
+            QTemporaryDir Directory; auto Started = Start(Directory); QVERIFY(Started.HasValue());
+            const auto Path = Directory.filePath("joint.hct"); QByteArray Original("HCWCX02", 7); Original += Mode;
+            const auto Number = [&](quint32 Value) { Original.append(reinterpret_cast<const char*>(&Value), 4); }; Number(2);
+            for (const QString Name : {QString("source.hct"), QString("target.hct")}) {
+                Number(Name.size()); Number(7); Number(0); Original.append(reinterpret_cast<const char*>(Name.utf16()), Name.size() * 2); Original += "HCWCX01";
+            }
+            QVERIFY(Put(Path, Original));
+            auto SourceRoot = At(Path, "/source.hct"); SourceRoot.nesting_.push_back({"wcx", "/"});
+            auto TargetRoot = At(Path, "/target.hct"); TargetRoot.nesting_.push_back({"wcx", "/"});
+            auto Backend = MakeHostedArchiveBackend(Started.Value());
+            auto Source = MakeWcxReadProvider({}, SourceRoot, Directory.path().toStdString(), Backend);
+            auto Target = MakeWcxReadProvider({}, TargetRoot, Directory.path().toStdString(), Backend);
+            auto Alpha = SourceRoot; Alpha.nesting_.back().entry_ = "/alpha.txt";
+            auto Entry = Source->Resolve(Alpha, {}).get(); QVERIFY(Entry.HasValue());
+            auto Removal = BeginWcxMutation({}, SourceRoot, Source, Directory.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Removal.HasValue());
+            auto Session = BeginWcxMutation({}, TargetRoot, Target, Directory.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Session.HasValue());
+            auto Prepared = Session.Value()->PrepareTogether({{ArchiveChangeKind::Put, "/moved.txt", {}, std::make_shared<ProviderContentSource>(Source, Entry.Value())}},
+                std::move(Removal.Value()), {{ArchiveChangeKind::Remove, "/alpha.txt", {}, {}, Entry.Value().id_}}, {});
+            QCOMPARE(Read(Path), Original);
+            if (Mode) { QVERIFY(!Prepared.HasValue()); QVERIFY(Session.Value()->Abort().empty()); QCOMPARE(Read(Path), Original); }
+            else {
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Session.Value()->Commit({}).HasValue());
+                QVERIFY(!MakeWcxReadProvider({}, SourceRoot, Directory.path().toStdString(), Backend)->Resolve(Alpha, {}).get().HasValue());
+                Alpha = TargetRoot; Alpha.nesting_.back().entry_ = "/moved.txt";
+                QVERIFY(MakeWcxReadProvider({}, TargetRoot, Directory.path().toStdString(), Backend)->Resolve(Alpha, {}).get().HasValue());
+            }
+        }
+    }
     void encryptedMutationPreservesEncryption()
     {
         for (const char Mode : {'Q', 'R'}) {
@@ -274,6 +305,97 @@ private slots:
         }
         Host->Close(); QVERIFY(!Host->Snapshot().running_);
         QVERIFY(!Host->Snapshot().forcedTermination_);
+    }
+    void compatibilityPassword()
+    {
+        const auto ManifestPath = qEnvironmentVariable("HC_WCX_PASSWORD_MANIFEST");
+        const auto Path = qEnvironmentVariable("HC_WCX_PASSWORD_SOURCE");
+        const auto Mode = qEnvironmentVariable("HC_WCX_PASSWORD_MODE", "read");
+        if (ManifestPath.isEmpty() || Path.isEmpty()) QSKIP("Set explicit password compatibility manifest and owned fixture path");
+        QVERIFY(Mode == "create" || Mode == "read" || Mode == "cancel" || Mode == "timeout" || Mode == "wrong" || Mode == "dismiss");
+        auto Inspected = InspectManifestFile(ManifestPath); QVERIFY(Inspected.HasValue());
+        PluginApproval Approval{Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_};
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); HostLimits Limits; Limits.requestMs_ = 60000;
+        auto Started = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", ManifestPath, Approval, Limits, {}, Directory.filePath("pkplugin.ini"));
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Host = std::shared_ptr<PluginProcess>(std::move(Started.Value())); auto Backend = MakeHostedArchiveBackend(Host);
+        struct NativePromptState { DWORD pid_; bool wrong_, dismiss_, wait_; std::atomic<unsigned> handled_{0}, visible_{0}; };
+        NativePromptState Native{Host->Snapshot().processId_, Mode == "wrong", Mode == "dismiss", Mode == "cancel" || Mode == "timeout"};
+        std::jthread NativeInput;
+        if (qEnvironmentVariableIntValue("HC_WCX_PASSWORD_AUTOMATE") == 1)
+            NativeInput = std::jthread([&](std::stop_token Token) {
+                while (!Token.stop_requested()) {
+                    EnumWindows([](HWND Window, LPARAM Parameter) -> BOOL {
+                        auto& State = *reinterpret_cast<NativePromptState*>(Parameter); DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+                        if (Pid != State.pid_ || !IsWindowVisible(Window)) return TRUE;
+                        std::vector<HWND> Fields;
+                        EnumChildWindows(Window, [](HWND Child, LPARAM Parameter) -> BOOL {
+                            wchar_t Class[64]{}; GetClassNameW(Child, Class, 64);
+                            if (_wcsicmp(Class, L"Edit") == 0 && (GetWindowLongPtrW(Child, GWL_STYLE) & ES_PASSWORD) && IsWindowVisible(Child))
+                                reinterpret_cast<std::vector<HWND>*>(Parameter)->push_back(Child);
+                            return TRUE;
+                        }, reinterpret_cast<LPARAM>(&Fields));
+                        if (Fields.empty()) return TRUE;
+                        ++State.visible_; if (State.wait_) return TRUE;
+                        DWORD_PTR Result = 0;
+                        // TotalSQX reopens its input after a wrong password.
+                        // Submit one wrong value, then cancel the retry.
+                        const auto Dismiss = State.dismiss_ || (State.wrong_ && State.handled_.load() != 0);
+                        if (!Dismiss) for (auto Field : Fields)
+                            if (!SendMessageTimeoutW(Field, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(State.wrong_ ? L"wrong-test-password" : L"hc-test-only-2026"), SMTO_ABORTIFHUNG, 500, &Result)) return TRUE;
+                        // Only the test host's visible password dialog is touched;
+                        // no foreground window, global keys or user credentials.
+                        // TotalSQX uses its own resource IDs for the encryption
+                        // dialog; Total7zip uses the standard OK/Cancel IDs.
+                        const auto CreateSqx = GetDlgItem(Window, 1709) != nullptr;
+                        const auto ReadSqx = GetDlgItem(Window, 1603) && GetDlgItem(Window, 2000);
+                        const auto Command = CreateSqx ? (Dismiss ? 1711 : 1709) : ReadSqx ? (Dismiss ? 2001 : 2000) : (Dismiss ? IDCANCEL : IDOK);
+                        if (SendMessageTimeoutW(Window, WM_COMMAND, Command, 0, SMTO_ABORTIFHUNG, 500, &Result)) ++State.handled_;
+                        return TRUE;
+                    }, reinterpret_cast<LPARAM>(&Native));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            });
+        const QByteArray Payload("HC encrypted compatibility payload\r\n");
+        std::atomic<unsigned> Prompts = 0; std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
+        Context.passwordPrompt_ = [&](const std::string&, unsigned, const OperationContext&) -> Result<Password> { ++Prompts;
+            if (Mode == "dismiss") return Error{ErrorCategory::Cancelled, "test-password-cancelled"};
+            return Password(Mode == "wrong" ? "wrong-test-password" : "hc-test-only-2026"); };
+        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        if (Mode == "create") {
+            QVERIFY(!QFile::exists(Path)); QVERIFY(Put(Directory.filePath("secret.txt"), Payload));
+            ArchiveUpdate Update{Path.toStdString(), Directory.path().toStdString(), {"secret.txt"}}; Update.encrypt_ = true;
+            auto Created = Backend->Update(Update, Context); QVERIFY2(Created.HasValue(), Created.HasValue() ? "" : Created.Failure().code_.c_str());
+        }
+        const auto Original = Read(Path); QVERIFY(!Original.isEmpty());
+        auto Cursor = Backend->Enumerate(Path.toStdString(), false, Context); QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        auto Page = Cursor.Value()->Next(256, Context); QVERIFY(Page.HasValue()); Cursor.Value().reset();
+        const auto Entry = std::ranges::find_if(Page.Value().entries_, [](const auto& Header) { return Header.name_ == "secret.txt"; });
+        QVERIFY(Entry != Page.Value().entries_.end()); qInfo() << "Plugin encrypted header marker" << Entry->encrypted_;
+        std::jthread Cancellation;
+        if (Mode == "cancel") Cancellation = std::jthread([&](std::stop_token Token) {
+            for (int Index = 0; Index < 200 && !Token.stop_requested(); ++Index) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (!Token.stop_requested()) Stop.request_stop();
+        });
+        if (Mode == "timeout") Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        const auto Output = Directory.filePath("secret.txt.out");
+        auto Extracted = Backend->Extract(Path.toStdString(), *Entry, Output.toStdString(), Context);
+        Cancellation.request_stop(); NativeInput.request_stop(); if (NativeInput.joinable()) NativeInput.join();
+        QCOMPARE(Read(Path), Original); qInfo() << "Crypt callback requests" << Prompts.load();
+        qInfo() << "Native password dialog observations" << Native.visible_.load() << "submitted" << Native.handled_.load();
+        if (Mode == "cancel" || Mode == "timeout" || Mode == "wrong" || Mode == "dismiss") {
+            QVERIFY(!Extracted.HasValue());
+            if (Mode == "wrong" || Mode == "dismiss") QVERIFY(Host->Snapshot().running_);
+            // Raw WCX can leave a partial output on failure. The product owns
+            // it through a materialization lease; this direct ABI test owns it
+            // through Directory and discards it without publishing any bytes.
+            qInfo() << "Discarded staging bytes" << QFileInfo(Output).size();
+            if (QFile::exists(Output)) QVERIFY(QFile::remove(Output));
+            QVERIFY(!QFile::exists(Output));
+            qInfo() << "Bounded native password wait result" << Extracted.Failure().code_;
+        } else {
+            QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str()); QCOMPARE(Read(Output), Payload);
+        }
     }
     void approvedBackendRechecksEachOperation()
     {

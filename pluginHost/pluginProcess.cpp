@@ -252,6 +252,11 @@ namespace hc::plugins
         Variables.sort(Qt::CaseInsensitive); std::wstring Environment;
         for (const auto& Variable : Variables) { Environment += Variable.toStdWString(); Environment += L'\0'; } Environment += L'\0';
         STARTUPINFOW Startup{}; Startup.cb = sizeof(Startup); Startup.dwFlags = STARTF_USESHOWWINDOW; Startup.wShowWindow = SW_HIDE;
+        // Windows applies STARTF_USESHOWWINDOW to the first native dialog too.
+        // An approved interactive WCX must not wait on an invisible password
+        // prompt. Keep the console hidden and preserve all Job UI restrictions.
+        if (Inspected.Value().manifest_.format_ == PluginFormat::Wcx
+            && Inspected.Value().manifest_.permissions_.contains(Permission::UserInterface)) Startup.wShowWindow = SW_SHOWNOACTIVATE;
         PROCESS_INFORMATION Process{};
         if (!CreateProcessAsUserW(Token.Value().Get(), reinterpret_cast<LPCWSTR>(HostPath.utf16()), Command.data(), nullptr, nullptr, FALSE,
             CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, Environment.data(), reinterpret_cast<LPCWSTR>(QFileInfo(HostPath).absolutePath().utf16()), &Startup, &Process))
