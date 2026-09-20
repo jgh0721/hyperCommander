@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMimeData>
 #include <QPainter>
 #include <QPointer>
 #include <QPlainTextEdit>
@@ -23,6 +24,75 @@
 using namespace hc::viewer;
 namespace
 {
+    // QPlainTextEdit shapes an entire paragraph synchronously, even with
+    // NoWrap. Keep normal documents unchanged and bound the visible window of
+    // pathological paragraphs; search and whole-document copy use the source.
+    class ViewerTextEdit final : public QPlainTextEdit
+    {
+    public:
+        using QPlainTextEdit::QPlainTextEdit;
+        static constexpr qsizetype PageSize = 32768;
+        std::function<void()> pageChanged_;
+        bool SetPagedSource(std::shared_ptr<const ViewerDocument> Source)
+        {
+            ClearSource();
+            qsizetype Run = 0;
+            for (auto Character : Source->text_)
+            {
+                Run = Character == u'\n' || Character == u'\r' || Character == 0x2029 ? 0 : Run + 1;
+                if (Run > PageSize) {
+                    source_ = std::move(Source); display_ = QString::fromStdU16String(source_->text_);
+                    display_.replace("\r\n", "\n"); display_.replace('\r', '\n');
+                    showPage(0); return true;
+                }
+            }
+            return false;
+        }
+        void ClearSource() { source_.reset(); display_.clear(); offset_ = 0; }
+        bool IsPaged() const { return static_cast<bool>(source_); }
+        qsizetype Offset() const { return offset_; }
+        qsizetype End() const { return offset_ + document()->characterCount() - 1; }
+        qsizetype Size() const { return display_.size(); }
+        void Page(bool Forward) { if (source_) showPage(Forward ? End() : std::max<qsizetype>(0, offset_ - PageSize)); }
+        bool FindSource(const QString& Needle, bool Backward)
+        {
+            if (!source_) return false;
+            const auto Text = QStringView(display_);
+            const auto Cursor = textCursor();
+            const auto From = offset_ + (Backward ? Cursor.selectionStart() : Cursor.selectionEnd());
+            auto Found = Backward ? (From ? Text.lastIndexOf(Needle, From - 1, Qt::CaseInsensitive) : -1)
+                : Text.indexOf(Needle, From, Qt::CaseInsensitive);
+            if (Found < 0) Found = Backward ? Text.lastIndexOf(Needle, -1, Qt::CaseInsensitive) : Text.indexOf(Needle, 0, Qt::CaseInsensitive);
+            if (Found < 0) return false;
+            if (Found < offset_ || Found + Needle.size() > End()) showPage(Found);
+            auto Selection = textCursor(); Selection.setPosition(static_cast<int>(Found - offset_));
+            Selection.setPosition(static_cast<int>(Found - offset_ + Needle.size()), QTextCursor::KeepAnchor); setTextCursor(Selection);
+            return true;
+        }
+    protected:
+        QMimeData* createMimeDataFromSelection() const override
+        {
+            const auto Cursor = textCursor();
+            if (source_ && Cursor.selectionStart() == 0 && Cursor.selectionEnd() == document()->characterCount() - 1)
+            {
+                auto* Data = new QMimeData; Data->setText(QString::fromStdU16String(source_->text_)); return Data;
+            }
+            return QPlainTextEdit::createMimeDataFromSelection();
+        }
+    private:
+        void showPage(qsizetype Start)
+        {
+            if (!source_ || Start >= Size()) return;
+            if (Start && display_[Start].isLowSurrogate()) --Start;
+            offset_ = Start; auto Count = std::min(PageSize, Size() - Start);
+            if (Start + Count < Size() && display_[Start + Count - 1].isHighSurrogate()) --Count;
+            setPlainText(display_.mid(Start, Count));
+            moveCursor(QTextCursor::Start); if (pageChanged_) pageChanged_();
+        }
+        std::shared_ptr<const ViewerDocument> source_;
+        QString display_;
+        qsizetype offset_ = 0;
+    };
     class MarkdownDocument final : public QTextDocument
     {
     public:
@@ -72,7 +142,9 @@ struct QtViewerSurface::State
     QTimer* timer_ = nullptr;
     QLabel* status_ = nullptr;
     QStackedWidget* pages_ = nullptr;
-    QPlainTextEdit* text_ = nullptr;
+    ViewerTextEdit* text_ = nullptr;
+    QAction* previousPart_ = nullptr;
+    QAction* nextPart_ = nullptr;
     MarkdownBrowser* markdown_ = nullptr;
     QScrollArea* imageScroll_ = nullptr;
     ImageCanvas* image_ = nullptr;
@@ -112,6 +184,8 @@ QtViewerSurface::QtViewerSurface(ViewerService& Service, QWidget* Parent)
     Action(tr("+"), "zoom-in", QKeySequence::ZoomIn)->setToolTip(tr("확대"));
     S.fit_ = Action(tr("맞춤"), "fit");
     S.stop_ = Action(tr("중지"), "cancel");
+    S.previousPart_ = Action(tr("이전 구간"), "previous-part"); S.previousPart_->setVisible(false);
+    S.nextPart_ = Action(tr("다음 구간"), "next-part"); S.nextPart_->setVisible(false);
     auto* Options = Toolbar->addAction(tr("보기")); Options->setObjectName("hc.viewer.options");
     auto* Menu = new QMenu(Toolbar); Options->setMenu(Menu);
     if (auto* Button = qobject_cast<QToolButton*>(Toolbar->widgetForAction(Options))) Button->setPopupMode(QToolButton::InstantPopup);
@@ -138,7 +212,12 @@ QtViewerSurface::QtViewerSurface(ViewerService& Service, QWidget* Parent)
     Layout->addWidget(S.searchBar_); S.searchBar_->hide();
     S.status_ = new QLabel(tr("파일을 선택하십시오."), this); S.status_->setObjectName("hc.viewer.status"); S.status_->setTextFormat(Qt::PlainText); S.status_->setWordWrap(true); Layout->addWidget(S.status_);
     S.pages_ = new QStackedWidget(this); Layout->addWidget(S.pages_, 1);
-    S.text_ = new QPlainTextEdit(S.pages_); S.text_->setObjectName("hc.viewer.text"); S.text_->setReadOnly(true); S.text_->setUndoRedoEnabled(false); S.text_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    S.text_ = new ViewerTextEdit(S.pages_); S.text_->setObjectName("hc.viewer.text"); S.text_->setReadOnly(true); S.text_->setUndoRedoEnabled(false); S.text_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    S.text_->pageChanged_ = [this] {
+        auto& S = *state_; S.previousPart_->setEnabled(S.text_->Offset() > 0); S.nextPart_->setEnabled(S.text_->End() < S.text_->Size());
+        if (S.ready_) S.status_->setText(tr("긴 본문 · 문자 %1–%2 / %3 · 전체 선택 후 복사는 원문 전체에 적용됩니다.")
+            .arg(S.text_->Offset() + 1).arg(S.text_->End()).arg(S.text_->Size()));
+    };
     auto Font = QFontDatabase::systemFont(QFontDatabase::FixedFont); Font.setPointSizeF(std::max(12.0, font().pointSizeF())); S.text_->setFont(Font);
     S.markdown_ = new MarkdownBrowser(S.pages_); S.markdown_->setObjectName("hc.viewer.markdown"); S.markdown_->setOpenLinks(false); S.markdown_->setOpenExternalLinks(false);
     auto ProseFont = font(); ProseFont.setPointSizeF(std::max(12.0, ProseFont.pointSizeF())); S.markdown_->setFont(ProseFont);
@@ -264,6 +343,7 @@ void QtViewerSurface::reopen()
 void QtViewerSurface::Close()
 {
     auto& S = *state_; S.timer_->stop(); S.ready_ = false;
+    S.text_->ClearSource(); S.previousPart_->setVisible(false); S.nextPart_->setVisible(false);
     if (S.pluginViewer_) S.pluginViewer_->Close(); S.selectedPlugin_.reset();
     S.automaticPlugin_ = false; S.automaticChoices_.clear();
     S.text_->document()->setLayoutEnabled(false);
@@ -319,6 +399,7 @@ void QtViewerSurface::present()
     if (S.inserting_) S.insertion_.endEditBlock();
     S.inserting_ = false; S.insertion_ = QTextCursor{};
     S.text_->clear(); S.markdown_->clear(); S.image_->SetDocument({});
+    S.text_->ClearSource(); S.previousPart_->setVisible(false); S.nextPart_->setVisible(false);
     S.source_->setEnabled(S.document_->kind_ == ViewerKind::Markdown); S.fit_->setEnabled(S.document_->kind_ == ViewerKind::Image);
     if (S.document_->kind_ == ViewerKind::Image)
     { S.pages_->setCurrentWidget(S.imageScroll_); S.image_->SetDocument(S.document_); S.fitImage_ = true; updateImage(); finishPresentation(); }
@@ -326,6 +407,11 @@ void QtViewerSurface::present()
     { S.pages_->setCurrentWidget(S.markdown_); S.markdown_->setMarkdown(QString::fromStdU16String(S.document_->text_)); finishPresentation(); }
     else
     {
+        if (S.text_->SetPagedSource(S.document_))
+        {
+            S.pages_->setCurrentWidget(S.text_); S.previousPart_->setVisible(true); S.nextPart_->setVisible(true);
+            finishPresentation(); return;
+        }
         S.pages_->setCurrentWidget(S.text_); S.inserted_ = 0; S.inserting_ = true;
         // Reflowing a multi-megabyte paragraph after every insertion is
         // quadratic. Populate incrementally, then lay out the document once.
@@ -340,7 +426,9 @@ void QtViewerSurface::finishPresentation()
     const auto Info = S.handle_->session_->Snapshot();
     S.status_->setText(tr("%1 · 읽기 전용 · %2").arg(QString::fromStdString(Info.source_.name_),
         S.document_->kind_ == ViewerKind::Image ? tr("%1 × %2").arg(S.document_->width_).arg(S.document_->height_) : QString::fromStdString(S.document_->encoding_)));
-    setFocusProxy(S.pages_->currentWidget()); emit Ready(QString::fromStdString(Info.id_));
+    setFocusProxy(S.pages_->currentWidget());
+    if (S.text_->IsPaged()) S.text_->pageChanged_();
+    emit Ready(QString::fromStdString(Info.id_));
 }
 void QtViewerSurface::fail(const QString& Code)
 {
@@ -361,6 +449,8 @@ void QtViewerSurface::find(bool Backward)
     if (state_->ready_ && state_->selectedPlugin_ && state_->pluginViewer_) { state_->pluginViewer_->Search(state_->search_->text(), Backward); return; }
     auto& S = *state_; if (!S.ready_ || !S.document_ || S.search_->text().isEmpty() || S.document_->kind_ == ViewerKind::Image) return;
     const auto Flags = Backward ? QTextDocument::FindBackward : QTextDocument::FindFlags{};
+    if (S.pages_->currentWidget() == S.text_ && S.text_->IsPaged())
+    { if (!S.text_->FindSource(S.search_->text(), Backward)) S.status_->setText(tr("일치하는 내용이 없습니다.")); return; }
     const auto Find = [&] { return S.pages_->currentWidget() == S.text_ ? S.text_->find(S.search_->text(), Flags) : S.markdown_->find(S.search_->text(), Flags); };
     if (Find()) return;
     if (S.pages_->currentWidget() == S.text_) S.text_->moveCursor(Backward ? QTextCursor::End : QTextCursor::Start);
@@ -372,6 +462,7 @@ void QtViewerSurface::Execute(const QString& Command)
     auto& S = *state_;
     if (Command == "cancel") { Close(); return; }
     if (Command == "find") { S.searchBar_->show(); S.search_->setFocus(); S.search_->selectAll(); return; }
+    if (Command == "previous-part" || Command == "next-part") { S.text_->Page(Command == "next-part"); return; }
     if (S.selectedPlugin_ && S.pluginViewer_) { S.pluginViewer_->Execute(Command); return; }
     if (!S.document_) return;
     if (Command == "source") { S.source_->toggle(); return; }

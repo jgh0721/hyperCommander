@@ -5,6 +5,7 @@
 #include "memoryStorage.hpp"
 #include <QtTest>
 #include <QBuffer>
+#include <QClipboard>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -159,15 +160,29 @@ private slots:
     {
         QFETCH(bool, singleLine);
         ViewerService Service(MakeBuiltinViewerRegistry()); QtViewerSurface Surface(Service); Surface.resize(700, 400); Surface.show();
-        QByteArray Large; if (singleLine) Large = QByteArray(2 * 1024 * 1024, 'x');
+        QByteArray Large; if (singleLine) Large = QByteArray(2 * 1024 * 1024, 'x') + "unique-tail";
         else for (int Index = 0; Index < 50000; ++Index) Large += "A long text line for asynchronous read-only presentation.\n";
         QSignalSpy Ready(&Surface, &QtViewerSurface::Ready); int Heartbeats = 0; QTimer Beat; Beat.setInterval(1);
         QElapsedTimer Clock; Clock.start(); qint64 Last = 0, MaxGap = 0;
         connect(&Beat, &QTimer::timeout, this, [&] { ++Heartbeats; const auto Now = Clock.elapsed(); MaxGap = std::max(MaxGap, Now - Last); Last = Now; }); Beat.start();
         Surface.Open(Content(Large, "large.txt")); QTRY_VERIFY_WITH_TIMEOUT(Surface.IsReady(), 10000);
-        qInfo() << "presentation ms" << Clock.elapsed() << "largest GUI timer gap ms" << MaxGap;
+        MaxGap = std::max(MaxGap, Clock.elapsed() - Last); QTest::qWait(30); qInfo() << "presentation ms" << Clock.elapsed() << "largest GUI timer gap ms" << MaxGap;
         QVERIFY(MaxGap < 400);
-        QVERIFY(Heartbeats > 2); auto* Text = Surface.findChild<QPlainTextEdit*>("hc.viewer.text"); QCOMPARE(Text->toPlainText().toUtf8(), Large);
+        QVERIFY(Heartbeats > 2); auto* Text = Surface.findChild<QPlainTextEdit*>("hc.viewer.text");
+        if (singleLine)
+        {
+            QVERIFY(Text->toPlainText().size() <= 32768);
+            QVERIFY(Surface.findChild<QAction*>("hc.viewer.next-part")->isVisible());
+            Surface.Execute("next-part"); QVERIFY(Surface.findChild<QAction*>("hc.viewer.previous-part")->isEnabled());
+            Surface.Execute("find"); auto* Search = Surface.findChild<QLineEdit*>("hc.viewer.search"); Search->setText("unique-tail");
+            QTest::keyClick(Search, Qt::Key_Return); QCOMPARE(Text->textCursor().selectedText(), QString("unique-tail"));
+            Text->selectAll(); Surface.Execute("copy"); QCOMPARE(QApplication::clipboard()->text().toUtf8(), Large);
+            QApplication::clipboard()->clear();
+            Surface.Execute("wrap"); Surface.Execute("zoom-in"); QTest::qWait(30);
+            MaxGap = std::max(MaxGap, Clock.elapsed() - Last); QVERIFY(MaxGap < 400);
+            Surface.Execute("wrap"); Surface.Execute("zoom-out");
+        }
+        else QCOMPARE(Text->toPlainText().toUtf8(), Large);
         QCOMPARE(Ready.count(), 1);
         connect(&Surface, &QtViewerSurface::Presenting, this, [&Surface](const QString&) {
             if (Surface.Snapshot().source_.name_ == "cancelled.txt")
@@ -189,6 +204,20 @@ private slots:
         Surface.findChild<QAction*>("hc.viewer.encoding.utf-8")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(Failed.count(), 2, 3000);
         Surface.findChild<QAction*>("hc.viewer.encoding.cp949")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Surface.IsReady(), 3000);
         QCOMPARE(Surface.findChild<QPlainTextEdit*>()->toPlainText(), QString::fromUtf8("한글"));
+    }
+    void pagedUnicodeAndNewlines()
+    {
+        ViewerService Service(MakeBuiltinViewerRegistry()); QtViewerSurface Surface(Service); Surface.resize(700, 400); Surface.show();
+        const auto Original = QString(32767, QChar('x')) + QString::fromUtf8("😀\r\n한글 needle ") + QString(40000, QChar('y')) + " end-marker";
+        Surface.Open(Content(Original.toUtf8(), "unicode.txt")); QTRY_VERIFY(Surface.IsReady());
+        auto* Text = Surface.findChild<QPlainTextEdit*>("hc.viewer.text"); QCOMPARE(Text->toPlainText(), QString(32767, QChar('x')));
+        Surface.Execute("next-part"); QVERIFY(Text->toPlainText().startsWith(QString::fromUtf8("😀\n한글 needle")));
+        Surface.Execute("find"); auto* Search = Surface.findChild<QLineEdit*>("hc.viewer.search"); Search->setText("end-marker");
+        QTest::keyClick(Search, Qt::Key_Return); QCOMPARE(Text->textCursor().selectedText(), QString("end-marker"));
+        Search->setText(QString::fromUtf8("한글 needle")); QTest::keyClick(Search, Qt::Key_Return);
+        QCOMPARE(Text->textCursor().selectedText(), QString::fromUtf8("한글 needle"));
+        Text->selectAll(); Surface.Execute("copy"); QCOMPARE(QApplication::clipboard()->text(), Original); QApplication::clipboard()->clear();
+        Surface.Close(); QVERIFY(!Surface.findChild<QAction*>("hc.viewer.next-part")->isVisible()); QCOMPARE(Service.RetainedBytes(), 0ULL);
     }
 };
 int main(int Argc, char** Argv)
