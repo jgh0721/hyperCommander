@@ -1399,17 +1399,22 @@ hc.events.unsubscribe(sub)
     {
         using namespace hc::plugins; using namespace hc::storage; using namespace hc::operations;
         QTemporaryDir Directory; TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
-        const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
+        QTemporaryDir DataDirectory(QDir(unc_).filePath("hc-nested-ui-XXXXXX")); QVERIFY(DataDirectory.isValid());
+        const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(DataDirectory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("encrypted.hcwcx", "HCWCX01U"));
         QByteArray Outer("HCWCX02\0", 8); const QString Inner("inner.hcwcx");
         const auto Number = [&](quint32 Value) { Outer.append(reinterpret_cast<const char*>(&Value), 4); };
-        Number(1); Number(Inner.size()); Number(7); Number(0); Outer.append(reinterpret_cast<const char*>(Inner.utf16()), Inner.size() * 2); Outer += "HCWCX01";
+        Number(2);
+        for (const auto& Name : {Inner, QString("target.hcwcx")}) {
+            Number(Name.size()); Number(7); Number(0); Outer.append(reinterpret_cast<const char*>(Name.utf16()), Name.size() * 2); Outer += "HCWCX01";
+        }
         QVERIFY(Put("outer.hcwcx", Outer));
         StSettings->beginGroup("PackerPlugins"); QVariantMap Original;
         for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key)); StSettings->endGroup();
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true); Panel->sig_NotifyPanelActivated();
         auto Restore = qScopeGuard([&] {
             Panel->ChangeCurrentPath(unc_, {});
+            panels_.back()->ChangeCurrentPath(unc_, {});
             StSettings->beginGroup("PackerPlugins"); StSettings->remove(""); for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
             StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
         });
@@ -1418,7 +1423,7 @@ hc.events.unsubscribe(sub)
         StSettings->setValue("PackerPlugins/0_HostManifest", Spec.hostManifest_); StSettings->setValue("PackerPlugins/0_HostReviewed", EncodeManifest(Spec.hostApproval_.reviewed_));
         StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
         const auto Index = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
-        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         unsigned Prompts = 0; bool Cancel = false; QTimer Input;
         connect(&Input, &QTimer::timeout, this, [&] {
             for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Dialog = qobject_cast<QInputDialog*>(Widget); Dialog && Dialog->isVisible() && Dialog->objectName() == "hc.archive.password") {
@@ -1431,7 +1436,7 @@ hc.events.unsubscribe(sub)
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("encrypted.hcwcx"));
         Cancel = true; Model->ChangeDirectory(Index("encrypted.hcwcx")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
         QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->LastNavigationError()->category_, ErrorCategory::Cancelled); Input.stop();
-        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         Model->ChangeDirectory(Index("outer.hcwcx")); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(Inner));
         Model->ChangeDirectory(Index(Inner)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000);
         QCOMPARE(Model->WorkspaceLocation().nesting_.size(), 2);
@@ -1446,6 +1451,20 @@ hc.events.unsubscribe(sub)
         hc::workspace::TabState Saved; Saved.location_ = Model->WorkspaceLocation(); Saved.provider_ = Spec.hostManifest_;
         RestoreWorkspaceLocation(Model, Saved); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("renamed.txt"), 10000);
         QCOMPARE(Model->WorkspaceLocation().nesting_.size(), 2);
+        auto* Target = static_cast<CFSModel*>(model(panels_.back())); Target->SetProviderEnabled(true);
+        auto Destination = Saved; Destination.location_.nesting_.front().entry_ = "/target.hcwcx";
+        RestoreWorkspaceLocation(Target, Destination); QTRY_VERIFY_WITH_TIMEOUT(!Target->IsLoading() && names(Target).contains("alpha.txt"), 10000);
+        Panel->sig_NotifyPanelActivated();
+        Future = Bridge->Dispatch("hc.file.move", {{"destination", QString::fromStdString(Serialize(Destination.location_))},
+            {"destinationTab", Target->property("hc.tabId").toString()}, {"destinationLocation", QString::fromStdString(Serialize(Destination.location_))}}, "test", Index("renamed.txt"));
+        QTRY_VERIFY(Future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); Accepted = Future.get();
+        QVERIFY2(Accepted.HasValue(), Accepted.HasValue() ? "" : Accepted.Failure().code_.c_str());
+        const auto MoveJob = Accepted.Value().jobId_;
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(MoveJob).HasValue() && IsTerminal(Scheduler.Snapshot(MoveJob).Value().state_), 30000);
+        QCOMPARE(Scheduler.Snapshot(MoveJob).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Model->IsLoading() && !Target->IsLoading() && !names(Model).contains("renamed.txt") && names(Target).contains("renamed.txt"));
+        RestoreWorkspaceLocation(Target, Destination); QTRY_VERIFY(!Target->IsLoading() && names(Target).contains("renamed.txt"));
+        panels_.back()->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Target->IsLoading());
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(Inner));
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("outer.hcwcx"));
         QThreadPool::globalInstance()->waitForDone();
@@ -1566,16 +1585,17 @@ hc.events.unsubscribe(sub)
     {
         QFETCH(bool, Hosted);
         using namespace hc::storage; using namespace hc::operations;
-        QTemporaryDir Directory; QVERIFY(Directory.isValid());
-        const auto Native = Directory.filePath("native"); QVERIFY(QDir().mkdir(Native));
+        QTemporaryDir Directory(QDir(unc_).filePath("hc-move-ui-XXXXXX")); QVERIFY(Directory.isValid());
+        QTemporaryDir PluginDirectory; QVERIFY(PluginDirectory.isValid());
+        const auto Native = QDir::toNativeSeparators(Directory.filePath("native")); QVERIFY(QDir().mkdir(Native));
         { QFile File(Native + "/move.txt"); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("move-content"), 12); }
         const auto A = Directory.filePath("a.hcwcx"), B = Directory.filePath("b.hcwcx");
         for (const auto& Path : {A, B}) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
         auto* Left = static_cast<CFSModel*>(model(panels_.front())); auto* Right = static_cast<CFSModel*>(model(panels_.back()));
         Left->SetProviderEnabled(true); Right->SetProviderEnabled(true);
-        panels_.front()->ChangeCurrentPath(Native, {}); panels_.back()->ChangeCurrentPath(Directory.path(), {});
+        panels_.front()->ChangeCurrentPath(Native, {}); panels_.back()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
-        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, Hosted));
+        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, PluginDirectory, Hosted));
         const auto Mount = [&](CFSModel* Model, const QString& Path) -> bool {
             auto Plugin = TySpWCX(new CTCPlugInWCX);
             if (Plugin->LoadWCX(Spec).ErrorCode || !Plugin->OpenArchive(Path).Value.value_or(false)) return false;
@@ -1596,7 +1616,7 @@ hc.events.unsubscribe(sub)
         auto Job = Move(Left, QString::fromStdString(Serialize({LocatorKind::Archive, A.toStdString(), {{"wcx", "/"}}}))); QVERIFY(!Job.empty());
         QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Right).contains("move.txt")); QVERIFY(!QFile::exists(Native + "/move.txt"));
-        panels_.front()->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!Left->IsLoading());
+        panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Left->IsLoading());
         QVERIFY(Mount(Left, B)); QTRY_VERIFY(!Left->IsLoading());
         Job = Move(Right, QString::fromStdString(Serialize({LocatorKind::Archive, B.toStdString(), {{"wcx", "/"}}}))); QVERIFY(!Job.empty());
         QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
