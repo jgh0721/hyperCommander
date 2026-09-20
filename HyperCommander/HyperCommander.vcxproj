@@ -67,6 +67,9 @@
     <ClCompile>
       <AdditionalIncludeDirectories>$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_script_runtime.lib;$(HcNativePluginBuild)\commonLibs\scripting\$(Configuration)\hc_lua_engine.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <OutDir>$(SolutionDir)_build\msbuild-vc2026-qt612\$(Configuration)\</OutDir>
@@ -180,7 +183,12 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\qtAutomationCompiler.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtAutomationLibrary.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\UniqueLibs\qtAutomation.hpp" />
-    <ClCompile Include="..\commonLibs\scripting\scriptApi.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <!-- Built once by the selected Qt kit with the pinned Lua/sol2 configuration. -->
+    <ClCompile Include="..\commonLibs\scripting\scriptApi.cpp"><ExcludedFromBuild>true</ExcludedFromBuild></ClCompile>
+    <ClCompile Include="..\commonLibs\scripting\luaRuntime.cpp"><ExcludedFromBuild>true</ExcludedFromBuild></ClCompile>
+    <ClCompile Include="..\commonLibs\scripting\scriptExecution.cpp"><ExcludedFromBuild>true</ExcludedFromBuild></ClCompile>
+    <ClInclude Include="..\commonLibs\scripting\luaRuntime.hpp" />
+    <ClInclude Include="..\commonLibs\scripting\scriptExecution.hpp" />
     <ClInclude Include="..\commonLibs\scripting\scriptApi.hpp" />
     <ClCompile Include="..\commonLibs\cmnConcurrent.cpp" />
     <ClCompile Include="..\commonLibs\cmnDateTime.cpp" />

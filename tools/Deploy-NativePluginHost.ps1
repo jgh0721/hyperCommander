@@ -14,12 +14,13 @@ $QtCMake = Join-Path $QtRoot 'bin/qt-cmake.bat'
 & $QtCMake -S $Root -B $BuildDir -G 'Visual Studio 18 2026' -A x64 -T 'v145,host=x64' `
     -DBUILD_TESTING=OFF -DHC_BUILD_SMB_TESTS=OFF
 if ($LASTEXITCODE -ne 0) { throw "Plugin host configure failed: $LASTEXITCODE" }
-& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package --parallel 4
-if ($LASTEXITCODE -ne 0) { throw "Built-in ISO package build failed: $LASTEXITCODE" }
+& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package hc_script_runtime --parallel 4
+if ($LASTEXITCODE -ne 0) { throw "Built-in ISO/script runtime build failed: $LASTEXITCODE" }
 if ($PrepareOnly) { return }
 & $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 hc-search-index --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Plugin host build failed: $LASTEXITCODE" }
 $Destination = Split-Path ([IO.Path]::GetFullPath($Executable)) -Parent
+Copy-Item -LiteralPath (Join-Path $Root 'commonLibs/scripting/ThirdPartyNotices.txt') -Destination (Join-Path $Destination 'LuaThirdPartyNotices.txt')
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-plugin-host-x64.exe") -Destination $Destination
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-search-index.exe") -Destination $Destination
 $BuiltinDestination = Join-Path $Destination 'BuiltInPlugin/IsoImage'

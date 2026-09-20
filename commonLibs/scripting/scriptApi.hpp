@@ -92,6 +92,8 @@ private:
 struct RuntimeLimits {
     std::size_t heapBytes_ = 8 * 1024 * 1024;
     std::uint64_t instructions_ = 1000000;
+    std::chrono::milliseconds wallTime_{30000};
+    std::size_t hostCalls_ = 10000;
 };
 struct RuntimeDescriptor {
     std::string id_, version_;

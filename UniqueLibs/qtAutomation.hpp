@@ -9,7 +9,7 @@ class QSettings;
 namespace hc::automation {
 struct Diagnostic { qsizetype line_ = 0, column_ = 0; QString message_; };
 storage::Result<Program> Compile(const QString& Source, Diagnostic* Diagnostic = nullptr, SchemaLookup Schema = {});
-struct SavedScript { QString id_, title_, source_, shortcut_; bool toolbar_ = false; };
+struct SavedScript { QString id_, title_, source_, shortcut_; bool toolbar_ = false; QString language_ = "dsl"; };
 storage::Result<QList<SavedScript>> DecodeLibrary(const QByteArray& Bytes);
 storage::Result<QByteArray> EncodeLibrary(const QList<SavedScript>& Scripts);
 class LibraryStore {

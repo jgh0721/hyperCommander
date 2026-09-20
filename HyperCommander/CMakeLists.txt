@@ -102,7 +102,6 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/qtSearch.hpp
         ../commonLibs/commands/automation.cpp
         ../commonLibs/commands/automation.hpp
-        ../commonLibs/scripting/scriptApi.cpp
         ../commonLibs/scripting/scriptApi.hpp
         ../UniqueLibs/qtAutomation.cpp
         ../UniqueLibs/qtAutomationCompiler.cpp
@@ -199,7 +198,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_builtin_iso hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_script_runtime hc_builtin_iso hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
@@ -227,6 +226,7 @@ set_target_properties(HyperCommander
 
 target_link_libraries(HyperCommander
         PRIVATE
+        hc_script_runtime
         Qt::Core
         Qt::Concurrent
         Qt::Gui
@@ -245,6 +245,11 @@ target_link_libraries(HyperCommander
 )
 
 # Keep the application executable immediately runnable from its build directory.
+add_custom_command(TARGET HyperCommander POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/commonLibs/scripting/ThirdPartyNotices.txt"
+        "$<TARGET_FILE_DIR:HyperCommander>/LuaThirdPartyNotices.txt"
+    VERBATIM)
 hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 add_dependencies(HyperCommander hc-plugin-host-x64)
 

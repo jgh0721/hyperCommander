@@ -12,11 +12,33 @@
 #include <QToolBar>
 #include <QLineEdit>
 #include <QKeySequenceEdit>
+#include <QComboBox>
 
 using namespace hc::automation;
 class AutomationTests : public QObject {
     Q_OBJECT
 private slots:
+    void luaEditorSaveRunAndStop() {
+        QTemporaryDir Temp; QSettings Settings(Temp.filePath("lua.ini"), QSettings::IniFormat);
+        Host Host; int Calls = 0;
+        Host.capture_ = [&]() -> Result<CommandContext> { ++Calls; return CommandContext{}; };
+        QWidget Parent; QPointer<QDialog> Dialog = Show(&Parent, [Host] { return Host; }, &Settings);
+        Dialog->findChild<QComboBox*>("hc.automation.language")->setCurrentIndex(1);
+        auto* Source = Dialog->findChild<QPlainTextEdit*>("hc.automation.source"); Source->setPlainText("return hc.capture()");
+        Dialog->findChild<QLineEdit*>("hc.automation.title")->setText("Lua test");
+        Dialog->findChild<QPushButton*>("hc.automation.save")->click();
+        LibraryStore Store(Settings); auto Saved = Store.Load(); QVERIFY(Saved.HasValue()); QCOMPARE(Saved.Value().size(), 1);
+        QCOMPARE(Saved.Value()[0].language_, QString("lua"));
+        Dialog->findChild<QPushButton*>("hc.automation.run")->click(); QTRY_COMPARE(Calls, 1);
+        QTRY_VERIFY(Dialog->findChild<QLabel*>("hc.automation.status")->text().contains("완료"));
+        Source->setPlainText("while true do hc.sleep(10) end");
+        Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true);
+        Dialog->findChild<QPushButton*>("hc.automation.run")->click();
+        QTest::qWait(30); Dialog->findChild<QPushButton*>("hc.automation.stop")->click();
+        QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.automation.run")->isEnabled());
+        QVERIFY(!Dialog->findChild<QCheckBox*>("hc.automation.write")->isChecked());
+        Dialog->close(); QTRY_VERIFY(Dialog.isNull());
+    }
     void savedLibraryVersionAndConcurrentChange() {
         QTemporaryDir Temp; QVERIFY(Temp.isValid()); QSettings Settings(Temp.filePath("scripts.ini"),QSettings::IniFormat);
         LibraryStore First(Settings), Second(Settings); QVERIFY(First.Load().HasValue()); QVERIFY(Second.Load().HasValue());
@@ -25,7 +47,7 @@ private slots:
         auto Loaded=Second.Load(); QVERIFY(Loaded.HasValue()); QCOMPARE(Loaded.Value()[0].title_,QString("테스트")); QVERIFY(Loaded.Value()[0].toolbar_);
         Scripts.append({"two","duplicate","invoke \"test\" {}","Ctrl+Alt+9",false}); QVERIFY(!EncodeLibrary(Scripts).HasValue());
         QVERIFY(DecodeLibrary("{\"version\":0,\"scripts\":[{\"id\":\"old\",\"title\":\"old\",\"source\":\"invoke \\\"test\\\" {}\"}]}").HasValue());
-        const QByteArray Future="{\"version\":2,\"scripts\":[]}"; Settings.setValue("Automation/library",Future); Settings.sync();
+        const QByteArray Future="{\"version\":3,\"scripts\":[]}"; Settings.setValue("Automation/library",Future); Settings.sync();
         QVERIFY(!First.Load().HasValue()); QVERIFY(!First.Save({}).HasValue()); QCOMPARE(Settings.value("Automation/library").toByteArray(),Future);
     }
     void savedActionsAndWritePreflight() {

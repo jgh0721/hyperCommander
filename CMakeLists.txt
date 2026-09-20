@@ -24,6 +24,8 @@ qt_standard_project_setup(REQUIRES 6.12)
 include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
 include(cmake/QtDeployment.cmake)
+set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
+add_subdirectory(commonLibs/scripting)
 
 set(HC_QTITAN_PACKAGE "" CACHE FILEPATH "Licensed QtitanDataGrid 9.3.0 ZIP for local reprovisioning")
 set(HC_QTITAN_PRIVATE_PATCH "${PROJECT_SOURCE_DIR}/externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip"
@@ -84,8 +86,6 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
-# M8 RUNTIME-001 records the accepted runtime; product integration follows in step 6.
-set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
 option(HC_BUILD_SCRIPT_COMPARISON "Build optional runtime comparison executables" OFF)
 if(HC_BUILD_SCRIPT_COMPARISON)
     add_subdirectory(tools/runtimeComparison)
