@@ -16,6 +16,12 @@
 QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     : QBaseUI( parent, flags )
 {
+    hc::settings::AppSettings().BeginEdit();
+    connect(this, &QDialog::finished, this, [] {
+        hc::settings::AppSettings().DiscardEdit();
+        TyStColorSchemeMgr::GetInstance()->Refresh(); TyStFileSetMgr::GetInstance()->Refresh();
+        TyStPlugInMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
+    });
     ui.setupUi( this );
     ui.groupBox_3->setTitle(tr("플러그인 실행 설정"));
     auto* WcxLayout = new QVBoxLayout(ui.groupBox_3);
@@ -34,51 +40,72 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     QMetaObject::invokeMethod( this, "LoadSettings", Qt::QueuedConnection );
 }
 
+QMainOpts::~QMainOpts()
+{
+    if (hc::settings::AppSettings().Editing()) {
+        hc::settings::AppSettings().DiscardEdit();
+        TyStColorSchemeMgr::GetInstance()->Refresh(); TyStFileSetMgr::GetInstance()->Refresh();
+        TyStPlugInMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
+    }
+}
+
 void QMainOpts::LoadSettings()
 {
     int Value = 0;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     const auto StFileSetMgr = TyStFileSetMgr::GetInstance();
 
-    StSettings->beginGroup( "Configuration" );
 
-    Value = StSettings->value( "SizeInHeader" ).toInt();
+    Value = hc::settings::AppSettings().SizeStyle(true);
     if( Value > HC_SIZE_STYLE_BKM )
         Value = HC_SIZE_STYLE_BYTES;
     ui.cbxHeaderSizeDisplay->setCurrentIndex( Value );
 
-    Value = StSettings->value( "SizeInFooter" ).toInt();
+    Value = hc::settings::AppSettings().SizeStyle(false);
     if( Value > HC_SIZE_STYLE_BKM )
         Value = HC_SIZE_STYLE_BYTES;
     ui.cbxFooterSizeDisplay->setCurrentIndex( Value );
 
-    StSettings->endGroup();
 
     StColorSchemeMgr->Refresh();
     StFileSetMgr->Refresh();
 
-    ui.cbxColorScheme->clear();
-    ui.cbxColorScheme->addItems( StColorSchemeMgr->GetNames() );
+    const auto SelectedScheme = StColorSchemeMgr->GetCurrentColorScheme();
+    {
+        const QSignalBlocker Block(ui.cbxColorScheme);
+        ui.cbxColorScheme->clear(); ui.cbxColorScheme->addItems(StColorSchemeMgr->GetNames());
+        ui.cbxColorScheme->setCurrentText(SelectedScheme);
+    }
+    RefreshColorScheme(SelectedScheme);
 
     ui.lstFileSet->clear();
     ui.lstFileSet->addItems( StFileSetMgr->GetNames() );
 
     RefreshPluginList();
+    TyStCommandMgr::GetInstance()->Refresh();
     RefreshShortcuts();
 }
 
-void QMainOpts::SaveSettings()
+bool QMainOpts::SaveSettings()
 {
-    StSettings->beginGroup( "Configuration" );
-    StSettings->setValue( "SizeInHeader", ui.cbxHeaderSizeDisplay->currentIndex() );
-    StSettings->setValue( "SizeInFooter", ui.cbxFooterSizeDisplay->currentIndex() );
-    StSettings->endGroup();
-
-    SaveSettings_ColorScheme();
-    TyStFileSetMgr::GetInstance()->SaveSettings();
-    SaveSettings_PluginList();
-
-    emit NotifyColorSchemeChanged( TyStColorSchemeMgr::GetInstance()->GetColorScheme( ui.cbxColorScheme->currentText() ) );
+    auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    General["sizeInHeader"] = hc::settings::SizeFormats().value(ui.cbxHeaderSizeDisplay->currentIndex(), "bytes");
+    General["sizeInFooter"] = hc::settings::SizeFormats().value(ui.cbxFooterSizeDisplay->currentIndex(), "bytes");
+    hc::settings::AppSettings().Put(hc::settings::Section::General, General);
+    SaveSettings_ColorScheme(); TyStFileSetMgr::GetInstance()->SaveSettings(); SaveSettings_PluginList();
+    TyStCommandMgr::GetInstance()->SaveSettings();
+    if (!hc::settings::AppSettings().Commit()) {
+        QMessageBox Message(QMessageBox::Warning, tr("설정 저장 실패"),
+            tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
+        auto* Reload = Message.addButton(tr("디스크에서 다시 읽기"), QMessageBox::ResetRole);
+        Message.exec();
+        if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); LoadSettings(); }
+        return false;
+    }
+    const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(ui.cbxColorScheme->currentText());
+    emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
+    emit NotifyColorSchemeChanged(Scheme);
+    return true;
 }
 
 void QMainOpts::SaveSettings_ColorScheme()
@@ -86,6 +113,7 @@ void QMainOpts::SaveSettings_ColorScheme()
     TyColorScheme ColorScheme = {};
 
     ColorScheme.Name                = ui.edtColorSchemeName->text();
+    if (ColorScheme.Name.trimmed().isEmpty()) return;
     ColorScheme.IsDarkMode          = ui.chkIsDarkMode->isChecked();
 
     ColorScheme.Menu_Font           = ui.fntMnuFontBox->currentFont();
@@ -121,11 +149,11 @@ void QMainOpts::SaveSettings_ColorScheme()
 void QMainOpts::SaveSettings_PluginList()
 {
     TyStPlugInMgr::GetInstance()->SaveSettings();
-    wcxHostSettings_->Save(*StSettings);
-    wlxHostSettings_->Save(*StSettings);
-    wfxHostSettings_->Save(*StSettings);
-    wdxHostSettings_->Save(*StSettings);
-    dopusVfsSettings_->Save(*StSettings); dopusViewerSettings_->Save(*StSettings);
+    wcxHostSettings_->Save(hc::settings::AppSettings());
+    wlxHostSettings_->Save(hc::settings::AppSettings());
+    wfxHostSettings_->Save(hc::settings::AppSettings());
+    wdxHostSettings_->Save(hc::settings::AppSettings());
+    dopusVfsSettings_->Save(hc::settings::AppSettings()); dopusViewerSettings_->Save(hc::settings::AppSettings());
     TyStPlugInMgr::GetInstance()->Refresh();
 }
 
@@ -215,11 +243,11 @@ void QMainOpts::RefreshFileSet( const QString& FileSetName )
 
 void QMainOpts::RefreshPluginList()
 {
-    wcxHostSettings_->Load(*StSettings);
-    wlxHostSettings_->Load(*StSettings);
-    wfxHostSettings_->Load(*StSettings);
-    wdxHostSettings_->Load(*StSettings);
-    dopusVfsSettings_->Load(*StSettings); dopusViewerSettings_->Load(*StSettings);
+    wcxHostSettings_->Load(hc::settings::AppSettings());
+    wlxHostSettings_->Load(hc::settings::AppSettings());
+    wfxHostSettings_->Load(hc::settings::AppSettings());
+    wdxHostSettings_->Load(hc::settings::AppSettings());
+    dopusVfsSettings_->Load(hc::settings::AppSettings()); dopusViewerSettings_->Load(hc::settings::AppSettings());
     const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
     StPlugInMgr->Refresh();
 
@@ -643,8 +671,7 @@ void QMainOpts::on_btnRemoveWLX_clicked( bool checked )
 
 void QMainOpts::on_btnOK_clicked( bool checked )
 {
-    SaveSettings();
-    accept();
+    if (SaveSettings()) accept();
 }
 
 void QMainOpts::on_btnCancel_clicked( bool checked )
@@ -655,8 +682,6 @@ void QMainOpts::on_btnCancel_clicked( bool checked )
 void QMainOpts::on_btnApply_clicked( bool checked )
 {
     SaveSettings();
-
-    ui.btnApply->setEnabled( false );
 }
 
 void QMainOpts::initialize()
@@ -745,6 +770,6 @@ void QMainOpts::pickButtonColor( bool checked )
     if( Selected.isValid() == true )
         setButtonColor( static_cast< QPushButton* >( sender() ), Selected );
 
-    SaveSettings();
+    ui.btnApply->setEnabled(true);
 }
 

@@ -446,9 +446,6 @@ void QMainUI::closeEvent( QCloseEvent* Event )
 {
     if (workspaceLoaded_ && workspace_.writable_ && !SaveWorkspace())
         QMessageBox::warning(this, tr("작업공간 저장"), tr("작업공간을 저장하지 못했습니다. 기존 설정은 유지됩니다.\n%1").arg(workspace_.error_));
-    StSettings->beginGroup( OPT_SEC_WINDOW );
-    StSettings->setValue( "geometry", saveGeometry() );
-    StSettings->endGroup();
 
     QMainWindow::closeEvent( Event );
 }
@@ -489,7 +486,7 @@ void QMainUI::initialize()
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );
 
-    workspace_ = hc::workspace::Load(*StSettings); workspaceLoaded_ = true;
+    workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
     if (workspace_.exists_ && workspace_.writable_) RestoreWorkspace(workspace_.state_);
     else if (!workspace_.writable_) statusBar()->showMessage(tr("저장된 작업공간을 읽을 수 없어 원본을 보존합니다: %1").arg(workspace_.error_));
 }
@@ -505,8 +502,8 @@ hc::workspace::State QMainUI::CaptureWorkspace() const
 void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
 {
     ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_); ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
-    if (!State.geometry_.isEmpty()) restoreGeometry(State.geometry_);
-    if (!State.layout_.isEmpty()) ui.splitter->restoreState(State.layout_);
+    if (!State.geometry_.isEmpty() && !restoreGeometry(State.geometry_)) statusBar()->showMessage(tr("저장된 창 위치가 올바르지 않아 기본 위치를 사용합니다."));
+    if (!State.layout_.isEmpty() && !ui.splitter->restoreState(State.layout_)) statusBar()->showMessage(tr("저장된 패널 배치가 올바르지 않아 기본 배치를 사용합니다."));
     currentPanelIndex = State.activePane_ == 1 ? 1 : 0;
     const auto Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
     Panel->SetFocusView(Panel->CurrentTabIndex()); emit Panel->sig_NotifyPanelActivated();
@@ -514,7 +511,7 @@ void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
 
 bool QMainUI::SaveWorkspace()
 {
-    return workspaceLoaded_ && hc::workspace::Save(*StSettings, workspace_, CaptureWorkspace());
+    return workspaceLoaded_ && hc::workspace::Save(hc::settings::WorkspaceSettings(), workspace_, CaptureWorkspace());
 }
 
 CmpPanel* QMainUI::retrieveSrcPanel() const

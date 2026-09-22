@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QJsonObject>
 #include <QMap>
-#include <QSettings>
+#include "settings/appSettings.hpp"
 #include <QStringList>
 #include <QVector>
 #include "commonLibs/storage/storage.hpp"
@@ -31,7 +31,7 @@ struct State {
 };
 struct Loaded {
     State state_;
-    QByteArray original_;
+    QByteArray original_, pending_;
     bool exists_ = false;
     bool writable_ = true;
     QString error_;
@@ -45,8 +45,8 @@ QString SelectionKey(const storage::EntrySnapshot& Entry);
 QJsonObject MergeView(const QJsonObject& Parent, const QJsonObject& Override);
 Loaded Decode(const QByteArray& Bytes);
 QByteArray Encode(const State& Value);
-Loaded Load(QSettings& Settings);
-bool Save(QSettings& Settings, Loaded& Previous, const State& Value);
+Loaded Load(hc::settings::JsonStore& Settings);
+bool Save(hc::settings::JsonStore& Settings, Loaded& Previous, const State& Value);
 
 // Metadata belongs to a published snapshot. A missing revision is never reused
 // across enumerations; unchanged strong revisions can retain computed values.

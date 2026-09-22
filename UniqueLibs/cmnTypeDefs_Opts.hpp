@@ -13,7 +13,7 @@ struct TyOpts
     QString                             Tooltip;
 
     // Settings
-    QString                             Section;        // QSettings => Group
+    QString                             Section;        // Application option category
     QString                             Key;
     QString                             ValueType;
     QString                             DefaultValue;

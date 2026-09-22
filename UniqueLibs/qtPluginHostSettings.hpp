@@ -4,7 +4,7 @@
 #include <vector>
 #include "qtViewerSurface.hpp"
 
-class QSettings;
+#include "settings/appSettings.hpp"
 class QTableWidget;
 class QPushButton;
 class QComboBox;
@@ -13,11 +13,11 @@ class QPluginHostSettings final : public QWidget
 public:
     explicit QPluginHostSettings(QWidget* Parent = nullptr);
     QPluginHostSettings(hc::plugins::PluginFormat Format, QWidget* Parent = nullptr);
-    void Load(QSettings& Settings);
-    void Save(QSettings& Settings);
-    static std::vector<QtViewerSurface::PluginViewerChoice> ViewerChoices(QSettings& Settings);
-    static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(QSettings& Settings, hc::plugins::PluginFormat Format);
-    static QtViewerSurface::PluginViewerSelectionMode ViewerSelection(QSettings& Settings);
+    void Load(hc::settings::Repository& Settings);
+    void Save(hc::settings::Repository& Settings);
+    static std::vector<QtViewerSurface::PluginViewerChoice> ViewerChoices(hc::settings::Repository& Settings);
+    static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format);
+    static QtViewerSurface::PluginViewerSelectionMode ViewerSelection(hc::settings::Repository& Settings);
 private:
     struct Row { int index_; QString path_, manifest_; QByteArray reviewed_; };
     void review();

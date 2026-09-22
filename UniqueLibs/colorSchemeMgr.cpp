@@ -13,72 +13,31 @@ DECLARE_CMNLIBSV2_NAMESPACE
 
 void CColorSchemeMgr::Refresh()
 {
-    QSet< QString > SetSchemeNames;
-
-    StSettings->beginGroup( "ColorScheme" );
-
-    auto Count = StSettings->value( "Count" ).toInt();
-    const auto Selected = StSettings->value( "Selected" ).toInt();
-    QString SelectedSchemeName;
-
-    for( int Idx = 0; Idx < Count; ++Idx )
-    {
-        const auto Name = StSettings->value( QString( "%1_Name" ).arg( Idx ) ).toString();
-        if( Selected == Idx )
-            SelectedSchemeName = Name;
-        SetSchemeNames.insert( Name );
-    }
-
-    StSettings->endGroup();
-
-    for( const auto& Name : SetSchemeNames )
-    {
-        TyColorScheme ColorScheme;
-        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( Name ) );
-
-        ColorScheme.Name                = Name;
-        ColorScheme.IsDarkMode          = StSettings->value( "IsDarkMode" ).toBool();
-
-        ColorScheme.Menu_Font           = retrieveFont( "Menu_Font_Family", "Menu_Font_Size" );
-        ColorScheme.Dialog_Font         = retrieveFont( "Dialog_Font_Family", "Dialog_Font_Size" );
-        ColorScheme.FileList_Font       = retrieveFont( "List_Font_Family", "List_Font_Size", 14 );
-
-        ColorScheme.Dialog_FGColor      = QColor::fromString( StSettings->value( "Dialog_FGColor" ).toString() );
-        ColorScheme.Dialog_BGColor      = QColor::fromString( StSettings->value( "Dialog_BGColor" ).toString() );
-
-        ColorScheme.FileList_FGColor    = QColor::fromString( StSettings->value( "List_FGColor" ).toString() );
-        ColorScheme.FileList_BGColor    = QColor::fromString( StSettings->value( "List_BGColor" ).toString() );
-        ColorScheme.FileList_Cursor     = QColor::fromString( StSettings->value( "List_CursorColor" ).toString() );
-        ColorScheme.FileList_Selected   = QColor::fromString( StSettings->value( "List_SelectColor" ).toString() );
-
-        for( const auto& Child : StSettings->childKeys() )
-        {
-            if( Child.startsWith( "FileSet", Qt::CaseInsensitive ) == false )
-                continue;
-
-            // FileSet_XXX_FGColor or FileSet_XXX_BGColor
-            const auto L = Child.split( '_', Qt::SkipEmptyParts );
-            if( L.size() != 3 )
-                continue;
-
-            const auto FileSetName = L[ 1 ];
-            if( Child.contains( "FGColor", Qt::CaseInsensitive ) == true )
-                ColorScheme.MapNameToColors[ FileSetName ].first = QColor::fromString( StSettings->value( Child ).toString() );
-            if( Child.contains( "BGColor", Qt::CaseInsensitive ) == true )
-                ColorScheme.MapNameToColors[ FileSetName ].second = QColor::fromString( StSettings->value( Child ).toString() );
+    mapNameToScheme.clear(); currentColorScheme = {};
+    const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
+    const auto Schemes = Appearance["schemes"].toObject();
+    for (auto It = Schemes.begin(); It != Schemes.end(); ++It) {
+        const auto Record = It.value().toObject(); TyColorScheme Scheme; Scheme.Name = It.key(); Scheme.IsDarkMode = Record["dark"].toBool();
+        const auto Fonts = Record["fonts"].toObject(); const auto Colors = Record["colors"].toObject();
+        Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
+        Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
+        Scheme.FileList_Font = retrieveFont(Fonts["list"].toObject(), 14);
+        Scheme.Dialog_FGColor = QColor::fromString(Colors["dialogText"].toString());
+        Scheme.Dialog_BGColor = QColor::fromString(Colors["dialogBackground"].toString());
+        Scheme.FileList_FGColor = QColor::fromString(Colors["listText"].toString());
+        Scheme.FileList_BGColor = QColor::fromString(Colors["listBackground"].toString());
+        Scheme.FileList_Cursor = QColor::fromString(Colors["listCursor"].toString());
+        Scheme.FileList_Selected = QColor::fromString(Colors["listSelection"].toString());
+        const auto FileSets = Record["fileSets"].toObject();
+        for (auto File = FileSets.begin(); File != FileSets.end(); ++File) {
+            const auto Pair = File.value().toObject();
+            Scheme.MapNameToColors[File.key()] = {QColor::fromString(Pair["foreground"].toString()), QColor::fromString(Pair["background"].toString())};
         }
-
-        mapNameToScheme[ Name ] = ColorScheme;
-        StSettings->endGroup();
+        mapNameToScheme[Scheme.Name] = Scheme;
     }
-
-    if( SelectedSchemeName.isEmpty() == false )
-        currentColorScheme = mapNameToScheme.value( SelectedSchemeName );
-    else
-    {
-        if( mapNameToScheme.isEmpty() == false )
-            currentColorScheme = mapNameToScheme.first();
-    }
+    const auto Selected = Appearance["selected"].toString();
+    if (mapNameToScheme.contains(Selected)) currentColorScheme = mapNameToScheme[Selected];
+    else if (!mapNameToScheme.isEmpty()) currentColorScheme = mapNameToScheme.first();
 }
 
 QVector<QString> CColorSchemeMgr::GetNames() const
@@ -109,96 +68,40 @@ void CColorSchemeMgr::SetCurrentColorScheme( const QString& Name )
 
 void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile )
 {
-    mapNameToScheme[ ColorScheme.Name ] = ColorScheme;
-    if( IsWriteToFile == false )
-        return;
-
-    StSettings->beginGroup( "ColorScheme" );
-    StSettings->setValue( "Count", mapNameToScheme.count() );
-    bool IsAlready = false;
-    for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
-    {
-        if( ColorScheme.Name.compare( StSettings->value( QString( "%1_Name" ).arg( Idx ) ).toString(), Qt::CaseInsensitive ) != 0 )
-            continue;
-
-        IsAlready = true;
-        break;
-    }
-    if( IsAlready == false )
-        StSettings->setValue( QString( "%1_Name" ).arg( mapNameToScheme.count() - 1 ), ColorScheme.Name );
-    StSettings->endGroup();
-
-    for( const auto& CS : mapNameToScheme )
-    {
-        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( CS.Name ) );
-
-        StSettings->setValue( "IsDarkMode",             CS.IsDarkMode );
-        StSettings->setValue( "Menu_Font_Family",       CS.Menu_Font.family() );
-        StSettings->setValue( "Menu_Font_Size",         CS.Menu_Font.pointSize() );
-
-        StSettings->setValue( "Dialog_Font_Family",     CS.Dialog_Font.family() );
-        StSettings->setValue( "Dialog_Font_Size",       CS.Dialog_Font.pointSize() );
-        
-        StSettings->setValue( "List_Font_Family",       CS.FileList_Font.family() );
-        StSettings->setValue( "List_Font_Size",         CS.FileList_Font.pointSize() );
-
-        StSettings->setValue( "Dialog_FGColor",         CS.Dialog_FGColor.name( QColor::HexRgb ) );
-        StSettings->setValue( "Dialog_BGColor",         CS.Dialog_BGColor.name( QColor::HexRgb ) );
-
-        StSettings->setValue( "List_FGColor",           CS.FileList_FGColor.name( QColor::HexRgb ) );
-        StSettings->setValue( "List_BGColor",           CS.FileList_BGColor.name( QColor::HexRgb ) );
-        StSettings->setValue( "List_CursorColor",       CS.FileList_Cursor.name( QColor::HexRgb ) );
-        StSettings->setValue( "List_SelectColor",       CS.FileList_Selected.name( QColor::HexRgb ) );
-
-        for( const auto& FileSet : CS.MapNameToColors.keys() )
-        {
-            StSettings->setValue( QString( "FileSet_%1_FGColor" ).arg( FileSet ), CS.MapNameToColors[ FileSet ].first.name( QColor::HexRgb ) );
-            StSettings->setValue( QString( "FileSet_%1_BGColor" ).arg( FileSet ), CS.MapNameToColors[ FileSet ].second.name( QColor::HexRgb ) );
+    if (ColorScheme.Name.trimmed().isEmpty()) return;
+    mapNameToScheme[ColorScheme.Name] = ColorScheme;
+    if (IsWriteToFile) {
+        auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
+        auto Schemes = Appearance["schemes"].toObject();
+        const auto EncodeFont = [](const QFont& Font) { return QJsonObject{{"family",Font.family()},{"pointSize",Font.pointSize() > 0 ? Font.pointSize() : 9}}; };
+        for (const auto& Scheme : mapNameToScheme) {
+            auto Record = Schemes[Scheme.Name].toObject();
+            Record["dark"] = Scheme.IsDarkMode;
+            Record["fonts"] = QJsonObject{{"menu",EncodeFont(Scheme.Menu_Font)},{"dialog",EncodeFont(Scheme.Dialog_Font)},{"list",EncodeFont(Scheme.FileList_Font)}};
+            Record["colors"] = QJsonObject{{"dialogText",Scheme.Dialog_FGColor.name(QColor::HexRgb)},{"dialogBackground",Scheme.Dialog_BGColor.name(QColor::HexRgb)},{"listText",Scheme.FileList_FGColor.name(QColor::HexRgb)},{"listBackground",Scheme.FileList_BGColor.name(QColor::HexRgb)},{"listCursor",Scheme.FileList_Cursor.name(QColor::HexRgb)},{"listSelection",Scheme.FileList_Selected.name(QColor::HexRgb)}};
+            QJsonObject FileSets;
+            for (auto It = Scheme.MapNameToColors.begin(); It != Scheme.MapNameToColors.end(); ++It)
+                if (!It.key().isEmpty()) FileSets[It.key()] = QJsonObject{{"foreground",It.value().first.name(QColor::HexRgb)},{"background",It.value().second.name(QColor::HexRgb)}};
+            Record["fileSets"] = FileSets; Schemes[Scheme.Name] = Record;
         }
-        
-        StSettings->endGroup();
+        Appearance["schemes"] = Schemes; Appearance["selected"] = ColorScheme.Name;
+        if (!hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance)) return;
     }
-
-    if( ColorScheme.Name == currentColorScheme.Name )
-    {
-        currentColorScheme = ColorScheme;
-        emit sigColorSchemeChanged( ColorScheme );
-    }
+    currentColorScheme = ColorScheme;
+    if (!hc::settings::AppSettings().Editing()) emit sigColorSchemeChanged(ColorScheme);
 }
 
 void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile )
 {
-    if( mapNameToScheme.contains( Name ) == false )
-        return;
-
-    // TODO: 하나 있는 것을 삭제하면 어떻게 할 것인지 고민해보자. 
-    if( mapNameToScheme.count() == 1 )
-    {
-        Q_ASSERT( false );
+    if (!mapNameToScheme.contains(Name)) return;
+    if (IsWriteToFile) {
+        auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
+        auto Schemes = Appearance["schemes"].toObject(); Schemes.remove(Name); Appearance["schemes"] = Schemes;
+        if (Appearance["selected"].toString() == Name) Appearance["selected"] = Schemes.isEmpty() ? QString{} : Schemes.keys().first();
+        if (!hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance)) return;
     }
-
-    const auto PrevCount = mapNameToScheme.count();
-    mapNameToScheme.remove( Name );
-
-    if( IsWriteToFile == true )
-    {
-        StSettings->beginGroup( "ColorScheme" );
-        for( int Idx = 0; Idx < mapNameToScheme.count(); ++Idx )
-        {
-            const auto Key = QString( "%1_Name" ).arg( Idx );
-            if( StSettings->value( Key ).toString().compare( Name, Qt::CaseInsensitive ) != 0 )
-                continue;
-
-            StSettings->remove( Key );
-            break;
-        }
-        StSettings->setValue( "Count", mapNameToScheme.count() );
-        StSettings->endGroup();
-
-        StSettings->beginGroup( QString( "ColorScheme_%1" ).arg( Name ) );
-        StSettings->remove( "" );
-        StSettings->endGroup();
-    }
+    mapNameToScheme.remove(Name);
+    if (currentColorScheme.Name == Name) currentColorScheme = mapNameToScheme.isEmpty() ? TyColorScheme{} : mapNameToScheme.first();
 }
 
 void CColorSchemeMgr::UpsertFileSetColor( const QString& ColorScheme, const QString& FileSet, const TyPrFGWithBG& FileSetColor )
@@ -211,7 +114,7 @@ void CColorSchemeMgr::UpsertFileSetColor( const QString& ColorScheme, const QStr
     if( ColorScheme == GetCurrentColorScheme() )
     {
         currentColorScheme = mapNameToScheme[ ColorScheme ];
-        emit sigColorSchemeChanged( currentColorScheme );
+        if (!hc::settings::AppSettings().Editing()) emit sigColorSchemeChanged( currentColorScheme );
     }
 }
 
@@ -302,19 +205,9 @@ bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, nsHC::CFileSourceT
     return IsMatch;
 }
 
-QFont CColorSchemeMgr::retrieveFont( const QString& FontFamily, const QString& FontSize, int DefaultSize ) const
+QFont CColorSchemeMgr::retrieveFont( const QJsonObject& Record, int DefaultSize ) const
 {
-    // TODO: dlgOpts 에서 설정되는 기본 글꼴 값과 일치해야 한다. 
-    auto Family = StSettings->value( FontFamily ).toString();
-    if( Family.isEmpty() == true )
-        Family = "맑은 고딕";
-
-    auto Size = StSettings->value( FontSize ).toInt();
-    if( Size <= 0 )
-        Size = DefaultSize;
-
-    QFont Font( Family, Size );
-    Font.setStyleStrategy( QFont::PreferAntialias );
-    Font.setHintingPreference( QFont::PreferFullHinting );
-    return Font;
+    const auto Family = Record["family"].toString("맑은 고딕");
+    auto Size = Record["pointSize"].toInt(DefaultSize); if (Size < 6 || Size > 72) Size = DefaultSize;
+    QFont Font(Family, Size); Font.setStyleStrategy(QFont::PreferAntialias); Font.setHintingPreference(QFont::PreferFullHinting); return Font;
 }

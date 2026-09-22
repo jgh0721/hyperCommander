@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSettings>
+#include "settings/appSettings.hpp"
 #include "commonLibs/view/columnWidthPolicy.hpp"
 
 namespace hc::view
@@ -39,15 +39,14 @@ namespace hc::view
         QMap<QString, ColumnWidthPolicy> columns_;
         bool writable_ = true;
     };
-    inline WidthSettings LoadWidths(QSettings& Settings, const QString& Key, const QMap<QString, int>& Legacy)
+    inline WidthSettings LoadWidths(hc::settings::Repository& Settings, const QString& Key, const QMap<QString, int>& Defaults)
     {
         WidthSettings Result;
-        for (auto It = Legacy.begin(); It != Legacy.end(); ++It) Result.columns_[It.key()].value_ = std::clamp(It.value(), 1, 1000000);
-        if (!Settings.contains(Key)) return Result;
-        QJsonParseError Error;
-        const auto Document = QJsonDocument::fromJson(Settings.value(Key).toByteArray(), &Error);
-        const auto Root = Document.object();
-        if (Error.error != QJsonParseError::NoError || !Document.isObject() || Root.value("version").toInt() != 1 || !Root.value("columns").isObject())
+        for (auto It = Defaults.begin(); It != Defaults.end(); ++It) Result.columns_[It.key()].value_ = std::clamp(It.value(), 1, 1000000);
+        const auto Profiles = Settings.Read(hc::settings::Section::Columns).toObject();
+        if (!Profiles.contains(Key)) return Result;
+        const auto Root = Profiles[Key].toObject();
+        if (!Profiles[Key].isObject() || Root.value("version").toInt() != 1 || !Root.value("columns").isObject())
         { Result.writable_ = false; return Result; }
         const auto Columns = Root.value("columns").toObject();
         for (auto It = Columns.begin(); It != Columns.end(); ++It)
@@ -58,7 +57,7 @@ namespace hc::view
         }
         return Result;
     }
-    inline bool SaveWidths(QSettings& Settings, const QString& Key, const WidthSettings& Value)
+    inline bool SaveWidths(hc::settings::Repository& Settings, const QString& Key, const WidthSettings& Value)
     {
         if (!Value.writable_) return false;
         QJsonObject Columns;
@@ -67,8 +66,8 @@ namespace hc::view
             if (!Validate(It.value()).empty()) return false;
             Columns[It.key()] = EncodeWidth(It.value());
         }
-        Settings.setValue(Key, QJsonDocument(QJsonObject{{"version", 1}, {"columns", Columns}}).toJson(QJsonDocument::Compact));
-        Settings.sync();
-        return Settings.status() == QSettings::NoError;
+        auto Profiles = Settings.Read(hc::settings::Section::Columns).toObject();
+        Profiles[Key] = QJsonObject{{"version", 1}, {"columns", Columns}};
+        return Settings.Put(hc::settings::Section::Columns, Profiles);
     }
 }

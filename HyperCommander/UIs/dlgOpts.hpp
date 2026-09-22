@@ -22,8 +22,10 @@ class QMainOpts : public nsHC::QBaseUI
 public:
     QMainOpts( QWidget* parent = Q_NULLPTR, Qt::WindowFlags flags = Qt::FramelessWindowHint );
 
+    ~QMainOpts() override;
+
     Q_INVOKABLE void                    LoadSettings();
-    Q_INVOKABLE void                    SaveSettings();
+    Q_INVOKABLE bool                    SaveSettings();
     Q_INVOKABLE void                    SaveSettings_ColorScheme();
     Q_INVOKABLE void                    SaveSettings_PluginList();
     Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );

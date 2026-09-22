@@ -104,7 +104,7 @@ void RestoreWorkspaceLocation(CFSModel* Model, const hc::workspace::TabState& Ta
     }
     if (hc::workspace::PluginPath(Location).isEmpty()) { Model->SetPlaceholder(Location, QObject::tr("플러그인 내부 경로를 확인하십시오.")); return; }
     for (const auto Format : {PluginFormat::Wfx, PluginFormat::DopusVfs})
-        for (const auto& Choice : QPluginHostSettings::DataChoices(*StSettings, Format)) {
+        for (const auto& Choice : QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format)) {
             if (Choice.options_.manifestPath_.compare(Tab.provider_, Qt::CaseInsensitive)) continue;
             const auto Options = Choice.options_;
             using OpenResult = Result<HostedStorage>;

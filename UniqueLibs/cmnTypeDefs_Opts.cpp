@@ -6,22 +6,14 @@
 
 QString GetOPTValue( const TyOpts& Option )
 {
-    if( Option.Section.isEmpty() == true )
-        return Option.DefaultValue;
-
-    StSettings->beginGroup( Option.Section );
-    const auto Ret = StSettings->value( Option.Key ).toString();
-    StSettings->endGroup();
-
-    return Ret.isEmpty() == true ? Option.DefaultValue : Ret;
+    const auto Value = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject().value(Option.Section).toObject().value(Option.Key);
+    return Value.isUndefined() ? Option.DefaultValue : Value.toVariant().toString();
 }
 
 void SetOPTValue( const TyOpts& Option, const QVariant& Variant )
 {
-    if( Option.Section.isEmpty() == true || Option.Key.isEmpty() == true )
-        return;
-
-    StSettings->beginGroup( Option.Section );
-    StSettings->setValue( Option.Key, Variant );
-    StSettings->endGroup();
+    if (Option.Section.isEmpty() || Option.Key.isEmpty()) return;
+    auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
+    auto Category = Options[Option.Section].toObject(); Category[Option.Key] = QJsonValue::fromVariant(Variant);
+    Options[Option.Section] = Category; hc::settings::AppSettings().Put(hc::settings::Section::Options, Options);
 }

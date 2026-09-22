@@ -3,11 +3,9 @@
 #include <QJsonDocument>
 #include <QSet>
 #include <QUuid>
-#include <QLockFile>
 
 namespace hc::workspace {
 namespace {
-constexpr auto SettingsKey = "Workspace/default";
 constexpr int MaxTabs = 64, MaxSelections = 10000, MaxHistory = 64, MaxBytes = 4 * 1024 * 1024;
 QString NewId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 bool Text(const QJsonValue& Value, int Limit = 32768) {
@@ -215,24 +213,21 @@ Loaded Decode(const QByteArray& Bytes) {
     Result.state_.defaults_ = Root.value("defaults").toObject();
     return Result;
 }
-Loaded Load(QSettings& Settings) {
-    Settings.sync();
-    if (Settings.status() != QSettings::NoError) { Loaded Result; Result.writable_ = false; Result.error_ = "workspace-read-failed"; return Result; }
-    if (!Settings.contains(SettingsKey)) return {};
-    return Decode(Settings.value(SettingsKey).toByteArray());
+Loaded Load(hc::settings::JsonStore& Settings) {
+    if (!Settings.Writable()) { Loaded Result; Result.writable_ = false; Result.error_ = Settings.Error(); return Result; }
+    if (!Settings.Object().contains("workspace")) return {};
+    return Decode(hc::settings::JsonBytes(Settings.Object()["workspace"]));
 }
-bool Save(QSettings& Settings, Loaded& Previous, const State& Value) {
+bool Save(hc::settings::JsonStore& Settings, Loaded& Previous, const State& Value) {
     if (!Previous.writable_) return false;
-    const auto Fail = [&](const QString& Code) { Previous.error_ = Code; return false; };
-    const auto Bytes = Encode(Value); if (!Decode(Bytes).writable_) return Fail("workspace-invalid-state");
-    QLockFile Lock(Settings.fileName() + ".workspace-lock");
-    if (!Lock.tryLock(0)) return Fail("workspace-save-locked");
-    Settings.sync();
-    // An independently running window must not silently replace a newer session.
-    if (Settings.status() != QSettings::NoError || Settings.contains(SettingsKey) != Previous.exists_
-        || Settings.value(SettingsKey).toByteArray() != Previous.original_) return Fail("workspace-changed-in-another-window");
-    Settings.setValue(SettingsKey, Bytes); Settings.sync();
-    if (Settings.status() != QSettings::NoError) return Fail("workspace-write-failed");
+    const auto Bytes = Encode(Value);
+    if (!Decode(Bytes).writable_) { Previous.error_ = "workspace-invalid-state"; return false; }
+    const auto Current = hc::settings::JsonBytes(Settings.Object()["workspace"]);
+    if (Current != Previous.original_ && (Previous.pending_.isEmpty() || Current != Previous.pending_)) {
+        Previous.error_ = "workspace-changed-in-another-window"; return false;
+    }
+    auto Next = Settings.Object(); Next["workspace"] = hc::settings::JsonObject(Bytes);
+    if (!Settings.Replace(Next)) { Previous.pending_ = Bytes; Previous.error_ = Settings.Error(); return false; }
     Previous = Decode(Bytes); return true;
 }
 }

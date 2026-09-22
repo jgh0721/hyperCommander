@@ -21,14 +21,14 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPointer>
-#include <QSettings>
+#include "settings/appSettings.hpp"
 #include <QToolBar>
 
 namespace hc::automation {
 namespace {
 class AutomationDialog final : public QDialog {
 public:
-    AutomationDialog(QWidget* Parent, std::function<Host()> MakeHost, QSettings* Settings, const QString& Id, bool Run, std::function<void()> Changed)
+    AutomationDialog(QWidget* Parent, std::function<Host()> MakeHost, hc::settings::Repository* Settings, const QString& Id, bool Run, std::function<void()> Changed)
         : QDialog(Parent), makeHost_(std::move(MakeHost)), settings_(Settings), changed_(std::move(Changed)) {
         setAttribute(Qt::WA_DeleteOnClose); setObjectName("hc.automationDialog"); setWindowTitle(tr("명령 자동화")); resize(720, 460);
         auto* Layout = new QVBoxLayout(this);
@@ -155,7 +155,7 @@ private:
     QPushButton* run_;
     QPushButton* stop_;
     QTimer* timer_;
-    QPointer<QSettings> settings_;
+    QPointer<hc::settings::Repository> settings_;
     std::function<void()> changed_;
     std::unique_ptr<LibraryStore> store_;
     QList<SavedScript> scripts_;
@@ -168,7 +168,7 @@ private:
 };
 class LibraryActions final : public QObject {
 public:
-    LibraryActions(QMainWindow* Window, QSettings& Settings, std::function<Host()> MakeHost)
+    LibraryActions(QMainWindow* Window, hc::settings::Repository& Settings, std::function<Host()> MakeHost)
         : QObject(Window), window_(Window), settings_(&Settings), makeHost_(std::move(MakeHost)) {
         menu_ = Window->menuBar()->addMenu(tr("자동화")); toolbar_ = Window->addToolBar(tr("자동화")); toolbar_->setObjectName("hc.automationToolbar");
         auto* Edit = menu_->addAction(tr("스크립트 편집·실행…")); Edit->setObjectName("hc.menu.automation");
@@ -196,7 +196,7 @@ private:
         toolbar_->setVisible(!toolbar_->actions().isEmpty());
     }
     QPointer<QMainWindow> window_;
-    QPointer<QSettings> settings_;
+    QPointer<hc::settings::Repository> settings_;
     std::function<Host()> makeHost_;
     QMenu* menu_;
     QToolBar* toolbar_;
@@ -204,7 +204,7 @@ private:
     QPointer<QDialog> dialog_;
 };
 }
-QDialog* Show(QWidget* Parent, std::function<Host()> MakeHost, QSettings* Settings, QString Id, bool Run, std::function<void()> Changed)
+QDialog* Show(QWidget* Parent, std::function<Host()> MakeHost, hc::settings::Repository* Settings, QString Id, bool Run, std::function<void()> Changed)
 { auto* Dialog = new AutomationDialog(Parent,std::move(MakeHost),Settings,Id,Run,std::move(Changed)); Dialog->show(); return Dialog; }
-void Install(QMainWindow* Window, QSettings& Settings, std::function<Host()> MakeHost) { new LibraryActions(Window,Settings,std::move(MakeHost)); }
+void Install(QMainWindow* Window, hc::settings::Repository& Settings, std::function<Host()> MakeHost) { new LibraryActions(Window,Settings,std::move(MakeHost)); }
 }

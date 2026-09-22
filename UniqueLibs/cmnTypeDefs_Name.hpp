@@ -2,7 +2,7 @@
 
 #include <QString>
 
-constexpr auto MAIN_CONFIG_FILENAME = QLatin1String( "HyperCommander.ini" );
+constexpr auto MAIN_CONFIG_FILENAME = QLatin1String( "settings.json" );
 
 constexpr auto TC_COMPAT_ENV_CMDPATH = L"COMMANDER_PATH";
 

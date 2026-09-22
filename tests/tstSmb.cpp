@@ -59,6 +59,12 @@ private:
 
 static QElapsedTimer StartupTimer;
 
+
+static void SetPluginField(hc::settings::Repository& Settings, const QString& Format, int Index, const QString& Field, const QJsonValue& Value)
+{
+    auto Items = Settings.Plugins(Format); while (Items.size() <= Index) Items.append(QJsonObject{});
+    auto Record = Items[Index].toObject(); Record[Field] = Value; Items[Index] = Record; Settings.SetPlugins(Format, Items);
+}
 class SmbTests : public QObject
 {
     Q_OBJECT
@@ -93,9 +99,62 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
+    }
+
+    void jsonSettingsUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings();
+        const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); TyStCommandMgr::GetInstance()->Refresh(); });
+        const auto DiskBytes = [&] { QFile File(Settings.FileName()); if (!File.open(QIODevice::ReadOnly)) return QByteArray{}; return File.readAll(); };
+        QVERIFY(Settings.Put(Section::Appearance, QJsonObject{{"selected","z-selected"},
+            {"schemes",QJsonObject{{"a-first",QJsonObject{}},{"z-selected",QJsonObject{}}}}}));
+        QVERIFY(Settings.Commit()); const auto Before = DiskBytes(); const int Header = Settings.SizeStyle(true);
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            QCOMPARE(Dialog.findChild<QComboBox*>("cbxColorScheme")->currentText(),QString("z-selected"));
+            Dialog.findChild<QComboBox*>("cbxHeaderSizeDisplay")->setCurrentIndex((Header + 1) % 12);
+            Dialog.reject();
+        }
+        QCOMPARE(Settings.SizeStyle(true), Header); QCOMPARE(DiskBytes(), Before);
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QComboBox*>("cbxHeaderSizeDisplay")->setCurrentIndex((Header + 1) % 12);
+            auto* Apply = Dialog.findChild<QPushButton*>("btnApply"); QVERIFY(Apply);
+            Apply->click(); QVERIFY(Settings.Error().isEmpty());
+            Dialog.findChild<QComboBox*>("cbxHeaderSizeDisplay")->setCurrentIndex((Header + 2) % 12);
+            QVERIFY(Apply->isEnabled()); Apply->click(); QVERIFY(Settings.Error().isEmpty());
+            Dialog.findChild<QComboBox*>("cbxHeaderSizeDisplay")->setCurrentIndex((Header + 3) % 12);
+            Dialog.reject();
+        }
+        Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QCOMPARE(Restart.SizeStyle(true), (Header + 2) % 12);
+        auto* Commands = TyStCommandMgr::GetInstance();
+        const auto Command = GlobalBuiltInCMDs.front().Name;
+        const QKeyCombination Key(Qt::ControlModifier | Qt::AltModifier, Qt::Key_F12);
+        Commands->SetShortcutWithCMD(Key, QString(Command)); QVERIFY(Settings.Reload()); Commands->Refresh();
+        QCOMPARE(Commands->Retrieve().value(Key), Command);
+        Commands->DelShortcut(Key); QVERIFY(Settings.Reload()); Commands->Refresh(); QVERIFY(!Commands->Retrieve().contains(Key));
+        // A disk edit after the dialog was opened must keep the dialog and the newer file intact.
+        QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+        auto External = Settings.Object(); External["externalEdit"] = true;
+        External["shortcuts"] = QJsonObject{{QKeySequence(Key).toString(QKeySequence::PortableText), QString(Command)}};
+        { QFile File(Settings.FileName()); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(QJsonDocument(External).toJson()); }
+        const auto Newer = DiskBytes();
+        QTimer Dismiss; connect(&Dismiss, &QTimer::timeout, &Dialog, [&] {
+            for (auto* Box : Dialog.findChildren<QMessageBox*>()) Box->reject();
+        }); Dismiss.start(10);
+        QVERIFY(!Dialog.SaveSettings()); Dismiss.stop(); QVERIFY(Dialog.isVisible()); QCOMPARE(DiskBytes(),Newer);
+        QTimer Reload; connect(&Reload, &QTimer::timeout, &Dialog, [&] {
+            for (auto* Box : Dialog.findChildren<QMessageBox*>())
+                for (auto* Button : Box->buttons()) if (Box->buttonRole(Button) == QMessageBox::ResetRole) Button->click();
+        }); Reload.start(10);
+        QVERIFY(!Dialog.SaveSettings()); Reload.stop(); QCOMPARE(Commands->Retrieve().value(Key), Command);
+        QCOMPARE(DiskBytes(), Newer);
+        Dialog.reject();
     }
 
     void qtitanCacheAndSortUi() { hc::tests::GridCacheAndSortRegression(); }
@@ -140,6 +199,8 @@ private slots:
         QVERIFY(main_->SaveWorkspace());
         QProcess Restart; auto Environment = QProcessEnvironment::systemEnvironment();
         Environment.insert("HC_WORKSPACE_BOOT_ID", Tab.id_); Restart.setProcessEnvironment(Environment);
+        Environment.insert("HC_TEST_CONFIG_DIR", QFileInfo(hc::settings::AppSettings().FileName()).absolutePath());
+        Restart.setProcessEnvironment(Environment);
         Restart.start(QCoreApplication::applicationFilePath(), {"workspaceBootUi", "-o", "workspace-restart.txt,txt"});
         QVERIFY(Restart.waitForStarted(5000));
         QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
@@ -889,22 +950,18 @@ hc.events.unsubscribe(sub)
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
         const auto ArchivePath = Directory.filePath("configured.hcwcx");
         { QFile File(ArchivePath); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
-        StSettings->beginGroup("PackerPlugins"); QVariantMap Original;
-        for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
-        StSettings->endGroup();
+        const auto Original = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
         const auto Restore = qScopeGuard([&] {
-            StSettings->beginGroup("PackerPlugins"); StSettings->remove("");
-            for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
-            StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Original); TyStPlugInMgr::GetInstance()->Refresh();
         });
-        StSettings->setValue("PackerPlugins/Count", 1); StSettings->setValue("PackerPlugins/0_Path", Spec.FileFullPath);
-        StSettings->setValue("PackerPlugins/0_Exts", "hcwcx"); StSettings->setValue("PackerPlugins/0_HostEnabled", true);
-        StSettings->setValue("PackerPlugins/0_HostManifest", Spec.hostManifest_);
+        hc::settings::AppSettings().SetPlugins("wcx", {}); SetPluginField(hc::settings::AppSettings(), "wcx", 0, "path", Spec.FileFullPath);
+        SetPluginField(hc::settings::AppSettings(), "wcx", 0, "extensions", QJsonArray{"hcwcx"}); SetPluginField(hc::settings::AppSettings(), "wcx", 0, "hostEnabled", true);
+        SetPluginField(hc::settings::AppSettings(), "wcx", 0, "hostManifest", Spec.hostManifest_);
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
         for (bool Approved : {true, false})
         {
-            StSettings->setValue("PackerPlugins/0_HostReviewed", Approved ? EncodeManifest(Spec.hostApproval_.reviewed_) : QByteArray{});
-            StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+            SetPluginField(hc::settings::AppSettings(), "wcx", 0, "hostReviewed", hc::settings::JsonObject(Approved ? EncodeManifest(Spec.hostApproval_.reviewed_) : QByteArray{}));
+            hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
             Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
             QModelIndex Selected;
             for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "configured.hcwcx") Selected = Model->index(Row, 0);
@@ -946,10 +1003,9 @@ hc.events.unsubscribe(sub)
             hc::plugins::PluginViewerOptions Options; QVERIFY(configureWlx(Options, Directory));
             Spec.FileFullPath = Options.binaryPath_; Spec.hostManifest_ = Options.manifestPath_; Spec.hostApproval_ = Options.approval_;
         }
-        QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
-        const QString Group = Wlx ? "ListerPlugins/" : "PackerPlugins/"; const QString Prefix = Wlx ? "wlx" : "wcx";
-        Settings.setValue(Group + "Count", 1); Settings.setValue(Group + "0_Path", Spec.FileFullPath);
-        Settings.setValue(Group + (Wlx ? "0_Detect" : "0_Exts"), Wlx ? "EXT=\"TXT\"" : "hcwcx");
+        hc::settings::Repository Settings(Directory.path());
+        const QString Group = Wlx ? "wlx" : "wcx"; const QString Prefix = Wlx ? "wlx" : "wcx";
+        Settings.SetPlugins(Group, QJsonArray{QJsonObject{{"path",Spec.FileFullPath},{"detect",Wlx ? "EXT=\"TXT\"" : ""},{"extensions",QJsonArray{"hcwcx"}}}});
         QPluginHostSettings Widget(Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx);
         Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
         auto* Review = Widget.findChild<QPushButton*>(Prefix + "HostReview"); QVERIFY(Review);
@@ -975,7 +1031,7 @@ hc.events.unsubscribe(sub)
             for (auto* Message : Widget.findChildren<QMessageBox*>()) if (Message->isVisible() && !Confirmed)
             {
                 Confirmed = true; DefaultNo = Message->defaultButton() == Message->button(QMessageBox::No);
-                UiPermission = Message->text().contains("뷰어 화면 표시");
+                UiPermission = Message->text().contains("플러그인 창 표시");
                 if (RevokeDuringConfirmation) Revoke->click();
                 auto* Choice = Message->button(Approve ? QMessageBox::Yes : QMessageBox::No);
                 if (Choice) Choice->click(); else Message->reject();
@@ -985,15 +1041,15 @@ hc.events.unsubscribe(sub)
         QTRY_VERIFY_WITH_TIMEOUT(Confirmed || TimedOut, 12000); Driver.stop(); QVERIFY(!TimedOut); QVERIFY(Chosen); QVERIFY(DefaultNo);
         Widget.Save(Settings);
         if (Wlx) QVERIFY(UiPermission);
-        const auto Reviewed = Settings.value(Group + "0_HostReviewed").toByteArray();
+        const auto Reviewed = hc::settings::JsonBytes(Settings.Plugins(Group)[0].toObject()["hostReviewed"]);
         if (Approve && !RevokeDuringConfirmation)
         {
             auto Parsed = hc::plugins::ParseManifest(Reviewed); QVERIFY(Parsed.HasValue());
             QVERIFY(Parsed.Value() == Spec.hostApproval_.reviewed_);
-            QVERIFY(Settings.value(Group + "0_HostEnabled").toBool());
+            QVERIFY(Settings.Plugins(Group)[0].toObject()["hostEnabled"].toBool());
         }
-        else QVERIFY(Reviewed.isEmpty());
-        if (RevokeDuringConfirmation) QVERIFY(Settings.value(Group + "0_HostEnabled").toBool());
+        else QVERIFY(Settings.Plugins(Group)[0].toObject()["hostReviewed"].toObject().isEmpty());
+        if (RevokeDuringConfirmation) QVERIFY(Settings.Plugins(Group)[0].toObject()["hostEnabled"].toBool());
     }
     void wlxViewerCommandsUi_data()
     {
@@ -1008,9 +1064,7 @@ hc.events.unsubscribe(sub)
         using namespace hc::plugins;
         QFETCH(bool, Automatic); QFETCH(bool, NativeKeys);
         QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(configureWlx(Options, Package));
-        StSettings->beginGroup("ListerPlugins"); QVariantMap Original;
-        for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key));
-        StSettings->endGroup();
+        const auto Original = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
         auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
         const auto Restore = qScopeGuard([&] {
             Host->CloseAll();
@@ -1021,15 +1075,13 @@ hc.events.unsubscribe(sub)
                 QMetaObject::invokeMethod(Preview, "CloseRequested", Qt::DirectConnection);
             while (!Host->IsIdle()) QTest::qWait(10);
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-            StSettings->beginGroup("ListerPlugins"); StSettings->remove("");
-            for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
-            StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Original); TyStPlugInMgr::GetInstance()->Refresh();
         });
-        StSettings->setValue("ListerPlugins/SelectionMode", Automatic ? "automatic" : "manual");
+        { auto Plugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(); Plugins["viewerSelection"] = Automatic ? "automatic" : "manual"; hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Plugins); }
         // Install via the actual registration UI. The fixture deliberately has
         // no ListGetDetectString export: registration must never execute it.
-        StSettings->setValue("ListerPlugins/Count", 1); StSettings->setValue("ListerPlugins/0_Path", "unrelated.wlx64");
-        StSettings->setValue("ListerPlugins/0_HostEnabled", false); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        hc::settings::AppSettings().SetPlugins("wlx", {}); SetPluginField(hc::settings::AppSettings(), "wlx", 0, "path", "unrelated.wlx64");
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostEnabled", false); hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
         {
             QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
             Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(PAGE_PLUGIN_MGR.first);
@@ -1055,24 +1107,26 @@ hc.events.unsubscribe(sub)
             });
             Driver.start(); Dialog.findChild<QPushButton*>("btnAddWLX")->click(); Driver.stop(); QVERIFY(Chosen); QVERIFY(!TimedOut);
             QCOMPARE(TyStPlugInMgr::GetInstance()->GetWLXCount(), 2u);
-            QVERIFY(StSettings->value("ListerPlugins/1_HostEnabled").toBool());
+            QVERIFY(hc::settings::AppSettings().Plugins("wlx")[1].toObject()["hostEnabled"].toBool());
             const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
+            QVERIFY(Dialog.SaveSettings());
         }
-        StSettings->setValue("ListerPlugins/1_HostManifest", Options.manifestPath_);
-        StSettings->setValue("ListerPlugins/1_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        SetPluginField(hc::settings::AppSettings(), "wlx", 1, "hostManifest", Options.manifestPath_);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 1, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Options.approval_.reviewed_))); hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
         {
             QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
             Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(PAGE_PLUGIN_MGR.first);
             Dialog.findChild<QTableWidget*>("tblWLX")->selectRow(0); Dialog.findChild<QPushButton*>("btnRemoveWLX")->click();
             QCOMPARE(TyStPlugInMgr::GetInstance()->GetWLXCount(), 1u);
-            QCOMPARE(StSettings->value("ListerPlugins/0_Path").toString(), Options.binaryPath_);
-            QVERIFY(StSettings->value("ListerPlugins/0_HostEnabled").toBool());
-            QCOMPARE(StSettings->value("ListerPlugins/0_HostReviewed").toByteArray(), EncodeManifest(Options.approval_.reviewed_));
+            QCOMPARE(hc::settings::AppSettings().Plugins("wlx")[0].toObject()["path"].toString(), Options.binaryPath_);
+            QVERIFY(hc::settings::AppSettings().Plugins("wlx")[0].toObject()["hostEnabled"].toBool());
+            QCOMPARE(hc::settings::AppSettings().Plugins("wlx")[0].toObject()["hostReviewed"].toObject(), hc::settings::JsonObject(EncodeManifest(Options.approval_.reviewed_)));
+            QVERIFY(Dialog.SaveSettings());
         }
-        StSettings->setValue("ListerPlugins/Count", 1); StSettings->setValue("ListerPlugins/0_Path", Options.binaryPath_);
-        StSettings->setValue("ListerPlugins/0_HostManifest", Options.manifestPath_);
-        StSettings->setValue("ListerPlugins/0_HostEnabled", true);
-        StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
+        hc::settings::AppSettings().SetPlugins("wlx", {}); SetPluginField(hc::settings::AppSettings(), "wlx", 0, "path", Options.binaryPath_);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostManifest", Options.manifestPath_);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostEnabled", true);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Options.approval_.reviewed_))); hc::settings::AppSettings().Commit();
         TyStPlugInMgr::GetInstance()->Refresh();
         QTemporaryDir Content(QDir(localOnly_ ? QDir::tempPath() : unc_).filePath("hc-wlx-XXXXXX")); QVERIFY(Content.isValid());
         qInfo() << "WLX product content:" << Content.path() << "SMB:" << !localOnly_;
@@ -1126,16 +1180,16 @@ hc.events.unsubscribe(sub)
             auto* Tabs = Dialog.findChild<QTabWidget*>("pluginHostTabs"); QVERIFY(Tabs); Tabs->setCurrentIndex(1);
             auto* Table = Dialog.findChild<QTableWidget*>("wlxHostTable"); QVERIFY(Table); QVERIFY(Table->isVisible()); QCOMPARE(Table->rowCount(), 1);
             Dialog.findChild<QPushButton*>("wlxHostRevoke")->click();
-            Dialog.SaveSettings(); StSettings->sync();
-            QVERIFY(StSettings->value("ListerPlugins/0_HostReviewed").toByteArray().isEmpty());
-            QVERIFY(StSettings->value("ListerPlugins/0_HostEnabled").toBool());
+            Dialog.SaveSettings(); hc::settings::AppSettings().Commit();
+            QVERIFY(hc::settings::AppSettings().Plugins("wlx")[0].toObject()["hostReviewed"].toObject().isEmpty());
+            QVERIFY(hc::settings::AppSettings().Plugins("wlx")[0].toObject()["hostEnabled"].toBool());
             QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/wlx-product-options.png"));
         }
         QSignalSpy Failed(Surface, &QtViewerSurface::Failed); QVERIFY(SelectWlx(Surface));
         QTRY_COMPARE_WITH_TIMEOUT(Failed.size(), 1, 5000); QVERIFY(!Surface->IsReady()); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);
         QMenu Legacy; QCOMPARE(TyStPlugInMgr::GetInstance()->ConstructWLXMenu(&Legacy, Content.filePath("뷰어.txt")), 0u);
         const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString(); QVERIFY(!GetModuleHandleW(Native.c_str()));
-        StSettings->setValue("ListerPlugins/0_HostReviewed", EncodeManifest(Options.approval_.reviewed_)); StSettings->sync();
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Options.approval_.reviewed_))); hc::settings::AppSettings().Commit();
         QVERIFY(SelectWlx(Surface)); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000); QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->IsReady());
         if (NativeKeys) QVERIFY(sendWlxKey(Surface, 'Q', true));
         else QVERIFY(QMetaObject::invokeMethod(Surface, "CloseRequested", Qt::DirectConnection));
@@ -1145,7 +1199,7 @@ hc.events.unsubscribe(sub)
     void wcxHostSettingsPersistence()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
-        QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
+        hc::settings::Repository Settings(Directory.path());
         using Selection = QtViewerSurface::PluginViewerSelectionMode;
         QCOMPARE(QPluginHostSettings::ViewerSelection(Settings), Selection::Manual);
         {
@@ -1153,13 +1207,13 @@ hc.events.unsubscribe(sub)
             auto* Mode = Wlx.findChild<QComboBox*>("wlxSelectionMode"); QVERIFY(Mode);
             Mode->setCurrentIndex(1);
             QCOMPARE(QPluginHostSettings::ViewerSelection(Settings), Selection::Manual);
-            Wlx.Save(Settings); Settings.sync();
-            QSettings Reload(Settings.fileName(), QSettings::IniFormat);
+            Wlx.Save(Settings); Settings.Commit();
+            hc::settings::Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
             QCOMPARE(QPluginHostSettings::ViewerSelection(Reload), Selection::Automatic);
             Wlx.Load(Reload); QCOMPARE(Mode->currentIndex(), 1);
-            Mode->setCurrentIndex(2); Wlx.Save(Reload); Reload.sync();
+            Mode->setCurrentIndex(2); Wlx.Save(Reload); Reload.Commit();
             QCOMPARE(QPluginHostSettings::ViewerSelection(Reload), Selection::Force);
-            Reload.setValue("ListerPlugins/SelectionMode", "unknown"); Wlx.Load(Reload);
+            auto Plugins = Reload.Read(hc::settings::Section::Plugins).toObject(); Plugins["viewerSelection"] = "manual"; Reload.Put(hc::settings::Section::Plugins, Plugins); Wlx.Load(Reload);
             QCOMPARE(Mode->currentIndex(), 0);
             Wlx.resize(720, 240); Wlx.show(); QCoreApplication::processEvents();
             QVERIFY(Wlx.grab().save(QCoreApplication::applicationDirPath() + "/wlx-selection-settings.png"));
@@ -1168,9 +1222,8 @@ hc.events.unsubscribe(sub)
         Manifest.binary_ = "fixture.wcx64"; Manifest.sha256_ = std::string(64, 'a');
         Manifest.extensions_ = {hc::plugins::Extension::ArchiveRead}; Manifest.permissions_ = {hc::plugins::Permission::ReadContent};
         const auto Reviewed = hc::plugins::EncodeManifest(Manifest);
-        Settings.setValue("PackerPlugins/Count", 1); Settings.setValue("PackerPlugins/0_Path", "fixture.wcx64");
-        Settings.setValue("PackerPlugins/0_Exts", "hcwcx"); Settings.setValue("PackerPlugins/0_HostEnabled", true);
-        Settings.setValue("PackerPlugins/0_HostManifest", "plugin.json"); Settings.setValue("PackerPlugins/0_HostReviewed", Reviewed);
+        Settings.Reload();
+        Settings.SetPlugins("wcx", QJsonArray{QJsonObject{{"path","fixture.wcx64"},{"extensions",QJsonArray{"hcwcx"}},{"hostEnabled",true},{"hostManifest","plugin.json"},{"hostReviewed",hc::settings::JsonObject(Reviewed)}}});
         {
             QPluginHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
             auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
@@ -1179,15 +1232,15 @@ hc.events.unsubscribe(sub)
             QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
             // Closing/cancelling the options UI must not persist its draft.
         }
-        QCOMPARE(Settings.value("PackerPlugins/0_HostReviewed").toByteArray(), Reviewed);
+        QCOMPARE(Settings.Plugins("wcx")[0].toObject()["hostReviewed"].toObject(), hc::settings::JsonObject(Reviewed));
         QPluginHostSettings Widget; Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
         auto* Table = Widget.findChild<QTableWidget*>("wcxHostTable"); QVERIFY(Table);
         auto* Revoke = Widget.findChild<QPushButton*>("wcxHostRevoke"); QVERIFY(Revoke); QTest::mouseClick(Revoke, Qt::LeftButton);
-        Widget.Save(Settings); Settings.sync();
-        QSettings Reload(Settings.fileName(), QSettings::IniFormat);
-        QVERIFY(Reload.value("PackerPlugins/0_HostReviewed").toByteArray().isEmpty());
-        QVERIFY(Reload.value("PackerPlugins/0_HostEnabled").toBool());
-        QCOMPARE(Reload.value("PackerPlugins/0_Path").toString(), QString("fixture.wcx64"));
+        Widget.Save(Settings); Settings.Commit();
+        hc::settings::Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
+        QVERIFY(Reload.Plugins("wcx")[0].toObject()["hostReviewed"].toObject().isEmpty());
+        QVERIFY(Reload.Plugins("wcx")[0].toObject()["hostEnabled"].toBool());
+        QCOMPARE(Reload.Plugins("wcx")[0].toObject()["path"].toString(), QString("fixture.wcx64"));
         Widget.Load(Reload); QCOMPARE(Table->item(0, 2)->checkState(), Qt::Checked);
         QVERIFY(Widget.grab().save(QCoreApplication::applicationDirPath() + "/wcx-host-settings.png"));
     }
@@ -1198,8 +1251,7 @@ hc.events.unsubscribe(sub)
         QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_dopus_fixture.dll", Binary));
         QFile Dll(Binary); QVERIFY(Dll.open(QIODevice::ReadOnly)); const auto Hash = QCryptographicHash::hash(Dll.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); Dll.close();
         { QFile Input(Root.filePath("sample.bitmap")); QVERIFY(Input.open(QIODevice::WriteOnly)); QCOMPARE(Input.write("dopus product"), 13); }
-        const QStringList Groups{"DopusVfsPlugins", "DopusViewerPlugins", "ListerPlugins"}; QMap<QString, QVariant> Saved;
-        for (const auto& Key : StSettings->allKeys()) for (const auto& Group : Groups) if (Key.startsWith(Group + '/')) Saved[Key] = StSettings->value(Key);
+        const auto Saved = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
         auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated(); const auto PreviousTab = Panel->CurrentTabIndex();
         auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
         const auto Restore = qScopeGuard([&] {
@@ -1208,24 +1260,23 @@ hc.events.unsubscribe(sub)
             while (!Host->IsIdle()) QTest::qWait(5);
             if (Panel->CurrentTabIndex() != PreviousTab) Panel->CloseTab();
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QThreadPool::globalInstance()->waitForDone();
-            for (const auto& Group : Groups) StSettings->remove(Group);
-            for (auto It = Saved.cbegin(); It != Saved.cend(); ++It) StSettings->setValue(It.key(), It.value());
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Saved);
         });
         for (const auto Format : {PluginFormat::DopusVfs, PluginFormat::DopusViewer})
         {
-            const bool Vfs = Format == PluginFormat::DopusVfs; const auto Group = Vfs ? QString("DopusVfsPlugins/") : QString("DopusViewerPlugins/");
+            const bool Vfs = Format == PluginFormat::DopusVfs; const auto Group = Vfs ? QString("dopusVfs") : QString("dopusViewer");
             PluginManifest Manifest; Manifest.id_ = "hc.dopus.product"; Manifest.version_ = "1"; Manifest.binary_ = "dopus.dll"; Manifest.sha256_ = Hash; Manifest.format_ = Format;
             Manifest.extensions_ = Vfs ? std::set{Extension::StorageRead, Extension::StorageWrite} : std::set{Extension::Viewer, Extension::Metadata};
             Manifest.permissions_ = {Permission::ReadContent, Vfs ? Permission::WriteContent : Permission::UserInterface};
             const auto Path = Package.filePath(Vfs ? "vfs.json" : "viewer.json"); QFile Json(Path); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
-            StSettings->setValue(Group + "Count", 1); StSettings->setValue(Group + "0_Path", Binary); StSettings->setValue(Group + "0_HostEnabled", true);
-            StSettings->setValue(Group + "0_HostManifest", Path); StSettings->setValue(Group + "0_HostReviewed", EncodeManifest(Manifest));
-            QPluginHostSettings Settings(Format); Settings.Load(*StSettings); Settings.Save(*StSettings);
-            const auto Choices = QPluginHostSettings::DataChoices(*StSettings, Format); QCOMPARE(Choices.size(), 1u); QVERIFY(Choices.front().options_.approval_.approved_);
+            hc::settings::AppSettings().SetPlugins(Group, QJsonArray{QJsonObject{{"path",Binary},{"hostEnabled",true},{"hostManifest",Path},{"hostReviewed",hc::settings::JsonObject(EncodeManifest(Manifest))}}});
+            QPluginHostSettings Settings(Format); Settings.Load(hc::settings::AppSettings()); Settings.Save(hc::settings::AppSettings());
+            const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format); QCOMPARE(Choices.size(), 1u); QVERIFY(Choices.front().options_.approval_.approved_);
             QCOMPARE(Choices.front().options_.binaryPath_, Binary);
         }
-        StSettings->setValue("ListerPlugins/Count", 0); StSettings->setValue("ListerPlugins/SelectionMode", "automatic");
-        const auto ViewerChoices = QPluginHostSettings::ViewerChoices(*StSettings); QCOMPARE(ViewerChoices.size(), 1u); QCOMPARE(ViewerChoices.front().id_, QString("dopus-0"));
+        hc::settings::AppSettings().SetPlugins("wlx", {});
+        auto Plugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(); Plugins["viewerSelection"] = "automatic"; hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Plugins);
+        const auto ViewerChoices = QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); QCOMPARE(ViewerChoices.size(), 1u); QCOMPARE(ViewerChoices.front().id_, QString("dopus-0"));
         QTimer Driver; Driver.setInterval(10); QElapsedTimer Timeout; Timeout.start();
         connect(&Driver, &QTimer::timeout, main_, [&] {
             for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Input = qobject_cast<QInputDialog*>(Widget))
@@ -1292,30 +1343,26 @@ hc.events.unsubscribe(sub)
         QTemporaryDir Directory; const auto Binary = Directory.filePath("data.dll");
         QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_tc_data_fixture.dll", Binary));
         QFile File(Binary); QVERIFY(File.open(QIODevice::ReadOnly)); const auto Hash = QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); File.close();
-        QStringList SavedKeys; QMap<QString, QVariant> Saved;
-        for (const auto& Key : StSettings->allKeys())
-            if (Key.startsWith("FileSystemPlugins/") || Key.startsWith("ContentPlugins/")) { SavedKeys << Key; Saved[Key] = StSettings->value(Key); }
+        const auto Saved = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
         const auto Restore = qScopeGuard([&] {
-            StSettings->remove("FileSystemPlugins"); StSettings->remove("ContentPlugins");
-            for (const auto& Key : SavedKeys) StSettings->setValue(Key, Saved[Key]);
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Saved);
         });
         for (const auto Format : {PluginFormat::Wfx, PluginFormat::Wdx})
         {
-            const auto Group = Format == PluginFormat::Wfx ? QString("FileSystemPlugins/") : QString("ContentPlugins/");
+            const auto Group = Format == PluginFormat::Wfx ? QString("wfx") : QString("wdx");
             PluginManifest Manifest; Manifest.id_ = "hc.test.product-data"; Manifest.version_ = "1"; Manifest.binary_ = "data.dll"; Manifest.sha256_ = Hash; Manifest.format_ = Format;
             Manifest.extensions_ = Format == PluginFormat::Wfx ? std::set{Extension::StorageRead, Extension::StorageWrite} : std::set{Extension::Metadata};
             Manifest.permissions_ = {Permission::ReadContent}; if (Format == PluginFormat::Wfx) Manifest.permissions_.insert(Permission::WriteContent);
             const auto Path = Directory.filePath(Format == PluginFormat::Wfx ? "wfx.json" : "wdx.json");
             QFile Json(Path); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
-            StSettings->setValue(Group + "Count", 1); StSettings->setValue(Group + "0_Path", Binary); StSettings->setValue(Group + "0_HostEnabled", true);
-            StSettings->setValue(Group + "0_HostManifest", Path); StSettings->setValue(Group + "0_HostReviewed", EncodeManifest(Manifest));
-            QPluginHostSettings Settings(Format); Settings.Load(*StSettings);
+            hc::settings::AppSettings().SetPlugins(Group, QJsonArray{QJsonObject{{"path",Binary},{"hostEnabled",true},{"hostManifest",Path},{"hostReviewed",hc::settings::JsonObject(EncodeManifest(Manifest))}}});
+            QPluginHostSettings Settings(Format); Settings.Load(hc::settings::AppSettings());
             const auto Prefix = Format == PluginFormat::Wfx ? QString("wfx") : QString("wdx");
             auto* Table = Settings.findChild<QTableWidget*>(Prefix + "HostTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 1);
             Settings.findChild<QPushButton*>(Prefix + "HostRevoke")->click();
-            QVERIFY(QPluginHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
-            Settings.Load(*StSettings); Settings.Save(*StSettings);
-            QVERIFY(QPluginHostSettings::DataChoices(*StSettings, Format).front().options_.approval_.approved_);
+            QVERIFY(QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format).front().options_.approval_.approved_);
+            Settings.Load(hc::settings::AppSettings()); Settings.Save(hc::settings::AppSettings());
+            QVERIFY(QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format).front().options_.approval_.approved_);
         }
         auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated(); const auto PreviousTab = Panel->CurrentTabIndex();
         const auto ClosePluginUi = qScopeGuard([&] {
@@ -1409,19 +1456,16 @@ hc.events.unsubscribe(sub)
             Number(Name.size()); Number(7); Number(0); Outer.append(reinterpret_cast<const char*>(Name.utf16()), Name.size() * 2); Outer += "HCWCX01";
         }
         QVERIFY(Put("outer.hcwcx", Outer));
-        StSettings->beginGroup("PackerPlugins"); QVariantMap Original;
-        for (const auto& Key : StSettings->allKeys()) Original.insert(Key, StSettings->value(Key)); StSettings->endGroup();
+        const auto Original = hc::settings::AppSettings().Plugins("wcx");
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true); Panel->sig_NotifyPanelActivated();
         auto Restore = qScopeGuard([&] {
             Panel->ChangeCurrentPath(unc_, {});
             panels_.back()->ChangeCurrentPath(unc_, {});
-            StSettings->beginGroup("PackerPlugins"); StSettings->remove(""); for (auto It = Original.cbegin(); It != Original.cend(); ++It) StSettings->setValue(It.key(), It.value());
-            StSettings->endGroup(); StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+            hc::settings::AppSettings().SetPlugins("wcx", Original); TyStPlugInMgr::GetInstance()->Refresh();
         });
-        StSettings->setValue("PackerPlugins/Count", 1); StSettings->setValue("PackerPlugins/0_Path", Spec.FileFullPath);
-        StSettings->setValue("PackerPlugins/0_Exts", "hcwcx"); StSettings->setValue("PackerPlugins/0_HostEnabled", true);
-        StSettings->setValue("PackerPlugins/0_HostManifest", Spec.hostManifest_); StSettings->setValue("PackerPlugins/0_HostReviewed", EncodeManifest(Spec.hostApproval_.reviewed_));
-        StSettings->sync(); TyStPlugInMgr::GetInstance()->Refresh();
+        hc::settings::AppSettings().SetPlugins("wcx", QJsonArray{QJsonObject{{"path",Spec.FileFullPath},{"extensions",QJsonArray{"hcwcx"}},{"hostEnabled",true},
+            {"hostManifest",Spec.hostManifest_},{"hostReviewed",hc::settings::JsonObject(EncodeManifest(Spec.hostApproval_.reviewed_))}}});
+        TyStPlugInMgr::GetInstance()->Refresh();
         const auto Index = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         unsigned Prompts = 0; bool Cancel = false; QTimer Input;
@@ -2190,7 +2234,12 @@ int main(int Argc, char** Argv)
     // Keep recovery history inside each copied test runtime, separate from the
     // installed application's persistent journal.
     QStandardPaths::setTestModeEnabled(true);
-    HyperCommanderApp App(Argc, Argv);
+    QTemporaryDir Config; if (!Config.isValid()) return 91;
+    QList<QByteArray> Arguments; for (int Index = 0; Index < Argc; ++Index) Arguments.append(Argv[Index]);
+    Arguments.append("--config-dir");
+    Arguments.append(qEnvironmentVariable("HC_TEST_CONFIG_DIR", Config.path()).toUtf8());
+    QList<char*> Pointers; for (auto& Argument : Arguments) Pointers.append(Argument.data()); Pointers.append(nullptr);
+    int AppArgc = Arguments.size(); HyperCommanderApp App(AppArgc, Pointers.data());
     SmbTests Tests;
     const auto Result = QTest::qExec(&Tests, Argc, Argv);
     QThreadPool::globalInstance()->waitForDone();

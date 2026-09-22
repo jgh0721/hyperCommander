@@ -56,7 +56,7 @@ void QtitanColumnAdapter::Reload()
     for (auto* Parent = owner_.data(); Parent; Parent = Parent->parentWidget())
         if (Parent->objectName() == "cmpLeftPanel" || Parent->objectName() == "cmpRightPanel") { Pane = Parent->objectName(); break; }
     profile_ = "Views/ColumnWidths/" + Pane + "/" + viewId_;
-    settings_ = LoadWidths(*StSettings, profile_, legacy_);
+    settings_ = LoadWidths(hc::settings::AppSettings(), profile_, legacy_);
     Request();
 }
 
@@ -131,7 +131,7 @@ bool QtitanColumnAdapter::SetPolicy(const QString& Id, const ColumnWidthPolicy& 
     return true;
 }
 
-bool QtitanColumnAdapter::save() { return workspaceOwned_ || (!profile_.isEmpty() && SaveWidths(*StSettings, profile_, settings_)); }
+bool QtitanColumnAdapter::save() { return workspaceOwned_ || (!profile_.isEmpty() && SaveWidths(hc::settings::AppSettings(), profile_, settings_)); }
 
 void QtitanColumnAdapter::SetWorkspaceOverrides(const QJsonObject& Columns)
 {
@@ -253,7 +253,7 @@ void QtitanColumnAdapter::ShowSettings()
             if (!Validate(Policy).empty()) { Error->setText(tr("최소값 ≤ 최대값, 고정 모드에서는 최소값 ≤ 기준값 ≤ 최대값이어야 합니다.")); return; }
             Next.columns_[Row.id_] = Policy;
         }
-        if (!SaveWidths(*StSettings, profile_, Next)) { Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
+        if (!SaveWidths(hc::settings::AppSettings(), profile_, Next)) { Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
         settings_ = Next; Request(); Dialog.accept();
     });
     Dialog.resize(920, 360);

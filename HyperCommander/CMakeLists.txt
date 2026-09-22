@@ -140,6 +140,7 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/fileJobUi.cpp
         ../UniqueLibs/fileJobUi.hpp
         ../commonLibs/view/columnWidthPolicy.hpp
+        ../UniqueLibs/settings/appSettings.hpp
         ../UniqueLibs/columnWidthSettings.hpp
         ../UniqueLibs/qtitanColumnAdapter.hpp
         ../UniqueLibs/qtitanColumnAdapter.cpp

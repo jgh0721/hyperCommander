@@ -68,17 +68,25 @@ private slots:
         QCOMPARE(QJsonDocument::fromJson(Encode(Loaded.state_)).object()["version"].toInt(), 2);
     }
     void corruptAndFutureStayUntouched() {
-        QTemporaryDir Directory; QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
-        for (const auto& Bytes : {QByteArray("broken"), QByteArray("{\"version\":99}"), QByteArray(4 * 1024 * 1024 + 1, 'x')}) {
-            Settings.setValue("Workspace/default", Bytes); auto Loaded = Load(Settings);
+        QTemporaryDir Directory;
+        const auto Path = Directory.filePath("workspace.json");
+        for (const auto& Bytes : {QByteArray("broken"), QByteArray("{\"schemaVersion\":99}"), QByteArray(16 * 1024 * 1024 + 1, 'x')}) {
+            { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
+            hc::settings::JsonStore Settings(Path); auto Loaded = Load(Settings);
             QVERIFY(!Loaded.writable_); QVERIFY(!Save(Settings, Loaded, example()));
-            QCOMPARE(Settings.value("Workspace/default").toByteArray(), Bytes);
+            QFile File(Path); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Bytes);
         }
         auto Object = QJsonDocument::fromJson(Encode(example())).object();
         Object["right"] = Object["left"]; QVERIFY(!Decode(QJsonDocument(Object).toJson()).writable_);
     }
+    void lockedSaveCanBeRetried() {
+        QTemporaryDir Directory; hc::settings::JsonStore Settings(Directory.filePath("workspace.json")); auto Previous = Load(Settings);
+        { QLockFile Lock(Settings.FileName() + ".lock"); QVERIFY(Lock.tryLock()); QVERIFY(!Save(Settings, Previous, example())); }
+        QVERIFY(Save(Settings, Previous, example()));
+        hc::settings::JsonStore Restart(Settings.FileName()); QCOMPARE(Load(Restart).state_.id_, example().id_);
+    }
     void concurrentSessionPreserved() {
-        QTemporaryDir Directory; QSettings Settings(Directory.filePath("settings.ini"), QSettings::IniFormat);
+        QTemporaryDir Directory; hc::settings::JsonStore Settings(Directory.filePath("workspace.json"));
         auto First = Load(Settings); auto Second = First; QVERIFY(Save(Settings, First, example()));
         QVERIFY(!Save(Settings, Second, example()));
         auto Value = example(); Value.id_ = "next"; QVERIFY(Save(Settings, First, Value));

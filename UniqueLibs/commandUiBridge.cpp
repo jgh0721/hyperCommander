@@ -125,8 +125,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
     viewers_ = new QtViewerHost(Main, [Base = QDir::tempPath().toStdString()] { return MakeNativeMaterializer(Base); },
-        [] { return QPluginHostSettings::ViewerChoices(*StSettings); },
-        [] { return QPluginHostSettings::ViewerSelection(*StSettings); });
+        [] { return QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); },
+        [] { return QPluginHostSettings::ViewerSelection(hc::settings::AppSettings()); });
     auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
@@ -559,7 +559,7 @@ void CommandUiBridge::createActions()
     auto* Metadata = Plugins->addAction(tr("선택 파일 정보…")); Metadata->setObjectName("hc.menu.wdx.query");
     auto* Search = Menu->addAction(tr("범위 검색…")); Search->setObjectName("hc.menu.search");
     connect(Search, &QAction::triggered, this, [this] { openSearch(); });
-    hc::automation::Install(Window,*StSettings,[Guard = QPointer<CommandUiBridge>(this)] { return Guard ? Guard->AutomationHost() : hc::automation::Host{}; });
+    hc::automation::Install(Window,hc::settings::AppSettings(),[Guard = QPointer<CommandUiBridge>(this)] { return Guard ? Guard->AutomationHost() : hc::automation::Host{}; });
     auto* DopusStorage = Plugins->addAction(tr("DOpus 파일 시스템 열기…")); DopusStorage->setObjectName("hc.menu.dopus.open");
     auto* DopusMetadata = Plugins->addAction(tr("DOpus 선택 파일 정보…")); DopusMetadata->setObjectName("hc.menu.dopus.query");
     connect(DopusStorage, &QAction::triggered, this, [this] { openDataPlugin(false, true); });
@@ -663,7 +663,7 @@ void CommandUiBridge::openSearch()
 void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
 {
     using namespace hc::plugins;
-    const auto Choices = QPluginHostSettings::DataChoices(*StSettings, Dopus ? (Metadata ? PluginFormat::DopusViewer : PluginFormat::DopusVfs) : (Metadata ? PluginFormat::Wdx : PluginFormat::Wfx));
+    const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Dopus ? (Metadata ? PluginFormat::DopusViewer : PluginFormat::DopusVfs) : (Metadata ? PluginFormat::Wdx : PluginFormat::Wfx));
     if (Choices.empty()) { QMessageBox::information(main_, tr("플러그인"), tr("설정의 플러그인 실행 설정에서 플러그인을 추가하고 승인해 주세요.")); return; }
     const auto Context = captureFiles({}, true);
     QPointer<CmpPanel> Panel = activePanel_;

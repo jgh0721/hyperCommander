@@ -30,71 +30,30 @@ CCommandMgr::CCommandMgr( QObject* parent )
 
 void CCommandMgr::Refresh()
 {
-    auto SpMapKeyToCMDText = std::make_shared< TyMapShortcutToCMDStr >();
-
-    StSettings->beginGroup( "Configuration" );
-    const auto IsUseBuiltInShortcut = StSettings->value( "UseBuiltInShortcut", QVariant( true ) ).toBool();
-    StSettings->endGroup();
-
-
-    // 기본값을 먼저 적용한 후, 사용자가 적용한 
-    if( IsUseBuiltInShortcut == true )
-    {
-        for( const auto& Key : GlobalBuiltInCMDs )
-            ( *SpMapKeyToCMDText )[ Key.Default ] = Key.Name;
+    auto Values = std::make_shared<TyMapShortcutToCMDStr>();
+    if (hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["useBuiltInShortcuts"].toBool(true))
+        for (const auto& Command : GlobalBuiltInCMDs) (*Values)[Command.Default] = Command.Name;
+    const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    for (auto It = Overrides.begin(); It != Overrides.end(); ++It) {
+        const auto Key = QKeySequence::fromString(It.key(), QKeySequence::PortableText);
+        if (Key.count() != 1 || Key[0].key() == Qt::Key_unknown) continue;
+        if (It.value().isNull()) { Values->remove(Key[0]); continue; }
+        const auto Command = GetDefaultCMD(It.value().toString());
+        if (!Command.Name.isEmpty()) (*Values)[Key[0]] = Command.Name;
     }
-
-    StSettings->beginGroup( "Shortcut" );
-    for( const auto& Shortcut : StSettings->allKeys() )
-    {
-        const auto Command = StSettings->value( Shortcut ).toString();
-        const auto It = std::find_if( GlobalBuiltInCMDs.begin(), GlobalBuiltInCMDs.end(), [ Command ]( const TyHC_COMMAND& CMD) {
-            return CMD.Name.compare( Command, Qt::CaseInsensitive ) == 0;
-        } );
-
-        if( It == GlobalBuiltInCMDs.end() )
-            continue;
-        
-        const auto Key = QKeySequence::fromString( Command );
-        if( Key.isEmpty() == true )
-            continue;
-        
-        ( *SpMapKeyToCMDText )[ Key[ 0 ] ] = It->Name;
-    }
-    StSettings->endGroup();
-
-    std::swap( SpMapKeyToCMDText, SpMapKeyToCMDText_ );
+    SpMapKeyToCMDText_ = std::move(Values);
 }
 
 void CCommandMgr::SaveSettings()
 {
-    StSettings->beginGroup( "Configuration" );
-    const auto IsUseBuiltInShortcut = StSettings->value( "UseBuiltInShortcut", QVariant( true ) ).toBool();
-    StSettings->endGroup();
-
-    const auto MapKeyToCMDText = Retrieve();
-    StSettings->beginGroup( "Shortcut" );
-    for( const auto Key : MapKeyToCMDText.keys() )
-    {
-        const auto Command = MapKeyToCMDText[ Key ];
-
-        // 기본값 설정을 사용 중이고, 기본값과 일치한다면 해당 값은 무시한다.  
-        if( IsUseBuiltInShortcut == true )
-        {
-            const auto It = std::find_if( GlobalBuiltInCMDs.begin(), GlobalBuiltInCMDs.end(), [Command, Key]( const TyHC_COMMAND& CMD ) {
-                return CMD.Name.compare( Command, Qt::CaseInsensitive ) == 0 && CMD.Default.toCombined() == Key;
-            } );
-
-            if( It != GlobalBuiltInCMDs.end() )
-                continue;
-        }
-
-        const auto CMD_Key = QKeySequence( Key ).toString();
-        const auto CMD_Value = Command;
-
-        StSettings->setValue( CMD_Key, CMD_Value );
-    }
-    StSettings->endGroup();
+    QJsonObject Overrides;
+    const auto Values = Retrieve();
+    if (hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["useBuiltInShortcuts"].toBool(true))
+        for (const auto& Command : GlobalBuiltInCMDs)
+            if (!Values.contains(Command.Default)) Overrides[QKeySequence(Command.Default).toString(QKeySequence::PortableText)] = QJsonValue::Null;
+    for (auto It = Values.begin(); It != Values.end(); ++It)
+        Overrides[QKeySequence(It.key()).toString(QKeySequence::PortableText)] = It.value();
+    hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
 }
 
 TyMapShortcutToCMDStr CCommandMgr::Retrieve() const
@@ -113,12 +72,13 @@ TyHC_COMMAND CCommandMgr::GetDefaultCMD( const QString& Command )
 
 void CCommandMgr::SetShortcutWithCMD( QKeyCombination Key, const QString& CMD )
 {
-
+    if (GetDefaultCMD(CMD).Name.isEmpty()) return;
+    (*SpMapKeyToCMDText_)[Key] = GetDefaultCMD(CMD).Name; SaveSettings();
 }
 
 void CCommandMgr::DelShortcut( QKeyCombination Key )
 {
-
+    SpMapKeyToCMDText_->remove(Key); SaveSettings();
 }
 
 QWidget* CCommandMgr::GetMainUI() const

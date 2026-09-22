@@ -27,7 +27,6 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     // Anchor the statically linked themes, SVGs, and font resources. Theme selection follows in P3.
     oclero::qlementine::resources::initializeResources();
     Qtitan::CommonStyle::ensureStyle();
-    QSettings::setDefaultFormat( QSettings::IniFormat );
 
     auto Font = QApplication::font();
     Font.setStyleStrategy( QFont::PreferAntialias  );
@@ -44,13 +43,19 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     SetEnvironmentVariableW( L"COMMANDER_PATH", QDir::toNativeSeparators( applicationDirPath() ).toStdWString().c_str() );
 
+    const auto Config = hc::settings::Paths();
+    if (!Config.error_.isEmpty()) qFatal("Invalid settings path: %s", qPrintable(Config.error_));
+    auto& Settings = hc::settings::AppSettings();
+    Settings.SetErrorHandler([this](const QString& Error) {
+        if (hc::settings::AppSettings().Editing()) return;
+        QTimer::singleShot(0, this, [this, Error] { QMessageBox::warning(mainUI, tr("설정 저장 실패"), Error); });
+    });
     initialize();
 
     mainUI = new QMainUI;
-    StSettings->beginGroup( OPT_SEC_WINDOW );
-    mainUI->restoreGeometry( StSettings->value( "geometry" ).toByteArray() );
-    StSettings->endGroup();
     mainUI->show();
+    if (!Settings.Error().isEmpty() || !Settings.Issues().isEmpty())
+        mainUI->statusBar()->showMessage(tr("설정 확인 필요: %1 %2").arg(Settings.Error(), Settings.Issues().join(", ")));
 }
 
 void HyperCommanderApp::ShowMultiRename( const QVector< QString >& VecFiles )

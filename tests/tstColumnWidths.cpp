@@ -39,26 +39,26 @@ private slots:
         for (double Value : {-1.0, 100.1, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
         { Policy = {}; Policy.unit_ = WidthUnit::Percent; Policy.value_ = Value; QVERIFY(!Validate(Policy).empty()); }
     }
-    void storageMigrationAndUnknownVersion()
+    void storageDefaultsAndUnknownVersion()
     {
         QTemporaryDir Directory;
-        const auto Path = Directory.filePath("widths.ini");
-        QSettings Settings(Path, QSettings::IniFormat);
-        const QMap<QString, int> Legacy{{"name", 220}, {"size", 80}};
-        auto Values = LoadWidths(Settings, "view", Legacy);
+        const auto Path = Directory.path();
+        hc::settings::Repository Settings(Path);
+        const QMap<QString, int> Defaults{{"name", 220}, {"size", 80}};
+        auto Values = LoadWidths(Settings, "view", Defaults);
         QCOMPARE(Values.columns_["name"].unit_, WidthUnit::Pixels);
         QCOMPARE(Values.columns_["name"].value_, 220.0);
         Values.columns_["name"] = {WidthUnit::Percent, WidthMode::Fixed, 25, 10, 40, true};
         QVERIFY(SaveWidths(Settings, "view", Values));
-        QSettings Reopened(Path, QSettings::IniFormat);
-        const auto Restored = LoadWidths(Reopened, "view", Legacy);
+        hc::settings::Repository Reopened(Path);
+        const auto Restored = LoadWidths(Reopened, "view", Defaults);
         QVERIFY(Restored.columns_["name"] == Values.columns_["name"]);
         QCOMPARE(Resolve(Restored.columns_["name"], 800)->width_, 200);
-        Settings.setValue("view", QByteArray("{\"version\":2,\"columns\":{}}"));
-        const auto Unknown = LoadWidths(Settings, "view", Legacy);
+        Settings.Put(hc::settings::Section::Columns, QJsonObject{{"view", QJsonObject{{"version",2},{"columns",QJsonObject{}}}}});
+        const auto Unknown = LoadWidths(Settings, "view", Defaults);
         QVERIFY(!Unknown.writable_);
         QVERIFY(!SaveWidths(Settings, "view", Unknown));
-        QVERIFY(Settings.value("view").toByteArray().contains("2"));
+        QVERIFY(Settings.Read(hc::settings::Section::Columns).toObject()["view"].toObject()["version"].toInt() == 2);
         QVERIFY(!DecodeWidth(QJsonObject{{"unit", "percent"}, {"mode", "fixed"}, {"value", "25"}}));
     }
 };

@@ -4,13 +4,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
-#include <QLockFile>
-#include <QSettings>
+#include "settings/appSettings.hpp"
 #include <QSet>
 
 namespace hc::automation {
 namespace {
-constexpr auto Key = "Automation/library";
 Error LibraryError(const char* Code) { return {ErrorCategory::InvalidRequest, Code}; }
 bool ValidText(const QJsonValue& Value, int Limit) { return Value.isString() && Value.toString().size() <= Limit && !Value.toString().contains(QChar::Null); }
 }
@@ -56,21 +54,20 @@ Result<QByteArray> EncodeLibrary(const QList<SavedScript>& Scripts)
 }
 Result<QList<SavedScript>> LibraryStore::Load()
 {
-    loaded_ = false; settings_.sync(); if (settings_.status() != QSettings::NoError) return LibraryError("automation-library-read");
-    exists_ = settings_.contains(Key); original_ = settings_.value(Key).toByteArray();
-    auto Result = exists_ ? DecodeLibrary(original_) : storage::Result<QList<SavedScript>>(QList<SavedScript>{});
-    loaded_ = Result.HasValue(); return Result;
+    loaded_ = false; pending_.clear();
+    if (!settings_.Writable()) return LibraryError("automation-library-read");
+    original_ = hc::settings::JsonBytes(settings_.Read(hc::settings::Section::Automation));
+    auto Result = DecodeLibrary(original_); loaded_ = Result.HasValue(); return Result;
 }
 Result<Unit> LibraryStore::Save(const QList<SavedScript>& Scripts)
 {
     if (!loaded_) return LibraryError("automation-library-not-loaded");
     auto Encoded = EncodeLibrary(Scripts); if (!Encoded.HasValue()) return Encoded.Failure();
-    QLockFile Lock(settings_.fileName() + ".automation-lock"); if (!Lock.tryLock(0)) return LibraryError("automation-library-busy");
-    settings_.sync();
-    if (settings_.status() != QSettings::NoError || settings_.contains(Key) != exists_ || settings_.value(Key).toByteArray() != original_)
-        return LibraryError("automation-library-changed");
-    settings_.setValue(Key,Encoded.Value()); settings_.sync();
-    if (settings_.status() != QSettings::NoError) return LibraryError("automation-library-write");
-    original_ = Encoded.Value(); exists_ = true; return Unit{};
+    const auto Current = hc::settings::JsonBytes(settings_.Read(hc::settings::Section::Automation));
+    if (Current != original_ && (pending_.isEmpty() || Current != pending_)) return LibraryError("automation-library-changed");
+    if (!settings_.Put(hc::settings::Section::Automation, hc::settings::JsonObject(Encoded.Value()))) {
+        pending_ = Encoded.Value(); return LibraryError("automation-library-write");
+    }
+    original_ = Encoded.Value(); pending_.clear(); return Unit{};
 }
 }

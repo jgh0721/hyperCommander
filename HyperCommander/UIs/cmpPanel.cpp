@@ -1015,7 +1015,7 @@ void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem
         ULARGE_INTEGER Avail, TotalBytes, TotalFree;
         if( GetDiskFreeSpaceExW( Root.c_str(), &Avail, &TotalBytes, &TotalFree ) != FALSE )
         {
-            const auto SizeStyle = static_cast< TyEnSizeStyle >( StSettings->value( "Configuration/SizeInHeader" ).toInt() );
+            const auto SizeStyle = static_cast< TyEnSizeStyle >( hc::settings::AppSettings().SizeStyle(true) );
             const auto AvailText = GetFormattedSizeText( Avail.QuadPart, SizeStyle );
             const auto TotalText = GetFormattedSizeText( TotalBytes.QuadPart, SizeStyle );
 
@@ -1035,7 +1035,7 @@ void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem
 void CmpPanel::processPanelStatusText()
 {
     const auto& State = retrieveFocusState();
-    const auto SizeStyle = static_cast< TyEnSizeStyle >( StSettings->value( "Configuration/SizeInFooter" ).toInt() );
+    const auto SizeStyle = static_cast< TyEnSizeStyle >( hc::settings::AppSettings().SizeStyle(false) );
 
     ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" )
                            .arg( GetFormattedSizeText( State->SelectedSize, SizeStyle ) ).arg( GetFormattedSizeText( State->Model->GetTotalSize(), SizeStyle ) )

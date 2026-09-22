@@ -2,6 +2,7 @@
   "version": 3,
   "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
   "configurePresets": [
+    { "name": "vc2026-readiness-p2", "displayName": "JSON settings validation", "inherits": "vc2026-qt612", "binaryDir": "${sourceDir}/_build/readiness-p2", "cacheVariables": { "HC_BUILD_SMB_TESTS": "ON" } },
     {
       "name": "vc2026-readiness-p1",
       "displayName": "Product Qlementine integration validation",
@@ -39,6 +40,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "vc2026-readiness-p2-debug", "configurePreset": "vc2026-readiness-p2", "configuration": "Debug", "targets": ["HyperCommander", "hc_smb_tests", "hc_settings_tests", "hc_workspace_tests", "hc_column_tests", "hc_automation_tests"] },
+    { "name": "vc2026-readiness-p2-release", "configurePreset": "vc2026-readiness-p2", "configuration": "Release", "targets": ["HyperCommander", "hc_smb_tests", "hc_settings_tests", "hc_workspace_tests", "hc_column_tests", "hc_automation_tests"] },
     { "name": "vc2026-readiness-p1-debug", "configurePreset": "vc2026-readiness-p1", "configuration": "Debug", "targets": ["HyperCommander", "hc_qlementine_tests"] },
     { "name": "vc2026-readiness-p1-release", "configurePreset": "vc2026-readiness-p1", "configuration": "Release", "targets": ["HyperCommander", "hc_qlementine_tests"] },
     { "name": "vc2026-debug", "configurePreset": "vc2026-qt612", "configuration": "Debug" },

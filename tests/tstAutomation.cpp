@@ -5,7 +5,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QCheckBox>
-#include <QSettings>
+#include "UniqueLibs/settings/appSettings.hpp"
 #include <QTemporaryDir>
 #include <QMainWindow>
 #include <QAction>
@@ -19,7 +19,7 @@ class AutomationTests : public QObject {
     Q_OBJECT
 private slots:
     void luaEditorSaveRunAndStop() {
-        QTemporaryDir Temp; QSettings Settings(Temp.filePath("lua.ini"), QSettings::IniFormat);
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
         Host Host; int Calls = 0;
         Host.capture_ = [&]() -> Result<CommandContext> { ++Calls; return CommandContext{}; };
         QWidget Parent; QPointer<QDialog> Dialog = Show(&Parent, [Host] { return Host; }, &Settings);
@@ -39,19 +39,27 @@ private slots:
         QVERIFY(!Dialog->findChild<QCheckBox*>("hc.automation.write")->isChecked());
         Dialog->close(); QTRY_VERIFY(Dialog.isNull());
     }
+    void lockedLibraryCanBeRetried() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); LibraryStore Store(Settings); QVERIFY(Store.Load().HasValue());
+        const QList<SavedScript> Scripts{{"retry","Retry","invoke \"test\" {}","",false}};
+        { QLockFile Lock(Settings.FileName() + ".lock"); QVERIFY(Lock.tryLock()); QVERIFY(!Store.Save(Scripts).HasValue()); }
+        QVERIFY(Store.Save(Scripts).HasValue());
+        hc::settings::Repository Restart(Temp.path()); LibraryStore Reopened(Restart); const auto Loaded = Reopened.Load();
+        QVERIFY(Loaded.HasValue()); QCOMPARE(Loaded.Value().size(),1);
+    }
     void savedLibraryVersionAndConcurrentChange() {
-        QTemporaryDir Temp; QVERIFY(Temp.isValid()); QSettings Settings(Temp.filePath("scripts.ini"),QSettings::IniFormat);
+        QTemporaryDir Temp; QVERIFY(Temp.isValid()); hc::settings::Repository Settings(Temp.path());
         LibraryStore First(Settings), Second(Settings); QVERIFY(First.Load().HasValue()); QVERIFY(Second.Load().HasValue());
         QList<SavedScript> Scripts{{"one","테스트","invoke \"test\" {}","Ctrl+Alt+9",true}};
         QVERIFY(First.Save(Scripts).HasValue()); QVERIFY(!Second.Save({}).HasValue());
         auto Loaded=Second.Load(); QVERIFY(Loaded.HasValue()); QCOMPARE(Loaded.Value()[0].title_,QString("테스트")); QVERIFY(Loaded.Value()[0].toolbar_);
         Scripts.append({"two","duplicate","invoke \"test\" {}","Ctrl+Alt+9",false}); QVERIFY(!EncodeLibrary(Scripts).HasValue());
         QVERIFY(DecodeLibrary("{\"version\":0,\"scripts\":[{\"id\":\"old\",\"title\":\"old\",\"source\":\"invoke \\\"test\\\" {}\"}]}").HasValue());
-        const QByteArray Future="{\"version\":3,\"scripts\":[]}"; Settings.setValue("Automation/library",Future); Settings.sync();
-        QVERIFY(!First.Load().HasValue()); QVERIFY(!First.Save({}).HasValue()); QCOMPARE(Settings.value("Automation/library").toByteArray(),Future);
+        const QByteArray Future="{\"version\":3,\"scripts\":[]}"; Settings.Put(hc::settings::Section::Automation, hc::settings::JsonObject(Future));
+        QVERIFY(!First.Load().HasValue()); QVERIFY(!First.Save({}).HasValue()); QCOMPARE(Settings.Read(hc::settings::Section::Automation).toObject(),hc::settings::JsonObject(Future));
     }
     void savedActionsAndWritePreflight() {
-        QTemporaryDir Temp; QSettings Settings(Temp.filePath("actions.ini"),QSettings::IniFormat); LibraryStore Store(Settings); QVERIFY(Store.Load().HasValue());
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); LibraryStore Store(Settings); QVERIFY(Store.Load().HasValue());
         QVERIFY(Store.Save({{"read","읽기","invoke \"read\" {}","Ctrl+Alt+9",true},{"write","쓰기","invoke \"write\" {}","",false}}).HasValue());
         int Calls=0; Host Host; Host.capture_=[]() -> Result<CommandContext> { return CommandContext{}; };
         Host.schema_=[](const std::string& Id) -> Result<CommandDescriptor> { return CommandDescriptor{Id,1,{},Id=="write" ? "file-write":"navigation"}; };

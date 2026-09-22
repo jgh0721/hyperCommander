@@ -774,42 +774,42 @@ void CTCPlugInMgr::Refresh()
     QVector< TyPlugInWLX > VecWLX;
     QVector< TyPlugInWCX > VecWCX;
 
-    StSettings->beginGroup( "ListerPlugins" );
-    const auto WLXCount = StSettings->value( "Count" ).toUInt();
+    const auto WlxItems = hc::settings::AppSettings().Plugins("wlx");
+    const auto WLXCount = WlxItems.size();
     for( uint32_t Idx = 0; Idx < WLXCount; ++Idx )
     {
+        const auto Record = WlxItems[Idx].toObject();
         TyPlugInWLX Plugin;
         Plugin.Index            = Idx;
-        Plugin.FileFullPath     = StSettings->value( QString( "%1_Path" ).arg( Idx ) ).toString();
+        Plugin.FileFullPath     = Record["path"].toString();
         Plugin.FileName         = QFileInfo( Plugin.FileFullPath ).baseName();
-        Plugin.Detect           = StSettings->value( QString( "%1_Detect" ).arg( Idx ) ).toString();
-        Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
-        Plugin.hostEnabled_ = StSettings->value(QString("%1_HostEnabled").arg(Idx), false).toBool();
-        Plugin.hostManifest_ = StSettings->value(QString("%1_HostManifest").arg(Idx)).toString();
-        Plugin.hostReviewed_ = StSettings->value(QString("%1_HostReviewed").arg(Idx)).toByteArray();
+        Plugin.Detect           = Record["detect"].toString();
+        Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostManifest_ = Record["hostManifest"].toString();
+        Plugin.hostReviewed_ = hc::settings::JsonBytes(Record["hostReviewed"]);
         VecWLX.push_back( Plugin );
     }
-    StSettings->endGroup();
 
-    StSettings->beginGroup( "PackerPlugins" );
-    const auto WCXCount = StSettings->value( "Count" ).toUInt();
+    const auto WcxItems = hc::settings::AppSettings().Plugins("wcx");
+    const auto WCXCount = WcxItems.size();
     for( uint32_t Idx = 0; Idx < WCXCount; ++Idx )
     {
+        const auto Record = WcxItems[Idx].toObject();
         TyPlugInWCX Plugin;
-        Plugin.FileFullPath     = StSettings->value( QString( "%1_Path" ).arg( Idx ) ).toString();
-        Plugin.PackerCaps       = StSettings->value( QString( "%1_Caps" ).arg( Idx ) ).toInt();
-        Plugin.Exts             = StSettings->value( QString( "%1_Exts" ).arg( Idx ) ).toString().split( '|' );
-        Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
-        Plugin.hostEnabled_ = StSettings->value(QString("%1_HostEnabled").arg(Idx), false).toBool();
-        Plugin.hostManifest_ = StSettings->value(QString("%1_HostManifest").arg(Idx)).toString();
-        auto Reviewed = hc::plugins::ParseManifest(StSettings->value(QString("%1_HostReviewed").arg(Idx)).toByteArray());
+        Plugin.FileFullPath     = Record["path"].toString();
+        Plugin.PackerCaps       = Record["caps"].toInt();
+        Plugin.Exts             = hc::settings::Strings(Record["extensions"]);
+        Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostManifest_ = Record["hostManifest"].toString();
+        auto Reviewed = hc::plugins::ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
         if (Reviewed.HasValue()) {
             Plugin.hostApproval_.reviewed_ = std::move(Reviewed.Value()); Plugin.hostApproval_.approved_ = true;
             Plugin.hostApproval_.granted_ = Plugin.hostApproval_.reviewed_.permissions_;
         }
         VecWCX.push_back( Plugin );
     }
-    StSettings->endGroup();
 
     // User handlers keep their configured priority. The bundled ISO handler is
     // appended without writing synthetic entries into the user's settings.
@@ -945,19 +945,13 @@ QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext ) const
 
 void CTCPlugInMgr::Save_WLX()
 {
-    StSettings->beginGroup( "ListerPlugins" );
-    StSettings->setValue( "Count", vecWLX.size() );
-    for( uint32_t Idx = 0; Idx < vecWLX.size(); ++Idx )
-    {
-        auto& WLX = vecWLX[ Idx ]; WLX.Index = static_cast<int>(Idx);
-        StSettings->setValue( QString( "%1_Path" ).arg( Idx ), WLX.FileFullPath );
-        StSettings->setValue( QString( "%1_Detect" ).arg( Idx ), WLX.Detect );
-        StSettings->setValue( QString( "%1_Support64Bit" ).arg( Idx ), WLX.IsContain64Bit );
-        StSettings->setValue(QString("%1_HostEnabled").arg(Idx), WLX.hostEnabled_);
-        StSettings->setValue(QString("%1_HostManifest").arg(Idx), WLX.hostManifest_);
-        StSettings->setValue(QString("%1_HostReviewed").arg(Idx), WLX.hostReviewed_);
+    QJsonArray Items;
+    for (auto& Item : vecWLX) {
+        Item.Index = Items.size();
+        Items.append(QJsonObject{{"path",Item.FileFullPath},{"detect",Item.Detect},{"support64Bit",Item.IsContain64Bit},
+            {"hostEnabled",Item.hostEnabled_},{"hostManifest",Item.hostManifest_},{"hostReviewed",hc::settings::JsonObject(Item.hostReviewed_)}});
     }
-    StSettings->endGroup();
+    hc::settings::AppSettings().SetPlugins("wlx", Items);
 }
 
 #undef LOAD_FUNC

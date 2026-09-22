@@ -636,6 +636,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\fileJobUi.hpp" />
     <ClInclude Include="..\commonLibs\commands\commandBus.hpp" />
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
+    <ClInclude Include="..\UniqueLibs\settings\appSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\qtitanColumnAdapter.hpp" />
     <ClInclude Include="..\UniqueLibs\qtPluginHostSettings.hpp" />
