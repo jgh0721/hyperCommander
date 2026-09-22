@@ -191,6 +191,11 @@ if(TARGET hc_smb_tests)
             -Executable "$<TARGET_FILE:hc_smb_tests>" -AutomationOnly -Dpr 1)
     set_tests_properties(hc.automation_ui PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
     foreach(HC_WORKSPACE_DPR IN ITEMS 1 1.5)
+        add_test(NAME hc.wlx_ui_${HC_WORKSPACE_DPR}
+            COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -WlxOnly -Dpr ${HC_WORKSPACE_DPR})
+        set_tests_properties(hc.wlx_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE LABELS "interactive;wlx")
         add_test(NAME hc.workspace_ui_${HC_WORKSPACE_DPR}
             COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                 -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
