@@ -125,6 +125,9 @@ private slots:
         QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
         PluginApproval Approval{Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_};
         QWidget Parent; Parent.resize(900, 600); Parent.show(); QVERIFY(QTest::qWaitForWindowExposed(&Parent)); Activate(Parent);
+        qInfo() << "Compatibility DPR:" << Parent.devicePixelRatioF();
+        const auto ExpectedDpr = qEnvironmentVariable("HC_VIEWER_EXPECT_DPR");
+        if (!ExpectedDpr.isEmpty()) QCOMPARE(Parent.devicePixelRatioF(), ExpectedDpr.toDouble());
         QTemporaryDir Config;
         auto Started = Worker([&] { return PluginProcess::Start(host_, ManifestPath, Approval, {}, {}, Config.filePath("lsplugin.ini")); });
         QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
@@ -135,7 +138,14 @@ private slots:
         QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
         const auto Viewer = Window(Opened.Value(), "viewer"); QVERIFY(IsWindow(Viewer)); QVERIFY(IsChild(reinterpret_cast<HWND>(Parent.winId()), Viewer));
         QTest::qWait(400); Activate(Parent);
+        QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Parent.winId()));
         auto Focus = Worker([&] { return Host->ViewerCall(WireKind::ViewerFocus, {}); }); QVERIFY(Focus.HasValue());
+        const auto NativeFocused = [&] {
+            GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+            return GetGUIThreadInfo(GetWindowThreadProcessId(Viewer, nullptr), &Info)
+                && (Info.hwndFocus == Viewer || IsChild(Viewer, Info.hwndFocus));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(NativeFocused(), 3000);
         auto Resize = Worker([&] { return Host->ViewerCall(WireKind::ViewerResize, {{"width", 800}, {"height", 500}}); }); QVERIFY(Resize.HasValue());
         const auto Search = qEnvironmentVariable("HC_WLX_SEARCH");
         if (!Search.isEmpty())
