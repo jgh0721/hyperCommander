@@ -1030,7 +1030,7 @@ void CmpPanel::processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem
 
             auto VolumeName = SpFileSystem->GetVolumeName();
             if( VolumeName.isEmpty() == true )
-                VolumeName = tr( "_없음_" );
+                VolumeName = SpFileSystem->GetRoot();
 
             ui.lblVolumeStatus->setText( QString( "[%1] %2 / %3 (남음/전체)" ).arg( VolumeName ).arg(AvailText).arg(TotalText));
         }

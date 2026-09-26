@@ -50,6 +50,10 @@ public:
         if (!Theme) return;
         Theme->fontRegular = Scheme.Dialog_Font;
         Theme->fontBold = Scheme.Dialog_Font; Theme->fontBold.setBold(true);
+        // Placeholder hints describe an available action, so keep them readable
+        // instead of inheriting the base theme's disabled-text contrast.
+        for (const auto Group : {QPalette::Active, QPalette::Inactive})
+            Theme->palette.setColor(Group, QPalette::PlaceholderText, QColor(Dark ? "#AAB5C5" : "#586174"));
         qlementine_->setTheme(*Theme);
         QApplication::setPalette(Theme->palette);
         QApplication::setFont(Scheme.Dialog_Font);
