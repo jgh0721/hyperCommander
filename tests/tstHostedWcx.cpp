@@ -312,22 +312,45 @@ private slots:
         const auto Path = qEnvironmentVariable("HC_WCX_PASSWORD_SOURCE");
         const auto Mode = qEnvironmentVariable("HC_WCX_PASSWORD_MODE", "read");
         if (ManifestPath.isEmpty() || Path.isEmpty()) QSKIP("Set explicit password compatibility manifest and owned fixture path");
-        QVERIFY(Mode == "create" || Mode == "read" || Mode == "cancel" || Mode == "timeout" || Mode == "wrong" || Mode == "dismiss");
+        const bool Write = Mode.startsWith("write");
+        QVERIFY(Mode == "create" || Mode == "read" || Mode == "cancel" || Mode == "timeout" || Mode == "wrong" || Mode == "dismiss"
+            || Mode == "write" || Mode == "write-plain" || Mode == "write-cancel" || Mode == "write-wrong" || Mode == "write-timeout");
         auto Inspected = InspectManifestFile(ManifestPath); QVERIFY(Inspected.HasValue());
         PluginApproval Approval{Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_};
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); HostLimits Limits; Limits.requestMs_ = 60000;
         auto Started = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", ManifestPath, Approval, Limits, {}, Directory.filePath("pkplugin.ini"));
         QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
         auto Host = std::shared_ptr<PluginProcess>(std::move(Started.Value())); auto Backend = MakeHostedArchiveBackend(Host);
-        struct NativePromptState { DWORD pid_; bool wrong_, dismiss_, wait_; std::atomic<unsigned> handled_{0}, visible_{0}; };
-        NativePromptState Native{Host->Snapshot().processId_, Mode == "wrong", Mode == "dismiss", Mode == "cancel" || Mode == "timeout"};
+        struct NativePromptState { DWORD pid_; bool wrong_, dismiss_, wait_, plain_, writeOnly_; std::atomic<unsigned> handled_{0}, visible_{0};
+            std::wstring helper_; std::vector<DWORD> children_; };
+        NativePromptState Native{Host->Snapshot().processId_, Mode == "wrong" || Mode == "write-wrong", Mode == "dismiss" || Mode == "write-cancel",
+            Mode == "cancel" || Mode == "timeout" || Mode == "write-timeout", Mode == "write-plain", Mode == "write-cancel" || Mode == "write-timeout"};
+        if (Inspected.Value().manifest_.helpers_.contains("64/7zG.exe"))
+            Native.helper_ = QDir::toNativeSeparators(QFileInfo(ManifestPath).dir().absoluteFilePath("64/7zG.exe")).toStdWString();
         std::jthread NativeInput;
         if (qEnvironmentVariableIntValue("HC_WCX_PASSWORD_AUTOMATE") == 1)
             NativeInput = std::jthread([&](std::stop_token Token) {
                 while (!Token.stop_requested()) {
+                    Native.children_.clear();
+                    if (!Native.helper_.empty()) {
+                        const auto Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                        if (Snapshot != INVALID_HANDLE_VALUE) {
+                            PROCESSENTRY32W Entry{}; Entry.dwSize = sizeof(Entry);
+                            if (Process32FirstW(Snapshot, &Entry)) do {
+                                if (Entry.th32ParentProcessID != Native.pid_) continue;
+                                const auto Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Entry.th32ProcessID);
+                                if (!Process) continue;
+                                wchar_t Image[32768]{}; DWORD Length = DWORD(std::size(Image));
+                                if (QueryFullProcessImageNameW(Process, 0, Image, &Length) && _wcsicmp(Image, Native.helper_.c_str()) == 0)
+                                    Native.children_.push_back(Entry.th32ProcessID);
+                                CloseHandle(Process);
+                            } while (Process32NextW(Snapshot, &Entry));
+                            CloseHandle(Snapshot);
+                        }
+                    }
                     EnumWindows([](HWND Window, LPARAM Parameter) -> BOOL {
                         auto& State = *reinterpret_cast<NativePromptState*>(Parameter); DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
-                        if (Pid != State.pid_ || !IsWindowVisible(Window)) return TRUE;
+                        if ((Pid != State.pid_ && std::ranges::find(State.children_, Pid) == State.children_.end()) || !IsWindowVisible(Window)) return TRUE;
                         std::vector<HWND> Fields;
                         EnumChildWindows(Window, [](HWND Child, LPARAM Parameter) -> BOOL {
                             wchar_t Class[64]{}; GetClassNameW(Child, Class, 64);
@@ -336,20 +359,22 @@ private slots:
                             return TRUE;
                         }, reinterpret_cast<LPARAM>(&Fields));
                         if (Fields.empty()) return TRUE;
-                        ++State.visible_; if (State.wait_) return TRUE;
+                        const auto CreateSqx = GetDlgItem(Window, 1709) != nullptr;
+                        const auto ReadSqx = GetDlgItem(Window, 1603) && GetDlgItem(Window, 2000);
+                        const auto Packing = CreateSqx || Fields.size() > 1;
+                        ++State.visible_; if (State.wait_ && (!State.writeOnly_ || Packing)) return TRUE;
+                        const auto Plain = State.plain_ && Packing;
                         DWORD_PTR Result = 0;
                         // TotalSQX reopens its input after a wrong password.
                         // Submit one wrong value, then cancel the retry.
-                        const auto Dismiss = State.dismiss_ || (State.wrong_ && State.handled_.load() != 0);
+                        const auto Dismiss = (State.dismiss_ && (!State.writeOnly_ || Packing)) || (State.wrong_ && State.handled_.load() != 0);
                         if (!Dismiss) for (auto Field : Fields)
-                            if (!SendMessageTimeoutW(Field, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(State.wrong_ ? L"wrong-test-password" : L"hc-test-only-2026"), SMTO_ABORTIFHUNG, 500, &Result)) return TRUE;
-                        // Only the test host's visible password dialog is touched;
-                        // no foreground window, global keys or user credentials.
+                            if (!SendMessageTimeoutW(Field, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(Plain ? L"" : State.wrong_ ? L"wrong-test-password" : L"hc-test-only-2026"), SMTO_ABORTIFHUNG, 500, &Result)) return TRUE;
+                        // Only the test host or its approved direct helper's
+                        // visible dialog is touched; no global keys/credentials.
                         // TotalSQX uses its own resource IDs for the encryption
                         // dialog; Total7zip uses the standard OK/Cancel IDs.
-                        const auto CreateSqx = GetDlgItem(Window, 1709) != nullptr;
-                        const auto ReadSqx = GetDlgItem(Window, 1603) && GetDlgItem(Window, 2000);
-                        const auto Command = CreateSqx ? (Dismiss ? 1711 : 1709) : ReadSqx ? (Dismiss ? 2001 : 2000) : (Dismiss ? IDCANCEL : IDOK);
+                        const auto Command = CreateSqx ? (Dismiss ? 1711 : State.plain_ ? 1710 : 1709) : ReadSqx ? (Dismiss ? 2001 : 2000) : (Dismiss ? IDCANCEL : IDOK);
                         if (SendMessageTimeoutW(Window, WM_COMMAND, Command, 0, SMTO_ABORTIFHUNG, 500, &Result)) ++State.handled_;
                         return TRUE;
                     }, reinterpret_cast<LPARAM>(&Native));
@@ -359,9 +384,69 @@ private slots:
         const QByteArray Payload("HC encrypted compatibility payload\r\n");
         std::atomic<unsigned> Prompts = 0; std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
         Context.passwordPrompt_ = [&](const std::string&, unsigned, const OperationContext&) -> Result<Password> { ++Prompts;
-            if (Mode == "dismiss") return Error{ErrorCategory::Cancelled, "test-password-cancelled"};
-            return Password(Mode == "wrong" ? "wrong-test-password" : "hc-test-only-2026"); };
+            if (Mode == "dismiss" || Mode == "write-cancel") return Error{ErrorCategory::Cancelled, "test-password-cancelled"};
+            return Password(Mode == "wrong" || Mode == "write-wrong" ? "wrong-test-password" : "hc-test-only-2026"); };
         Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        if (Write) {
+            // Each run owns a copy. Never publish over the supplied corpus.
+            const auto Original = Read(Path); QVERIFY(!Original.isEmpty());
+            const auto Working = Directory.filePath("write." + QFileInfo(Path).suffix()); QVERIFY(Put(Working, Original));
+            auto Root = At(Working);
+            auto Provider = MakeWcxReadProvider({}, Root, Directory.path().toStdString(), Backend);
+            auto Secret = Provider->Resolve(At(Working, "/secret.txt"), Context).get(); QVERIFY(Secret.HasValue());
+            QVERIFY(Secret.Value().hints_.contains("encrypted"));
+            const auto Input = Directory.filePath("new.txt"); QVERIFY(Put(Input, Payload));
+            auto InputContent = Content(Input); QVERIFY(InputContent);
+            const auto Replacement = Directory.filePath("replacement.txt"); QVERIFY(Put(Replacement, "changed encrypted payload\r\n"));
+            auto ReplacementContent = Content(Replacement); QVERIFY(ReplacementContent);
+            if (Mode == "write-timeout") Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            const std::vector<std::vector<ArchiveChange>> Batches = Mode == "write" ? std::vector<std::vector<ArchiveChange>>{
+                {{ArchiveChangeKind::Rename, "/secret.txt", "/renamed.txt", {}, Secret.Value().id_}},
+                {{ArchiveChangeKind::Put, "/renamed.txt", {}, ReplacementContent}},
+                {{ArchiveChangeKind::Put, "/secret.txt", {}, InputContent}},
+                {{ArchiveChangeKind::Remove, "/renamed.txt"}}}
+                : std::vector<std::vector<ArchiveChange>>{{Mode == "write-wrong"
+                    ? ArchiveChange{ArchiveChangeKind::Rename, "/secret.txt", "/renamed.txt", {}, Secret.Value().id_}
+                    : ArchiveChange{ArchiveChangeKind::Put, "/new.txt", {}, InputContent}}};
+            for (auto Batch : Batches) {
+                const auto Before = Read(Working);
+                for (auto& Change : Batch) {
+                    auto Existing = Provider->Resolve(At(Working, Change.path_), Context).get();
+                    if (Existing.HasValue()) {
+                        if (Change.kind_ == ArchiveChangeKind::Put) Change.destination_ = {true, Existing.Value().id_.revision_};
+                        else Change.source_ = Existing.Value().id_;
+                    }
+                }
+                auto Session = BeginWcxMutation({}, Root, Provider, Directory.path().toStdString(), {}, Context, {}, Backend); QVERIFY(Session.HasValue());
+                auto Prepared = Session.Value()->Prepare(Batch, Context);
+                QCOMPARE(Read(Working), Before); QCOMPARE(Read(Path), Original);
+                if (Mode != "write") {
+                    QVERIFY2(!Prepared.HasValue(), "An unencrypted or cancelled write must not become a candidate");
+                    qInfo() << "Encrypted write rejected" << Prepared.Failure().code_;
+                    if (Mode == "write-plain") QCOMPARE(Prepared.Failure().code_, std::string("archive-output-encryption-lost"));
+                    if (Mode == "write-cancel") QCOMPARE(Prepared.Failure().code_, std::string("wcx:21"));
+                    if (Mode == "write-timeout") QCOMPARE(Prepared.Failure().code_, std::string("deadline-exceeded"));
+                    QVERIFY(Session.Value()->Abort().empty()); QCOMPARE(Read(Working), Before);
+                    return;
+                }
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+                auto Committed = Session.Value()->Commit(Context); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+                Provider = MakeWcxReadProvider({}, Root, Directory.path().toStdString(), Backend);
+                auto Listing = Backend->Enumerate(Working.toStdString(), true, Context); QVERIFY(Listing.HasValue());
+                auto Page = Listing.Value()->Next(256, Context); QVERIFY(Page.HasValue()); QVERIFY(Page.Value().end_);
+                for (const auto& Header : Page.Value().entries_) if (!Header.directory_) QVERIFY(Header.encrypted_);
+            }
+            auto Final = Backend->Enumerate(Working.toStdString(), false, Context); QVERIFY(Final.HasValue());
+            auto Page = Final.Value()->Next(256, Context); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), 1);
+            QCOMPARE(Page.Value().entries_.front().name_, std::string("secret.txt"));
+            const auto Output = Directory.filePath("verify.txt");
+            auto Extracted = Backend->Extract(Working.toStdString(), Page.Value().entries_.front(), Output.toStdString(), Context);
+            QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str()); QCOMPARE(Read(Output), Payload);
+            const auto Saved = qEnvironmentVariable("HC_WCX_CREATED_ARCHIVE");
+            if (!Saved.isEmpty()) { QVERIFY(!QFile::exists(Saved)); QVERIFY(QFile::copy(Working, Saved)); }
+            qInfo() << "Encrypted rename, replace, add, delete and payload verification passed";
+            return;
+        }
         if (Mode == "create") {
             QVERIFY(!QFile::exists(Path)); QVERIFY(Put(Directory.filePath("secret.txt"), Payload));
             ArchiveUpdate Update{Path.toStdString(), Directory.path().toStdString(), {"secret.txt"}}; Update.encrypt_ = true;
