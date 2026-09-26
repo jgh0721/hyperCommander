@@ -11,6 +11,8 @@ namespace hc::plugins
         std::int64_t modifiedUtcMs_ = 0;
         bool directory_ = false;
         bool encrypted_ = false;
+        // Some adapters cannot update encrypted solid archives in place.
+        bool rebuildEncrypted_ = false;
     };
     struct ArchivePage { std::vector<ArchiveHeader> entries_; bool end_ = false; };
     class IArchiveListing

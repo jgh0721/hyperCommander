@@ -94,7 +94,8 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
     if (State->mode_ == 'T') wcscpy_s(Header->FileName, L"../escape.txt");
     if (State->mode_ == 'D') wcscpy_s(Header->FileName, L"alpha.txt");
     Header->FileAttr = Item.directory_ ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-    if (State->mode_ == 'Q' || State->mode_ == 'R') Header->Flags |= 4;
+    Header->Flags = 0x12345600;
+    if (State->mode_ == 'Q' || State->mode_ == 'R') Header->Flags |= 8;
     Header->UnpSize = static_cast<unsigned int>(Item.bytes_.size()); Header->PackSize = Header->UnpSize;
     Header->FileCRC = Crc(Item.bytes_); Header->FileTime = (46 << 25) | (9 << 21) | (7 << 16);
     return 0;
@@ -124,7 +125,7 @@ extern "C" __declspec(dllexport) int __stdcall ProcessFileW(HANDLE Handle, int O
 }
 extern "C" __declspec(dllexport) int __stdcall CloseArchive(HANDLE Handle) { delete static_cast<ArchiveState*>(Handle); return 0; }
 extern "C" __declspec(dllexport) int __stdcall GetBackgroundFlags() { return BACKGROUND_UNPACK | BACKGROUND_PACK; }
-extern "C" __declspec(dllexport) int __stdcall GetPackerCaps() { return PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE | PK_CAPS_MULTIPLE; }
+extern "C" __declspec(dllexport) int __stdcall GetPackerCaps() { return PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE | PK_CAPS_MULTIPLE | PK_CAPS_ENCRYPT; }
 extern "C" __declspec(dllexport) void __stdcall SetProcessDataProcW(HANDLE Handle, tProcessDataProcW Callback) {
     if (Handle == INVALID_HANDLE_VALUE) PackingProgress = Callback;
     else if (Handle) static_cast<ArchiveState*>(Handle)->progress_ = Callback;

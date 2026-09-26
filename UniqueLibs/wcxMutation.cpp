@@ -372,12 +372,25 @@ namespace hc::storage
                     return Unit{};
                 };
                 std::uint64_t Total = 0;
-                bool Encrypt = false;
+                // New content inherits the archive's protection as well. In a
+                // mixed archive all files in this update batch are encrypted;
+                // unchanged plaintext members need not be rewritten.
+                const bool Encrypt = std::ranges::any_of(before_, [](const auto& Pair) {
+                    return Pair.second.entry_.hints_.contains("encrypted");
+                });
+                const bool Rebuild = Encrypt && std::ranges::any_of(before_, [](const auto& Pair) {
+                    return Pair.second.entry_.hints_.contains("rebuildEncrypted");
+                });
+                if (Rebuild && draft_.empty()) return Error{ErrorCategory::Unsupported, "archive-encrypted-empty-rebuild-unsupported"};
                 std::vector<std::string> Added, Removed;
                 for (auto& [Path, Item] : draft_)
                 {
+                    if (Rebuild) {
+                        if (!Item.entry_.directory_ && !Item.content_) Item.content_ = std::make_shared<ProviderContentSource>(reader_, Item.entry_);
+                        Item.changed_ = true;
+                    }
                     if (!Item.changed_) continue;
-                    Encrypt = Encrypt || Item.entry_.hints_.contains("encrypted");
+                    if (Encrypt && !Item.entry_.directory_) Item.entry_.hints_["encrypted"] = "1";
                     const auto Made = MakeParents(Path, Item.entry_.directory_); if (!Made.HasValue()) return Made;
                     if (!Item.entry_.directory_)
                     {
@@ -405,7 +418,15 @@ namespace hc::storage
                         const auto Raw = Item.entry_.hints_.find("wcxName");
                         Removed.push_back(Raw == Item.entry_.hints_.end() ? Path.substr(1) : Raw->second);
                     }
-                const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
+                // TotalSQX's deletion callback cannot supply passwords for solid
+                // encrypted data. Build a fresh candidate from bounded staging
+                // instead; no deletion/recompression is attempted on the source.
+                if (Rebuild) {
+                    Removed.clear();
+                    if (!QFile::remove(Output)) return Error{ErrorCategory::Unavailable, "archive-staging-placeholder-remove"};
+                } else {
+                    const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
+                }
                 auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt}, Context);
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();

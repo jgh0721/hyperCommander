@@ -207,6 +207,7 @@ namespace hc::storage
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
                     if (Header.encrypted_) Entry.hints_["encrypted"] = "1";
+                    if (Header.rebuildEncrypted_) Entry.hints_["rebuildEncrypted"] = "1";
                     // Deletion must use the plugin's exact directory marker:
                     // some WCX plugins expose directories without a final slash.
                     Entry.hints_["wcxName"] = Header.name_;
@@ -254,6 +255,11 @@ namespace hc::storage
                 auto Pin = native_->OpenRead(archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
                 hc::plugins::ArchiveHeader Expected; Expected.name_ = Entry.hints_.at("wcxName"); Expected.size_ = Entry.size_;
                 Expected.crc_ = static_cast<std::uint32_t>(std::stoul(Entry.hints_.at("crc")));
+                // Output is the content store's empty reservation inside its
+                // pinned private directory. TotalSQX skips existing targets;
+                // let the plugin create the file, then the store validates it.
+                if (!QFile::remove(QString::fromStdString(Output)))
+                    return Error{ErrorCategory::Unavailable, "archive-staging-placeholder-remove"};
                 return backend_->Extract(archivePath_, std::move(Expected), Output, Context);
             }
             std::string plugin_;

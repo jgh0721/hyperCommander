@@ -113,11 +113,22 @@ namespace hc::plugins
             int (__stdcall* pack_)(wchar_t*, wchar_t*, wchar_t*, wchar_t*, int) = nullptr;
             int (__stdcall* remove_)(wchar_t*, wchar_t*) = nullptr;
             int background_ = 0, caps_ = 0;
+            bool rebuildEncrypted_ = false, missingEncryptionMetadata_ = false;
             ~Module() { std::lock_guard Lock(WcxCallMutex()); if (module_) FreeLibrary(module_); }
             Result<Unit> Load(const std::string& Path, bool Background)
             {
                 if (module_) return Unit{};
                 if (!Absolute(Path)) return Invalid("absolute-plugin-path-required");
+                // Bind the workaround to reviewed bytes, never a filename or
+                // an untrusted archive extension. Older SQX compatibility builds
+                // omit encryption metadata and must be re-prepared before writes.
+                QFile Image(QString::fromStdString(Path));
+                if (!Image.open(QIODevice::ReadOnly)) return Invalid("wcx-binary-unreadable");
+                QCryptographicHash Hash(QCryptographicHash::Sha256); if (!Hash.addData(&Image)) return Invalid("wcx-binary-unreadable");
+                const auto Digest = Hash.result().toHex();
+                rebuildEncrypted_ = Digest == "af75ba9493b6ce04626cf9a7c2d4a74e8483e4c4363545af43d80fe9478b0cfb";
+                missingEncryptionMetadata_ = Digest == "a05f301e0c24df9dc7bbbea6472c1eb53bf4839ea92be62e27267fd84c754f85"
+                    || Digest == "ab36c94e5d6850b3f1d86b6732fb9dd1871957abbb7abb788d9ab32b1b884452";
                 module_ = LoadLibraryExW(Native(Path).c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                 if (!module_) return Error{ErrorCategory::Unavailable, "wcx-load:" + std::to_string(GetLastError()), {"wcx"}};
 #define HC_BIND(Member, Name) Member = reinterpret_cast<decltype(Member)>(GetProcAddress(module_, Name))
@@ -142,7 +153,10 @@ namespace hc::plugins
             if (!Length || Length == 1024) return Invalid("invalid-archive-name");
             const auto Name = QString::fromWCharArray(Header.FileName, Length);
             ArchiveHeader Out; Out.name_ = Name.toStdString(); Out.attributes_ = Header.FileAttr; Out.directory_ = !!(Header.FileAttr & FILE_ATTRIBUTE_DIRECTORY);
-            Out.encrypted_ = (Header.Flags & 4) != 0;
+            // TC's extended header convention (also used by Total7zip and
+            // TotalSQX's published fillHeaderEx) has a signature and bit 3.
+            // Unqualified Flags bits have no portable encryption meaning.
+            Out.encrypted_ = (static_cast<unsigned>(Header.Flags) & 0xffffff08U) == 0x12345608U;
             Out.size_ = (std::uint64_t(Header.UnpSizeHigh) << 32) | Header.UnpSize; Out.packedSize_ = (std::uint64_t(Header.PackSizeHigh) << 32) | Header.PackSize;
             Out.crc_ = static_cast<std::uint32_t>(Header.FileCRC);
             const QDate Date(1980 + ((Header.FileTime >> 25) & 127), (Header.FileTime >> 21) & 15, (Header.FileTime >> 16) & 31);
@@ -171,6 +185,7 @@ namespace hc::plugins
                     { const auto Closed = module_->close_(std::exchange(handle_, nullptr)); if (Closed) return WcxError(Closed); Page.end_ = true; break; }
                     if (++count_ > Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
                     auto Header = Decode(Raw); if (!Header.HasValue()) return Header.Failure();
+                    Header.Value().rebuildEncrypted_ = module_->rebuildEncrypted_;
                     // Reject expansion bombs before PK_TEST asks the plugin to
                     // decompress candidate content for integrity verification.
                     if (test_ && !Header.Value().directory_ && Header.Value().size_)
@@ -231,7 +246,14 @@ namespace hc::plugins
                         return Error{ErrorCategory::StaleRevision, "archive-entry-changed", {"wcx"}};
                     auto Target = Native(Output); Checked = Check(Plugin->process_(Handle, PK_EXTRACT, nullptr, Target.data()), State); if (!Checked.HasValue()) return Checked;
                     if (QFileInfo(QString::fromStdString(Output)).size() > static_cast<qint64>(Expected.size_)) return Error{ErrorCategory::BudgetExceeded, "archive-extraction-budget", {"wcx"}};
-                    const auto Closed = Plugin->close_(Handle); Cleanup.dismiss(); return Check(Closed, State);
+                    const auto Closed = Plugin->close_(Handle); Cleanup.dismiss();
+                    Checked = Check(Closed, State); if (!Checked.HasValue()) return Checked;
+                    // Some plugins defer extraction until CloseArchive. Check
+                    // the final size, including silent skips of existing files.
+                    const QFileInfo Produced(QString::fromStdString(Output));
+                    if (!Produced.isFile() || Produced.size() != static_cast<qint64>(Expected.size_))
+                        return Invalid("archive-extracted-size-mismatch");
+                    return Unit{};
                 }
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
@@ -239,8 +261,11 @@ namespace hc::plugins
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_ || Request.maxOutputBytes_ > 128ULL * 1024 * 1024 * 1024) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;
+                if (Plugin->missingEncryptionMetadata_) return Error{ErrorCategory::Unsupported, "wcx-encryption-metadata-upgrade-required", {"wcx"}};
                 if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE)
                     || (background_ && !(Plugin->background_ & BACKGROUND_PACK))) return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required", {"wcx"}};
+                if (Request.encrypt_ && !Request.add_.empty() && !(Plugin->caps_ & PK_CAPS_ENCRYPT))
+                    return Error{ErrorCategory::Unsupported, "wcx-encrypted-write-unsupported", {"wcx"}};
                 const auto Multi = [](const std::vector<std::string>& Names) -> Result<std::wstring> {
                     if (Names.size() > 100000) return Invalid("archive-update-count"); std::wstring Out;
                     for (const auto& Name : Names)

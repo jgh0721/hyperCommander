@@ -20,15 +20,15 @@ namespace hc::plugins
     QJsonObject EncodeArchiveHeader(const ArchiveHeader& Header)
     {
         return {{"name", Text(Header.name_)}, {"size", QString::number(Header.size_)}, {"packedSize", QString::number(Header.packedSize_)},
-            {"attributes", QString::number(Header.attributes_)}, {"crc", QString::number(Header.crc_)}, {"modifiedUtcMs", QString::number(Header.modifiedUtcMs_)}, {"directory", Header.directory_}, {"encrypted", Header.encrypted_}};
+            {"attributes", QString::number(Header.attributes_)}, {"crc", QString::number(Header.crc_)}, {"modifiedUtcMs", QString::number(Header.modifiedUtcMs_)}, {"directory", Header.directory_}, {"encrypted", Header.encrypted_}, {"rebuildEncrypted", Header.rebuildEncrypted_}};
     }
     Result<ArchiveHeader> DecodeArchiveHeader(const QJsonObject& Object)
     {
-        if (Object.size() != 8 || !String(Object["name"], 1024) || Object["name"].toString().isEmpty() || !Object["directory"].isBool() || !Object["encrypted"].isBool() || !Object["modifiedUtcMs"].isString()) return Invalid();
+        if (Object.size() != 9 || !Object["rebuildEncrypted"].isBool() || !String(Object["name"], 1024) || Object["name"].toString().isEmpty() || !Object["directory"].isBool() || !Object["encrypted"].isBool() || !Object["modifiedUtcMs"].isString()) return Invalid();
         auto Size = WireUnsigned(Object["size"]), Packed = WireUnsigned(Object["packedSize"]), Attributes = WireUnsigned(Object["attributes"]), Crc = WireUnsigned(Object["crc"]);
         if (!Size.HasValue() || !Packed.HasValue() || !Attributes.HasValue() || !Crc.HasValue() || Attributes.Value() > UINT32_MAX || Crc.Value() > UINT32_MAX) return Invalid();
         bool Ok = false; auto Time = Object["modifiedUtcMs"].toString().toLongLong(&Ok); if (!Ok) return Invalid();
-        return ArchiveHeader{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool()};
+        return ArchiveHeader{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool(), Object["rebuildEncrypted"].toBool()};
     }
     QJsonObject EncodeArchiveUpdate(const ArchiveUpdate& Update)
     {
