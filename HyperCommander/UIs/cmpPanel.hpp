@@ -106,6 +106,7 @@ public slots:
 
 signals:
     void                            sig_NotifyPanelActivated();
+    void                            sigViewSettingsChanged();
     void                            sig_NotifyCurrentDirectory( const QString& CurrentPath );
 
 private:

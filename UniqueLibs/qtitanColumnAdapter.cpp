@@ -6,6 +6,16 @@
 
 using namespace hc::view;
 
+namespace {
+const QStringList LayoutModes{"details", "name-first", "name-last"};
+QJsonObject EncodePolicies(const QMap<QString, ColumnWidthPolicy>& Policies)
+{
+    QJsonObject Result;
+    for (auto It = Policies.begin(); It != Policies.end(); ++It) Result[It.key()] = EncodeWidth(It.value());
+    return Result;
+}
+}
+
 QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View)
     : QObject(Owner), owner_(Owner), grid_(Grid), view_(View)
 {
@@ -33,7 +43,7 @@ QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qti
 
 void QtitanColumnAdapter::Bind(const ColumnView& Columns)
 {
-    ids_.clear(); legacy_.clear(); defaults_.clear(); applied_.clear();
+    ids_.clear(); legacy_.clear(); defaults_.clear(); applied_.clear(); nameColumn_ = -1;
     QStringList ContentIds;
     for (const auto& Column : Columns.VecColumns)
     {
@@ -41,6 +51,7 @@ void QtitanColumnAdapter::Bind(const ColumnView& Columns)
         const auto Id = QString::fromLatin1(QCryptographicHash::hash(Column.Content.toCaseFolded().toUtf8(), QCryptographicHash::Sha256).toHex()) + ":" + QString::number(Column.Index);
         ids_[Column.Index] = Id;
         ContentIds.push_back(Id);
+        if (Column.Content.compare(BUILTIN_COL_FS_NAME, Qt::CaseInsensitive) == 0) nameColumn_ = Column.Index;
         if (const auto Native = view_->getColumnByModelColumn(Column.Index)) legacy_[Id] = Native->width();
         ColumnWidthPolicy Policy; Policy.value_ = std::max(80, legacy_.value(Id));
         if (Columns.IsBuiltIn) {
@@ -55,6 +66,7 @@ void QtitanColumnAdapter::Bind(const ColumnView& Columns)
         defaults_[Id] = Policy;
     }
     ContentIds.sort();
+    singleLineDefaults_ = defaults_;
     viewId_ = Columns.IsBuiltIn ? "builtin-details" : QString::fromLatin1(QCryptographicHash::hash(ContentIds.join('|').toUtf8(), QCryptographicHash::Sha256).toHex());
     QTimer::singleShot(0, this, &QtitanColumnAdapter::Reload);
 }
@@ -66,9 +78,93 @@ void QtitanColumnAdapter::Reload()
     QString Pane = "default";
     for (auto* Parent = owner_.data(); Parent; Parent = Parent->parentWidget())
         if (Parent->objectName() == "cmpLeftPanel" || Parent->objectName() == "cmpRightPanel") { Pane = Parent->objectName(); break; }
-    profile_ = "Views/ColumnWidths/" + Pane + "/" + viewId_;
-    settings_ = LoadWidthPolicies(hc::settings::AppSettings(), profile_, defaults_);
+    baseProfile_ = "Views/ColumnWidths/" + Pane + "/" + viewId_;
+    const auto Profile = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()[baseProfile_].toObject();
+    const auto Mode = Profile.value("listMode").toString("details");
+    activateLayout(LayoutModes.contains(Mode) ? Mode : "details");
+    if (!LayoutModes.contains(Mode)) settings_.writable_ = false;
     Request();
+}
+
+QString QtitanColumnAdapter::profileForLayout(const QString& Mode) const
+{
+    return Mode == "details" ? baseProfile_ : baseProfile_ + "/" + Mode;
+}
+
+QMap<QString, ColumnWidthPolicy> QtitanColumnAdapter::defaultsForLayout(const QString& Mode) const
+{
+    auto Result = singleLineDefaults_;
+    if (Mode != "details" && nameColumn_ >= 0) {
+        const auto NameId = ids_.value(nameColumn_);
+        double Total = 0;
+        for (auto It = Result.begin(); It != Result.end(); ++It) if (It.key() != NameId) Total += It.value().value_;
+        for (auto It = Result.begin(); It != Result.end(); ++It) {
+            // Match the editor's precision so saving defaults retains their
+            // logical-pixel readability floors on a narrow pane.
+            const auto Percent = It.key() == NameId ? 100 : Total > 0 ? It.value().value_ * 100 / Total : 0;
+            It.value() = {WidthUnit::Percent, WidthMode::Flexible, std::round(Percent * 1000000) / 1000000};
+        }
+    }
+    return Result;
+}
+
+void QtitanColumnAdapter::activateLayout(const QString& Mode)
+{
+    layoutMode_ = Mode;
+    defaults_ = defaultsForLayout(Mode);
+    profile_ = profileForLayout(Mode);
+    settings_ = LoadWidthPolicies(hc::settings::AppSettings(), profile_, defaults_);
+    inherited_ = settings_.columns_;
+    const auto Overrides = layoutWidths_.value(Mode).toObject();
+    for (auto It = Overrides.begin(); It != Overrides.end(); ++It) {
+        const auto Policy = It.value().isObject() ? DecodeWidth(It.value().toObject()) : std::nullopt;
+        if (Policy && ids_.values().contains(It.key())) settings_.columns_[It.key()] = *Policy;
+    }
+    if (!unsupportedLayout_.isEmpty()) settings_.writable_ = false;
+    applied_.clear(); Request();
+}
+
+bool QtitanColumnAdapter::SetLayoutMode(const QString& Mode)
+{
+    if (!LayoutModes.contains(Mode) || !settings_.writable_ || (Mode != "details" && nameColumn_ < 0)) return false;
+    layoutWidths_[layoutMode_] = EncodePolicies(settings_.columns_);
+    activateLayout(Mode);
+    return true;
+}
+
+QJsonObject QtitanColumnAdapter::WorkspaceLayout() const
+{
+    if (!unsupportedLayout_.isEmpty()) return unsupportedLayout_;
+    auto Profiles = layoutWidths_;
+    Profiles[layoutMode_] = EncodePolicies(settings_.columns_);
+    return {{"version", 1}, {"mode", layoutMode_}, {"profiles", Profiles}};
+}
+
+void QtitanColumnAdapter::RestoreWorkspaceLayout(const QJsonObject& View)
+{
+    if (baseProfile_.isEmpty()) Reload();
+    layoutWidths_ = {}; unsupportedLayout_ = {};
+    const auto Layout = View.value("listLayout").toObject();
+    if (!Layout.isEmpty()) {
+        bool Valid = Layout.value("version") == QJsonValue(1) && LayoutModes.contains(Layout.value("mode").toString()) && Layout.value("profiles").isObject();
+        const auto Profiles = Layout.value("profiles").toObject();
+        for (auto It = Profiles.begin(); It != Profiles.end(); ++It) {
+            if (!LayoutModes.contains(It.key()) || !It.value().isObject()) { Valid = false; continue; }
+            const auto Columns = It.value().toObject();
+            for (auto Column = Columns.begin(); Column != Columns.end(); ++Column)
+                if (!Column.value().isObject() || !DecodeWidth(Column.value().toObject())) Valid = false;
+        }
+        if (Valid) layoutWidths_ = Profiles;
+        else unsupportedLayout_ = Layout;
+        activateLayout(Valid ? Layout.value("mode").toString() : "details");
+    } else {
+        // Old workspace tabs were always one line. Empty new tabs inherit the
+        // panel profile, while existing tabs keep their previous presentation.
+        if (View.contains("mode")) activateLayout("details");
+        else { workspaceOwned_ = false; Reload(); }
+        SetWorkspaceOverrides(View.value("widths").toObject());
+    }
+    workspaceOwned_ = true; Request();
 }
 
 int QtitanColumnAdapter::AvailableWidth() const
@@ -118,6 +214,9 @@ void QtitanColumnAdapter::Apply()
     {
         auto* Column = view_->getColumnByModelColumn(It.key());
         if (!Column || !settings_.columns_.contains(It.value())) continue;
+        auto* Banded = static_cast<Qtitan::GridBandedTableColumn*>(Column);
+        const int Row = layoutMode_ == "details" ? 0 : (It.key() == nameColumn_ ? (layoutMode_ == "name-first" ? 0 : 1) : (layoutMode_ == "name-first" ? 1 : 0));
+        if (Banded->rowIndex() != Row) Banded->setRowIndex(Row);
         const auto& Policy = settings_.columns_[It.value()];
         const auto Width = resolveWidth(It.value(), Available);
         if (!Width) continue;
@@ -218,16 +317,37 @@ bool QtitanColumnAdapter::eventFilter(QObject* Watched, QEvent* Event)
     return QObject::eventFilter(Watched, Event);
 }
 
-void QtitanColumnAdapter::ShowSettings()
+bool QtitanColumnAdapter::ShowSettings()
 {
     if (profile_.isEmpty()) Reload();
     QDialog Dialog(owner_);
     Dialog.setObjectName("hc.columnWidthsDialog");
-    Dialog.setWindowTitle(tr("컬럼 너비"));
+    Dialog.setWindowTitle(tr("목록 모양"));
     auto* Layout = new QVBoxLayout(&Dialog);
-    auto* Note = new QLabel(tr("퍼센트는 이 패널의 컬럼 표시 영역 기준입니다. 고정 모드는 헤더 드래그를 제한합니다.\n0은 최소 1픽셀로 표시합니다. 컬럼을 감추려면 ‘표시’를 해제하세요."), &Dialog);
+    auto Draft = WorkspaceLayout().value("profiles").toObject();
+    QString DraftMode = layoutMode_;
+    auto* Form = new QFormLayout;
+    auto* ModeChoice = new QComboBox(&Dialog); ModeChoice->setObjectName("hc.listLayout.mode");
+    ModeChoice->addItems({tr("한 줄"), tr("두 줄: 이름 위"), tr("두 줄: 이름 아래")});
+    ModeChoice->setCurrentIndex(LayoutModes.indexOf(DraftMode));
+    ModeChoice->setEnabled(nameColumn_ >= 0);
+    Form->addRow(tr("표시 모드(&M)"), ModeChoice);
+    auto* Scope = new QComboBox(&Dialog); Scope->setObjectName("hc.listLayout.scope");
+    Scope->addItems({tr("현재 탭"), tr("현재 탭 + 이 패널의 새 탭 기본값")});
+    Form->addRow(tr("저장 범위(&S)"), Scope); Layout->addLayout(Form);
+    auto* Preview = new QLabel(&Dialog); Preview->setObjectName("hc.listLayout.preview");
+    Preview->setFrameStyle(QFrame::StyledPanel); Preview->setMargin(10); Layout->addWidget(Preview);
+    const auto UpdatePreview = [&] {
+        const auto Name = tr("프로젝트 검토 자료.txt");
+        const auto Details = tr("128 KB     2026-09-27 10:30     A");
+        Preview->setText(DraftMode == "details" ? Name + "     " + Details :
+            DraftMode == "name-first" ? Name + "\n" + Details : Details + "\n" + Name);
+    };
+    UpdatePreview();
+    auto* Note = new QLabel(tr("모드별 컬럼 너비를 따로 보관합니다. 퍼센트는 패널의 표시 영역 기준이며, 두 줄 모드의 각 줄에 별도로 적용됩니다.\n고정 모드는 헤더 드래그를 제한합니다. ‘기본값’은 선택한 모드의 너비와 표시 여부를 초기화합니다."), &Dialog);
     Note->setWordWrap(true); Layout->addWidget(Note);
     auto* Table = new QTableWidget(ids_.size(), 7, &Dialog);
+    Table->setProperty("hc.cellControls", true);
     Table->setHorizontalHeaderLabels({tr("컬럼"), tr("단위"), tr("모드"), tr("기준값"), tr("최소값"), tr("최대값"), tr("표시")});
     Table->verticalHeader()->hide();
     Table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
@@ -260,27 +380,82 @@ void QtitanColumnAdapter::ShowSettings()
         Rows.push_back({It.value(), Unit, Mode, Value, Minimum, Maximum, Visible});
     }
     auto* Error = new QLabel(&Dialog); Error->setObjectName("hc.columnWidths.error"); Error->setWordWrap(true); Layout->addWidget(Error);
-    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &Dialog); Layout->addWidget(Buttons);
+    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, &Dialog); Layout->addWidget(Buttons);
+    Buttons->button(QDialogButtonBox::RestoreDefaults)->setText(tr("기본값"));
     Buttons->button(QDialogButtonBox::Save)->setText(tr("저장"));
     Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
     if (!settings_.writable_) { Error->setText(tr("지원하지 않거나 손상된 설정이 있습니다. 기존 설정을 보존하기 위해 저장할 수 없습니다.")); Buttons->button(QDialogButtonBox::Save)->setEnabled(false); }
     connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
-    connect(Buttons, &QDialogButtonBox::accepted, &Dialog, [&] {
-        auto Next = settings_;
+    const auto ReadRows = [&](WidthSettings& Next) {
+        int VisibleCount = 0;
         for (const auto& Row : Rows)
         {
             if ((Row.min_->value() < 0 && Row.min_->value() != -1) || (Row.max_->value() < 0 && Row.max_->value() != -1))
-            { Error->setText(tr("최소·최대값은 0 이상 또는 ‘미지정’이어야 합니다.")); return; }
+            { Error->setText(tr("최소·최대값은 0 이상 또는 ‘미지정’이어야 합니다.")); return false; }
             ColumnWidthPolicy Policy{static_cast<WidthUnit>(Row.unit_->currentIndex()), static_cast<WidthMode>(Row.mode_->currentIndex()), Row.value_->value()};
             if (Row.min_->value() >= 0) Policy.minimum_ = Row.min_->value();
             if (Row.max_->value() >= 0) Policy.maximum_ = Row.max_->value();
             Policy.hidden_ = !Row.visible_->isChecked();
-            if (!Validate(Policy).empty()) { Error->setText(tr("최소값 ≤ 최대값, 고정 모드에서는 최소값 ≤ 기준값 ≤ 최대값이어야 합니다.")); return; }
+            if (!Validate(Policy).empty()) { Error->setText(tr("최소값 ≤ 최대값, 고정 모드에서는 최소값 ≤ 기준값 ≤ 최대값이어야 합니다.")); return false; }
+            if (!Policy.hidden_) ++VisibleCount;
+            if (DraftMode != "details" && Row.id_ == ids_.value(nameColumn_) && Policy.hidden_) {
+                Error->setText(tr("두 줄 모드에서는 이름 컬럼을 표시해야 합니다.")); return false;
+            }
             Next.columns_[Row.id_] = Policy;
         }
-        if (!SaveWidths(hc::settings::AppSettings(), profile_, Next)) { Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
-        settings_ = Next; Request(); Dialog.accept();
+        if (!VisibleCount) { Error->setText(tr("하나 이상의 컬럼을 표시해야 합니다.")); return false; }
+        Error->clear(); return true;
+    };
+    const auto Populate = [&](const QMap<QString, ColumnWidthPolicy>& Policies) {
+        for (const auto& Row : Rows) {
+            const auto Policy = Policies.value(Row.id_);
+            Row.unit_->setCurrentIndex(int(Policy.unit_)); Row.mode_->setCurrentIndex(int(Policy.mode_));
+            Row.value_->setValue(Policy.value_); Row.min_->setValue(Policy.minimum_.value_or(-1));
+            Row.max_->setValue(Policy.maximum_.value_or(-1)); Row.visible_->setChecked(!Policy.hidden_);
+        }
+        UpdatePreview();
+    };
+    connect(ModeChoice, &QComboBox::currentIndexChanged, &Dialog, [&](int Index) {
+        WidthSettings Previous;
+        if (!ReadRows(Previous)) { const QSignalBlocker Block(ModeChoice); ModeChoice->setCurrentIndex(LayoutModes.indexOf(DraftMode)); return; }
+        Draft[DraftMode] = EncodePolicies(Previous.columns_);
+        DraftMode = LayoutModes[Index];
+        auto Next = LoadWidthPolicies(hc::settings::AppSettings(), profileForLayout(DraftMode), defaultsForLayout(DraftMode));
+        const auto Saved = Draft.value(DraftMode).toObject();
+        for (auto It = Saved.begin(); It != Saved.end(); ++It)
+            if (const auto Policy = DecodeWidth(It.value().toObject())) Next.columns_[It.key()] = *Policy;
+        Populate(Next.columns_);
+        Buttons->button(QDialogButtonBox::Save)->setEnabled(settings_.writable_ && Next.writable_);
+        if (!Next.writable_) Error->setText(tr("이 모드의 설정을 읽을 수 없어 저장할 수 없습니다."));
     });
-    Dialog.resize(920, 360);
-    Dialog.exec();
+    connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, &Dialog, [&] {
+        Populate(defaultsForLayout(DraftMode)); Error->clear();
+    });
+    connect(Buttons, &QDialogButtonBox::accepted, &Dialog, [&] {
+        WidthSettings Next;
+        if (!ReadRows(Next)) return;
+        Draft[DraftMode] = EncodePolicies(Next.columns_);
+        if (Scope->currentIndex() == 1) {
+            auto& Settings = hc::settings::AppSettings();
+            auto Profiles = Settings.Read(hc::settings::Section::Columns).toObject();
+            if (!LoadWidthPolicies(Settings, baseProfile_, singleLineDefaults_).writable_) {
+                Error->setText(tr("이 패널의 기본 설정을 읽을 수 없어 덮어쓰지 않습니다.")); return;
+            }
+            for (auto It = Draft.begin(); It != Draft.end(); ++It) {
+                const auto Key = profileForLayout(It.key());
+                const auto Existing = LoadWidthPolicies(Settings, Key, defaultsForLayout(It.key()));
+                if (!Existing.writable_) { Error->setText(tr("읽을 수 없는 모드 설정이 있어 기본값을 저장할 수 없습니다.")); return; }
+                auto Profile = Profiles[Key].toObject(); Profile["version"] = 1; Profile["columns"] = It.value(); Profiles[Key] = Profile;
+            }
+            auto Base = Profiles[baseProfile_].toObject();
+            if (Base.isEmpty()) Base = {{"version", 1}, {"columns", EncodePolicies(singleLineDefaults_)}};
+            Base["listMode"] = DraftMode; Profiles[baseProfile_] = Base;
+            if (!Settings.Put(hc::settings::Section::Columns, Profiles)) { Settings.DiscardEdit(); Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
+        }
+        layoutWidths_ = Draft; activateLayout(DraftMode); workspaceOwned_ = true;
+        Request(); Dialog.accept();
+    });
+    Table->verticalHeader()->setDefaultSectionSize(std::max(36, Table->fontMetrics().height() + 18));
+    Dialog.resize(980, 510);
+    return Dialog.exec() == QDialog::Accepted;
 }

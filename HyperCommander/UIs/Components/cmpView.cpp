@@ -288,7 +288,10 @@ void CGridView::AdjustSizeToContents() const
     CViewT::AdjustSizeToContents();
 }
 
-void CGridView::ConfigureColumns() { if (columnAdapter_) columnAdapter_->ShowSettings(); }
+void CGridView::ConfigureColumns()
+{
+    if (columnAdapter_ && columnAdapter_->ShowSettings()) emit sigViewSettingsChanged();
+}
 
 QJsonObject CGridView::CaptureWorkspaceView() const
 {
@@ -304,13 +307,13 @@ QJsonObject CGridView::CaptureWorkspaceView() const
                 {"sort", int(Column->sortOrder())}, {"priority", Priority}});
         }
     const auto Proxy = qobject_cast<CFSProxyModel*>(proxy_);
-    return {{"mode", "details"}, {"widths", columnAdapter_->WorkspaceOverrides()}, {"columns", Columns},
+    return {{"mode", "details"}, {"listLayout", columnAdapter_->WorkspaceLayout()}, {"widths", columnAdapter_->WorkspaceOverrides()}, {"columns", Columns},
         {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
 }
 
 void CGridView::RestoreWorkspaceView(const QJsonObject& View)
 {
-    columnAdapter_->SetWorkspaceOverrides(View.value("widths").toObject());
+    columnAdapter_->RestoreWorkspaceLayout(View);
     QList<QJsonObject> Sorted;
     for (const auto& Value : View.value("columns").toArray()) Sorted.append(Value.toObject());
     std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {

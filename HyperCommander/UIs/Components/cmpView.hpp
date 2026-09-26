@@ -75,6 +75,9 @@ public:
     QString                        CaptureFocus() const;
     void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
 
+signals:
+    void                           sigViewSettingsChanged();
+
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
     void                            oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args );

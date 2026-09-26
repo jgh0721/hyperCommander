@@ -73,7 +73,9 @@ namespace hc::view
             Columns[It.key()] = EncodeWidth(It.value());
         }
         auto Profiles = Settings.Read(hc::settings::Section::Columns).toObject();
-        Profiles[Key] = QJsonObject{{"version", 1}, {"columns", Columns}};
+        auto Profile = Profiles[Key].toObject();
+        Profile["version"] = 1; Profile["columns"] = Columns;
+        Profiles[Key] = Profile;
         return Settings.Put(hc::settings::Section::Columns, Profiles);
     }
 }

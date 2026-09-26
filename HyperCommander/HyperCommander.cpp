@@ -75,7 +75,9 @@ public:
     QRect subElementRect(SubElement Element, const QStyleOption* Option, const QWidget* Widget = nullptr) const override {
         // Qtitan measures an editor before assigning its text. Qlementine would
         // otherwise return an empty content box, hiding the cell's contents.
-        if (Element == SE_ItemViewItemText && isGrid(Widget)) return Option->rect;
+        // Persistent controls in a settings table also need the entire empty
+        // cell; the delegate has no display text to measure in those cells.
+        if (Element == SE_ItemViewItemText && (isGrid(Widget) || (Widget && Widget->property("hc.cellControls").toBool()))) return Option->rect;
         return Qtitan::CommonStyle::subElementRect(Element, Option, Widget);
     }
     void drawControl(ControlElement Element, const QStyleOption* Option, QPainter* Painter, const QWidget* Widget = nullptr) const override {

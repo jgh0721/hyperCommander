@@ -491,6 +491,11 @@ void QMainUI::initialize()
     //connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyCurrentDirectory, this, &QMainUI::oo_notifyCurrentDirectory );
     connect( ui.cmpLeftPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
     connect( ui.cmpRightPanel, &CmpPanel::sig_NotifyPanelActivated, this, &QMainUI::oo_notifyPanelActivated );
+    for (auto* Panel : {ui.cmpLeftPanel, ui.cmpRightPanel})
+        connect(Panel, &CmpPanel::sigViewSettingsChanged, this, [this] {
+            if (!SaveWorkspace())
+                QMessageBox::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
+        });
 
     ui.cmpLeftPanel->installEventFilter( this );
     ui.cmpRightPanel->installEventFilter( this );

@@ -148,6 +148,7 @@ void CmpPanel::AddTab(bool Navigate)
     Model->setProperty("hc.tabId", State->workspace_.id_);
     vecTabStates.append(State);
     connect(View, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated);
+    connect(View, &CGridView::sigViewSettingsChanged, this, &CmpPanel::sigViewSettingsChanged);
     connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);
     connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search()); });
     connect(Model, &CFSModel::RetryRequested, this, [this, Model] {
@@ -186,7 +187,9 @@ void CmpPanel::AddTab(bool Navigate)
         if (!Previous.tabs_.isEmpty()) {
             auto Saved = Previous.tabs_.value(Previous.active_); Saved.id_ = State->workspace_.id_;
             State->workspace_ = Saved; State->restoreSelection_ = true;
-            View->RestoreWorkspaceView(Saved.view_); restoreTab(vecTabStates.size() - 1);
+            // A new tab inherits its panel's display defaults, while navigation
+            // and selection follow the current location.
+            restoreTab(vecTabStates.size() - 1);
         } else if (const auto Item = ui.cbxVolume->GetItem(ui.cbxVolume->currentIndex())) {
             Model->SetRoot(Item->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>());
             Model->SetCurrentPath("\\"); Model->Refresh();
@@ -834,7 +837,13 @@ void CmpPanel::initializeUIs()
     ui.lblVolumeStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     ui.horizontalLayout->setStretch(1, 1);
     for (auto* Button : ui.frmHDR->findChildren<QPushButton*>())
-        if (Button->text() == "Grid Style") Button->setText(tr("목록 모양"));
+        if (Button->text() == "Grid Style") {
+            Button->setText(tr("목록 모양"));
+            connect(Button, &QPushButton::clicked, this, [this] {
+                emit sig_NotifyPanelActivated();
+                if (auto* View = qobject_cast<CGridView*>(GetFocusView(CurrentTabIndex()))) View->ConfigureColumns();
+            });
+        }
     ui.cbxVolume->setMinimumHeight(32); ui.cbxVolume->view()->setMinimumWidth(160);
     while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; }
     auto* Controls = new QWidget(this); auto* Layout = new QHBoxLayout(Controls); Layout->setContentsMargins(0, 0, 0, 0);

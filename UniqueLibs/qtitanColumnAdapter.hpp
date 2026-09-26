@@ -17,7 +17,11 @@ public:
     void Request();
     void Apply();
     void Reload();
-    void ShowSettings();
+    bool ShowSettings();
+    QString LayoutMode() const { return layoutMode_; }
+    bool SetLayoutMode(const QString& Mode);
+    QJsonObject WorkspaceLayout() const;
+    void RestoreWorkspaceLayout(const QJsonObject& View);
     void SetWorkspaceOverrides(const QJsonObject& Columns);
     QJsonObject WorkspaceOverrides() const;
     bool SetPolicy(const QString& Id, const hc::view::ColumnWidthPolicy& Policy, bool Persist = true);
@@ -31,6 +35,9 @@ protected:
 private:
     void captureDrag();
     bool save();
+    void activateLayout(const QString& Mode);
+    QString profileForLayout(const QString& Mode) const;
+    QMap<QString, hc::view::ColumnWidthPolicy> defaultsForLayout(const QString& Mode) const;
     std::optional<hc::view::ColumnWidthResult> resolveWidth(const QString& Id, int Available) const;
     QPointer<QWidget> owner_;
     Qtitan::Grid* grid_;
@@ -40,9 +47,15 @@ private:
     QMap<int, QString> ids_;
     QMap<QString, int> legacy_;
     QMap<QString, hc::view::ColumnWidthPolicy> defaults_;
+    QMap<QString, hc::view::ColumnWidthPolicy> singleLineDefaults_;
     QMap<QString, int> applied_;
     hc::view::WidthSettings settings_;
     QString profile_;
+    QString baseProfile_;
+    QString layoutMode_ = "details";
+    QJsonObject layoutWidths_;
+    QJsonObject unsupportedLayout_;
+    int nameColumn_ = -1;
     QString viewId_;
     bool applying_ = false;
     bool dragging_ = false;
