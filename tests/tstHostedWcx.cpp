@@ -390,7 +390,18 @@ private slots:
         if (Write) {
             // Each run owns a copy. Never publish over the supplied corpus.
             const auto Original = Read(Path); QVERIFY(!Original.isEmpty());
-            const auto Working = Directory.filePath("write." + QFileInfo(Path).suffix()); QVERIFY(Put(Working, Original));
+            const auto Share = qEnvironmentVariable("HC_WCX_SMB_ROOT");
+            std::unique_ptr<QTemporaryDir> Remote;
+            if (!Share.isEmpty()) {
+                QVERIFY(QDir(Share).exists());
+                Remote = std::make_unique<QTemporaryDir>(QDir(Share).filePath("hc-encrypted-write-XXXXXX"));
+                QVERIFY(Remote->isValid());
+            }
+            // Keep plugin configuration and staging local, but publish to the
+            // owned SMB archive so Commit exercises the network write session.
+            const auto Working = (Remote ? *Remote : Directory).filePath("write." + QFileInfo(Path).suffix());
+            QVERIFY(Put(Working, Original));
+            qInfo().noquote() << "Owned encrypted mutation archive:" << Working;
             auto Root = At(Working);
             auto Provider = MakeWcxReadProvider({}, Root, Directory.path().toStdString(), Backend);
             auto Secret = Provider->Resolve(At(Working, "/secret.txt"), Context).get(); QVERIFY(Secret.HasValue());
