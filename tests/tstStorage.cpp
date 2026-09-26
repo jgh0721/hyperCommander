@@ -2,6 +2,8 @@
 #include "memoryStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QtTest>
+#include <Windows.h>
+#include <AclAPI.h>
 
 using namespace hc::storage;
 using namespace hc::storage::test;
@@ -10,6 +12,43 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void protectedChildDoesNotHideParentListing()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Child = Directory.filePath("protected-child"); QVERIFY(QDir().mkdir(Child));
+        const auto Handle = CreateFileW(QDir::toNativeSeparators(Child).toStdWString().c_str(), READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+        PACL OriginalAcl = nullptr;
+        PSECURITY_DESCRIPTOR OriginalDescriptor = nullptr;
+        QCOMPARE(GetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, &OriginalAcl, nullptr, &OriginalDescriptor), DWORD(ERROR_SUCCESS));
+        const auto Free = qScopeGuard([&] { LocalFree(OriginalDescriptor); });
+        ACL EmptyAcl{};
+        QVERIFY(InitializeAcl(&EmptyAcl, sizeof(EmptyAcl), ACL_REVISION));
+        // An empty DACL on this owned fixture deterministically denies metadata
+        // access. The already-open handle restores access even after an assertion.
+        const auto Restore = qScopeGuard([&] {
+            SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, OriginalAcl, nullptr);
+        });
+        QCOMPARE(SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, &EmptyAcl, nullptr), DWORD(ERROR_SUCCESS));
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        const Locator Root{LocatorKind::Local, QDir::toNativeSeparators(Directory.path()).toStdString()};
+        auto Cursor = Provider->Enumerate(Root, {}).get(); QVERIFY(Cursor.HasValue());
+        auto Page = Cursor.Value()->Next(16, {}).get(); QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().entries_.size(), 1u);
+        const auto& ChildEntry = Page.Value().entries_.front();
+        QCOMPARE(ChildEntry.name_, std::string("protected-child")); QVERIFY(ChildEntry.directory_);
+        QVERIFY(!ChildEntry.id_.revision_);
+        QVERIFY(!Provider->Stat(ChildEntry.id_, {}).get().HasValue());
+        OperationContext Fresh; Fresh.freshEnumerationMetadata_ = true;
+        auto Strict = Provider->Enumerate(Root, Fresh).get(); QVERIFY(!Strict.HasValue());
+        QCOMPARE(Strict.Failure().code_, std::string("win32:5"));
+        QCOMPARE(SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, OriginalAcl, nullptr), DWORD(ERROR_SUCCESS));
+    }
     void nativeReadProvider()
     {
         QTemporaryDir Directory;

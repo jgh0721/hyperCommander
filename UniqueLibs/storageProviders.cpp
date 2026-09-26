@@ -236,13 +236,24 @@ namespace hc::storage
                                 WIN32_FILE_ATTRIBUTE_DATA Data{Found.dwFileAttributes, Found.ftCreationTime, Found.ftLastAccessTime, Found.ftLastWriteTime, Found.nFileSizeHigh, Found.nFileSizeLow};
                                 const auto ChildPath = At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name;
                                 auto ActualRevision = Revision(Data);
+                                bool HasRevision = true;
                                 // NTFS directory enumeration can retain a cached
                                 // mtime after children change. Use the same metadata
                                 // source as Stat so a fresh snapshot is revalidatable.
                                 if (((Data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || Context.freshEnumerationMetadata_)
-                                    && !ReadAttributes(Wide(ChildPath), Data, &ActualRevision)) return NativeError(GetLastError(), Id);
+                                    && !ReadAttributes(Wide(ChildPath), Data, &ActualRevision)) {
+                                    const auto Code = GetLastError();
+                                    // Listing a readable parent must not disappear because
+                                    // one child (e.g. System Volume Information) is protected.
+                                    // Browsing may use FindFirstFile metadata, without claiming
+                                    // a verified revision. Mutation planning still requires it.
+                                    if (Context.freshEnumerationMetadata_ || (Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION))
+                                        return NativeError(Code, Id);
+                                    HasRevision = false;
+                                }
                                 auto Item = Entry(Id, Prefix, {Kind, ChildPath}, Name, Data);
-                                Item.id_.revision_ = std::move(ActualRevision);
+                                if (HasRevision) Item.id_.revision_ = std::move(ActualRevision);
+                                else Item.id_.revision_.reset();
                                 Item.hints_["reparseTag"] = std::to_string(Found.dwReserved0);
                                 Entries.push_back(std::move(Item));
                             } while (FindNextFileW(Handle, &Found));
