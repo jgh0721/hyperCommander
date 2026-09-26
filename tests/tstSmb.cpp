@@ -25,6 +25,7 @@
 #include <psapi.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
+#include "colorSchemeMgr.hpp"
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -99,8 +100,59 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"firstRunAppearanceUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
+        }
+    }
+
+    void firstRunAppearanceUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        QVERIFY(Settings.Exists());
+        QCOMPARE(Colors->GetNames().size(), 2);
+        for (auto* Panel : panels_) {
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+            const auto Model = static_cast<CFSModel*>(model(Panel));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            QVERIFY(!Model->LastNavigationError());
+            QCOMPARE(QDir::fromNativeSeparators(QString::fromStdString(Model->WorkspaceLocation().root_)), QDir::homePath());
+            const auto Columns = View->BaseView();
+            QTRY_VERIFY(Columns->getColumnByModelColumn(0)->width() >= 200);
+            QVERIFY(Columns->getColumnByModelColumn(1)->width() >= 88);
+            QVERIFY(Columns->getColumnByModelColumn(2)->width() >= 190);
+            QVERIFY(Columns->getColumnByModelColumn(3)->width() >= 56);
+        }
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        { QFile File(Directory.filePath("first-run-example.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("first run"); }
+        hc::workspace::TabState Tab; Tab.id_ = "first-run-theme"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; panels_.front()->RestoreWorkspace(Pane);
+        auto* Model = model(panels_.front());
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("first-run-example.txt"), 10000);
+        for (const bool Dark : {true, false}) {
+            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QComboBox*>("cbxColorScheme")->setCurrentText(Name);
+            Dialog.findChild<QPushButton*>("btnApply")->click();
+            QVERIFY(Settings.Error().isEmpty());
+            QCOMPARE(qApp->style()->property("hc.theme").toString(), Name);
+            QCOMPARE(QApplication::palette().color(QPalette::Window), Colors->GetColorScheme(Name).Dialog_BGColor);
+            const auto Scheme = Colors->GetColorScheme(Name);
+            QCOMPARE(Model->index(0, 0).data(Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
+            QCOMPARE(Model->index(0, 0).data(Qt::BackgroundRole).value<QColor>(), Scheme.FileList_BGColor);
+            QCOMPARE(Model->index(0, 0).data(Qt::FontRole).value<QFont>().pointSize(), 12);
+            Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
+            QCOMPARE(Restart.Read(Section::Appearance).toObject()["selected"].toString(), Name);
+            const auto Applied = QApplication::palette();
+            Dialog.findChild<QComboBox*>("cbxColorScheme")->setCurrentText(Dark ? QStringLiteral("기본 라이트") : QStringLiteral("기본 다크"));
+            Dialog.reject(); QCOMPARE(QApplication::palette(), Applied);
         }
     }
 

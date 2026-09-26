@@ -26,7 +26,10 @@ private slots:
         const QByteArray Ini("[Configuration]\r\nSizeInHeader=9\r\n[ListerPlugins]\r\nCount=1\r\n0_Path=evil.wlx64\r\n");
         QVERIFY(Write(Temp.filePath("HyperCommander.ini"), Ini));
         Repository Settings(Temp.path()); QVERIFY(Settings.Writable()); QVERIFY(!Settings.Exists());
-        QCOMPARE(Settings.SizeStyle(true), 0); QVERIFY(Settings.Plugins("wlx").isEmpty());
+        QCOMPARE(Settings.SizeStyle(true), SizeFormats().indexOf("adaptive2")); QVERIFY(Settings.Plugins("wlx").isEmpty());
+        const auto Appearance = Settings.Read(Section::Appearance).toObject();
+        QCOMPARE(Appearance, BuiltInAppearance());
+        QCOMPARE(Appearance["schemes"].toObject().size(), 2);
         QVERIFY(!QFileInfo::exists(Settings.FileName())); QCOMPARE(Bytes(Temp.filePath("HyperCommander.ini")), Ini);
         QVERIFY(Settings.Commit()); Repository Reload(Temp.path()); QCOMPARE(Reload.Object(), Defaults());
     }
@@ -58,7 +61,12 @@ private slots:
         QTemporaryDir Temp; Repository Settings(Temp.path());
         const QJsonObject Appearance{{"selected","z-selected"},{"schemes",QJsonObject{{"a-first",QJsonObject{}},{"z-selected",QJsonObject{}}}}};
         QVERIFY2(Settings.Put(Section::Appearance, Appearance), qPrintable(Settings.Error()));
-        Repository Restart(Temp.path()); QCOMPARE(Restart.Read(Section::Appearance).toObject(),Appearance);
+        Repository Restart(Temp.path());
+        const auto Restored = Restart.Read(Section::Appearance).toObject();
+        QCOMPARE(Restored["selected"], Appearance["selected"]);
+        QVERIFY(Restored["schemes"].toObject().contains("a-first"));
+        QVERIFY(Restored["schemes"].toObject().contains("z-selected"));
+        for (const auto& Name : BuiltInAppearance()["schemes"].toObject().keys()) QVERIFY(Restored["schemes"].toObject().contains(Name));
         auto Root = Restart.Object();
         const QJsonObject Invalid{{"fonts",QJsonObject{{"list",QJsonObject{{"family",""},{"pointSize",-2}}}}},
             {"colors",QJsonObject{{"listText","not-a-color"}}}};
