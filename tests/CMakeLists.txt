@@ -421,9 +421,9 @@ add_test(NAME hc.deployment
         -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
 )
 # This runs the product and every deployed test executable sequentially. The
-# added DOpus suites bring the measured Debug total close to one minute; keep
+# nested archive suites bring the measured Debug total to 87 seconds; keep
 # process-level limits while allowing deployment/copy and startup overhead.
-set_tests_properties(hc.deployment PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+set_tests_properties(hc.deployment PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
 add_custom_target(hc_check
