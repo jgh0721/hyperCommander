@@ -101,7 +101,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"firstRunAppearanceUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -155,6 +155,100 @@ private slots:
             Dialog.findChild<QComboBox*>("cbxColorScheme")->setCurrentText(Dark ? QStringLiteral("기본 라이트") : QStringLiteral("기본 다크"));
             Dialog.reject(); QCOMPARE(QApplication::palette(), Applied);
         }
+    }
+
+    void appearanceInteractionUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"alpha.txt", "beta.txt", "gamma.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("appearance");
+        }
+        hc::workspace::TabState Tab; Tab.id_ = "appearance"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel); auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("gamma.txt"), 10000);
+        auto* Base = View->BaseView();
+        Base->selectRow(2); Base->selectRow(3); Base->setFocusedRowIndex(2);
+        const auto Selected = View->CaptureSelection(); QVERIFY(!Selected.isEmpty());
+        for (const bool Dark : {false, true, false}) {
+            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
+            for (int Mask = 0; Mask < 4; ++Mask) {
+                QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+                Dialog.findChild<QComboBox*>("cbxColorScheme")->setCurrentText(Name);
+                Dialog.findChild<QCheckBox*>("chkInverseCursor")->setChecked(Mask & 1);
+                Dialog.findChild<QCheckBox*>("chkInverseSelection")->setChecked(Mask & 2);
+                Dialog.findChild<QSpinBox*>("spbDlgFontBox")->setValue(Dark ? 18 : 11);
+                QVERIFY(Dialog.SaveSettings());
+                auto* Pages = Dialog.findChild<QStackedWidget*>("stkOpts"); QVERIFY(Pages);
+                Pages->setCurrentWidget(Dialog.findChild<QWidget*>("pgDisplay"));
+                QCoreApplication::processEvents();
+                for (const auto& Id : {"cbxHeaderSizeDisplay", "cbxFooterSizeDisplay"}) {
+                    auto* Combo = Dialog.findChild<QComboBox*>(Id); QVERIFY(Combo->isVisible());
+                    QVERIFY(Combo->height() >= Combo->fontMetrics().height() + 4);
+                    QVERIFY(Combo->width() >= Combo->fontMetrics().horizontalAdvance(Combo->currentText()) + 32);
+                }
+                Pages->setCurrentWidget(Dialog.findChild<QWidget*>("pgDisplay_ColorScheme"));
+                QCoreApplication::processEvents();
+                const auto Scheme = Colors->GetColorScheme(Name);
+                QCOMPARE(Scheme.IsInverseCursor, bool(Mask & 1)); QCOMPARE(Scheme.IsInverseSelect, bool(Mask & 2));
+                QCOMPARE(Base->fileManagerOptions().invertedCursor(), bool(Mask & 1));
+                QCOMPARE(Base->fileManagerOptions().invertedSelection(), bool(Mask & 2));
+                QCOMPARE(View->CaptureSelection(), Selected);
+                Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
+                const auto Saved = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()[Name].toObject();
+                QCOMPARE(Saved["inverseCursor"].toBool(), bool(Mask & 1));
+                QCOMPARE(Saved["inverseSelection"].toBool(), bool(Mask & 2));
+                for (auto* Combo : Dialog.findChildren<QComboBox*>()) {
+                    QVERIFY2(Combo->sizeHint().height() >= Combo->fontMetrics().height() + 4, qPrintable(Combo->objectName()));
+                    if (Combo->isVisible()) QVERIFY2(Combo->height() >= Combo->fontMetrics().height() + 4, qPrintable(Combo->objectName()));
+                }
+                if (Mask == 3) {
+                    QTest::qWait(200); // Let checkbox and button color animations settle before evidence capture.
+                    Dialog.grab().save(Dark ? "appearance-settings-dark.png" : "appearance-settings-light.png");
+                }
+                Dialog.accept(); QCoreApplication::processEvents();
+                Base->setFocusedRowIndex(2);
+                auto* Column = static_cast<Qtitan::GridTableColumn*>(Base->getColumnByModelColumn(0));
+                Qtitan::GridEditorStyleOption Paint;
+                qtn_init_editor_option(Base, &Paint, Column->dataBinding(), Base->getRow(2), 0,
+                    false, true, true, true, false, QRect(0, 0, 200, 30), Qt::AlignLeft);
+                auto Text = Scheme.FileList_FGColor; auto Background = Scheme.FileList_Selected;
+                if (Mask & 2) qSwap(Text, Background);
+                if (Mask & 1) qSwap(Text, Background);
+                QCOMPARE(Paint.palette.color(QPalette::Text), Text); QCOMPARE(Paint.backgroundBrush.color(), Background);
+                Grid->viewport()->repaint();
+                QRect Header;
+                for (const auto& Hit : Grid->hitInfoAll())
+                    if (Hit.info() == Qtitan::GridHitInfo::Column && Hit.columnIndex() == 1) Header = Hit.rect();
+                QVERIFY(!Header.isEmpty());
+                const auto Pixels = Grid->viewport()->grab().toImage(); const auto Dpr = Pixels.devicePixelRatio();
+                for (const int Row : {2, 3}) {
+                    QRect Cell;
+                    for (const auto& Hit : Grid->hitInfoAll())
+                        if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.columnIndex() == 0 && Hit.row().rowIndex() == Row) Cell = Hit.rect();
+                    QVERIFY(!Cell.isEmpty());
+                    qtn_init_editor_option(Base, &Paint, Column->dataBinding(), Base->getRow(Row), 0,
+                        false, true, true, Row == 2, false, Cell, Qt::AlignLeft);
+                    QCOMPARE(Pixels.pixelColor(qRound((Cell.right() - 5) * Dpr), qRound(Cell.center().y() * Dpr)), Paint.backgroundBrush.color());
+                }
+                QCOMPARE(Pixels.pixelColor(qRound((Header.left() + 5) * Dpr), qRound((Header.top() + 5) * Dpr)),
+                    QColor(Dark ? "#293241" : "#E8EDF5"));
+                if (Mask == 3) main_->grab().save(Dark ? "appearance-dark.png" : "appearance-light.png");
+            }
+        }
+        const auto Before = Settings.Object();
+        { QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+          auto* Toggle = Dialog.findChild<QCheckBox*>("chkInverseCursor"); Toggle->setChecked(!Toggle->isChecked()); Dialog.reject(); }
+        QCOMPARE(Settings.Object(), Before);
     }
 
     void jsonSettingsUi()

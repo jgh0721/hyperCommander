@@ -482,11 +482,12 @@ inline void GridFileManagerRegression()
     auto& Options = View->fileManagerOptions();
     Options.cursorColor = QColor(12, 34, 56); Options.cursorTextColor = Qt::yellow;
     Options.setInvertedCursor(true); Options.setInvertedSelection(true);
-    QVERIFY(!Options.invertedCursor()); QVERIFY(Options.invertedSelection());
+    QVERIFY(Options.invertedCursor()); QVERIFY(Options.invertedSelection());
+    Options.setInvertedCursor(false);
     Options.setInvertedSelection(false);
     Qtitan::GridEditorStyleOption Paint;
     qtn_init_editor_option(View, &Paint, Column->dataBinding(), View->getRow(Moved), 0,
-        false, true, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
+        false, false, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
     QCOMPARE(Paint.backgroundBrush.color(), Options.cursorColor);
     QCOMPARE(Paint.palette.color(QPalette::Text).rgb(), QColor(Qt::yellow).rgb());
     QVERIFY(Paint.palette.color(QPalette::Text).alphaF() < 0.5);
@@ -494,12 +495,12 @@ inline void GridFileManagerRegression()
     View->clearCutRows(); QVERIFY(!View->isRowCut(Moved));
     View->options().setModelDecorationOpacityRole(Qt::UserRole + 1);
     qtn_init_editor_option(View, &Paint, Column->dataBinding(), View->getRow(Moved), 0,
-        false, true, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
+        false, false, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
     const int HiddenAlpha = Paint.icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8).alpha();
     QVERIFY(HiddenAlpha >= 125 && HiddenAlpha <= 130);
     View->setCutRows({Moved});
     qtn_init_editor_option(View, &Paint, Column->dataBinding(), View->getRow(Moved), 0,
-        false, true, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
+        false, false, true, true, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
     const int CutAlpha = Paint.icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8).alpha();
     QVERIFY(CutAlpha >= 48 && CutAlpha <= 53);
     View->clearCutRows();
@@ -520,7 +521,7 @@ inline void GridFileManagerRegression()
     qtn_init_editor_option(View, &Paint, Column->dataBinding(), View->getRow(2), 0,
         false, true, true, false, false, QRect(0, 0, 100, 20), Qt::AlignLeft);
     QCOMPARE(Paint.backgroundBrush.color(), QColor(Qt::red));
-    QCOMPARE(Paint.palette.color(QPalette::Text), QColor(Qt::black));
+    QCOMPARE(Paint.palette.color(QPalette::Text), Options.selectedColor);
     Options.setInvertedSelection(false);
     Options.selectedColor = Qt::magenta; Options.selectedTextColor = Qt::cyan;
     qtn_init_editor_option(View, &Paint, Column->dataBinding(), View->getRow(2), 0,
