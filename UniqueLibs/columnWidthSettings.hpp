@@ -39,10 +39,10 @@ namespace hc::view
         QMap<QString, ColumnWidthPolicy> columns_;
         bool writable_ = true;
     };
-    inline WidthSettings LoadWidths(hc::settings::Repository& Settings, const QString& Key, const QMap<QString, int>& Defaults)
+    inline WidthSettings LoadWidthPolicies(hc::settings::Repository& Settings, const QString& Key, const QMap<QString, ColumnWidthPolicy>& Defaults)
     {
         WidthSettings Result;
-        for (auto It = Defaults.begin(); It != Defaults.end(); ++It) Result.columns_[It.key()].value_ = std::clamp(It.value(), 1, 1000000);
+        Result.columns_ = Defaults;
         const auto Profiles = Settings.Read(hc::settings::Section::Columns).toObject();
         if (!Profiles.contains(Key)) return Result;
         const auto Root = Profiles[Key].toObject();
@@ -56,6 +56,12 @@ namespace hc::view
             Result.columns_[It.key()] = *Policy;
         }
         return Result;
+    }
+    inline WidthSettings LoadWidths(hc::settings::Repository& Settings, const QString& Key, const QMap<QString, int>& Defaults)
+    {
+        QMap<QString, ColumnWidthPolicy> Policies;
+        for (auto It = Defaults.begin(); It != Defaults.end(); ++It) Policies[It.key()].value_ = std::clamp(It.value(), 1, 1000000);
+        return LoadWidthPolicies(Settings, Key, Policies);
     }
     inline bool SaveWidths(hc::settings::Repository& Settings, const QString& Key, const WidthSettings& Value)
     {

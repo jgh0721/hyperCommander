@@ -33,7 +33,7 @@ QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qti
 
 void QtitanColumnAdapter::Bind(const ColumnView& Columns)
 {
-    ids_.clear(); legacy_.clear(); applied_.clear();
+    ids_.clear(); legacy_.clear(); defaults_.clear(); applied_.clear();
     QStringList ContentIds;
     for (const auto& Column : Columns.VecColumns)
     {
@@ -42,6 +42,17 @@ void QtitanColumnAdapter::Bind(const ColumnView& Columns)
         ids_[Column.Index] = Id;
         ContentIds.push_back(Id);
         if (const auto Native = view_->getColumnByModelColumn(Column.Index)) legacy_[Id] = Native->width();
+        ColumnWidthPolicy Policy; Policy.value_ = std::max(80, legacy_.value(Id));
+        if (Columns.IsBuiltIn) {
+            // Header best-fit measures short captions, not useful file content.
+            // Logical pixels and percentages remain independent of monitor DPI.
+            const auto Expression = Column.Content.toCaseFolded();
+            if (Expression == QString(BUILTIN_COL_FS_NAME).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 46}; legacy_[Id] = 200; }
+            else if (Expression == QString(BUILTIN_COL_FS_SIZE).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 15}; legacy_[Id] = 88; }
+            else if (Expression == QString(BUILTIN_COL_FS_CREATED).toCaseFolded() || Expression == QString(BUILTIN_COL_FS_MODIFIED).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 30}; legacy_[Id] = 190; }
+            else if (Expression == QString(BUILTIN_COL_FS_ATTRIB_TEXT).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 9}; legacy_[Id] = 56; }
+        }
+        defaults_[Id] = Policy;
     }
     ContentIds.sort();
     viewId_ = Columns.IsBuiltIn ? "builtin-details" : QString::fromLatin1(QCryptographicHash::hash(ContentIds.join('|').toUtf8(), QCryptographicHash::Sha256).toHex());
@@ -56,7 +67,7 @@ void QtitanColumnAdapter::Reload()
     for (auto* Parent = owner_.data(); Parent; Parent = Parent->parentWidget())
         if (Parent->objectName() == "cmpLeftPanel" || Parent->objectName() == "cmpRightPanel") { Pane = Parent->objectName(); break; }
     profile_ = "Views/ColumnWidths/" + Pane + "/" + viewId_;
-    settings_ = LoadWidths(hc::settings::AppSettings(), profile_, legacy_);
+    settings_ = LoadWidthPolicies(hc::settings::AppSettings(), profile_, defaults_);
     Request();
 }
 
@@ -81,6 +92,20 @@ void QtitanColumnAdapter::Request()
     if (!applying_ && !timer_.isActive()) timer_.start();
 }
 
+std::optional<ColumnWidthResult> QtitanColumnAdapter::resolveWidth(const QString& Id, int Available) const
+{
+    const auto Policy = settings_.columns_.value(Id);
+    auto Result = Resolve(Policy, Available);
+    // Defaults have a readable pixel floor on narrow panes. Explicit user
+    // policies retain their own units and bounds (including narrow columns).
+    if (Result && viewId_ == "builtin-details" && Policy == defaults_.value(Id)) {
+        Result->minimum_ = std::max(Result->minimum_, legacy_.value(Id));
+        Result->width_ = std::max(Result->width_, Result->minimum_);
+        Result->maximum_ = std::max(Result->maximum_, Result->minimum_);
+    }
+    return Result;
+}
+
 void QtitanColumnAdapter::Apply()
 {
     if (applying_ || dragging_ || settings_.columns_.isEmpty()) return;
@@ -94,7 +119,7 @@ void QtitanColumnAdapter::Apply()
         auto* Column = view_->getColumnByModelColumn(It.key());
         if (!Column || !settings_.columns_.contains(It.value())) continue;
         const auto& Policy = settings_.columns_[It.value()];
-        const auto Width = Resolve(Policy, Available);
+        const auto Width = resolveWidth(It.value(), Available);
         if (!Width) continue;
         Column->setAutoWidth(false);
         Column->setHorSizingEnabled(Policy.mode_ == WidthMode::Flexible);
@@ -110,7 +135,7 @@ void QtitanColumnAdapter::Apply()
     {
         auto* Column = view_->getColumnByModelColumn(It.key());
         if (!Column || !settings_.columns_.contains(It.value())) continue;
-        const auto Width = Resolve(settings_.columns_[It.value()], Available);
+        const auto Width = resolveWidth(It.value(), Available);
         if (!Width) continue;
         if (Column->width() != Width->width_) Column->setWidth(Width->width_);
         applied_[It.value()] = Column->width();

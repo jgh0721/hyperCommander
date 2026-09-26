@@ -17,7 +17,11 @@ void CColorSchemeMgr::Refresh()
     const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
     const auto Schemes = Appearance["schemes"].toObject();
     for (auto It = Schemes.begin(); It != Schemes.end(); ++It) {
-        const auto Record = It.value().toObject(); TyColorScheme Scheme; Scheme.Name = It.key(); Scheme.IsDarkMode = Record["dark"].toBool();
+        auto Record = It.value().toObject();
+        const auto Fallback = hc::settings::BuiltInAppearance()["schemes"].toObject().value(
+            Record["dark"].toBool() ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")).toObject();
+        QStringList Issues; Record = hc::settings::MergeDefaults(Record, Fallback, {}, Issues);
+        TyColorScheme Scheme; Scheme.Name = It.key(); Scheme.IsDarkMode = Record["dark"].toBool();
         const auto Fonts = Record["fonts"].toObject(); const auto Colors = Record["colors"].toObject();
         Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
         Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
@@ -37,7 +41,7 @@ void CColorSchemeMgr::Refresh()
     }
     const auto Selected = Appearance["selected"].toString();
     if (mapNameToScheme.contains(Selected)) currentColorScheme = mapNameToScheme[Selected];
-    else if (!mapNameToScheme.isEmpty()) currentColorScheme = mapNameToScheme.first();
+    else currentColorScheme = mapNameToScheme.value(hc::settings::BuiltInAppearance()["selected"].toString());
 }
 
 QVector<QString> CColorSchemeMgr::GetNames() const

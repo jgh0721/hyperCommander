@@ -63,15 +63,33 @@ inline QStringList SizeFormats()
     return {"bytes", "kbytes", "adaptive3", "adaptive2", "adaptive1", "adaptive0",
         "adaptiveT3", "adaptiveT2", "adaptiveT1", "adaptiveT0", "adaptiveM1", "adaptiveM0"};
 }
+inline QJsonObject BuiltInAppearance()
+{
+    QJsonObject Schemes;
+    for (const bool Dark : {false, true}) {
+        const QJsonObject Font{{"family", "Malgun Gothic"}, {"pointSize", 11}};
+        const QJsonObject ListFont{{"family", "Malgun Gothic"}, {"pointSize", 12}};
+        Schemes[Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")] = QJsonObject{
+            {"dark", Dark}, {"fonts", QJsonObject{{"menu", Font}, {"dialog", Font}, {"list", ListFont}}},
+            {"colors", QJsonObject{{"dialogText", Dark ? "#E8EDF5" : "#20242B"},
+                {"dialogBackground", Dark ? "#20252E" : "#F4F6FA"},
+                {"listText", Dark ? "#E8EDF5" : "#20242B"}, {"listBackground", Dark ? "#181C23" : "#FFFFFF"},
+                {"listCursor", Dark ? "#34445C" : "#E0EBFF"}, {"listSelection", Dark ? "#405575" : "#C9D9F1"}}},
+            {"fileSets", QJsonObject{}}};
+    }
+    return {{"selected", QStringLiteral("기본 라이트")}, {"schemes", Schemes}};
+}
 inline QJsonObject Defaults()
 {
     // Compiled JSON defaults are available before widgets and without a writable installation.
-    return QJsonDocument::fromJson(R"({"schemaVersion":1,
-        "general":{"sizeInHeader":"bytes","sizeInFooter":"bytes","useBuiltInShortcuts":true},
+    auto Result = QJsonDocument::fromJson(R"({"schemaVersion":1,
+        "general":{"sizeInHeader":"adaptive2","sizeInFooter":"adaptive2","useBuiltInShortcuts":true},
         "appearance":{"selected":"","schemes":{}},"shortcuts":{},
         "favorites":{"drivesOn":"none","items":[]},"fileSets":[],"editors":[],
         "plugins":{"viewerSelection":"manual","wlx":[],"wcx":[],"wfx":[],"wdx":[],"dopusVfs":[],"dopusViewer":[]},
         "columns":{},"automation":{"version":2,"scripts":[]},"options":{}})").object();
+    Result["appearance"] = BuiltInAppearance();
+    return Result;
 }
 inline QJsonObject MergeDefaults(QJsonObject Value, const QJsonObject& Base, const QString& Path, QStringList& Issues)
 {
@@ -172,7 +190,15 @@ public:
     explicit Repository(const QString& Directory) : JsonStore(QDir(Directory).filePath("settings.json"), Defaults()) { Reload(); }
     QJsonValue Read(Section Domain) const { return Object().value(SectionName(Domain)); }
     bool Put(Section Domain, const QJsonValue& Value)
-    { auto Next = Object(); Next[SectionName(Domain)] = Value; return Replace(Next); }
+    {
+        auto Next = Object(); Next[SectionName(Domain)] = Value;
+        if (Domain == Section::Appearance && Value.isObject()) {
+            QStringList Problems;
+            const auto Merged = MergeDefaults(Value.toObject(), BuiltInAppearance(), "appearance", Problems);
+            if (Problems.isEmpty()) Next[SectionName(Domain)] = Merged;
+        }
+        return Replace(Next);
+    }
     QJsonArray Plugins(const QString& Format) const { return Read(Section::Plugins).toObject().value(Format).toArray(); }
     bool SetPlugins(const QString& Format, const QJsonArray& Items)
     { auto Next = Read(Section::Plugins).toObject(); Next[Format] = Items; return Put(Section::Plugins, Next); }

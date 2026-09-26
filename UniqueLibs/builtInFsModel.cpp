@@ -764,6 +764,22 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
     endResetModel();
 }
 
+void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
+{
+    CFsModelT::SetColorScheme(Scheme);
+    // Recolor the existing snapshot without an I/O refresh or selection reset.
+    const auto Manager = TyStColorSchemeMgr::GetInstance();
+    vecRowColors_.clear(); vecRowColors_.reserve(vecNode_.size());
+    for (const auto& Item : vecNode_) {
+        auto Color = qMakePair(Scheme.FileList_FGColor, Scheme.FileList_BGColor);
+        for (const auto& Set : vecFileSetColors_)
+            if (Manager->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
+        vecRowColors_.push_back(Color);
+    }
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
+        {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
+}
+
 QString CFSModel::retrieveRootWithPath() const
 {
     const auto RootCount = GetRootCount();

@@ -18,8 +18,17 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     : QMainWindow( parent, flags )
 {
     ui.setupUi( this );
+    ui.verticalLayout->setContentsMargins(10, 8, 10, 8);
+    ui.verticalLayout->setSpacing(8);
+    ui.verticalLayout_2->setContentsMargins(0, 0, 0, 0);
+    ui.horizontalLayout->setContentsMargins(0, 4, 0, 0);
+    ui.frame->setFrameShape(QFrame::NoFrame);
+    ui.frame_2->setFrameShape(QFrame::NoFrame);
 
-    setWindowTitle( tr( "HyperCommander - %1" ).arg( CMN_MAKE_STR( RES_CANONICAL_VERSION ) ) );
+    setWindowTitle(QCoreApplication::applicationName());
+    const auto Available = screen()->availableGeometry().size();
+    resize(std::min(1360, Available.width() * 9 / 10), std::min(850, Available.height() * 9 / 10));
+    ui.splitter->setSizes({1, 1});
 
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 }

@@ -56,6 +56,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
     vbox_ = new QVBoxLayout;
     grid_ = new Qtitan::Grid;
+    grid_->setProperty("hc.fileGrid", true);
 
     grid_->setViewType( Qtitan::Grid::BandedTableView );
     grid_->setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
@@ -219,8 +220,6 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             GridColumn->setMinWidth( 30 );
             // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.Align );
-            GridColumn->setTextColor( "silver" );
-            GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
             if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
             {
@@ -253,6 +252,14 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     // RowFocus 색상 등 적용
     view_->beginUpdate();
     auto& BaseOpts = view_->options();
+    grid_->setFont(ColorScheme.FileList_Font);
+    BaseOpts.setTransparentBackground(false);
+    BaseOpts.setSelectedInverseColor(false);
+    for (int Index = 0; model_ && Index < model_->columnCount(); ++Index)
+        if (auto* Column = view_->getColumnByModelColumn(Index)) {
+            Column->setTextColor(ColorScheme.FileList_FGColor);
+            Column->setBackgroundColor(Qt::transparent);
+        }
 
     if( ColorScheme.FileList_BGColor.isValid() == true )
         BaseOpts.setBackgroundColor( ColorScheme.FileList_BGColor );

@@ -85,6 +85,7 @@ public:
 
     QString                         GetCurrentPathWithRoot() const override { return retrieveRootWithPath(); }
     QString                         GetName( const QModelIndex& Index ) const;
+    void                            SetColorScheme(const TyColorScheme& Scheme) override;
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 

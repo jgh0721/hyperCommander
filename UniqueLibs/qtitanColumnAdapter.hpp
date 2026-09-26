@@ -31,6 +31,7 @@ protected:
 private:
     void captureDrag();
     bool save();
+    std::optional<hc::view::ColumnWidthResult> resolveWidth(const QString& Id, int Available) const;
     QPointer<QWidget> owner_;
     Qtitan::Grid* grid_;
     Qtitan::GridBandedTableView* view_;
@@ -38,6 +39,7 @@ private:
     QTimer dragTimer_;
     QMap<int, QString> ids_;
     QMap<QString, int> legacy_;
+    QMap<QString, hc::view::ColumnWidthPolicy> defaults_;
     QMap<QString, int> applied_;
     hc::view::WidthSettings settings_;
     QString profile_;

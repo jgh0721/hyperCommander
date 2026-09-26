@@ -49,15 +49,13 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
         if( workspaceRestored_ || ui.cbxVolume->GetCount() == 0 )
             return;
 
-        // A disconnected mapping may sort before C:. Showing the drive list
-        // must not automatically attempt to open that server on first launch.
-        int Initial = 0;
-        for (int Index = 0; Index < ui.cbxVolume->GetCount(); ++Index)
-        {
-            const auto Fs = ui.cbxVolume->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
-            if (Fs && !Fs->IsRemote()) { Initial = Index; break; }
-        }
-        ui.cbxVolume->setCurrentIndex( Initial );
+        // Start in the user's home; restored tabs keep their saved location.
+        // Never probe a mapped drive just to populate the first window.
+        hc::workspace::PaneState Initial;
+        hc::workspace::TabState Tab; Tab.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        Tab.location_ = {hc::storage::LocatorKind::Local, QDir::toNativeSeparators(QDir::homePath()).toStdString()};
+        Initial.tabs_.append(Tab);
+        RestoreWorkspace(Initial);
     } );
 }
 
@@ -284,6 +282,7 @@ void CmpPanel::updateWorkspaceStatus()
     const auto Error = Model->LastNavigationError();
     workspaceStatus_->setText(Error ? tr("%1 · %2").arg(QString::fromStdString(Model->WorkspaceLocation().root_), QString::fromStdString(Error->code_)) : QString{});
     workspaceStatus_->setVisible(bool(Error)); retry_->setVisible(bool(Error));
+    workspaceStatus_->parentWidget()->setVisible(bool(Error));
     retry_->setEnabled(!Model->property("hc.restorePending").toBool());
     processPanelStatusText();
 }
@@ -756,6 +755,8 @@ void CmpPanel::OnChangedDirectory(const QString& CurrentPath)
         for (const auto& Item : State->workspace_.history_) history_->addItem(QString::fromStdString(Item.root_));
         history_->setCurrentIndex(history_->count() - 1);
     }
+    if (Model->GetRoot() && (Model->GetRoot()->GetCate() == nsHC::FS_CATE_LOCAL || Model->GetRoot()->IsRemote()))
+        processVolumeStatusText(Model->GetRoot());
     processPanelStatusText(); updateWorkspaceStatus(); emit sig_NotifyCurrentDirectory(CurrentPath);
 }
 
@@ -826,6 +827,14 @@ bool CmpPanel::eventFilter(QObject* Object, QEvent* Event)
 
 void CmpPanel::initializeUIs()
 {
+    ui.verticalLayout->setContentsMargins(6, 4, 6, 4);
+    ui.verticalLayout->setSpacing(6);
+    ui.lblVolumeStatus->setMinimumWidth(0);
+    ui.lblVolumeStatus->setMaximumWidth(QWIDGETSIZE_MAX);
+    ui.lblVolumeStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    ui.horizontalLayout->setStretch(1, 1);
+    for (auto* Button : ui.frmHDR->findChildren<QPushButton*>())
+        if (Button->text() == "Grid Style") Button->setText(tr("목록 모양"));
     ui.cbxVolume->setMinimumHeight(32); ui.cbxVolume->view()->setMinimumWidth(160);
     while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; }
     auto* Controls = new QWidget(this); auto* Layout = new QHBoxLayout(Controls); Layout->setContentsMargins(0, 0, 0, 0);
@@ -839,7 +848,7 @@ void CmpPanel::initializeUIs()
     workspaceStatus_ = new QLabel(Notice); workspaceStatus_->setWordWrap(true); workspaceStatus_->setTextFormat(Qt::PlainText);
     retry_ = new QPushButton(tr("다시 시도"), Notice); retry_->setObjectName("hc.workspaceRetry");
     NoticeLayout->addWidget(workspaceStatus_, 1); NoticeLayout->addWidget(retry_); ui.verticalLayout->insertWidget(2, Notice);
-    workspaceStatus_->hide(); retry_->hide();
+    workspaceStatus_->hide(); retry_->hide(); Notice->hide();
     connect(search_, &QLineEdit::textChanged, this, [this](const QString& Text) {
         emit sig_NotifyPanelActivated();
         const auto Index = ui.tabWidget->currentIndex(); if (Index >= 0 && Index < vecTabStates.size()) vecTabStates[Index]->ProxyModel->SetSearch(Text);
