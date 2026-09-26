@@ -47,7 +47,7 @@
     },
     {
       "path": "src/src/grid/QtnGridBase.h",
-      "sha256": "fb3993bb46aa25966d289fa521800b990a2909d9a2481e7b71dce84bc1b2164e",
+      "sha256": "36394473800b5f87be2dd317afe4c60e052b8457b21fcba95008687c5dd75c31",
       "upstreamSha256": "f69ae3260574d0d2eec32e1932a8a57771d7f1e7a80f3673ec5076c76488a6c4"
     },
     {
@@ -87,12 +87,12 @@
     },
     {
       "path": "src/src/grid/QtnGridTableViewPrivate.cpp",
-      "sha256": "e5468b054a2554c23ef6a4f174ff6a407cc1a91b83a82a47f27c8666dd8d0da3",
+      "sha256": "95da4fb1339f29aa0f93355c771831fae40f2d4ac0feec1fcf03e1290a880e9d",
       "upstreamSha256": "068d4493a9db6eaa9a6dd864afbee70e9f07811a9068319fdd2332e944f25109"
     },
     {
       "path": "src/src/grid/QtnGridViewGraphics.cpp",
-      "sha256": "b6341cc2d9adb13c38c2f64400848e434f233914bc0ef6e080ba3165172df70c",
+      "sha256": "4bf15bc32ec8ae58ab13e7601713808fc85e2f1133ddd706740b0632c7f339c0",
       "upstreamSha256": "f2d0c6c8d6b58e2f8af620b3c7a40bd8c8da4ab3114f63f6fe6985d56e9a99db"
     },
     {
@@ -117,6 +117,6 @@
   },
   "privatePatch": {
     "path": "externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip",
-    "sha256": "f25a82a70ed8ce92960223cd5d7bedca6e0aa52c8e15a9e967d59d2a78b8e808"
+    "sha256": "d5ca80db13343c05ec9a9067d239d74f68c0495e104dd758eea809ca749a2432"
   }
 }

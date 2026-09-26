@@ -70,7 +70,8 @@ inline QJsonObject BuiltInAppearance()
         const QJsonObject Font{{"family", "Malgun Gothic"}, {"pointSize", 11}};
         const QJsonObject ListFont{{"family", "Malgun Gothic"}, {"pointSize", 12}};
         Schemes[Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")] = QJsonObject{
-            {"dark", Dark}, {"fonts", QJsonObject{{"menu", Font}, {"dialog", Font}, {"list", ListFont}}},
+            {"dark", Dark}, {"inverseCursor", false}, {"inverseSelection", false},
+            {"fonts", QJsonObject{{"menu", Font}, {"dialog", Font}, {"list", ListFont}}},
             {"colors", QJsonObject{{"dialogText", Dark ? "#E8EDF5" : "#20242B"},
                 {"dialogBackground", Dark ? "#20252E" : "#F4F6FA"},
                 {"listText", Dark ? "#E8EDF5" : "#20242B"}, {"listBackground", Dark ? "#181C23" : "#FFFFFF"},

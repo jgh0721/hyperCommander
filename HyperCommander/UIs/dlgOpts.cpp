@@ -23,6 +23,39 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
         TyStPlugInMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
     });
     ui.setupUi( this );
+    // The legacy display page used 22-pixel combo boxes at absolute positions.
+    // Let font metrics drive every row and scroll the page on smaller screens.
+    auto* DisplayLayout = new QVBoxLayout(ui.pgDisplay);
+    auto* DisplayScroll = new QScrollArea(ui.pgDisplay); DisplayScroll->setWidgetResizable(true);
+    DisplayScroll->setFrameShape(QFrame::NoFrame); DisplayLayout->addWidget(DisplayScroll);
+    auto* DisplayBody = new QWidget; auto* DisplayRows = new QVBoxLayout(DisplayBody);
+    DisplayScroll->setWidget(DisplayBody);
+    auto* Icons = new QVBoxLayout(ui.grpIconDisplay);
+    for (auto* Choice : {ui.radioButton_7, ui.radioButton_6, ui.radioButton_5, ui.radioButton_4}) Icons->addWidget(Choice);
+    Icons->addWidget(ui.chkIsDimmedIconWhenHidden); DisplayRows->addWidget(ui.grpIconDisplay);
+    auto* Sizes = new QFormLayout;
+    Sizes->addRow(ui.lblHeaderSizeDisplay, ui.cbxHeaderSizeDisplay);
+    Sizes->addRow(ui.lblFooterSizeDisplay, ui.cbxFooterSizeDisplay); DisplayRows->addLayout(Sizes);
+    DisplayRows->addWidget(ui.lblSortMethod);
+    for (auto* Choice : {ui.chkSortCaseSensitive, ui.chkSortLocaleAware, ui.chkSortNumericAware}) DisplayRows->addWidget(Choice);
+    auto* DirectoryRows = new QVBoxLayout;
+    for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) DirectoryRows->addWidget(Choice);
+    DisplayRows->addWidget(ui.lblDirectory); DisplayRows->addLayout(DirectoryRows);
+    ui.widget_4->hide();
+    auto* FolderSizes = new QVBoxLayout(ui.groupBox);
+    FolderSizes->addWidget(ui.checkBox); FolderSizes->addWidget(ui.comboBox); DisplayRows->addWidget(ui.groupBox);
+    DisplayRows->addStretch();
+    ui.lstOptCate->setStyleSheet({});
+    ui.horizontalSpacer_4->changeSize(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum);
+    ui.cbxColorScheme->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+    for (auto* Frame : {ui.frmTitleBar, ui.frmFooter}) {
+        Frame->setMinimumHeight(0); Frame->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+    for (auto* Button : {ui.btnLstFGColor, ui.btnLstBGColor, ui.btnLstCursorColor, ui.btnLstSelectColor}) {
+        Button->setMinimumWidth(0); Button->setMaximumWidth(QWIDGETSIZE_MAX);
+    }
+    for (auto* Combo : {ui.cbxColorScheme, ui.cbxHeaderSizeDisplay, ui.cbxFooterSizeDisplay})
+        Combo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     ui.groupBox_3->setTitle(tr("플러그인 실행 설정"));
     auto* WcxLayout = new QVBoxLayout(ui.groupBox_3);
     auto* PluginTabs = new QTabWidget(ui.groupBox_3); PluginTabs->setObjectName("pluginHostTabs"); WcxLayout->addWidget(PluginTabs);
@@ -115,6 +148,8 @@ void QMainOpts::SaveSettings_ColorScheme()
     ColorScheme.Name                = ui.edtColorSchemeName->text();
     if (ColorScheme.Name.trimmed().isEmpty()) return;
     ColorScheme.IsDarkMode          = ui.chkIsDarkMode->isChecked();
+    ColorScheme.IsInverseCursor     = ui.chkInverseCursor->isChecked();
+    ColorScheme.IsInverseSelect     = ui.chkInverseSelection->isChecked();
 
     ColorScheme.Menu_Font           = ui.fntMnuFontBox->currentFont();
     ColorScheme.Menu_Font.setPointSize( ui.spbMnuFontBox->value() );
@@ -168,6 +203,8 @@ void QMainOpts::RefreshColorScheme( const QString& SchemeName )
 
     ui.edtColorSchemeName->setText( ColorScheme.Name );
     ui.chkIsDarkMode->setChecked( ColorScheme.IsDarkMode );
+    ui.chkInverseCursor->setChecked(ColorScheme.IsInverseCursor);
+    ui.chkInverseSelection->setChecked(ColorScheme.IsInverseSelect);
 
     ui.fntMnuFontBox->setCurrentFont( QFont( ColorScheme.Menu_Font ) );
     ui.spbMnuFontBox->setValue( ColorScheme.Menu_Font.pointSize() );
@@ -746,6 +783,8 @@ void QMainOpts::resetColorScheme( const QString& Name )
 {
     ui.edtColorSchemeName->setText( Name );
     ui.chkIsDarkMode->setChecked( false );
+    ui.chkInverseCursor->setChecked(false);
+    ui.chkInverseSelection->setChecked(false);
 
     ui.fntMnuFontBox->setCurrentFont( {} );
     ui.spbMnuFontBox->setValue( 9 );

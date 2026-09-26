@@ -254,7 +254,14 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     auto& BaseOpts = view_->options();
     grid_->setFont(ColorScheme.FileList_Font);
     BaseOpts.setTransparentBackground(false);
-    BaseOpts.setSelectedInverseColor(false);
+    view_->fileManagerOptions().setInvertedCursor(ColorScheme.IsInverseCursor);
+    BaseOpts.setSelectedInverseColor(ColorScheme.IsInverseSelect);
+    // Qtitan pins the viewport palette and caches header primitives. A theme
+    // change must refresh both even when the QApplication style is unchanged.
+    grid_->setPalette(QApplication::palette());
+    grid_->viewport()->setPalette(QApplication::palette());
+    QEvent StyleChange(QEvent::StyleChange);
+    QApplication::sendEvent(grid_, &StyleChange);
     for (int Index = 0; model_ && Index < model_->columnCount(); ++Index)
         if (auto* Column = view_->getColumnByModelColumn(Index)) {
             Column->setTextColor(ColorScheme.FileList_FGColor);

@@ -92,7 +92,6 @@ void CmpPanel::RefreshVolumeList() const
                 const auto Item = ui.cbxVolume->CreateItem();
                 const auto Label = QString::fromStdString( fmt::format( "{:^3c} | {:20s}", 'A' + idx, Fs->GetVolumeName().toStdString() ) );
                 
-                Item->setFixedHeight( 32 );
                 Item->SetText( QChar( 'A' + idx ) );
                 Item->GetItem()->setForeground( QColor( "black" ) );
                 Item->GetItem()->setBackground( QColor( "yellow" ) );
@@ -113,10 +112,7 @@ void CmpPanel::RefreshVolumeList() const
             const auto Item = ui.cbxVolume->CreateItem();
             const auto Label = tr("\\ | 네트워크 환경" );
 
-            Item->setFixedHeight( 32 );
             Item->SetText( tr("네트워크 환경") );
-            Item->GetItem()->setForeground( QColor( "black" ) );
-            Item->GetItem()->setBackground( QColor( "yellow" ) );
             Item->GetItem()->setIcon( DriveIcon );
             Item->AddLabel()->setText( Label );
             Item->AddLabel()->adjustSize();

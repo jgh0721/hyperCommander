@@ -22,6 +22,8 @@ void CColorSchemeMgr::Refresh()
             Record["dark"].toBool() ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")).toObject();
         QStringList Issues; Record = hc::settings::MergeDefaults(Record, Fallback, {}, Issues);
         TyColorScheme Scheme; Scheme.Name = It.key(); Scheme.IsDarkMode = Record["dark"].toBool();
+        Scheme.IsInverseCursor = Record["inverseCursor"].toBool();
+        Scheme.IsInverseSelect = Record["inverseSelection"].toBool();
         const auto Fonts = Record["fonts"].toObject(); const auto Colors = Record["colors"].toObject();
         Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
         Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
@@ -81,6 +83,8 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
         for (const auto& Scheme : mapNameToScheme) {
             auto Record = Schemes[Scheme.Name].toObject();
             Record["dark"] = Scheme.IsDarkMode;
+            Record["inverseCursor"] = Scheme.IsInverseCursor;
+            Record["inverseSelection"] = Scheme.IsInverseSelect;
             Record["fonts"] = QJsonObject{{"menu",EncodeFont(Scheme.Menu_Font)},{"dialog",EncodeFont(Scheme.Dialog_Font)},{"list",EncodeFont(Scheme.FileList_Font)}};
             Record["colors"] = QJsonObject{{"dialogText",Scheme.Dialog_FGColor.name(QColor::HexRgb)},{"dialogBackground",Scheme.Dialog_BGColor.name(QColor::HexRgb)},{"listText",Scheme.FileList_FGColor.name(QColor::HexRgb)},{"listBackground",Scheme.FileList_BGColor.name(QColor::HexRgb)},{"listCursor",Scheme.FileList_Cursor.name(QColor::HexRgb)},{"listSelection",Scheme.FileList_Selected.name(QColor::HexRgb)}};
             QJsonObject FileSets;

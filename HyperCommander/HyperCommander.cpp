@@ -50,19 +50,25 @@ public:
         if (!Theme) return;
         Theme->fontRegular = Scheme.Dialog_Font;
         Theme->fontBold = Scheme.Dialog_Font; Theme->fontBold.setBold(true);
+        const int ControlHeight = QFontMetrics(Scheme.Dialog_Font).height() + 12;
+        Theme->controlHeightLarge = qMax(Theme->controlHeightLarge, ControlHeight);
+        Theme->controlHeightMedium = qMax(Theme->controlHeightMedium, ControlHeight - 4);
         // Placeholder hints describe an available action, so keep them readable
         // instead of inheriting the base theme's disabled-text contrast.
         for (const auto Group : {QPalette::Active, QPalette::Inactive})
             Theme->palette.setColor(Group, QPalette::PlaceholderText, QColor(Dark ? "#AAB5C5" : "#586174"));
+        // setTheme/setPalette can synchronously repaint widgets. Publish all
+        // custom drawing colors before those notifications reach the grid.
+        header_ = Theme->backgroundColorMain3; text_ = Scheme.Dialog_FGColor;
+        hover_ = Scheme.FileList_Cursor; selected_ = Scheme.FileList_Selected;
+        border_ = Theme->borderColor;
+        QPixmapCache::clear();
         qlementine_->setTheme(*Theme);
         QApplication::setPalette(Theme->palette);
         QApplication::setFont(Scheme.Dialog_Font);
         QApplication::setFont(Scheme.Menu_Font, "QMenu");
         QApplication::setFont(Scheme.Menu_Font, "QMenuBar");
         setProperty("hc.theme", Scheme.Name);
-        header_ = Theme->backgroundColorMain3; text_ = Scheme.Dialog_FGColor;
-        hover_ = Scheme.FileList_Cursor; selected_ = Scheme.FileList_Selected;
-        border_ = Theme->borderColor;
         for (const auto Pair : {qMakePair(Qtitan::GridThemeManager::SortAscendingIcon, false),
                                qMakePair(Qtitan::GridThemeManager::SortDescendingIcon, true)}) {
             QPixmap Pixmap(16, 16); Pixmap.fill(Qt::transparent);
@@ -71,6 +77,34 @@ public:
             Painter.end(); Qtitan::GridBase::themeManager()->setIcon(Pair.first, QIcon(Pixmap));
         }
         Qtitan::GridBase::themeManager()->updateViews();
+    }
+    QSize sizeFromContents(ContentsType Type, const QStyleOption* Option, const QSize& Contents, const QWidget* Widget = nullptr) const override {
+        auto Size = Qtitan::CommonStyle::sizeFromContents(Type, Option, Contents, Widget);
+        if (Type == CT_ComboBox || Type == CT_LineEdit || Type == CT_SpinBox)
+            Size.setHeight(qMax(Size.height(), Option->fontMetrics.height() + 12));
+        if (Type == CT_ComboBox)
+            Size.setWidth(qMax(Size.width(), Contents.width() + qlementine_->theme().spacing * 3 + qlementine_->theme().iconSize.width()));
+        return Size;
+    }
+    using Qtitan::CommonStyle::polish;
+    using Qtitan::CommonStyle::unpolish;
+    void polish(QWidget* Widget) override {
+        Qtitan::CommonStyle::polish(Widget);
+        if (qobject_cast<QComboBox*>(Widget)) {
+            if (!Widget->property("hc.originalMinimumHeight").isValid())
+                Widget->setProperty("hc.originalMinimumHeight", Widget->minimumHeight());
+            Widget->installEventFilter(this);
+            fitComboHeight(Widget);
+        }
+    }
+    void unpolish(QWidget* Widget) override {
+        Widget->removeEventFilter(this);
+        Qtitan::CommonStyle::unpolish(Widget);
+    }
+    bool eventFilter(QObject* Object, QEvent* Event) override {
+        if (Event->type() == QEvent::FontChange || Event->type() == QEvent::ApplicationFontChange)
+            if (auto* Widget = qobject_cast<QComboBox*>(Object)) fitComboHeight(Widget);
+        return Qtitan::CommonStyle::eventFilter(Object, Event);
     }
     QRect subElementRect(SubElement Element, const QStyleOption* Option, const QWidget* Widget = nullptr) const override {
         // Qtitan measures an editor before assigning its text. Qlementine would
@@ -98,6 +132,10 @@ public:
         Qtitan::CommonStyle::drawControl(Element, Option, Painter, Widget);
     }
 private:
+    static void fitComboHeight(QWidget* Widget) {
+        Widget->setMinimumHeight(qMax(Widget->property("hc.originalMinimumHeight").toInt(), Widget->fontMetrics().height() + 12));
+        Widget->updateGeometry();
+    }
     static bool isGrid(const QWidget* Widget) {
         for (auto* Current = Widget; Current; Current = Current->parentWidget())
             if (Current->property("hc.fileGrid").toBool()) return true;
