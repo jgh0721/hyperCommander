@@ -100,7 +100,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"firstRunAppearanceUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"firstRunAppearanceUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -211,6 +211,134 @@ private slots:
 
     void qtitanCacheAndSortUi() { hc::tests::GridCacheAndSortRegression(); }
     void qtitanFileManagerUi() { hc::tests::GridFileManagerRegression(); }
+
+    void listLayoutRestartUi()
+    {
+        if (!qEnvironmentVariableIsSet("HC_LIST_LAYOUT_RESTART")) QSKIP("Child-process restart check");
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        QCOMPARE(Left->CaptureWorkspace().tabs_.size(), 2);
+        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("name-last"));
+        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->ColumnWidths()->LayoutMode(), QString("name-first"));
+        QCOMPARE(static_cast<CGridView*>(Right->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("details"));
+        auto* Adapter = static_cast<CGridView*>(Left->GetFocusView(0))->ColumnWidths();
+        QVERIFY(Adapter->SetLayoutMode("details"));
+        QCOMPARE(Adapter->Policies().value(Adapter->ColumnId(0)).value_, 42.0);
+    }
+
+    void listLayoutSettingsUi()
+    {
+        using namespace hc::view;
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace(); });
+        QVERIFY(Settings.Put(hc::settings::Section::Columns, QJsonObject{}));
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"alpha.txt", "beta.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Name); }
+        hc::workspace::TabState Tab; Tab.id_ = "layout-test"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        Left->RestoreWorkspace(Pane); Tab.id_ = "layout-right"; Pane.tabs_ = {Tab}; Right->RestoreWorkspace(Pane);
+        QTRY_VERIFY(!model(Left)->IsLoading() && names(model(Left)).contains("beta.txt"));
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Adapter = View->ColumnWidths();
+        auto* Native = View->BaseView();
+        const auto NameId = Adapter->ColumnId(0);
+        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Flexible, 42}));
+        QString Key;
+        for (int Row = 0; Row < model(Left)->rowCount(); ++Row) {
+            const auto Item = model(Left)->GetFileInfo(model(Left)->index(Row, 0));
+            if (Item && Item->Name_ == "beta.txt") Key = hc::workspace::SelectionKey(*Item->storageEntry_);
+        }
+        QVERIFY(!Key.isEmpty()); View->RestoreSelection({Key}, Key);
+        QSignalSpy Resets(model(Left), &QAbstractItemModel::modelReset);
+        const auto NameColumn = static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(0));
+        const auto SizeColumn = static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(1));
+        const auto OriginalSize = main_->size();
+        for (const auto& Mode : {QString("name-first"), QString("name-last"), QString("details")}) {
+            QVERIFY(Adapter->SetLayoutMode(Mode));
+            QTRY_COMPARE(NameColumn->rowIndex(), Mode == "name-last" ? 1 : 0);
+            QTRY_COMPARE(SizeColumn->rowIndex(), Mode == "name-first" ? 1 : 0);
+            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
+            main_->resize(OriginalSize.width() - 140, OriginalSize.height());
+            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
+            main_->resize(OriginalSize);
+            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
+            QCOMPARE(View->CaptureSelection(), QStringList{Key}); QCOMPARE(View->CaptureFocus(), Key);
+            Native->grid()->viewport()->repaint();
+            for (const int ColumnIndex : {0, 1}) {
+                QRect Header, Cell;
+                for (const auto& Hit : Native->grid()->hitInfoAll()) {
+                    if (Hit.columnIndex() != ColumnIndex) continue;
+                    if (Hit.info() == Qtitan::GridHitInfo::Column) Header = Hit.rect();
+                    if (Hit.info() == Qtitan::GridHitInfo::Cell) Cell = Hit.rect();
+                }
+                QVERIFY(!Header.isEmpty() && !Cell.isEmpty());
+                QCOMPARE(Header.left(), Cell.left()); QCOMPARE(Header.width(), Cell.width());
+            }
+            QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/list-layout-" + Mode + ".png"));
+        }
+        QCOMPARE(Resets.count(), 0); QCOMPARE(Adapter->Policies()[NameId].value_, 42.0);
+        const auto BeforeCancel = Adapter->WorkspaceLayout(); const auto BeforeSettings = Settings.Object();
+        bool DialogSeen = false;
+        const auto Edit = [&](int ModeIndex, int ScopeIndex, bool Save, bool Reset) {
+            DialogSeen = false;
+            QTimer::singleShot(0, main_, [&] {
+                auto* Dialog = View->findChild<QDialog*>("hc.columnWidthsDialog"); if (!Dialog) return;
+                const auto Close = qScopeGuard([Dialog] { if (Dialog->isVisible()) Dialog->reject(); });
+                DialogSeen = true;
+                auto* Modes = Dialog->findChild<QComboBox*>("hc.listLayout.mode"); QVERIFY(Modes);
+                Modes->setCurrentIndex(ModeIndex);
+                Dialog->findChild<QComboBox*>("hc.listLayout.scope")->setCurrentIndex(ScopeIndex);
+                auto* Buttons = Dialog->findChild<QDialogButtonBox*>();
+                if (Reset) Buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+                QCoreApplication::processEvents();
+                auto* Table = Dialog->findChild<QTableWidget*>();
+                for (int Row = 0; Row < Table->rowCount(); ++Row)
+                    for (int Column = 1; Column < Table->columnCount(); ++Column) {
+                        auto* Control = Table->cellWidget(Row, Column); QVERIFY(Control && Control->isVisible());
+                        const auto Cell = Table->visualRect(Table->model()->index(Row, Column));
+                        QVERIFY2(Control->geometry().intersects(Cell) && Control->width() > 20 && Control->height() > 15, "Cell controls must occupy their own visible table cells");
+                    }
+                QVERIFY(Dialog->grab().save(QCoreApplication::applicationDirPath() + "/list-layout-settings.png"));
+                Buttons->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
+                if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
+            });
+            auto* Button = Left->findChild<QPushButton*>("btnGridStyle"); QVERIFY(Button);
+            Button->click();
+        };
+        Edit(1, 1, false, true); QVERIFY(DialogSeen);
+        QCOMPARE(Adapter->WorkspaceLayout(), BeforeCancel); QCOMPARE(Settings.Object(), BeforeSettings);
+        Edit(1, 0, true, true); QVERIFY(DialogSeen); QCOMPARE(Adapter->LayoutMode(), QString("name-first"));
+        QCOMPARE(Settings.Object(), BeforeSettings);
+        hc::settings::JsonStore SavedWorkspace(hc::settings::WorkspaceSettings().FileName());
+        const auto SavedState = hc::workspace::Load(SavedWorkspace);
+        QCOMPARE(SavedState.state_.left_.tabs_.front().view_.value("listLayout").toObject().value("mode").toString(), QString("name-first"));
+        Left->AddTab(true);
+        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->ColumnWidths()->LayoutMode(), QString("details"));
+        Left->CloseTab();
+        Edit(2, 1, true, true); QVERIFY(DialogSeen); QCOMPARE(Adapter->LayoutMode(), QString("name-last"));
+        QCOMPARE(static_cast<CGridView*>(Right->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("details"));
+        Left->AddTab(true);
+        auto* NewView = static_cast<CGridView*>(Left->GetFocusView(1));
+        QCOMPARE(NewView->ColumnWidths()->LayoutMode(), QString("name-last"));
+        QVERIFY(NewView->ColumnWidths()->SetLayoutMode("name-first"));
+        QCOMPARE(Adapter->LayoutMode(), QString("name-last"));
+        QVERIFY(main_->SaveWorkspace());
+        QProcess Restart; auto Environment = QProcessEnvironment::systemEnvironment();
+        Environment.insert("HC_LIST_LAYOUT_RESTART", "1");
+        Environment.insert("HC_TEST_CONFIG_DIR", QFileInfo(Settings.FileName()).absolutePath()); Restart.setProcessEnvironment(Environment);
+        Restart.start(QCoreApplication::applicationFilePath(), {"listLayoutRestartUi", "-o", "list-layout-restart.txt,txt"});
+        QVERIFY(Restart.waitForStarted(5000)); QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
+        QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
+        // Legacy tabs retain their one-line widths even when the panel's new-tab
+        // default has changed. Unknown future formats remain read-only and intact.
+        View->RestoreWorkspaceView({{"mode", "details"}, {"widths", QJsonObject{{NameId, EncodeWidth({WidthUnit::Percent, WidthMode::Flexible, 37})}}}});
+        QCOMPARE(Adapter->LayoutMode(), QString("details")); QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
+        const QJsonObject Future{{"version", 99}, {"mode", "future"}, {"profiles", QJsonObject{}}};
+        View->RestoreWorkspaceView({{"listLayout", Future}});
+        QCOMPARE(Adapter->WorkspaceLayout(), Future); QVERIFY(!Adapter->SetLayoutMode("name-first"));
+    }
 
     void workspaceRestoreUi()
     {
@@ -2157,8 +2285,9 @@ hc.events.unsubscribe(sub)
         Panel->AddTab();
         auto* NewView = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         QTRY_VERIFY(NewView->ColumnWidths()->Policies().contains(NewView->ColumnWidths()->ColumnId(0)));
-        QCOMPARE(NewView->ColumnWidths()->Policies()[NewView->ColumnWidths()->ColumnId(0)].value_, 25.0);
-        QTRY_COMPARE(NewView->BaseView()->getColumnByModelColumn(0)->width(), qRound(NewView->ColumnWidths()->AvailableWidth() * 0.25));
+        // A tab-only override does not replace the panel's new-tab default.
+        QCOMPARE(NewView->ColumnWidths()->Policies()[NewView->ColumnWidths()->ColumnId(0)].value_, 46.0);
+        QTRY_COMPARE(NewView->BaseView()->getColumnByModelColumn(0)->width(), std::max(200, qRound(NewView->ColumnWidths()->AvailableWidth() * 0.46)));
         Panel->CloseTab(); QTest::qWait(30); QTRY_VERIFY(Check());
         main_->resize(OriginalSize);
     }
