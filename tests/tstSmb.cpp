@@ -23,6 +23,7 @@
 #include "qtWorkspaceRestore.hpp"
 #include <QInputDialog>
 #include <psapi.h>
+#include <AclAPI.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
 #include "colorSchemeMgr.hpp"
@@ -100,7 +101,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"firstRunAppearanceUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"firstRunAppearanceUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -392,6 +393,71 @@ private slots:
         QVERIFY(Model->HasPlaceholder()); QCOMPARE(Panel->CaptureWorkspace().tabs_[1].provider_, Missing.provider_);
         Tabs->setCurrentIndex(0); Panel->CloseTab(); // Closing active tab updates watches and placeholder status.
         QVERIFY(static_cast<CFSModel*>(model(Panel))->HasPlaceholder());
+    }
+
+    void protectedParentNavigationUi()
+    {
+        // The product requests fresh child metadata, unlike a plain provider
+        // listing. Exercise its real navigation path with a protected sibling.
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Start = Directory.filePath("start"); QVERIFY(QDir().mkdir(Start));
+        const auto Protected = Directory.filePath("protected"); QVERIFY(QDir().mkdir(Protected));
+        const auto Handle = CreateFileW(QDir::toNativeSeparators(Protected).toStdWString().c_str(), READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+        PACL OriginalAcl = nullptr; PSECURITY_DESCRIPTOR OriginalDescriptor = nullptr;
+        QCOMPARE(GetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, &OriginalAcl, nullptr, &OriginalDescriptor), DWORD(ERROR_SUCCESS));
+        const auto Free = qScopeGuard([&] { LocalFree(OriginalDescriptor); });
+        const auto Restore = qScopeGuard([&] {
+            SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                nullptr, nullptr, OriginalAcl, nullptr);
+        });
+        ACL EmptyAcl{}; QVERIFY(InitializeAcl(&EmptyAcl, sizeof(EmptyAcl), ACL_REVISION));
+        QCOMPARE(SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, &EmptyAcl, nullptr), DWORD(ERROR_SUCCESS));
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "protected-parent";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Start.toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000); QVERIFY(!Model->LastNavigationError());
+        Model->ChangeDirectory("..");
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000); QVERIFY(!Model->LastNavigationError());
+        QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Directory.path());
+        QVERIFY(names(Model).contains("protected")); QVERIFY(names(Model).contains("start"));
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            if (Item->Name_ == "protected") {
+                QVERIFY(Item->storageEntry_); QVERIFY(Item->storageEntry_->directory_);
+                QVERIFY(!Item->storageEntry_->id_.revision_);
+            }
+        }
+        Model->Refresh(); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QVERIFY(!Model->LastNavigationError()); QVERIFY(names(Model).contains("protected"));
+        Model->ChangeDirectory("protected"); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QVERIFY(Model->LastNavigationError());
+        QCOMPARE(Model->LastNavigationError()->category_, hc::storage::ErrorCategory::AccessDenied);
+        QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Directory.path());
+        Model->ChangeDirectory("start"); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QVERIFY(!Model->LastNavigationError());
+
+        // Read-only reproduction on the actual Windows volume; never change
+        // system ACLs. Record the token used to distinguish UAC elevation.
+        HANDLE Token = nullptr; QVERIFY(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token));
+        const auto CloseToken = qScopeGuard([&] { CloseHandle(Token); });
+        TOKEN_ELEVATION Elevation{}; DWORD Bytes = 0;
+        QVERIFY(GetTokenInformation(Token, TokenElevation, &Elevation, sizeof(Elevation), &Bytes));
+        qInfo() << "Parent navigation token elevated:" << Elevation.TokenIsElevated;
+        const auto Users = QDir::cleanPath(QDir::homePath() + "/..");
+        Tab.location_.root_ = Users.toStdString(); Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000); QVERIFY(!Model->LastNavigationError());
+        Model->ChangeDirectory(".."); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QVERIFY(!Model->LastNavigationError());
+        QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), QDir::cleanPath(Users + "/.."));
+        QVERIFY(names(Model).contains(QFileInfo(Users).fileName()));
     }
 
     void workspaceWatchAndMetadataUi()

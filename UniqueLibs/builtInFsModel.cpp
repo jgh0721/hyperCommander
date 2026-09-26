@@ -653,6 +653,7 @@ void CFSModel::refreshProvider()
     Context.stopToken_ = navigationStop_.get_token();
     Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     Context.freshEnumerationMetadata_ = true;
+    Context.allowUnavailableChildMetadata_ = true;
     using ReadResult = Result<std::vector<EntrySnapshot>>;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
     connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location] {

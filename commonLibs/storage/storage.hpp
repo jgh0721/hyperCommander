@@ -121,6 +121,10 @@ namespace hc::storage
         std::size_t maxEnumerationEntries_ = 100000;
         bool denyConcurrentMutation_ = false;
         bool freshEnumerationMetadata_ = false;
+        // Browsing may retain directory-enumeration metadata when opening an
+        // individual child is denied. Such entries have no verified revision.
+        // Mutation planners leave this false even when requesting fresh data.
+        bool allowUnavailableChildMetadata_ = false;
         PasswordPrompt passwordPrompt_;
         std::optional<Error> Check(const ProviderId& Provider) const
         {

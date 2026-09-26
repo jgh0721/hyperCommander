@@ -12,10 +12,19 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void protectedChildDoesNotHideParentListing_data()
+    {
+        QTest::addColumn<bool>("DirectoryChild");
+        QTest::newRow("directory") << true;
+        QTest::newRow("file") << false;
+    }
     void protectedChildDoesNotHideParentListing()
     {
+        QFETCH(bool, DirectoryChild);
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
-        const auto Child = Directory.filePath("protected-child"); QVERIFY(QDir().mkdir(Child));
+        const auto Child = Directory.filePath("protected-child");
+        if (DirectoryChild) { QVERIFY(QDir().mkdir(Child)); }
+        else { QFile File(Child); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("protected"), 9); }
         const auto Handle = CreateFileW(QDir::toNativeSeparators(Child).toStdWString().c_str(), READ_CONTROL | WRITE_DAC,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
         QVERIFY(Handle != INVALID_HANDLE_VALUE);
@@ -40,12 +49,19 @@ private slots:
         auto Page = Cursor.Value()->Next(16, {}).get(); QVERIFY(Page.HasValue());
         QCOMPARE(Page.Value().entries_.size(), 1u);
         const auto& ChildEntry = Page.Value().entries_.front();
-        QCOMPARE(ChildEntry.name_, std::string("protected-child")); QVERIFY(ChildEntry.directory_);
-        QVERIFY(!ChildEntry.id_.revision_);
+        QCOMPARE(ChildEntry.name_, std::string("protected-child")); QCOMPARE(ChildEntry.directory_, DirectoryChild);
+        if (DirectoryChild) QVERIFY(!ChildEntry.id_.revision_);
         QVERIFY(!Provider->Stat(ChildEntry.id_, {}).get().HasValue());
         OperationContext Fresh; Fresh.freshEnumerationMetadata_ = true;
         auto Strict = Provider->Enumerate(Root, Fresh).get(); QVERIFY(!Strict.HasValue());
         QCOMPARE(Strict.Failure().code_, std::string("win32:5"));
+        Fresh.allowUnavailableChildMetadata_ = true;
+        auto Browse = Provider->Enumerate(Root, Fresh).get(); QVERIFY(Browse.HasValue());
+        auto BrowsePage = Browse.Value()->Next(16, Fresh).get(); QVERIFY(BrowsePage.HasValue());
+        QCOMPARE(BrowsePage.Value().entries_.size(), 1u);
+        QCOMPARE(BrowsePage.Value().entries_.front().directory_, DirectoryChild);
+        QVERIFY(!BrowsePage.Value().entries_.front().id_.revision_);
+        QCOMPARE(Provider->Stat(BrowsePage.Value().entries_.front().id_, Fresh).get().Failure().category_, ErrorCategory::AccessDenied);
         QCOMPARE(SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
             nullptr, nullptr, OriginalAcl, nullptr), DWORD(ERROR_SUCCESS));
     }

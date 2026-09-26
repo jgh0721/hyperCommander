@@ -247,7 +247,8 @@ namespace hc::storage
                                     // one child (e.g. System Volume Information) is protected.
                                     // Browsing may use FindFirstFile metadata, without claiming
                                     // a verified revision. Mutation planning still requires it.
-                                    if (Context.freshEnumerationMetadata_ || (Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION))
+                                    if ((Context.freshEnumerationMetadata_ && !Context.allowUnavailableChildMetadata_)
+                                        || (Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION))
                                         return NativeError(Code, Id);
                                     HasRevision = false;
                                 }
