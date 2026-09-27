@@ -2251,8 +2251,8 @@ void QlementineStyle::drawControl(ControlElement ce, const QStyleOption* opt, QP
           const auto elidedText = optComboBox->fontMetrics.elidedText(
             optComboBox->currentText, Qt::ElideRight, availableW, Qt::TextSingleLine);
           const auto textRect = QRect{ availableX, contentRect.y(), availableW, contentRect.height() };
-          constexpr auto textFlags =
-            Qt::AlignVCenter | Qt::AlignBaseline | Qt::TextSingleLine | Qt::AlignLeft | Qt::TextHideMnemonic;
+          const auto textFlags =
+            optComboBox->textAlignment | Qt::TextSingleLine | Qt::TextHideMnemonic;
           p->setBrush(Qt::NoBrush);
 
           const auto status = widgetStatus(w);

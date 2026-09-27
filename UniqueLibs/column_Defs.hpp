@@ -33,6 +33,8 @@ struct Column
     Qt::Alignment                       Align;
     QString                             Content;
 
+    bool                                defaultHidden_ = false;
+
     // Internal Use Only.
     QVector< wchar_t >                  Content_CVT;
 };
@@ -50,6 +52,9 @@ constexpr auto BUILTIN_COL_FS_NAME          = QLatin1String( "[=HC.Fs.Name]" );
 constexpr auto BUILTIN_COL_FS_SIZE          = QLatin1String( "[=HC.Fs.Size]" );
 constexpr auto BUILTIN_COL_FS_CREATED       = QLatin1String( "[=HC.Fs.Created]" );
 constexpr auto BUILTIN_COL_FS_MODIFIED      = QLatin1String( "[=HC.Fs.Modified]" );
+constexpr auto BUILTIN_COL_FS_EXTENSION     = QLatin1String( "[=HC.Fs.Extension]" );
+constexpr auto BUILTIN_COL_FS_BASE_NAME     = QLatin1String( "[=HC.Fs.BaseName]" );
+constexpr auto BUILTIN_COL_FS_TYPE          = QLatin1String( "[=HC.Fs.Type]" );
 constexpr auto BUILTIN_COL_FS_ATTRIB        = QLatin1String( "[=HC.Fs.Attrib]" );
 constexpr auto BUILTIN_COL_FS_ATTRIB_TEXT   = QLatin1String( "[=HC.Fs.AttribText]" );
 
@@ -64,4 +69,9 @@ const ColumnView BUILTIN_COLVIEW_DETAILS = {
         << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignRight,    BUILTIN_COL_FS_SIZE }
         << Column { 2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_CREATED }
         << Column { 3, 0, QObject::tr( "속성" ),      Qt::AlignCenter,   BUILTIN_COL_FS_ATTRIB_TEXT }
+        // Append catalog fields: existing model indices are persisted in column IDs.
+        << Column { 4, 0, QObject::tr( "수정 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_MODIFIED, true }
+        << Column { 5, 0, QObject::tr( "확장자" ),    Qt::AlignLeft,     BUILTIN_COL_FS_EXTENSION, true }
+        << Column { 6, 0, QObject::tr( "확장자 없는 이름" ), Qt::AlignLeft, BUILTIN_COL_FS_BASE_NAME, true }
+        << Column { 7, 0, QObject::tr( "파일 종류" ), Qt::AlignLeft,     BUILTIN_COL_FS_TYPE, true }
 };

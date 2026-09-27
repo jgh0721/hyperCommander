@@ -3,10 +3,47 @@
 #include "column_Defs.hpp"
 #include "cmnTypeDefs.hpp"
 #include <QtitanGrid.h>
+#include <QStyledItemDelegate>
+#include <QStyleOptionComboBox>
 
 using namespace hc::view;
 
 namespace {
+class CenteredColumnChoice final : public QComboBox
+{
+public:
+    using QComboBox::QComboBox;
+protected:
+    void initStyleOption(QStyleOptionComboBox* Option) const override
+    {
+        QComboBox::initStyleOption(Option);
+        Option->textAlignment = Qt::AlignCenter;
+    }
+};
+class ColumnWidthEditor final : public QDoubleSpinBox
+{
+public:
+    using QDoubleSpinBox::QDoubleSpinBox;
+protected:
+    QString textFromValue(double Value) const override
+    {
+        // Keep fractional percentages from header drags and two-line defaults
+        // intact until edited, while presenting a compact whole-number value.
+        return locale().toString(Value, 'f', 0);
+    }
+};
+class ColumnNameDelegate final : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+protected:
+    void initStyleOption(QStyleOptionViewItem* Option, const QModelIndex& Index) const override
+    {
+        QStyledItemDelegate::initStyleOption(Option, Index);
+        Option->displayAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+        Option->rect.adjust(10, 0, -10, 0);
+    }
+};
 const QStringList LayoutModes{"details", "name-first", "name-last"};
 QJsonObject EncodePolicies(const QMap<QString, ColumnWidthPolicy>& Policies)
 {
@@ -63,6 +100,7 @@ void QtitanColumnAdapter::Bind(const ColumnView& Columns)
             else if (Expression == QString(BUILTIN_COL_FS_CREATED).toCaseFolded() || Expression == QString(BUILTIN_COL_FS_MODIFIED).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 30}; legacy_[Id] = 190; }
             else if (Expression == QString(BUILTIN_COL_FS_ATTRIB_TEXT).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 9}; legacy_[Id] = 56; }
         }
+        Policy.hidden_ = Column.defaultHidden_;
         defaults_[Id] = Policy;
     }
     ContentIds.sort();
@@ -97,8 +135,9 @@ QMap<QString, ColumnWidthPolicy> QtitanColumnAdapter::defaultsForLayout(const QS
     if (Mode != "details" && nameColumn_ >= 0) {
         const auto NameId = ids_.value(nameColumn_);
         double Total = 0;
-        for (auto It = Result.begin(); It != Result.end(); ++It) if (It.key() != NameId) Total += It.value().value_;
+        for (auto It = Result.begin(); It != Result.end(); ++It) if (It.key() != NameId && !It.value().hidden_) Total += It.value().value_;
         for (auto It = Result.begin(); It != Result.end(); ++It) {
+            if (It.value().hidden_) continue;
             // Match the editor's precision so saving defaults retains their
             // logical-pixel readability floors on a narrow pane.
             const auto Percent = It.key() == NameId ? 100 : Total > 0 ? It.value().value_ * 100 / Total : 0;
@@ -338,13 +377,7 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
     Form->addRow(tr("저장 범위(&S)"), Scope); Layout->addLayout(Form);
     auto* Preview = new QLabel(&Dialog); Preview->setObjectName("hc.listLayout.preview");
     Preview->setFrameStyle(QFrame::StyledPanel); Preview->setMargin(10); Layout->addWidget(Preview);
-    const auto UpdatePreview = [&] {
-        const auto Name = tr("프로젝트 검토 자료.txt");
-        const auto Details = tr("128 KB     2026-09-27 10:30     A");
-        Preview->setText(DraftMode == "details" ? Name + "     " + Details :
-            DraftMode == "name-first" ? Name + "\n" + Details : Details + "\n" + Name);
-    };
-    UpdatePreview();
+    Preview->setWordWrap(true);
     auto* Note = new QLabel(tr("모드별 컬럼 너비를 따로 보관합니다. 퍼센트는 패널의 표시 영역 기준이며, 두 줄 모드의 각 줄에 별도로 적용됩니다.\n고정 모드는 헤더 드래그를 제한합니다. ‘기본값’은 선택한 모드의 너비와 표시 여부를 초기화합니다."), &Dialog);
     Note->setWordWrap(true); Layout->addWidget(Note);
     auto* Table = new QTableWidget(ids_.size(), 7, &Dialog);
@@ -353,7 +386,19 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
     Table->verticalHeader()->hide();
     Table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    Table->setObjectName("hc.listLayout.columns");
+    Table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    Table->setSelectionMode(QAbstractItemView::SingleSelection);
+    Table->setItemDelegateForColumn(0, new ColumnNameDelegate(Table));
     Layout->addWidget(Table);
+    auto* ColumnActions = new QHBoxLayout;
+    auto* Available = new QComboBox(&Dialog); Available->setObjectName("hc.listLayout.availableColumns");
+    Available->setAccessibleName(tr("추가할 컬럼"));
+    auto* Add = new QPushButton(tr("컬럼 추가(&A)"), &Dialog); Add->setObjectName("hc.listLayout.addColumn");
+    auto* Remove = new QPushButton(tr("컬럼 제거(&R)"), &Dialog); Remove->setObjectName("hc.listLayout.removeColumn");
+    Remove->setToolTip(tr("선택한 컬럼을 숨깁니다. 컬럼 추가로 다시 표시할 수 있습니다."));
+    ColumnActions->addWidget(Available, 1); ColumnActions->addWidget(Add); ColumnActions->addWidget(Remove);
+    Layout->addLayout(ColumnActions);
     struct Row { QString id_; QComboBox* unit_; QComboBox* mode_; QDoubleSpinBox* value_; QDoubleSpinBox* min_; QDoubleSpinBox* max_; QCheckBox* visible_; };
     QList<Row> Rows;
     int RowIndex = 0;
@@ -362,11 +407,26 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
         const auto Column = view_->getColumnByModelColumn(It.key());
         const auto Policy = settings_.columns_.value(It.value());
         auto* Item = new QTableWidgetItem(Column->caption());
-        Item->setFlags(Qt::ItemIsEnabled); Table->setItem(RowIndex, 0, Item);
-        auto* Unit = new QComboBox(Table); Unit->addItems({tr("픽셀"), tr("퍼센트")}); Unit->setCurrentIndex(static_cast<int>(Policy.unit_));
-        auto* Mode = new QComboBox(Table); Mode->addItems({tr("가변"), tr("고정")}); Mode->setCurrentIndex(static_cast<int>(Policy.mode_));
+        Item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        Item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter); Table->setItem(RowIndex, 0, Item);
+        auto* Unit = new CenteredColumnChoice(Table); Unit->addItems({tr("픽셀"), tr("퍼센트")}); Unit->setCurrentIndex(static_cast<int>(Policy.unit_));
+        auto* Mode = new CenteredColumnChoice(Table); Mode->addItems({tr("가변"), tr("고정")}); Mode->setCurrentIndex(static_cast<int>(Policy.mode_));
+        int ChoiceColumn = 1;
+        for (auto* Choice : {Unit, Mode}) {
+            int TextWidth = 0;
+            for (int Index = 0; Index < Choice->count(); ++Index) {
+                Choice->setItemData(Index, int(Qt::AlignCenter), Qt::TextAlignmentRole);
+                TextWidth = std::max(TextWidth, Choice->fontMetrics().horizontalAdvance(Choice->itemText(Index)));
+            }
+            // QTableWidget's content sizing does not reliably include a cell
+            // widget's themed arrow/padding, especially with large dialog fonts.
+            auto* Cell = new QTableWidgetItem;
+            Cell->setFlags(Qt::ItemIsEnabled);
+            Cell->setSizeHint(QSize(TextWidth + 52, Choice->sizeHint().height()));
+            Table->setItem(RowIndex, ChoiceColumn++, Cell);
+        }
         const auto Spin = [&](int Position, double Value, bool Optional) {
-            auto* Box = new QDoubleSpinBox(Table); Box->setDecimals(6); Box->setRange(Optional ? -1 : 0, Policy.unit_ == WidthUnit::Percent ? 100 : 1000000);
+            auto* Box = new ColumnWidthEditor(Table); Box->setAlignment(Qt::AlignCenter); Box->setDecimals(6); Box->setRange(Optional ? -1 : 0, Policy.unit_ == WidthUnit::Percent ? 100 : 1000000);
             if (Optional) Box->setSpecialValueText(tr("미지정"));
             Box->setValue(Value); Box->setAccessibleName(Column->caption() + " " + Table->horizontalHeaderItem(Position)->text());
             Table->setCellWidget(RowIndex, Position, Box); return Box;
@@ -376,10 +436,52 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
         auto* Maximum = Spin(5, Policy.maximum_.value_or(-1), true);
         auto* Visible = new QCheckBox(Table); Visible->setChecked(!Policy.hidden_);
         Unit->setAccessibleName(Column->caption() + tr(" 단위")); Mode->setAccessibleName(Column->caption() + tr(" 모드")); Visible->setAccessibleName(Column->caption() + tr(" 표시"));
-        Table->setCellWidget(RowIndex, 1, Unit); Table->setCellWidget(RowIndex, 2, Mode); Table->setCellWidget(RowIndex, 6, Visible);
+        auto* VisibilityCell = new QWidget(Table);
+        auto* VisibilityLayout = new QHBoxLayout(VisibilityCell); VisibilityLayout->setContentsMargins(0, 0, 0, 0);
+        VisibilityLayout->addWidget(Visible, 0, Qt::AlignCenter);
+        Table->setCellWidget(RowIndex, 1, Unit); Table->setCellWidget(RowIndex, 2, Mode); Table->setCellWidget(RowIndex, 6, VisibilityCell);
         connect(Unit, &QComboBox::currentIndexChanged, &Dialog, [Value, Minimum, Maximum](int Index) { for (auto* Box : {Value, Minimum, Maximum}) Box->setMaximum(Index == 1 ? 100 : 1000000); });
         Rows.push_back({It.value(), Unit, Mode, Value, Minimum, Maximum, Visible});
     }
+    const auto UpdatePreview = [&] {
+        const QStringList Samples{tr("프로젝트 검토 자료.txt"), "128 KB", "2026-09-27 10:30", "A",
+            "2026-09-27 11:00", "txt", tr("프로젝트 검토 자료"), tr("TXT 파일")};
+        QString Name; QStringList Details;
+        int Index = 0;
+        for (auto It = ids_.begin(); It != ids_.end(); ++It, ++Index) {
+            if (!Rows[Index].visible_->isChecked()) continue;
+            const auto Sample = viewId_ == "builtin-details" ? Samples.value(It.key()) : Table->item(Index, 0)->text();
+            if (It.key() == nameColumn_) Name = Sample;
+            else Details.append(Sample);
+        }
+        if (DraftMode == "details") {
+            if (!Name.isEmpty()) Details.prepend(Name);
+            Preview->setText(Details.join("     "));
+        } else Preview->setText(DraftMode == "name-first" ? Name + "\n" + Details.join("     ") : Details.join("     ") + "\n" + Name);
+    };
+    for (const auto& Row : Rows) connect(Row.visible_, &QCheckBox::toggled, &Dialog, UpdatePreview);
+    const auto RefreshChoices = [&] {
+        const auto Selected = Available->currentData();
+        Available->clear();
+        for (int Index = 0; Index < Rows.size(); ++Index)
+            if (Table->isRowHidden(Index)) Available->addItem(Table->item(Index, 0)->text(), Index);
+        const auto Previous = Available->findData(Selected);
+        if (Previous >= 0) Available->setCurrentIndex(Previous);
+        Available->setEnabled(Available->count() > 0); Add->setEnabled(Available->count() > 0);
+        Remove->setEnabled(Table->currentRow() >= 0 && !Table->isRowHidden(Table->currentRow()));
+    };
+    connect(Table, &QTableWidget::currentCellChanged, &Dialog, RefreshChoices);
+    connect(Add, &QPushButton::clicked, &Dialog, [&] {
+        if (Available->currentIndex() < 0) return;
+        const auto Index = Available->currentData().toInt();
+        Table->setRowHidden(Index, false); Rows[Index].visible_->setChecked(true);
+        Table->setCurrentCell(Index, 0); Table->scrollToItem(Table->item(Index, 0)); RefreshChoices();
+    });
+    connect(Remove, &QPushButton::clicked, &Dialog, [&] {
+        const auto Index = Table->currentRow(); if (Index < 0) return;
+        Rows[Index].visible_->setChecked(false); Table->setRowHidden(Index, true);
+        Table->setCurrentCell(-1, -1); RefreshChoices();
+    });
     auto* Error = new QLabel(&Dialog); Error->setObjectName("hc.columnWidths.error"); Error->setWordWrap(true); Layout->addWidget(Error);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, &Dialog); Layout->addWidget(Buttons);
     Buttons->button(QDialogButtonBox::RestoreDefaults)->setText(tr("기본값"));
@@ -408,12 +510,15 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
         Error->clear(); return true;
     };
     const auto Populate = [&](const QMap<QString, ColumnWidthPolicy>& Policies) {
+        int Index = 0;
         for (const auto& Row : Rows) {
             const auto Policy = Policies.value(Row.id_);
             Row.unit_->setCurrentIndex(int(Policy.unit_)); Row.mode_->setCurrentIndex(int(Policy.mode_));
             Row.value_->setValue(Policy.value_); Row.min_->setValue(Policy.minimum_.value_or(-1));
             Row.max_->setValue(Policy.maximum_.value_or(-1)); Row.visible_->setChecked(!Policy.hidden_);
+            Table->setRowHidden(Index++, Policy.hidden_);
         }
+        Table->setCurrentCell(-1, -1); RefreshChoices();
         UpdatePreview();
     };
     auto InitialPolicies = LoadWidthPolicies(hc::settings::AppSettings(), profileForLayout(DraftMode), defaultsForLayout(DraftMode)).columns_;
@@ -465,7 +570,12 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
         }
         Dialog.accept();
     });
-    Table->verticalHeader()->setDefaultSectionSize(std::max(36, Table->fontMetrics().height() + 18));
-    Dialog.resize(980, 510);
+    const auto RowHeight = std::max(36, Table->fontMetrics().height() + 18);
+    Table->verticalHeader()->setDefaultSectionSize(RowHeight);
+    // Before the dialog is polished the header's size hint can still use the
+    // previous font. Reserve a full header row and scrollbar to avoid clipping
+    // the fourth row at large font sizes.
+    Table->setMinimumHeight(RowHeight * 5 + Table->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, Table) + 8);
+    Dialog.resize(980, std::max(570, Dialog.minimumSizeHint().height()));
     return Dialog.exec() == QDialog::Accepted;
 }

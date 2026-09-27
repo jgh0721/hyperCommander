@@ -177,6 +177,28 @@ void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, nsHC::CFil
     {
         Content.push_back( Info->Created_.toString( "yyyy-MM-dd hh:mm:ss" ) );
     }
+    else if( Name.compare( QLatin1String( "modified" ), Qt::CaseInsensitive ) == 0 )
+    {
+        Content.push_back( Info->Modified_.toString( "yyyy-MM-dd hh:mm:ss" ) );
+    }
+    else if( Name.compare( QLatin1String( "extension" ), Qt::CaseInsensitive ) == 0 )
+    {
+        if( !(Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) )
+            Content.push_back( QFileInfo(Info->Name_).suffix() );
+    }
+    else if( Name.compare( QLatin1String( "baseName" ), Qt::CaseInsensitive ) == 0 )
+    {
+        Content.push_back( (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+            ? Info->Name_ : QFileInfo(Info->Name_).completeBaseName() );
+    }
+    else if( Name.compare( QLatin1String( "type" ), Qt::CaseInsensitive ) == 0 )
+    {
+        // Derive a portable label from the snapshot, without blocking on shell
+        // associations for network or archive entries.
+        const auto Extension = QFileInfo(Info->Name_).suffix();
+        Content.push_back( (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? QObject::tr("폴더")
+            : Extension.isEmpty() ? QObject::tr("파일") : QObject::tr("%1 파일").arg(Extension.toUpper()) );
+    }
     else if( Name.compare( QLatin1String( "attribText" ), Qt::CaseInsensitive ) == 0 )
     {
         Content.push_back( GetFormattedAttrText( Info->Attributes_, false ) );
