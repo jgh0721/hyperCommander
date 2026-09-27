@@ -681,7 +681,10 @@ void CmpPanel::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
         State->View->ApplyColorScheme( ColorScheme );
     }
 
-    int a = 0;
+    if (const auto State = retrieveFocusState()) {
+        if (State->Model->GetRoot()) processVolumeStatusText(State->Model->GetRoot());
+        processPanelStatusText();
+    }
 }
 
 

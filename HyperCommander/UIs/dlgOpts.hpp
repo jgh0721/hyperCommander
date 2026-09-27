@@ -107,6 +107,9 @@ private:
     QJsonObject pendingListLayout_;
     QPushButton* listSettingsButton_ = nullptr;
     int listSettingsPage_ = -1;
+    QCheckBox* focusPreviousDirectory_ = nullptr;
+    QButtonGroup* iconModes_ = nullptr;
+    QButtonGroup* directoryStyles_ = nullptr;
     QPluginHostSettings* wcxHostSettings_ = nullptr;
     QPluginHostSettings* wlxHostSettings_ = nullptr;
     QPluginHostSettings* wfxHostSettings_ = nullptr;

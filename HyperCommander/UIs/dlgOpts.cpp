@@ -34,6 +34,13 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     DisplayScroll->setWidget(DisplayBody);
     auto* Icons = new QVBoxLayout(ui.grpIconDisplay);
     for (auto* Choice : {ui.radioButton_7, ui.radioButton_6, ui.radioButton_5, ui.radioButton_4}) Icons->addWidget(Choice);
+    iconModes_ = new QButtonGroup(this);
+    int IconIndex = 0;
+    for (auto* Choice : {ui.radioButton_7, ui.radioButton_6, ui.radioButton_5, ui.radioButton_4}) iconModes_->addButton(Choice, IconIndex++);
+    ui.radioButton_7->setText(tr("모든 연결된 파일 + EXE/LNK (느림)"));
+    directoryStyles_ = new QButtonGroup(this);
+    int DirectoryIndex = 0;
+    for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) directoryStyles_->addButton(Choice, DirectoryIndex++);
     Icons->addWidget(ui.chkIsDimmedIconWhenHidden); DisplayRows->addWidget(ui.grpIconDisplay);
     auto* Sizes = new QFormLayout;
     Sizes->addRow(ui.lblHeaderSizeDisplay, ui.cbxHeaderSizeDisplay);
@@ -102,6 +109,14 @@ void QMainOpts::LoadSettings()
     ui.cbxFooterSizeDisplay->setCurrentIndex( Value );
 
 
+    const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    iconModes_->button(qMax(0, QStringList{"all", "associated", "standard", "none"}.indexOf(General["iconMode"].toString())))->setChecked(true);
+    directoryStyles_->button(qMax(0, QStringList{"plain", "brackets", "suffix"}.indexOf(General["directoryStyle"].toString())))->setChecked(true);
+    ui.chkIsDimmedIconWhenHidden->setChecked(General["dimHiddenIcons"].toBool(true));
+    ui.chkSortCaseSensitive->setChecked(General["sortCaseSensitive"].toBool());
+    ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(true));
+    ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(true));
+    focusPreviousDirectory_->setChecked(General["focusPreviousDirectory"].toBool(true));
     StColorSchemeMgr->Refresh();
     StFileSetMgr->Refresh();
 
@@ -138,6 +153,13 @@ bool QMainOpts::SaveSettings()
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     General["sizeInHeader"] = hc::settings::SizeFormats().value(ui.cbxHeaderSizeDisplay->currentIndex(), "bytes");
     General["sizeInFooter"] = hc::settings::SizeFormats().value(ui.cbxFooterSizeDisplay->currentIndex(), "bytes");
+    General["iconMode"] = QStringList{"all", "associated", "standard", "none"}.value(iconModes_->checkedId(), "standard");
+    General["directoryStyle"] = QStringList{"plain", "brackets", "suffix"}.value(directoryStyles_->checkedId(), "plain");
+    General["dimHiddenIcons"] = ui.chkIsDimmedIconWhenHidden->isChecked();
+    General["sortCaseSensitive"] = ui.chkSortCaseSensitive->isChecked();
+    General["sortLocaleAware"] = ui.chkSortLocaleAware->isChecked();
+    General["sortNumericAware"] = ui.chkSortNumericAware->isChecked();
+    General["focusPreviousDirectory"] = focusPreviousDirectory_->isChecked();
     hc::settings::AppSettings().Put(hc::settings::Section::General, General);
     SaveSettings_ColorScheme(); TyStFileSetMgr::GetInstance()->SaveSettings(); SaveSettings_PluginList();
     TyStCommandMgr::GetInstance()->SaveSettings();
@@ -765,6 +787,14 @@ void QMainOpts::initialize()
     });
 
 
+    auto* NavigationPage = new QWidget(ui.stkOpts); NavigationPage->setObjectName("hc.settings.navigation");
+    ui.stkOpts->addWidget(NavigationPage); ui.lstOptCate->addItem(tr("탐색"));
+    auto* NavigationLayout = new QVBoxLayout(NavigationPage);
+    focusPreviousDirectory_ = new QCheckBox(tr("상위 폴더(..)로 이동할 때 방금 나온 폴더에 커서 놓기"), NavigationPage);
+    focusPreviousDirectory_->setObjectName("hc.navigation.focusPreviousDirectory");
+    NavigationLayout->addWidget(focusPreviousDirectory_);
+    auto* NavigationNote = new QLabel(tr("좌우 패널에 모두 적용합니다. 끄면 상위 폴더 목록의 첫 항목에 커서를 놓습니다."), NavigationPage);
+    NavigationNote->setWordWrap(true); NavigationLayout->addWidget(NavigationNote); NavigationLayout->addStretch();
     ui.lstOptCate->setResizeMode( QListView::Adjust );
     ui.lstOptCate->setSpacing( 6 );
     ui.lstOptCate->setUniformItemSizes( true );

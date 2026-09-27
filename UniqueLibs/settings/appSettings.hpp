@@ -84,7 +84,7 @@ inline QJsonObject Defaults()
 {
     // Compiled JSON defaults are available before widgets and without a writable installation.
     auto Result = QJsonDocument::fromJson(R"({"schemaVersion":1,
-        "general":{"sizeInHeader":"adaptive2","sizeInFooter":"adaptive2","useBuiltInShortcuts":true},
+        "general":{"sizeInHeader":"adaptive2","sizeInFooter":"adaptive2","useBuiltInShortcuts":true,"iconMode":"standard","dimHiddenIcons":true,"sortCaseSensitive":false,"sortLocaleAware":true,"sortNumericAware":true,"directoryStyle":"plain","focusPreviousDirectory":true},
         "appearance":{"selected":"","schemes":{}},"shortcuts":{},
         "favorites":{"drivesOn":"none","items":[]},"fileSets":[],"editors":[],
         "plugins":{"viewerSelection":"manual","wlx":[],"wcx":[],"wfx":[],"wdx":[],"dopusVfs":[],"dopusViewer":[]},
@@ -212,6 +212,8 @@ protected:
         auto General = Document["general"].toObject();
         for (const auto* Key : {"sizeInHeader", "sizeInFooter"})
             if (!SizeFormats().contains(General[Key].toString())) { General[Key] = "bytes"; Report(QString("general.") + Key); }
+        if (!QStringList{"all", "associated", "standard", "none"}.contains(General["iconMode"].toString())) { General["iconMode"] = "standard"; Report("general.iconMode"); }
+        if (!QStringList{"plain", "brackets", "suffix"}.contains(General["directoryStyle"].toString())) { General["directoryStyle"] = "plain"; Report("general.directoryStyle"); }
         Document["general"] = General;
         auto Favorites = Document["favorites"].toObject();
         if (!QStringList{"none","top","bottom"}.contains(Favorites["drivesOn"].toString())) { Favorites["drivesOn"] = "none"; Report("favorites.drivesOn"); }

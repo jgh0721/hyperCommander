@@ -87,6 +87,7 @@ public:
     QString                         GetCurrentPathWithRoot() const override { return retrieveRootWithPath(); }
     QString                         GetName( const QModelIndex& Index ) const;
     void                            SetColorScheme(const TyColorScheme& Scheme) override;
+    void                            ApplyDisplaySettings();
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
@@ -128,6 +129,12 @@ private:
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
     void                            refreshProvider();
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
+    void                            refreshDisplayIcons();
+    void                            refreshNameSortRanks();
+    QVector<int>                    nameSortRanks_;
+    QJsonObject                     displaySettings_;
+    quint64                         iconGeneration_ = 0;
+    std::stop_source                iconStop_;
     bool                            providerEnabled_ = true;
     QtDirectoryTracker              tracker_;
     bool                            watchEnabled_ = false;

@@ -191,6 +191,22 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString())
             RestoreSelection(resetSelection_, resetFocus_);
         resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear();
+        const auto Previous = model_->property("hc.parentFocusName").toString();
+        const bool ParentNavigation = model_->property("hc.parentNavigation").toBool();
+        model_->setProperty("hc.parentFocusName", QVariant{}); model_->setProperty("hc.parentNavigation", false);
+        const auto Native = qobject_cast<CFSModel*>(model_);
+        if (!ParentNavigation || (Native && Native->LastNavigationError())) return;
+        if (view_->getRowCount()) view_->setFocusedRowIndex(0);
+        if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(true)) return;
+        for (int Index = 0; !Previous.isEmpty() && Index < model_->rowCount(); ++Index) {
+            const auto Source = model_->index(Index, 0);
+            if (model_->GetName(Source) != Previous) continue;
+            const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+            if (!Visible.isValid()) break;
+            const auto Row = view_->getRow(Visible);
+            if (Row.isValid()) view_->setFocusedRowIndex(Row.rowIndex());
+            break;
+        }
     });
     model_->SetColumnView( *Columns );
 
@@ -236,6 +252,26 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     view_->bestFit( FitToHeader );
     view_->endUpdate();
     columnAdapter_->Bind(*Columns);
+    ApplyDisplaySettings();
+}
+
+void CGridView::ApplyDisplaySettings()
+{
+    if (!model_ || !view_) return;
+    const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    const auto Selection = CaptureSelection(); const auto Focus = CaptureFocus();
+    view_->beginUpdate();
+    if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ApplyDisplaySettings();
+    for (int Index = 0; Index < model_->columnCount(); ++Index) {
+        auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index)); if (!Column) continue;
+        Column->setSortCaseSensitivity(General["sortCaseSensitive"].toBool());
+        Column->setSortLocaleAware(General["sortLocaleAware"].toBool(true));
+        const auto Order = Column->sortOrder();
+        Column->setSortOrder(Order, General["sortNumericAware"].toBool(true));
+    }
+    view_->modelController()->refresh();
+    view_->endUpdate();
+    RestoreSelection(Selection, Focus);
 }
 
 void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
@@ -249,6 +285,7 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     if( model_ != nullptr )
         model_->SetColorScheme( ColorScheme );
 
+    ApplyDisplaySettings();
     // RowFocus 색상 등 적용
     view_->beginUpdate();
     auto& BaseOpts = view_->options();
@@ -340,7 +377,7 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
             if (Position >= 0 && Position < model_->columnCount()) Column->setVisualIndex(Position);
             const auto Sort = Value.value("sort").toInt(-1);
             if (Sort == Qtitan::SortAscending || Sort == Qtitan::SortDescending)
-                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), true);
+                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["sortNumericAware"].toBool(true));
         }
     view_->endUpdate();
     if (auto* Proxy = qobject_cast<CFSProxyModel*>(proxy_))

@@ -245,6 +245,7 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
     }
 
     vecNode_.push_back( Item );
+    refreshNameSortRanks();
     directoryCount_++;
 
     if( FsIconGatherer_ != nullptr )
@@ -297,6 +298,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
             case Qt::DisplayRole:
             case Qt::EditRole: {
+                if (Col == 0 && Role == Qt::DisplayRole && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Item->Name_ != "..") {
+                    const auto Style = displaySettings_["directoryStyle"].toString();
+                    if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
+                    if (Style == "suffix") { RoleWith.setData(Item->Name_ + "\\"); break; }
+                }
                 if( Item->VecContent.isEmpty() == true || Col >= Item->VecContent.size() )
                     RoleWith.setData( Item->Name_ );
                 else
@@ -304,8 +310,8 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
 
             case Qt::DecorationRole: {
-                if( Col == 0 )
-                    RoleWith.setData( vecNode_[ Row ]->Icon );
+                if (Col == 0 && displaySettings_["iconMode"].toString() != "none") RoleWith.setData(vecNode_[Row]->Icon);
+                else RoleWith.clearData();
             } break;
 
             case Qt::ForegroundRole: {
@@ -335,6 +341,10 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
 
             case CFsModelT::USR_ROLE_SORT: {
+                if (Col == 0 && nameSortRanks_.size() == vecNode_.size()) {
+                    RoleWith.setData(nameSortRanks_[Row]);
+                    break;
+                }
                 // 디렉토리 순으로 정렬하기 위해 디렉토리 이름 앞에 0 을 붙이고, 파일 이름 앞에는 1 을 붙인다.
                 // 이로 인해 오름차순이나 내림차순으로 정렬하면 자연히 이에 따라 정렬된다.
                 // QtitanDataGrid 에서 컬럼을 생성할 때 정렬에 사용할 Role 을 UserRole 로 지정한 컬럼만 적용된다.
@@ -357,8 +367,8 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 RoleWith.setData( static_cast< quint32 >( Item->Attributes_ ) );
             } break;
             case CFsModelT::USR_ROLE_HIDDENOPACITY: {
-                if( FlagOn( Item->Attributes_, FILE_ATTRIBUTE_HIDDEN ) ||
-                    FlagOn( Item->Attributes_, FILE_ATTRIBUTE_SYSTEM ) )
+                if (displaySettings_["dimHiddenIcons"].toBool(true) &&
+                    (FlagOn(Item->Attributes_, FILE_ATTRIBUTE_HIDDEN) || FlagOn(Item->Attributes_, FILE_ATTRIBUTE_SYSTEM)))
                     RoleWith.setData( 0.5f );
                 else
                     RoleWith.setData( 1.0f );
@@ -501,6 +511,8 @@ void CFSModel::doRefresh()
         qSwap( FileCount, fileCount_ );
         qSwap( DirectoryCount, directoryCount_ );
         qSwap( TotalSize, totalSize_ );
+        refreshNameSortRanks();
+        ++iconGeneration_; iconStop_.request_stop();
         endResetModel();
     }
 
@@ -539,6 +551,7 @@ void CFSModel::doRefresh()
 
 CFSModel::CFSModel()
 {
+    displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
         if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) Refresh();
     });
@@ -591,7 +604,7 @@ bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<Q
 
 CFSModel::~CFSModel()
 {
-    navigationStop_.request_stop();
+    navigationStop_.request_stop(); iconStop_.request_stop();
     if (FsIconGatherer_ || DirSizeGatherer_)
     {
         if (FsIconGatherer_) FsIconGatherer_->requestInterruption();
@@ -770,7 +783,119 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
     fileCount_ = Files;
     directoryCount_ = Directories;
     totalSize_ = Size;
+    refreshNameSortRanks();
     endResetModel();
+    refreshDisplayIcons();
+}
+
+void CFSModel::ApplyDisplaySettings()
+{
+    const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    const bool IconsChanged = displaySettings_["iconMode"] != General["iconMode"];
+    displaySettings_ = General;
+    refreshNameSortRanks();
+    if (IconsChanged) refreshDisplayIcons();
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
+        {Qt::DisplayRole, Qt::DecorationRole, CFsModelT::USR_ROLE_HIDDENOPACITY, CFsModelT::USR_ROLE_SORT});
+}
+
+void CFSModel::refreshNameSortRanks()
+{
+    // Supply numeric ranks to the grid so locale and natural-number options
+    // remain independent, without relying on its locale-only numeric comparator.
+    const bool Locale = displaySettings_["sortLocaleAware"].toBool(true);
+    const bool Numeric = displaySettings_["sortNumericAware"].toBool(true);
+    const auto Case = displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    QCollator Collator; Collator.setCaseSensitivity(Case); Collator.setNumericMode(Numeric);
+    const auto Compare = [&](const QString& Left, const QString& Right) -> int {
+        if (Locale) return Collator.compare(Left, Right);
+        if (!Numeric) return QString::compare(Left, Right, Case);
+        const auto Digit = [](QChar Char) { return Char >= QChar('0') && Char <= QChar('9'); };
+        qsizetype L = 0, R = 0;
+        while (L < Left.size() && R < Right.size()) {
+            auto LE = L, RE = R;
+            if (Digit(Left[L]) && Digit(Right[R])) {
+                while (LE < Left.size() && Digit(Left[LE])) ++LE;
+                while (RE < Right.size() && Digit(Right[RE])) ++RE;
+                while (L < LE && Left[L] == '0') ++L;
+                while (R < RE && Right[R] == '0') ++R;
+                if (LE - L != RE - R) return LE - L < RE - R ? -1 : 1;
+                const auto Compared = QString::compare(Left.mid(L, LE - L), Right.mid(R, RE - R), Qt::CaseSensitive);
+                if (Compared) return Compared;
+            } else {
+                // Compare one character when only one side begins a number.
+                if (Digit(Left[L]) != Digit(Right[R])) { ++LE; ++RE; }
+                else {
+                    while (LE < Left.size() && !Digit(Left[LE])) ++LE;
+                    while (RE < Right.size() && !Digit(Right[RE])) ++RE;
+                }
+                const auto Compared = QString::compare(Left.mid(L, LE - L), Right.mid(R, RE - R), Case);
+                if (Compared) return Compared;
+            }
+            L = LE; R = RE;
+        }
+        return L < Left.size() ? 1 : R < Right.size() ? -1 : 0;
+    };
+    QVector<int> Order; Order.reserve(vecNode_.size());
+    for (int Row = 0; Row < vecNode_.size(); ++Row) Order.push_back(Row);
+    std::stable_sort(Order.begin(), Order.end(), [&](int Left, int Right) {
+        const auto Group = [&](int Row) { return vecNode_[Row]->Name_ == ".." ? 0 : (vecNode_[Row]->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2; };
+        if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
+        return Compare(vecNode_[Left]->Name_, vecNode_[Right]->Name_) < 0;
+    });
+    nameSortRanks_.resize(Order.size());
+    for (int Rank = 0; Rank < Order.size(); ++Rank) nameSortRanks_[Order[Rank]] = Rank;
+}
+
+void CFSModel::refreshDisplayIcons()
+{
+    iconStop_.request_stop(); iconStop_ = std::stop_source{};
+    const auto Generation = ++iconGeneration_;
+    const auto Mode = displaySettings_["iconMode"].toString("standard");
+    QFileIconProvider Generic;
+    const auto FolderIcon = Generic.icon(QFileIconProvider::Folder).pixmap(32, 32);
+    const auto FileIcon = Generic.icon(QFileIconProvider::File).pixmap(32, 32);
+    struct IconRequest { QString name_; QString path_; bool directory_; };
+    QVector<IconRequest> Requests;
+    for (auto& Item : vecNode_) {
+        const bool Directory = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+        Item->Icon = Mode == "none" || Item->Name_ == ".." ? QPixmap{} : Directory ? FolderIcon : FileIcon;
+        QString Path;
+        if (Item->storageEntry_ && Item->storageEntry_->locator_.nesting_.empty()
+            && (Item->storageEntry_->locator_.kind_ == hc::storage::LocatorKind::Local || Item->storageEntry_->locator_.kind_ == hc::storage::LocatorKind::Smb))
+            Path = QString::fromStdString(Item->storageEntry_->locator_.root_);
+        Requests.push_back({Item->Name_, Path, Directory});
+    }
+    if (Mode != "all" && Mode != "associated") return;
+    auto* Watcher = new QFutureWatcher<QVector<QImage>>(this);
+    connect(Watcher, &QFutureWatcher<QVector<QImage>>::finished, this, [this, Watcher, Generation] {
+        const auto Images = Watcher->result(); Watcher->deleteLater();
+        if (Generation != iconGeneration_ || Images.size() != vecNode_.size()) return;
+        for (int Row = 0; Row < Images.size(); ++Row) if (!Images[Row].isNull()) vecNode_[Row]->Icon = QPixmap::fromImage(Images[Row]);
+        if (rowCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, 0), {Qt::DecorationRole});
+    });
+    const auto Stop = iconStop_.get_token();
+    Watcher->setFuture(QtConcurrent::run([Requests, Mode, Stop] {
+        const auto Com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const auto Release = qScopeGuard([&] { if (SUCCEEDED(Com)) CoUninitialize(); });
+        QVector<QImage> Images(Requests.size()); QHash<QString, QImage> Cache;
+        for (int Row = 0; Row < Requests.size() && !Stop.stop_requested(); ++Row) {
+            const auto& Request = Requests[Row];
+            if (Request.directory_) continue;
+            const auto Extension = QFileInfo(Request.name_).suffix().toLower();
+            const bool Specific = Mode == "all" && !Request.path_.isEmpty() && (Extension == "exe" || Extension == "lnk" || Extension == "ico");
+            const auto Key = Specific ? Request.path_ : Extension;
+            if (Cache.contains(Key)) { Images[Row] = Cache[Key]; continue; }
+            const auto Name = (Specific ? Request.path_ : "hc-icon." + Extension).toStdWString();
+            SHFILEINFOW Info{};
+            const auto Flags = SHGFI_ICON | SHGFI_SMALLICON | (Specific ? 0 : SHGFI_USEFILEATTRIBUTES);
+            if (SHGetFileInfoW(Name.c_str(), FILE_ATTRIBUTE_NORMAL, &Info, sizeof(Info), Flags) && Info.hIcon) {
+                Images[Row] = QImage::fromHICON(Info.hIcon); DestroyIcon(Info.hIcon);
+            }
+            Cache.insert(Key, Images[Row]);
+        }
+        return Images;
+    }));
 }
 
 void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
