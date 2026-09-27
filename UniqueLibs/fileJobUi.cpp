@@ -25,6 +25,14 @@ namespace
         }
         return {};
     }
+    QString ErrorText(const Error& Value)
+    {
+        if (Value.code_ == "destination-added-hidden-attribute")
+            return QObject::tr("파일 내용은 복사되었지만 대상에서 숨김 속성이 추가되었습니다. 대상 서버의 숨김 파일 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
+        if (Value.code_ == "destination-attributes-mismatch")
+            return QObject::tr("파일 내용은 복사되었지만 대상의 파일 속성이 원본과 다릅니다. 대상의 속성 지원 및 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
+        return QString::fromStdString(Value.code_);
+    }
     QString DisplayPath(const std::string& Value)
     {
         const auto At = ParseLocator(Value);
@@ -231,7 +239,7 @@ void FileJobUi::updateSelection()
         Details = Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
             ? tr("선택한 항목과 하위 항목을 영구 삭제합니다. 휴지통에서 복원할 수 없습니다.")
             : tr("목적지에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.");
-    if (Snapshot.error_) Details += "\n" + QString::fromStdString(Snapshot.error_->code_);
+    if (Snapshot.error_) Details += "\n" + ErrorText(*Snapshot.error_);
     if (const auto It = results_.find(Snapshot.id_); It != results_.end())
     {
         std::size_t Shown = 0;
@@ -240,10 +248,10 @@ void FileJobUi::updateSelection()
             if (++Shown > 200) { Details += tr("\n표시 한도: 처음 200개 항목. 전체 결과는 작업 이력에 보관됩니다."); break; }
             Details += "\n" + DisplayPath(Item.item_) + " — " + (Item.status_ == ItemOutcome::Status::Completed ? tr("완료")
                 : Item.status_ == ItemOutcome::Status::Skipped ? tr("건너뜀") : tr("실패"));
-            if (Item.error_) Details += ": " + QString::fromStdString(Item.error_->code_);
+            if (Item.error_) Details += ": " + ErrorText(*Item.error_);
             if (Item.destinationCommitted_ && !Item.sourceRemoved_) Details += tr(" (목적지 저장됨, 원본 유지)");
         }
-        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n정리 실패: %1").arg(QString::fromStdString(Error.code_));
+        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1").arg(ErrorText(Error));
     }
     Details = Details.trimmed();
     if (details_->toPlainText() != Details) details_->setPlainText(Details);

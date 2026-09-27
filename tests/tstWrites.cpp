@@ -105,7 +105,8 @@ private slots:
         const auto Remote = qEnvironmentVariable("HC_MUTATION_ROOT");
         if (!Remote.isEmpty())
         {
-            QVERIFY(Remote.startsWith("\\\\DEVTESTER-QTS\\", Qt::CaseInsensitive));
+            QVERIFY(Remote.compare("\\\\DEVTESTER-QTS\\Public", Qt::CaseInsensitive) == 0
+                || Remote.compare("\\\\DEVTESTER-QTB4\\Pubs", Qt::CaseInsensitive) == 0);
             kind_ = LocatorKind::Smb;
             root_ = std::make_unique<QTemporaryDir>(QDir(Remote).filePath("hc-write-test-XXXXXX"));
         }
@@ -138,6 +139,84 @@ private slots:
         QVERIFY(Session.Value()->Abort().HasValue());
         QCOMPARE(read("한글 staged.txt"), QByteArray("first second"));
         QVERIFY(artifacts().isEmpty());
+    }
+    void destinationAttributesAreVerified()
+    {
+        constexpr DWORD Mask = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY;
+        for (const auto& Name : {QString("ordinary-attributes.txt"), QString(".dot-attributes.txt")})
+        {
+            for (const DWORD Attributes : {DWORD(FILE_ATTRIBUTE_ARCHIVE), DWORD(FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN),
+                DWORD(FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)})
+            {
+                const auto Path = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
+                const auto Remove = qScopeGuard([&] { SetFileAttributesW(Path.c_str(), FILE_ATTRIBUTE_NORMAL); QFile::remove(QString::fromStdWString(Path)); });
+                auto Session = writer_->BeginWrite(at(Name), {}, {});
+                QVERIFY2(Session.HasValue(), Session.HasValue() ? "" : Session.Failure().code_.c_str());
+                QVERIFY(append(*Session.Value(), "attribute fixture").HasValue());
+                QVERIFY(Session.Value()->SetMetadata({1700000000123LL, Attributes}, {}).HasValue());
+                auto Receipt = Session.Value()->Commit({});
+                QVERIFY2(Receipt.HasValue(), Receipt.HasValue() ? "" : Receipt.Failure().code_.c_str());
+                QCOMPARE(read(Name), QByteArray("attribute fixture"));
+                const auto Actual = GetFileAttributesW(Path.c_str());
+                QVERIFY(Actual != INVALID_FILE_ATTRIBUTES);
+                const auto Difference = (Actual ^ Attributes) & Mask;
+                qInfo() << Name << "requested" << Attributes << "actual" << Actual;
+                if (kind_ == LocatorKind::Local) QCOMPARE(Difference, DWORD(0));
+                if (!Difference) QVERIFY(Receipt.Value().cleanupErrors_.empty());
+                else
+                {
+                    QCOMPARE(Receipt.Value().cleanupErrors_.size(), std::size_t(1));
+                    QCOMPARE(Receipt.Value().cleanupErrors_.front().code_, Difference == FILE_ATTRIBUTE_HIDDEN && (Actual & FILE_ATTRIBUTE_HIDDEN)
+                        ? std::string("destination-added-hidden-attribute") : std::string("destination-attributes-mismatch"));
+                }
+                QVERIFY(Session.Value()->Abort().HasValue());
+                QCOMPARE(read(Name), QByteArray("attribute fixture"));
+                QVERIFY(artifacts().isEmpty());
+            }
+        }
+    }
+    void coordinatorDotFileMetadata()
+    {
+        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+        auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
+        for (const auto Operation : {FileOperation::Copy, FileOperation::Move})
+        {
+            QTemporaryDir SourceRoot; QVERIFY(SourceRoot.isValid());
+            const auto Name = Operation == FileOperation::Copy ? ".copy-attributes.txt" : ".move-attributes.txt";
+            const auto SourcePath = QDir::toNativeSeparators(SourceRoot.filePath(Name));
+            { QFile File(SourcePath); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("dot file fixture"), 16); }
+            QVERIFY(SetFileAttributesW(SourcePath.toStdWString().c_str(), FILE_ATTRIBUTE_ARCHIVE));
+            auto Source = LocalWriter->Inspect({LocatorKind::Local, SourcePath.toStdString()}, {});
+            QVERIFY(Source.HasValue() && Source.Value());
+            QCOMPARE(Source.Value()->attributes_, std::uint32_t(FILE_ATTRIBUTE_ARCHIVE));
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+            FileOperationRequest Request;
+            Request.operation_ = Operation;
+            Request.sources_ = {{*Source.Value(), LocalReader, LocalWriter}};
+            Request.destination_ = at(""); Request.destinationWriter_ = writer_;
+            auto Submitted = SubmitFileOperation(Scheduler, Request); QVERIFY(Submitted.HasValue());
+            QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(15)) == std::future_status::ready);
+            const auto& Result = Submitted.Value().completion_.get();
+            QCOMPARE(read(Name), QByteArray("dot file fixture"));
+            const auto Actual = GetFileAttributesW(QDir::toNativeSeparators(root_->filePath(Name)).toStdWString().c_str());
+            QVERIFY(Actual != INVALID_FILE_ATTRIBUTES);
+            QCOMPARE(Result.items_.size(), std::size_t(1));
+            QVERIFY(Result.items_.front().destinationCommitted_);
+            if (Actual & FILE_ATTRIBUTE_HIDDEN)
+            {
+                QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+                QVERIFY(Result.snapshot_.error_);
+                QVERIFY(Result.items_.front().error_);
+                QCOMPARE(Result.items_.front().error_->code_, std::string("destination-added-hidden-attribute"));
+                QVERIFY(QFileInfo::exists(SourcePath));
+                QVERIFY(!Result.items_.front().sourceRemoved_);
+            }
+            else
+            {
+                QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+                QCOMPARE(QFileInfo::exists(SourcePath), Operation == FileOperation::Copy);
+            }
+        }
     }
     void overwriteRevalidatesDestination()
     {

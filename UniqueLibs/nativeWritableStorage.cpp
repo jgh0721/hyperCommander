@@ -253,6 +253,32 @@ namespace hc::storage
                 WriteReceipt Receipt{destination_};
                 Basic.FileAttributes = FinalAttributes;
                 if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_));
+                else if (metadata_.attributes_)
+                {
+                    // SMB servers can acknowledge the update yet derive HIDDEN from
+                    // the final name (for example Samba's hide dot files policy).
+                    // Query through the final name while the write handle still pins
+                    // the file against rename/delete. SMB handle queries may retain
+                    // attributes derived from the stage name. Report a committed
+                    // copy with a metadata error so moves retain their source.
+                    Handle Final(CreateFileW(path_.path_.c_str(), FILE_READ_ATTRIBUTES,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                    FILE_BASIC_INFO Actual{};
+                    if (Final.value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(Final.value_, FileBasicInfo, &Actual, sizeof(Actual)))
+                        Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_));
+                    else
+                    {
+                        constexpr DWORD Mask = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY;
+                        const auto Difference = (Actual.FileAttributes ^ FinalAttributes) & Mask;
+                        if (Difference)
+                        {
+                            const bool AddedHidden = Difference == FILE_ATTRIBUTE_HIDDEN && (Actual.FileAttributes & FILE_ATTRIBUTE_HIDDEN);
+                            Receipt.cleanupErrors_.push_back({ErrorCategory::Unsupported,
+                                AddedHidden ? "destination-added-hidden-attribute" : "destination-attributes-mismatch", id_, {}, false,
+                                AddedHidden ? "check-destination-hidden-file-policy" : "check-destination-attributes"});
+                        }
+                    }
+                }
                 file_.Close();
                 if (backup_.value_ != INVALID_HANDLE_VALUE)
                 {
