@@ -101,11 +101,63 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
 
+    void activePanelAppearanceUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { emit Colors->sigColorSchemeChanged(Scheme); main_->RestoreWorkspace(Workspace); });
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        QVERIFY(Left && Right);
+        for (const bool Dark : {false, true}) {
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")));
+            main_->activateWindow(); QTest::qWait(100);
+            // Native foreground activation is not guaranteed in an unattended UI run.
+            QApplication::setActiveWindow(main_);
+            auto* LeftGrid = Left->findChild<Qtitan::Grid*>(); auto* RightGrid = Right->findChild<Qtitan::Grid*>();
+            QVERIFY(LeftGrid && RightGrid);
+            auto* LeftPath = Left->findChild<QComboBox*>("hc.workspaceHistory");
+            auto* RightPath = Right->findChild<QComboBox*>("hc.workspaceHistory");
+            const auto AssertActive = [&](bool RightActive) {
+                return Left->property("hc.activePanel").toBool() == !RightActive && Right->property("hc.activePanel").toBool() == RightActive
+                    && main_->CaptureWorkspace().activePane_ == int(RightActive)
+                    && (RightActive ? Right : Left)->findChild<QLabel*>("hc.activePaneIndicator")->text() == QStringLiteral("현재 패널");
+            };
+            QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                LeftGrid->viewport()->mapTo(main_, QPoint(10, LeftGrid->viewport()->height() - 10)));
+            QVERIFY(AssertActive(false));
+            const auto LeftGeometry = LeftPath->geometry(); const auto RightGeometry = RightPath->geometry();
+            const auto LeftActiveStyle = LeftPath->styleSheet(); QVERIFY(LeftActiveStyle != RightPath->styleSheet());
+            QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/active-left-dark.png" : "/active-left-light.png")));
+            // The application's Tab command must update both command routing and presentation.
+            QTest::keyClick(LeftGrid, Qt::Key_Tab); QTest::qWait(50); QVERIFY(AssertActive(true));
+            QCOMPARE(LeftPath->geometry(), LeftGeometry); QCOMPARE(RightPath->geometry(), RightGeometry);
+            QCOMPARE(RightPath->styleSheet(), LeftActiveStyle);
+            auto* Search = Left->findChild<QLineEdit*>("hc.workspaceSearch");
+            // Dispatch through the window so Qt applies its normal click-focus policy.
+            QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                Search->mapTo(main_, Search->rect().center()));
+            QTRY_VERIFY(Search->hasFocus());
+            QVERIFY(AssertActive(false));
+            QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
+                RightGrid->viewport()->mapTo(main_, QPoint(10, RightGrid->viewport()->height() - 10)));
+            QVERIFY(AssertActive(true));
+            {
+                QDialog Dialog(main_); QVBoxLayout Layout(&Dialog); QLineEdit Edit; Layout.addWidget(&Edit);
+                Dialog.show(); Edit.setFocus(); QTest::qWait(50); QVERIFY(AssertActive(true)); Dialog.close();
+            }
+            QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/active-right-dark.png" : "/active-right-light.png")));
+            RightPath->showPopup(); QTest::qWait(50);
+            const auto ClosePopup = qScopeGuard([&] { RightPath->hidePopup(); });
+            QVERIFY(AssertActive(true)); QVERIFY(RightPath->view()->isVisible());
+            QVERIFY(RightPath->view()->visualRect(RightPath->model()->index(0, 0)).height() >= RightPath->fontMetrics().height());
+        }
+    }
     void displayAndNavigationSettingsUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
@@ -207,6 +259,7 @@ private slots:
                 main_->activateWindow();
                 QCursor::setPos(main_->mapToGlobal(Attempt ? main_->rect().bottomRight() : QPoint(0, 0)));
                 QTest::qWait(100); // Drain native mouse/activation events before opening the keyboard menu.
+                QApplication::setActiveWindow(main_);
                 Panel->sig_NotifyPanelActivated();
                 bool Seen = false;
                 QTimer::singleShot(150, main_, [&] {
