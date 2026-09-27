@@ -399,7 +399,15 @@ namespace hc::storage
             if (FAILED(Status)) return NativeError(Status, Id);
             auto FreeFolder = qScopeGuard([&] { Folder->Release(); });
             IEnumIDList* Enumerator = nullptr;
-            Status = Folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &Enumerator);
+            // Network discovery may wait for slow/offline devices. Ask the
+            // shell for its quickly enumerable snapshot; refresh can discover
+            // later arrivals without holding the previous panel for a timeout.
+            // QSHChangeNotify subscribes to the network namespace and invalidates
+            // active network panels when asynchronous discovery adds entries.
+            const bool Network = At.root_ == "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
+            const SHCONTF Flags = Network ? SHCONTF_FOLDERS | SHCONTF_FASTITEMS | SHCONTF_ENABLE_ASYNC
+                : SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN;
+            Status = Folder->EnumObjects(nullptr, Flags, &Enumerator);
             if (FAILED(Status)) return NativeError(Status, Id);
             std::vector<EntrySnapshot> Entries;
             if (!Enumerator) return Entries;

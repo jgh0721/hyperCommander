@@ -68,6 +68,7 @@ public:
     CFSModel();
     ~CFSModel() override;
     void SetWatchEnabled(bool Enabled);
+    void NotifyNetworkChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason);
     hc::storage::Locator WorkspaceLocation() const;
     void ClearPlaceholder();

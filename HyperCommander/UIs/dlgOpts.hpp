@@ -8,6 +8,7 @@
 struct TyFileSet;
 struct TyColorScheme;
 class QPluginHostSettings;
+class CGridView;
 
 const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
 const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
@@ -23,6 +24,8 @@ public:
     QMainOpts( QWidget* parent = Q_NULLPTR, Qt::WindowFlags flags = Qt::FramelessWindowHint );
 
     ~QMainOpts() override;
+    void SetListView(CGridView* View);
+    void ShowListSettingsPage();
 
     Q_INVOKABLE void                    LoadSettings();
     Q_INVOKABLE bool                    SaveSettings();
@@ -100,6 +103,10 @@ private:
     Q_INVOKABLE void                    pickButtonColor( bool checked = false );
 
     Ui::dlgOpts                         ui;
+    QPointer<CGridView> listView_;
+    QJsonObject pendingListLayout_;
+    QPushButton* listSettingsButton_ = nullptr;
+    int listSettingsPage_ = -1;
     QPluginHostSettings* wcxHostSettings_ = nullptr;
     QPluginHostSettings* wlxHostSettings_ = nullptr;
     QPluginHostSettings* wfxHostSettings_ = nullptr;

@@ -101,7 +101,7 @@ public slots:
     void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
     void                            OnChangedDirectory( const QString& CurrentPath );
 
-    void                            on_cbxVolume_currentIndexChanged( int index, const QString& Path = "" );
+    void                            changeVolumeIndex( int index, const QString& Path = "" );
     void                            on_tabWidget_currentChanged( int Index );
 
 signals:

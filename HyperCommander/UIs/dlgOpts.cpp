@@ -2,6 +2,8 @@
 #include "dlgOpts.hpp"
 
 #include "dlgDefaultCMD.hpp"
+#include "Components/cmpView.hpp"
+#include "UniqueLibs/qtitanColumnAdapter.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
@@ -119,6 +121,18 @@ void QMainOpts::LoadSettings()
     RefreshShortcuts();
 }
 
+void QMainOpts::SetListView(CGridView* View)
+{
+    listView_ = View;
+    pendingListLayout_ = {};
+    listSettingsButton_->setEnabled(View && View->ColumnWidths());
+}
+
+void QMainOpts::ShowListSettingsPage()
+{
+    ui.lstOptCate->setCurrentRow(listSettingsPage_);
+}
+
 bool QMainOpts::SaveSettings()
 {
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
@@ -132,8 +146,13 @@ bool QMainOpts::SaveSettings()
             tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
         auto* Reload = Message.addButton(tr("디스크에서 다시 읽기"), QMessageBox::ResetRole);
         Message.exec();
-        if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); LoadSettings(); }
+        if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); pendingListLayout_ = {}; LoadSettings(); }
         return false;
+    }
+    if (listView_ && !pendingListLayout_.isEmpty()) {
+        listView_->ColumnWidths()->RestoreWorkspaceLayout({{"listLayout", pendingListLayout_}});
+        emit listView_->sigViewSettingsChanged();
+        pendingListLayout_ = {};
     }
     const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(ui.cbxColorScheme->currentText());
     emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
@@ -731,6 +750,20 @@ void QMainOpts::initialize()
     ui.lstOptCate->addItem( PAGE_SHORTCUT.second );
     ui.lstOptCate->addItem( PAGE_CUSTOM_COLUMNS.second );
     ui.lstOptCate->addItem( PAGE_PLUGIN_MGR.second );
+    auto* ListPage = new QWidget(ui.stkOpts); ListPage->setObjectName("hc.settings.listAppearance");
+    listSettingsPage_ = ui.stkOpts->addWidget(ListPage);
+    ui.lstOptCate->addItem(tr("목록 모양"));
+    auto* ListLayout = new QVBoxLayout(ListPage);
+    auto* Note = new QLabel(tr("환경설정을 열기 전에 사용하던 패널의 현재 탭을 설정합니다.\n표시 모드, 컬럼 너비와 표시 여부, 이 패널의 새 탭 기본값을 지정할 수 있습니다.\n변경 내용은 환경설정의 ‘적용’ 또는 ‘확인’을 누르면 반영됩니다."), ListPage);
+    Note->setWordWrap(true); ListLayout->addWidget(Note);
+    listSettingsButton_ = new QPushButton(tr("목록 모양 설정…"), ListPage);
+    listSettingsButton_->setObjectName("hc.settings.editListAppearance");
+    listSettingsButton_->setEnabled(false); ListLayout->addWidget(listSettingsButton_); ListLayout->addStretch();
+    connect(listSettingsButton_, &QPushButton::clicked, this, [this] {
+        if (!listView_) return;
+        if (auto* Adapter = listView_->ColumnWidths()) Adapter->ShowSettings(this, &pendingListLayout_);
+    });
+
 
     ui.lstOptCate->setResizeMode( QListView::Adjust );
     ui.lstOptCate->setSpacing( 6 );

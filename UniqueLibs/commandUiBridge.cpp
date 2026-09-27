@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "commandUiBridge.hpp"
+#include "HyperCommander/UIs/dlgOpts.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "builtInFsModel.hpp"
 #include "fileJobUi.hpp"
@@ -479,7 +480,9 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     else if (Id == "hc.tab.previous") { Panel->PrevTab(); return CommandOutcome{}; }
     else if (Id == "hc.view.columns")
     {
-        if (const auto View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()))) View->ConfigureColumns();
+        if (const auto View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()))) {
+            QMainOpts Settings(main_); Settings.SetListView(View); Settings.ShowListSettingsPage(); Settings.exec();
+        }
         return CommandOutcome{};
     }
     else return Error{ErrorCategory::NotFound, "unknown-command"};
@@ -496,7 +499,7 @@ void CommandUiBridge::createActions()
     Toolbar->setObjectName("hc.navigationToolbar");
     const std::vector<std::pair<QString, QString>> Actions{
         {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
-        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")}, {"hc.view.columns", tr("컬럼 너비")}
+        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")}
     };
     for (const auto& [Id, Label] : Actions)
     {

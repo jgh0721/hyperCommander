@@ -12,6 +12,7 @@
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/SHChangeNotify.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
+#include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/solFavoriteDirMgr.hpp"
 
 QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
@@ -406,8 +407,9 @@ void QMainUI::OnAddCurrentDirToFavorite()
 
 void QMainUI::on_acShowMainOpts_triggered( bool checked )
 {
-    QMainOpts Opts;
-
+    QMainOpts Opts(this);
+    if (auto* Panel = retrieveSrcPanel())
+        Opts.SetListView(qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())));
     Opts.exec();
 
 }
@@ -477,7 +479,11 @@ void QMainUI::initialize()
 
     StCommandMgr->SetMainUI( this );
 
-    shlChangeNotify = new QSHChangeNotify;
+    shlChangeNotify = new QSHChangeNotify(this);
+    shlChangeNotify->hide();
+    connect(shlChangeNotify, &QSHChangeNotify::NetworkChanged, this, [this] {
+        for (auto* Model : findChildren<CFSModel*>()) Model->NotifyNetworkChange();
+    });
     shlChangeNotify->StartWatching();
 
     connect( shlChangeNotify, &QSHChangeNotify::OnDriveAdd, this, &QMainUI::OnDriveAdd );

@@ -17,7 +17,7 @@ public:
     void Request();
     void Apply();
     void Reload();
-    bool ShowSettings();
+    bool ShowSettings(QWidget* Parent = nullptr, QJsonObject* Pending = nullptr);
     QString LayoutMode() const { return layoutMode_; }
     bool SetLayoutMode(const QString& Mode);
     QJsonObject WorkspaceLayout() const;

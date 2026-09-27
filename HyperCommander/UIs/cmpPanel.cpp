@@ -46,7 +46,7 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
     QMetaObject::invokeMethod( this, "RefreshVolumeList", Qt::QueuedConnection );
     QTimer::singleShot( 100, this, [this]() {
-        if( workspaceRestored_ || ui.cbxVolume->GetCount() == 0 )
+        if( workspaceRestored_ || ui.cbxVolume->count() == 0 )
             return;
 
         // Start in the user's home; restored tabs keep their saved location.
@@ -61,73 +61,30 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
 void CmpPanel::RefreshVolumeList() const
 {
-    // NOTE: 선택 복원용
-    // TODO: 만약 수량이 변경되었다면( 드라이브 추가/삭제일 때, 색인으로 복원하면 다른 드라이브가 선택될 수 있다. )
-
-    const auto Current = ui.cbxVolume->currentIndex();
-
-    /*!
-    * 1. 실제 파일시스템 추가
-    * 2. 네트워크 환경 추가
-    */
-
-    QSignalBlocker Blocker( ui.cbxVolume );
+    const auto Previous = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>();
+    const auto PreviousRoot = Previous ? Previous->GetRoot() : QString{};
+    const QSignalBlocker Blocker(ui.cbxVolume);
     ui.cbxVolume->clear();
-
-    QFileIconProvider QFIP;
-    const auto DriveIcon = QFIP.icon( QAbstractFileIconProvider::Drive );
-
-    // TODO: 색상 구성표 적용
-
-    DWORD Drives = GetLogicalDrives();
-    for( char idx = 0; idx < 26; ++idx )
-    {
-        if( ( Drives & ( 1 << idx ) ) != 0 )
-        {
-            CHAR driveName[] = { static_cast< CHAR >( 'A' + idx ), ':', '\\', '\0' };
-
-            const auto Fs = nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( QString::fromStdString( driveName ) ) );
-            if( Fs != nullptr )
-            {
-                const auto Item = ui.cbxVolume->CreateItem();
-                const auto Label = QString::fromStdString( fmt::format( "{:^3c} | {:20s}", 'A' + idx, Fs->GetVolumeName().toStdString() ) );
-                
-                Item->SetText( QChar( 'A' + idx ) );
-                Item->GetItem()->setForeground( QColor( "black" ) );
-                Item->GetItem()->setBackground( QColor( "yellow" ) );
-                Item->GetItem()->setIcon( DriveIcon );
-                Item->AddLabel()->setText( Label );
-                Item->AddLabel()->adjustSize();
-                Item->SetUserData( Qt::UserRole, QVariant::fromValue( Fs ) );
-
-                ui.cbxVolume->AppendItem( Item->GetItem(), Item );
-            }
-        }
+    QFileIconProvider Icons;
+    const auto DriveIcon = Icons.icon(QAbstractFileIconProvider::Drive);
+    const DWORD Drives = GetLogicalDrives();
+    for (int Index = 0; Index < 26; ++Index) {
+        if (!(Drives & (1 << Index))) continue;
+        const auto Root = QString(QChar('A' + Index)) + ":\\";
+        const auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Root));
+        if (!Fs) continue;
+        const auto Name = Fs->GetVolumeName().trimmed();
+        const auto Label = QString(QChar('A' + Index)) + (Name.isEmpty() ? ":" : ":  " + Name);
+        ui.cbxVolume->addItem(DriveIcon, Label, QVariant::fromValue(Fs));
     }
-
-    {
-        const auto FsUNC = nsHC::TySpFileSystem( nsHC::CFileSystemT::MakeFileSystem( R"(\\)" ) );
-        if( FsUNC != nullptr )
-        {
-            const auto Item = ui.cbxVolume->CreateItem();
-            const auto Label = tr("\\ | 네트워크 환경" );
-
-            Item->SetText( tr("네트워크 환경") );
-            Item->GetItem()->setIcon( DriveIcon );
-            Item->AddLabel()->setText( Label );
-            Item->AddLabel()->adjustSize();
-            Item->SetUserData( Qt::UserRole, QVariant::fromValue( FsUNC ) );
-
-            ui.cbxVolume->AppendItem( Item->GetItem(), Item );
-        }
+    const auto Network = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(R"(\\)"));
+    if (Network) ui.cbxVolume->addItem(DriveIcon, tr("네트워크 환경"), QVariant::fromValue(Network));
+    int Current = -1;
+    for (int Index = 0; Index < ui.cbxVolume->count(); ++Index) {
+        const auto Fs = ui.cbxVolume->itemData(Index).value<nsHC::TySpFileSystem>();
+        if (Fs && Fs->GetRoot() == PreviousRoot) { Current = Index; break; }
     }
-
-    ui.cbxVolume->setCurrentIndex( Current );
-
-    //    //if( ui.cbxVolume->count() > 0 )
-    //    //    processVolumeStatusText( ui.cbxVolume->currentText()[ 0 ] );
-    //}
-    
+    ui.cbxVolume->setCurrentIndex(Current);
 }
 
 
@@ -186,8 +143,8 @@ void CmpPanel::AddTab(bool Navigate)
             // A new tab inherits its panel's display defaults, while navigation
             // and selection follow the current location.
             restoreTab(vecTabStates.size() - 1);
-        } else if (const auto Item = ui.cbxVolume->GetItem(ui.cbxVolume->currentIndex())) {
-            Model->SetRoot(Item->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>());
+        } else if (const auto Fs = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>()) {
+            Model->SetRoot(Fs);
             Model->SetCurrentPath("\\"); Model->Refresh();
         }
     }
@@ -254,8 +211,8 @@ void CmpPanel::restoreTab(int Index)
     // without another filesystem-information query during workspace restore.
     nsHC::TySpFileSystem Native;
     const auto Path = QDir::toNativeSeparators(QString::fromStdString(State->workspace_.location_.root_));
-    for (int Volume = 0; Volume < ui.cbxVolume->GetCount(); ++Volume) {
-        const auto Fs = ui.cbxVolume->GetItem(Volume)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+    for (int Volume = 0; Volume < ui.cbxVolume->count(); ++Volume) {
+        const auto Fs = ui.cbxVolume->itemData(Volume).value<nsHC::TySpFileSystem>();
         if (Fs && !Fs->GetRoot().isEmpty() && Path.startsWith(Fs->GetRoot(), Qt::CaseInsensitive)) { Native = Fs; break; }
     }
     RestoreWorkspaceLocation(static_cast<CFSModel*>(State->Model), State->workspace_, Native);
@@ -269,8 +226,8 @@ void CmpPanel::updateWorkspaceStatus()
     int Volume = -1;
     if (Location.kind_ == hc::storage::LocatorKind::Local || Location.kind_ == hc::storage::LocatorKind::Smb || Location.kind_ == hc::storage::LocatorKind::Archive) {
         const auto Path = QDir::toNativeSeparators(QString::fromStdString(Location.root_));
-        for (int Index = 0; Index < ui.cbxVolume->GetCount(); ++Index) {
-            const auto Fs = ui.cbxVolume->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+        for (int Index = 0; Index < ui.cbxVolume->count(); ++Index) {
+            const auto Fs = ui.cbxVolume->itemData(Index).value<nsHC::TySpFileSystem>();
             if (Fs && !Fs->GetRoot().isEmpty() && Path.startsWith(Fs->GetRoot(), Qt::CaseInsensitive)) { Volume = Index; break; }
         }
     }
@@ -658,9 +615,9 @@ void CmpPanel::ChangeVolume( const QString& Drive )
 {
     int FsIndex = -1;
 
-    for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
+    for( int idx = 0; idx < ui.cbxVolume->count(); ++idx )
     {
-        const auto& Fs = ui.cbxVolume->GetItem( idx )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+        const auto& Fs = ui.cbxVolume->itemData(idx).value< nsHC::TySpFileSystem >();
         if( Fs == nullptr )
             continue;
 
@@ -673,8 +630,10 @@ void CmpPanel::ChangeVolume( const QString& Drive )
         break;
     }
 
-    if( FsIndex >= 0 )
-        ui.cbxVolume->setCurrentIndex( FsIndex );
+    if (FsIndex >= 0) {
+        ui.cbxVolume->setCurrentIndex(FsIndex);
+        changeVolumeIndex(FsIndex);
+    }
 }
 
 void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter )
@@ -685,9 +644,9 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
     {
         QSignalBlocker Blocker( ui.cbxVolume );
 
-        for( int idx = 0; idx < ui.cbxVolume->GetCount(); ++idx )
+        for( int idx = 0; idx < ui.cbxVolume->count(); ++idx )
         {
-            const auto& Fs = ui.cbxVolume->GetItem( idx )->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+            const auto& Fs = ui.cbxVolume->itemData(idx).value< nsHC::TySpFileSystem >();
             if( Fs == nullptr )
                 continue;
 
@@ -706,7 +665,7 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
     }
 
     if( FsIndex >= 0 )
-        on_cbxVolume_currentIndexChanged( FsIndex, Child );
+        changeVolumeIndex( FsIndex, Child );
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -760,7 +719,7 @@ void CmpPanel::OnChangedDirectory(const QString& CurrentPath)
 }
 
 
-void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path )
+void CmpPanel::changeVolumeIndex( int index, const QString& Path )
 {
     // TODO: 실제 파일시스템 외의 것들은 예외처리 필요함
     const auto State = retrieveFocusState();
@@ -774,11 +733,9 @@ void CmpPanel::on_cbxVolume_currentIndexChanged( int index, const QString& Path 
     const auto ViewMode = State->View->GetViewMode();
     Q_ASSERT( ViewMode == CViewT::VM_GRID );
 
-    const auto Item = ui.cbxVolume->GetItem( index );
-    if( Item == nullptr )
-        return;
-
-    const auto Fs = Item->GetUserData( Qt::UserRole ).value< nsHC::TySpFileSystem >();
+    const auto Fs = ui.cbxVolume->itemData(index).value<nsHC::TySpFileSystem>();
+    if (!Fs) return;
+    emit sig_NotifyPanelActivated();
 
     State->Model->SetRoot( Fs );
     State->Model->SetCurrentPath( "\\" );
@@ -832,15 +789,14 @@ void CmpPanel::initializeUIs()
     ui.lblVolumeStatus->setMaximumWidth(QWIDGETSIZE_MAX);
     ui.lblVolumeStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     ui.horizontalLayout->setStretch(1, 1);
-    for (auto* Button : ui.frmHDR->findChildren<QPushButton*>())
-        if (Button->text() == "Grid Style") {
-            Button->setText(tr("목록 모양"));
-            connect(Button, &QPushButton::clicked, this, [this] {
-                emit sig_NotifyPanelActivated();
-                if (auto* View = qobject_cast<CGridView*>(GetFocusView(CurrentTabIndex()))) View->ConfigureColumns();
-            });
-        }
-    ui.cbxVolume->setMinimumHeight(32); ui.cbxVolume->view()->setMinimumWidth(160);
+    ui.btnGridStyle->hide();
+    ui.cbxVolume->setMinimumHeight(32);
+    ui.cbxVolume->setMinimumContentsLength(12);
+    connect(ui.cbxVolume, &QComboBox::activated, this, [this](int Index) {
+        // Activation also fires when returning from a server/share to the
+        // already selected network entry; index changes alone miss that case.
+        changeVolumeIndex(Index);
+    });
     while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; }
     auto* Controls = new QWidget(this); auto* Layout = new QHBoxLayout(Controls); Layout->setContentsMargins(0, 0, 0, 0);
     history_ = new QComboBox(Controls); history_->setObjectName("hc.workspaceHistory"); history_->setToolTip(tr("방문 기록"));

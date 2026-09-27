@@ -501,6 +501,10 @@ namespace nsHC
 
     hc::storage::Locator CFileSystemT::ReadLocation(const QString& Path) const
     {
+        // The SMB root is stored as one slash and its root path may add a
+        // second. Both spellings identify discovery, never an empty server.
+        if (cate_ == FS_CATE_REMOTE && (Path == "\\" || Path == "\\\\"))
+            return {hc::storage::LocatorKind::Smb, "\\"};
         return {cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local, Path.toStdString()};
     }
 

@@ -551,6 +551,14 @@ hc::storage::Locator CFSModel::WorkspaceLocation() const
     return Root ? Root->ReadLocation(GetCurrentPathWithRoot()) : hc::storage::Locator{};
 }
 
+void CFSModel::NotifyNetworkChange()
+{
+    const auto Location = WorkspaceLocation();
+    if ((Location.kind_ == hc::storage::LocatorKind::Smb && Location.root_ == "\\")
+        || (Location.kind_ == hc::storage::LocatorKind::Shell && Location.root_ == "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"))
+        tracker_.Invalidate();
+}
+
 void CFSModel::SetWatchEnabled(bool Enabled)
 {
     watchEnabled_ = Enabled;

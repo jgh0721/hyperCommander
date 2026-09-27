@@ -317,15 +317,16 @@ bool QtitanColumnAdapter::eventFilter(QObject* Watched, QEvent* Event)
     return QObject::eventFilter(Watched, Event);
 }
 
-bool QtitanColumnAdapter::ShowSettings()
+bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
 {
     if (profile_.isEmpty()) Reload();
-    QDialog Dialog(owner_);
+    QDialog Dialog(Parent ? Parent : owner_.data());
     Dialog.setObjectName("hc.columnWidthsDialog");
     Dialog.setWindowTitle(tr("목록 모양"));
     auto* Layout = new QVBoxLayout(&Dialog);
-    auto Draft = WorkspaceLayout().value("profiles").toObject();
-    QString DraftMode = layoutMode_;
+    const auto Initial = Pending && !Pending->isEmpty() ? *Pending : WorkspaceLayout();
+    auto Draft = Initial.value("profiles").toObject();
+    QString DraftMode = Initial.value("mode").toString(layoutMode_);
     auto* Form = new QFormLayout;
     auto* ModeChoice = new QComboBox(&Dialog); ModeChoice->setObjectName("hc.listLayout.mode");
     ModeChoice->addItems({tr("한 줄"), tr("두 줄: 이름 위"), tr("두 줄: 이름 아래")});
@@ -382,7 +383,7 @@ bool QtitanColumnAdapter::ShowSettings()
     auto* Error = new QLabel(&Dialog); Error->setObjectName("hc.columnWidths.error"); Error->setWordWrap(true); Layout->addWidget(Error);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, &Dialog); Layout->addWidget(Buttons);
     Buttons->button(QDialogButtonBox::RestoreDefaults)->setText(tr("기본값"));
-    Buttons->button(QDialogButtonBox::Save)->setText(tr("저장"));
+    Buttons->button(QDialogButtonBox::Save)->setText(Pending ? tr("확인") : tr("저장"));
     Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
     if (!settings_.writable_) { Error->setText(tr("지원하지 않거나 손상된 설정이 있습니다. 기존 설정을 보존하기 위해 저장할 수 없습니다.")); Buttons->button(QDialogButtonBox::Save)->setEnabled(false); }
     connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
@@ -415,6 +416,11 @@ bool QtitanColumnAdapter::ShowSettings()
         }
         UpdatePreview();
     };
+    auto InitialPolicies = LoadWidthPolicies(hc::settings::AppSettings(), profileForLayout(DraftMode), defaultsForLayout(DraftMode)).columns_;
+    const auto SavedPolicies = Draft.value(DraftMode).toObject();
+    for (auto It = SavedPolicies.begin(); It != SavedPolicies.end(); ++It)
+        if (const auto Policy = DecodeWidth(It.value().toObject())) InitialPolicies[It.key()] = *Policy;
+    Populate(InitialPolicies);
     connect(ModeChoice, &QComboBox::currentIndexChanged, &Dialog, [&](int Index) {
         WidthSettings Previous;
         if (!ReadRows(Previous)) { const QSignalBlocker Block(ModeChoice); ModeChoice->setCurrentIndex(LayoutModes.indexOf(DraftMode)); return; }
@@ -452,8 +458,12 @@ bool QtitanColumnAdapter::ShowSettings()
             Base["listMode"] = DraftMode; Profiles[baseProfile_] = Base;
             if (!Settings.Put(hc::settings::Section::Columns, Profiles)) { Settings.DiscardEdit(); Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
         }
-        layoutWidths_ = Draft; activateLayout(DraftMode); workspaceOwned_ = true;
-        Request(); Dialog.accept();
+        if (Pending) *Pending = QJsonObject{{"version", 1}, {"mode", DraftMode}, {"profiles", Draft}};
+        else {
+            layoutWidths_ = Draft; activateLayout(DraftMode); workspaceOwned_ = true;
+            Request();
+        }
+        Dialog.accept();
     });
     Table->verticalHeader()->setDefaultSectionSize(std::max(36, Table->fontMetrics().height() + 18));
     Dialog.resize(980, 510);
