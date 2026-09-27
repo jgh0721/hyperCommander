@@ -353,6 +353,9 @@ private slots:
                     if (!Selected) QVERIFY(Choice->view()->window()->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/mode-popup-dark.png" : "/mode-popup-light.png")));
                     Choice->hidePopup();
                 }
+                for (int Row = 0; Row < 4; ++Row)
+                    QVERIFY(Table->viewport()->rect().contains(Table->visualRect(Table->model()->index(Row, 0))));
+                QVERIFY(Editor->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/column-editor-dark.png" : "/column-editor-light.png")));
                 Editor->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
             });
             Dialog.findChild<QPushButton*>("hc.settings.editListAppearance")->click();
@@ -704,12 +707,21 @@ private slots:
                 if (Reset) Buttons->button(QDialogButtonBox::RestoreDefaults)->click();
                 QCoreApplication::processEvents();
                 auto* Table = Dialog->findChild<QTableWidget*>();
-                for (int Row = 0; Row < Table->rowCount(); ++Row)
+                for (int Row = 0; Row < Table->rowCount(); ++Row) {
+                    if (Table->isRowHidden(Row)) continue;
                     for (int Column = 1; Column < Table->columnCount(); ++Column) {
                         auto* Control = Table->cellWidget(Row, Column); QVERIFY(Control && Control->isVisible());
                         const auto Cell = Table->visualRect(Table->model()->index(Row, Column));
                         QVERIFY2(Control->geometry().intersects(Cell) && Control->width() > 20 && Control->height() > 15, "Cell controls must occupy their own visible table cells");
                     }
+                }
+                auto* Number = qobject_cast<QDoubleSpinBox*>(Table->cellWidget(0, 3)); QVERIFY(Number);
+                QVERIFY(!Number->text().contains(Number->locale().decimalPoint()));
+                QCOMPARE(Number->alignment(), Qt::AlignCenter);
+                auto* Visibility = Table->cellWidget(0, 6);
+                auto* Check = Visibility->findChild<QCheckBox*>(); QVERIFY(Check);
+                QVERIFY(qAbs(Check->geometry().center().x() - Visibility->rect().center().x()) <= 1);
+                QVERIFY(qAbs(Check->geometry().center().y() - Visibility->rect().center().y()) <= 1);
                 QVERIFY(Dialog->grab().save(QCoreApplication::applicationDirPath() + "/list-layout-settings.png"));
                 Buttons->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
                 if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
@@ -719,6 +731,7 @@ private slots:
         Edit(1, 1, false, true); QVERIFY(DialogSeen);
         QCOMPARE(Adapter->WorkspaceLayout(), BeforeCancel); QCOMPARE(Settings.Object(), BeforeSettings);
         Edit(1, 0, true, true); QVERIFY(DialogSeen); QCOMPARE(Adapter->LayoutMode(), QString("name-first"));
+        QCOMPARE(Adapter->Policies()[Adapter->ColumnId(1)].value_, 27.777778); // display rounding must not change saved widths
         QCOMPARE(Settings.Object(), BeforeSettings);
         hc::settings::JsonStore SavedWorkspace(hc::settings::WorkspaceSettings().FileName());
         const auto SavedState = hc::workspace::Load(SavedWorkspace);
@@ -740,10 +753,65 @@ private slots:
         Restart.start(QCoreApplication::applicationFilePath(), {"listLayoutRestartUi", "-o", "list-layout-restart.txt,txt"});
         QVERIFY(Restart.waitForStarted(5000)); QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
         QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
+        Left->CloseTab(); // perform the following visibility checks on the visible original tab
         // Legacy tabs retain their one-line widths even when the panel's new-tab
         // default has changed. Unknown future formats remain read-only and intact.
         View->RestoreWorkspaceView({{"mode", "details"}, {"widths", QJsonObject{{NameId, EncodeWidth({WidthUnit::Percent, WidthMode::Flexible, 37})}}}});
         QCOMPARE(Adapter->LayoutMode(), QString("details")); QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
+        // Newly available fields stay hidden in existing workspaces until added.
+        for (int Column = 4; Column < 8; ++Column) QVERIFY(Adapter->Policies()[Adapter->ColumnId(Column)].hidden_);
+        int FileRow = -1;
+        for (int Row = 0; Row < model(Left)->rowCount(); ++Row)
+            if (model(Left)->GetName(model(Left)->index(Row, 0)) == "alpha.txt") FileRow = Row;
+        QVERIFY(FileRow >= 0);
+        QCOMPARE(model(Left)->index(FileRow, 5).data().toString(), QString("txt"));
+        QCOMPARE(model(Left)->index(FileRow, 6).data().toString(), QString("alpha"));
+        QVERIFY(!model(Left)->index(FileRow, 4).data().toString().isEmpty());
+        QVERIFY(model(Left)->index(FileRow, 7).data().toString().contains("TXT"));
+        const auto BeforeAdd = Adapter->WorkspaceLayout();
+        const auto EditColumns = [&](bool Save, bool RemoveColumn) {
+            bool Seen = false;
+            QTimer::singleShot(0, main_, [&] {
+                auto* Dialog = View->findChild<QDialog*>("hc.columnWidthsDialog"); if (!Dialog) return;
+                const auto Close = qScopeGuard([Dialog] { if (Dialog->isVisible()) Dialog->reject(); });
+                Seen = true;
+                auto* Table = Dialog->findChild<QTableWidget*>();
+                auto* Available = Dialog->findChild<QComboBox*>("hc.listLayout.availableColumns"); QVERIFY(Available);
+                if (RemoveColumn) {
+                    QVERIFY(!Table->isRowHidden(4));
+                    Table->setCurrentCell(4, 0);
+                    Dialog->findChild<QPushButton*>("hc.listLayout.removeColumn")->click();
+                    QVERIFY(Table->isRowHidden(4)); QVERIFY(Available->findData(4) >= 0);
+                } else {
+                    for (int Column = 4; Column < 8; ++Column) {
+                        const auto Choice = Available->findData(Column); QVERIFY(Choice >= 0);
+                        Available->setCurrentIndex(Choice);
+                        Dialog->findChild<QPushButton*>("hc.listLayout.addColumn")->click();
+                        QVERIFY(!Table->isRowHidden(Column));
+                        QVERIFY(Table->cellWidget(Column, 6)->findChild<QCheckBox*>()->isChecked());
+                        QCOMPARE(Available->findData(Column), -1); // no duplicate columns
+                    }
+                    QVERIFY(!Available->isEnabled());
+                }
+                QCoreApplication::processEvents();
+                QVERIFY(Dialog->grab().save(QCoreApplication::applicationDirPath() + "/list-columns-added.png"));
+                Dialog->findChild<QDialogButtonBox*>()->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
+                if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
+            });
+            View->ConfigureColumns(); QVERIFY(Seen);
+        };
+        EditColumns(false, false); QCOMPARE(Adapter->WorkspaceLayout(), BeforeAdd);
+        EditColumns(true, false);
+        for (int Column = 4; Column < 8; ++Column) QTRY_VERIFY(Native->getColumnByModelColumn(Column)->isVisible());
+        const auto Added = View->CaptureWorkspaceView();
+        View->RestoreWorkspaceView({{"listLayout", BeforeAdd}});
+        QTRY_VERIFY(!Native->getColumnByModelColumn(4)->isVisible());
+        View->RestoreWorkspaceView(Added);
+        QTRY_VERIFY(Native->getColumnByModelColumn(4)->isVisible());
+        EditColumns(true, true);
+        QTRY_VERIFY(!Native->getColumnByModelColumn(4)->isVisible());
+        QVERIFY(Native->getColumnByModelColumn(5)->isVisible());
+        QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
         const QJsonObject Future{{"version", 99}, {"mode", "future"}, {"profiles", QJsonObject{}}};
         View->RestoreWorkspaceView({{"listLayout", Future}});
         QCOMPARE(Adapter->WorkspaceLayout(), Future); QVERIFY(!Adapter->SetLayoutMode("name-first"));
@@ -2628,7 +2696,7 @@ hc.events.unsubscribe(sub)
         auto* Adapter = View->ColumnWidths();
         auto* Native = View->BaseView();
         auto* Grid = Native->grid();
-        QTRY_VERIFY(Adapter->Policies().size() == 4);
+        QTRY_COMPARE(Adapter->Policies().size(), qsizetype(model(panels_.front())->columnCount()));
         const auto NameId = Adapter->ColumnId(0);
         const auto SizeId = Adapter->ColumnId(1);
         QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Fixed, 25}));
@@ -2638,6 +2706,9 @@ hc.events.unsubscribe(sub)
         const auto OriginalSize = main_->size();
         const auto Reset = qScopeGuard([&] { View->setMinimumWidth(0); View->setMaximumWidth(QWIDGETSIZE_MAX); main_->resize(OriginalSize); });
         QSignalSpy ModelReset(model(panels_.front()), &QAbstractItemModel::modelReset);
+        // The previous fixture can leave a vertical scrollbar pending layout.
+        // Measure chrome only after the two-row fixture has removed it.
+        QTRY_VERIFY(!Native->verticalScrollBar()->isVisible());
         const auto FrameWidth = View->width() - Adapter->AvailableWidth();
         for (int Width : {1000, 800, 1000, 800})
         {
