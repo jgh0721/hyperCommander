@@ -79,7 +79,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_NewTab )
         return;
 
     Pane->AddTab();
-    currentPanelIndex = Prev;
+    setActivePanel(Prev);
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_PrevTab )
@@ -111,7 +111,7 @@ DEFINE_HC_COMMAND( QMainUI, cm_CloseTab )
         return;
 
     Pane->CloseTab();
-    currentPanelIndex = Prev;
+    setActivePanel(Prev);
 }
 
 DEFINE_HC_COMMAND( QMainUI, cm_SrcQuickView )
@@ -357,13 +357,13 @@ DEFINE_HC_COMMAND( QMainUI, cm_SwitchPanel )
     {
         ui.cmpRightPanel->setFocus( Qt::MouseFocusReason );
         ui.cmpRightPanel->SetFocusView( ui.cmpRightPanel->CurrentTabIndex() );
-        currentPanelIndex = 1;
+        setActivePanel(1);
     }
     else if( currentPanelIndex == 1 )
     {
         ui.cmpLeftPanel->setFocus( Qt::MouseFocusReason );
         ui.cmpLeftPanel->SetFocusView( ui.cmpLeftPanel->CurrentTabIndex() );
-        currentPanelIndex = 0;
+        setActivePanel(0);
     }
 }
 
@@ -435,6 +435,13 @@ void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
     ui.lblPrompt->setText( CurrentPath + ">" );
 }
 
+void QMainUI::setActivePanel(int Index)
+{
+    currentPanelIndex = Index == 1 ? 1 : 0;
+    ui.cmpLeftPanel->setActivePanel(currentPanelIndex == 0);
+    ui.cmpRightPanel->setActivePanel(currentPanelIndex == 1);
+}
+
 void QMainUI::oo_notifyPanelActivated()
 {
     const auto Sender = qobject_cast< CmpPanel* >( sender() );
@@ -442,31 +449,23 @@ void QMainUI::oo_notifyPanelActivated()
     if( Sender == ui.cmpLeftPanel )
     {
         qDebug() << __FUNCTION__ << " : " << "왼쪽 패널 활성화";
-        currentPanelIndex = 0;
+        setActivePanel(0);
     }
     else if( Sender == ui.cmpRightPanel )
     {
         qDebug() << __FUNCTION__ << " : " << "오른쪽 패널 활성화";
-        currentPanelIndex = 1;
+        setActivePanel(1);
     }
 }
 
 bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 {
-    if( Event->type() != QEvent::FocusAboutToChange )
-        return false;
-
-    const auto FocusEvent = ( QFocusEvent* )Event;
-    if( FocusEvent->gotFocus() == false )
-        return false;
-
-    const auto Grid = qobject_cast< Qtitan::Grid* >( Object );
-    if( Grid != nullptr )
-    {
-
+    if (Event->type() == QEvent::FocusIn) {
+        auto* Widget = qobject_cast<QWidget*>(Object);
+        if (Widget && (Widget == ui.cmpLeftPanel || ui.cmpLeftPanel->isAncestorOf(Widget))) setActivePanel(0);
+        else if (Widget && (Widget == ui.cmpRightPanel || ui.cmpRightPanel->isAncestorOf(Widget))) setActivePanel(1);
     }
-
-    return false;
+    return QMainWindow::eventFilter(Object, Event);
 }
 
 void QMainUI::closeEvent( QCloseEvent* Event )
@@ -519,8 +518,10 @@ void QMainUI::initialize()
                 QMessageBox::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
         });
 
-    ui.cmpLeftPanel->installEventFilter( this );
-    ui.cmpRightPanel->installEventFilter( this );
+    // Track input in all panel descendants, including the path/search controls
+    // and viewers. Focus outside both panels keeps the current command source.
+    qApp->installEventFilter(this);
+    setActivePanel(currentPanelIndex);
 
     workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
     if (workspace_.exists_ && workspace_.writable_) RestoreWorkspace(workspace_.state_);
@@ -540,7 +541,7 @@ void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
     ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_); ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
     if (!State.geometry_.isEmpty() && !restoreGeometry(State.geometry_)) statusBar()->showMessage(tr("저장된 창 위치가 올바르지 않아 기본 위치를 사용합니다."));
     if (!State.layout_.isEmpty() && !ui.splitter->restoreState(State.layout_)) statusBar()->showMessage(tr("저장된 패널 배치가 올바르지 않아 기본 배치를 사용합니다."));
-    currentPanelIndex = State.activePane_ == 1 ? 1 : 0;
+    setActivePanel(State.activePane_);
     const auto Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
     Panel->SetFocusView(Panel->CurrentTabIndex()); emit Panel->sig_NotifyPanelActivated();
 }

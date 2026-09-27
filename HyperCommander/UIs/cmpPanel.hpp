@@ -111,6 +111,8 @@ signals:
 
 private:
     friend class QMainUI;
+    void                            setActivePanel(bool Active);
+    void                            updateActiveAppearance();
 
     bool                            eventFilter( QObject* Object, QEvent* Event ) override;
     void                            resizeEvent( QResizeEvent* event ) override;
@@ -141,6 +143,9 @@ private:
     QLabel*                         workspaceStatus_ = nullptr;
     QPushButton*                    retry_ = nullptr;
     QComboBox*                      history_ = nullptr;
+    QLabel*                        activeIndicator_ = nullptr;
+    bool                           activePanel_ = false;
+    bool                           darkTheme_ = false;
 };
 
 //class CmpPanel : public QWidget

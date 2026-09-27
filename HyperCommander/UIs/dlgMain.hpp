@@ -73,6 +73,7 @@ protected:
 
 private:
     Q_INVOKABLE void                    initialize();
+    void                                setActivePanel(int Index);
 
     CmpPanel*                           retrieveSrcPanel() const;
     CmpPanel*                           retrieveDstPanel() const;

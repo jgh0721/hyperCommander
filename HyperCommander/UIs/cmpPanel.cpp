@@ -671,8 +671,39 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
 //////////////////////////////////////////////////////////////////////////////
 /// Slot Handler 
 
+void CmpPanel::setActivePanel(bool Active)
+{
+    if (activePanel_ == Active && property("hc.activePanel").isValid()) return;
+    activePanel_ = Active;
+    setProperty("hc.activePanel", Active);
+    updateActiveAppearance();
+}
+
+void CmpPanel::updateActiveAppearance()
+{
+    if (!history_ || !activeIndicator_) return;
+    const auto Background = darkTheme_ ? QString("#78AAFF") : QString("#2457A7");
+    const auto Foreground = darkTheme_ ? QString("#101B2D") : QString("#FFFFFF");
+    // Keep the active pane recognizable while a menu, dialog or command line
+    // owns keyboard focus. The path text and history popup remain usable.
+    const auto PathBackground = activePanel_ ? Background : darkTheme_ ? QString("#303744") : QString("#E1E5ED");
+    const auto PathForeground = activePanel_ ? Foreground : darkTheme_ ? QString("#E8EDF5") : QString("#20242B");
+    // Identical geometry in both states prevents the file list from jumping.
+    history_->setStyleSheet(QString(
+        "QComboBox { background-color: %1; color: %2; border: 2px solid %1; border-radius: 4px; padding: 4px 8px; font-weight: 600; }")
+        .arg(PathBackground, PathForeground));
+    history_->setAccessibleName(activePanel_ ? tr("현재 패널 경로와 방문 기록") : tr("다른 패널 경로와 방문 기록"));
+    activeIndicator_->setText(activePanel_ ? tr("현재 패널") : tr("다른 패널"));
+    activeIndicator_->setStyleSheet(activePanel_ ? QString(
+        "QLabel { background-color: %1; color: %2; border-radius: 4px; padding: 4px 8px; font-weight: 600; }")
+        .arg(Background, Foreground) : QString("QLabel { padding: 4px 8px; font-weight: 600; }"));
+    activeIndicator_->setMinimumWidth(activeIndicator_->fontMetrics().horizontalAdvance(tr("현재 패널")) + 20);
+}
+
 void CmpPanel::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
 {
+    darkTheme_ = ColorScheme.IsDarkMode;
+    updateActiveAppearance();
     for( const auto& State : vecTabStates )
     {
         if( State->View == nullptr )
@@ -793,6 +824,11 @@ void CmpPanel::initializeUIs()
     ui.lblVolumeStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     ui.horizontalLayout->setStretch(1, 1);
     ui.btnGridStyle->hide();
+    activeIndicator_ = new QLabel(ui.frmHDR);
+    activeIndicator_->setObjectName("hc.activePaneIndicator");
+    activeIndicator_->setAlignment(Qt::AlignCenter);
+    activeIndicator_->setToolTip(tr("파일 작업과 탐색 명령이 적용되는 패널입니다. Tab 키로 반대편 패널로 전환합니다."));
+    ui.horizontalLayout->insertWidget(ui.horizontalLayout->count() - 1, activeIndicator_);
     ui.cbxVolume->setMinimumHeight(32);
     ui.cbxVolume->setMinimumContentsLength(12);
     connect(ui.cbxVolume, &QComboBox::activated, this, [this](int Index) {
