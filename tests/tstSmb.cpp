@@ -123,14 +123,26 @@ private slots:
             QVERIFY(LeftGrid && RightGrid);
             auto* LeftPath = Left->findChild<QComboBox*>("hc.workspaceHistory");
             auto* RightPath = Right->findChild<QComboBox*>("hc.workspaceHistory");
+            auto* LeftView = qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex()));
+            auto* RightView = qobject_cast<CGridView*>(Right->GetFocusView(Right->CurrentTabIndex()));
+            QVERIFY(LeftView && RightView);
             const auto AssertActive = [&](bool RightActive) {
                 return Left->property("hc.activePanel").toBool() == !RightActive && Right->property("hc.activePanel").toBool() == RightActive
+                    && LeftView->BaseView()->options().showFocusDecoration() == !RightActive
+                    && RightView->BaseView()->options().showFocusDecoration() == RightActive
                     && main_->CaptureWorkspace().activePane_ == int(RightActive)
                     && (RightActive ? Right : Left)->findChild<QLabel*>("hc.activePaneIndicator")->text() == QStringLiteral("현재 패널");
             };
             QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
                 LeftGrid->viewport()->mapTo(main_, QPoint(10, LeftGrid->viewport()->height() - 10)));
             QVERIFY(AssertActive(false));
+            QVERIFY(LeftView->BaseView()->getRowCount() > 3);
+            LeftView->BaseView()->deselectAll();
+            LeftView->BaseView()->selectRow(2, Qtitan::Select);
+            LeftView->BaseView()->selectRow(3, Qtitan::Select);
+            LeftView->BaseView()->setFocusedRowIndex(2);
+            const auto Focus = LeftView->CaptureFocus(); const auto Marks = LeftView->CaptureSelection();
+            QVERIFY(!Focus.isEmpty()); QCOMPARE(Marks.size(), 2);
             const auto LeftGeometry = LeftPath->geometry(); const auto RightGeometry = RightPath->geometry();
             const auto LeftActiveStyle = LeftPath->styleSheet(); QVERIFY(LeftActiveStyle != RightPath->styleSheet());
             QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/active-left-dark.png" : "/active-left-light.png")));
@@ -138,12 +150,14 @@ private slots:
             QTest::keyClick(LeftGrid, Qt::Key_Tab); QTest::qWait(50); QVERIFY(AssertActive(true));
             QCOMPARE(LeftPath->geometry(), LeftGeometry); QCOMPARE(RightPath->geometry(), RightGeometry);
             QCOMPARE(RightPath->styleSheet(), LeftActiveStyle);
+            QCOMPARE(LeftView->CaptureFocus(), Focus); QCOMPARE(LeftView->CaptureSelection(), Marks);
             auto* Search = Left->findChild<QLineEdit*>("hc.workspaceSearch");
             // Dispatch through the window so Qt applies its normal click-focus policy.
             QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
                 Search->mapTo(main_, Search->rect().center()));
             QTRY_VERIFY(Search->hasFocus());
             QVERIFY(AssertActive(false));
+            QCOMPARE(LeftView->CaptureFocus(), Focus); QCOMPARE(LeftView->CaptureSelection(), Marks);
             QTest::mouseClick(main_->windowHandle(), Qt::LeftButton, Qt::NoModifier,
                 RightGrid->viewport()->mapTo(main_, QPoint(10, RightGrid->viewport()->height() - 10)));
             QVERIFY(AssertActive(true));
@@ -504,6 +518,7 @@ private slots:
                     Dialog.grab().save(Dark ? "appearance-settings-dark.png" : "appearance-settings-light.png");
                 }
                 Dialog.accept(); QCoreApplication::processEvents();
+                Panel->sig_NotifyPanelActivated();
                 Base->setFocusedRowIndex(2);
                 auto* Column = static_cast<Qtitan::GridTableColumn*>(Base->getColumnByModelColumn(0));
                 Qtitan::GridEditorStyleOption Paint;
@@ -513,6 +528,18 @@ private slots:
                 if (Mask & 2) qSwap(Text, Background);
                 if (Mask & 1) qSwap(Text, Background);
                 QCOMPARE(Paint.palette.color(QPalette::Text), Text); QCOMPARE(Paint.backgroundBrush.color(), Background);
+                const auto Focus = View->CaptureFocus();
+                auto* Other = panels_.front() == Panel ? panels_.back() : panels_.front();
+                Other->sig_NotifyPanelActivated();
+                QVERIFY(!Base->options().showFocusDecoration());
+                qtn_init_editor_option(Base, &Paint, Column->dataBinding(), Base->getRow(2), 0,
+                    false, true, true, true, false, QRect(0, 0, 200, 30), Qt::AlignLeft);
+                if (Mask & 1) qSwap(Text, Background); // Inactive panes retain marks, but never apply cursor inversion.
+                QCOMPARE(Paint.palette.color(QPalette::Text), Text); QCOMPARE(Paint.backgroundBrush.color(), Background);
+                QCOMPARE(View->CaptureFocus(), Focus); QCOMPARE(View->CaptureSelection(), Selected);
+                Panel->sig_NotifyPanelActivated();
+                QVERIFY(Base->options().showFocusDecoration());
+                QCOMPARE(View->CaptureFocus(), Focus); QCOMPARE(View->CaptureSelection(), Selected);
                 Grid->viewport()->repaint();
                 QRect Header;
                 for (const auto& Hit : Grid->hitInfoAll())
