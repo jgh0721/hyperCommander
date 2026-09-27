@@ -101,11 +101,98 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
 
+    void displayAndNavigationSettingsUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        QVERIFY(QDir(Directory.path()).mkdir("zzPrevious"));
+        for (const auto* Name : {"item2.txt", "item10.txt", "hidden.txt", "a-case.txt", "B-case.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(QByteArray(2048, 'x')), 2048);
+        }
+        QVERIFY(SetFileAttributesW(QDir::toNativeSeparators(Directory.filePath("hidden.txt")).toStdWString().c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("item2.txt"));
+        auto* Proxy = qobject_cast<QAbstractProxyModel*>(View->BaseView()->model());
+        const auto Find = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto VisualRow = [&](const QString& Name) { const auto Index = Find(Name); return View->BaseView()->getRow(Proxy ? Proxy->mapFromSource(Index) : Index).rowIndex(); };
+        const auto BeforeHeader = Panel->findChild<QLabel*>("lblVolumeStatus")->text();
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
+        Dialog.findChild<QRadioButton*>("radioButton_4")->setChecked(true);
+        Dialog.findChild<QRadioButton*>("radioButton_2")->setChecked(true);
+        Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->setChecked(false);
+        Dialog.findChild<QCheckBox*>("chkSortNumericAware")->setChecked(false);
+        Dialog.findChild<QCheckBox*>("chkSortCaseSensitive")->setChecked(true);
+        Dialog.findChild<QCheckBox*>("chkSortLocaleAware")->setChecked(false);
+        Dialog.findChild<QComboBox*>("cbxHeaderSizeDisplay")->setCurrentIndex(0);
+        Dialog.findChild<QComboBox*>("cbxFooterSizeDisplay")->setCurrentIndex(0);
+        auto* Navigation = Dialog.findChild<QCheckBox*>("hc.navigation.focusPreviousDirectory"); QVERIFY(Navigation); Navigation->setChecked(true);
+        QVERIFY(Dialog.SaveSettings());
+        QCOMPARE(Model->data(Find("zzPrevious")).toString(), QString("[zzPrevious]"));
+        QCOMPARE(Model->GetName(Find("zzPrevious")), QString("zzPrevious"));
+        QVERIFY(!Model->data(Find("item2.txt"), Qt::DecorationRole).isValid());
+        QCOMPARE(Model->data(Find("hidden.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 1.0f);
+        QVERIFY(VisualRow("item10.txt") < VisualRow("item2.txt"));
+        QVERIFY(VisualRow("B-case.txt") < VisualRow("a-case.txt"));
+        QVERIFY(Panel->findChild<QLabel*>("lblVolumeStatus")->text() != BeforeHeader);
+        QVERIFY(Panel->findChild<QLabel*>("lblStatus")->text().contains("10240"));
+        Dialog.findChild<QRadioButton*>("radioButton_3")->setChecked(true);
+        Dialog.findChild<QRadioButton*>("radioButton_6")->setChecked(true);
+        Dialog.findChild<QCheckBox*>("chkSortNumericAware")->setChecked(true);
+        Dialog.findChild<QCheckBox*>("chkSortCaseSensitive")->setChecked(false);
+        Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->setChecked(true);
+        QVERIFY(Dialog.SaveSettings());
+        QCOMPARE(Model->data(Find("zzPrevious")).toString(), QString("zzPrevious\\"));
+        QCOMPARE(Model->data(Find("hidden.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 0.5f);
+        QVERIFY(VisualRow("item2.txt") < VisualRow("item10.txt"));
+        QVERIFY(VisualRow("a-case.txt") < VisualRow("B-case.txt"));
+        QTRY_VERIFY(!qvariant_cast<QPixmap>(Model->data(Find("item2.txt"), Qt::DecorationRole)).isNull());
+        Dialog.reject();
+        Settings.Reload();
+        QCOMPARE(Settings.Read(hc::settings::Section::General).toObject()["directoryStyle"].toString(), QString("suffix"));
+        {
+            QMainOpts Reopen(main_); Reopen.show(); QTest::qWait(50); Reopen.LoadSettings();
+            QVERIFY(Reopen.findChild<QRadioButton*>("radioButton_6")->isChecked());
+            QVERIFY(Reopen.findChild<QRadioButton*>("radioButton_3")->isChecked());
+            auto* Categories = Reopen.findChild<QListWidget*>("lstOptCate");
+            const auto Pages = Categories->findItems(QStringLiteral("탐색"), Qt::MatchExactly); QCOMPARE(Pages.size(), 1);
+            Categories->setCurrentItem(Pages.front());
+            QVERIFY(Reopen.findChild<QCheckBox*>("hc.navigation.focusPreviousDirectory")->isVisible());
+            QVERIFY(Reopen.grab().save(QCoreApplication::applicationDirPath() + "/navigation-settings.png"));
+            Reopen.findChild<QRadioButton*>("radioButton_4")->setChecked(true); Reopen.reject();
+        }
+        QCOMPARE(Settings.Read(hc::settings::Section::General).toObject()["iconMode"].toString(), QString("associated"));
+        for (const bool Enabled : {true, false}) {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); General["focusPreviousDirectory"] = Enabled;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+            for (auto* Target : panels_) {
+                Target->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+                auto* TargetModel = static_cast<CFSModel*>(model(Target));
+                auto* TargetView = qobject_cast<CGridView*>(Target->GetFocusView(Target->CurrentTabIndex()));
+                QTRY_VERIFY(!TargetModel->IsLoading() && names(TargetModel).contains("zzPrevious"));
+                TargetModel->ChangeDirectory("zzPrevious"); QTRY_VERIFY(!TargetModel->IsLoading());
+                TargetModel->ChangeDirectory(".."); QTRY_VERIFY(!TargetModel->IsLoading() && names(TargetModel).contains("zzPrevious"));
+                auto Index = TargetView->BaseView()->focusedRow().modelIndex(0);
+                if (auto* TargetProxy = qobject_cast<QAbstractProxyModel*>(TargetView->BaseView()->model())) Index = TargetProxy->mapToSource(Index);
+                QCOMPARE(TargetModel->GetName(Index), Enabled ? QString("zzPrevious") : QString(".."));
+            }
+        }
+    }
     void directoryHotListPlacementUi()
     {
         const auto OldCursor = QCursor::pos();
@@ -120,6 +207,7 @@ private slots:
                 main_->activateWindow();
                 QCursor::setPos(main_->mapToGlobal(Attempt ? main_->rect().bottomRight() : QPoint(0, 0)));
                 QTest::qWait(100); // Drain native mouse/activation events before opening the keyboard menu.
+                Panel->sig_NotifyPanelActivated();
                 bool Seen = false;
                 QTimer::singleShot(150, main_, [&] {
                     auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
