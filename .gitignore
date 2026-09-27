@@ -59,3 +59,9 @@ uniqueLibs/cmnTypeDefs_Ver.hpp
 # Local instructions and Markdown require review before any explicit inclusion.
 AGENTS.md
 *.md
+
+# Local development/validation scripts and authored project documentation.
+/tools/**/*.ps1
+!/tools/Deploy-NativePluginHost.ps1
+!/tools/Install-QtitanDataGrid.ps1
+/documentation/source/*.rst

@@ -1,3 +1,5 @@
+option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using untracked local PowerShell tools" ON)
+
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 qt_add_executable(hc_lua_tests tstLuaRuntime.cpp)
 target_link_libraries(hc_lua_tests PRIVATE hc_script_runtime Qt6::Test)
@@ -130,14 +132,16 @@ qt_add_executable(hc_viewer_surface_tests tstViewerSurface.cpp)
 target_include_directories(hc_viewer_surface_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(hc_viewer_surface_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_link_libraries(hc_viewer_surface_tests PRIVATE hc_viewer_qt Qt6::Test)
-add_test(NAME hc.viewer_surface COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-    -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
-    -Executable "$<TARGET_FILE:hc_viewer_surface_tests>" -Dpr 1)
-set_tests_properties(hc.viewer_surface PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
-add_test(NAME hc.viewer_surface150 COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-    -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
-    -Executable "$<TARGET_FILE:hc_viewer_surface_tests>" -Dpr 1.5)
-set_tests_properties(hc.viewer_surface150 PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1")
+    add_test(NAME hc.viewer_surface COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
+        -Executable "$<TARGET_FILE:hc_viewer_surface_tests>" -Dpr 1)
+    set_tests_properties(hc.viewer_surface PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME hc.viewer_surface150 COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
+        -Executable "$<TARGET_FILE:hc_viewer_surface_tests>" -Dpr 1.5)
+    set_tests_properties(hc.viewer_surface150 PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+endif()
 hc_enable_qt_deployment(hc_viewer_surface_tests TEST PLUGINS)
 if(NOT TARGET hc_wcx_fixture)
     qt_add_library(hc_wcx_fixture SHARED wcxFixture.cpp)
@@ -184,7 +188,7 @@ target_include_directories(hc_wlx_sdk_fixture PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(hc_wlx_sdk_fixture PRIVATE user32)
 target_compile_options(hc_wlx_sdk_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set_target_properties(hc_wlx_sdk_fixture PROPERTIES SUFFIX ".wlx64")
-if(TARGET hc_smb_tests)
+if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1")
     add_test(NAME hc.automation_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
@@ -207,6 +211,8 @@ if(TARGET hc_smb_tests)
                 -Executable "$<TARGET_FILE:hc_smb_tests>" -QtitanOnly -Dpr ${HC_WORKSPACE_DPR} -TimeoutSeconds 90)
         set_tests_properties(hc.qtitan_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     endforeach()
+endif()
+if(TARGET hc_smb_tests)
     add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
 qt_add_executable(hc_hosted_wlx_tests tstHostedWlx.cpp)
@@ -215,24 +221,28 @@ target_link_libraries(hc_hosted_wlx_tests PRIVATE hc_viewer_qt Qt6::Test)
 target_compile_options(hc_hosted_wlx_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_dependencies(hc_hosted_wlx_tests hc-plugin-host-x64 hc_wlx_fixture hc_wlx_sdk_fixture)
 hc_enable_qt_deployment(hc_hosted_wlx_tests TEST PLUGINS)
-foreach(HC_WLX_DPR IN ITEMS 1 1.5)
-    add_test(NAME hc.hosted_wlx${HC_WLX_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
-        -Executable "$<TARGET_FILE:hc_hosted_wlx_tests>" -Dpr ${HC_WLX_DPR})
-    set_tests_properties(hc.hosted_wlx${HC_WLX_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
-endforeach()
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1")
+    foreach(HC_WLX_DPR IN ITEMS 1 1.5)
+        add_test(NAME hc.hosted_wlx${HC_WLX_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
+            -Executable "$<TARGET_FILE:hc_hosted_wlx_tests>" -Dpr ${HC_WLX_DPR})
+        set_tests_properties(hc.hosted_wlx${HC_WLX_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+    endforeach()
+endif()
 qt_add_executable(hc_wlx_selection_tests tstWlxSelection.cpp ../UniqueLibs/nativeMaterializer.cpp)
 target_include_directories(hc_wlx_selection_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hc_wlx_selection_tests PRIVATE hc_plugin_viewer_sessions Qt6::Widgets Qt6::Test)
 target_compile_options(hc_wlx_selection_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_dependencies(hc_wlx_selection_tests hc-plugin-host-x64 hc_wlx_fixture hc_wlx_sdk_fixture)
 hc_enable_qt_deployment(hc_wlx_selection_tests TEST PLUGINS)
-foreach(HC_SELECTION_DPR IN ITEMS 1 1.5)
-    add_test(NAME hc.wlx_selection${HC_SELECTION_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
-        -Executable "$<TARGET_FILE:hc_wlx_selection_tests>" -Dpr ${HC_SELECTION_DPR})
-    set_tests_properties(hc.wlx_selection${HC_SELECTION_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
-endforeach()
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1")
+    foreach(HC_SELECTION_DPR IN ITEMS 1 1.5)
+        add_test(NAME hc.wlx_selection${HC_SELECTION_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Test-ViewerSurface.ps1"
+            -Executable "$<TARGET_FILE:hc_wlx_selection_tests>" -Dpr ${HC_SELECTION_DPR})
+        set_tests_properties(hc.wlx_selection${HC_SELECTION_DPR} PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+    endforeach()
+endif()
 qt_add_executable(hc_wcx_tests
     tstWcx.cpp
     ../UniqueLibs/wcxStorage.cpp
@@ -314,8 +324,10 @@ target_compile_options(hc_job_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/u
 target_link_libraries(hc_job_tests PRIVATE Qt6::Test)
 add_test(NAME hc.jobs COMMAND hc_job_tests)
 set_tests_properties(hc.jobs PROPERTIES TIMEOUT 30)
-add_test(NAME hc.qtitan COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
-set_tests_properties(hc.qtitan PROPERTIES TIMEOUT 30)
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
+    add_test(NAME hc.qtitan COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
+    set_tests_properties(hc.qtitan PROPERTIES TIMEOUT 30)
+endif()
 
 qt_add_executable(hc_column_tests tstColumnWidths.cpp ../commonLibs/view/columnWidthPolicy.hpp ../UniqueLibs/columnWidthSettings.hpp)
 target_include_directories(hc_column_tests PRIVATE ${PROJECT_SOURCE_DIR})
@@ -367,23 +379,27 @@ set_tests_properties(hc.path PROPERTIES
     TIMEOUT 30
 )
 
-add_test(NAME hc.sources
-    COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${PROJECT_SOURCE_DIR}/tools/Test-SourceInventory.ps1"
-        -SourceRoot "${PROJECT_SOURCE_DIR}"
-        -SourceList "${CMAKE_BINARY_DIR}/hc-product-sources.txt"
-)
-add_test(NAME hc.startup
-    COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${PROJECT_SOURCE_DIR}/tools/Test-AppStartup.ps1"
-        -Executable "$<TARGET_FILE:HyperCommander>"
-        -QtBin "$<TARGET_FILE_DIR:Qt6::Core>"
-        -OutputRoot "${CMAKE_BINARY_DIR}/startup/$<CONFIG>"
-)
-set_tests_properties(hc.sources PROPERTIES TIMEOUT 30)
-set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-SourceInventory.ps1")
+    add_test(NAME hc.sources
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Test-SourceInventory.ps1"
+            -SourceRoot "${PROJECT_SOURCE_DIR}"
+            -SourceList "${CMAKE_BINARY_DIR}/hc-product-sources.txt"
+    )
+    set_tests_properties(hc.sources PROPERTIES TIMEOUT 30)
+endif()
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-AppStartup.ps1")
+    add_test(NAME hc.startup
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Test-AppStartup.ps1"
+            -Executable "$<TARGET_FILE:HyperCommander>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>"
+            -OutputRoot "${CMAKE_BINARY_DIR}/startup/$<CONFIG>"
+    )
+    set_tests_properties(hc.startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+endif()
 
-if(TARGET hc_smb_tests)
+if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1")
     foreach(HC_ISO_DPR IN ITEMS 1 1.5)
         add_test(NAME hc.iso_ui_${HC_ISO_DPR}
             COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
@@ -413,17 +429,19 @@ if(TARGET hc_smb_tests)
     set_tests_properties(hc.network_startup PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 endif()
 
-add_test(NAME hc.deployment
-    COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
-        -Executable "$<TARGET_FILE:HyperCommander>"
-        -TestExecutables "$<TARGET_FILE:hc_settings_tests>|$<TARGET_FILE:hc_automation_tests>|$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
-        -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
-)
-# This runs the product and every deployed test executable sequentially. The
-# nested archive suites bring the measured Debug total to 87 seconds; keep
-# process-level limits while allowing deployment/copy and startup overhead.
-set_tests_properties(hc.deployment PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1")
+    add_test(NAME hc.deployment
+        COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
+            -Executable "$<TARGET_FILE:HyperCommander>"
+            -TestExecutables "$<TARGET_FILE:hc_settings_tests>|$<TARGET_FILE:hc_automation_tests>|$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
+            -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
+    )
+    # This runs the product and every deployed test executable sequentially. The
+    # nested archive suites bring the measured Debug total to 87 seconds; keep
+    # process-level limits while allowing deployment/copy and startup overhead.
+    set_tests_properties(hc.deployment PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+endif()
 
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
 add_custom_target(hc_check
@@ -440,7 +458,7 @@ if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()
 
-if(TARGET hc_smb_tests)
+if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1")
     add_dependencies(hc_check hc_smb_tests)
 endif()
 

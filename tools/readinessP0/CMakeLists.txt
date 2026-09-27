@@ -32,7 +32,7 @@ target_compile_options(hc_readiness_p0 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>
 target_compile_definitions(hc_readiness_p0 PRIVATE HC_P0_QLEMENTINE_COMMIT="${P0_COMMIT}")
 hc_enable_qt_deployment(hc_readiness_p0 TEST PLUGINS)
 find_program(P0_POWERSHELL NAMES powershell REQUIRED)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Run-Test.ps1")
     foreach(P0_SCALE IN ITEMS 1 1.25 1.5 2)
         add_test(NAME hc.readiness_p0_${P0_SCALE}
             COMMAND "${P0_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
@@ -42,9 +42,11 @@ if(BUILD_TESTING)
             ENVIRONMENT "QT_SCALE_FACTOR=${P0_SCALE};HC_P0_EVIDENCE=${CMAKE_BINARY_DIR}/readiness-evidence/$<CONFIG>/${P0_SCALE}")
     endforeach()
 endif()
-add_custom_target(hc_readiness_p0_inventory
-    COMMAND "${P0_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${CMAKE_CURRENT_SOURCE_DIR}/Measure-Inputs.ps1"
-        -Repository "${PROJECT_SOURCE_DIR}" -OutputDirectory "${CMAKE_BINARY_DIR}/readiness-evidence"
-        -QlementineSource "${HC_P0_QLEMENTINE_SOURCE}"
-    VERBATIM)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Measure-Inputs.ps1")
+    add_custom_target(hc_readiness_p0_inventory
+        COMMAND "${P0_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/Measure-Inputs.ps1"
+            -Repository "${PROJECT_SOURCE_DIR}" -OutputDirectory "${CMAKE_BINARY_DIR}/readiness-evidence"
+            -QlementineSource "${HC_P0_QLEMENTINE_SOURCE}"
+        VERBATIM)
+endif()

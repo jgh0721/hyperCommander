@@ -39,10 +39,12 @@ foreach(Candidate IN ITEMS lua sol2 qjs)
     endif()
 endforeach()
 find_program(HC_RUNTIME_POWERSHELL NAMES powershell REQUIRED)
-add_custom_target(hc_compare_script_runtimes
-    COMMAND "${HC_RUNTIME_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-        -File "${CMAKE_CURRENT_SOURCE_DIR}/Compare-Runtimes.ps1"
-        -Lua "$<TARGET_FILE:hc_runtime_lua>" -Sol2 "$<TARGET_FILE:hc_runtime_sol2>" -Qjs "$<TARGET_FILE:hc_runtime_qjs>"
-        -Output "${CMAKE_CURRENT_BINARY_DIR}/comparison-$<CONFIG>.json"
-    DEPENDS hc_runtime_lua hc_runtime_sol2 hc_runtime_qjs
-    USES_TERMINAL VERBATIM)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Compare-Runtimes.ps1")
+    add_custom_target(hc_compare_script_runtimes
+        COMMAND "${HC_RUNTIME_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/Compare-Runtimes.ps1"
+            -Lua "$<TARGET_FILE:hc_runtime_lua>" -Sol2 "$<TARGET_FILE:hc_runtime_sol2>" -Qjs "$<TARGET_FILE:hc_runtime_qjs>"
+            -Output "${CMAKE_CURRENT_BINARY_DIR}/comparison-$<CONFIG>.json"
+        DEPENDS hc_runtime_lua hc_runtime_sol2 hc_runtime_qjs
+        USES_TERMINAL VERBATIM)
+endif()

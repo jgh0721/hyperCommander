@@ -17,4 +17,12 @@ jobs:
           persist-credentials: false
       - name: Build and test with the qualified Qt kit
         shell: powershell
-        run: ./tools/Invoke-Baseline.ps1 -Fresh
+        run: |
+          $Kit = 'D:\Qt\Qt-6.12.0-VC2026-X64-H-MD-2026-09-04\bin\qt-cmake.bat'
+          $BuildDir = Join-Path $PWD ('_build/ci-' + [Guid]::NewGuid().ToString('N'))
+          & $Kit --preset vc2026-qt612 -B $BuildDir -DBUILD_TESTING=ON -DHC_ENABLE_LOCAL_TEST_TOOLS=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($Config in @('Debug', 'Release')) {
+            & $Kit --build $BuildDir --config $Config --target hc_check --parallel 6
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
