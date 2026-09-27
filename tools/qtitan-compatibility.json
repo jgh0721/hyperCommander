@@ -9,7 +9,7 @@
   "vendorPatches": [
     {
       "id": "HC-QTN-006",
-      "purpose": "File manager navigation, full-row cursor, independent marks, palette inversion, persistent cut state, legacy decoration opacity and natural filename sorting"
+      "purpose": "File manager navigation, full-row cursor, independent marks, palette inversion, persistent cut state, legacy decoration opacity and natural filename sorting, active-panel cursor visibility without changing focus or marks"
     },
     {
       "id": "HC-QTN-007",
@@ -87,12 +87,12 @@
     },
     {
       "path": "src/src/grid/QtnGridTableViewPrivate.cpp",
-      "sha256": "95da4fb1339f29aa0f93355c771831fae40f2d4ac0feec1fcf03e1290a880e9d",
+      "sha256": "364b6fda64f88f02fd852b77fd4403e74ed307631c5870933aee0f0c0e620913",
       "upstreamSha256": "068d4493a9db6eaa9a6dd864afbee70e9f07811a9068319fdd2332e944f25109"
     },
     {
       "path": "src/src/grid/QtnGridViewGraphics.cpp",
-      "sha256": "4bf15bc32ec8ae58ab13e7601713808fc85e2f1133ddd706740b0632c7f339c0",
+      "sha256": "dc4bde2a0b1b57263c42c174611549fbfd8248eb817703523d0e0ccb1eb7a478",
       "upstreamSha256": "f2d0c6c8d6b58e2f8af620b3c7a40bd8c8da4ab3114f63f6fe6985d56e9a99db"
     },
     {
@@ -117,6 +117,6 @@
   },
   "privatePatch": {
     "path": "externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip",
-    "sha256": "d5ca80db13343c05ec9a9067d239d74f68c0495e104dd758eea809ca749a2432"
+    "sha256": "b5ae2561e2a655808cbae7b163816b26f4f421ba861ff82796477b8a504a62bf"
   }
 }

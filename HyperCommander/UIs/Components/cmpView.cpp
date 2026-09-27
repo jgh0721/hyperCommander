@@ -317,6 +317,13 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     view_->endUpdate();
 }
 
+void CGridView::SetPanelActive(bool Active)
+{
+    // Keep the logical cursor and marks intact; only suppress cursor painting.
+    if (view_ && view_->options().showFocusDecoration() != Active)
+        view_->options().setShowFocusDecoration(Active);
+}
+
 bool CGridView::IsEditing() const
 {
     if( view_ == nullptr )

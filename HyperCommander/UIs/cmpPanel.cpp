@@ -676,6 +676,8 @@ void CmpPanel::setActivePanel(bool Active)
     if (activePanel_ == Active && property("hc.activePanel").isValid()) return;
     activePanel_ = Active;
     setProperty("hc.activePanel", Active);
+    for (const auto& State : vecTabStates)
+        if (auto* Grid = qobject_cast<CGridView*>(State->View)) Grid->SetPanelActive(Active);
     updateActiveAppearance();
 }
 
@@ -869,6 +871,7 @@ void CmpPanel::initializeUIs()
 CViewT* CmpPanel::createGridView()
 {
     CGridView* View = new CGridView;
+    View->SetPanelActive(activePanel_);
 
     return View;
 }

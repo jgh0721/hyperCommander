@@ -59,6 +59,7 @@ public:
     void                            SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns );
     void                            ApplyColorScheme( const TyColorScheme& ColorScheme ) override;
     void                            ApplyDisplaySettings();
+    void                            SetPanelActive(bool Active);
     bool                            IsEditing() const override;
     void                            AdjustSizeToContents() const override;
     void                            EnsureKeyboardFocusOnView() const override;
