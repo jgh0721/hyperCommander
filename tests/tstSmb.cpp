@@ -101,11 +101,47 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
 
+    void directoryHotListPlacementUi()
+    {
+        const auto OldCursor = QCursor::pos();
+        const auto Restore = qScopeGuard([&] { QCursor::setPos(OldCursor); });
+        for (auto* Panel : panels_)
+        {
+            auto* View = Panel->GetFocusView(Panel->CurrentTabIndex()); QVERIFY(View);
+            Panel->sig_NotifyPanelActivated();
+            QPoint Previous;
+            for (int Attempt = 0; Attempt < 2; ++Attempt)
+            {
+                main_->activateWindow();
+                QCursor::setPos(main_->mapToGlobal(Attempt ? main_->rect().bottomRight() : QPoint(0, 0)));
+                QTest::qWait(100); // Drain native mouse/activation events before opening the keyboard menu.
+                bool Seen = false;
+                QTimer::singleShot(150, main_, [&] {
+                    auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (!Menu) return;
+                    const auto Close = qScopeGuard([&] { Menu->close(); });
+                    QCOMPARE(Menu->objectName(), QString("hc.directoryHotList"));
+                    const auto Bounds = QRect(View->mapToGlobal(QPoint()), View->size());
+                    QVERIFY(qAbs(Menu->geometry().center().x() - Bounds.center().x()) <= 2);
+                    QVERIFY(qAbs(Menu->pos().y() - Bounds.top() - 8) <= 2);
+                    QVERIFY(View->screen()->availableGeometry().contains(Menu->geometry()));
+                    QVERIFY(Menu->activeAction() && !Menu->activeAction()->isSeparator());
+                    if (Attempt) QCOMPARE(Menu->pos(), Previous);
+                    Previous = Menu->pos();
+                    Seen = true;
+                    QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath()
+                        + (Panel == panels_.front() ? "/favorites-left.png" : "/favorites-right.png")));
+                });
+                main_->cm_DirectoryHotList({});
+                QVERIFY(Seen);
+            }
+        }
+    }
     void comboAndListPreferencesUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();

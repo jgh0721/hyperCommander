@@ -300,15 +300,31 @@ DEFINE_HC_COMMAND( QMainUI, cm_DirectoryHotList )
 {
     const auto StFavoriteDirMgr = TyStFavoriteDirMgr::GetInstance();
 
-    QMenu Menu;
-    StFavoriteDirMgr->ConstructDirMenu( &Menu );
+    const auto Pane = retrieveSrcPanel();
+    if (!Pane) return;
+    QWidget* Anchor = Pane->GetFocusView(Pane->CurrentTabIndex());
+    if (!Anchor) Anchor = Pane;
 
-    QMetaObject::invokeMethod( &Menu, "setFocus", Qt::QueuedConnection );
-    auto ArrowDownEvent = new QKeyEvent( QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier );
-    qApp->postEvent( &Menu, ArrowDownEvent );   // 이벤트의 소유권은 Qt 에게로 이전되며, 자동으로 삭제된다. 
-
-    // TODO: 화면 중앙에 나타나도록 개선 필요함
-    Menu.exec( QCursor::pos() );
+    QMenu Menu(this);
+    Menu.setObjectName("hc.directoryHotList");
+    StFavoriteDirMgr->ConstructDirMenu(&Menu);
+    Menu.ensurePolished();
+    const auto Size = Menu.sizeHint();
+    // Keyboard navigation should not depend on where the mouse was left.
+    auto Position = Anchor->mapToGlobal(QPoint((Anchor->width() - Size.width()) / 2, 8));
+    const auto Available = Anchor->screen()->availableGeometry();
+    Position.setX(std::clamp(Position.x(), Available.left(), std::max(Available.left(), Available.right() - Size.width() + 1)));
+    Position.setY(std::clamp(Position.y(), Available.top(), std::max(Available.top(), Available.bottom() - Size.height() + 1)));
+    QTimer::singleShot(0, &Menu, [&Menu] {
+        Menu.setFocus();
+        for (auto* Action : Menu.actions()) {
+            if (Action->isVisible() && Action->isEnabled() && !Action->isSeparator()) {
+                Menu.setActiveAction(Action);
+                break;
+            }
+        }
+    });
+    Menu.exec(Position);
 }
 
 DEFINE_HC_COMMAND_EX( QMainUI, cm_GotoDrive )
