@@ -3,6 +3,6 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
-    <QT_LIB_VER>6.10.0</QT_LIB_VER>
+    <QT_LIB_VER>6.12.0</QT_LIB_VER>
   </PropertyGroup>
 </Project>
