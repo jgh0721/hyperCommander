@@ -139,7 +139,7 @@ void polishComboBoxPopup(QWidget* widget, const QlementineStyle& style) {
 
       itemView->viewport()->setAutoFillBackground(false);
       auto* comboBox = findFirstParentOfType<QComboBox>(itemView);
-      new ComboboxItemViewFilter(comboBox, itemView);
+      new ComboboxItemViewFilter(comboBox, itemView, style);
     }
   }
 }

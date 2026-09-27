@@ -30,10 +30,11 @@ inline bool isDefaultItemDelegate(const QAbstractItemDelegate* delegate) {
 // Event filter for the item view in the QComboBox's popup.
 class ComboboxItemViewFilter : public QObject {
 public:
-  ComboboxItemViewFilter(QComboBox* comboBox, QAbstractItemView* view)
+  ComboboxItemViewFilter(QComboBox* comboBox, QAbstractItemView* view, const QlementineStyle& style)
     : QObject(view)
     , _comboBox(comboBox)
     , _view(view)
+    , style_(&style)
     , _initialMaxHeight(view->maximumHeight()) {
     _view->installEventFilter(this);
 
@@ -58,7 +59,7 @@ protected:
           const auto* childEvent = static_cast<QChildEvent*>(evt);
           const auto* child = childEvent->child();
           if (child == _comboBox->view()) {
-            if (auto* qlementine = qobject_cast<QlementineStyle*>(_comboBox->style())) {
+            if (auto* qlementine = const_cast<QlementineStyle*>(style_.data())) {
               if (isDefaultItemDelegate(_comboBox->itemDelegate())) {
                 _comboBox->setItemDelegate(new ComboBoxDelegate(_comboBox, *qlementine));
               }
@@ -96,7 +97,9 @@ private:
   void fixViewGeometry() const {
     if (_comboBox) {
       if (auto* view = _comboBox->view()) {
-        if (const auto* qlementineStyle = qobject_cast<QlementineStyle*>(_comboBox->style())) {
+        // The widget can use a wrapper style (e.g. Qtitan CommonStyle).
+        // Retain the style that installed this filter instead of casting the wrapper.
+        if (const auto* qlementineStyle = style_.data()) {
           const auto isTreeView = view->inherits("QTreeView");
           const auto hMargin = qlementineStyle->pixelMetric(QStyle::PM_MenuHMargin);
           const auto shadowWidth = qlementineStyle->theme().spacing;
@@ -163,6 +166,7 @@ private:
 
   QComboBox* _comboBox{ nullptr };
   QAbstractItemView* _view{ nullptr };
+  QPointer<const QlementineStyle> style_;
   int _initialMaxHeight{ 0 };
   QModelIndex _clickedIndex{};
 };

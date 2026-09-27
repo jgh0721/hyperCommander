@@ -175,7 +175,7 @@ QSize ComboBoxDelegate::sizeHint(const QStyleOptionViewItem& opt, const QModelIn
     const auto textW = qlementine::textWidth(fm, text);
     const auto iconW = !icon.isNull() ? iconSize.width() + spacing : 0;
     const auto w = std::max(0, contentMargin * 2 + hPadding + iconW + textW + hPadding);
-    const auto h = std::max(theme.controlHeightMedium, std::max(iconSize.height(), vPadding) + vPadding);
+    const auto h = std::max(theme.controlHeightMedium, std::max({iconSize.height(), fm.height(), vPadding}) + vPadding);
     return QSize{ w, h };
   }
 }
