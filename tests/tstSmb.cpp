@@ -101,8 +101,119 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
+        }
+    }
+
+    void comboAndListPreferencesUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        auto* Panel = panels_.front(); auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        auto* Adapter = View->ColumnWidths(); QVERIFY(Adapter);
+        auto* Drives = Panel->findChild<QComboBox*>("cbxVolume"); QVERIFY(Drives);
+        QVERIFY(!Panel->findChild<QPushButton*>("btnGridStyle")->isVisible());
+        QVERIFY(!main_->findChild<QAction*>("hc.toolbar.hc.view.columns"));
+        const auto Before = Adapter->WorkspaceLayout();
+        for (const bool Dark : {false, true}) {
+            auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+            Scheme.Dialog_Font.setPointSize(Dark ? 18 : 11);
+            emit Colors->sigColorSchemeChanged(Scheme);
+            main_->activateWindow(); QTest::qWait(150);
+            Drives->showPopup();
+            QTRY_VERIFY(Drives->view()->isVisible());
+            QTest::qWait(150);
+            for (int Row = 0; Row < Drives->count(); ++Row) {
+                const auto Index = Drives->model()->index(Row, 0);
+                QVERIFY(!Drives->view()->indexWidget(Index)); // text is drawn once by the delegate
+                QVERIFY(Drives->view()->visualRect(Index).height() >= Drives->fontMetrics().height());
+            }
+            QVERIFY(Drives->view()->window()->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/drive-popup-dark.png" : "/drive-popup-light.png")));
+            Drives->hidePopup();
+            QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show();
+            QCoreApplication::processEvents();
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/list-preferences-dark.png" : "/list-preferences-light.png")));
+            bool Seen = false;
+            QTimer::singleShot(200, &Dialog, [&] {
+                auto* Editor = Dialog.findChild<QDialog*>("hc.columnWidthsDialog"); if (!Editor) return;
+                const auto Close = qScopeGuard([Editor] { if (Editor->isVisible()) Editor->reject(); });
+                Seen = true;
+                Editor->findChild<QComboBox*>("hc.listLayout.mode")->setCurrentIndex(1);
+                Editor->findChild<QComboBox*>("hc.listLayout.scope")->setCurrentIndex(1);
+                auto* Table = Editor->findChild<QTableWidget*>(); QVERIFY(Table);
+                QCoreApplication::processEvents();
+                auto* Choice = qobject_cast<QComboBox*>(Table->cellWidget(0, 2)); QVERIFY(Choice);
+                for (int Selected = 0; Selected < Choice->count(); ++Selected) {
+                    Choice->setCurrentIndex(Selected); QTest::qWait(100); Choice->showPopup(); QTest::qWait(100);
+                    const auto HidePopup = qScopeGuard([Choice] { Choice->hidePopup(); });
+                    QVERIFY(Choice->view()->isVisible());
+                    for (int Row = 0; Row < Choice->count(); ++Row) {
+                        const auto Rect = Choice->view()->visualRect(Choice->model()->index(Row, 0));
+                        qInfo() << "Combo popup" << Dark << Selected << Row << Choice->view()->viewport()->rect() << Rect;
+                        QVERIFY2(Choice->view()->viewport()->rect().contains(Rect), "Both flexible and fixed choices must be fully visible");
+                        QVERIFY(Rect.height() >= Choice->fontMetrics().height());
+                    }
+                    if (!Selected) QVERIFY(Choice->view()->window()->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/mode-popup-dark.png" : "/mode-popup-light.png")));
+                    Choice->hidePopup();
+                }
+                Editor->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+            });
+            Dialog.findChild<QPushButton*>("hc.settings.editListAppearance")->click();
+            QVERIFY(Seen); QCOMPARE(Adapter->WorkspaceLayout(), Before);
+            if (Dark) {
+                Dialog.findChild<QPushButton*>("btnApply")->click();
+                QCOMPARE(Adapter->LayoutMode(), QString("name-first"));
+                const auto Applied = Adapter->WorkspaceLayout();
+                Dialog.reject(); QCOMPARE(Adapter->WorkspaceLayout(), Applied);
+            } else {
+                Dialog.reject(); QCOMPARE(Adapter->WorkspaceLayout(), Before); QCOMPARE(Settings.Object(), Original);
+            }
+        }
+        // Replace only the network provider with an in-memory fixture. Drive
+        // activation itself uses the real product signal and navigation path.
+        class NetworkFs : public nsHC::CFileSystemT {
+        public:
+            NetworkFs() : CFileSystemT("\\") { cate_ = nsHC::FS_CATE_REMOTE; }
+            std::shared_ptr<hc::storage::test::MemoryProvider> provider_ = std::make_shared<hc::storage::test::MemoryProvider>();
+            mutable QString requested_;
+            std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override { return provider_; }
+            hc::storage::Locator ReadLocation(const QString& Path) const override { requested_ = QString::fromStdString(CFileSystemT::ReadLocation(Path).root_); return provider_->Root(); }
+        };
+        const int NetworkIndex = Drives->findText(tr("네트워크 환경")); QVERIFY(NetworkIndex >= 0);
+        const auto OriginalNetwork = Drives->itemData(NetworkIndex);
+        const auto RestoreNetwork = qScopeGuard([&] { Drives->setItemData(NetworkIndex, OriginalNetwork); });
+        auto Network = QSharedPointer<NetworkFs>::create();
+        Drives->setItemData(NetworkIndex, QVariant::fromValue(nsHC::TySpFileSystem(Network)));
+        for (int Attempt = 0; Attempt < 2; ++Attempt) {
+            { QSignalBlocker Blocker(Drives); Drives->setCurrentIndex(NetworkIndex); }
+            QSignalSpy Activated(Drives, &QComboBox::activated);
+            QSignalSpy Completed(model(Panel), &CFsModelT::sigRefreshCompleted);
+            main_->activateWindow(); QTest::qWait(150);
+            Drives->showPopup(); QTRY_VERIFY(Drives->view()->isVisible()); QTest::qWait(150);
+            const auto Index = Drives->model()->index(NetworkIndex, 0); Drives->view()->scrollTo(Index);
+            Drives->view()->setCurrentIndex(Index);
+            QTest::keyClick(Drives->view(), Qt::Key_Return);
+            QCOMPARE(Activated.count(), 1); QTRY_VERIFY(Completed.count() > 0);
+            QCOMPARE(Network->requested_, QString("\\"));
+        }
+        if (qEnvironmentVariableIsSet("HC_TEST_NETWORK_DISCOVERY")) {
+            const auto Native = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(R"(\\)"));
+            QVERIFY(Native);
+            hc::storage::OperationContext Context;
+            Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+            const auto Location = Native->ReadLocation(R"(\\)");
+            auto Task = Native->ReadProvider()->Enumerate(Location, Context);
+            QTRY_VERIFY_WITH_TIMEOUT(Task.wait_for(std::chrono::seconds(0)) == std::future_status::ready, 20000);
+            auto Cursor = Task.get(); QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+            auto Page = Cursor.Value()->Next(256, Context).get(); QVERIFY(Page.HasValue());
+            qInfo() << "Live network discovery entries:" << Page.Value().entries_.size();
+            for (const auto& Entry : Page.Value().entries_) qInfo() << QString::fromStdString(Entry.name_);
         }
     }
 
@@ -399,8 +510,7 @@ private slots:
                 Buttons->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
                 if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
             });
-            auto* Button = Left->findChild<QPushButton*>("btnGridStyle"); QVERIFY(Button);
-            Button->click();
+            View->ConfigureColumns();
         };
         Edit(1, 1, false, true); QVERIFY(DialogSeen);
         QCOMPARE(Adapter->WorkspaceLayout(), BeforeCancel); QCOMPARE(Settings.Object(), BeforeSettings);
@@ -863,12 +973,12 @@ hc.events.unsubscribe(sub)
         }
         for (auto* Panel : panels_)
         {
-            auto* Combo = Panel->findChild<QComboBoxForWidget*>("cbxVolume");
+            auto* Combo = Panel->findChild<QComboBox*>("cbxVolume");
             QVERIFY(Combo);
             nsHC::TySpFileSystem Mapped;
-            for (int Index = 0; Index < Combo->GetCount(); ++Index)
+            for (int Index = 0; Index < Combo->count(); ++Index)
             {
-                auto Fs = Combo->GetItem(Index)->GetUserData(Qt::UserRole).value<nsHC::TySpFileSystem>();
+                auto Fs = Combo->itemData(Index).value<nsHC::TySpFileSystem>();
                 if (Fs && Fs->GetRoot().compare(Root, Qt::CaseInsensitive) == 0) Mapped = Fs;
             }
             QVERIFY2(Mapped, "A disconnected drive must remain visible in both panels");
