@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpView.hpp"
+#include "UIs/dlgOpts.hpp"
 #include "UniqueLibs/qtWorkspaceState.hpp"
 
 #include "builtInFsModel.hpp"
@@ -220,8 +221,6 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         view_->setModel( model_ );
     }
 
-    model_->SetColumnView( *Columns );
-
     view_->beginUpdate();
     Qtitan::GridBandedTableColumn* GridColumn = nullptr;
     
@@ -241,7 +240,6 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
             {
                 GridColumn->setSortLocaleAware( true );
-                GridColumn->setSortOrder( Qtitan::SortAscending, true );
                 GridColumn->dataBinding()->setSortRole( Qt::UserRole );
                 
             }
@@ -252,6 +250,17 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
     view_->bestFit( FitToHeader );
     view_->endUpdate();
+    for (int Position = 0; Position < Columns->profile_.columns_.size(); ++Position)
+        for (const auto& Column : Columns->VecColumns)
+            if (Column.definition_.id_ == Columns->profile_.columns_[Position].id_)
+                view_->getColumnByModelColumn(Column.Index)->setVisualIndex(Position);
+    if (!Columns->profile_.sorts_.isEmpty()) {
+        const auto& Sort = Columns->profile_.sorts_.front();
+        for (const auto& Column : Columns->VecColumns)
+            if (Column.definition_.id_ == Sort.columnId_)
+                static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Column.Index))->setSortOrder(
+                    Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+    }
     columnAdapter_->Bind(*Columns);
     ApplyDisplaySettings();
 }
@@ -342,7 +351,42 @@ void CGridView::AdjustSizeToContents() const
 
 void CGridView::ConfigureColumns()
 {
-    if (columnAdapter_ && columnAdapter_->ShowSettings()) emit sigViewSettingsChanged();
+    QMainOpts Dialog(window()); Dialog.SetListView(this); Dialog.ShowListSettingsPage(); Dialog.exec();
+}
+
+hc::columns::ColumnProfile CGridView::ColumnProfile() const
+{
+    auto Profile = columnAdapter_->Profile();
+    QMap<QUuid, int> Positions;
+    for (int Index = 0; Index < model_->columnCount(); ++Index)
+        if (const auto* Column = view_->getColumnByModelColumn(Index)) Positions[QUuid(columnAdapter_->ColumnId(Index))] = Column->visualIndex();
+    std::stable_sort(Profile.columns_.begin(), Profile.columns_.end(), [&](const auto& Left, const auto& Right) {
+        return Positions.value(Left.id_, -1) < Positions.value(Right.id_, -1);
+    });
+    Profile.sorts_.clear();
+    const auto Rules = view_->modelController()->sortRules();
+    for (int Rule = 0; Rule < Rules->sortRulesCount(); ++Rule)
+        for (int Index = 0; Index < model_->columnCount(); ++Index) {
+            auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+            if (Column && Rules->sortRule(Rule)->dataBinding == Column->dataBinding())
+                Profile.sorts_.append({QUuid(columnAdapter_->ColumnId(Index)), Column->sortOrder() == Qtitan::SortDescending ? Qt::DescendingOrder : Qt::AscendingOrder});
+        }
+    return Profile;
+}
+
+bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
+{
+    if (!model_ || !hc::columns::IsBuiltInProfile(Profile)) return false;
+    const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
+    view_->beginUpdate();
+    view_->deselectAll(); view_->setModel(nullptr); view_->removeColumns();
+    auto Binding = BindColumnProfile(Profile);
+    SetModel(model_, proxy_, &Binding);
+    columnAdapter_->UseProfileWidths();
+    columnAdapter_->Apply();
+    view_->endUpdate();
+    RestoreSelection(Selected, Focus);
+    return true;
 }
 
 QJsonObject CGridView::CaptureWorkspaceView() const
@@ -359,13 +403,25 @@ QJsonObject CGridView::CaptureWorkspaceView() const
                 {"sort", int(Column->sortOrder())}, {"priority", Priority}});
         }
     const auto Proxy = qobject_cast<CFSProxyModel*>(proxy_);
-    return {{"mode", "details"}, {hc::columns::WorkspaceKey, columnAdapter_->WorkspaceLayout()}, {"columnOrderV2", Columns},
+    auto Layout = columnAdapter_->WorkspaceLayout();
+    if (columnAdapter_->Writable()) Layout["definition"] = hc::columns::EncodeProfile(ColumnProfile());
+    return {{"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
         {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
 }
 
 void CGridView::RestoreWorkspaceView(const QJsonObject& View)
 {
-    columnAdapter_->RestoreWorkspaceLayout(View);
+    const auto Layout = View.value(hc::columns::WorkspaceKey).toObject();
+    auto Definition = hc::columns::DecodeProfile(Layout.value("definition").toObject());
+    if (Layout.isEmpty()) {
+        const auto Defaults = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()
+            ["ColumnsV2/Defaults/" + columnAdapter_->PaneKey()].toObject();
+        Definition = hc::columns::DecodeProfile(Defaults);
+    }
+    if (Definition && hc::columns::IsBuiltInProfile(*Definition)) {
+        ApplyColumnProfile(*Definition);
+        if (!Layout.isEmpty()) columnAdapter_->RestoreWorkspaceLayout(View);
+    } else columnAdapter_->RestoreWorkspaceLayout(View);
     QList<QJsonObject> Sorted;
     for (const auto& Value : View.value("columnOrderV2").toArray()) Sorted.append(Value.toObject());
     std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {

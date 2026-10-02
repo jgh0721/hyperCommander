@@ -596,6 +596,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\qtViewerProvider.hpp" />
     <ClInclude Include="..\UniqueLibs\qtViewerHost.hpp" />
     <QtMoc Include="..\UniqueLibs\qtViewerSurface.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtColumnProfileEditor.cpp" />
     <ClCompile Include="..\UniqueLibs\qtitanColumnAdapter.cpp" />
     <ClCompile Include="..\UniqueLibs\qtWorkspaceState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtWorkspaceRestore.cpp" />
@@ -642,6 +643,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
     <ClInclude Include="..\UniqueLibs\settings\appSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />
+    <QtMoc Include="..\UniqueLibs\qtColumnProfileEditor.hpp" />
     <ClInclude Include="..\UniqueLibs\qtitanColumnAdapter.hpp" />
     <ClInclude Include="..\UniqueLibs\qtPluginHostSettings.hpp" />
     <ClCompile Include="..\UniqueLibs\qtPluginHostSettings.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

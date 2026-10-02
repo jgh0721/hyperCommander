@@ -9,6 +9,30 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void pathFlagsAndFormats()
+    {
+        using namespace hc::columns;
+        FileSnapshot File; File.name_ = "report.tar.gz"; File.parentPath_ = "C:\\Projects\\docs";
+        File.attributes_ = 0x21; File.size_ = 1048576; File.typeDescription_ = "Archive document";
+        File.accessed_ = QDateTime(QDate(2026, 10, 2), QTime(12, 34, 56));
+        QCOMPARE(Resolve("file.path", File).Raw().toString(), QString("C:\\Projects\\docs\\report.tar.gz"));
+        QCOMPARE(Resolve("file.parentName", File).Raw().toString(), QString("docs"));
+        QCOMPARE(Resolve("file.pathLength", File).Raw().toULongLong(), quint64(Resolve("file.path", File).Raw().toString().size()));
+        QVERIFY(Resolve("file.readOnly", File).Raw().toBool()); QVERIFY(Resolve("file.archive", File).Raw().toBool());
+        QVERIFY(!Resolve("file.hidden", File).Raw().toBool());
+        QCOMPARE(Resolve("file.type", File).Raw().toString(), QString("Archive document"));
+        FormatOptions Date; Date.datePattern_ = "HH:mm:ss";
+        QCOMPARE(Format(Resolve("file.accessed", File), Date), QString("12:34:56"));
+        FormatOptions Size; Size.size_ = SizeFormat::MiB; Size.precision_ = 1;
+        QCOMPARE(Format(Resolve("file.size", File), Size), QLocale().toString(1.0, 'f', 1) + " MiB");
+        QCOMPARE(Resolve("file.size", File).Raw().toULongLong(), quint64(1048576));
+        File.parentPath_ = "\\\\server\\share\\";
+        QCOMPARE(Resolve("file.path", File).Raw().toString(), QString("\\\\server\\share\\report.tar.gz"));
+        QCOMPARE(Resolve("file.parentName", File).Raw().toString(), QString("share"));
+        auto Profile = DefaultProfile(); Profile.columns_[1].fieldId_ = "file.path";
+        QVERIFY(IsBuiltInProfile(Profile)); Profile.columns_[1].fieldId_ = "wdx.unknown.field";
+        QVERIFY(!IsBuiltInProfile(Profile)); // Unsupported providers remain preserved but not executed.
+    }
     void typedValuesPreservePrecisionAndState()
     {
         using namespace hc::columns;

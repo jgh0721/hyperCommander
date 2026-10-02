@@ -9,6 +9,7 @@ struct TyFileSet;
 struct TyColorScheme;
 class QPluginHostSettings;
 class CGridView;
+class QtColumnProfileEditor;
 
 const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
 const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
@@ -104,9 +105,7 @@ private:
 
     Ui::dlgOpts                         ui;
     QPointer<CGridView> listView_;
-    QJsonObject pendingListLayout_;
-    QPushButton* listSettingsButton_ = nullptr;
-    int listSettingsPage_ = -1;
+    QtColumnProfileEditor* columnEditor_ = nullptr;
     QCheckBox* focusPreviousDirectory_ = nullptr;
     QButtonGroup* iconModes_ = nullptr;
     QButtonGroup* directoryStyles_ = nullptr;

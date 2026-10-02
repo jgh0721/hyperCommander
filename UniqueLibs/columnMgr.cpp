@@ -8,11 +8,7 @@ CColumnMgr::CColumnMgr() { Initialize(); }
 void CColumnMgr::Initialize()
 {
     columnViews_.clear();
-    ColumnView View;
-    View.profile_ = hc::columns::DefaultProfile();
-    for (const auto& Definition : View.profile_.columns_)
-        View.VecColumns.append({int(View.VecColumns.size()), Definition});
-    columnViews_.append(View);
+    columnViews_.append(BindColumnProfile(hc::columns::DefaultProfile()));
 }
 
 qsizetype CColumnMgr::GetCount() const { return columnViews_.size(); }
@@ -22,7 +18,7 @@ ColumnView CColumnMgr::GetColumnView(int Index)
     return Index >= 0 && Index < columnViews_.size() ? columnViews_[Index] : ColumnView{};
 }
 
-hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition& Column, const nsHC::CFileSourceT* Info)
+hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition& Column, const nsHC::CFileSourceT* Info, const QString& ParentPath)
 {
     using namespace hc::columns;
     if (!Info) return CellValue::Missing(ValueState::Empty);
@@ -36,6 +32,15 @@ hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition&
     else if (Info->Size_ >= 0) File.size_ = quint64(Info->Size_);
     File.attributes_ = Info->Attributes_;
     File.created_ = Info->Created_; File.modified_ = Info->Modified_;
+    File.parentPath_ = ParentPath;
+    if (Info->storageEntry_) {
+        const auto& Hints = Info->storageEntry_->hints_;
+        if (const auto It = Hints.find("accessedUtcMs"); It != Hints.end()) {
+            bool Ok = false; const auto Time = QString::fromStdString(It->second).toLongLong(&Ok);
+            if (Ok) File.accessed_ = QDateTime::fromMSecsSinceEpoch(Time);
+        }
+        if (const auto It = Hints.find("typeDescription"); It != Hints.end()) File.typeDescription_ = QString::fromStdString(It->second);
+    }
     return Resolve(Column.fieldId_, File);
 }
 

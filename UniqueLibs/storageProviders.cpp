@@ -3,6 +3,9 @@
 #include <lm.h>
 #include <shlobj.h>
 #include <QUuid>
+#include <QFileInfo>
+#include <shlwapi.h>
+#pragma comment(lib, "shlwapi")
 
 #pragma comment(lib, "netapi32")
 
@@ -79,6 +82,22 @@ namespace hc::storage
             Value.size_ = (static_cast<std::uint64_t>(Data.nFileSizeHigh) << 32) | Data.nFileSizeLow;
             Value.createdUtcMs_ = Milliseconds(Data.ftCreationTime);
             Value.modifiedUtcMs_ = Milliseconds(Data.ftLastWriteTime);
+            if (Ticks(Data.ftLastAccessTime)) Value.hints_["accessedUtcMs"] = std::to_string(Milliseconds(Data.ftLastAccessTime));
+            // Called on the provider worker. Cache by extension for this thread;
+            // no file access or shell association lookup occurs during painting.
+            if (!Value.directory_) {
+                const auto Extension = QFileInfo(QString::fromStdString(Value.name_)).suffix().toLower();
+                if (!Extension.isEmpty()) {
+                    static thread_local QMap<QString, QString> Descriptions;
+                    if (!Descriptions.contains(Extension)) {
+                        wchar_t Buffer[1024]{}; DWORD Length = DWORD(std::size(Buffer));
+                        const auto Result = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_FRIENDLYDOCNAME,
+                            (L"." + Extension.toStdWString()).c_str(), nullptr, Buffer, &Length);
+                        Descriptions[Extension] = SUCCEEDED(Result) ? QString::fromWCharArray(Buffer) : QString{};
+                    }
+                    if (!Descriptions[Extension].isEmpty()) Value.hints_["typeDescription"] = Descriptions[Extension].toStdString();
+                }
+            }
             return Value;
         }
         class SnapshotCursor final : public IEntryCursor

@@ -136,10 +136,10 @@ void CFSDirSizeGatherer::run()
                 Item->directorySize_ = quint64(Item->Size_);
             }
 
-            ( ( CFSModel* )model_ )->createBuiltFsValues( Item, sizeCol_ );
+            ( ( CFSModel* )model_ )->createBuiltFsValues( Item, -1 );
         }
 
-        model_->dataChanged( model_->index( row, sizeCol_ ), model_->index( row, sizeCol_ ), QList<int>() << Qt::DisplayRole << Qt::EditRole << CFsModelT::USR_ROLE_SORT );
+        model_->dataChanged( model_->index( row, 0 ), model_->index( row, model_->columnCount() - 1 ), QList<int>() << Qt::DisplayRole << Qt::EditRole << CFsModelT::USR_ROLE_SORT );
     }
 }
 
@@ -267,6 +267,18 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
     return { TyOsError::OS_WIN32_ERROR, ERROR_SUCCESS };
 }
 
+void CFSModel::SetColumnView(const ColumnView& View)
+{
+    beginResetModel();
+    {
+        CCmnMutexLocker Locker(&lock);
+        columnView_ = View;
+        createBuiltFsValues(vecNode_);
+        refreshNameSortRanks();
+    }
+    endResetModel();
+}
+
 void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
 {
     if( index.isValid() == false )
@@ -300,6 +312,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
             case Qt::DisplayRole:
             case Qt::EditRole: {
+                if (Col == 0 && Role == Qt::EditRole) { RoleWith.setData(Item->Name_); break; }
                 if (Col == 0 && Role == Qt::DisplayRole && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Item->Name_ != "..") {
                     const auto Style = displaySettings_["directoryStyle"].toString();
                     if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
@@ -848,7 +861,9 @@ void CFSModel::refreshNameSortRanks()
     std::stable_sort(Order.begin(), Order.end(), [&](int Left, int Right) {
         const auto Group = [&](int Row) { return vecNode_[Row]->Name_ == ".." ? 0 : (vecNode_[Row]->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2; };
         if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
-        return Compare(vecNode_[Left]->Name_, vecNode_[Right]->Name_) < 0;
+        const auto Name = [&](int Row) { const auto& Item = vecNode_[Row];
+            return Item->columnValues_.isEmpty() ? Item->Name_ : Item->columnValues_.front().Raw().toString(); };
+        return Compare(Name(Left), Name(Right)) < 0;
     });
     nameSortRanks_.resize(Order.size());
     for (int Rank = 0; Rank < Order.size(); ++Rank) nameSortRanks_[Order[Rank]] = Rank;
@@ -942,7 +957,7 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
         Item->columnValues_.clear();
         for (const auto& Column : columnView_.VecColumns)
         {
-            const auto Value = CColumnMgr::GetValue(Column.definition_, Item.get());
+            const auto Value = CColumnMgr::GetValue(Column.definition_, Item.get(), GetCurrentPathWithRoot());
             Item->columnValues_.append(Value);
             Item->VecContent.append(CColumnMgr::FormatValue(Column.definition_, Value, Item.get()));
         }
@@ -951,9 +966,14 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
 
 void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 {
-    if (!Item || Column < 0 || Column >= columnView_.VecColumns.size()) return;
+    if (!Item) return;
+    if (Column < 0) {
+        for (int Index = 0; Index < columnView_.VecColumns.size(); ++Index) createBuiltFsValues(Item, Index);
+        return;
+    }
+    if (Column >= columnView_.VecColumns.size()) return;
     const auto& Definition = columnView_.VecColumns[Column].definition_;
-    const auto Value = CColumnMgr::GetValue(Definition, Item.get());
+    const auto Value = CColumnMgr::GetValue(Definition, Item.get(), GetCurrentPathWithRoot());
     Item->columnValues_.resize(columnView_.VecColumns.size());
     Item->VecContent.resize(columnView_.VecColumns.size());
     Item->columnValues_[Column] = Value;

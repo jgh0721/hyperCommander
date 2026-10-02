@@ -4,6 +4,7 @@
 #include "dlgDefaultCMD.hpp"
 #include "Components/cmpView.hpp"
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
+#include "UniqueLibs/qtColumnProfileEditor.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
@@ -139,17 +140,26 @@ void QMainOpts::LoadSettings()
 void QMainOpts::SetListView(CGridView* View)
 {
     listView_ = View;
-    pendingListLayout_ = {};
-    listSettingsButton_->setEnabled(View && View->ColumnWidths());
+    columnEditor_->Load(View ? View->ColumnProfile() : hc::columns::DefaultProfile(),
+        hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Profiles"].toObject(),
+        View && View->ColumnWidths()->Writable());
 }
 
 void QMainOpts::ShowListSettingsPage()
 {
-    ui.lstOptCate->setCurrentRow(listSettingsPage_);
+    ui.lstOptCate->setCurrentRow(PAGE_CUSTOM_COLUMNS.first);
 }
 
 bool QMainOpts::SaveSettings()
 {
+    const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
+    if (ColumnsChanged) {
+        if (!columnEditor_->ValidateDraft()) { ShowListSettingsPage(); return false; }
+        auto Columns = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject();
+        Columns["ColumnsV2/Profiles"] = columnEditor_->Library();
+        if (columnEditor_->NewTabDefault()) Columns["ColumnsV2/Defaults/" + listView_->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
+        hc::settings::AppSettings().Put(hc::settings::Section::Columns, Columns);
+    }
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     General["sizeInHeader"] = hc::settings::SizeFormats().value(ui.cbxHeaderSizeDisplay->currentIndex(), "bytes");
     General["sizeInFooter"] = hc::settings::SizeFormats().value(ui.cbxFooterSizeDisplay->currentIndex(), "bytes");
@@ -168,13 +178,13 @@ bool QMainOpts::SaveSettings()
             tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
         auto* Reload = Message.addButton(tr("디스크에서 다시 읽기"), QMessageBox::ResetRole);
         Message.exec();
-        if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); pendingListLayout_ = {}; LoadSettings(); }
+        if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); SetListView(listView_); LoadSettings(); }
         return false;
     }
-    if (listView_ && !pendingListLayout_.isEmpty()) {
-        listView_->ColumnWidths()->RestoreWorkspaceLayout({{hc::columns::WorkspaceKey, pendingListLayout_}});
+    if (ColumnsChanged) {
+        listView_->ApplyColumnProfile(columnEditor_->Profile());
         emit listView_->sigViewSettingsChanged();
-        pendingListLayout_ = {};
+        columnEditor_->MarkSaved();
     }
     const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(ui.cbxColorScheme->currentText());
     emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
@@ -772,20 +782,8 @@ void QMainOpts::initialize()
     ui.lstOptCate->addItem( PAGE_SHORTCUT.second );
     ui.lstOptCate->addItem( PAGE_CUSTOM_COLUMNS.second );
     ui.lstOptCate->addItem( PAGE_PLUGIN_MGR.second );
-    auto* ListPage = new QWidget(ui.stkOpts); ListPage->setObjectName("hc.settings.listAppearance");
-    listSettingsPage_ = ui.stkOpts->addWidget(ListPage);
-    ui.lstOptCate->addItem(tr("목록 모양"));
-    auto* ListLayout = new QVBoxLayout(ListPage);
-    auto* Note = new QLabel(tr("환경설정을 열기 전에 사용하던 패널의 현재 탭을 설정합니다.\n표시 모드, 컬럼 너비와 표시 여부, 이 패널의 새 탭 기본값을 지정할 수 있습니다.\n변경 내용은 환경설정의 ‘적용’ 또는 ‘확인’을 누르면 반영됩니다."), ListPage);
-    Note->setWordWrap(true); ListLayout->addWidget(Note);
-    listSettingsButton_ = new QPushButton(tr("목록 모양 설정…"), ListPage);
-    listSettingsButton_->setObjectName("hc.settings.editListAppearance");
-    listSettingsButton_->setEnabled(false); ListLayout->addWidget(listSettingsButton_); ListLayout->addStretch();
-    connect(listSettingsButton_, &QPushButton::clicked, this, [this] {
-        if (!listView_) return;
-        if (auto* Adapter = listView_->ColumnWidths()) Adapter->ShowSettings(this, &pendingListLayout_);
-    });
-
+    columnEditor_ = new QtColumnProfileEditor(ui.pgCustomColumns);
+    ui.pgCustomColumns->layout()->addWidget(columnEditor_);
 
     auto* NavigationPage = new QWidget(ui.stkOpts); NavigationPage->setObjectName("hc.settings.navigation");
     ui.stkOpts->addWidget(NavigationPage); ui.lstOptCate->addItem(tr("탐색"));
@@ -800,7 +798,8 @@ void QMainOpts::initialize()
     ui.lstOptCate->setUniformItemSizes( true );
 
     ui.lstOptCate->setSizeAdjustPolicy( QAbstractScrollArea::AdjustToContents );
-    ui.lstOptCate->setFixedWidth( ui.lstOptCate->sizeHintForColumn( 0 ) + ui.lstOptCate->lineWidth() * 2 + ui.lstOptCate->frameWidth() * 2 );
+    ui.lstOptCate->setFixedWidth( ui.lstOptCate->sizeHintForColumn( 0 ) + ui.lstOptCate->lineWidth() * 2 + ui.lstOptCate->frameWidth() * 2
+        + ui.lstOptCate->spacing() * 2 + ui.lstOptCate->fontMetrics().height() * 2 );
 
     // TyEnSizeStyle 과 순서가 일치해야 한다.
     const auto SizeInStyles = QStringList() << "Bytes" << "KBytes"

@@ -67,6 +67,7 @@ public:
 
     CFSModel();
     ~CFSModel() override;
+    void SetColumnView(const ColumnView& View) override;
     void SetWatchEnabled(bool Enabled);
     void NotifyNetworkChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason);

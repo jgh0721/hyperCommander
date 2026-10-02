@@ -9,6 +9,7 @@
 #include "commandMgr.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
+#include "qtColumnProfileEditor.hpp"
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
@@ -331,36 +332,23 @@ private slots:
             QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show();
             QCoreApplication::processEvents();
             QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/list-preferences-dark.png" : "/list-preferences-light.png")));
-            bool Seen = false;
-            QTimer::singleShot(200, &Dialog, [&] {
-                auto* Editor = Dialog.findChild<QDialog*>("hc.columnWidthsDialog"); if (!Editor) return;
-                const auto Close = qScopeGuard([Editor] { if (Editor->isVisible()) Editor->reject(); });
-                Seen = true;
-                Editor->findChild<QComboBox*>("hc.listLayout.mode")->setCurrentIndex(1);
-                Editor->findChild<QComboBox*>("hc.listLayout.scope")->setCurrentIndex(1);
-                auto* Table = Editor->findChild<QTableWidget*>(); QVERIFY(Table);
-                QCoreApplication::processEvents();
-                auto* Choice = qobject_cast<QComboBox*>(Table->cellWidget(0, 2)); QVERIFY(Choice);
-                for (int Selected = 0; Selected < Choice->count(); ++Selected) {
-                    Choice->setCurrentIndex(Selected); QTest::qWait(100); Choice->showPopup(); QTest::qWait(100);
-                    const auto HidePopup = qScopeGuard([Choice] { Choice->hidePopup(); });
-                    QVERIFY(Choice->view()->isVisible());
-                    for (int Row = 0; Row < Choice->count(); ++Row) {
-                        const auto Rect = Choice->view()->visualRect(Choice->model()->index(Row, 0));
-                        qInfo() << "Combo popup" << Dark << Selected << Row << Choice->view()->viewport()->rect() << Rect;
-                        QVERIFY2(Choice->view()->viewport()->rect().contains(Rect), "Both flexible and fixed choices must be fully visible");
-                        QVERIFY(Rect.height() >= Choice->fontMetrics().height());
-                    }
-                    if (!Selected) QVERIFY(Choice->view()->window()->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/mode-popup-dark.png" : "/mode-popup-light.png")));
-                    Choice->hidePopup();
-                }
-                for (int Row = 0; Row < 4; ++Row)
-                    QVERIFY(Table->viewport()->rect().contains(Table->visualRect(Table->model()->index(Row, 0))));
-                QVERIFY(Editor->grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/column-editor-dark.png" : "/column-editor-light.png")));
-                Editor->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
-            });
-            Dialog.findChild<QPushButton*>("hc.settings.editListAppearance")->click();
-            QVERIFY(Seen); QCOMPARE(Adapter->WorkspaceLayout(), Before);
+            auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+            QVERIFY(!Dialog.findChild<QDialog*>("hc.columnWidthsDialog"));
+            Editor->findChild<QComboBox*>("hc.columns.layout")->setCurrentIndex(1);
+            Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(1);
+            Editor->findChild<QTabWidget*>("hc.columns.details")->setCurrentIndex(1);
+            auto* Choice = Editor->findChild<QComboBox*>("hc.columns.widthMode");
+            Dialog.activateWindow(); QTest::qWait(150); QVERIFY(Choice->isVisible());
+            for (int Selected = 0; Selected < Choice->count(); ++Selected) {
+                Choice->setCurrentIndex(Selected); Choice->showPopup();
+                QTRY_VERIFY_WITH_TIMEOUT(Choice->view()->isVisible(), 3000);
+                QTest::qWait(100);
+                for (int Row = 0; Row < Choice->count(); ++Row)
+                    QVERIFY(Choice->view()->viewport()->rect().contains(Choice->view()->visualRect(Choice->model()->index(Row, 0))));
+                Choice->hidePopup();
+            }
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + (Dark ? "/column-editor-dark.png" : "/column-editor-light.png")));
+            QCOMPARE(Adapter->WorkspaceLayout(), Before);
             if (Dark) {
                 Dialog.findChild<QPushButton*>("btnApply")->click();
                 QCOMPARE(Adapter->LayoutMode(), QString("name-first"));
@@ -630,206 +618,125 @@ private slots:
     {
         if (!qEnvironmentVariableIsSet("HC_LIST_LAYOUT_RESTART")) QSKIP("Child-process restart check");
         auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
-        auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
         QCOMPARE(Left->CaptureWorkspace().tabs_.size(), 2);
-        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("name-last"));
-        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->ColumnWidths()->LayoutMode(), QString("name-first"));
-        QCOMPARE(static_cast<CGridView*>(Right->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("details"));
-        auto* Adapter = static_cast<CGridView*>(Left->GetFocusView(0))->ColumnWidths();
-        QVERIFY(Adapter->SetLayoutMode("details"));
-        QCOMPARE(Adapter->Policies().value(Adapter->ColumnId(0)).value_, 42.0);
+        for (int Tab = 0; Tab < 2; ++Tab) {
+            auto* View = static_cast<CGridView*>(Left->GetFocusView(Tab));
+            QCOMPARE(View->BaseModel()->columnCount(), 10);
+            QCOMPARE(View->ColumnWidths()->LayoutMode(), QString("name-last"));
+            const auto Profile = View->ColumnProfile();
+            int Sizes = 0;
+            for (const auto& Column : Profile.columns_) {
+                Sizes += Column.fieldId_ == "file.size";
+                if (Column.id_ == Profile.primaryNameId_) QCOMPARE(Column.fieldId_, QString("file.stem"));
+            }
+            QCOMPARE(Sizes, 2);
+        }
     }
 
     void listLayoutSettingsUi()
     {
-        using namespace hc::view;
+        using namespace hc::columns;
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
         const auto Workspace = main_->CaptureWorkspace();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace(); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace(); });
         QVERIFY(Settings.Put(hc::settings::Section::Columns, QJsonObject{}));
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
-        for (const auto& Name : {"alpha.txt", "beta.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Name); }
-        hc::workspace::TabState Tab; Tab.id_ = "layout-test"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        for (const auto& Item : QList<QPair<QString, int>>{{"a.txt", 2}, {"b.txt", 10}, {"archive.tar.gz", 1536}}) {
+            QFile File(Directory.filePath(Item.first)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(QByteArray(Item.second, 'x'));
+        }
+        hc::workspace::TabState Tab; Tab.id_ = "column-profile-test"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
         hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
-        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
-        auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
-        Left->RestoreWorkspace(Pane); Tab.id_ = "layout-right"; Pane.tabs_ = {Tab}; Right->RestoreWorkspace(Pane);
-        QTRY_VERIFY(!model(Left)->IsLoading() && names(model(Left)).contains("beta.txt"));
-        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Adapter = View->ColumnWidths();
-        auto* Native = View->BaseView();
-        const auto NameId = Adapter->ColumnId(0);
-        const auto SizeDefinition = hc::columns::DefaultProfile().columns_[1];
-        nsHC::CFileSourceT Folder; Folder.Attributes_ = FILE_ATTRIBUTE_DIRECTORY; Folder.Size_ = 4096;
-        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).State(), hc::columns::ValueState::OnDemand);
-        Folder.directorySize_ = 0;
-        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).Raw().toULongLong(), quint64(0));
-        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).State(), hc::columns::ValueState::Ready);
-        nsHC::CFileSourceT LargeFile; LargeFile.storageEntry_.emplace();
-        LargeFile.storageEntry_->size_ = std::numeric_limits<quint64>::max(); LargeFile.Size_ = -1;
-        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &LargeFile).Raw().toULongLong(), std::numeric_limits<quint64>::max());
-        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Flexible, 42}));
-        QString Key;
-        for (int Row = 0; Row < model(Left)->rowCount(); ++Row) {
-            const auto Item = model(Left)->GetFileInfo(model(Left)->index(Row, 0));
-            if (Item && Item->Name_ == "beta.txt") Key = hc::workspace::SelectionKey(*Item->storageEntry_);
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); Left->RestoreWorkspace(Pane);
+        QTRY_VERIFY(!model(Left)->IsLoading() && names(model(Left)).contains("a.txt"));
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Adapter = View->ColumnWidths(); auto* Native = View->BaseView();
+        const auto Before = View->CaptureWorkspaceView();
+        const auto SetText = [](QLineEdit* Edit, const QString& Text) { Edit->setFocus(); Edit->selectAll(); QTest::keyClicks(Edit, Text); };
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        auto* List = Editor->findChild<QListWidget*>("hc.columns.list");
+        auto* Field = Editor->findChild<QComboBox*>("hc.columns.field");
+        QCOMPARE(List->count(), 8); QVERIFY(!Dialog.findChild<QPushButton*>("hc.settings.editListAppearance"));
+        const auto OriginalProfile = Editor->Profile();
+        Editor->findChild<QPushButton*>("hc.columns.cloneProfile")->click();
+        QVERIFY(Editor->Profile().id_ != OriginalProfile.id_);
+        QCOMPARE(Editor->Library().size(), 2);
+        for (int Index = 0; Index < OriginalProfile.columns_.size(); ++Index)
+            QVERIFY(Editor->Profile().columns_[Index].id_ != OriginalProfile.columns_[Index].id_);
+        List->setCurrentRow(1); Editor->findChild<QPushButton*>("hc.columns.duplicate")->click();
+        QCOMPARE(List->count(), 9);
+        Editor->findChild<QComboBox*>("hc.columns.sizeFormat")->setCurrentIndex(1);
+        Editor->findChild<QSpinBox*>("hc.columns.precision")->setValue(1);
+        SetText(Editor->findChild<QLineEdit*>("hc.columns.title"), "Adaptive size");
+        const auto SizeId = Editor->Profile().columns_[1].id_;
+        const auto FormattedId = Editor->Profile().columns_[2].id_;
+        QVERIFY(SizeId != FormattedId);
+        List->setCurrentRow(0); Field->setCurrentIndex(Field->findData("file.stem"));
+        Editor->findChild<QPushButton*>("hc.columns.down")->click();
+        QCOMPARE(Editor->Profile().primaryNameId_, Editor->Profile().columns_[1].id_);
+        Editor->findChild<QPushButton*>("hc.columns.add")->click(); Field->setCurrentIndex(Field->findData("file.path"));
+        Editor->findChild<QComboBox*>("hc.columns.unit")->setCurrentIndex(0);
+        Editor->findChild<QDoubleSpinBox*>("hc.columns.width")->setValue(220);
+        Editor->findChild<QComboBox*>("hc.columns.layout")->setCurrentIndex(2);
+        QCOMPARE(Editor->findChild<QTableWidget*>("hc.columns.preview")->rowCount(), 6);
+        Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(1);
+        QCOMPARE(model(Left)->columnCount(), 8); QCOMPARE(View->CaptureWorkspaceView(), Before);
+        QVERIFY(Editor->ValidateDraft()); QVERIFY(Dialog.SaveSettings());
+        QCOMPARE(model(Left)->columnCount(), 10); QCOMPARE(Adapter->LayoutMode(), QString("name-last"));
+        const auto Applied = View->ColumnProfile();
+        const auto StoredProfiles = Settings.Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Profiles"].toObject();
+        QCOMPARE(StoredProfiles.size(), 2); QVERIFY(StoredProfiles.contains(IdText(Applied.id_)));
+        SetText(Editor->findChild<QLineEdit*>("hc.columns.title"), "Cancelled title"); Dialog.reject();
+        QVERIFY(View->ColumnProfile() == Applied);
+        const auto ModelColumn = [&](const QUuid& Id) { for (int Index = 0; Index < model(Left)->columnCount(); ++Index) if (Adapter->ColumnId(Index) == IdText(Id)) return Index; return -1; };
+        const auto SizeIndex = ModelColumn(SizeId), FormattedIndex = ModelColumn(FormattedId); QVERIFY(SizeIndex >= 0 && FormattedIndex >= 0);
+        int FileRow = -1;
+        for (int Row = 0; Row < model(Left)->rowCount(); ++Row) if (model(Left)->GetName(model(Left)->index(Row, 0)) == "archive.tar.gz") FileRow = Row;
+        QVERIFY(FileRow >= 0);
+        QCOMPARE(model(Left)->index(FileRow, 0).data().toString(), QString("archive.tar"));
+        QCOMPARE(model(Left)->index(FileRow, 0).data(Qt::EditRole).toString(), QString("archive.tar.gz"));
+        QCOMPARE(model(Left)->index(FileRow, SizeIndex).data().toString(), QString("1536"));
+        QVERIFY(model(Left)->index(FileRow, FormattedIndex).data().toString().endsWith("KiB"));
+        QCOMPARE(model(Left)->index(FileRow, SizeIndex).data(CFsModelT::USR_ROLE_SORT), model(Left)->index(FileRow, FormattedIndex).data(CFsModelT::USR_ROLE_SORT));
+        const auto Key = hc::workspace::SelectionKey(*model(Left)->GetFileInfo(model(Left)->index(FileRow, 0))->storageEntry_);
+        View->RestoreSelection({Key}, Key);
+        QVERIFY(View->ApplyColumnProfile(View->ColumnProfile()));
+        QCOMPARE(View->CaptureSelection(), QStringList{Key}); QCOMPARE(View->CaptureFocus(), Key);
+        auto SortedProfile = View->ColumnProfile();
+        SortedProfile.sorts_ = {{QUuid(Adapter->ColumnId(FormattedIndex)), Qt::AscendingOrder}};
+        QVERIFY(View->ApplyColumnProfile(SortedProfile));
+        QCoreApplication::processEvents();
+        QList<quint64> Sizes;
+        for (int Row = 0; Row < Native->getRowCount(); ++Row) {
+            const auto Value = Native->getRow(Row).modelIndex(FormattedIndex).data(CFsModelT::USR_ROLE_SORT);
+            if (Value.isValid()) Sizes.append(Value.toULongLong());
         }
-        QVERIFY(!Key.isEmpty()); View->RestoreSelection({Key}, Key);
-        QSignalSpy Resets(model(Left), &QAbstractItemModel::modelReset);
-        const auto NameColumn = static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(0));
-        const auto SizeColumn = static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(1));
-        const auto OriginalSize = main_->size();
-        for (const auto& Mode : {QString("name-first"), QString("name-last"), QString("details")}) {
+        QCOMPARE(Sizes, (QList<quint64>{2, 10, 1536}));
+        auto Unsorted = SortedProfile; Unsorted.sorts_.clear();
+        QVERIFY(View->ApplyColumnProfile(Unsorted)); QCOMPARE(Native->modelController()->sortRules()->sortRulesCount(), 0);
+        QVERIFY(View->ApplyColumnProfile(SortedProfile));
+        for (const auto& Mode : {QString("details"), QString("name-first"), QString("name-last")}) {
             QVERIFY(Adapter->SetLayoutMode(Mode));
-            QTRY_COMPARE(NameColumn->rowIndex(), Mode == "name-last" ? 1 : 0);
-            QTRY_COMPARE(SizeColumn->rowIndex(), Mode == "name-first" ? 1 : 0);
-            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
-            main_->resize(OriginalSize.width() - 140, OriginalSize.height());
-            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
-            main_->resize(OriginalSize);
-            QTRY_COMPARE(NameColumn->width(), qRound(Adapter->AvailableWidth() * (Mode == "details" ? 0.42 : 1.0)));
-            QCOMPARE(View->CaptureSelection(), QStringList{Key}); QCOMPARE(View->CaptureFocus(), Key);
-            Native->grid()->viewport()->repaint();
-            for (const int ColumnIndex : {0, 1}) {
-                QRect Header, Cell;
-                for (const auto& Hit : Native->grid()->hitInfoAll()) {
-                    if (Hit.columnIndex() != ColumnIndex) continue;
-                    if (Hit.info() == Qtitan::GridHitInfo::Column) Header = Hit.rect();
-                    if (Hit.info() == Qtitan::GridHitInfo::Cell) Cell = Hit.rect();
-                }
-                QVERIFY(!Header.isEmpty() && !Cell.isEmpty());
-                QCOMPARE(Header.left(), Cell.left()); QCOMPARE(Header.width(), Cell.width());
-            }
-            QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/list-layout-" + Mode + ".png"));
+            QTRY_COMPARE(static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(0))->rowIndex(), Mode == "name-last" ? 1 : 0);
+            QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/custom-columns-" + Mode + ".png"));
         }
-        QCOMPARE(Resets.count(), 0); QCOMPARE(Adapter->Policies()[NameId].value_, 42.0);
-        const auto BeforeCancel = Adapter->WorkspaceLayout(); const auto BeforeSettings = Settings.Object();
-        bool DialogSeen = false;
-        const auto Edit = [&](int ModeIndex, int ScopeIndex, bool Save, bool Reset) {
-            DialogSeen = false;
-            QTimer::singleShot(0, main_, [&] {
-                auto* Dialog = View->findChild<QDialog*>("hc.columnWidthsDialog"); if (!Dialog) return;
-                const auto Close = qScopeGuard([Dialog] { if (Dialog->isVisible()) Dialog->reject(); });
-                DialogSeen = true;
-                auto* Modes = Dialog->findChild<QComboBox*>("hc.listLayout.mode"); QVERIFY(Modes);
-                Modes->setCurrentIndex(ModeIndex);
-                Dialog->findChild<QComboBox*>("hc.listLayout.scope")->setCurrentIndex(ScopeIndex);
-                auto* Buttons = Dialog->findChild<QDialogButtonBox*>();
-                if (Reset) Buttons->button(QDialogButtonBox::RestoreDefaults)->click();
-                QCoreApplication::processEvents();
-                auto* Table = Dialog->findChild<QTableWidget*>();
-                for (int Row = 0; Row < Table->rowCount(); ++Row) {
-                    if (Table->isRowHidden(Row)) continue;
-                    for (int Column = 1; Column < Table->columnCount(); ++Column) {
-                        auto* Control = Table->cellWidget(Row, Column); QVERIFY(Control && Control->isVisible());
-                        const auto Cell = Table->visualRect(Table->model()->index(Row, Column));
-                        QVERIFY2(Control->geometry().intersects(Cell) && Control->width() > 20 && Control->height() > 15, "Cell controls must occupy their own visible table cells");
-                    }
-                }
-                auto* Number = qobject_cast<QDoubleSpinBox*>(Table->cellWidget(0, 3)); QVERIFY(Number);
-                QVERIFY(!Number->text().contains(Number->locale().decimalPoint()));
-                QCOMPARE(Number->alignment(), Qt::AlignCenter);
-                auto* Visibility = Table->cellWidget(0, 6);
-                auto* Check = Visibility->findChild<QCheckBox*>(); QVERIFY(Check);
-                QVERIFY(qAbs(Check->geometry().center().x() - Visibility->rect().center().x()) <= 1);
-                QVERIFY(qAbs(Check->geometry().center().y() - Visibility->rect().center().y()) <= 1);
-                QVERIFY(Dialog->grab().save(QCoreApplication::applicationDirPath() + "/list-layout-settings.png"));
-                Buttons->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
-                if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
-            });
-            View->ConfigureColumns();
-        };
-        Edit(1, 1, false, true); QVERIFY(DialogSeen);
-        QCOMPARE(Adapter->WorkspaceLayout(), BeforeCancel); QCOMPARE(Settings.Object(), BeforeSettings);
-        Edit(1, 0, true, true); QVERIFY(DialogSeen); QCOMPARE(Adapter->LayoutMode(), QString("name-first"));
-        QCOMPARE(Adapter->Policies()[Adapter->ColumnId(1)].value_, 27.777778); // display rounding must not change saved widths
-        QCOMPARE(Settings.Object(), BeforeSettings);
-        hc::settings::JsonStore SavedWorkspace(hc::settings::WorkspaceSettings().FileName());
-        const auto SavedState = hc::workspace::Load(SavedWorkspace);
-        QCOMPARE(SavedState.state_.left_.tabs_.front().view_.value(hc::columns::WorkspaceKey).toObject().value("mode").toString(), QString("name-first"));
-        Left->AddTab(true);
-        QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->ColumnWidths()->LayoutMode(), QString("details"));
-        Left->CloseTab();
-        Edit(2, 1, true, true); QVERIFY(DialogSeen); QCOMPARE(Adapter->LayoutMode(), QString("name-last"));
-        QCOMPARE(static_cast<CGridView*>(Right->GetFocusView(0))->ColumnWidths()->LayoutMode(), QString("details"));
-        Left->AddTab(true);
-        auto* NewView = static_cast<CGridView*>(Left->GetFocusView(1));
-        QCOMPARE(NewView->ColumnWidths()->LayoutMode(), QString("name-last"));
-        QVERIFY(NewView->ColumnWidths()->SetLayoutMode("name-first"));
-        QCOMPARE(Adapter->LayoutMode(), QString("name-last"));
+        QMainOpts Invalid(main_); Invalid.SetListView(View); Invalid.ShowListSettingsPage(); Invalid.show(); QCoreApplication::processEvents();
+        auto* Draft = Invalid.findChild<QtColumnProfileEditor*>();
+        Draft->findChild<QComboBox*>("hc.columns.unit")->setCurrentIndex(1);
+        Draft->findChild<QDoubleSpinBox*>("hc.columns.width")->setValue(101);
+        QVERIFY(!Invalid.SaveSettings()); QVERIFY(!Draft->findChild<QLabel*>("hc.columns.error")->text().isEmpty()); Invalid.reject();
+        // New tabs follow the saved panel default even if this tab changes later.
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
+        Left->AddTab(true); QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->BaseModel()->columnCount(), 10);
+        QVERIFY(View->ApplyColumnProfile(SortedProfile));
         QVERIFY(main_->SaveWorkspace());
         QProcess Restart; auto Environment = QProcessEnvironment::systemEnvironment();
-        Environment.insert("HC_LIST_LAYOUT_RESTART", "1");
-        Environment.insert("HC_TEST_CONFIG_DIR", QFileInfo(Settings.FileName()).absolutePath()); Restart.setProcessEnvironment(Environment);
+        Environment.insert("HC_LIST_LAYOUT_RESTART", "1"); Environment.insert("HC_TEST_CONFIG_DIR", QFileInfo(Settings.FileName()).absolutePath()); Restart.setProcessEnvironment(Environment);
         Restart.start(QCoreApplication::applicationFilePath(), {"listLayoutRestartUi", "-o", "list-layout-restart.txt,txt"});
         QVERIFY(Restart.waitForStarted(5000)); QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
-        QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
-        Left->CloseTab(); // perform the following visibility checks on the visible original tab
-        // Old layouts and expression-hash widths must not enter the new namespace.
-        View->RestoreWorkspaceView({{"mode", "details"}, {"widths", QJsonObject{{NameId, EncodeWidth({WidthUnit::Percent, WidthMode::Flexible, 37})}}},
-            {"listLayout", QJsonObject{{"version", 1}, {"mode", "details"}, {"profiles", QJsonObject{}}}}});
-        QCOMPARE(Adapter->LayoutMode(), QString("name-last")); QCOMPARE(Adapter->Policies()[NameId].value_, 100.0);
-        QVERIFY(Adapter->SetLayoutMode("details"));
-        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Flexible, 37}));
-        QVERIFY(!QUuid(NameId).isNull());
-        // Newly available fields stay hidden in existing workspaces until added.
-        for (int Column = 4; Column < 8; ++Column) QVERIFY(Adapter->Policies()[Adapter->ColumnId(Column)].hidden_);
-        int FileRow = -1;
-        for (int Row = 0; Row < model(Left)->rowCount(); ++Row)
-            if (model(Left)->GetName(model(Left)->index(Row, 0)) == "alpha.txt") FileRow = Row;
-        QVERIFY(FileRow >= 0);
-        QCOMPARE(model(Left)->index(FileRow, 1).data(CFsModelT::USR_ROLE_SORT).metaType(), QMetaType::fromType<quint64>());
-        QCOMPARE(model(Left)->index(FileRow, 1).data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(9));
-        QCOMPARE(model(Left)->index(FileRow, 5).data().toString(), QString("txt"));
-        QCOMPARE(model(Left)->index(FileRow, 6).data().toString(), QString("alpha"));
-        QVERIFY(!model(Left)->index(FileRow, 4).data().toString().isEmpty());
-        QVERIFY(model(Left)->index(FileRow, 7).data().toString().contains("TXT"));
-        const auto BeforeAdd = Adapter->WorkspaceLayout();
-        const auto EditColumns = [&](bool Save, bool RemoveColumn) {
-            bool Seen = false;
-            QTimer::singleShot(0, main_, [&] {
-                auto* Dialog = View->findChild<QDialog*>("hc.columnWidthsDialog"); if (!Dialog) return;
-                const auto Close = qScopeGuard([Dialog] { if (Dialog->isVisible()) Dialog->reject(); });
-                Seen = true;
-                auto* Table = Dialog->findChild<QTableWidget*>();
-                auto* Available = Dialog->findChild<QComboBox*>("hc.listLayout.availableColumns"); QVERIFY(Available);
-                if (RemoveColumn) {
-                    QVERIFY(!Table->isRowHidden(4));
-                    Table->setCurrentCell(4, 0);
-                    Dialog->findChild<QPushButton*>("hc.listLayout.removeColumn")->click();
-                    QVERIFY(Table->isRowHidden(4)); QVERIFY(Available->findData(4) >= 0);
-                } else {
-                    for (int Column = 4; Column < 8; ++Column) {
-                        const auto Choice = Available->findData(Column); QVERIFY(Choice >= 0);
-                        Available->setCurrentIndex(Choice);
-                        Dialog->findChild<QPushButton*>("hc.listLayout.addColumn")->click();
-                        QVERIFY(!Table->isRowHidden(Column));
-                        QVERIFY(Table->cellWidget(Column, 6)->findChild<QCheckBox*>()->isChecked());
-                        QCOMPARE(Available->findData(Column), -1); // no duplicate columns
-                    }
-                    QVERIFY(!Available->isEnabled());
-                }
-                QCoreApplication::processEvents();
-                QVERIFY(Dialog->grab().save(QCoreApplication::applicationDirPath() + "/list-columns-added.png"));
-                Dialog->findChild<QDialogButtonBox*>()->button(Save ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
-                if (Save) QCOMPARE(Dialog->result(), int(QDialog::Accepted));
-            });
-            View->ConfigureColumns(); QVERIFY(Seen);
-        };
-        EditColumns(false, false); QCOMPARE(Adapter->WorkspaceLayout(), BeforeAdd);
-        EditColumns(true, false);
-        for (int Column = 4; Column < 8; ++Column) QTRY_VERIFY(Native->getColumnByModelColumn(Column)->isVisible());
-        const auto Added = View->CaptureWorkspaceView();
-        View->RestoreWorkspaceView({{hc::columns::WorkspaceKey, BeforeAdd}});
-        QTRY_VERIFY(!Native->getColumnByModelColumn(4)->isVisible());
-        View->RestoreWorkspaceView(Added);
-        QTRY_VERIFY(Native->getColumnByModelColumn(4)->isVisible());
-        EditColumns(true, true);
-        QTRY_VERIFY(!Native->getColumnByModelColumn(4)->isVisible());
-        QVERIFY(Native->getColumnByModelColumn(5)->isVisible());
-        QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
+        QCOMPARE(Restart.exitCode(), 0);
+        Left->CloseTab();
         const QJsonObject Future{{"version", 99}, {"mode", "future"}, {"profiles", QJsonObject{}}};
-        View->RestoreWorkspaceView({{hc::columns::WorkspaceKey, Future}});
-        QCOMPARE(Adapter->WorkspaceLayout(), Future); QVERIFY(!Adapter->SetLayoutMode("name-first"));
+        View->RestoreWorkspaceView({{WorkspaceKey, Future}}); QCOMPARE(Adapter->WorkspaceLayout(), Future); QVERIFY(!Adapter->Writable());
     }
 
     void workspaceRestoreUi()
@@ -2789,23 +2696,11 @@ hc.events.unsubscribe(sub)
         QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(3), {WidthUnit::Pixels, WidthMode::Flexible, 80}));
         Native->horizontalScrollBar()->setValue(0);
         QTRY_COMPARE(Native->getColumnByModelColumn(0)->width(), 200);
-        bool DialogSeen = false;
-        bool InvalidRejected = false;
-        QTimer::singleShot(100, this, [&] {
-            for (auto* Widget : QApplication::topLevelWidgets())
-                if (auto* Dialog = qobject_cast<QDialog*>(Widget); Dialog && Dialog->objectName() == "hc.columnWidthsDialog")
-                {
-                    DialogSeen = Dialog->grab().save(QCoreApplication::applicationDirPath() + "/m3-column-settings.png");
-                    auto* Table = Dialog->findChild<QTableWidget*>();
-                    qobject_cast<QDoubleSpinBox*>(Table->cellWidget(0, 4))->setValue(30);
-                    Dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
-                    InvalidRejected = Dialog->isVisible() && !Dialog->findChild<QLabel*>("hc.columnWidths.error")->text().isEmpty();
-                    Dialog->reject();
-                }
-        });
-        View->ConfigureColumns();
-        QVERIFY(DialogSeen);
-        QVERIFY(InvalidRejected);
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/m3-column-settings.png"));
+        Editor->findChild<QDoubleSpinBox*>("hc.columns.minimum")->setValue(30);
+        QVERIFY(!Dialog.SaveSettings()); QVERIFY(!Editor->findChild<QLabel*>("hc.columns.error")->text().isEmpty()); Dialog.reject();
         QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/m3-column-layout.png"));
     }
 

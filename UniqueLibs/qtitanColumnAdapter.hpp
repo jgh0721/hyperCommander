@@ -18,7 +18,10 @@ public:
     void Request();
     void Apply();
     void Reload();
-    bool ShowSettings(QWidget* Parent = nullptr, QJsonObject* Pending = nullptr);
+    hc::columns::ColumnProfile Profile() const;
+    void UseProfileWidths();
+    QString PaneKey() const;
+    bool Writable() const { return unsupportedLayout_.isEmpty() && settings_.writable_; }
     QString LayoutMode() const { return layoutMode_; }
     bool SetLayoutMode(const QString& Mode);
     QJsonObject WorkspaceLayout() const;
@@ -59,6 +62,7 @@ private:
     int nameColumn_ = -1;
     QString viewId_;
     hc::columns::ColumnProfile definition_;
+    bool defaultPresentation_ = false;
     bool applying_ = false;
     bool dragging_ = false;
     bool workspaceOwned_ = false;

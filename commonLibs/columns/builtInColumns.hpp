@@ -12,8 +12,22 @@ namespace hc::columns
             {"file.modified", QObject::tr("수정 날짜"), FieldType::Timestamp},
             {"file.extension", QObject::tr("확장자"), FieldType::Text},
             {"file.stem", QObject::tr("이름 (확장자 제외)"), FieldType::Text},
-            {"file.type", QObject::tr("파일 종류"), FieldType::Text},
-            {"file.isDirectory", QObject::tr("폴더 여부"), FieldType::Boolean}};
+            {"file.type", QObject::tr("파일 형식 설명"), FieldType::Text},
+            {"file.isDirectory", QObject::tr("폴더 여부"), FieldType::Boolean},
+            {"file.kind", QObject::tr("항목 종류"), FieldType::Text},
+            {"file.path", QObject::tr("전체 경로"), FieldType::Text},
+            {"file.parentPath", QObject::tr("폴더 경로"), FieldType::Text},
+            {"file.parentName", QObject::tr("부모 폴더명"), FieldType::Text},
+            {"file.pathLength", QObject::tr("경로 길이"), FieldType::UnsignedInteger},
+            {"file.accessed", QObject::tr("접근 시각"), FieldType::Timestamp},
+            {"file.readOnly", QObject::tr("읽기 전용"), FieldType::Boolean},
+            {"file.hidden", QObject::tr("숨김"), FieldType::Boolean},
+            {"file.system", QObject::tr("시스템"), FieldType::Boolean},
+            {"file.archive", QObject::tr("보관"), FieldType::Boolean},
+            {"file.compressed", QObject::tr("압축"), FieldType::Boolean},
+            {"file.encrypted", QObject::tr("암호화"), FieldType::Boolean},
+            {"file.sparse", QObject::tr("희소 파일"), FieldType::Boolean},
+            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean}};
     }
     inline const QUuid BuiltInProfileId{"a4ea8e7c-b621-4db7-bc79-b37dab6e7b8d"};
     inline ColumnProfile DefaultProfile()
@@ -57,6 +71,9 @@ namespace hc::columns
         quint64 attributes_ = 0;
         QDateTime created_;
         QDateTime modified_;
+        QDateTime accessed_;
+        QString parentPath_;
+        QString typeDescription_;
     };
     inline QString Extension(const FileSnapshot& File)
     {
@@ -66,6 +83,23 @@ namespace hc::columns
     }
     inline CellValue Resolve(const QString& FieldId, const FileSnapshot& File)
     {
+        if (FieldId == "file.parentPath") return File.parentPath_.isEmpty() ? CellValue::Missing(ValueState::Empty) : CellValue::Ready(File.parentPath_);
+        if (FieldId == "file.parentName") {
+            auto Path = File.parentPath_; Path.replace('\\', '/');
+            while (Path.endsWith('/') && Path.size() > 1) Path.chop(1);
+            return Path.isEmpty() ? CellValue::Missing(ValueState::Empty) : CellValue::Ready(Path.mid(Path.lastIndexOf('/') + 1));
+        }
+        if (FieldId == "file.path" || FieldId == "file.pathLength") {
+            if (File.parentPath_.isEmpty()) return CellValue::Missing(ValueState::Empty);
+            const auto Separator = File.parentPath_.contains('\\') ? '\\' : '/';
+            const auto Path = File.parentPath_ + (File.parentPath_.endsWith('/') || File.parentPath_.endsWith('\\') ? QString{} : QString(Separator)) + File.name_;
+            return FieldId == "file.path" ? CellValue::Ready(Path) : CellValue::Ready(quint64(Path.size()));
+        }
+        const std::array<std::pair<const char*, quint64>, 8> Flags{{{"file.readOnly", 0x1}, {"file.hidden", 0x2},
+            {"file.system", 0x4}, {"file.archive", 0x20}, {"file.compressed", 0x800}, {"file.encrypted", 0x4000},
+            {"file.sparse", 0x200}, {"file.offline", 0x1000}}};
+        for (const auto& [Id, Flag] : Flags) if (FieldId == Id) return CellValue::Ready(bool(File.attributes_ & Flag));
+        if (FieldId == "file.kind") return CellValue::Ready((File.attributes_ & 0x400) ? QObject::tr("링크") : File.directory_ ? QObject::tr("폴더") : QObject::tr("파일"));
         if (FieldId == "file.name") return CellValue::Ready(File.name_);
         if (FieldId == "file.stem") {
             const auto Dot = File.name_.lastIndexOf('.');
@@ -79,14 +113,22 @@ namespace hc::columns
             : CellValue::Missing(File.directory_ ? ValueState::OnDemand : ValueState::Empty);
         if (FieldId == "file.isDirectory") return CellValue::Ready(File.directory_);
         if (FieldId == "file.attributes") return CellValue::Ready(File.attributes_);
-        if (FieldId == "file.created" || FieldId == "file.modified") {
-            const auto Date = FieldId == "file.created" ? File.created_ : File.modified_;
+        if (FieldId == "file.created" || FieldId == "file.modified" || FieldId == "file.accessed") {
+            const auto Date = FieldId == "file.created" ? File.created_ : FieldId == "file.modified" ? File.modified_ : File.accessed_;
             return Date.isValid() ? CellValue::Ready(Date) : CellValue::Missing(ValueState::Empty);
         }
         if (FieldId == "file.type") {
+            if (!File.typeDescription_.isEmpty()) return CellValue::Ready(File.typeDescription_);
             const auto Ext = Extension(File);
             return CellValue::Ready(File.directory_ ? QObject::tr("폴더") : Ext.isEmpty() ? QObject::tr("파일") : QObject::tr("%1 파일").arg(Ext.toUpper()));
         }
         return CellValue::Missing(ValueState::Unsupported);
+    }
+    inline bool IsBuiltInProfile(const ColumnProfile& Profile)
+    {
+        const auto Fields = BuiltInFields();
+        for (const auto& Column : Profile.columns_)
+            if (std::none_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Column.fieldId_; })) return false;
+        return Validate(Profile).isEmpty();
     }
 }

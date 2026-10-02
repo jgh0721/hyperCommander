@@ -139,6 +139,7 @@ void CmpPanel::AddTab(bool Navigate)
     if (Navigate) {
         if (!Previous.tabs_.isEmpty()) {
             auto Saved = Previous.tabs_.value(Previous.active_); Saved.id_ = State->workspace_.id_;
+            Saved.view_ = View->CaptureWorkspaceView();
             State->workspace_ = Saved; State->restoreSelection_ = true;
             // A new tab inherits its panel's display defaults, while navigation
             // and selection follow the current location.

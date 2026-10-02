@@ -71,6 +71,8 @@ public:
     CFsModelT*                      BaseModel() const;
     QtitanColumnAdapter*            ColumnWidths() const { return columnAdapter_; }
     void                           ConfigureColumns();
+    bool                           ApplyColumnProfile(const hc::columns::ColumnProfile& Profile);
+    hc::columns::ColumnProfile      ColumnProfile() const;
     QJsonObject                    CaptureWorkspaceView() const;
     void                           RestoreWorkspaceView(const QJsonObject& View);
     QStringList                    CaptureSelection() const;

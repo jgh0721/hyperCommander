@@ -147,6 +147,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/settings/appSettings.hpp
         ../UniqueLibs/columnWidthSettings.hpp
         ../UniqueLibs/qtitanColumnAdapter.hpp
+        ../UniqueLibs/qtColumnProfileEditor.cpp
+        ../UniqueLibs/qtColumnProfileEditor.hpp
         ../UniqueLibs/qtitanColumnAdapter.cpp
         ../commonLibs/storage/storage.hpp
         ../UniqueLibs/storageProviders.cpp
