@@ -110,6 +110,10 @@ extern "C" __declspec(dllexport) int __stdcall ProcessFileW(HANDLE Handle, int O
         if (State->mode_ == 'Q') { wchar_t Name[] = L"encrypted.hct"; const auto Code = CheckPassword(Name); if (Code) return Code; }
         if (State->mode_ == 'V' && State->volume_) { State->volume_(nullptr, PK_VOL_ASK); return E_EABORTED; }
         if (State->progress_ && !State->progress_(nullptr, 0)) return E_EABORTED;
+        if (State->mode_ == 'Y') for (int Percent = 1; Percent <= 8; ++Percent) {
+            Sleep(80);
+            if (State->progress_ && !State->progress_(nullptr, -Percent)) return E_EABORTED;
+        }
         if (Operation == PK_EXTRACT) {
             const auto File = CreateFileW(Destination, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (File == INVALID_HANDLE_VALUE) return E_ECREATE;

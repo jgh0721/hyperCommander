@@ -60,10 +60,10 @@ namespace hc::plugins
             return Unit{};
         }
     }
-    Result<Unit> WriteFrame(HANDLE Pipe, HANDLE Peer, WireKind Kind, std::uint64_t Sequence, const QByteArray& Payload, OperationContext Context)
+    Result<Unit> WriteFrame(HANDLE Pipe, HANDLE Peer, WireKind Kind, std::uint64_t Sequence, const QByteArray& Payload, OperationContext Context, ProtocolVersion Version)
     {
         if (Payload.size() > WirePayloadLimit) return HostError("host-wire-budget");
-        auto Header = EncodeHeader({{1, 0}, Kind, Sequence, static_cast<std::uint32_t>(Payload.size())});
+        auto Header = EncodeHeader({Version, Kind, Sequence, static_cast<std::uint32_t>(Payload.size())});
         if (!Header.HasValue()) return Header.Failure();
         auto Sent = Transfer(Pipe, Peer, Header.Value().data(), static_cast<DWORD>(Header.Value().size()), true, Context);
         if (!Sent.HasValue()) return Sent.Failure();

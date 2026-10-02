@@ -68,7 +68,7 @@ namespace hc::plugins
                 if (!Reply.Value()["entries"].isArray() || !Reply.Value()["end"].isBool()) return Ready<EntryPage>(Invalid("hosted-storage-page-envelope"));
                 for (const auto& Item : Reply.Value()["entries"].toArray())
                 {
-                    if (++seen_ > std::min(budget_, Context.maxEnumerationEntries_)) return Ready<EntryPage>(Error{ErrorCategory::BudgetExceeded, "hosted-storage-enumeration-budget", id_});
+                    if (++seen_ > std::min(budget_, Context.EnumerationLimit())) return Ready<EntryPage>(Error{ErrorCategory::BudgetExceeded, "hosted-storage-enumeration-budget", id_});
                     auto Entry = DecodeEntry(Item.toObject(), at_, id_); if (!Entry.HasValue()) return Ready<EntryPage>(Entry.Failure());
                     Page.entries_.push_back(std::move(Entry.Value()));
                 }
@@ -85,6 +85,7 @@ namespace hc::plugins
         public:
             explicit LeaseStream(std::shared_ptr<IMaterializedFileLease> Lease) : lease_(std::move(Lease)) {}
             bool CanSeek() const override { return true; }
+            ReadAccess Access() const override { return ReadAccess::Materialized; }
             Task<ReadChunk> Read(std::size_t MaxBytes, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(lease_->Describe().id_.providerId_)) return Ready<ReadChunk>(*Stop);
@@ -106,12 +107,49 @@ namespace hc::plugins
             std::uint64_t offset_ = 0;
         };
         enum class StorageFeature { ReadFile, WriteFile, CreateDirectory, DeleteFile, RemoveDirectory, Rename, Attributes, Modified };
+        class RemoteStream final : public IReadStream
+        {
+        public:
+            RemoteStream(std::shared_ptr<PluginProcess> Process, QString Token, std::uint64_t Size, std::function<Result<Unit>(OperationContext)> Verify)
+                : process_(std::move(Process)), token_(std::move(Token)), size_(Size), verify_(std::move(Verify)) {}
+            ~RemoteStream() override {
+                OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+                process_->SessionCall(WireKind::StreamClose, {{"stream", token_}}, Context);
+            }
+            bool CanSeek() const override { return false; }
+            ReadAccess Access() const override { return ReadAccess::Sequential; }
+            Task<Unit> Seek(std::uint64_t, OperationContext) override { return Ready<Unit>(Unsupported("hosted-stream-seek-unavailable")); }
+            Task<ReadChunk> Read(std::size_t Count, OperationContext Context) override
+            {
+                if (failed_) return Ready<ReadChunk>(*failed_);
+                auto Chunk = process_->ReadStream(token_, Count, Context);
+                if (!Chunk.HasValue()) { failed_ = Chunk.Failure(); return Ready<ReadChunk>(*failed_); }
+                if (Chunk.Value().bytes_.size() > size_ - offset_ || (Chunk.Value().eof_ && offset_ + Chunk.Value().bytes_.size() != size_))
+                { failed_ = Error{ErrorCategory::StaleRevision, "hosted-stream-size-changed"}; return Ready<ReadChunk>(*failed_); }
+                offset_ += Chunk.Value().bytes_.size();
+                if (Chunk.Value().eof_) { auto Fresh = verify_(Context); if (!Fresh.HasValue()) { failed_ = Fresh.Failure(); return Ready<ReadChunk>(*failed_); } }
+                return Ready<ReadChunk>(std::move(Chunk));
+            }
+        private:
+            std::shared_ptr<PluginProcess> process_; QString token_; std::uint64_t size_, offset_ = 0;
+            std::function<Result<Unit>(OperationContext)> verify_; std::optional<Error> failed_;
+        };
         class HostedStorageProvider final : public IStorageProvider, public IWritableStorage, public std::enable_shared_from_this<HostedStorageProvider>
         {
         public:
             HostedStorageProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, std::set<StorageFeature> Features, bool Writable, std::string Scheme = "wfx")
                 : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), features_(std::move(Features)), writable_(Writable), scheme_(std::move(Scheme)) {}
             ProviderId Id() const override { return id_; }
+            ProviderCapabilities Capabilities() const override
+            {
+                ProviderCapabilities Value;
+                // DOpus selects direct I/O or batch materialization per path.
+                // Only the opened stream can report the chosen access mode.
+                Value.read_ = scheme_ == "dopus" && !process_->Session().epoch_.empty() ? ReadAccess::Unknown : ReadAccess::Materialized;
+                Value.batch_ = BatchSupport::Emulated;
+                Value.concurrency_ = ProviderConcurrency::SerializedPerModule; Value.commit_ = writable_ ? CommitSemantics::BestEffort : CommitSemantics::ReadOnly;
+                return Value;
+            }
             std::vector<PresentationColumn> Columns() const override { return columns_; }
             void SetColumns(std::vector<PresentationColumn> Columns) { columns_ = std::move(Columns); }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override
@@ -126,7 +164,7 @@ namespace hc::plugins
                 auto Reply = process_->DataCall(WireKind::StorageEnumerate, {{"action", "open"}, {"path", Path.Value()}}, Context);
                 if (!Reply.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Reply.Failure());
                 const int Handle = Reply.Value()["cursor"].toInt(-1); if (Handle < 0) return Ready<std::unique_ptr<IEntryCursor>>(Invalid("hosted-storage-cursor-envelope"));
-                return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(std::make_unique<Cursor>(process_, id_, std::move(At), Handle, Context.maxEnumerationEntries_)));
+                return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(std::make_unique<Cursor>(process_, id_, std::move(At), Handle, Context.EnumerationLimit())));
             }
             Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override
             {
@@ -160,6 +198,22 @@ namespace hc::plugins
                 auto Entry = Stat(Resource, Context).get(); if (!Entry.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Entry.Failure());
                 if (Entry.Value().directory_) return Ready<std::shared_ptr<IReadStream>>(Invalid("hosted-storage-read-directory"));
                 auto Path = Remote(Entry.Value().locator_, id_, scheme_); if (!Path.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Path.Failure());
+                if (Context.workload_.IsAutomatic() && Entry.Value().size_ > Context.workload_.automaticFileBytes_)
+                    return Ready<std::shared_ptr<IReadStream>>(Error{ErrorCategory::BudgetExceeded, "automatic-content-budget", id_, {}, true, "open-explicitly"});
+                if (scheme_ == "dopus" && !process_->Session().epoch_.empty())
+                {
+                    auto Opened = process_->SessionCall(WireKind::StreamOpen, {{"path", Path.Value()}}, Context);
+                    if (Opened.HasValue())
+                    {
+                        const auto Token = Opened.Value()["stream"].toString();
+                        if (Token.size() != 32 || Opened.Value()["seek"].toBool(true) || Opened.Value()["access"].toInt() != int(ReadAccess::Sequential))
+                            return Ready<std::shared_ptr<IReadStream>>(Invalid("hosted-stream-envelope"));
+                        auto Owner = shared_from_this(); const auto Captured = Entry.Value().id_;
+                        return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(std::make_shared<RemoteStream>(process_, Token, Entry.Value().size_,
+                            [Owner, Captured](OperationContext Operation) -> Result<Unit> { auto Fresh = Owner->Stat(Captured, Operation).get(); if (!Fresh.HasValue()) return Fresh.Failure(); return Unit{}; })));
+                    }
+                    if (Opened.Failure().category_ != ErrorCategory::Unsupported) return Ready<std::shared_ptr<IReadStream>>(Opened.Failure());
+                }
                 auto Lease = store_->Produce(Entry.Value(), {}, {}, Context, [&](const std::string& Local, OperationContext Operation) -> Result<Unit>
                 {
                     const auto& Item = Entry.Value(); QJsonObject Info{{"size", QString::number(Item.size_)}, {"attributes", qint64(Item.attributes_)},

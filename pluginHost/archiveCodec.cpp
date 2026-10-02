@@ -1,5 +1,6 @@
 ﻿#include "archiveCodec.hpp"
 #include <QJsonArray>
+#include "commonLibs/plugins/pluginWire.hpp"
 
 namespace hc::plugins
 {
@@ -54,14 +55,46 @@ namespace hc::plugins
         const auto Maximum = static_cast<long long>(std::min(MaximumMilliseconds, 3600000u));
         const auto Milliseconds = Context.deadline_ == std::chrono::steady_clock::time_point::max() ? Maximum
             : std::clamp(static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count()), 0LL, Maximum);
-        return {{"maxEntries", QString::number(Context.maxEnumerationEntries_)}, {"pageItems", QString::number(Context.maxPageItems_)}, {"milliseconds", QString::number(Milliseconds)}};
+        // v1 hosts only understand this bounded legacy envelope. v2 carries
+        // the independent policy and caller deadline outside this shim.
+        return {{"maxEntries", QString::number(std::min(Context.EnumerationLimit(), std::size_t(100000)))}, {"pageItems", QString::number(Context.maxPageItems_)}, {"milliseconds", QString::number(Milliseconds)}};
     }
     Result<OperationContext> DecodeContext(const QJsonObject& Object)
     {
         if (Object.size() != 3) return Invalid();
         auto Entries = WireUnsigned(Object["maxEntries"]), Page = WireUnsigned(Object["pageItems"]), Time = WireUnsigned(Object["milliseconds"]);
-        if (!Entries.HasValue() || !Page.HasValue() || !Time.HasValue() || !Entries.Value() || Entries.Value() > 100000 || !Page.Value() || Page.Value() > 100000 || Time.Value() > 3600000) return Invalid();
+        if (!Entries.HasValue() || !Page.HasValue() || !Time.HasValue() || !Entries.Value() || Entries.Value() > SIZE_MAX || !Page.Value() || Page.Value() > 100000 || Time.Value() > 3600000) return Invalid();
         OperationContext Context; Context.maxEnumerationEntries_ = Entries.Value(); Context.maxPageItems_ = Page.Value();
         Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Time.Value()); return Context;
+    }
+    QJsonObject EncodeContextV2(const OperationContext& Context)
+    {
+        QJsonObject Value{{"entries", QString::number(Context.maxEnumerationEntries_)}, {"page", QString::number(Context.maxPageItems_)},
+            {"read", QString::number(std::min(Context.maxReadBytes_, std::size_t(WirePayloadLimit)))}, {"automatic", Context.workload_.IsAutomatic()},
+            {"autoBytes", QString::number(Context.workload_.automaticFileBytes_)}, {"autoEntries", QString::number(Context.workload_.automaticEntries_)},
+            {"autoDepth", QString::number(Context.workload_.automaticDepth_)}, {"autoRatio", QString::number(Context.workload_.automaticExpansionRatio_)}};
+        Value["milliseconds"] = Context.deadline_ == std::chrono::steady_clock::time_point::max() ? QJsonValue(QJsonValue::Null)
+            : QJsonValue(QString::number(std::max<std::int64_t>(0, std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count())));
+        return Value;
+    }
+    Result<OperationContext> DecodeContextV2(const QJsonObject& Object)
+    {
+        if (Object.size() != 9 || !Object["automatic"].isBool()) return Invalid();
+        auto Entries = WireUnsigned(Object["entries"]), Page = WireUnsigned(Object["page"]), Read = WireUnsigned(Object["read"]),
+            Bytes = WireUnsigned(Object["autoBytes"]), Count = WireUnsigned(Object["autoEntries"]), Depth = WireUnsigned(Object["autoDepth"]), Ratio = WireUnsigned(Object["autoRatio"]);
+        if (!Entries.HasValue() || Entries.Value() > SIZE_MAX || !Page.HasValue() || !Page.Value() || Page.Value() > 100000
+            || !Read.HasValue() || !Read.Value() || Read.Value() > WirePayloadLimit || !Bytes.HasValue() || !Count.HasValue()
+            || !Depth.HasValue() || Depth.Value() > SIZE_MAX || !Ratio.HasValue()) return Invalid();
+        OperationContext Context; Context.maxEnumerationEntries_ = Entries.Value(); Context.maxPageItems_ = Page.Value(); Context.maxReadBytes_ = Read.Value();
+        Context.workload_ = {Object["automatic"].toBool() ? WorkloadIntent::Automatic : WorkloadIntent::Explicit, Bytes.Value(), Count.Value(), std::size_t(Depth.Value()), Ratio.Value()};
+        if (!Object["milliseconds"].isNull())
+        {
+            auto Time = WireUnsigned(Object["milliseconds"]); if (!Time.HasValue()) return Invalid();
+            const auto Now = std::chrono::steady_clock::now();
+            const auto Remaining = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - Now).count();
+            if (Time.Value() > std::uint64_t(Remaining)) return Invalid();
+            Context.deadline_ = Now + std::chrono::milliseconds(Time.Value());
+        }
+        return Context;
     }
 }

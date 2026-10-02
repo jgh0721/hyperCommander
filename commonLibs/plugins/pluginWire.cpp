@@ -6,11 +6,38 @@ namespace hc::plugins
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"plugin-host"}}; }
-        bool ValidKind(WireKind Kind) { return Kind >= WireKind::Hello && Kind <= WireKind::ArchivePassword; }
+        bool ValidKind(WireKind Kind)
+        {
+            return IsArchiveCommand(Kind) || IsViewerCommand(Kind) || IsDataCommand(Kind) || IsSessionCommand(Kind)
+                || Kind == WireKind::Hello || Kind == WireKind::Ping || Kind == WireKind::Probe || Kind == WireKind::Close
+                || Kind == WireKind::Response || Kind == WireKind::Failure || Kind == WireKind::ArchivePassword;
+        }
+    }
+    bool IsArchiveCommand(WireKind Kind)
+    {
+        switch (Kind) { case WireKind::ArchiveOpen: case WireKind::ArchiveNext: case WireKind::ArchiveRelease:
+        case WireKind::ArchiveExtract: case WireKind::ArchiveUpdateBegin: case WireKind::ArchiveUpdateData: case WireKind::ArchiveUpdateApply: return true; default: return false; }
+    }
+    bool IsViewerCommand(WireKind Kind)
+    {
+        switch (Kind) { case WireKind::ViewerOpen: case WireKind::ViewerResize: case WireKind::ViewerFocus:
+        case WireKind::ViewerCommand: case WireKind::ViewerClose: return true; default: return false; }
+    }
+    bool IsDataCommand(WireKind Kind)
+    {
+        switch (Kind) { case WireKind::StorageEnumerate: case WireKind::StorageGet: case WireKind::StorageMutate:
+        case WireKind::MetadataQuery: case WireKind::ContentConvert: return true; default: return false; }
+    }
+    bool IsSessionCommand(WireKind Kind)
+    {
+        switch (Kind) { case WireKind::SessionInvoke: case WireKind::SessionCancel: case WireKind::SessionProgress:
+        case WireKind::InteractionRequest: case WireKind::InteractionReply: case WireKind::StreamOpen: case WireKind::StreamRead:
+        case WireKind::StreamSeek: case WireKind::StreamClose: case WireKind::StreamData: case WireKind::ArchiveUpdateBinary: return true; default: return false; }
     }
     Result<std::vector<std::byte>> EncodeHeader(const WireHeader& Header)
     {
-        if (Header.version_ != ProtocolVersion{1, 0}) return Invalid("host-wire-version");
+        if (Header.version_ != ProtocolVersion{1, 0} && Header.version_ != ProtocolVersion{2, 0}) return Invalid("host-wire-version");
+        if (Header.version_.major_ == 1 && IsSessionCommand(Header.kind_)) return Invalid("host-wire-version");
         if (!ValidKind(Header.kind_) || !Header.sequence_) return Invalid("host-wire-envelope");
         if (Header.length_ > WirePayloadLimit) return Invalid("host-wire-budget");
         std::vector<std::byte> Bytes(WireHeaderBytes);

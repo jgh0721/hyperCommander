@@ -200,7 +200,7 @@ private slots:
     }
     void faults()
     {
-        QFETCH(bool, Wfx); QFETCH(QString, Fault); QTemporaryDir Directory; HostLimits Limits; Limits.requestMs_ = 300;
+        QFETCH(bool, Wfx); QFETCH(QString, Fault); QTemporaryDir Directory; HostLimits Limits; Limits.requestMs_ = 300; Limits.noProgressMs_ = 300;
         auto Process = start(Directory, Wfx ? PluginFormat::Wfx : PluginFormat::Wdx, false, true, Limits); QVERIFY(Process.HasValue());
         auto Reply = Wfx ? Process.Value()->DataCall(WireKind::StorageEnumerate, {{"action", "open"}, {"path", "\\" + Fault}})
             : Process.Value()->DataCall(WireKind::MetadataQuery, {{"action", "value"}, {"path", Directory.filePath(Fault + ".txt")}, {"field", 0}, {"unit", 0}, {"defer", false}});

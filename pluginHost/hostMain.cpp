@@ -4,11 +4,14 @@
 #include "nativeViewerHostService.hpp"
 #include "tcDataHostService.hpp"
 #include "dopusVfsHostService.hpp"
+#include "hostSession.hpp"
+#include <QUuid>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <thread>
 
 namespace
@@ -45,10 +48,13 @@ namespace
         std::unique_ptr<DopusVfsHostService> dopusVfs_;
         std::vector<HMODULE> dependencies_;
         HMODULE module_ = nullptr;
-        ~LoadedPlugin()
+        std::map<QString, std::shared_ptr<IReadStream>> streams_;
+        ~LoadedPlugin() { Close(); }
+        void Close()
         {
-            dopusVfs_.reset(); data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
+            streams_.clear(); dopusVfs_.reset(); data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
             for (auto At = dependencies_.rbegin(); At != dependencies_.rend(); ++At) FreeLibrary(*At);
+            module_ = nullptr; dependencies_.clear(); locks_.clear();
         }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
         {
@@ -146,6 +152,41 @@ namespace
             // Deliberately invoke the plugin only in this job-owned process.
             return QJsonObject{{"format", "wcx"}, {"unicode", true}, {"caps", Caps ? Caps() : 0}, {"processId", qint64(GetCurrentProcessId())}};
         }
+        Result<QByteArray> Dispatch(WireKind Kind, const QJsonObject& Request, const QByteArray& Binary, OperationContext Context)
+        {
+            const auto Json = [](const Result<QJsonObject>& Value) -> Result<QByteArray> {
+                if (!Value.HasValue()) return Value.Failure(); return QJsonDocument(Value.Value()).toJson(QJsonDocument::Compact);
+            };
+            if (const auto Stop = Context.Check({"plugin-host"})) return *Stop;
+            if (Kind == WireKind::ArchiveUpdateBinary && archives_) return Json(archives_->AppendBinary(Request, Binary, Context));
+            if (!Binary.isEmpty()) return HostError("session-unexpected-binary");
+            if (IsArchiveCommand(Kind) && archives_) return Json(archives_->Handle(Kind, Request, {}, Context));
+            if (IsDataCommand(Kind) && (data_ || dopusVfs_)) return Json(dopusVfs_ ? dopusVfs_->Handle(Kind, Request, Context) : data_->Handle(Kind, Request));
+            if (Kind == WireKind::StreamOpen)
+            {
+                if (!dopusVfs_) return Error{ErrorCategory::Unsupported, "host-stream-unavailable"};
+                if (streams_.size() >= 64) return Error{ErrorCategory::BudgetExceeded, "host-active-streams", {}, {}, true, "close-streams"};
+                auto Stream = dopusVfs_->OpenStream(Request, Context); if (!Stream.HasValue()) return Stream.Failure();
+                const auto Token = QUuid::createUuid().toString(QUuid::Id128); streams_.emplace(Token, Stream.Value());
+                return Json(QJsonObject{{"stream", Token}, {"seek", Stream.Value()->CanSeek()}, {"access", int(Stream.Value()->Access())}});
+            }
+            const auto Token = Request["stream"].toString(); const auto It = streams_.find(Token);
+            if (It == streams_.end()) return Error{ErrorCategory::StaleRevision, "host-stream-token"};
+            if (Kind == WireKind::StreamClose && Request.size() == 1) { streams_.erase(It); return Json(QJsonObject{{"closed", true}}); }
+            if (Kind == WireKind::StreamRead && Request.size() == 2)
+            {
+                auto Count = WireUnsigned(Request["count"]); if (!Count.HasValue() || !Count.Value() || Count.Value() > WirePayloadLimit / 2) return HostError("host-stream-read-size");
+                auto Chunk = It->second->Read(std::size_t(Count.Value()), Context).get(); if (!Chunk.HasValue()) return Chunk.Failure();
+                if (Chunk.Value().bytes_.size() > Count.Value() || (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_)) return HostError("host-stream-no-progress");
+                QByteArray Bytes(1, Chunk.Value().eof_ ? '\1' : '\0'); Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), Chunk.Value().bytes_.size()); return Bytes;
+            }
+            if (Kind == WireKind::StreamSeek && Request.size() == 2)
+            {
+                auto Offset = WireUnsigned(Request["offset"]); if (!Offset.HasValue()) return Offset.Failure();
+                auto Moved = It->second->Seek(Offset.Value(), Context).get(); if (!Moved.HasValue()) return Moved.Failure(); return Json(QJsonObject{});
+            }
+            return Error{ErrorCategory::Unsupported, "host-session-command"};
+        }
     };
 }
 int main(int Argc, char** Argv)
@@ -163,12 +204,40 @@ int main(int Argc, char** Argv)
     WinHandle Pipe(CreateFileW(reinterpret_cast<LPCWSTR>(PipeName.utf16()), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
     if (!Pipe.Valid()) return 4;
     ULONG Server = 0; if (!GetNamedPipeServerProcessId(Pipe.Get(), &Server) || Server != ParentId) return 5;
-    LoadedPlugin Plugin; bool Ready = false; std::uint64_t LastSequence = 0;
+    LoadedPlugin Plugin; std::unique_ptr<HostSession> Session; bool Ready = false, LastWasSession = false; std::uint64_t LastSequence = 0;
+    const auto Execute = [&](std::function<Result<QJsonObject>()> Call) -> Result<QJsonObject> {
+        if (!Session) return Call();
+        auto Reply = Session->Invoke([&]() -> Result<QByteArray> {
+            auto Value = Call(); if (!Value.HasValue()) return Value.Failure();
+            return QJsonDocument(Value.Value()).toJson(QJsonDocument::Compact);
+        });
+        if (!Reply.HasValue()) return Reply.Failure();
+        return QJsonDocument::fromJson(Reply.Value()).object();
+    };
+    // SDK thread-local settings and native handles share one lifetime for both
+    // wire versions. Windowed viewers retain their main-thread message loop.
+    const auto Cleanup = qScopeGuard([&] {
+        if (Session) Session->Invoke([&]() -> Result<QByteArray> { Plugin.Close(); return QByteArray{}; });
+    });
     for (;;)
     {
         auto Frame = ReadFrame(Pipe.Get(), Parent.Get(), Deadline(120000), Plugin.viewer_ != nullptr); if (!Frame.HasValue()) return 6;
         const auto& Header = Frame.Value().header_;
+        // Completion can cross an already-sent cancel/prompt reply on the
+        // duplex pipe. Retire that control for the completed invocation; it
+        // must neither cancel the next invocation nor poison its sequence.
+        if (LastWasSession && Header.version_ == ProtocolVersion{2, 0} && Header.sequence_ == LastSequence
+            && (Header.kind_ == WireKind::InteractionReply || (Header.kind_ == WireKind::SessionCancel && Frame.Value().payload_.isEmpty())))
+        { Frame.Value().payload_.fill(0); continue; }
         if (Header.sequence_ != LastSequence + 1) return 7; LastSequence = Header.sequence_;
+        LastWasSession = false;
+        if (Header.version_ == ProtocolVersion{2, 0})
+        {
+            if (!Ready || !Session || Header.kind_ != WireKind::SessionInvoke) return 7;
+            if (!Session->Run(Frame.Value(), Pipe.Get(), Parent.Get()).HasValue()) return 10;
+            LastWasSession = true;
+            continue;
+        }
         Result<QJsonObject> Result = HostError("host-command-unavailable");
         if (!Ready && Header.kind_ == WireKind::Hello)
         {
@@ -176,19 +245,32 @@ int main(int Argc, char** Argv)
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
             const auto Policy = Restrictions();
             if (!Policy["inJob"].toBool() || !Policy["adminDenied"].toBool() || !Policy["privilegesRemoved"].toBool()) return 9;
-            auto Opened = Plugin.Open(Request.object(), ParentId); if (Opened.HasValue()) { Ready = true; Result = Policy; } else Result = Opened.Failure();
+            auto Expected = ParseManifest(QJsonDocument(Request.object()["manifest"].toObject()).toJson());
+            if (!Expected.HasValue()) return 8;
+            if (Expected.Value().format_ != PluginFormat::Wlx && Expected.Value().format_ != PluginFormat::DopusViewer)
+                Session = std::make_unique<HostSession>([&](WireKind Kind, const QJsonObject& Request, const QByteArray& Binary, OperationContext Context) { return Plugin.Dispatch(Kind, Request, Binary, Context); });
+            auto Opened = Execute([&]() -> hc::storage::Result<QJsonObject> {
+                auto Value = Plugin.Open(Request.object(), ParentId); if (!Value.HasValue()) return Value.Failure(); return QJsonObject{};
+            });
+            if (Opened.HasValue()) {
+                Ready = true; auto Reply = Policy;
+                if (!Plugin.viewer_) {
+                    Reply["sessionProtocol"] = 2; Reply["sessionEpoch"] = Session->Epoch();
+                }
+                Result = Reply;
+            } else Result = Opened.Failure();
         }
         else if (Ready && Frame.Value().payload_.isEmpty())
         {
             if (Header.kind_ == WireKind::Ping) Result = Restrictions();
-            else if (Header.kind_ == WireKind::Probe) Result = Plugin.Probe();
+            else if (Header.kind_ == WireKind::Probe) Result = Execute([&] { return Plugin.Probe(); });
             else if (Header.kind_ == WireKind::Close) Result = QJsonObject{{"closed", true}};
         }
-        else if (Ready && Plugin.archives_ && Header.kind_ >= WireKind::ArchiveOpen && Header.kind_ <= WireKind::ArchiveUpdateApply)
+        else if (Ready && Plugin.archives_ && IsArchiveCommand(Header.kind_))
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
-            Result = Plugin.archives_->Handle(Header.kind_, Request.object(), [&](const std::string& Archive, unsigned Attempt, const OperationContext& Context) -> hc::storage::Result<Password> {
+            Result = Execute([&] { return Plugin.archives_->Handle(Header.kind_, Request.object(), [&](const std::string& Archive, unsigned Attempt, const OperationContext& Context) -> hc::storage::Result<Password> {
                 const auto Query = QJsonDocument(QJsonObject{{"archive", QString::fromStdString(Archive)}, {"attempt", int(Attempt)}}).toJson(QJsonDocument::Compact);
                 auto Sent = WriteFrame(Pipe.Get(), Parent.Get(), WireKind::ArchivePassword, Header.sequence_, Query, Context);
                 if (!Sent.HasValue()) return Sent.Failure();
@@ -202,19 +284,19 @@ int main(int Argc, char** Argv)
                 if (!Accepted) { Text.fill(QChar::Null); return hc::storage::Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}}; }
                 if (Text.size() > 4096 || Text.contains(QChar::Null)) { Text.fill(QChar::Null); return HostError("host-password-size"); }
                 Password Value(Text.toStdString()); Text.fill(QChar::Null); return Value;
-            });
+            }); });
         }
-        else if (Ready && Plugin.viewer_ && ((Header.kind_ >= WireKind::ViewerOpen && Header.kind_ <= WireKind::ViewerClose) || Header.kind_ == WireKind::MetadataQuery || Header.kind_ == WireKind::ContentConvert))
+        else if (Ready && Plugin.viewer_ && (IsViewerCommand(Header.kind_) || Header.kind_ == WireKind::MetadataQuery || Header.kind_ == WireKind::ContentConvert))
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
             Result = Plugin.viewer_->Handle(Header.kind_, Request.object());
         }
-        else if (Ready && (Plugin.data_ || Plugin.dopusVfs_) && Header.kind_ >= WireKind::StorageEnumerate && Header.kind_ <= WireKind::MetadataQuery)
+        else if (Ready && (Plugin.data_ || Plugin.dopusVfs_) && IsDataCommand(Header.kind_))
         {
             QJsonParseError Error; const auto Request = QJsonDocument::fromJson(Frame.Value().payload_, &Error);
             if (Error.error != QJsonParseError::NoError || !Request.isObject()) return 8;
-            Result = Plugin.dopusVfs_ ? Plugin.dopusVfs_->Handle(Header.kind_, Request.object()) : Plugin.data_->Handle(Header.kind_, Request.object());
+            Result = Execute([&] { return Plugin.dopusVfs_ ? Plugin.dopusVfs_->Handle(Header.kind_, Request.object()) : Plugin.data_->Handle(Header.kind_, Request.object()); });
         }
         const auto Reply = Result.HasValue() ? Result.Value() : QJsonObject{{"code", QString::fromStdString(Result.Failure().code_)},
             {"category", static_cast<int>(Result.Failure().category_)}, {"provider", QString::fromStdString(Result.Failure().provider_.value_)},

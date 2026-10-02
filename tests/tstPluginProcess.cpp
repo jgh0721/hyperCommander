@@ -4,6 +4,7 @@
 #include <QProcess>
 #include "pluginProcess.hpp"
 #include "pipeChannel.hpp"
+#include "archiveCodec.hpp"
 #include <TlHelp32.h>
 #include <thread>
 
@@ -27,6 +28,21 @@ private:
         QFile File(Directory.filePath("plugin.json")); return File.open(QIODevice::WriteOnly) && File.write(EncodeManifest(Value)) > 0;
     }
 private slots:
+    void sessionPolicyRoundTrip()
+    {
+        OperationContext Context; Context.maxReadBytes_ = 64ULL * 1024 * 1024;
+        auto Decoded = DecodeContextV2(EncodeContextV2(Context)); QVERIFY(Decoded.HasValue());
+        QCOMPARE(Decoded.Value().EnumerationLimit(), SIZE_MAX);
+        QCOMPARE(Decoded.Value().deadline_, std::chrono::steady_clock::time_point::max());
+        QCOMPARE(Decoded.Value().maxReadBytes_, std::size_t(WirePayloadLimit));
+        Context.workload_.intent_ = WorkloadIntent::Automatic;
+        Context.workload_.automaticEntries_ = 17; Context.workload_.automaticFileBytes_ = 5ULL * 1024 * 1024 * 1024;
+        Decoded = DecodeContextV2(EncodeContextV2(Context)); QVERIFY(Decoded.HasValue());
+        QCOMPARE(Decoded.Value().EnumerationLimit(), 17u); QCOMPARE(Decoded.Value().workload_.automaticFileBytes_, Context.workload_.automaticFileBytes_);
+        auto Invalid = EncodeContextV2(Context); Invalid["milliseconds"] = QString::number(UINT64_MAX);
+        QVERIFY(!DecodeContextV2(Invalid).HasValue());
+        Invalid = EncodeContextV2(Context); Invalid["entries"] = "-1"; QVERIFY(!DecodeContextV2(Invalid).HasValue());
+    }
     void framing()
     {
         const WireHeader Value{{1, 0}, WireKind::Probe, 0x0102030405060708, WirePayloadLimit};
@@ -34,10 +50,13 @@ private slots:
         QCOMPARE(std::to_integer<int>(Encoded.Value()[12]), 8); QCOMPARE(std::to_integer<int>(Encoded.Value()[19]), 1);
         const auto Decoded = DecodeHeader(Encoded.Value()); QVERIFY(Decoded.HasValue()); QCOMPARE(Decoded.Value().sequence_, Value.sequence_);
         for (unsigned Size = 0; Size < WireHeaderBytes; ++Size) QVERIFY(!DecodeHeader(std::span(Encoded.Value()).first(Size)).HasValue());
-        auto Broken = Encoded.Value(); Broken[4] = std::byte{2}; QVERIFY(!DecodeHeader(Broken).HasValue());
+        auto Broken = Encoded.Value(); Broken[4] = std::byte{3}; QVERIFY(!DecodeHeader(Broken).HasValue());
         Broken = Encoded.Value(); Broken[10] = std::byte{1}; QVERIFY(!DecodeHeader(Broken).HasValue());
         Broken = Encoded.Value(); Broken[23] = std::byte{0xff}; QVERIFY(!DecodeHeader(Broken).HasValue());
         QVERIFY(!EncodeHeader({{1, 0}, WireKind::Ping, 0, 0}).HasValue()); QVERIFY(!EncodeHeader({{1, 0}, WireKind(99), 1, 0}).HasValue());
+        QVERIFY(!EncodeHeader({{1, 0}, WireKind::SessionInvoke, 1, 0}).HasValue());
+        auto V2 = EncodeHeader({{2, 0}, WireKind::SessionInvoke, UINT64_MAX, 0}); QVERIFY(V2.HasValue());
+        QCOMPARE(DecodeHeader(V2.Value()).Value().sequence_, UINT64_MAX);
     }
     void actualHostAndLease()
     {

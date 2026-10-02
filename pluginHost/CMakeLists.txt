@@ -16,7 +16,10 @@ qt_add_executable(hc-plugin-inspect inspectMain.cpp)
 target_link_libraries(hc-plugin-inspect PRIVATE hc_plugin_manifest)
 target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-inspect)
-qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp)
+qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp
+    hostSession.cpp hostSession.hpp sessionClient.cpp sessionClient.hpp
+    ../commonLibs/storage/providerSession.hpp ../commonLibs/storage/resourceQuota.hpp
+)
 target_sources(hc_plugin_process PRIVATE archiveCodec.cpp archiveCodec.hpp hostedArchiveBackend.cpp hostedArchiveBackend.hpp)
 target_sources(hc_plugin_process PRIVATE approvedWcxBackend.cpp approvedWcxBackend.hpp)
 target_sources(hc_plugin_process PRIVATE wlxDetection.cpp wlxDetection.hpp)

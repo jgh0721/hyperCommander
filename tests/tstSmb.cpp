@@ -2397,6 +2397,7 @@ hc.events.unsubscribe(sub)
         QTemporaryDir DataDirectory(QDir(unc_).filePath("hc-nested-ui-XXXXXX")); QVERIFY(DataDirectory.isValid());
         const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(DataDirectory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("encrypted.hcwcx", "HCWCX01U"));
+        QVERIFY(Put("content-encrypted.hcwcx", "HCWCX01Q"));
         QByteArray Outer("HCWCX02\0", 8); const QString Inner("inner.hcwcx");
         const auto Number = [&](quint32 Value) { Outer.append(reinterpret_cast<const char*>(&Value), 4); };
         Number(2);
@@ -2428,6 +2429,25 @@ hc.events.unsubscribe(sub)
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("encrypted.hcwcx"));
         Cancel = true; Model->ChangeDirectory(Index("encrypted.hcwcx")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
         QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->LastNavigationError()->category_, ErrorCategory::Cancelled); Input.stop();
+        {
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+            Model->ChangeDirectory(Index("content-encrypted.hcwcx")); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("alpha.txt"));
+            auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+            auto Future = Bridge->Dispatch("hc.file.copy", {{"destination", DataDirectory.path()}}, "test", Index("alpha.txt"));
+            QTRY_VERIFY(Future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+            auto Accepted = Future.get(); QVERIFY2(Accepted.HasValue(), Accepted.HasValue() ? "" : Accepted.Failure().code_.c_str());
+            auto& Scheduler = Bridge->FileJobs()->Scheduler(); const auto Job = Accepted.Value().jobId_;
+            QTRY_COMPARE_WITH_TIMEOUT(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser, 10000);
+            QCOMPARE(Scheduler.Snapshot(Job).Value().interaction_->kind_, InteractionKind::Password);
+            auto* Field = main_->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Field);
+            auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Confirm))); QVERIFY(Confirm);
+            QTRY_VERIFY(Field->isVisible() && Confirm->isVisible()); QCOMPARE(Field->echoMode(), QLineEdit::Password);
+            Field->setText("비밀-pass"); QTest::mouseClick(Confirm, Qt::LeftButton);
+            QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Job).Value().state_), 10000);
+            QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+            QFile Extracted(DataDirectory.filePath("alpha.txt")); QVERIFY(Extracted.open(QIODevice::ReadOnly)); QCOMPARE(Extracted.readAll(), QByteArray("alpha"));
+            QTRY_VERIFY(Field->text().isEmpty());
+        }
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         Model->ChangeDirectory(Index("outer.hcwcx")); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(Inner));
         Model->ChangeDirectory(Index(Inner)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000);

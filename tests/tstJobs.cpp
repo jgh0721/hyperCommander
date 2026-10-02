@@ -73,6 +73,31 @@ class JobTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void providerPromptReleasesSchedulerWorker_data()
+    { QTest::addColumn<bool>("Cancel"); QTest::newRow("reply") << false; QTest::newRow("cancel") << true; }
+    void providerPromptReleasesSchedulerWorker()
+    {
+        QFETCH(bool, Cancel);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1, 16);
+        JobRequest Request; Request.operation_.providerInteractions_ = true;
+        auto A = std::make_shared<Probe>(); std::atomic<bool> Accepted = false;
+        auto First = Scheduler.Submit(Request, std::make_unique<ScriptTask>(A, [&](JobStepContext Context) {
+            auto Answer = Context.operation_.interactionStart_({ProviderInteractionKind::Password, "prompt", "archive", 1}, Context.operation_).get();
+            if (Answer.HasValue() && Answer.Value().accepted_ && Answer.Value().value_.Value() == "secret") Accepted = true;
+            return JobStep{Answer.HasValue() && Answer.Value().accepted_ ? JobState::Completed : JobState::Cancelled};
+        }));
+        QVERIFY(First.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(First.Value().id_).Value().state_, JobState::WaitingForUser);
+        auto Other = Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>())); QVERIFY(Other.HasValue());
+        QVERIFY(Ready(Other.Value())); QCOMPARE(Other.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        if (Cancel) QVERIFY(Scheduler.Cancel(First.Value().id_).HasValue());
+        else {
+            auto Snapshot = Scheduler.Snapshot(First.Value().id_).Value();
+            QVERIFY(Scheduler.Reply(First.Value().id_, {Snapshot.interaction_->id_, InteractionChoice::Confirm, "secret"}).HasValue());
+        }
+        QVERIFY(Ready(First.Value())); QCOMPARE(First.Value().completion_.get().snapshot_.state_, Cancel ? JobState::Cancelled : JobState::Completed);
+        QCOMPARE(Accepted.load(), !Cancel); QCOMPARE(A->finalizations_.load(), 1);
+    }
     void itemUpdatesPreserveEffectsAndCounts_data()
     {
         QTest::addColumn<int>("Kind");

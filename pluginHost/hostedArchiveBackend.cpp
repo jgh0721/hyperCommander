@@ -60,8 +60,7 @@ namespace hc::plugins
                 auto Cleanup = qScopeGuard([&] { auto CleanContext = CleanupContext(); process_->ArchiveCall(WireKind::ArchiveRelease, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(CleanContext)}}, CleanContext); });
                 for (qsizetype Offset = 0; Offset < Bytes.size(); Offset += 48 * 1024)
                 {
-                    auto Written = process_->ArchiveCall(WireKind::ArchiveUpdateData, {{"upload", QString::number(Id.Value())}, {"offset", QString::number(Offset)},
-                        {"data", QString::fromLatin1(Bytes.mid(Offset, 48 * 1024).toBase64())}, {"context", EncodeContext(Context)}}, Context);
+                    auto Written = process_->ArchiveData({{"upload", QString::number(Id.Value())}, {"offset", QString::number(Offset)}}, Bytes.mid(Offset, 48 * 1024), Context);
                     if (!Written.HasValue()) return Written.Failure(); auto Received = WireUnsigned(Written.Value()["received"]);
                     if (!Received.HasValue() || Received.Value() != std::uint64_t(std::min(Offset + 48 * 1024, Bytes.size()))) return Invalid();
                 }

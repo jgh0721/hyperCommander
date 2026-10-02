@@ -620,6 +620,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\commonLibs\storage\storage.hpp" />
     <ClInclude Include="..\commonLibs\storage\writableStorage.hpp" />
     <ClInclude Include="..\commonLibs\operations\jobScheduler.hpp" />
+    <ClInclude Include="..\commonLibs\operations\providerInteractionTask.hpp" />
     <ClInclude Include="..\commonLibs\operations\fileOperation.hpp" />
     <ClInclude Include="..\UniqueLibs\nativeWritableStorage.hpp" />
     <ClInclude Include="..\UniqueLibs\nativeMaterializer.hpp" />
@@ -661,6 +662,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\pluginHost\pipeChannel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\pluginHost\pluginProcess.hpp" />
     <ClCompile Include="..\pluginHost\pluginProcess.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\pluginHost\hostSession.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\pluginHost\sessionClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\pluginHost\hostSession.hpp" />
+    <ClInclude Include="..\pluginHost\sessionClient.hpp" />
     <ClInclude Include="..\commonLibs\storage\providerSession.hpp" />
     <ClInclude Include="..\commonLibs\storage\resourceQuota.hpp" />
     <ClCompile Include="..\pluginHost\wlxDetection.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

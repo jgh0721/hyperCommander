@@ -143,6 +143,7 @@ FileJobUi::~FileJobUi() { timer_->stop(); scheduler_.Shutdown(); }
 
 Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context)
 {
+    Context.providerInteractions_ = true;
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
@@ -151,6 +152,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
 
 Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context)
 {
+    Context.providerInteractions_ = true;
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.nesting_.empty() ? Request.destination_.root_ : Request.destination_.nesting_.back().entry_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
@@ -159,6 +161,7 @@ Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationCo
 
 Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationContext Context)
 {
+    Context.providerInteractions_ = true;
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().name_;
     return track(SubmitMoveOperation(scheduler_, std::move(Request), std::move(Context)), hc::operations::FileOperation::Move, Label);
@@ -166,6 +169,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
 
 Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label)
 {
+    Job.request_.operation_.providerInteractions_ = true;
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     auto Submitted = track(scheduler_.Submit(std::move(Job.request_), std::move(Job.task_)), hc::operations::FileOperation::Copy, Label.toStdString());
     if (Submitted.HasValue()) jobs_->setItemText(jobs_->findData(QString::fromStdString(Submitted.Value().id_)), Label);
@@ -217,7 +221,13 @@ void FileJobUi::updateSelection()
     for (const auto& [Choice, Button] : choices_)
         Button->setVisible(Active && !Snapshot.cancelRequested_ && Snapshot.interaction_
             && std::find(Snapshot.interaction_->choices_.begin(), Snapshot.interaction_->choices_.end(), Choice) != Snapshot.interaction_->choices_.end());
-    renamed_->setVisible(choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
+    const bool Password = Active && !Snapshot.cancelRequested_ && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Password;
+    const auto Echo = Password ? QLineEdit::Password : QLineEdit::Normal;
+    if (renamed_->echoMode() != Echo) { renamed_->clear(); renamed_->setEchoMode(Echo); }
+    renamed_->setPlaceholderText(Password ? tr("암호") : tr("새 이름"));
+    renamed_->setAccessibleName(Password ? tr("압축 파일 암호") : tr("충돌한 항목의 새 이름"));
+    choices_.at(InteractionChoice::Confirm)->setText(Password ? tr("확인") : tr("영구 삭제"));
+    renamed_->setVisible(Password || choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
     if (!Valid) { status_->setText(tr("파일 작업이 없습니다.")); details_->clear(); progress_->setRange(0, 1); progress_->setValue(0); progress_->setFormat({}); return; }
     status_->setText(tr("%1 · 완료 %2 / 건너뜀 %3 / 실패 %4\n%5")
         .arg(Snapshot.cancelRequested_ && Active ? tr("취소 후 정리 중") : StateText(Snapshot.state_))
@@ -236,7 +246,7 @@ void FileJobUi::updateSelection()
     }
     QString Details;
     if (Snapshot.interaction_)
-        Details = Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
+        Details = Password ? tr("압축 파일의 암호를 입력하세요. 다른 파일 작업은 계속 진행할 수 있습니다.") : Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
             ? tr("선택한 항목과 하위 항목을 영구 삭제합니다. 휴지통에서 복원할 수 없습니다.")
             : tr("목적지에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.");
     if (Snapshot.error_) Details += "\n" + ErrorText(*Snapshot.error_);

@@ -17,7 +17,7 @@ namespace
         Manifest.extensions_ = {Extension::StorageRead}; Manifest.permissions_ = {Permission::ReadContent};
         if (Write) { Manifest.extensions_.insert(Extension::StorageWrite); Manifest.permissions_.insert(Permission::WriteContent); }
         if (!Put(Directory.filePath("plugin.json"), EncodeManifest(Manifest))) return Error{ErrorCategory::Internal, "fixture-manifest"};
-        HostLimits Limits; Limits.requestMs_ = RequestMs; PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
+        HostLimits Limits; Limits.requestMs_ = RequestMs; Limits.noProgressMs_ = RequestMs; PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
         auto Process = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", Directory.filePath("plugin.json"), Approval, Limits);
         if (!Process.HasValue()) return Process.Failure(); return std::shared_ptr<PluginProcess>(std::move(Process.Value()));
     }
@@ -26,6 +26,32 @@ class HostedDopusTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void binaryStreamFramesAndStaleLifetime()
+    {
+        QTemporaryDir Package, Root, Cache; auto Process = Start(Package); QVERIFY(Process.HasValue());
+        QByteArray Bytes(2 * 1024 * 1024 + 7, Qt::Uninitialized);
+        for (qsizetype Index = 0; Index < Bytes.size(); ++Index) Bytes[Index] = char(Index % 251);
+        QVERIFY(Put(Root.filePath("stream.bin"), Bytes));
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"stream"}, Store.Value(), false, Root.path()); QVERIFY(Mounted.HasValue());
+        auto At = Mounted.Value().root_; At.root_ += "stream.bin";
+        auto Entry = Mounted.Value().reader_->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        auto Stream = Mounted.Value().reader_->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+        QCOMPARE(Stream.Value()->Access(), ReadAccess::Sequential);
+        QByteArray ReadBack;
+        for (;;) {
+            auto Chunk = Stream.Value()->Read(1024 * 1024, {}).get(); QVERIFY2(Chunk.HasValue(), Chunk.HasValue() ? "" : Chunk.Failure().code_.c_str());
+            QVERIFY(Chunk.Value().bytes_.size() <= WirePayloadLimit / 2);
+            ReadBack.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), Chunk.Value().bytes_.size());
+            if (Chunk.Value().eof_) break;
+        }
+        QCOMPARE(ReadBack, Bytes);
+        QVERIFY(QDir(Cache.filePath("hc-materialized-v1")).entryList({"hc-lease-v1-*"}, QDir::Dirs).isEmpty());
+        auto Stale = Process.Value()->SessionCall(WireKind::StreamClose, {{"stream", QString(32, '0')}});
+        QVERIFY(!Stale.HasValue()); QCOMPARE(Stale.Failure().category_, ErrorCategory::StaleRevision);
+        QVERIFY(Process.Value()->Ping().HasValue()); Process.Value()->Close();
+        QVERIFY(!Stream.Value()->Read(100, {}).get().HasValue());
+    }
     void customColumnsOwnTheirValues()
     {
         QTemporaryDir Package, Root, Cache; auto Process = Start(Package); QVERIFY(Process.HasValue());
@@ -132,6 +158,10 @@ private slots:
         auto Entry = Provider.reader_->Resolve(At("한글.txt"), {}).get(); QVERIFY(Entry.HasValue());
         auto Stream = Provider.reader_->OpenRead(Entry.Value().id_, {}).get(); QVERIFY2(Stream.HasValue(), Stream.HasValue() ? "" : Stream.Failure().code_.c_str());
         auto Chunk = Stream.Value()->Read(100, {}).get(); QVERIFY(Chunk.HasValue()); QCOMPARE(Chunk.Value().bytes_.size(), 8u);
+        QCOMPARE(Stream.Value()->Access(), ReadAccess::Sequential);
+        QVERIFY(!Stream.Value()->CanSeek());
+        auto Eof = Stream.Value()->Read(100, {}).get(); QVERIFY(Eof.HasValue()); QVERIFY(Eof.Value().eof_);
+        Stream.Value().reset(); // Direct stream owns the source handle until closed.
         const std::string Payload(8192, 'x');
         auto Write = Provider.writer_->BeginWrite(At("short-write.txt"), {}, {}); QVERIFY(Write.HasValue());
         QVERIFY(Write.Value()->Append(std::as_bytes(std::span(Payload)), {}).HasValue()); QVERIFY(Write.Value()->Commit({}).HasValue());
@@ -147,7 +177,7 @@ private slots:
         for (int Index = 0; Index < 70; ++Index) { auto Early = Provider.reader_->Enumerate(Provider.root_, {}).get(); QVERIFY(Early.HasValue()); }
         Process.Value()->Close(); QVERIFY(!Process.Value()->Snapshot().forcedTermination_);
         QCOMPARE(Process.Value()->Snapshot().exitCode_.value_or(1), std::uint32_t(0));
-        QVERIFY(Stream.Value()->Seek(0, {}).get().HasValue()); QVERIFY(Stream.Value()->Read(20, {}).get().HasValue());
+        QCOMPARE(Process.Value()->Session().state_, ProviderSessionState::Closed);
     }
     void vfsReadOnlyAndApproval_data()
     { QTest::addColumn<bool>("ReadOnly"); QTest::newRow("manifest-denial") << false; QTest::newRow("sdk-read-only") << true; }

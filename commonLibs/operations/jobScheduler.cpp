@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <stdexcept>
 #include <random>
+#include "providerInteractionTask.hpp"
 
 namespace hc::operations
 {
@@ -135,6 +136,8 @@ namespace hc::operations
         std::sort(Request.resourceLanes_.begin(), Request.resourceLanes_.end());
         Request.resourceLanes_.erase(std::unique(Request.resourceLanes_.begin(), Request.resourceLanes_.end()), Request.resourceLanes_.end());
         auto Value = std::make_shared<Job>();
+        if (Request.operation_.providerInteractions_ && !Request.operation_.interactionStart_)
+            Task = std::make_unique<ProviderInteractionTask>(std::move(Task));
         Value->request_ = std::move(Request);
         Value->task_ = std::move(Task);
         static std::atomic<std::uint64_t> NextId{0};

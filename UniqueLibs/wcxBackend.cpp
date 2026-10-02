@@ -33,6 +33,9 @@ namespace hc::plugins
             bool volume_ = false, exceeded_ = false;
             unsigned attempts_ = 0;
             std::optional<Error> passwordFailure_;
+            std::uint64_t completed_ = 0;
+            int percent_ = 0, totalPercent_ = 0;
+            std::optional<Error> progressFailure_;
         };
         thread_local Callback* Current = nullptr;
         // NO_UI must never open a dialog. This adapter deliberately has no
@@ -78,9 +81,20 @@ namespace hc::plugins
             }
             catch (...) { if (Current) Current->passwordFailure_ = Error{ErrorCategory::Internal, "archive-password-callback-failed", {"wcx"}}; return E_EABORTED; }
         }
-        int __stdcall Progress(wchar_t*, int)
+        int __stdcall Progress(wchar_t*, int Bytes)
         {
             if (!Current || Current->context_.Check({"wcx"})) return 0;
+            // WCX also encodes progress bars as -1..-100 / -1000..-1100.
+            // Changed percentages are work signals, not byte counts. Repeated
+            // values must not disguise a stalled plugin as advancing work.
+            std::uint64_t Delta = Bytes > 0 ? std::uint64_t(Bytes) : 0;
+            if (Bytes >= -100 && Bytes <= -1 && std::exchange(Current->percent_, Bytes) != Bytes) Delta = 1;
+            if (Bytes >= -1100 && Bytes <= -1000 && std::exchange(Current->totalPercent_, Bytes) != Bytes) Delta = 1;
+            if (Delta <= UINT64_MAX - Current->completed_) Current->completed_ += Delta;
+            if (Current->context_.progress_) {
+                try { Current->context_.progress_(Current->completed_); }
+                catch (...) { Current->progressFailure_ = Error{ErrorCategory::Internal, "archive-progress-callback-failed", {"wcx"}}; return 0; }
+            }
             if (!Current->output_.empty() && QFileInfo(QString::fromStdString(Current->output_)).size() > static_cast<qint64>(Current->limit_))
             { Current->exceeded_ = true; return 0; }
             return 1;
@@ -95,6 +109,7 @@ namespace hc::plugins
         Result<Unit> Check(int Code, const Callback& State)
         {
             if (State.passwordFailure_) return *State.passwordFailure_;
+            if (State.progressFailure_) return *State.progressFailure_;
             if (State.volume_) return Error{ErrorCategory::Unsupported, "archive-volume-required", {"wcx"}};
             if (State.exceeded_) return Error{ErrorCategory::BudgetExceeded, "archive-extraction-budget", {"wcx"}};
             if (const auto Stop = State.context_.Check({"wcx"})) return *Stop;
@@ -183,7 +198,7 @@ namespace hc::plugins
                     auto Checked = Check(Code == E_END_ARCHIVE ? 0 : Code, State); if (!Checked.HasValue()) return Checked.Failure();
                     if (Code == E_END_ARCHIVE)
                     { const auto Closed = module_->close_(std::exchange(handle_, nullptr)); if (Closed) return WcxError(Closed); Page.end_ = true; break; }
-                    if (++count_ > Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
+                    if (++count_ > Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
                     auto Header = Decode(Raw); if (!Header.HasValue()) return Header.Failure();
                     Header.Value().rebuildEncrypted_ = module_->rebuildEncrypted_;
                     // Reject expansion bombs before PK_TEST asks the plugin to
@@ -238,7 +253,7 @@ namespace hc::plugins
                     State.attempts_ = 0;
                     tHeaderDataExW Raw{}; const auto Code = Plugin->header_(Handle, &Raw); auto Checked = Check(Code == E_END_ARCHIVE ? 0 : Code, State);
                     if (!Checked.HasValue()) return Checked; if (Code == E_END_ARCHIVE) return Error{ErrorCategory::NotFound, "archive-entry-not-found", {"wcx"}};
-                    if (Count >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
+                    if (Count >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
                     auto Header = Decode(Raw); if (!Header.HasValue()) return Header.Failure();
                     if (Header.Value().name_ != Expected.name_)
                     { Checked = Check(Plugin->process_(Handle, PK_SKIP, nullptr, nullptr), State); if (!Checked.HasValue()) return Checked; continue; }

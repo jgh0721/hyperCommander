@@ -1,5 +1,8 @@
 ﻿#include "pluginProcess.hpp"
 #include "pipeChannel.hpp"
+#include "sessionClient.hpp"
+#include "archiveCodec.hpp"
+#include <cstring>
 #include <sddl.h>
 #include <QCoreApplication>
 #include <QDir>
@@ -76,30 +79,48 @@ namespace hc::plugins
         std::jthread heartbeat_;
         std::mutex sleepMutex_;
         std::condition_variable_any sleep_;
+        QString epoch_;
+        std::atomic<ProviderSessionState> sessionState_{ProviderSessionState::Closed};
+        ReadChunk streamReply_;
         void fail(Error Error)
         {
             if (!failure_) failure_ = std::move(Error);
+            sessionState_ = ProviderSessionState::Faulted;
             // Preserve an OS crash exit code when the broken pipe wins the race
             // with process termination. Hung/live jobs still get bounded teardown.
             if (job_.Valid() && (helpers_ || !process_.Valid() || WaitForSingleObject(process_.Get(), 100) == WAIT_TIMEOUT))
             { forcedTermination_ = true; TerminateJobObject(job_.Get(), 0xe0000001); }
         }
-        Result<QJsonObject> call(WireKind Kind, const QByteArray& Payload, OperationContext Context)
+        Result<QJsonObject> call(WireKind Kind, const QByteArray& Payload, OperationContext Context, const QByteArray& Binary = {})
         {
             if (failure_) return *failure_;
             if (closed_) return HostError("host-closed");
             // In-process WCX writers also stream and verify multi-GiB images.
             // The write budget is independent of permission to spawn helpers.
             const auto RequestBudget = Context.passwordPrompt_ ? std::max(limits_.requestMs_, 180000u) : limits_.requestMs_;
-            Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : RequestBudget));
+            const bool Session = !epoch_.isEmpty() && (IsArchiveCommand(Kind) || IsDataCommand(Kind) || IsSessionCommand(Kind));
+            if (!Session) Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : RequestBudget));
             const auto Sequence = ++sequence_;
-            auto Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
-            if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
-            auto Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
+            Result<Unit> Sent = Unit{};
+            Result<WireFrame> Reply = HostError("host-no-response");
+            if (Session)
+            {
+                sessionState_ = ProviderSessionState::Busy;
+                Reply = CallSession(pipe_.Get(), process_.Get(), epoch_, Sequence, Kind, QJsonDocument::fromJson(Payload).object(), Binary, Context,
+                    limits_.requestMs_, limits_.noProgressMs_, limits_.cancelGraceMs_,
+                    [this](bool Waiting) { sessionState_ = Waiting ? ProviderSessionState::AwaitingInteraction : ProviderSessionState::Busy; });
+                sessionState_ = ProviderSessionState::Ready;
+            }
+            else
+            {
+                Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
+                if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
+                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
+            }
             unsigned Prompts = 0;
             while (Reply.HasValue() && Reply.Value().header_.kind_ == WireKind::ArchivePassword)
             {
-                if (Kind < WireKind::ArchiveOpen || Kind > WireKind::ArchiveUpdateApply || Reply.Value().header_.sequence_ != Sequence
+                if (!IsArchiveCommand(Kind) || Reply.Value().header_.sequence_ != Sequence
                     || ++Prompts > (Kind == WireKind::ArchiveNext ? 384u : Kind == WireKind::ArchiveUpdateApply ? 6u : 3u))
                 { fail(HostError("host-password-envelope")); return *failure_; }
                 const auto Query = QJsonDocument::fromJson(Reply.Value().payload_).object();
@@ -120,6 +141,15 @@ namespace hc::plugins
                 Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
             }
             if (!Reply.HasValue()) { fail(Reply.Failure()); return *failure_; }
+            if (Session && Reply.Value().header_.kind_ == WireKind::StreamData)
+            {
+                if (Kind != WireKind::StreamRead || Reply.Value().payload_.isEmpty() || (Reply.Value().payload_[0] != 0 && Reply.Value().payload_[0] != 1))
+                { fail(HostError("host-stream-response")); return *failure_; }
+                streamReply_.eof_ = Reply.Value().payload_[0] == 1;
+                streamReply_.bytes_.resize(Reply.Value().payload_.size() - 1);
+                std::memcpy(streamReply_.bytes_.data(), Reply.Value().payload_.constData() + 1, streamReply_.bytes_.size());
+                lastCall_ = std::chrono::steady_clock::now(); return QJsonObject{};
+            }
             if (Reply.Value().header_.sequence_ != Sequence || (Reply.Value().header_.kind_ != WireKind::Response && Reply.Value().header_.kind_ != WireKind::Failure))
             { fail(HostError("host-response-mismatch")); return *failure_; }
             QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(Reply.Value().payload_, &Parse);
@@ -128,9 +158,13 @@ namespace hc::plugins
             {
                 // A WCX return alone is insufficient for a plugin that delegates
                 // updates. Keep staging inputs alive until every helper exits.
+                auto HelperProgressAt = std::chrono::steady_clock::now();
+                std::map<DWORD, std::uint64_t> HelperTicks;
                 for (;;)
                 {
                     if (const auto Stop = Context.Check({"plugin-host"})) { fail(*Stop); return *failure_; }
+                    if (Session && limits_.noProgressMs_ && std::chrono::steady_clock::now() - HelperProgressAt > std::chrono::milliseconds(limits_.noProgressMs_))
+                    { fail(HostError("host-helper-no-progress")); return *failure_; }
                     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
                     if (!QueryInformationJobObject(job_.Get(), JobObjectBasicAccountingInformation, &Accounting, sizeof(Accounting), nullptr))
                     { fail(HostError("host-helper-accounting", GetLastError())); return *failure_; }
@@ -157,6 +191,13 @@ namespace hc::plugins
                         if (Image.compare(Console, Qt::CaseInsensitive) == 0) continue;
                         if (Image.compare(helperPath_, Qt::CaseInsensitive) != 0)
                         { fail(HostError("host-unexpected-child")); return *failure_; }
+                        FILETIME Created{}, Exited{}, Kernel{}, User{};
+                        if (GetProcessTimes(Child.Get(), &Created, &Exited, &Kernel, &User)) {
+                            const auto Ticks = ((std::uint64_t(Kernel.dwHighDateTime) << 32) | Kernel.dwLowDateTime)
+                                + ((std::uint64_t(User.dwHighDateTime) << 32) | User.dwLowDateTime);
+                            if (!HelperTicks.contains(Pid) || Ticks > HelperTicks[Pid]) HelperProgressAt = std::chrono::steady_clock::now();
+                            HelperTicks[Pid] = Ticks;
+                        }
                         Busy = true;
                     }
                     if (!Busy) break;
@@ -193,7 +234,8 @@ namespace hc::plugins
     {
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
             || Limits.archiveWriteMs_ < 100 || Limits.archiveWriteMs_ > 3600000
-            || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000 || Limits.memoryBytes_ < 64ULL * 1024 * 1024 || Limits.memoryBytes_ > 4ULL * 1024 * 1024 * 1024)
+            || Limits.cancelGraceMs_ < 100 || Limits.cancelGraceMs_ > 60000
+            || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000 || Limits.memoryBytes_ < 64ULL * 1024 * 1024)
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
@@ -285,6 +327,12 @@ namespace hc::plugins
         auto Ready = S.call(WireKind::Hello, Hello, Context); if (!Ready.HasValue()) return Ready.Failure();
         if (!Ready.Value()["inJob"].toBool() || !Ready.Value()["adminDenied"].toBool() || !Ready.Value()["privilegesRemoved"].toBool()) return HostError("host-restriction-verification");
         S.ready_ = true;
+        if (Limits.enableSessionV2_ && !S.viewer_ && Ready.Value()["sessionProtocol"].toInt() == 2)
+        {
+            S.epoch_ = Ready.Value()["sessionEpoch"].toString();
+            if (S.epoch_.size() != 32) return HostError("host-session-negotiation");
+            S.sessionState_ = ProviderSessionState::Ready;
+        }
         S.heartbeat_ = std::jthread([State = &S](std::stop_token Stop) {
             while (!Stop.stop_requested())
             {
@@ -308,12 +356,12 @@ namespace hc::plugins
     { std::lock_guard Lock(state_->mutex_); return state_->call(WireKind::Ping, {}, Context); }
     Result<QJsonObject> PluginProcess::ArchiveCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
-        if (Kind < WireKind::ArchiveOpen || Kind > WireKind::ArchiveUpdateApply) return HostError("host-archive-command");
+        if (!IsArchiveCommand(Kind)) return HostError("host-archive-command");
         std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
     Result<QJsonObject> PluginProcess::ViewerCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
-        if (Kind < WireKind::ViewerOpen || Kind > WireKind::ViewerClose) return HostError("host-viewer-command");
+        if (!IsViewerCommand(Kind)) return HostError("host-viewer-command");
         std::lock_guard Lock(state_->mutex_); auto& S = *state_;
         if (!S.viewer_ || S.closed_ || S.failure_) return HostError("host-viewer-unavailable");
         if (Kind == WireKind::ViewerOpen)
@@ -337,7 +385,7 @@ namespace hc::plugins
     }
     Result<QJsonObject> PluginProcess::DataCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
-        if (Kind < WireKind::StorageEnumerate || Kind > WireKind::ContentConvert) return HostError("host-data-command");
+        if (!IsDataCommand(Kind)) return HostError("host-data-command");
         if (const auto Stop = Context.Check({"hosted-data"})) return *Stop;
         std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
@@ -380,6 +428,33 @@ namespace hc::plugins
         }
         if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
         S.viewerParent_ = nullptr;
-        S.closed_ = true; S.pipe_.Reset(); S.job_.Reset();
+        S.closed_ = true; S.sessionState_ = ProviderSessionState::Closed; S.pipe_.Reset(); S.job_.Reset();
+    }
+    ProviderSessionSnapshot PluginProcess::Session() const
+    { return {state_->epoch_.toStdString(), state_->sessionState_.load()}; }
+    Result<QJsonObject> PluginProcess::SessionCall(WireKind Kind, QJsonObject Request, OperationContext Context, QByteArray Binary)
+    {
+        if (Kind != WireKind::StreamOpen && Kind != WireKind::StreamSeek && Kind != WireKind::StreamClose && Kind != WireKind::ArchiveUpdateBinary)
+            return HostError("host-session-command");
+        std::lock_guard Lock(state_->mutex_);
+        if (state_->epoch_.isEmpty()) return Error{ErrorCategory::Unsupported, "session-v2-required"};
+        return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context, Binary);
+    }
+    Result<ReadChunk> PluginProcess::ReadStream(const QString& Token, std::size_t Count, OperationContext Context)
+    {
+        if (!Count || !Context.maxReadBytes_) return HostError("host-stream-read-size");
+        std::lock_guard Lock(state_->mutex_);
+        if (state_->epoch_.isEmpty()) return Error{ErrorCategory::Unsupported, "session-v2-required"};
+        const auto Wanted = std::min({Count, Context.maxReadBytes_, std::size_t(WirePayloadLimit / 2)});
+        auto Read = state_->call(WireKind::StreamRead, QJsonDocument(QJsonObject{{"stream", Token}, {"count", QString::number(Wanted)}}).toJson(QJsonDocument::Compact), Context);
+        if (!Read.HasValue()) return Read.Failure();
+        if (state_->streamReply_.bytes_.size() > Wanted) { state_->fail(HostError("host-stream-read-size")); return *state_->failure_; }
+        return std::exchange(state_->streamReply_, {});
+    }
+    Result<QJsonObject> PluginProcess::ArchiveData(QJsonObject Request, const QByteArray& Bytes, OperationContext Context)
+    {
+        if (!Session().epoch_.empty()) return SessionCall(WireKind::ArchiveUpdateBinary, std::move(Request), Context, Bytes);
+        Request["data"] = QString::fromLatin1(Bytes.toBase64()); Request["context"] = EncodeContext(Context);
+        return ArchiveCall(WireKind::ArchiveUpdateData, std::move(Request), Context);
     }
 }

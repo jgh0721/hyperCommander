@@ -26,7 +26,7 @@ namespace
         auto Provider = MakeNativeReadProvider(LocatorKind::Local); auto Entry = Provider->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get();
         return Entry.HasValue() ? std::make_shared<ProviderContentSource>(Provider, Entry.Value()) : nullptr;
     }
-    Result<std::shared_ptr<PluginProcess>> Start(const QTemporaryDir& Directory, bool Write = true, unsigned RequestMs = 3000, QString Source = {}, bool Helper = false, unsigned WriteMs = 0)
+    Result<std::shared_ptr<PluginProcess>> Start(const QTemporaryDir& Directory, bool Write = true, unsigned RequestMs = 3000, QString Source = {}, bool Helper = false, unsigned WriteMs = 0, bool V2 = true)
     {
         const auto Binary = Directory.filePath("fixture.wcx64");
         if (Source.isEmpty()) Source = QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64";
@@ -46,6 +46,7 @@ namespace
         PluginApproval Approval; Approval.reviewed_ = Manifest; Approval.approved_ = true; Approval.granted_ = Manifest.permissions_;
         if (!Put(Directory.filePath("plugin.json"), EncodeManifest(Manifest))) return Error{ErrorCategory::Internal, "write-manifest"};
         HostLimits Limits; Limits.requestMs_ = RequestMs; Limits.archiveWriteMs_ = WriteMs ? WriteMs : RequestMs;
+        Limits.noProgressMs_ = std::max(RequestMs, WriteMs); Limits.enableSessionV2_ = V2;
         auto Started = PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", Directory.filePath("plugin.json"), Approval, Limits);
         if (!Started.HasValue()) return Started.Failure(); return std::shared_ptr<PluginProcess>(std::move(Started.Value()));
     }
@@ -130,6 +131,58 @@ private slots:
                 auto Fresh = MakeWcxReadProvider({}, At(Path), Directory.path().toStdString(), Backend); auto Renamed = Fresh->Resolve(At(Path, "/renamed.txt"), Context).get();
                 QVERIFY(Renamed.HasValue()); QVERIFY(Renamed.Value().hints_.contains("encrypted")); }
         }
+    }
+    void v1AndV2SessionCompatibility()
+    {
+        for (const bool V2 : {false, true}) {
+            QTemporaryDir Directory; auto Started = Start(Directory, true, 3000, {}, false, 0, V2); QVERIFY(Started.HasValue());
+            QCOMPARE(Started.Value()->Session().epoch_.empty(), !V2);
+            auto Backend = MakeHostedArchiveBackend(Started.Value()); const auto Path = Directory.filePath("compat.hct"); QVERIFY(Put(Path, "HCWCX01"));
+            auto Listing = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listing.HasValue());
+            auto Page = Listing.Value()->Next(128, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), 2u);
+            auto Extracted = Backend->Extract(Path.toStdString(), Page.Value().entries_.front(), Directory.filePath("read").toStdString(), {});
+            QVERIFY(Extracted.HasValue()); QCOMPARE(Read(Directory.filePath("read")), QByteArray("alpha"));
+            QVERIFY(Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"alpha.txt"}}, {}).HasValue());
+            Started.Value()->Close(); QVERIFY(!Started.Value()->Snapshot().forcedTermination_);
+        }
+    }
+    void asynchronousInteractionKeepsControlResponsive_data()
+    { QTest::addColumn<bool>("Cancel"); QTest::newRow("reply") << false; QTest::newRow("cancel") << true; }
+    void asynchronousInteractionKeepsControlResponsive()
+    {
+        QFETCH(bool, Cancel);
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 200); QVERIFY(Started.HasValue());
+        auto Backend = MakeHostedArchiveBackend(Started.Value()); const auto Path = Directory.filePath("prompt.hct"); QVERIFY(Put(Path, "HCWCX01U"));
+        std::stop_source Cancellation; OperationContext Context; Context.stopToken_ = Cancellation.get_token();
+        std::promise<Result<ProviderInteractionReply>> Answer; std::atomic<bool> Asked = false, SawWaiting = false;
+        Context.interactionStart_ = [&](const ProviderInteractionRequest& Request, const OperationContext&) {
+            if (Request.kind_ != ProviderInteractionKind::Password) return Ready<ProviderInteractionReply>(Error{ErrorCategory::InvalidRequest, "wrong-interaction"});
+            Asked = true; return Answer.get_future();
+        };
+        std::jthread Respond([&](std::stop_token Stop) {
+            while (!Asked.load()) { if (Stop.stop_requested()) return; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            SawWaiting = Started.Value()->Session().state_ == ProviderSessionState::AwaitingInteraction;
+            if (Cancel) Cancellation.request_stop();
+            else Answer.set_value(ProviderInteractionReply{true, Password("비밀-pass")});
+        });
+        auto Listing = Backend->Enumerate(Path.toStdString(), false, Context);
+        QCOMPARE(Listing.HasValue(), !Cancel);
+        if (Cancel) QCOMPARE(Listing.Failure().category_, ErrorCategory::Cancelled);
+        QVERIFY(Asked); QVERIFY(SawWaiting); QVERIFY(Started.Value()->Ping().HasValue());
+    }
+    void percentProgressKeepsActiveWorkAlive()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 350); QVERIFY(Started.HasValue());
+        const auto Path = Directory.filePath("progress.hct"); QVERIFY(Put(Path, "HCWCX01Y"));
+        auto Backend = MakeHostedArchiveBackend(Started.Value()); auto Listing = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listing.HasValue());
+        auto Page = Listing.Value()->Next(8, {}); QVERIFY(Page.HasValue()); QVERIFY(!Page.Value().entries_.empty());
+        OperationContext Context; std::uint64_t Progress = 0; Context.progress_ = [&](std::uint64_t Value) { Progress = Value; };
+        QElapsedTimer Timer; Timer.start();
+        auto Extracted = Backend->Extract(Path.toStdString(), Page.Value().entries_.front(), Directory.filePath("out").toStdString(), Context);
+        QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str());
+        QVERIFY(Timer.elapsed() >= 500); QVERIFY(Progress > 0); QCOMPARE(Read(Directory.filePath("out")), QByteArray("alpha"));
+        QVERIFY(Started.Value()->Ping().HasValue());
     }
     void passwordCallbacks()
     {

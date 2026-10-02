@@ -8,6 +8,7 @@
 #include <array>
 #include <QCryptographicHash>
 #include <QSet>
+#include <QScopeGuard>
 
 namespace hc::plugins
 {
@@ -236,6 +237,45 @@ namespace hc::plugins
         }
         return true;
     }
+    Result<std::shared_ptr<IReadStream>> DopusVfsHostService::OpenStream(const QJsonObject& Request, OperationContext Context)
+    {
+        if (const auto Stop = Context.Check({"dopus-vfs"})) return *Stop;
+        if (!manifest_.extensions_.contains(Extension::StorageRead) || !manifest_.permissions_.contains(Permission::ReadContent)) return Unsupported("dopus-vfs-stream-denied");
+        auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
+        const auto Open = Export<dopus::VfsOpenFile>(module_, "VFS_CreateFileW");
+        const auto Read = Export<dopus::VfsReadFile>(module_, "VFS_ReadFile");
+        const auto Close = Export<dopus::VfsCloseFile>(module_, "VFS_CloseFile");
+        // A batch-only archive may expose stubs for file I/O. Do not silently
+        // replace its known batch extraction path with those stubs.
+        const auto Parent = Name.Value().substr(0, Name.Value().find_last_of(L'\\'));
+        if (!Open || !Read || !Close || batchAvailable(Parent, 2)) return Unsupported("dopus-vfs-direct-stream-unavailable");
+        auto File = Open(instance_, nullptr, Name.Value().data(), GENERIC_READ, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, nullptr);
+        if (!File || File == INVALID_HANDLE_VALUE) return failure("stream-open");
+        class Stream final : public IReadStream
+        {
+        public:
+            Stream(HANDLE Instance, HANDLE File, dopus::VfsReadFile Read, dopus::VfsCloseFile Close) : instance_(Instance), file_(File), read_(Read), close_(Close) {}
+            ~Stream() override { close_(instance_, nullptr, file_); }
+            bool CanSeek() const override { return false; }
+            ReadAccess Access() const override { return ReadAccess::Sequential; }
+            Task<Unit> Seek(std::uint64_t, OperationContext) override { return Ready<Unit>(Error{ErrorCategory::Unsupported, "dopus-stream-seek-unavailable"}); }
+            Task<ReadChunk> Read(std::size_t Count, OperationContext Context) override
+            {
+                if (const auto Stop = Context.Check({"dopus-vfs"})) return Ready<ReadChunk>(*Stop);
+                Count = std::min({Count, Context.maxReadBytes_, std::size_t(WirePayloadLimit / 2)});
+                if (!Count) return Ready<ReadChunk>(Error{ErrorCategory::InvalidRequest, "dopus-stream-read-size"});
+                ReadChunk Chunk; Chunk.bytes_.resize(Count); DWORD Done = 0;
+                if (!read_(instance_, nullptr, file_, Chunk.bytes_.data(), DWORD(Count), &Done)) return Ready<ReadChunk>(HostError("dopus-stream-read"));
+                if (Done > Count) return Ready<ReadChunk>(HostError("dopus-stream-read-count"));
+                Chunk.bytes_.resize(Done); Chunk.eof_ = Done == 0;
+                if (Context.progress_) Context.progress_(Done);
+                return Ready<ReadChunk>(std::move(Chunk));
+            }
+        private:
+            HANDLE instance_, file_; dopus::VfsReadFile read_; dopus::VfsCloseFile close_;
+        };
+        return std::shared_ptr<IReadStream>(std::make_shared<Stream>(instance_, File, Read, Close));
+    }
     Result<QJsonObject> DopusVfsHostService::transfer(const QJsonObject& Request, bool Write)
     {
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
@@ -272,7 +312,7 @@ namespace hc::plugins
         // The content store reserves this output file before invoking its
         // producer, keeping the lease directory and ownership record pinned.
         if (!LocalFile.open(Write ? QIODevice::ReadOnly : QIODevice::WriteOnly | QIODevice::Truncate)) return HostError("dopus-vfs-local-open");
-        const auto Budget = 256ULL * 1024 * 1024;
+        const auto Budget = context_.workload_.IsAutomatic() ? context_.workload_.automaticFileBytes_ : UINT64_MAX;
         if (Write && quint64(LocalFile.size()) > Budget) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-transfer-budget"};
         auto File = Open(instance_, nullptr, Name.Value().data(), Write ? GENERIC_WRITE : GENERIC_READ, FILE_ATTRIBUTE_NORMAL,
             Write ? Request["replace"].toBool() ? CREATE_ALWAYS : CREATE_NEW : OPEN_EXISTING, nullptr);
@@ -281,6 +321,8 @@ namespace hc::plugins
         std::array<char, 256 * 1024> Buffer{}; quint64 Total = 0;
         for (;;)
         {
+            if (const auto Stop = context_.Check({"dopus-vfs"})) return *Stop;
+            if (context_.progress_) context_.progress_(Total);
             DWORD Count = 0;
             if (Write)
             {
@@ -304,8 +346,13 @@ namespace hc::plugins
         if (!Write && !LocalFile.flush()) { LocalFile.remove(); return HostError("dopus-vfs-local-flush"); }
         return QJsonObject{};
     }
-    Result<QJsonObject> DopusVfsHostService::Handle(WireKind Kind, const QJsonObject& Request)
+    Result<QJsonObject> DopusVfsHostService::Handle(WireKind Kind, const QJsonObject& Request, OperationContext Context)
     {
+        ResetEvent(abort_.Get());
+        std::stop_callback Cancel(Context.stopToken_, [this] { SetEvent(abort_.Get()); });
+        context_ = Context;
+        auto ClearContext = qScopeGuard([this] { context_ = {}; });
+        if (const auto Stop = Context.Check({"dopus-vfs"})) return *Stop;
         if (!instance_) return Invalid("dopus-vfs-not-initialized");
         if (!manifest_.extensions_.contains(Extension::StorageRead)) return Unsupported("dopus-vfs-storage-extension");
         if (Kind == WireKind::StorageEnumerate) return enumerate(Request);

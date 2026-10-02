@@ -15,7 +15,8 @@ namespace hc::plugins
         ~DopusVfsHostService();
         storage::Result<storage::Unit> Initialize();
         storage::Result<QJsonObject> Probe();
-        storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
+        storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request, storage::OperationContext Context = {});
+        storage::Result<std::shared_ptr<storage::IReadStream>> OpenStream(const QJsonObject& Request, storage::OperationContext Context);
     private:
         struct Record { WIN32_FIND_DATAW file_; QJsonObject columns_; };
         struct Cursor { std::vector<Record> entries_; std::size_t next_ = 0; };
@@ -36,5 +37,6 @@ namespace hc::plugins
         std::map<int, Cursor> cursors_;
         int nextCursor_ = 1;
         std::size_t retainedEntries_ = 0;
+        storage::OperationContext context_;
     };
 }
