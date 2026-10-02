@@ -15,6 +15,7 @@ public:
     bool Dirty() const { return dirty_; }
     bool NewTabDefault() const;
     bool ValidateDraft();
+    void SetContextFields(QVector<hc::columns::FieldDefinition> Fields);
     void MarkSaved() { dirty_ = false; }
 protected:
     void resizeEvent(QResizeEvent* Event) override;
@@ -26,6 +27,8 @@ private:
     void updatePreview();
     void cloneProfile();
     void refreshProfiles();
+    QVector<hc::columns::FieldDefinition> availableFields() const;
+    QVector<hc::columns::FieldDefinition> contextFields_;
     void refreshSorts(int Row = 0);
     hc::columns::ColumnProfile draft_;
     QJsonObject library_;

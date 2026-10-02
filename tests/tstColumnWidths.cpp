@@ -34,6 +34,18 @@ private slots:
         Profile.columns_[1].template_ = "${file.doesNotExist}"; QVERIFY(!IsSupportedProfile(Profile));
         Profile = DefaultProfile(); Profile.columns_[0].template_ = "${file.name}"; QVERIFY(!Validate(Profile).isEmpty());
     }
+    void vfsColumnTypesAndScope()
+    {
+        using namespace hc::columns;
+        QCOMPARE(VfsColumnCell("9007199254740993", 16).Raw().toULongLong(), quint64(9007199254740993ULL));
+        QCOMPARE(VfsColumnCell("-2", 16).Raw().toLongLong(), -2);
+        QCOMPARE(VfsColumnCell("12.5", 32).Raw().toDouble(), 12.5); QCOMPARE(Format(VfsColumnCell("12.5", 32)), QString("12.5%"));
+        QCOMPARE(VfsColumnCell("invalid", 16).State(), ValueState::Error); QCOMPARE(VfsColumnCell("", 16).State(), ValueState::Empty);
+        const auto Ranks = SortRanks({{"ten", false, false, {VfsColumnCell("10", 16)}}, {"two", false, false, {VfsColumnCell("2", 16)}}}, {Qt::AscendingOrder});
+        QVERIFY(IsFieldId("dopusviewer.0123456789abcdef0123456789abcdef.0.0"));
+        QVERIFY(IsFieldId("dopusvfs.0123456789abcdef0123456789abcdef.1"));
+        QCOMPARE(Ranks, (QVector<int>{1, 0})); QVERIFY(IsVfsColumn("dopusvfs.0123456789abcdef0123456789abcdef.1"));
+    }
     void metadataDisplayAndTypedSort()
     {
         using namespace hc::columns; using namespace hc::plugins;

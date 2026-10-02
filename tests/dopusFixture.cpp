@@ -129,6 +129,39 @@ API UINT VFS_BatchOperationW(HANDLE Handle, void*, wchar_t* Path, VfsBatchData* 
 }
 API void VFS_Destroy(HANDLE Handle) { auto& Value = State(Handle); Require(!Value.cursors_ && !Value.files_); delete &Value; --Instances; }
 API long VFS_GetLastError(HANDLE Handle) { return State(Handle).error_; }
+API VfsCustomColumn<wchar_t>* VFS_GetCustomColumnsW(HANDLE Handle)
+{
+    State(Handle);
+    static wchar_t Numeric[] = L"Native number", NumericKey[] = L"number", Text[] = L"Native text", TextKey[] = L"text", Percent[] = L"Native percent", PercentKey[] = L"percent";
+    static VfsCustomColumn<wchar_t> Three{sizeof(Three), nullptr, Percent, PercentKey, 32, 3};
+    static VfsCustomColumn<wchar_t> Two{sizeof(Two), &Three, Text, TextKey, 0, 2};
+    static VfsCustomColumn<wchar_t> One{sizeof(One), &Two, Numeric, NumericKey, 16 | 1, 1}; return &One;
+}
+API int VFS_ReadDirectoryW(HANDLE Handle, void*, VfsReadDirectoryData* Data)
+{
+    State(Handle); Require(Data && Data->size_ == sizeof(*Data) && Data->operation_ == 1 && Data->heap_); Fail(Data->path_);
+    std::wstring Path = Data->path_; if (!Path.ends_with(L'\\')) Path += L'\\'; Path += L'*';
+    WIN32_FIND_DATAW File{}; const auto Find = FindFirstFileW(Path.c_str(), &File);
+    if (Find == INVALID_HANDLE_VALUE) return Result(Handle, FALSE);
+    std::vector<WIN32_FIND_DATAW> Entries;
+    do { Entries.push_back(File); } while (FindNextFileW(Find, &File)); FindClose(Find);
+    const auto Bytes = sizeof(VfsFileHeader) + Entries.size() * sizeof(VfsFileData);
+    auto* Header = static_cast<VfsFileHeader*>(HeapAlloc(Data->heap_, HEAP_ZERO_MEMORY, Bytes)); Require(Header);
+    Header->size_ = sizeof(*Header); Header->count_ = int(Entries.size()); Header->entrySize_ = sizeof(VfsFileData); Data->files_ = Header;
+    const auto String = [&](const std::wstring& Text) {
+        auto* Value = static_cast<wchar_t*>(HeapAlloc(Data->heap_, 0, (Text.size() + 1) * sizeof(wchar_t))); Require(Value);
+        memcpy(Value, Text.c_str(), (Text.size() + 1) * sizeof(wchar_t)); return Value;
+    };
+    auto* Items = reinterpret_cast<VfsFileData*>(Header + 1);
+    for (std::size_t Index = 0; Index < Entries.size(); ++Index) {
+        auto& Item = Items[Index]; Item.file_ = Entries[Index]; Item.columnCount_ = 3;
+        Item.columns_ = static_cast<VfsFileColumn*>(HeapAlloc(Data->heap_, HEAP_ZERO_MEMORY, 3 * sizeof(VfsFileColumn))); Require(Item.columns_);
+        Item.columns_[0] = {1, String(std::to_wstring(Item.file_.nFileSizeLow))};
+        Item.columns_[1] = {2, String(L"VFS value 한글")}; Item.columns_[2] = {3, String(L"12.5")};
+        if (wcsstr(Data->path_, L"bad-column-count")) Item.columnCount_ = 65;
+    }
+    return Result(Handle, TRUE);
+}
 API HANDLE VFS_FindFirstFileW(HANDLE Handle, void*, wchar_t* Path, WIN32_FIND_DATAW* Data, HANDLE)
 {
     Fail(Path); const auto Found = FindFirstFileW(Path, Data); Result(Handle, Found != INVALID_HANDLE_VALUE);

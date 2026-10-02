@@ -40,6 +40,15 @@ namespace hc::plugins
             Entry.modifiedUtcMs_ = std::int64_t(Modified / 10000) - 11644473600000LL;
             Entry.createdUtcMs_ = std::int64_t(Created / 10000) - 11644473600000LL;
             Entry.id_.revision_ = ResourceRevision{std::to_string(Modified) + ":" + std::to_string(Entry.size_) + ":" + std::to_string(Entry.attributes_)};
+            if (Object.contains("columns")) {
+                if (!Object["columns"].isObject() || Object["columns"].toObject().size() > 64) return Invalid("hosted-storage-column-envelope");
+                const auto Columns = Object["columns"].toObject();
+                for (auto It = Columns.begin(); It != Columns.end(); ++It) {
+                    bool Valid = false; const auto Key = It.key().toInt(&Valid);
+                    if (!Valid || Key < 1 || !It.value().isString() || It.value().toString().size() > 4096) return Invalid("hosted-storage-column-value");
+                    Entry.hints_["dopus.column." + It.key().toStdString()] = It.value().toString().toStdString();
+                }
+            }
             return Entry;
         }
         class Cursor final : public IEntryCursor
@@ -103,6 +112,8 @@ namespace hc::plugins
             HostedStorageProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id, std::shared_ptr<INativeContentStore> Store, std::set<StorageFeature> Features, bool Writable, std::string Scheme = "wfx")
                 : process_(std::move(Process)), id_(std::move(Id)), store_(std::move(Store)), features_(std::move(Features)), writable_(Writable), scheme_(std::move(Scheme)) {}
             ProviderId Id() const override { return id_; }
+            std::vector<PresentationColumn> Columns() const override { return columns_; }
+            void SetColumns(std::vector<PresentationColumn> Columns) { columns_ = std::move(Columns); }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override
             {
                 if (const auto Stop = Context.Check(id_)) return Ready<SupportDecision>(*Stop);
@@ -203,6 +214,7 @@ namespace hc::plugins
         private:
             std::shared_ptr<PluginProcess> process_; ProviderId id_; std::shared_ptr<INativeContentStore> store_; std::set<StorageFeature> features_; bool writable_;
             std::string scheme_;
+            std::vector<PresentationColumn> columns_;
         };
         class WriteSession final : public IWriteSession
         {
@@ -366,6 +378,11 @@ namespace hc::plugins
         if (Mounted.Value()["batchExtract"].toBool()) Features.insert(StorageFeature::ReadFile);
         if (Mounted.Value()["batchDelete"].toBool()) Features.insert(StorageFeature::DeleteFile);
         auto Provider = std::make_shared<HostedStorageProvider>(std::move(Process), Id, std::move(Store), std::move(Features), Writable && !Probe.Value()["readOnly"].toBool(), "dopus");
+        std::vector<PresentationColumn> Columns;
+        for (const auto& Value : Mounted.Value()["columns"].toArray()) {
+            const auto Field = Value.toObject(); Columns.push_back({Field["key"].toString().toStdString(), Field["label"].toString().toStdString(), "dopus.column." + std::to_string(Field["id"].toInt()), std::uint32_t(Field["flags"].toInteger())});
+        }
+        Provider->SetColumns(std::move(Columns));
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id, "dopus") + "\\"}};
     }
     Result<std::shared_ptr<IMetadataProvider>> MakeHostedWdxProvider(std::shared_ptr<PluginProcess> Process, std::shared_ptr<IMaterializer> Materializer)

@@ -88,18 +88,18 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     };
     auto* Content = new QWidget; auto* Form = new QFormLayout(Content);
     field_ = Choice(Content, "hc.columns.field", {});
-    for (const auto& Field : PluginFields::Instance().Fields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
+    for (const auto& Field : availableFields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
     field_->addItem(tr("복합 템플릿"), QString{});
     template_ = new QLineEdit(Content); template_->setObjectName("hc.columns.template"); template_->setPlaceholderText("${file.name} · ${file.size}");
     template_->setMaxLength(4096);
     auto* Insert = new QPushButton(tr("필드 삽입"), Content);
     auto* TemplateRow = new QHBoxLayout; TemplateRow->addWidget(template_, 1); TemplateRow->addWidget(Insert);
     connect(Insert, &QPushButton::clicked, this, [this, Insert] {
-        QMenu Menu(this); for (const auto& Field : PluginFields::Instance().Fields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
+        QMenu Menu(this); for (const auto& Field : availableFields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
         if (const auto* Action = Menu.exec(Insert->mapToGlobal(QPoint(0, Insert->height())))) template_->insert("${" + Action->data().toString() + "}");
     });
     sortField_ = Choice(Content, "hc.columns.sortField", {tr("원래 값 / 템플릿 문자열")});
-    for (const auto& Field : PluginFields::Instance().Fields()) sortField_->addItem(Field.title_, Field.id_);
+    for (const auto& Field : availableFields()) sortField_->addItem(Field.title_, Field.id_);
     title_ = new QLineEdit(Content); title_->setObjectName("hc.columns.title");
     alignment_ = Choice(Content, "hc.columns.alignment", {tr("왼쪽"), tr("가운데"), tr("오른쪽")});
     primary_ = new QCheckBox(tr("주 이름 컬럼으로 사용"), Content); primary_->setObjectName("hc.columns.primary");
@@ -193,11 +193,25 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     connect(Reload, &QPushButton::clicked, &PluginFields::Instance(), &PluginFields::Refresh);
     connect(&PluginFields::Instance(), &PluginFields::Changed, this, [this] {
         const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
-        for (const auto& Field : PluginFields::Instance().Fields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
+        for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
         field_->addItem(tr("복합 템플릿"), QString{}); loadColumn(row_);
         if (!PluginFields::Instance().Status().isEmpty()) error_->setText(PluginFields::Instance().Status());
     });
     Load(DefaultProfile(), {});
+}
+
+QVector<FieldDefinition> QtColumnProfileEditor::availableFields() const
+{
+    auto Fields = PluginFields::Instance().Fields(); Fields += contextFields_; return Fields;
+}
+void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
+{
+    contextFields_.clear();
+    for (const auto& Field : Fields) if (IsVfsColumn(Field.id_)) contextFields_.append(Field);
+    const QSignalBlocker One(field_), Two(sortField_);
+    field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
+    for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
+    field_->addItem(tr("복합 템플릿"), QString{});
 }
 
 void QtColumnProfileEditor::Load(const ColumnProfile& Profile, const QJsonObject& Library, bool Writable)
@@ -262,7 +276,7 @@ void QtColumnProfileEditor::storeColumn()
     Column.template_ = Field.isEmpty() ? (FieldChanged ? QString("${file.name} · ${file.size}") : template_->text()) : QString{};
     Column.sortField_ = sortField_->currentData().toString();
     if (FieldChanged) {
-        const auto Fields = PluginFields::Instance().Fields();
+        const auto Fields = availableFields();
         for (const auto& Old : Fields) if (Old.id_ == PreviousField && Column.title_ == Old.title_) {
             Column.title_ = field_->currentText(); break;
         }

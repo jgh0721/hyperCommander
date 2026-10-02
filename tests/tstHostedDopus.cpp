@@ -26,6 +26,31 @@ class HostedDopusTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void customColumnsOwnTheirValues()
+    {
+        QTemporaryDir Package, Root, Cache; auto Process = Start(Package); QVERIFY(Process.HasValue());
+        QVERIFY(Put(Root.filePath("one.txt"), "1234567890"));
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"columns"}, Store.Value(), false, Root.path()); QVERIFY(Mounted.HasValue());
+        const auto Columns = Mounted.Value().reader_->Columns(); QCOMPARE(Columns.size(), 3u);
+        QVERIFY(Columns[0].key_.starts_with("dopusvfs.")); QCOMPARE(Columns[0].flags_, 17u);
+        auto At = Mounted.Value().root_; At.root_ += "one.txt";
+        auto Entry = Mounted.Value().reader_->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        QCOMPARE(Entry.Value().hints_.at(Columns[0].valueKey_), std::string("10"));
+        Process.Value()->Close(); QVERIFY(!Process.Value()->Snapshot().forcedTermination_);
+        QCOMPARE(Entry.Value().hints_.at(Columns[1].valueKey_), std::string("VFS value 한글"));
+        QTemporaryDir Second; auto Other = Start(Second); QVERIFY(Other.HasValue());
+        auto Remounted = MakeHostedDopusVfsProvider(Other.Value(), {"different-session"}, Store.Value(), false, Root.path()); QVERIFY(Remounted.HasValue());
+        QCOMPARE(Remounted.Value().reader_->Columns()[0].key_, Columns[0].key_);
+    }
+    void invalidCustomColumnCount()
+    {
+        QTemporaryDir Package, Root, Cache; QVERIFY(QDir(Root.path()).mkdir("bad-column-count"));
+        auto Process = Start(Package); QVERIFY(Process.HasValue()); auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"invalid-columns"}, Store.Value(), false, Root.path()); QVERIFY(Mounted.HasValue());
+        auto At = Mounted.Value().root_; At.root_ += "bad-column-count";
+        auto Result = Mounted.Value().reader_->Enumerate(At, {}).get(); QVERIFY(!Result.HasValue()); QCOMPARE(Result.Failure().code_, std::string("dopus-vfs-column-count"));
+    }
     void batchWritesAndPerFileResults()
     {
         QTemporaryDir Package, Root, Cache; auto Process = Start(Package, true, false, 3000, true); QVERIFY(Process.HasValue());

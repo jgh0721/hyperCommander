@@ -6,6 +6,7 @@
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
 #include "UniqueLibs/qtColumnProfileEditor.hpp"
 #include "UniqueLibs/columnPluginFields.hpp"
+#include "UniqueLibs/builtInFsModel.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
@@ -141,6 +142,8 @@ void QMainOpts::LoadSettings()
 void QMainOpts::SetListView(CGridView* View)
 {
     listView_ = View;
+    const auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    columnEditor_->SetContextFields(Model ? Model->AvailableColumns() : QVector<hc::columns::FieldDefinition>{});
     columnEditor_->Load(View ? View->ColumnProfile() : hc::columns::DefaultProfile(),
         hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Profiles"].toObject(),
         View && View->ColumnWidths()->Writable());

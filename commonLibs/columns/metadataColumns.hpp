@@ -5,8 +5,24 @@
 #include <QTimeZone>
 namespace hc::columns {
     inline bool IsPluginField(const QString& Id) {
-        static const QRegularExpression Pattern("^wdx\\.[a-f0-9]{32}\\.[0-9]{1,3}\\.[0-9]{1,4}$");
+        static const QRegularExpression Pattern("^(wdx|dopusviewer)\\.[a-f0-9]{32}\\.[0-9]{1,3}\\.[0-9]{1,4}$");
         return Pattern.match(Id).hasMatch();
+    }
+    inline bool IsVfsColumn(const QString& Id) {
+        static const QRegularExpression Pattern("^dopusvfs\\.[a-f0-9]{32}\\.[0-9]+$"); return Pattern.match(Id).hasMatch();
+    }
+    inline CellValue VfsColumnCell(const QString& Text, unsigned Flags) {
+        if (Text.isEmpty()) return CellValue::Missing(ValueState::Empty);
+        if (!(Flags & 112)) return CellValue::Ready(Text);
+        bool Ok = false;
+        CellValue Value;
+        if (Flags & 64) { const auto Number = Text.toULongLong(&Ok); Value = CellValue::Ready(quint64(Number)); }
+        else if (!Text.contains('.') && !Text.contains('e', Qt::CaseInsensitive)) {
+            if (Text.startsWith('-')) { const auto Number = Text.toLongLong(&Ok); Value = CellValue::Ready(qint64(Number)); }
+            else { const auto Number = Text.toULongLong(&Ok); Value = CellValue::Ready(quint64(Number)); }
+        } else { const auto Number = QLocale::c().toDouble(Text, &Ok); Value = CellValue::Ready(Number); }
+        if (!Ok) return CellValue::Missing(ValueState::Error, "vfs-column-number").WithDisplay(Text);
+        return Flags & 32 ? Value.WithDisplay(Text + "%") : Value;
     }
     inline FieldType MetadataFieldType(hc::plugins::MetadataType Type) {
         using T = hc::plugins::MetadataType;

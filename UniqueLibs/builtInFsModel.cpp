@@ -1226,6 +1226,15 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
     return QSortFilterProxyModel::filterAcceptsRow( source_row, source_parent );
 }
 
+QVector<hc::columns::FieldDefinition> CFSModel::AvailableColumns() const
+{
+    using namespace hc::columns;
+    auto Fields = PluginFields::Instance().Fields();
+    if (SnapshotProvider()) for (const auto& Column : SnapshotProvider()->Columns())
+        Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot});
+    return Fields;
+}
+
 QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const
 {
     if (!Item->storageEntry_ || Item->Name_ == "..") return {};
@@ -1237,6 +1246,14 @@ QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const
 hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent) const
 {
     using namespace hc::columns;
+    if (IsVfsColumn(Field)) {
+        if (!Item->storageEntry_ || !SnapshotProvider()) return CellValue::Missing(ValueState::Unsupported);
+        for (const auto& Definition : SnapshotProvider()->Columns()) if (QString::fromStdString(Definition.key_) == Field) {
+            const auto It = Item->storageEntry_->hints_.find(Definition.valueKey_);
+            return It == Item->storageEntry_->hints_.end() ? CellValue::Missing(ValueState::Empty) : VfsColumnCell(QString::fromStdString(It->second), Definition.flags_);
+        }
+        return CellValue::Missing(ValueState::Unsupported);
+    }
     if (!QueryFamily(Field).isEmpty()) {
         const auto Path = queryPath(Item);
         if (Path.isEmpty()) return CellValue::Missing(Item->Name_ == ".." ? ValueState::Empty : ValueState::Unsupported);

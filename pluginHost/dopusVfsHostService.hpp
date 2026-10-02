@@ -2,6 +2,7 @@
 #include "pipeChannel.hpp"
 #include "dopusAbi.hpp"
 #include <QJsonObject>
+#include <QJsonArray>
 #include <map>
 #include <vector>
 
@@ -16,7 +17,8 @@ namespace hc::plugins
         storage::Result<QJsonObject> Probe();
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
     private:
-        struct Cursor { std::vector<WIN32_FIND_DATAW> entries_; std::size_t next_ = 0; };
+        struct Record { WIN32_FIND_DATAW file_; QJsonObject columns_; };
+        struct Cursor { std::vector<Record> entries_; std::size_t next_ = 0; };
         storage::Error failure(const char* Operation);
         storage::Result<std::wstring> path(const QJsonValue& Remote);
         storage::Result<QJsonObject> enumerate(const QJsonObject& Request);
@@ -30,6 +32,7 @@ namespace hc::plugins
         bool initialized_ = false;
         DWORD capabilities_ = 0;
         QString root_, extensions_, name_;
+        QJsonArray columns_;
         std::map<int, Cursor> cursors_;
         int nextCursor_ = 1;
         std::size_t retainedEntries_ = 0;

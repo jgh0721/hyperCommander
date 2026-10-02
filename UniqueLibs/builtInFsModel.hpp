@@ -73,6 +73,7 @@ public:
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void CancelColumnQueries();
     void ResumeColumnQueries();
+    QVector<hc::columns::FieldDefinition> AvailableColumns() const;
     int PendingColumnQueries() const { return columnQueries_->Pending(); }
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;

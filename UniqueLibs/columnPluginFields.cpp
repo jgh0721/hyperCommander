@@ -16,7 +16,9 @@ namespace hc::columns {
     PluginFields::PluginFields(QObject* Parent) : QObject(Parent) { Refresh(); }
     void PluginFields::Refresh() {
         if (busy_) { refreshAgain_ = true; return; } busy_ = true;
-        const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), PluginFormat::Wdx);
+        auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), PluginFormat::Wdx);
+        const auto Viewers = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), PluginFormat::DopusViewer);
+        Choices.insert(Choices.end(), Viewers.begin(), Viewers.end());
         auto* Watcher = new QFutureWatcher<std::pair<std::shared_ptr<State>, QString>>(this);
         connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
             auto Result = Watcher->result(); Watcher->deleteLater(); state_ = std::move(Result.first); status_ = Result.second; busy_ = false; emit Changed();
@@ -35,18 +37,19 @@ namespace hc::columns {
                 if (!Started.HasValue()) { Errors.append(Choice.name_ + ": " + QString::fromStdString(Started.Failure().code_)); continue; }
                 auto Process = std::shared_ptr<PluginProcess>(Started.Value().release(), [](PluginProcess* Value) { (void)QtConcurrent::run([Value] { delete Value; }); });
                 auto Materializer = MakeNativeMaterializer(QDir::tempPath().toStdString()); if (!Materializer.HasValue()) continue;
-                auto Provider = MakeHostedWdxProvider(Process, Materializer.Value()); if (!Provider.HasValue()) continue;
+                const bool Dopus = Options.approval_.reviewed_.format_ == PluginFormat::DopusViewer;
+                auto Provider = Dopus ? MakeHostedDopusMetadataProvider(Process, Materializer.Value()) : MakeHostedWdxProvider(Process, Materializer.Value()); if (!Provider.HasValue()) continue;
                 auto Fields = Provider.Value()->Fields(Context).get(); if (!Fields.HasValue()) { Errors.append(Choice.name_ + ": fields-unavailable"); continue; }
                 const auto Key = QString::fromLatin1(QCryptographicHash::hash(Options.binaryPath_.toCaseFolded().toUtf8(), QCryptographicHash::Md5).toHex());
                 for (const auto& Field : Fields.Value()) {
                     if (Field.type_ == MetadataType::FullText) continue;
                     const int Count = std::max(1, int(Field.units_.size()));
                     for (int Unit = 0; Unit < Count; ++Unit) {
-                        const auto Id = "wdx." + Key + "." + QString::number(Field.index_) + "." + QString::number(Unit);
+                        const auto Id = (Dopus ? "dopusviewer." : "wdx.") + Key + "." + QString::number(Field.index_) + "." + QString::number(Unit);
                         auto Title = Choice.name_ + " / " + QString::fromStdString(Field.name_);
                         if (Unit < Field.units_.size() && !Field.units_[Unit].empty()) Title += " [" + QString::fromStdString(Field.units_[Unit]) + "]";
                         if (!Field.choices_.empty()) { QStringList Values; for (const auto& Value : Field.choices_) Values.append(QString::fromStdString(Value)); Title += " {" + Values.join(", ") + "}"; }
-                        FieldDefinition Definition{Id, Title, MetadataFieldType(Field.type_), ProviderKind::Wdx, EvaluationCost::Background};
+                        FieldDefinition Definition{Id, Title, MetadataFieldType(Field.type_), Dopus ? ProviderKind::DOpus : ProviderKind::Wdx, EvaluationCost::Background};
                         Result->entries_.insert(Id, {Definition, Provider.Value(), {Field.index_, Unit, true, false}, Field.descending_});
                     }
                 }

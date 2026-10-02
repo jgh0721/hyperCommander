@@ -2027,6 +2027,13 @@ hc.events.unsubscribe(sub)
             const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format); QCOMPARE(Choices.size(), 1u); QVERIFY(Choices.front().options_.approval_.approved_);
             QCOMPARE(Choices.front().options_.binaryPath_, Binary);
         }
+        QSignalSpy ColumnCatalog(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed);
+        hc::columns::PluginFields::Instance().Refresh(); QTRY_VERIFY_WITH_TIMEOUT(ColumnCatalog.count(), 10000);
+        QString ViewerField;
+        for (const auto& Field : hc::columns::PluginFields::Instance().Fields()) if (Field.id_.startsWith("dopusviewer.") && Field.id_.endsWith(".1.0")) ViewerField = Field.id_;
+        QVERIFY(!ViewerField.isEmpty());
+        auto MetadataRead = QtConcurrent::run([Load = hc::columns::PluginFields::Instance().Loader(), Path = Root.filePath("sample.bitmap"), ViewerField] { return Load(Path, ViewerField, {}); });
+        QTRY_VERIFY(MetadataRead.isFinished()); QCOMPARE(MetadataRead.result()[ViewerField].Raw().toLongLong(), 2);
         hc::settings::AppSettings().SetPlugins("wlx", {});
         auto Plugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(); Plugins["viewerSelection"] = "automatic"; hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Plugins);
         const auto ViewerChoices = QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); QCOMPARE(ViewerChoices.size(), 1u); QCOMPARE(ViewerChoices.front().id_, QString("dopus-0"));
@@ -2044,6 +2051,17 @@ hc.events.unsubscribe(sub)
         QTRY_VERIFY_WITH_TIMEOUT(Panel->CurrentTabIndex() != PreviousTab, 5000);
         auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 5000); QVERIFY(names(Model).contains("sample.bitmap"));
         auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid); QModelIndex Selected;
+        const auto VfsColumns = Model->SnapshotProvider()->Columns(); QCOMPARE(VfsColumns.size(), 3u);
+        auto ColumnProfile = hc::columns::DefaultProfile(); ColumnProfile.columns_[1].fieldId_ = QString::fromStdString(VfsColumns[0].key_);
+        ColumnProfile.columns_[2].fieldId_ = QString::fromStdString(VfsColumns[1].key_); ColumnProfile.columns_[3].fieldId_ = ViewerField;
+        QVERIFY(Grid->ApplyColumnProfile(ColumnProfile));
+        for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "sample.bitmap") {
+            QCOMPARE(Model->index(Row, 2).data().toString(), QString("VFS value 한글"));
+            QCOMPARE(Model->index(Row, 1).data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(13));
+            QCOMPARE(Model->index(Row, 3).data(CFSModel::ColumnStateRole).toInt(), int(hc::columns::ValueState::Unsupported)); // No extraction to feed the viewer.
+        }
+        QMainOpts ColumnsDialog(main_); ColumnsDialog.SetListView(Grid); ColumnsDialog.ShowListSettingsPage();
+        auto* FieldChoice = ColumnsDialog.findChild<QComboBox*>("hc.columns.field"); QVERIFY(FieldChoice->findData(ColumnProfile.columns_[2].fieldId_) >= 0);
         for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
         {
             Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
@@ -2087,6 +2105,7 @@ hc.events.unsubscribe(sub)
         Panel->RestoreWorkspace(WorkspaceSaved); Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(Model->GetRoot() && !Model->IsLoading() && names(Model).contains("sample.bitmap"), 10000);
         QVERIFY(Model->GetRoot()->WriteProvider());
+        for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "sample.bitmap") QCOMPARE(Model->index(Row, 2).data().toString(), QString("VFS value 한글"));
         QMainOpts Settings(main_); Settings.show(); QCoreApplication::processEvents();
         QVERIFY(Settings.findChild<QTableWidget*>("dopus-vfsHostTable")); QVERIFY(Settings.findChild<QTableWidget*>("dopus-viewerHostTable"));
     }

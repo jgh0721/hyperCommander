@@ -187,10 +187,13 @@ namespace hc::storage
         virtual Task<ReadChunk> Read(std::size_t MaxBytes, OperationContext Context) = 0;
         virtual Task<Unit> Seek(std::uint64_t Offset, OperationContext Context) = 0;
     };
+    struct PresentationColumn { std::string key_, title_, valueKey_; std::uint32_t flags_ = 0; };
     class IStorageProvider
     {
     public:
         virtual ~IStorageProvider() = default;
+        // A copied mount-time schema; this accessor performs no I/O.
+        virtual std::vector<PresentationColumn> Columns() const { return {}; }
         virtual ProviderId Id() const = 0;
         virtual Task<SupportDecision> Supports(Operation Request, OperationContext Context) = 0;
         virtual Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) = 0;

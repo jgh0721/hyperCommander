@@ -4,7 +4,10 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <array>
+#include <QCryptographicHash>
+#include <QSet>
 
 namespace hc::plugins
 {
@@ -38,8 +41,10 @@ namespace hc::plugins
     }
     Result<Unit> DopusVfsHostService::Initialize()
     {
-        for (const auto Name : {"VFS_IdentifyW", "VFS_Create", "VFS_Destroy", "VFS_GetLastError", "VFS_FindFirstFileW", "VFS_FindNextFileW", "VFS_FindClose"})
+        for (const auto Name : {"VFS_IdentifyW", "VFS_Create", "VFS_Destroy", "VFS_GetLastError"})
             if (!GetProcAddress(module_, Name)) return Unsupported("dopus-vfs-required-exports");
+        if (!GetProcAddress(module_, "VFS_ReadDirectoryW") &&
+            (!GetProcAddress(module_, "VFS_FindFirstFileW") || !GetProcAddress(module_, "VFS_FindNextFileW") || !GetProcAddress(module_, "VFS_FindClose"))) return Unsupported("dopus-vfs-enumeration-exports");
         abort_ = WinHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr)); if (!abort_.Valid()) return HostError("dopus-vfs-abort-event");
         wchar_t Language[] = L"english"; dopus::InitData Init{sizeof(Init), nullptr, 9, 0, Language};
         if (const auto Call = Export<dopus::Init>(module_, "VFS_Init")) if (!Call(&Init)) return Unsupported("dopus-vfs-init");
@@ -87,13 +92,59 @@ namespace hc::plugins
             Root = QDir::toNativeSeparators(QDir::cleanPath(Root));
             while (Root.endsWith('\\')) Root.chop(1);
             if (Root.isEmpty()) return Invalid("dopus-vfs-mount-root"); root_ = Root;
-            return QJsonObject{{"batchAdd", batchAvailable(root_.toStdWString(), 1)}, {"batchExtract", batchAvailable(root_.toStdWString(), 2)},
+            const auto Scope = QString::fromLatin1(QCryptographicHash::hash((QString::fromStdString(manifest_.id_) + "\n" + root_.toCaseFolded()).toUtf8(), QCryptographicHash::Md5).toHex());
+            const auto ReadColumns = [&]<class Char>(const char* ExportName) -> Result<Unit> {
+                const auto Get = Export<dopus::VfsCustomColumn<Char>*(*)(HANDLE)>(module_, ExportName); if (!Get) return Unit{};
+                QSet<const void*> Seen; QSet<int> Ids;
+                for (const auto* Column = Get(instance_); Column; Column = Column->next_) {
+                    if (Seen.contains(Column) || Seen.size() >= 64 || Column->size_ < sizeof(*Column) || Column->id_ < 1 || Ids.contains(Column->id_)) return Invalid("dopus-vfs-column-schema");
+                    Seen.insert(Column); Ids.insert(Column->id_);
+                    const auto Text = [](const Char* Value) -> std::optional<QString> {
+                        if (!Value) return {}; const auto* End = std::find(Value, Value + 1024, Char(0)); if (End == Value + 1024) return {};
+                        if constexpr (std::is_same_v<Char, wchar_t>) return QString::fromWCharArray(Value, int(End - Value));
+                        else return QString::fromLocal8Bit(Value, int(End - Value));
+                    };
+                    const auto Label = Text(Column->label_), Key = Text(Column->key_); if (!Label || !Key || Label->isEmpty() || Key->isEmpty()) return Invalid("dopus-vfs-column-text");
+                    columns_.append(QJsonObject{{"id", Column->id_}, {"key", "dopusvfs." + Scope + "." + QString::number(Column->id_)}, {"label", *Label}, {"flags", qint64(Column->flags_)}});
+                }
+                return Unit{};
+            };
+            const auto Columns = GetProcAddress(module_, "VFS_GetCustomColumnsW") ? ReadColumns.operator()<wchar_t>("VFS_GetCustomColumnsW") : ReadColumns.operator()<char>("VFS_GetCustomColumnsA");
+            if (!Columns.HasValue()) return Columns.Failure();
+            return QJsonObject{{"columns", columns_}, {"batchAdd", batchAvailable(root_.toStdWString(), 1)}, {"batchExtract", batchAvailable(root_.toStdWString(), 2)},
                 {"batchDelete", batchAvailable(root_.toStdWString(), 3)}};
         }
         if (Action == "open" && Request.size() == 2)
         {
             auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
             if (cursors_.size() >= 64 || nextCursor_ == INT_MAX) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-cursor-budget"};
+            if (const auto Read = Export<int(*)(HANDLE, void*, dopus::VfsReadDirectoryData*)>(module_, "VFS_ReadDirectoryW")) {
+                const auto Heap = HeapCreate(0, 0, 0); if (!Heap) return HostError("dopus-vfs-column-heap");
+                struct HeapGuard { HANDLE heap_; ~HeapGuard() { HeapDestroy(heap_); } } Cleanup{Heap};
+                dopus::VfsReadDirectoryData Data{sizeof(Data), nullptr, Name.Value().data(), 1, abort_.Get(), Heap, nullptr};
+                if (!Read(instance_, nullptr, &Data)) return failure("read-directory");
+                Cursor Value; QSet<const void*> Seen; std::size_t TextBytes = 0;
+                for (auto* Header = Data.files_; Header; Header = Header->next_) {
+                    if (Seen.contains(Header) || !HeapValidate(Heap, 0, Header)) return Invalid("dopus-vfs-directory-chain"); Seen.insert(Header);
+                    const auto Bytes = HeapSize(Heap, 0, Header);
+                    if (Header->size_ < sizeof(*Header) || Header->count_ < 0 || Header->entrySize_ < sizeof(dopus::VfsFileData) ||
+                        quint64(Header->size_) + quint64(Header->count_) * Header->entrySize_ > Bytes || retainedEntries_ + Value.entries_.size() + Header->count_ > 65536) return Invalid("dopus-vfs-directory-size");
+                    for (int Index = 0; Index < Header->count_; ++Index) {
+                        const auto* Entry = reinterpret_cast<const dopus::VfsFileData*>(reinterpret_cast<const char*>(Header) + Header->size_ + std::size_t(Index) * Header->entrySize_);
+                        if (Entry->columnCount_ < 0 || Entry->columnCount_ > 64 || (Entry->columnCount_ && !Entry->columns_)) return Invalid("dopus-vfs-column-count");
+                        Record Record{Entry->file_, {}};
+                        for (int Col = 0; Col < Entry->columnCount_; ++Col) {
+                            const auto& Cell = Entry->columns_[Col]; const auto Key = QString::number(Cell.id_);
+                            if (!Cell.value_ || Record.columns_.contains(Key) || std::none_of(columns_.begin(), columns_.end(), [&](const auto& Def) { return Def.toObject()["id"].toInt() == Cell.id_; })) return Invalid("dopus-vfs-column-id");
+                            const auto* End = std::find(Cell.value_, Cell.value_ + 4096, L'\0'); if (End == Cell.value_ + 4096) return Invalid("dopus-vfs-column-termination");
+                            TextBytes += (End - Cell.value_) * 2; if (TextBytes > 8 * 1024 * 1024) return Invalid("dopus-vfs-column-budget");
+                            Record.columns_[Key] = QString::fromWCharArray(Cell.value_, int(End - Cell.value_));
+                        }
+                        Value.entries_.push_back(std::move(Record));
+                    }
+                }
+                retainedEntries_ += Value.entries_.size(); const auto Id = nextCursor_++; cursors_.emplace(Id, std::move(Value)); return QJsonObject{{"cursor", Id}, {"end", false}};
+            }
             if (!Name.Value().ends_with(L'\\')) Name.Value() += L'\\'; Name.Value() += L'*'; Cursor Value{}; WIN32_FIND_DATAW Data{};
             const auto Find = Export<dopus::VfsFindFirst>(module_, "VFS_FindFirstFileW")(instance_, nullptr, Name.Value().data(), &Data, abort_.Get());
             if (!Find || Find == INVALID_HANDLE_VALUE)
@@ -111,7 +162,7 @@ namespace hc::plugins
             for (;;)
             {
                 if (retainedEntries_ + Value.entries_.size() >= 65536) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-list-budget"};
-                Value.entries_.push_back(Data);
+                Value.entries_.push_back({Data, {}});
                 if (!Export<dopus::VfsFindNext>(module_, "VFS_FindNextFileW")(instance_, nullptr, Find, &Data))
                 {
                     const auto Code = Export<dopus::VfsError>(module_, "VFS_GetLastError")(instance_);
@@ -126,16 +177,22 @@ namespace hc::plugins
         if (Action == "close" && Request.size() == 2)
         { retainedEntries_ -= At->second.entries_.size(); cursors_.erase(At); return QJsonObject{}; }
         if (Action != "next" || Request.size() != 3 || !Integer(Request["count"], 1, 256)) return Invalid("dopus-vfs-page");
-        auto& Cursor = At->second; QJsonArray Entries; int Examined = 0;
+        auto& Cursor = At->second; QJsonArray Entries; int Examined = 0; qsizetype PageBytes = 64;
         while (Cursor.next_ < Cursor.entries_.size() && Entries.size() < Request["count"].toInt() && ++Examined <= 1024)
         {
-            const auto& Data = Cursor.entries_[Cursor.next_++]; const auto End = std::find(std::begin(Data.cFileName), std::end(Data.cFileName), L'\0');
+            const auto& Record = Cursor.entries_[Cursor.next_++]; const auto& Data = Record.file_; const auto End = std::find(std::begin(Data.cFileName), std::end(Data.cFileName), L'\0');
             if (End == std::end(Data.cFileName)) return Invalid("dopus-vfs-name-termination");
             const auto Name = QString::fromWCharArray(Data.cFileName);
             if (Name.isEmpty() || Name.contains('/') || Name.contains('\\') || Name.contains(':')) return Invalid("dopus-vfs-entry-name");
-            if (Name != "." && Name != "..") Entries.append(QJsonObject{{"name", Name}, {"attributes", qint64(Data.dwFileAttributes)},
-                {"size", QString::number((quint64(Data.nFileSizeHigh) << 32) | Data.nFileSizeLow)},
-                {"modified", QString::number(Ticks(Data.ftLastWriteTime))}, {"created", QString::number(Ticks(Data.ftCreationTime))}});
+            if (Name != "." && Name != "..") {
+                const QJsonObject Entry{{"columns", Record.columns_}, {"name", Name}, {"attributes", qint64(Data.dwFileAttributes)},
+                    {"size", QString::number((quint64(Data.nFileSizeHigh) << 32) | Data.nFileSizeLow)},
+                    {"modified", QString::number(Ticks(Data.ftLastWriteTime))}, {"created", QString::number(Ticks(Data.ftCreationTime))}};
+                const auto Bytes = QJsonDocument(Entry).toJson(QJsonDocument::Compact).size() + 1;
+                if (Bytes > WirePayloadLimit - 1024) return Invalid("dopus-vfs-column-entry-budget");
+                if (!Entries.isEmpty() && PageBytes + Bytes > WirePayloadLimit - 1024) { --Cursor.next_; break; }
+                PageBytes += Bytes; Entries.append(Entry);
+            }
         }
         return QJsonObject{{"entries", Entries}, {"end", Cursor.next_ == Cursor.entries_.size()}};
     }

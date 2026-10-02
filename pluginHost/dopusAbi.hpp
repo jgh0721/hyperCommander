@@ -76,6 +76,7 @@ namespace hc::plugins::dopus
         int count_;
         UINT entrySize_;
     };
+    template<class Char> struct VfsCustomColumn { UINT size_; VfsCustomColumn* next_; Char* label_; Char* key_; DWORD flags_; int id_; };
     struct VfsFileColumn { int id_; wchar_t* value_; };
     struct VfsFileData
     {

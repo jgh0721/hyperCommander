@@ -124,7 +124,7 @@ namespace hc::columns
     {
         const auto Parts = Id.split('.');
         if (Parts.size() < 2) return false;
-        if (Parts.front() != "file" && Parts.front() != "wdx" && Parts.front() != "dopus" && Parts.front() != "lua") return false;
+        if (Parts.front() != "file" && Parts.front() != "wdx" && Parts.front() != "dopus" && Parts.front() != "dopusviewer" && Parts.front() != "dopusvfs" && Parts.front() != "lua") return false;
         if (Parts.front() != "file" && Parts.size() < 3) return false;
         for (const auto& Part : Parts) {
             if (Part.isEmpty()) return false;
