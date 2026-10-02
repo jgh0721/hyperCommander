@@ -172,7 +172,7 @@ bool QMainOpts::SaveSettings()
         return false;
     }
     if (listView_ && !pendingListLayout_.isEmpty()) {
-        listView_->ColumnWidths()->RestoreWorkspaceLayout({{"listLayout", pendingListLayout_}});
+        listView_->ColumnWidths()->RestoreWorkspaceLayout({{hc::columns::WorkspaceKey, pendingListLayout_}});
         emit listView_->sigViewSettingsChanged();
         pendingListLayout_ = {};
     }

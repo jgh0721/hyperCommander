@@ -80,32 +80,22 @@ QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qti
 
 void QtitanColumnAdapter::Bind(const ColumnView& Columns)
 {
-    ids_.clear(); legacy_.clear(); defaults_.clear(); applied_.clear(); nameColumn_ = -1;
-    QStringList ContentIds;
+    ids_.clear(); readableFloors_.clear(); defaults_.clear(); applied_.clear(); nameColumn_ = -1;
+    definition_ = Columns.profile_;
     for (const auto& Column : Columns.VecColumns)
     {
-        // Expressions/model indices survive captions, translation and visual reorder.
-        const auto Id = QString::fromLatin1(QCryptographicHash::hash(Column.Content.toCaseFolded().toUtf8(), QCryptographicHash::Sha256).toHex()) + ":" + QString::number(Column.Index);
+        const auto& Definition = Column.definition_;
+        const auto Id = hc::columns::IdText(Definition.id_);
         ids_[Column.Index] = Id;
-        ContentIds.push_back(Id);
-        if (Column.Content.compare(BUILTIN_COL_FS_NAME, Qt::CaseInsensitive) == 0) nameColumn_ = Column.Index;
-        if (const auto Native = view_->getColumnByModelColumn(Column.Index)) legacy_[Id] = Native->width();
-        ColumnWidthPolicy Policy; Policy.value_ = std::max(80, legacy_.value(Id));
-        if (Columns.IsBuiltIn) {
-            // Header best-fit measures short captions, not useful file content.
-            // Logical pixels and percentages remain independent of monitor DPI.
-            const auto Expression = Column.Content.toCaseFolded();
-            if (Expression == QString(BUILTIN_COL_FS_NAME).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 46}; legacy_[Id] = 200; }
-            else if (Expression == QString(BUILTIN_COL_FS_SIZE).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 15}; legacy_[Id] = 88; }
-            else if (Expression == QString(BUILTIN_COL_FS_CREATED).toCaseFolded() || Expression == QString(BUILTIN_COL_FS_MODIFIED).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 30}; legacy_[Id] = 190; }
-            else if (Expression == QString(BUILTIN_COL_FS_ATTRIB_TEXT).toCaseFolded()) { Policy = {WidthUnit::Percent, WidthMode::Flexible, 9}; legacy_[Id] = 56; }
-        }
-        Policy.hidden_ = Column.defaultHidden_;
-        defaults_[Id] = Policy;
+        if (Definition.id_ == definition_.primaryNameId_) nameColumn_ = Column.Index;
+        const auto& Field = Definition.fieldId_;
+        readableFloors_[Id] = Field == "file.name" || Field == "file.stem" ? 200
+            : Field == "file.size" ? 88 : Field == "file.created" || Field == "file.modified" ? 190
+            : Field == "file.attributes" ? 56 : 80;
+        defaults_[Id] = Definition.widths_[0];
     }
-    ContentIds.sort();
     singleLineDefaults_ = defaults_;
-    viewId_ = Columns.IsBuiltIn ? "builtin-details" : QString::fromLatin1(QCryptographicHash::hash(ContentIds.join('|').toUtf8(), QCryptographicHash::Sha256).toHex());
+    viewId_ = hc::columns::IdText(definition_.id_);
     QTimer::singleShot(0, this, &QtitanColumnAdapter::Reload);
 }
 
@@ -116,7 +106,7 @@ void QtitanColumnAdapter::Reload()
     QString Pane = "default";
     for (auto* Parent = owner_.data(); Parent; Parent = Parent->parentWidget())
         if (Parent->objectName() == "cmpLeftPanel" || Parent->objectName() == "cmpRightPanel") { Pane = Parent->objectName(); break; }
-    baseProfile_ = "Views/ColumnWidths/" + Pane + "/" + viewId_;
+    baseProfile_ = hc::columns::SettingsPrefix + Pane + "/" + viewId_;
     const auto Profile = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()[baseProfile_].toObject();
     const auto Mode = Profile.value("listMode").toString("details");
     activateLayout(LayoutModes.contains(Mode) ? Mode : "details");
@@ -131,19 +121,10 @@ QString QtitanColumnAdapter::profileForLayout(const QString& Mode) const
 
 QMap<QString, ColumnWidthPolicy> QtitanColumnAdapter::defaultsForLayout(const QString& Mode) const
 {
-    auto Result = singleLineDefaults_;
-    if (Mode != "details" && nameColumn_ >= 0) {
-        const auto NameId = ids_.value(nameColumn_);
-        double Total = 0;
-        for (auto It = Result.begin(); It != Result.end(); ++It) if (It.key() != NameId && !It.value().hidden_) Total += It.value().value_;
-        for (auto It = Result.begin(); It != Result.end(); ++It) {
-            if (It.value().hidden_) continue;
-            // Match the editor's precision so saving defaults retains their
-            // logical-pixel readability floors on a narrow pane.
-            const auto Percent = It.key() == NameId ? 100 : Total > 0 ? It.value().value_ * 100 / Total : 0;
-            It.value() = {WidthUnit::Percent, WidthMode::Flexible, std::round(Percent * 1000000) / 1000000};
-        }
-    }
+    QMap<QString, ColumnWidthPolicy> Result;
+    const auto Layout = hc::columns::ParseMode(Mode).value_or(hc::columns::LayoutMode::Details);
+    for (const auto& Column : definition_.columns_)
+        Result[hc::columns::IdText(Column.id_)] = Column.widths_[int(Layout)];
     return Result;
 }
 
@@ -176,32 +157,40 @@ QJsonObject QtitanColumnAdapter::WorkspaceLayout() const
     if (!unsupportedLayout_.isEmpty()) return unsupportedLayout_;
     auto Profiles = layoutWidths_;
     Profiles[layoutMode_] = EncodePolicies(settings_.columns_);
-    return {{"version", 1}, {"mode", layoutMode_}, {"profiles", Profiles}};
+    return {{"version", 1}, {"definition", hc::columns::EncodeProfile(definition_)}, {"mode", layoutMode_}, {"profiles", Profiles}};
 }
 
 void QtitanColumnAdapter::RestoreWorkspaceLayout(const QJsonObject& View)
 {
     if (baseProfile_.isEmpty()) Reload();
     layoutWidths_ = {}; unsupportedLayout_ = {};
-    const auto Layout = View.value("listLayout").toObject();
+    const auto Layout = View.value(hc::columns::WorkspaceKey).toObject();
     if (!Layout.isEmpty()) {
         bool Valid = Layout.value("version") == QJsonValue(1) && LayoutModes.contains(Layout.value("mode").toString()) && Layout.value("profiles").isObject();
+        const auto Definition = hc::columns::DecodeProfile(Layout.value("definition").toObject());
+        // Until the profile editor can rebuild model bindings, only the bound
+        // definition is executable. Preserve other valid/future profiles intact.
+        if (!Definition || Definition->id_ != definition_.id_ || Definition->primaryNameId_ != definition_.primaryNameId_ ||
+            Definition->columns_.size() != definition_.columns_.size()) Valid = false;
+        else for (int Index = 0; Index < Definition->columns_.size(); ++Index) {
+            auto Saved = Definition->columns_[Index];
+            Saved.title_ = definition_.columns_[Index].title_; // Translation is not identity.
+            if (Saved != definition_.columns_[Index]) Valid = false;
+        }
         const auto Profiles = Layout.value("profiles").toObject();
         for (auto It = Profiles.begin(); It != Profiles.end(); ++It) {
             if (!LayoutModes.contains(It.key()) || !It.value().isObject()) { Valid = false; continue; }
             const auto Columns = It.value().toObject();
             for (auto Column = Columns.begin(); Column != Columns.end(); ++Column)
-                if (!Column.value().isObject() || !DecodeWidth(Column.value().toObject())) Valid = false;
+                if (!ids_.values().contains(Column.key()) || !Column.value().isObject() || !DecodeWidth(Column.value().toObject())) Valid = false;
         }
         if (Valid) layoutWidths_ = Profiles;
         else unsupportedLayout_ = Layout;
         activateLayout(Valid ? Layout.value("mode").toString() : "details");
     } else {
-        // Old workspace tabs were always one line. Empty new tabs inherit the
-        // panel profile, while existing tabs keep their previous presentation.
-        if (View.contains("mode")) activateLayout("details");
-        else { workspaceOwned_ = false; Reload(); }
-        SetWorkspaceOverrides(View.value("widths").toObject());
+        // Breaking transition: old listLayout/widths data is intentionally ignored.
+        workspaceOwned_ = false;
+        Reload();
     }
     workspaceOwned_ = true; Request();
 }
@@ -233,8 +222,8 @@ std::optional<ColumnWidthResult> QtitanColumnAdapter::resolveWidth(const QString
     auto Result = Resolve(Policy, Available);
     // Defaults have a readable pixel floor on narrow panes. Explicit user
     // policies retain their own units and bounds (including narrow columns).
-    if (Result && viewId_ == "builtin-details" && Policy == defaults_.value(Id)) {
-        Result->minimum_ = std::max(Result->minimum_, legacy_.value(Id));
+    if (Result && definition_.id_ == hc::columns::BuiltInProfileId && Policy == defaults_.value(Id)) {
+        Result->minimum_ = std::max(Result->minimum_, readableFloors_.value(Id));
         Result->width_ = std::max(Result->width_, Result->minimum_);
         Result->maximum_ = std::max(Result->maximum_, Result->minimum_);
     }
@@ -286,7 +275,7 @@ void QtitanColumnAdapter::Apply()
 
 bool QtitanColumnAdapter::SetPolicy(const QString& Id, const ColumnWidthPolicy& Policy, bool Persist)
 {
-    if (!legacy_.contains(Id) || !Validate(Policy).empty() || !settings_.writable_) return false;
+    if (!readableFloors_.contains(Id) || !Validate(Policy).empty() || !settings_.writable_) return false;
     const auto Previous = settings_;
     settings_.columns_[Id] = Policy;
     if (Persist && !save()) { settings_ = Previous; return false; }
@@ -302,7 +291,7 @@ void QtitanColumnAdapter::SetWorkspaceOverrides(const QJsonObject& Columns)
     settings_.columns_ = inherited_;
     for (auto It = Columns.begin(); It != Columns.end(); ++It) {
         const auto Policy = It.value().isObject() ? DecodeWidth(It.value().toObject()) : std::nullopt;
-        if (Policy && legacy_.contains(It.key())) settings_.columns_[It.key()] = *Policy;
+        if (Policy && readableFloors_.contains(It.key())) settings_.columns_[It.key()] = *Policy;
     }
     Request();
 }
@@ -450,7 +439,7 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
         int Index = 0;
         for (auto It = ids_.begin(); It != ids_.end(); ++It, ++Index) {
             if (!Rows[Index].visible_->isChecked()) continue;
-            const auto Sample = viewId_ == "builtin-details" ? Samples.value(It.key()) : Table->item(Index, 0)->text();
+            const auto Sample = definition_.id_ == hc::columns::BuiltInProfileId ? Samples.value(It.key()) : Table->item(Index, 0)->text();
             if (It.key() == nameColumn_) Name = Sample;
             else Details.append(Sample);
         }
@@ -563,7 +552,7 @@ bool QtitanColumnAdapter::ShowSettings(QWidget* Parent, QJsonObject* Pending)
             Base["listMode"] = DraftMode; Profiles[baseProfile_] = Base;
             if (!Settings.Put(hc::settings::Section::Columns, Profiles)) { Settings.DiscardEdit(); Error->setText(tr("설정을 저장할 수 없습니다.")); return; }
         }
-        if (Pending) *Pending = QJsonObject{{"version", 1}, {"mode", DraftMode}, {"profiles", Draft}};
+        if (Pending) *Pending = QJsonObject{{"version", 1}, {"definition", hc::columns::EncodeProfile(definition_)}, {"mode", DraftMode}, {"profiles", Draft}};
         else {
             layoutWidths_ = Draft; activateLayout(DraftMode); workspaceOwned_ = true;
             Request();

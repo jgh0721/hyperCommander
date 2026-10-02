@@ -227,17 +227,18 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     
     for( const auto& Column : Columns->VecColumns )
     {
-        GridColumn = view_->addColumn( Column.Index, Column.Name );
+        GridColumn = view_->addColumn( Column.Index, Column.definition_.title_ );
         if( GridColumn != nullptr )
         {
             GridColumn->setBandIndex( 0 );
             GridColumn->setAutoWidth( true );
-            GridColumn->setRowIndex( Column.Row );
+            GridColumn->setRowIndex( 0 );
             GridColumn->setMinWidth( 30 );
             // GridColumn->setWidth( 100 );
-            GridColumn->setTextAlignment( Column.Align );
+            GridColumn->setTextAlignment( Column.definition_.alignment_ );
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
-            if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
+            GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFsModelT::USR_ROLE_SORT));
+            if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
             {
                 GridColumn->setSortLocaleAware( true );
                 GridColumn->setSortOrder( Qtitan::SortAscending, true );
@@ -358,7 +359,7 @@ QJsonObject CGridView::CaptureWorkspaceView() const
                 {"sort", int(Column->sortOrder())}, {"priority", Priority}});
         }
     const auto Proxy = qobject_cast<CFSProxyModel*>(proxy_);
-    return {{"mode", "details"}, {"listLayout", columnAdapter_->WorkspaceLayout()}, {"widths", columnAdapter_->WorkspaceOverrides()}, {"columns", Columns},
+    return {{"mode", "details"}, {hc::columns::WorkspaceKey, columnAdapter_->WorkspaceLayout()}, {"columnOrderV2", Columns},
         {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
 }
 
@@ -366,7 +367,7 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
 {
     columnAdapter_->RestoreWorkspaceLayout(View);
     QList<QJsonObject> Sorted;
-    for (const auto& Value : View.value("columns").toArray()) Sorted.append(Value.toObject());
+    for (const auto& Value : View.value("columnOrderV2").toArray()) Sorted.append(Value.toObject());
     std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {
         return A.value("priority").toInt(-1) < B.value("priority").toInt(-1);
     });

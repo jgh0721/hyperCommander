@@ -358,7 +358,7 @@ QVariant CFsModelT::headerData( int section, Qt::Orientation orientation, int ro
     if( section < 0 || section >= columnView_.VecColumns.size() )
         return {};
 
-    return columnView_.VecColumns[ section ].Name;
+    return columnView_.VecColumns[ section ].definition_.title_;
 }
 
 Qt::ItemFlags CFsModelT::flags( const QModelIndex& index ) const

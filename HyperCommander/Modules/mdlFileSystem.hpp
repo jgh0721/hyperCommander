@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QtCore>
+#include "commonLibs/columns/columnContracts.hpp"
 
 #include "cmnBase.hpp"
 #include "mdlFileSystem.hpp"
@@ -84,6 +85,7 @@ namespace nsHC
         DWORD                   Attributes_ = 0;
         DWORD                   Reserved0_ = 0;
         qint64                  Size_ = 0;
+        std::optional<quint64> directorySize_; // A measured zero differs from an unqueried folder.
         // TyUpItemIDList          UpItemIDList;                   // FS_FLAG_VIRTUAL, FS_FLAG_PIDL
 
         QDateTime               Created_;
@@ -94,6 +96,7 @@ namespace nsHC
 
         QPixmap                 Icon;
         QVector< QVariant >     VecContent;
+        QVector<hc::columns::CellValue> columnValues_;
         LPITEMIDLIST            PIDL = nullptr;
         std::optional<hc::storage::EntrySnapshot> storageEntry_;
     };

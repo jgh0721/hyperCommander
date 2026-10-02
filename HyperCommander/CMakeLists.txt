@@ -139,6 +139,10 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/commandUiBridge.hpp
         ../UniqueLibs/fileJobUi.cpp
         ../UniqueLibs/fileJobUi.hpp
+        ../commonLibs/columns/columnContracts.hpp
+        ../commonLibs/columns/builtInColumns.hpp
+        ../commonLibs/columns/columnProfileStorage.hpp
+        ../commonLibs/view/columnWidthCodec.hpp
         ../commonLibs/view/columnWidthPolicy.hpp
         ../UniqueLibs/settings/appSettings.hpp
         ../UniqueLibs/columnWidthSettings.hpp

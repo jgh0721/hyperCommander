@@ -3,6 +3,7 @@
 #include <QPointer>
 #include <QTimer>
 #include "columnWidthSettings.hpp"
+#include "commonLibs/columns/columnProfileStorage.hpp"
 
 class QWidget;
 struct ColumnView;
@@ -45,7 +46,7 @@ private:
     QTimer timer_;
     QTimer dragTimer_;
     QMap<int, QString> ids_;
-    QMap<QString, int> legacy_;
+    QMap<QString, int> readableFloors_;
     QMap<QString, hc::view::ColumnWidthPolicy> defaults_;
     QMap<QString, hc::view::ColumnWidthPolicy> singleLineDefaults_;
     QMap<QString, int> applied_;
@@ -57,6 +58,7 @@ private:
     QJsonObject unsupportedLayout_;
     int nameColumn_ = -1;
     QString viewId_;
+    hc::columns::ColumnProfile definition_;
     bool applying_ = false;
     bool dragging_ = false;
     bool workspaceOwned_ = false;

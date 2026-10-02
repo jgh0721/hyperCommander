@@ -8,6 +8,7 @@
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
 #include "qtitanColumnAdapter.hpp"
+#include "columnMgr.hpp"
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
@@ -657,6 +658,15 @@ private slots:
         auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Adapter = View->ColumnWidths();
         auto* Native = View->BaseView();
         const auto NameId = Adapter->ColumnId(0);
+        const auto SizeDefinition = hc::columns::DefaultProfile().columns_[1];
+        nsHC::CFileSourceT Folder; Folder.Attributes_ = FILE_ATTRIBUTE_DIRECTORY; Folder.Size_ = 4096;
+        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).State(), hc::columns::ValueState::OnDemand);
+        Folder.directorySize_ = 0;
+        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).Raw().toULongLong(), quint64(0));
+        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &Folder).State(), hc::columns::ValueState::Ready);
+        nsHC::CFileSourceT LargeFile; LargeFile.storageEntry_.emplace();
+        LargeFile.storageEntry_->size_ = std::numeric_limits<quint64>::max(); LargeFile.Size_ = -1;
+        QCOMPARE(CColumnMgr::GetValue(SizeDefinition, &LargeFile).Raw().toULongLong(), std::numeric_limits<quint64>::max());
         QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Flexible, 42}));
         QString Key;
         for (int Row = 0; Row < model(Left)->rowCount(); ++Row) {
@@ -735,7 +745,7 @@ private slots:
         QCOMPARE(Settings.Object(), BeforeSettings);
         hc::settings::JsonStore SavedWorkspace(hc::settings::WorkspaceSettings().FileName());
         const auto SavedState = hc::workspace::Load(SavedWorkspace);
-        QCOMPARE(SavedState.state_.left_.tabs_.front().view_.value("listLayout").toObject().value("mode").toString(), QString("name-first"));
+        QCOMPARE(SavedState.state_.left_.tabs_.front().view_.value(hc::columns::WorkspaceKey).toObject().value("mode").toString(), QString("name-first"));
         Left->AddTab(true);
         QCOMPARE(static_cast<CGridView*>(Left->GetFocusView(1))->ColumnWidths()->LayoutMode(), QString("details"));
         Left->CloseTab();
@@ -754,16 +764,21 @@ private slots:
         QVERIFY(Restart.waitForStarted(5000)); QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
         QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
         Left->CloseTab(); // perform the following visibility checks on the visible original tab
-        // Legacy tabs retain their one-line widths even when the panel's new-tab
-        // default has changed. Unknown future formats remain read-only and intact.
-        View->RestoreWorkspaceView({{"mode", "details"}, {"widths", QJsonObject{{NameId, EncodeWidth({WidthUnit::Percent, WidthMode::Flexible, 37})}}}});
-        QCOMPARE(Adapter->LayoutMode(), QString("details")); QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
+        // Old layouts and expression-hash widths must not enter the new namespace.
+        View->RestoreWorkspaceView({{"mode", "details"}, {"widths", QJsonObject{{NameId, EncodeWidth({WidthUnit::Percent, WidthMode::Flexible, 37})}}},
+            {"listLayout", QJsonObject{{"version", 1}, {"mode", "details"}, {"profiles", QJsonObject{}}}}});
+        QCOMPARE(Adapter->LayoutMode(), QString("name-last")); QCOMPARE(Adapter->Policies()[NameId].value_, 100.0);
+        QVERIFY(Adapter->SetLayoutMode("details"));
+        QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Flexible, 37}));
+        QVERIFY(!QUuid(NameId).isNull());
         // Newly available fields stay hidden in existing workspaces until added.
         for (int Column = 4; Column < 8; ++Column) QVERIFY(Adapter->Policies()[Adapter->ColumnId(Column)].hidden_);
         int FileRow = -1;
         for (int Row = 0; Row < model(Left)->rowCount(); ++Row)
             if (model(Left)->GetName(model(Left)->index(Row, 0)) == "alpha.txt") FileRow = Row;
         QVERIFY(FileRow >= 0);
+        QCOMPARE(model(Left)->index(FileRow, 1).data(CFsModelT::USR_ROLE_SORT).metaType(), QMetaType::fromType<quint64>());
+        QCOMPARE(model(Left)->index(FileRow, 1).data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(9));
         QCOMPARE(model(Left)->index(FileRow, 5).data().toString(), QString("txt"));
         QCOMPARE(model(Left)->index(FileRow, 6).data().toString(), QString("alpha"));
         QVERIFY(!model(Left)->index(FileRow, 4).data().toString().isEmpty());
@@ -804,7 +819,7 @@ private slots:
         EditColumns(true, false);
         for (int Column = 4; Column < 8; ++Column) QTRY_VERIFY(Native->getColumnByModelColumn(Column)->isVisible());
         const auto Added = View->CaptureWorkspaceView();
-        View->RestoreWorkspaceView({{"listLayout", BeforeAdd}});
+        View->RestoreWorkspaceView({{hc::columns::WorkspaceKey, BeforeAdd}});
         QTRY_VERIFY(!Native->getColumnByModelColumn(4)->isVisible());
         View->RestoreWorkspaceView(Added);
         QTRY_VERIFY(Native->getColumnByModelColumn(4)->isVisible());
@@ -813,7 +828,7 @@ private slots:
         QVERIFY(Native->getColumnByModelColumn(5)->isVisible());
         QCOMPARE(Adapter->Policies()[NameId].value_, 37.0);
         const QJsonObject Future{{"version", 99}, {"mode", "future"}, {"profiles", QJsonObject{}}};
-        View->RestoreWorkspaceView({{"listLayout", Future}});
+        View->RestoreWorkspaceView({{hc::columns::WorkspaceKey, Future}});
         QCOMPARE(Adapter->WorkspaceLayout(), Future); QVERIFY(!Adapter->SetLayoutMode("name-first"));
     }
 

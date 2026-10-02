@@ -131,13 +131,15 @@ void CFSDirSizeGatherer::run()
             CCmnMutexLocker Locker( lock_ );
             const auto& Item = vecNode_[ row ];
 
-            if( MapDirNameToSize.contains( Item->Name_ ) == true )
-                Item->Size_ = MapDirNameToSize[ Item->Name_ ];
+            if (MapDirNameToSize.contains(Item->Name_) && MapDirNameToSize[Item->Name_] >= 0) {
+                Item->Size_ = MapDirNameToSize[Item->Name_];
+                Item->directorySize_ = quint64(Item->Size_);
+            }
 
             ( ( CFSModel* )model_ )->createBuiltFsValues( Item, sizeCol_ );
         }
 
-        model_->dataChanged( model_->index( row, sizeCol_ ), model_->index( row, sizeCol_ ), QList<int>() << Qt::DisplayRole << Qt::EditRole );
+        model_->dataChanged( model_->index( row, sizeCol_ ), model_->index( row, sizeCol_ ), QList<int>() << Qt::DisplayRole << Qt::EditRole << CFsModelT::USR_ROLE_SORT );
     }
 }
 
@@ -341,6 +343,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
 
             case CFsModelT::USR_ROLE_SORT: {
+                if (Col != 0) {
+                    if (Col < Item->columnValues_.size()) RoleWith.setData(Item->columnValues_[Col].Raw());
+                    else RoleWith.clearData();
+                    break;
+                }
                 if (Col == 0 && nameSortRanks_.size() == vecNode_.size()) {
                     RoleWith.setData(nameSortRanks_[Row]);
                     break;
@@ -532,7 +539,7 @@ void CFSModel::doRefresh()
             int ColSize = -1;
             for( const auto& ColView : columnView_.VecColumns )
             {
-                if( ColView.Content.contains( BUILTIN_COL_FS_SIZE ) == false )
+                if( ColView.definition_.fieldId_ != "file.size" )
                     continue;
 
                     ColSize = ColView.Index;
@@ -929,66 +936,29 @@ QString CFSModel::retrieveRootWithPath() const
 
 void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
 {
-    // 컬럼 서식 변환
-    for( auto& Col : columnView_.VecColumns )
+    for (const auto& Item : Items)
     {
-        if( Col.Content_CVT.isEmpty() == true && Col.Content.isEmpty() == false )
+        Item->VecContent.clear();
+        Item->columnValues_.clear();
+        for (const auto& Column : columnView_.VecColumns)
         {
-            Col.Content_CVT.resize( Col.Content.length() + 1 );
-            Col.Content.toWCharArray( Col.Content_CVT.data() );
-        }
-    }
-
-    // 컬럼에 대한 데이터 생성
-    for( const auto& Item : Items )
-    {
-        for( const auto& Col : columnView_.VecColumns )
-        {
-            QString Content;
-            bool IsParsed = false;
-            auto Fmt = const_cast< wchar_t* >( Col.Content_CVT.data() );
-
-            do
-            {
-                // TODO: ColumnParseResult 를 미리 만들어 두면 더욱 빨라질 수 있다.
-                ColumnParseResult Result;
-                IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
-
-                if( IsParsed == true )
-                    CColumnMgr::CreateColumnContent( Result, Item.get(), Content);
-
-            } while( IsParsed == true );
-
-            Item->VecContent.push_back( Content );
+            const auto Value = CColumnMgr::GetValue(Column.definition_, Item.get());
+            Item->columnValues_.append(Value);
+            Item->VecContent.append(CColumnMgr::FormatValue(Column.definition_, Value, Item.get()));
         }
     }
 }
 
-void CFSModel::createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column )
+void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 {
-    if( Column < 0 || Column >= columnView_.VecColumns.size() )
-        return;
-
-    const auto& Col = columnView_.VecColumns[ Column ];
-
-    QString Content;
-    bool IsParsed = false;
-    auto Fmt = const_cast< wchar_t* >( Col.Content_CVT.data() );
-
-    do
-    {
-        // TODO: ColumnParseResult 를 미리 만들어 두면 더욱 빨라질 수 있다.
-        ColumnParseResult Result;
-        IsParsed = CColumnMgr::Parse( Fmt, Result, Content );
-
-        if( IsParsed == true )
-            CColumnMgr::CreateColumnContent( Result, Item.get(), Content );
-
-    } while( IsParsed == true );
-
-    Item->VecContent[ Column ] = Content;
+    if (!Item || Column < 0 || Column >= columnView_.VecColumns.size()) return;
+    const auto& Definition = columnView_.VecColumns[Column].definition_;
+    const auto Value = CColumnMgr::GetValue(Definition, Item.get());
+    Item->columnValues_.resize(columnView_.VecColumns.size());
+    Item->VecContent.resize(columnView_.VecColumns.size());
+    Item->columnValues_[Column] = Value;
+    Item->VecContent[Column] = CColumnMgr::FormatValue(Definition, Value, Item.get());
 }
-
 
 //DWORD FSModel::Rename( const QModelIndex& Index, const QString& NewName )
 //{

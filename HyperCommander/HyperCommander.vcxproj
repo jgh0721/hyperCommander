@@ -635,6 +635,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\commandUiBridge.hpp" />
     <ClInclude Include="..\UniqueLibs\fileJobUi.hpp" />
     <ClInclude Include="..\commonLibs\commands\commandBus.hpp" />
+    <ClInclude Include="..\commonLibs\columns\columnContracts.hpp" />
+    <ClInclude Include="..\commonLibs\columns\builtInColumns.hpp" />
+    <ClInclude Include="..\commonLibs\columns\columnProfileStorage.hpp" />
+    <ClInclude Include="..\commonLibs\view\columnWidthCodec.hpp" />
     <ClInclude Include="..\commonLibs\view\columnWidthPolicy.hpp" />
     <ClInclude Include="..\UniqueLibs\settings\appSettings.hpp" />
     <ClInclude Include="..\UniqueLibs\columnWidthSettings.hpp" />

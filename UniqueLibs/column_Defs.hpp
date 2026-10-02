@@ -1,77 +1,15 @@
 ﻿#pragma once
+#include "commonLibs/columns/builtInColumns.hpp"
 
-/*!
-    컬럼 정의 규격
-
-    [=모듈.분류.이름.형식]
-
-
-
-
-    환경설정
-
-    [ColumnView]
-
-
- */
-
-struct Node;
-
-struct ColumnParseResult
-{
-    QStringView                         Module;
-    QStringView                         Cate;
-    QStringView                         Name;
-    QStringView                         Convert;
-};
-
+// Model indices belong only to this UI binding, never to persisted identities.
 struct Column
 {
-    int                                 Index = 0;
-    int                                 Row = 0;
-    QString                             Name;
-    Qt::Alignment                       Align;
-    QString                             Content;
-
-    bool                                defaultHidden_ = false;
-
-    // Internal Use Only.
-    QVector< wchar_t >                  Content_CVT;
+    int Index = 0;
+    hc::columns::ColumnDefinition definition_;
 };
 
 struct ColumnView
 {
-    QString                             Name;
-    bool                                IsBuiltIn = false;
-
-    QVector< Column >                   VecColumns;
-    QVector< ColumnParseResult >        VecParseResult;
-};
-
-constexpr auto BUILTIN_COL_FS_NAME          = QLatin1String( "[=HC.Fs.Name]" );
-constexpr auto BUILTIN_COL_FS_SIZE          = QLatin1String( "[=HC.Fs.Size]" );
-constexpr auto BUILTIN_COL_FS_CREATED       = QLatin1String( "[=HC.Fs.Created]" );
-constexpr auto BUILTIN_COL_FS_MODIFIED      = QLatin1String( "[=HC.Fs.Modified]" );
-constexpr auto BUILTIN_COL_FS_EXTENSION     = QLatin1String( "[=HC.Fs.Extension]" );
-constexpr auto BUILTIN_COL_FS_BASE_NAME     = QLatin1String( "[=HC.Fs.BaseName]" );
-constexpr auto BUILTIN_COL_FS_TYPE          = QLatin1String( "[=HC.Fs.Type]" );
-constexpr auto BUILTIN_COL_FS_ATTRIB        = QLatin1String( "[=HC.Fs.Attrib]" );
-constexpr auto BUILTIN_COL_FS_ATTRIB_TEXT   = QLatin1String( "[=HC.Fs.AttribText]" );
-
-constexpr auto BUILTIN_COL_NTFS_STREAM_COUNT = QLatin1String( "[=HC.Ntfs.StreamCount]" );
-// tagURLZone( urlmon.h ), 존재하면 >= -1
-constexpr auto BUILTIN_COL_NTFS_ZONE_ID = QLatin1String( "[=HC.Ntfs.ZoneId]" );
-
-const ColumnView BUILTIN_COLVIEW_DETAILS = {
-    QObject::tr( "자세히" ), true,
-    QVector< Column >()
-        << Column { 0, 0, QObject::tr( "이름" ),      Qt::AlignLeft,     BUILTIN_COL_FS_NAME }
-        << Column { 1, 0, QObject::tr( "크기" ),      Qt::AlignRight,    BUILTIN_COL_FS_SIZE }
-        << Column { 2, 0, QObject::tr( "만든 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_CREATED }
-        << Column { 3, 0, QObject::tr( "속성" ),      Qt::AlignCenter,   BUILTIN_COL_FS_ATTRIB_TEXT }
-        // Append catalog fields: existing model indices are persisted in column IDs.
-        << Column { 4, 0, QObject::tr( "수정 날짜" ), Qt::AlignCenter,   BUILTIN_COL_FS_MODIFIED, true }
-        << Column { 5, 0, QObject::tr( "확장자" ),    Qt::AlignLeft,     BUILTIN_COL_FS_EXTENSION, true }
-        << Column { 6, 0, QObject::tr( "확장자 없는 이름" ), Qt::AlignLeft, BUILTIN_COL_FS_BASE_NAME, true }
-        << Column { 7, 0, QObject::tr( "파일 종류" ), Qt::AlignLeft,     BUILTIN_COL_FS_TYPE, true }
+    hc::columns::ColumnProfile profile_;
+    QVector<Column> VecColumns;
 };
