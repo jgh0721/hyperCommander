@@ -640,7 +640,9 @@ void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QStrin
     beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
     placeholder_ = Location; index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
+    pageSource_.reset(); pageView_.reset(); pageOffset_ = 0;
     endResetModel();
+    emit PageChanged();
     navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Unavailable, Reason.toStdString(), {}, {}, true, "retry"};
     emit sigNavigationFailed(Reason); emit sigRefreshCompleted();
 }
@@ -655,7 +657,7 @@ bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<Q
 
 CFSModel::~CFSModel()
 {
-    navigationStop_.request_stop(); iconStop_.request_stop();
+    navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop();
     if (FsIconGatherer_ || DirSizeGatherer_)
     {
         if (FsIconGatherer_) FsIconGatherer_->requestInterruption();
@@ -672,6 +674,7 @@ void CFSModel::CancelNavigation()
     emit NavigationCancelled();
     navigationStop_.request_stop();
     ++generation_;
+    pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     if (loading_)
     {
         loading_ = false;
@@ -693,6 +696,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
         QThreadPool::globalInstance()->waitForDone();
     }
     providerEnabled_ = Enabled;
+    pageSource_.reset(); pageView_.reset(); pageOffset_ = 0; emit PageChanged();
     // The compatibility path performs synchronous legacy I/O. Automatic
     // rescans belong only to the asynchronous provider path.
     index_.Publish({}); SetWatchEnabled(watchEnabled_);
@@ -703,6 +707,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
 
 void CFSModel::refreshProvider()
 {
+    pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     requestOnlyValues_ = false; columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     using namespace hc::storage;
     navigationStop_.request_stop();
@@ -710,6 +715,7 @@ void CFSModel::refreshProvider()
     const auto Generation = ++generation_;
     const auto TargetRoots = vecFs_;
     const auto TargetPath = path_;
+    const auto TargetFullPath = retrieveRootWithPath();
     const auto Root = GetRoot();
     if (!Root) return;
     const auto Location = Root->ReadLocation(retrieveRootWithPath());
@@ -724,12 +730,16 @@ void CFSModel::refreshProvider()
     OperationContext Context;
     Context.requestId_ = std::to_string(Generation);
     Context.stopToken_ = navigationStop_.get_token();
-    Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     Context.freshEnumerationMetadata_ = true;
     Context.allowUnavailableChildMetadata_ = true;
-    using ReadResult = Result<std::vector<EntrySnapshot>>;
+    struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; };
+    using ReadResult = Result<Listing>;
+    auto Compare = pageComparison(TargetFullPath); const bool Fallback = !Compare.HasValue();
+    if (Fallback) Compare = pageComparison(TargetFullPath, true);
+    const auto Sorts = columnSorts_; const auto Display = displaySettings_;
+    const auto Query = pageQuery_; const auto ShowHidden = pageShowHidden_;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, ShowHidden, Sorts, Fallback, Display] {
         const auto Result = Watcher->result();
         Watcher->deleteLater();
         if (Generation != generation_) return;
@@ -746,37 +756,174 @@ void CFSModel::refreshProvider()
         acceptedRoots_ = TargetRoots;
         acceptedPath_ = TargetPath;
         acceptedProvider_ = Provider;
-        publishProvider(Result.Value());
+        pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_; pageOffset_ = 0;
+        completedSorts_ = Sorts;
+        if (IsPaged() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); emit ColumnSortCancelled(); }
+        publishProvider(Result.Value().page_.entries_);
         setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
         SetWatchEnabled(watchEnabled_);
+        emit PageChanged();
         emit sigRefreshCompleted();
         const auto Notify = IsRoot() && (GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK)
             ? GetRoot()->GetRoot() : GetCurrentPathWithRoot();
         emit sigChangedDirectory(QDir::toNativeSeparators(QDir::cleanPath(Notify)));
+        if (IsPaged() && (Query != pageQuery_ || ShowHidden != pageShowHidden_ || (!Fallback && Sorts != columnSorts_) || Display != displaySettings_)) requestPage(0, true);
+        else if (IsPaged() && Fallback) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
     });
-    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context]() -> ReadResult {
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, ShowHidden]() -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
         try
         {
             if (!Provider) return Error{ErrorCategory::Unsupported, "provider-not-available"};
             auto Cursor = Provider->Enumerate(Location, Context).get();
             if (!Cursor.HasValue()) return Cursor.Failure();
-            std::vector<EntrySnapshot> Entries;
-            for (;;)
-            {
-                auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context).get();
-                if (!Page.HasValue()) return Page.Failure();
-                if (Page.Value().entries_.size() > Context.EnumerationLimit() - Entries.size())
-                    return Error{ErrorCategory::BudgetExceeded, "entry-limit", Provider->Id()};
-                if (Page.Value().entries_.empty() && !Page.Value().end_)
-                    return Error{ErrorCategory::Internal, "cursor-no-progress", Provider->Id()};
-                Entries.insert(Entries.end(), Page.Value().entries_.begin(), Page.Value().entries_.end());
-                if (Page.Value().end_) break;
+            auto Source = PagedEntryIndex::Build(*Cursor.Value(), Context);
+            if (!Source.HasValue()) return Source.Failure();
+            auto View = Source;
+            if (Source.Value()->Count() > PageSize) {
+                if (!Compare.HasValue()) return Compare.Failure();
+                View = Source.Value()->Project(Compare.Value(), [Query, ShowHidden](const EntrySnapshot& Entry) {
+                    return (ShowHidden || !(Entry.attributes_ & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) &&
+                        hc::workspace::DirectoryIndex{}.Matches(Entry, Query);
+                }, Context, {});
+                if (!View.HasValue()) return View.Failure();
             }
+            auto Page = View.Value()->Read(0, PageSize, Context); if (!Page.HasValue()) return Page.Failure();
             if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
-            return Entries;
+            return Listing{Source.Value(), View.Value(), std::move(Page.Value())};
         }
         catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
+    }));
+}
+
+hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison(const QString& ParentPath, bool NameOnly) const
+{
+    using namespace hc::columns;
+    QVector<Column> Bindings; QVector<Qt::SortOrder> Orders;
+    for (const auto& Sort : columnSorts_) {
+        if (NameOnly) break;
+        for (const auto& Binding : columnView_.VecColumns) if (Binding.definition_.id_ == Sort.columnId_) {
+            auto Fields = Binding.compiled_.dependencies_;
+            if (Binding.definition_.template_.isEmpty()) Fields = {Binding.definition_.fieldId_};
+            if (!Binding.definition_.sortField_.isEmpty()) Fields = {Binding.definition_.sortField_};
+            for (const auto& Field : Fields) if (!QueryFamily(Field).isEmpty() || IsVfsColumn(Field))
+                return hc::storage::Error{hc::storage::ErrorCategory::Unsupported, "paged-sort-needs-snapshot-values"};
+            Bindings.push_back(Binding); Orders.push_back(Sort.order_);
+        }
+    }
+    if (Bindings.isEmpty()) { Column Name; Name.definition_.fieldId_ = "file.name"; Bindings.push_back(Name); Orders.push_back(Qt::AscendingOrder); }
+    const auto& First = Bindings.front().definition_;
+    if (Bindings.size() == 1 && (First.sortField_ == "file.name" ||
+        (First.sortField_.isEmpty() && First.template_.isEmpty() && First.fieldId_ == "file.name"))) {
+        const auto TextOrder = TextCompare(displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
+            displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+        const auto Direction = Orders.front();
+        // Name sorting needs no display object, template evaluation or identity
+        // encoding except on a tie. Keep the exact shared text comparison rules.
+        return hc::storage::PagedEntryIndex::Less([TextOrder, Direction](const auto& A, const auto& B) {
+            if (A.directory_ != B.directory_) return A.directory_;
+            const auto Order = TextOrder(QString::fromStdString(A.name_), QString::fromStdString(B.name_));
+            if (Order) return Direction == Qt::AscendingOrder ? Order < 0 : Order > 0;
+            return QString::compare(hc::workspace::SelectionKey(A), hc::workspace::SelectionKey(B), Qt::CaseSensitive) < 0;
+        });
+    }
+    const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
+        displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    const auto Parent = ParentPath.isEmpty() ? GetCurrentPathWithRoot() : ParentPath;
+    const auto MakeRow = [Bindings, Parent](const hc::storage::EntrySnapshot& Entry) {
+        FileSnapshot Item; Item.name_ = QString::fromStdString(Entry.name_); Item.attributes_ = Entry.attributes_;
+        Item.directory_ = Entry.directory_; Item.parentPath_ = Parent;
+        if (!Entry.directory_) Item.size_ = Entry.size_;
+        if (Entry.createdUtcMs_) Item.created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
+        if (Entry.modifiedUtcMs_) Item.modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
+        if (const auto It = Entry.hints_.find("accessedUtcMs"); It != Entry.hints_.end()) {
+            bool Ok = false; const auto Time = QString::fromStdString(It->second).toLongLong(&Ok);
+            if (Ok) Item.accessed_ = QDateTime::fromMSecsSinceEpoch(Time);
+        }
+        if (const auto It = Entry.hints_.find("typeDescription"); It != Entry.hints_.end()) Item.typeDescription_ = QString::fromStdString(It->second);
+        SortRow Row; Row.directory_ = Entry.directory_; Row.id_ = hc::workspace::SelectionKey(Entry);
+        for (const auto& Binding : Bindings) {
+            const auto Resolve = [&](const QString& Field) { return hc::columns::Resolve(Field, Item); };
+            const auto& Def = Binding.definition_;
+            Row.values_.push_back(!Def.sortField_.isEmpty() ? Resolve(Def.sortField_) : Def.template_.isEmpty() ? Resolve(Def.fieldId_) : RenderTemplate(Binding.compiled_, Def.format_, Resolve));
+        }
+        return Row;
+    };
+    return hc::storage::PagedEntryIndex::Less([Compare, MakeRow](const auto& A, const auto& B) { return Compare(MakeRow(A), MakeRow(B)); });
+}
+
+void CFSModel::SetPage(std::uint64_t Offset)
+{
+    if (!IsPaged() || loading_ || pageBusy_ || Offset >= EntryCount()) return;
+    requestPage(Offset / PageSize * PageSize, false);
+}
+
+void CFSModel::SetPageFilter(const QString& Query, bool ShowHidden)
+{
+    if (pageQuery_ == Query && pageShowHidden_ == ShowHidden) return;
+    pageQuery_ = Query; pageShowHidden_ = ShowHidden;
+    if (IsPaged() && !loading_) requestPage(0, true);
+}
+
+hc::storage::Result<std::shared_ptr<hc::storage::ISelectionManifest>> CFSModel::SelectAllEntries() const
+{
+    if (!pageView_) return hc::storage::Error{hc::storage::ErrorCategory::Unavailable, "no-directory-snapshot"};
+    auto Selected = pageView_->SelectAll(); if (!Selected.HasValue()) return Selected.Failure();
+    class BoundSelection final : public hc::storage::ISelectionManifest
+    {
+        std::shared_ptr<hc::storage::ISelectionManifest> selection_;
+        std::shared_ptr<hc::storage::IStorageProvider> provider_;
+    public:
+        BoundSelection(std::shared_ptr<hc::storage::ISelectionManifest> Selection, std::shared_ptr<hc::storage::IStorageProvider> Provider)
+            : selection_(std::move(Selection)), provider_(std::move(Provider)) {}
+        std::uint64_t Count() const override { return selection_->Count(); }
+        std::shared_ptr<hc::storage::IStorageProvider> Provider() const override { return provider_; }
+        hc::storage::Result<hc::storage::EntryPage> Read(std::uint64_t Offset, std::size_t MaxItems, const hc::storage::OperationContext& Context) const override
+        { return selection_->Read(Offset, MaxItems, Context); }
+    };
+    return std::shared_ptr<hc::storage::ISelectionManifest>(new BoundSelection(Selected.Value(), acceptedProvider_));
+}
+
+void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
+{
+    using namespace hc::storage;
+    auto Compare = pageComparison();
+    if (Rebuild && !Compare.HasValue()) {
+        columnSorts_ = completedSorts_; emit ColumnSortCancelled();
+        emit ColumnQueryStatus(tr("이 컬럼은 전체 목록의 정렬 값 수집을 아직 지원하지 않습니다.")); return;
+    }
+    pageStop_.request_stop(); pageStop_ = std::stop_source{};
+    pageBusy_ = true;
+    const auto Generation = ++pageGeneration_; const auto Navigation = generation_;
+    const auto Source = pageSource_; const auto Current = pageView_;
+    const auto Query = pageQuery_; const auto ShowHidden = pageShowHidden_; const auto Metadata = index_;
+    const auto Sorts = columnSorts_;
+    OperationContext Context; Context.stopToken_ = pageStop_.get_token();
+    struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; };
+    using PageResult = Result<Listing>;
+    auto* Watcher = new QFutureWatcher<PageResult>(this);
+    emit ColumnQueryStatus(tr("목록 페이지를 준비하고 있습니다…"));
+    connect(Watcher, &QFutureWatcher<PageResult>::finished, this, [this, Watcher, Generation, Navigation, Offset, Sorts] {
+        const auto Result = Watcher->result(); Watcher->deleteLater();
+        if (Generation != pageGeneration_ || Navigation != generation_) return;
+        pageBusy_ = false;
+        if (!Result.HasValue()) {
+            columnSorts_ = completedSorts_; emit ColumnSortCancelled();
+            emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
+        }
+        pageView_ = Result.Value().view_; pageOffset_ = Offset; completedSorts_ = Sorts;
+        publishProvider(Result.Value().page_.entries_);
+        emit PageChanged(); emit sigRefreshCompleted(); emit ColumnQueryStatus({});
+    });
+    Watcher->setFuture(QtConcurrent::run([Source, Current, Offset, Rebuild, Compare, Query, ShowHidden, Metadata, Context]() -> PageResult {
+        try {
+            auto View = Rebuild ? Source->Project(Compare.Value(), [Query, ShowHidden, Metadata](const EntrySnapshot& Entry) {
+                return (ShowHidden || !(Entry.attributes_ & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) && Metadata.Matches(Entry, Query);
+            }, Context, {}) : Result<std::shared_ptr<PagedEntryIndex>>(Current);
+            if (!View.HasValue()) return View.Failure();
+            auto Page = View.Value()->Read(Offset, PageSize, Context); if (!Page.HasValue()) return Page.Failure();
+            return Listing{View.Value(), std::move(Page.Value())};
+        } catch (const std::exception&) { return Error{ErrorCategory::Internal, "page-worker-exception"}; }
     }));
 }
 
@@ -847,6 +994,7 @@ void CFSModel::ApplyDisplaySettings()
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     const bool IconsChanged = displaySettings_["iconMode"] != General["iconMode"];
     displaySettings_ = General;
+    if (IsPaged() && !loading_) requestPage(0, true);
     refreshNameSortRanks();
     if (IconsChanged) refreshDisplayIcons();
     refreshColumnSortRanks();
@@ -1207,8 +1355,22 @@ void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 void CFSProxyModel::SetHiddenSystem( bool IsShow )
 {
     IsShowHiddenSystem_ = IsShow;
+    if (auto* Model = qobject_cast<CFSModel*>(sourceModel())) Model->SetPageFilter(search_, IsShowHiddenSystem_);
     
     invalidateFilter();
+}
+
+void CFSProxyModel::SetSearch(const QString& Query)
+{
+    search_ = Query.left(4096);
+    if (auto* Model = qobject_cast<CFSModel*>(sourceModel())) Model->SetPageFilter(search_, IsShowHiddenSystem_);
+    invalidateFilter();
+}
+
+void CFSProxyModel::setSourceModel(QAbstractItemModel* Source)
+{
+    QSortFilterProxyModel::setSourceModel(Source);
+    if (auto* Model = qobject_cast<CFSModel*>(Source)) Model->SetPageFilter(search_, IsShowHiddenSystem_);
 }
 
 bool CFSProxyModel::GetHiddenSystem() const
@@ -1222,6 +1384,7 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
 
     if( Index.isValid() && !source_parent.isValid() )
     {
+        if (const auto Model = qobject_cast<const CFSModel*>(sourceModel()); Model && Model->IsPaged()) return true;
         const auto Attr = Index.data( CFSModel::USR_ROLE_ATTRIBUTE ).toUInt();
         if (!IsShowHiddenSystem_ && (FlagOn(Attr, FILE_ATTRIBUTE_HIDDEN) || FlagOn(Attr, FILE_ATTRIBUTE_SYSTEM))) return false;
         const auto Model = qobject_cast<const CFSModel*>(sourceModel());
@@ -1330,6 +1493,7 @@ void CFSModel::columnResultsReady(const QSet<QString>& Paths)
 
 void CFSModel::CancelColumnQueries()
 {
+    pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     const bool HadPending = columnQueries_->Pending() != 0;
     const bool SortChanged = columnSorts_ != completedSorts_;
     columnQueries_->Cancel(); columnSorts_ = completedSorts_;
@@ -1350,6 +1514,7 @@ void CFSModel::ResumeColumnQueries()
 void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
 {
     if (Sorts == columnSorts_ && columnSortRanks_.size() == vecNode_.size()) return;
+    if (IsPaged()) { if (Sorts != columnSorts_) { columnSorts_ = Sorts; if (!loading_) requestPage(0, true); } return; }
     columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
 }
 
@@ -1357,6 +1522,10 @@ void CFSModel::refreshColumnSortRanks()
 {
     using namespace hc::columns;
     if (loading_) return;
+    if (IsPaged()) {
+        columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
+        return;
+    }
     if (columnSorts_.isEmpty()) {
         columnQueries_->EndSnapshot(); columnSortRanks_.clear(); completedSorts_.clear();
         emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{}); return;

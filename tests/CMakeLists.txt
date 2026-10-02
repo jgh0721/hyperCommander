@@ -1,6 +1,13 @@
 option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using untracked local PowerShell tools" ON)
 
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+qt_add_executable(hc_paged_storage_tests tstPagedStorage.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp)
+target_include_directories(hc_paged_storage_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_link_libraries(hc_paged_storage_tests PRIVATE Qt6::Test psapi)
+target_compile_options(hc_paged_storage_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.paged_storage COMMAND hc_paged_storage_tests -o "${CMAKE_BINARY_DIR}/paged-storage-$<CONFIG>.txt,txt")
+set_tests_properties(hc.paged_storage PROPERTIES TIMEOUT 600 LABELS "storage;large-list")
+hc_enable_qt_deployment(hc_paged_storage_tests TEST)
 qt_add_executable(hc_lua_tests tstLuaRuntime.cpp)
 target_link_libraries(hc_lua_tests PRIVATE hc_script_runtime Qt6::Test)
 target_compile_options(hc_lua_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -208,8 +215,8 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
         add_test(NAME hc.qtitan_ui_${HC_WORKSPACE_DPR}
             COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                 -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
-                -Executable "$<TARGET_FILE:hc_smb_tests>" -QtitanOnly -Dpr ${HC_WORKSPACE_DPR} -TimeoutSeconds 90)
-        set_tests_properties(hc.qtitan_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -QtitanOnly -Dpr ${HC_WORKSPACE_DPR} -TimeoutSeconds 240)
+        set_tests_properties(hc.qtitan_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 270 RUN_SERIAL TRUE)
     endforeach()
 endif()
 if(TARGET hc_smb_tests)

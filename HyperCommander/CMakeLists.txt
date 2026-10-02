@@ -96,6 +96,12 @@ set(PROJECT_UI_SRC
 )
 
 set(UNIQUELIBS_SRC
+        ../UniqueLibs/qtPagedStorage.cpp
+        ../UniqueLibs/qtPagedStorage.hpp
+        ../commonLibs/storage/entryIndex.hpp
+        ../UniqueLibs/qtItemOutcomeStore.cpp
+        ../UniqueLibs/qtItemOutcomeStore.hpp
+        ../commonLibs/operations/itemOutcomeStore.hpp
         ../UniqueLibs/columnNativeFields.cpp
         ../UniqueLibs/columnNativeFields.hpp
         ../UniqueLibs/columnPluginFields.cpp

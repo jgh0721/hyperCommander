@@ -115,6 +115,7 @@ private:
     QTimer                          viewClickTimer_;
     QTimer                          columnSortTimer_;
     QLabel*                         columnStatus_ = nullptr;
+    QWidget*                        pageBar_ = nullptr;
     QStringList                     querySelection_;
     QString                         queryFocus_;
     int                             lastFocusedRowIndex_ = -1;

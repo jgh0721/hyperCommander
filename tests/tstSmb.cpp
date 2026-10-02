@@ -731,13 +731,33 @@ private slots:
         auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
         QElapsedTimer Clock; Clock.start(); Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\"); Model->Refresh();
-        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() >= 100000, 30000); const auto LoadMs = Clock.elapsed();
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->IsPaged() && Model->EntryCount() == 100000, 120000); const auto LoadMs = Clock.elapsed();
+        QCOMPARE(Model->rowCount(), int(CFSModel::PageSize + 1));
+        QTRY_COMPARE_WITH_TIMEOUT(Model->GetName(Model->index(1, 0)), QString("item1.txt"), 120000);
+        auto* PageBar = View->findChild<QWidget*>("hc.entries.pageBar"); QVERIFY(PageBar); QVERIFY(PageBar->isVisible());
+        View->findChild<QPushButton*>("hc.entries.next")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(Model->PageOffset(), CFSModel::PageSize, 30000);
+        QCOMPARE(Model->GetName(Model->index(1, 0)), QString("item4097.txt"));
+        auto Selection = Model->SelectAllEntries(); QVERIFY(Selection.HasValue()); QCOMPARE(Selection.Value()->Count(), 100000ULL);
+        QCOMPARE(Selection.Value()->Provider(), Model->SnapshotProvider());
+        QCOMPARE(Selection.Value()->Read(99999, 1).Value().entries_.front().name_, std::string("item100000.txt"));
         auto Profile = View->ColumnProfile(); Profile.sorts_ = {{Profile.columns_[0].id_, Qt::DescendingOrder}};
-        Clock.restart(); QVERIFY(View->ApplyColumnProfile(Profile)); QCoreApplication::processEvents(); const auto SortMs = Clock.elapsed();
+        Clock.restart(); QVERIFY(View->ApplyColumnProfile(Profile));
+        QTRY_COMPARE_WITH_TIMEOUT(Model->GetName(Model->index(1, 0)), QString("item100000.txt"), 120000); const auto SortMs = Clock.elapsed();
+        QCOMPARE(Model->PageOffset(), 0ULL);
+        // A selection retains the old order and revisions after a new projection.
+        QCOMPARE(Selection.Value()->Read(0, 1).Value().entries_.front().name_, std::string("item1.txt"));
+        auto* Proxy = qobject_cast<CFSProxyModel*>(View->BaseView()->model()); QVERIFY(Proxy);
+        Proxy->SetSearch("name:item99999.txt");
+        QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 1ULL, 120000);
+        QCOMPARE(Model->GetName(Model->index(1, 0)), QString("item99999.txt")); QCOMPARE(Model->rowCount(), 2);
+        Proxy->SetSearch("name:no-such-item"); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 0ULL, 120000);
+        QCOMPARE(Model->rowCount(), 1);
+        Proxy->SetSearch({}); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 100000ULL, 120000);
         auto* Scroll = View->BaseView()->verticalScrollBar(); Clock.restart();
         for (int Index = 0; Index < 20; ++Index) { Scroll->setValue(Index % 2 ? Scroll->minimum() : Scroll->maximum()); QCoreApplication::processEvents(); }
         const auto ScrollMs = Clock.elapsed(); Clock.restart(); Model->CancelColumnQueries(); const auto CancelMs = Clock.elapsed();
-        qInfo() << "100k column baseline load/sort/20-scroll/cancel ms" << LoadMs << SortMs << ScrollMs << CancelMs;
+        qInfo() << "100k paged listing load/sort/20-scroll/cancel ms" << LoadMs << SortMs << ScrollMs << CancelMs;
         QCOMPARE(Model->PendingColumnQueries(), 0); QVERIFY(CancelMs < 500);
     }
     void columnPreviewAndScopesUi()

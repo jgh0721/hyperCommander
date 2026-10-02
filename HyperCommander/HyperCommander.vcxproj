@@ -675,6 +675,12 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\pluginHost\hostedArchiveBackend.hpp" />
     <ClInclude Include="..\pluginHost\hostedDataProviders.hpp" />
     <ClInclude Include="..\UniqueLibs\qtJobJournal.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtPagedStorage.hpp" />
+    <ClInclude Include="..\UniqueLibs\qtItemOutcomeStore.hpp" />
+    <ClInclude Include="..\commonLibs\operations\itemOutcomeStore.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtItemOutcomeStore.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\commonLibs\storage\entryIndex.hpp" />
+    <ClCompile Include="..\UniqueLibs\qtPagedStorage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtJobJournal.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\plugins\metadataProvider.hpp" />
     <ClInclude Include="..\commonLibs\plugins\contentConverter.hpp" />

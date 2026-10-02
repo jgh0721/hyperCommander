@@ -2,17 +2,17 @@
 #include "columnContracts.hpp"
 #include <QCollator>
 #include <numeric>
+#include <functional>
 
 namespace hc::columns
 {
     struct SortRow { QString id_; bool parent_ = false; bool directory_ = false; QVector<CellValue> values_; };
     // Comparison never invokes a provider. Missing values stay last in either
     // direction; parent/folder grouping and stable identity precede tie breaking.
-    inline QVector<int> SortRanks(const QVector<SortRow>& Rows, const QVector<Qt::SortOrder>& Orders,
-        bool Locale = true, bool Numeric = true, Qt::CaseSensitivity Case = Qt::CaseInsensitive)
+    inline auto TextCompare(bool Locale = true, bool Numeric = true, Qt::CaseSensitivity Case = Qt::CaseInsensitive)
     {
         QCollator Collator; Collator.setNumericMode(Numeric); Collator.setCaseSensitivity(Case);
-        const auto CompareText = [&](const QString& A, const QString& B) {
+        return [=](const QString& A, const QString& B) {
             if (Locale) return Collator.compare(A, B);
             if (!Numeric) return QString::compare(A, B, Case);
             // Locale-independent natural order; arbitrary-length digit runs never overflow.
@@ -29,9 +29,12 @@ namespace hc::columns
             }
             return (I < A.size()) - (J < B.size());
         };
-        QVector<int> Indices(Rows.size()); std::iota(Indices.begin(), Indices.end(), 0);
-        std::stable_sort(Indices.begin(), Indices.end(), [&](int A, int B) {
-            const auto& Left = Rows[A]; const auto& Right = Rows[B];
+    }
+    inline auto SortLess(const QVector<Qt::SortOrder>& Orders,
+        bool Locale = true, bool Numeric = true, Qt::CaseSensitivity Case = Qt::CaseInsensitive)
+    {
+        const auto CompareText = TextCompare(Locale, Numeric, Case);
+        return [=](const SortRow& Left, const SortRow& Right) {
             if (Left.parent_ != Right.parent_) return Left.parent_;
             if (Left.directory_ != Right.directory_) return Left.directory_;
             for (int Index = 0; Index < Orders.size(); ++Index) {
@@ -45,7 +48,14 @@ namespace hc::columns
                 if (Order) return Orders[Index] == Qt::AscendingOrder ? Order < 0 : Order > 0;
             }
             return QString::compare(Left.id_, Right.id_, Qt::CaseSensitive) < 0;
-        });
+        };
+    }
+    inline QVector<int> SortRanks(const QVector<SortRow>& Rows, const QVector<Qt::SortOrder>& Orders,
+        bool Locale = true, bool Numeric = true, Qt::CaseSensitivity Case = Qt::CaseInsensitive)
+    {
+        const auto Less = SortLess(Orders, Locale, Numeric, Case);
+        QVector<int> Indices(Rows.size()); std::iota(Indices.begin(), Indices.end(), 0);
+        std::stable_sort(Indices.begin(), Indices.end(), [&](int A, int B) { return Less(Rows[A], Rows[B]); });
         QVector<int> Result(Rows.size()); for (int Rank = 0; Rank < Indices.size(); ++Rank) Result[Indices[Rank]] = Rank;
         return Result;
     }

@@ -151,6 +151,19 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     QueryBar->addWidget(columnStatus_, 1); QueryBar->addWidget(Stop); QueryBar->addWidget(Resume);
     auto* QueryWidget = new QWidget(this); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
     vbox_->addWidget(QueryWidget); vbox_->addWidget( grid_ );
+    pageBar_ = new QWidget(this); pageBar_->setObjectName("hc.entries.pageBar");
+    auto* PageLayout = new QHBoxLayout(pageBar_);
+    auto* PreviousPage = new QPushButton(tr("이전 페이지"), pageBar_); PreviousPage->setObjectName("hc.entries.previous");
+    auto* NextPage = new QPushButton(tr("다음 페이지"), pageBar_); NextPage->setObjectName("hc.entries.next");
+    auto* PageLabel = new QLabel(pageBar_); PageLabel->setObjectName("hc.entries.pageStatus");
+    PageLayout->addWidget(PreviousPage); PageLayout->addWidget(PageLabel, 1); PageLayout->addWidget(NextPage);
+    pageBar_->hide(); vbox_->addWidget(pageBar_);
+    connect(PreviousPage, &QPushButton::clicked, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() >= CFSModel::PageSize ? Model->PageOffset() - CFSModel::PageSize : 0);
+    });
+    connect(NextPage, &QPushButton::clicked, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() + CFSModel::PageSize);
+    });
     connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
     columnSortTimer_.setSingleShot(true);
@@ -227,6 +240,14 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
+        connect(Native, &CFSModel::PageChanged, this, [this, Native] {
+            pageBar_->setVisible(Native->IsPaged());
+            pageBar_->findChild<QLabel*>("hc.entries.pageStatus")->setText(tr("%1–%2 / %3개 · 선택은 현재 페이지에 적용")
+                .arg(Native->EntryCount() ? Native->PageOffset() + 1 : 0)
+                .arg(std::min(Native->PageOffset() + CFSModel::PageSize, Native->EntryCount())).arg(Native->EntryCount()));
+            pageBar_->findChild<QPushButton*>("hc.entries.previous")->setEnabled(Native->PageOffset() != 0);
+            pageBar_->findChild<QPushButton*>("hc.entries.next")->setEnabled(Native->PageOffset() + CFSModel::PageSize < Native->EntryCount());
+        });
         connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); });
         connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); });
         connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });

@@ -5,6 +5,7 @@
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "qtWorkspaceState.hpp"
 #include "qtDirectoryTracker.hpp"
+#include "qtPagedStorage.hpp"
 #include "cmnTypeDefs.hpp"
 
 #include "Modules/mdlFileModel.hpp"
@@ -92,6 +93,13 @@ public:
     void                            SetProviderEnabled(bool Enabled);
     bool                            ProviderEnabled() const { return providerEnabled_; }
     bool                            IsLoading() const override { return loading_; }
+    static constexpr std::uint64_t PageSize = 4096;
+    bool IsPaged() const { return pageSource_ && pageSource_->Count() > PageSize; }
+    std::uint64_t EntryCount() const { return pageView_ ? pageView_->Count() : 0; }
+    std::uint64_t PageOffset() const { return pageOffset_; }
+    void SetPage(std::uint64_t Offset);
+    void SetPageFilter(const QString& Query, bool ShowHidden);
+    hc::storage::Result<std::shared_ptr<hc::storage::ISelectionManifest>> SelectAllEntries() const;
     bool                            HandlesRefreshSignals() const override { return providerEnabled_; }
     void                            CancelNavigation();
     std::optional<hc::storage::Error> LastNavigationError() const { return navigationError_; }
@@ -133,6 +141,7 @@ signals:
     void ColumnValuesChanged();
     void ColumnQueryStatus(const QString& Text);
     void ColumnSortCancelled();
+    void PageChanged();
 protected:
     void                            doRefresh() override;
 
@@ -144,6 +153,8 @@ private:
     void                            createBuiltFsValues( QVector< nsHC::TySpFileSource >& Items );
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
     void                            refreshProvider();
+    void requestPage(std::uint64_t Offset, bool Rebuild);
+    hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
     void                            refreshDisplayIcons();
     void                            refreshNameSortRanks();
@@ -172,6 +183,13 @@ private:
     QVector<nsHC::TySpFileSystem>    acceptedRoots_;
     QString                         acceptedPath_;
     std::shared_ptr<hc::storage::IStorageProvider> acceptedProvider_;
+    std::shared_ptr<hc::storage::PagedEntryIndex> pageSource_, pageView_;
+    std::uint64_t pageOffset_ = 0;
+    QString pageQuery_;
+    bool pageShowHidden_ = false;
+    bool pageBusy_ = false;
+    std::stop_source pageStop_;
+    std::uint64_t pageGeneration_ = 0;
 
     CFSIconGatherer*                FsIconGatherer_ = nullptr;
     CFSDirSizeGatherer*             DirSizeGatherer_ = nullptr;
@@ -193,7 +211,8 @@ public:
 
     Q_INVOKABLE void                    SetHiddenSystem( bool IsShow );
     Q_INVOKABLE bool                    GetHiddenSystem() const;
-    void SetSearch(const QString& Query) { search_ = Query.left(4096); invalidateFilter(); }
+    void SetSearch(const QString& Query);
+    void setSourceModel(QAbstractItemModel* Source) override;
     QString Search() const { return search_; }
 
     bool                                filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const override;
