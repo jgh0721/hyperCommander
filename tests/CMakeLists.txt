@@ -336,7 +336,7 @@ qt_add_executable(hc_column_tests tstColumnWidths.cpp
     ../commonLibs/view/columnWidthCodec.hpp ../commonLibs/view/columnWidthPolicy.hpp ../UniqueLibs/columnWidthSettings.hpp)
 target_include_directories(hc_column_tests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_options(hc_column_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_column_tests PRIVATE Qt6::Test)
+target_link_libraries(hc_column_tests PRIVATE Qt6::Test Qt6::Concurrent)
 add_test(NAME hc.columns COMMAND hc_column_tests)
 set_tests_properties(hc.columns PROPERTIES TIMEOUT 30)
 

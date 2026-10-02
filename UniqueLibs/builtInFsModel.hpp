@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "columnMgr.hpp"
+#include "commonLibs/columns/columnQueryEngine.hpp"
 #include "qtWorkspaceState.hpp"
 #include "qtDirectoryTracker.hpp"
 #include "cmnTypeDefs.hpp"
@@ -68,6 +69,13 @@ public:
     CFSModel();
     ~CFSModel() override;
     void SetColumnView(const ColumnView& View) override;
+    void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
+    const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
+    void CancelColumnQueries();
+    void ResumeColumnQueries();
+    int PendingColumnQueries() const { return columnQueries_->Pending(); }
+    static constexpr int GridSortRole = Qt::UserRole + 65;
+    static constexpr int ColumnStateRole = Qt::UserRole + 64;
     void SetWatchEnabled(bool Enabled);
     void NotifyNetworkChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason);
@@ -118,6 +126,10 @@ signals:
     void NavigationCancelled();
     void RetryRequested();
     void MetadataChanged();
+    void ColumnValuesChanging();
+    void ColumnValuesChanged();
+    void ColumnQueryStatus(const QString& Text);
+    void ColumnSortCancelled();
 protected:
     void                            doRefresh() override;
 
@@ -132,7 +144,14 @@ private:
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
     void                            refreshDisplayIcons();
     void                            refreshNameSortRanks();
-    QVector<int>                    nameSortRanks_;
+    hc::columns::CellValue readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent = true) const;
+    hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
+    QString queryPath(const nsHC::TySpFileSource& Item) const;
+    void columnResultsReady(const QSet<QString>& Paths);
+    std::unique_ptr<hc::columns::QueryEngine> columnQueries_;
+    QVector<int>                    nameSortRanks_, columnSortRanks_;
+    QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_;
+    void refreshColumnSortRanks();
     QJsonObject                     displaySettings_;
     quint64                         iconGeneration_ = 0;
     std::stop_source                iconStop_;

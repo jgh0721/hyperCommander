@@ -596,6 +596,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\UniqueLibs\qtViewerProvider.hpp" />
     <ClInclude Include="..\UniqueLibs\qtViewerHost.hpp" />
     <QtMoc Include="..\UniqueLibs\qtViewerSurface.hpp" />
+    <ClCompile Include="..\UniqueLibs\columnNativeFields.cpp" />
+    <ClInclude Include="..\UniqueLibs\columnNativeFields.hpp" />
     <ClCompile Include="..\UniqueLibs\qtColumnProfileEditor.cpp" />
     <ClCompile Include="..\UniqueLibs\qtitanColumnAdapter.cpp" />
     <ClCompile Include="..\UniqueLibs\qtWorkspaceState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

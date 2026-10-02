@@ -144,7 +144,23 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     view_->endUpdate();
 
     vbox_->setContentsMargins( 0, 9, 0, 0 );
-    vbox_->addWidget( grid_ );
+    auto* QueryBar = new QHBoxLayout;
+    columnStatus_ = new QLabel(this); columnStatus_->setObjectName("hc.columns.queryStatus"); columnStatus_->setWordWrap(true);
+    auto* Stop = new QPushButton(tr("컬럼 조회 중지"), this); Stop->setObjectName("hc.columns.stop");
+    auto* Resume = new QPushButton(tr("다시 조회"), this); Resume->setObjectName("hc.columns.resume");
+    QueryBar->addWidget(columnStatus_, 1); QueryBar->addWidget(Stop); QueryBar->addWidget(Resume);
+    auto* QueryWidget = new QWidget(this); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
+    vbox_->addWidget(QueryWidget); vbox_->addWidget( grid_ );
+    connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
+    connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
+    columnSortTimer_.setSingleShot(true);
+    connect(view_, &Qtitan::GridViewBase::sortingChanged, this, [this] { columnSortTimer_.start(0); });
+    connect(&columnSortTimer_, &QTimer::timeout, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) {
+            const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
+            Model->SetColumnSorts(ColumnProfile().sorts_); RestoreSelection(Selected, Focus);
+        }
+    });
     setLayout( vbox_ );
     setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
 
@@ -209,6 +225,20 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             break;
         }
     });
+    if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
+        Native->setProperty("hc.columnSignals", true);
+        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); });
+        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); });
+        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
+        connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
+            view_->beginUpdate();
+            for (int Index = 0; Index < model_->columnCount(); ++Index) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Qtitan::SortNone);
+            for (const auto& Sort : Native->ColumnSorts()) for (int Index = 0; Index < model_->columnCount(); ++Index)
+                if (QUuid(columnAdapter_->ColumnId(Index)) == Sort.columnId_) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+            view_->endUpdate();
+            columnSortTimer_.stop();
+        });
+    }
     model_->SetColumnView( *Columns );
 
     if( Proxy != nullptr )
@@ -236,11 +266,10 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.definition_.alignment_ );
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
-            GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFsModelT::USR_ROLE_SORT));
+            GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
             if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
             {
                 GridColumn->setSortLocaleAware( true );
-                GridColumn->dataBinding()->setSortRole( Qt::UserRole );
                 
             }
             GridColumn->setFilterButtonVisible( false );
@@ -254,14 +283,14 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         for (const auto& Column : Columns->VecColumns)
             if (Column.definition_.id_ == Columns->profile_.columns_[Position].id_)
                 view_->getColumnByModelColumn(Column.Index)->setVisualIndex(Position);
-    if (!Columns->profile_.sorts_.isEmpty()) {
-        const auto& Sort = Columns->profile_.sorts_.front();
+    for (const auto& Sort : Columns->profile_.sorts_) {
         for (const auto& Column : Columns->VecColumns)
             if (Column.definition_.id_ == Sort.columnId_)
                 static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Column.Index))->setSortOrder(
                     Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
     }
     columnAdapter_->Bind(*Columns);
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetColumnSorts(Columns->profile_.sorts_);
     ApplyDisplaySettings();
 }
 

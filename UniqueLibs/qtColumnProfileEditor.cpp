@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "qtColumnProfileEditor.hpp"
 #include "cmnHCUtils.hpp"
+#include <QScrollArea>
+#include "commonLibs/columns/columnSort.hpp"
 
 using namespace hc::columns;
 
@@ -79,19 +81,34 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     });
     Button(tr("기본값"), "hc.columns.reset", 1, 2, [this] { const auto Id = draft_.id_; const auto Title = draft_.title_; draft_ = DefaultProfile(); draft_.id_ = Id; draft_.title_ = Title; dirty_ = true; rebuildList(0); });
     auto* Details = new QTabWidget(Split); Details->setObjectName("hc.columns.details");
+    const auto AddScrollableTab = [Details](QWidget* Page, const QString& Title) {
+        auto* Scroll = new QScrollArea(Details); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame);
+        Scroll->setWidget(Page); Details->addTab(Scroll, Title);
+    };
     auto* Content = new QWidget; auto* Form = new QFormLayout(Content);
     field_ = Choice(Content, "hc.columns.field", {});
-    for (const auto& Field : BuiltInFields()) field_->addItem(Field.title_, Field.id_);
+    for (const auto& Field : BuiltInFields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
+    field_->addItem(tr("복합 템플릿"), QString{});
+    template_ = new QLineEdit(Content); template_->setObjectName("hc.columns.template"); template_->setPlaceholderText("${file.name} · ${file.size}");
+    template_->setMaxLength(4096);
+    auto* Insert = new QPushButton(tr("필드 삽입"), Content);
+    auto* TemplateRow = new QHBoxLayout; TemplateRow->addWidget(template_, 1); TemplateRow->addWidget(Insert);
+    connect(Insert, &QPushButton::clicked, this, [this, Insert] {
+        QMenu Menu(this); for (const auto& Field : BuiltInFields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
+        if (const auto* Action = Menu.exec(Insert->mapToGlobal(QPoint(0, Insert->height())))) template_->insert("${" + Action->data().toString() + "}");
+    });
+    sortField_ = Choice(Content, "hc.columns.sortField", {tr("원래 값 / 템플릿 문자열")});
+    for (const auto& Field : BuiltInFields()) sortField_->addItem(Field.title_, Field.id_);
     title_ = new QLineEdit(Content); title_->setObjectName("hc.columns.title");
     alignment_ = Choice(Content, "hc.columns.alignment", {tr("왼쪽"), tr("가운데"), tr("오른쪽")});
     primary_ = new QCheckBox(tr("주 이름 컬럼으로 사용"), Content); primary_->setObjectName("hc.columns.primary");
     sizeFormat_ = Choice(Content, "hc.columns.sizeFormat", {tr("바이트"), tr("자동 단위"), "KiB", "MiB", "GiB"});
     precision_ = new QSpinBox(Content); precision_->setObjectName("hc.columns.precision"); precision_->setRange(0, 6);
     dateFormat_ = Choice(Content, "hc.columns.dateFormat", {"yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "HH:mm:ss", "yyyy/MM/dd HH:mm"}); dateFormat_->setEditable(true);
-    Form->addRow(tr("내용"), field_); Form->addRow(tr("컬럼 제목"), title_); Form->addRow(tr("내용 정렬"), alignment_);
+    Form->addRow(tr("내용"), field_); Form->addRow(tr("템플릿"), TemplateRow); Form->addRow(tr("정렬 값"), sortField_); Form->addRow(tr("컬럼 제목"), title_); Form->addRow(tr("내용 정렬"), alignment_);
     Form->addRow(primary_); Form->addRow(tr("크기 형식"), sizeFormat_); Form->addRow(tr("소수 자릿수"), precision_); Form->addRow(tr("날짜 형식"), dateFormat_);
     auto* FormatNote = new QLabel(tr("같은 필드를 여러 컬럼에 추가해 서로 다른 형식으로 표시할 수 있습니다. 정렬은 원래 값을 기준으로 합니다."), Content);
-    FormatNote->setWordWrap(true); Form->addRow(FormatNote); Details->addTab(Content, tr("내용·형식"));
+    FormatNote->setWordWrap(true); Form->addRow(FormatNote); AddScrollableTab(Content, tr("내용·형식"));
     auto* Widths = new QWidget; auto* WidthForm = new QFormLayout(Widths);
     unit_ = Choice(Widths, "hc.columns.unit", {tr("픽셀"), tr("퍼센트")});
     widthMode_ = Choice(Widths, "hc.columns.widthMode", {tr("가변"), tr("고정")});
@@ -104,28 +121,60 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     WidthForm->addRow(tr("단위"), unit_); WidthForm->addRow(tr("모드"), widthMode_); WidthForm->addRow(tr("기준값"), width_);
     WidthForm->addRow(tr("최소값"), minimum_); WidthForm->addRow(tr("최대값"), maximum_); WidthForm->addRow(visible_);
     auto* WidthNote = new QLabel(tr("모드마다 너비와 표시 여부를 따로 저장합니다. 두 줄 모드의 주 이름은 별도 줄을 사용합니다."), Widths);
-    WidthNote->setWordWrap(true); WidthForm->addRow(WidthNote); Details->addTab(Widths, tr("너비·표시"));
+    WidthNote->setWordWrap(true); WidthForm->addRow(WidthNote); AddScrollableTab(Widths, tr("너비·표시"));
     Split->setStretchFactor(0, 2); Split->setStretchFactor(1, 3); Split->setChildrenCollapsible(false);
     auto* Sorting = new QHBoxLayout;
     sort_ = Choice(this, "hc.columns.sort", {}); sortOrder_ = Choice(this, "hc.columns.sortOrder", {tr("오름차순"), tr("내림차순")});
     Sorting->addWidget(new QLabel(tr("정렬 기준"))); Sorting->addWidget(sort_, 1); Sorting->addWidget(sortOrder_); Root->addLayout(Sorting);
+    auto* AddSort = new QPushButton(tr("정렬 추가"), this); AddSort->setObjectName("hc.columns.addSort"); Sorting->addWidget(AddSort);
+    auto* RemoveSort = new QPushButton(tr("정렬 제거"), this); Sorting->addWidget(RemoveSort);
+    sortRules_ = new QListWidget(this); sortRules_->setObjectName("hc.columns.sortRules"); sortRules_->setMaximumHeight(80); Root->addWidget(sortRules_);
+    auto* Priority = new QHBoxLayout; Root->addLayout(Priority); Priority->addStretch();
+    for (int Direction : {-1, 1}) {
+        auto* Move = new QPushButton(Direction < 0 ? tr("우선순위 올림") : tr("우선순위 내림"), this);
+        Move->setObjectName(Direction < 0 ? "hc.columns.sortUp" : "hc.columns.sortDown"); Priority->addWidget(Move);
+        connect(Move, &QPushButton::clicked, this, [this, Direction] {
+            const int Row = sortRules_->currentRow(), Next = Row + Direction;
+            if (Row < 0 || Next < 0 || Next >= draft_.sorts_.size()) return;
+            draft_.sorts_.swapItemsAt(Row, Next); dirty_ = true; refreshSorts(Next); updatePreview();
+        });
+    }
+    connect(AddSort, &QPushButton::clicked, this, [this] {
+        for (const auto& Column : draft_.columns_) if (std::none_of(draft_.sorts_.begin(), draft_.sorts_.end(), [&](const auto& Sort) { return Sort.columnId_ == Column.id_; })) {
+            draft_.sorts_.append({Column.id_, Qt::AscendingOrder}); dirty_ = true; refreshSorts(int(draft_.sorts_.size()) - 1); updatePreview(); return;
+        }
+    });
+    connect(RemoveSort, &QPushButton::clicked, this, [this] {
+        const int Row = sortRules_->currentRow(); if (Row < 0) return; draft_.sorts_.removeAt(Row); dirty_ = true; refreshSorts(); updatePreview();
+    });
+    connect(sortRules_, &QListWidget::currentRowChanged, this, [this](int Row) {
+        if (loading_ || Row < 0 || Row >= draft_.sorts_.size()) return;
+        const QSignalBlocker One(sort_), Two(sortOrder_); sort_->setCurrentIndex(sort_->findData(IdText(draft_.sorts_[Row].columnId_))); sortOrder_->setCurrentIndex(draft_.sorts_[Row].order_ == Qt::DescendingOrder);
+    });
     Root->addWidget(new QLabel(tr("예제 미리 보기"), this));
     preview_ = new QTableWidget(this); preview_->setObjectName("hc.columns.preview"); preview_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     preview_->viewport()->installEventFilter(this); preview_->verticalHeader()->hide(); preview_->setSelectionBehavior(QAbstractItemView::SelectRows); preview_->setMinimumHeight(130); Root->addWidget(preview_, 2);
     error_ = new QLabel(this); error_->setObjectName("hc.columns.error"); error_->setWordWrap(true); Root->addWidget(error_);
     connect(columns_, &QListWidget::currentRowChanged, this, &QtColumnProfileEditor::loadColumn);
-    for (auto* Combo : {field_, alignment_, sizeFormat_, unit_, widthMode_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] { storeColumn(); });
+    for (auto* Combo : {field_, alignment_, sizeFormat_, unit_, widthMode_, sortField_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] { storeColumn(); });
     connect(dateFormat_, &QComboBox::currentTextChanged, this, [this] { storeColumn(); });
     connect(title_, &QLineEdit::textEdited, this, [this] { storeColumn(); });
+    connect(template_, &QLineEdit::textChanged, this, [this] { storeColumn(); });
     connect(precision_, &QSpinBox::valueChanged, this, [this] { storeColumn(); });
     for (auto* Number : {width_, minimum_, maximum_}) connect(Number, &QDoubleSpinBox::valueChanged, this, [this] { storeColumn(); });
     for (auto* Check : {primary_, visible_}) connect(Check, &QCheckBox::toggled, this, [this] { storeColumn(); });
     connect(layout_, &QComboBox::currentIndexChanged, this, [this](int Index) { if (loading_) return; draft_.mode_ = static_cast<LayoutMode>(Index); dirty_ = true; loadColumn(row_); });
     connect(scope_, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; });
     for (auto* Combo : {sort_, sortOrder_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] {
-        if (loading_) return; draft_.sorts_.clear();
-        if (!sort_->currentData().toString().isEmpty()) draft_.sorts_.append({QUuid(sort_->currentData().toString()), sortOrder_->currentIndex() ? Qt::DescendingOrder : Qt::AscendingOrder});
-        dirty_ = true; updatePreview();
+        if (loading_) return;
+        const auto Id = QUuid(sort_->currentData().toString()); const int Row = sortRules_->currentRow();
+        if (Id.isNull()) { if (Row >= 0) draft_.sorts_.removeAt(Row); }
+        else {
+            for (int Index = 0; Index < draft_.sorts_.size(); ++Index) if (Index != Row && draft_.sorts_[Index].columnId_ == Id) { error_->setText(tr("이미 정렬 기준에 있습니다.")); return; }
+            SortDefinition Sort{Id, sortOrder_->currentIndex() ? Qt::DescendingOrder : Qt::AscendingOrder};
+            if (Row < 0) draft_.sorts_.append(Sort); else draft_.sorts_[Row] = Sort;
+        }
+        dirty_ = true; refreshSorts(std::max(0, Row)); updatePreview();
     });
     connect(profileTitle_, &QLineEdit::textEdited, this, [this](const QString& Text) { draft_.title_ = Text; const auto Index = profiles_->findData(IdText(draft_.id_)); if (Index >= 0) profiles_->setItemText(Index, Text); dirty_ = true; });
     connect(Copy, &QPushButton::clicked, this, &QtColumnProfileEditor::cloneProfile);
@@ -168,19 +217,21 @@ void QtColumnProfileEditor::rebuildList(int Row)
         columns_->addItem(Column.title_); sort_->addItem(Column.title_, IdText(Column.id_));
     }
     if (!draft_.sorts_.isEmpty()) { sort_->setCurrentIndex(sort_->findData(IdText(draft_.sorts_.front().columnId_))); sortOrder_->setCurrentIndex(draft_.sorts_.front().order_ == Qt::DescendingOrder); }
-    columns_->setCurrentRow(Row); loading_ = false; loadColumn(Row);
+    columns_->setCurrentRow(Row); loading_ = false; refreshSorts(); loadColumn(Row);
 }
 
 void QtColumnProfileEditor::loadColumn(int Row)
 {
     if (loading_ || Row < 0 || Row >= draft_.columns_.size()) return;
     loading_ = true; row_ = Row; const auto& Column = draft_.columns_[Row]; const auto& Width = Column.widths_[int(draft_.mode_)];
-    field_->setCurrentIndex(field_->findData(Column.fieldId_)); title_->setText(Column.title_);
+    field_->setCurrentIndex(field_->findData(Column.template_.isEmpty() ? Column.fieldId_ : QString{})); title_->setText(Column.title_);
+    template_->setText(Column.template_); template_->setEnabled(!Column.template_.isEmpty());
+    sortField_->setCurrentIndex(std::max(0, sortField_->findData(Column.sortField_)));
     alignment_->setCurrentIndex(Column.alignment_ == Qt::AlignLeft ? 0 : Column.alignment_ == Qt::AlignRight ? 2 : 1);
     primary_->setChecked(Column.id_ == draft_.primaryNameId_); primary_->setEnabled(Column.fieldId_ == "file.name" || Column.fieldId_ == "file.stem");
     sizeFormat_->setCurrentIndex(int(Column.format_.size_)); precision_->setValue(Column.format_.precision_); dateFormat_->setCurrentText(Column.format_.datePattern_);
-    sizeFormat_->setEnabled(Column.fieldId_ == "file.size"); precision_->setEnabled(Column.fieldId_ == "file.size");
-    dateFormat_->setEnabled(Column.fieldId_ == "file.created" || Column.fieldId_ == "file.modified" || Column.fieldId_ == "file.accessed");
+    sizeFormat_->setEnabled(Column.fieldId_ == "file.size" || Column.fieldId_ == "file.allocatedSize" || !Column.template_.isEmpty()); precision_->setEnabled(sizeFormat_->isEnabled());
+    dateFormat_->setEnabled(Column.fieldId_ == "file.created" || Column.fieldId_ == "file.modified" || Column.fieldId_ == "file.accessed" || !Column.template_.isEmpty());
     unit_->setCurrentIndex(int(Width.unit_)); widthMode_->setCurrentIndex(int(Width.mode_)); width_->setValue(Width.value_);
     minimum_->setValue(Width.minimum_.value_or(-1)); maximum_->setValue(Width.maximum_.value_or(-1)); visible_->setChecked(!Width.hidden_);
     loading_ = false; updatePreview();
@@ -197,6 +248,8 @@ void QtColumnProfileEditor::storeColumn()
     const bool FieldChanged = Column.fieldId_ != Field;
     const auto PreviousField = Column.fieldId_;
     Column.fieldId_ = Field; Column.title_ = title_->text();
+    Column.template_ = Field.isEmpty() ? (FieldChanged ? QString("${file.name} · ${file.size}") : template_->text()) : QString{};
+    Column.sortField_ = sortField_->currentData().toString();
     if (FieldChanged) {
         const auto Fields = BuiltInFields();
         for (const auto& Old : Fields) if (Old.id_ == PreviousField && Column.title_ == Old.title_) {
@@ -224,6 +277,11 @@ void QtColumnProfileEditor::storeColumn()
 
 bool QtColumnProfileEditor::ValidateDraft()
 {
+    for (const auto& Column : draft_.columns_) {
+        const auto Compiled = CompileTemplate(Column.template_);
+        if (!Compiled.Valid()) { error_->setText(tr("%1 · %2번째 문자: %3").arg(Column.title_).arg(Compiled.errorOffset_ + 1).arg(Compiled.error_)); return false; }
+    }
+    if (!IsBuiltInProfile(draft_)) { error_->setText(tr("필드 참조·정렬 값·너비 설정을 확인하세요.")); return false; }
     const auto Error = Validate(draft_);
     if (!Error.isEmpty()) {
         error_->setText(Error == "width" ? tr("너비를 확인하세요. 퍼센트는 0~100이며, 최소값은 최대값 이하이어야 합니다.")
@@ -249,19 +307,25 @@ void QtColumnProfileEditor::updatePreview()
     Samples[2].name_ = tr("문서"); Samples[2].directory_ = true; Samples[2].attributes_ = 0x10;
     for (auto& File : Samples) { File.parentPath_ = "C:\\Projects"; File.created_ = File.modified_ = File.accessed_ = QDateTime(QDate(2026, 10, 2), QTime(10, 30)); }
     if (!draft_.sorts_.isEmpty()) {
-        const auto Sort = draft_.sorts_.front();
-        const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) { return Column.id_ == Sort.columnId_; });
-        if (It != draft_.columns_.end()) std::stable_sort(Samples.begin(), Samples.end(), [&](const auto& A, const auto& B) {
-            const auto Left = Resolve(It->fieldId_, A).Raw(), Right = Resolve(It->fieldId_, B).Raw();
-            if (Left.isValid() != Right.isValid()) return Left.isValid();
-            const auto Compared = QVariant::compare(Left, Right);
-            return Sort.order_ == Qt::AscendingOrder ? Compared < 0 : Compared > 0;
-        });
+        QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders;
+        for (const auto& Sort : draft_.sorts_) Orders.append(Sort.order_);
+        for (const auto& File : Samples) {
+            SortRow Row; Row.id_ = File.name_; Row.directory_ = File.directory_;
+            for (const auto& Sort : draft_.sorts_) {
+                const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Col) { return Col.id_ == Sort.columnId_; });
+                if (It == draft_.columns_.end()) { Row.values_.append(CellValue::Missing(ValueState::Empty)); continue; }
+                Row.values_.append(!It->sortField_.isEmpty() ? Resolve(It->sortField_, File) : It->template_.isEmpty() ? Resolve(It->fieldId_, File)
+                    : RenderTemplate(CompileTemplate(It->template_), It->format_, [&](const QString& Field) { return Resolve(Field, File); }));
+            }
+            Rows.append(Row);
+        }
+        const auto Ranks = SortRanks(Rows, Orders); auto Sorted = Samples;
+        for (int Index = 0; Index < Samples.size(); ++Index) Sorted[Ranks[Index]] = Samples[Index]; Samples = Sorted;
     }
     for (int Row = 0; Row < Samples.size(); ++Row) {
         const auto& File = Samples[Row]; const int DetailRow = Two ? Row * 2 + (draft_.mode_ == LayoutMode::NameFirst ? 1 : 0) : Row;
         for (int Index = 0; Index < Visible.size(); ++Index) {
-            const auto& Column = Visible[Index]; auto Value = Resolve(Column.fieldId_, File);
+            const auto& Column = Visible[Index]; auto Value = Column.template_.isEmpty() ? Resolve(Column.fieldId_, File) : RenderTemplate(CompileTemplate(Column.template_), Column.format_, [&](const QString& Field) { return Resolve(Field, File); });
             auto Text = Value.State() == ValueState::OnDemand ? tr("<폴더>") : Format(Value, Column.format_);
             if (Column.fieldId_ == "file.attributes") Text = GetFormattedAttrText(quint32(File.attributes_), false);
             auto* Cell = new QTableWidgetItem(Text); Cell->setTextAlignment(Column.alignment_ | Qt::AlignVCenter); preview_->setItem(DetailRow, Index, Cell);
@@ -303,4 +367,19 @@ bool QtColumnProfileEditor::eventFilter(QObject* Watched, QEvent* Event)
     if (preview_ && Watched == preview_->viewport() && Event->type() == QEvent::Resize)
         QTimer::singleShot(0, this, &QtColumnProfileEditor::updatePreview);
     return QWidget::eventFilter(Watched, Event);
+}
+
+void QtColumnProfileEditor::refreshSorts(int Row)
+{
+    const QSignalBlocker Block(sortRules_); sortRules_->clear();
+    for (int Index = 0; Index < draft_.sorts_.size(); ++Index) {
+        const auto& Sort = draft_.sorts_[Index];
+        const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Col) { return Col.id_ == Sort.columnId_; });
+        sortRules_->addItem(QString::number(Index + 1) + ". " + (It == draft_.columns_.end() ? QString{} : It->title_) + (Sort.order_ == Qt::AscendingOrder ? " ↑" : " ↓"));
+    }
+    sortRules_->setCurrentRow(std::min(Row, int(draft_.sorts_.size()) - 1));
+    const QSignalBlocker One(sort_), Two(sortOrder_);
+    if (sortRules_->currentRow() >= 0) {
+        const auto& Sort = draft_.sorts_[sortRules_->currentRow()]; sort_->setCurrentIndex(sort_->findData(IdText(Sort.columnId_))); sortOrder_->setCurrentIndex(Sort.order_ == Qt::DescendingOrder);
+    } else sort_->setCurrentIndex(0);
 }

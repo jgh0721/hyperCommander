@@ -1,5 +1,9 @@
 ﻿#include "UniqueLibs/columnWidthSettings.hpp"
 #include <QtTest>
+#include "commonLibs/columns/columnQueryEngine.hpp"
+#include "commonLibs/columns/columnSort.hpp"
+#include <atomic>
+#include <thread>
 #include <limits>
 #include "commonLibs/columns/builtInColumns.hpp"
 #include "commonLibs/columns/columnProfileStorage.hpp"
@@ -9,6 +13,81 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void templateCompilerAndStorage()
+    {
+        using namespace hc::columns;
+        const auto Template = CompileTemplate("$${literal} ${file.name} · ${file.size} / ${file.size}");
+        QVERIFY(Template.Valid()); QCOMPARE(Template.dependencies_, (QStringList{"file.name", "file.size"}));
+        FormatOptions Options; Options.size_ = SizeFormat::KiB;
+        const auto Value = RenderTemplate(Template, Options, [](const QString& Field) { return Field == "file.name" ? CellValue::Ready(QString("파일.txt")) : CellValue::Ready(quint64(2048)); });
+        QCOMPARE(Value.Raw().toString(), QString("${literal} 파일.txt · %1 KiB / %1 KiB").arg(QLocale().toString(2.0, 'f', 2)));
+        QCOMPARE(CompileTemplate("abc ${file.name").errorOffset_, 4);
+        QVERIFY(!CompileTemplate("${file.name + 1}").Valid()); QVERIFY(!CompileTemplate(QString(4097, 'x')).Valid());
+        int Reads = 0;
+        QCOMPARE(RenderTemplate(Template, {}, [&](const QString&) { ++Reads; return CellValue::Missing(ValueState::Pending); }).State(), ValueState::Pending);
+        QCOMPARE(Reads, 3); // All dependencies can be queued in one pass.
+        QCOMPARE(RenderTemplate(CompileTemplate("${file.fileVersion} ${file.imageWidth}"), {}, [](const QString& Field) {
+            return CellValue::Missing(Field == "file.fileVersion" ? ValueState::Pending : ValueState::Unsupported);
+        }).State(), ValueState::Pending);
+        auto Profile = DefaultProfile(); Profile.columns_[1].template_ = "${file.name}: ${file.allocatedSize}"; Profile.columns_[1].sortField_ = "file.allocatedSize";
+        QVERIFY(IsBuiltInProfile(Profile)); const auto Restored = DecodeProfile(EncodeProfile(Profile)); QVERIFY(Restored); QVERIFY(*Restored == Profile);
+        Profile.columns_[1].template_ = "${file.doesNotExist}"; QVERIFY(!IsBuiltInProfile(Profile));
+        Profile = DefaultProfile(); Profile.columns_[0].template_ = "${file.name}"; QVERIFY(!Validate(Profile).isEmpty());
+    }
+    void compositeSortValuesAndMissing()
+    {
+        using namespace hc::columns;
+        QVector<SortRow> Rows{
+            {"z", false, false, {CellValue::Ready(quint64(2)), CellValue::Ready(QString("a"))}},
+            {"a", false, false, {CellValue::Ready(quint64(2)), CellValue::Ready(QString("b"))}},
+            {"large", false, false, {CellValue::Ready(std::numeric_limits<quint64>::max()), CellValue::Ready(QString("c"))}},
+            {"missing", false, false, {CellValue::Missing(ValueState::Error), CellValue::Ready(QString("d"))}},
+            {"parent", true, true, {}}, {"folder", false, true, {}}};
+        const auto Ranks = SortRanks(Rows, {Qt::AscendingOrder, Qt::DescendingOrder});
+        QCOMPARE(Ranks[4], 0); QCOMPARE(Ranks[5], 1); QCOMPARE(Ranks[1], 2); QCOMPARE(Ranks[0], 3); QCOMPARE(Ranks[2], 4); QCOMPARE(Ranks[3], 5);
+        const auto Desc = SortRanks(Rows, {Qt::DescendingOrder}); QCOMPARE(Desc[4], 0); QCOMPARE(Desc[5], 1); QCOMPARE(Desc[2], 2); QCOMPARE(Desc[3], 5);
+        Rows = {{"id2", false, false, {CellValue::Ready(QString("same"))}}, {"id1", false, false, {CellValue::Ready(QString("same"))}}};
+        QCOMPARE(SortRanks(Rows, {Qt::AscendingOrder}), (QVector<int>{1, 0}));
+    }
+    void queryDedupCancellationAndLifetime()
+    {
+        using namespace hc::columns;
+        auto Calls = std::make_shared<std::atomic<int>>(0);
+        QueryEngine Engine([Calls](const QString&, const QString&, std::stop_token) {
+            const int Call = ++*Calls; std::this_thread::sleep_for(std::chrono::milliseconds(Call == 1 ? 180 : 20));
+            return FieldValues{{"file.fileVersion", CellValue::Ready(QString::number(Call))}, {"file.productName", CellValue::Ready(QString("product"))}};
+        });
+        QCOMPARE(Engine.Read("one", "file.fileVersion").State(), ValueState::Pending);
+        QCOMPARE(Engine.Read("one", "file.productName").State(), ValueState::Pending); QCOMPARE(Engine.Pending(), 1);
+        QTRY_COMPARE(Calls->load(), 1);
+        int Beats = 0; QTimer Heartbeat; connect(&Heartbeat, &QTimer::timeout, this, [&] { ++Beats; }); Heartbeat.start(5);
+        Engine.Reset(); Engine.Read("one", "file.fileVersion");
+        QTRY_COMPARE(Engine.Read("one", "file.fileVersion", false).Raw().toString(), QString("2"));
+        QTest::qWait(200); QCOMPARE(Engine.Read("one", "file.fileVersion", false).Raw().toString(), QString("2")); QVERIFY(Beats > 5);
+        QCOMPARE(Calls->load(), 2); QCOMPARE(Engine.Read("one", "file.productName").Raw().toString(), QString("product"));
+        Engine.Cancel(); QCOMPARE(Engine.Read("other", "file.fileVersion").State(), ValueState::OnDemand); QCOMPARE(Engine.Pending(), 0);
+        Engine.Resume(); Engine.Read("other", "file.fileVersion"); QTRY_COMPARE(Engine.Pending(), 0);
+        auto Started = std::make_shared<std::atomic<bool>>(false);
+        auto Disposable = std::make_unique<QueryEngine>([Started](const QString&, const QString&, std::stop_token) { *Started = true; std::this_thread::sleep_for(std::chrono::milliseconds(180)); return FieldValues{}; });
+        Disposable->Read("slow", "file.fileVersion"); QTRY_VERIFY(Started->load());
+        QElapsedTimer Timer; Timer.start(); Disposable.reset(); QVERIFY(Timer.elapsed() < 100); QTest::qWait(200);
+    }
+    void querySnapshotRetainsEarlyResults()
+    {
+        using namespace hc::columns;
+        QueryEngine Engine([](const QString&, const QString&, std::stop_token) {
+            return FieldValues{{"file.fileVersion", CellValue::Ready(QString("ready"))}};
+        }, nullptr, 20);
+        Engine.BeginSnapshot(); Engine.Read("one", "file.fileVersion");
+        QTRY_COMPARE(Engine.Pending(), 0);
+        QTest::qWait(40);
+        QCOMPARE(Engine.Read("one", "file.fileVersion", false).State(), ValueState::Ready);
+        Engine.EndSnapshot();
+        QCOMPARE(Engine.Read("one", "file.fileVersion", false).State(), ValueState::Pending);
+        Engine.Read("one", "file.fileVersion"); QTRY_COMPARE(Engine.Pending(), 0);
+        QTest::qWait(40); Engine.BeginSnapshot();
+        QCOMPARE(Engine.Read("one", "file.fileVersion", false).State(), ValueState::Pending);
+    }
     void pathFlagsAndFormats()
     {
         using namespace hc::columns;

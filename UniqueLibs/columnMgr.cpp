@@ -20,6 +20,11 @@ ColumnView CColumnMgr::GetColumnView(int Index)
 
 hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition& Column, const nsHC::CFileSourceT* Info, const QString& ParentPath)
 {
+    return GetFieldValue(Column.fieldId_, Info, ParentPath);
+}
+
+hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsHC::CFileSourceT* Info, const QString& ParentPath)
+{
     using namespace hc::columns;
     if (!Info) return CellValue::Missing(ValueState::Empty);
     FileSnapshot File;
@@ -41,12 +46,16 @@ hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition&
         }
         if (const auto It = Hints.find("typeDescription"); It != Hints.end()) File.typeDescription_ = QString::fromStdString(It->second);
     }
-    return Resolve(Column.fieldId_, File);
+    return Resolve(Field, File);
 }
 
 QString CColumnMgr::FormatValue(const hc::columns::ColumnDefinition& Column, const hc::columns::CellValue& Value, const nsHC::CFileSourceT* Info)
 {
-    if (Info && Column.fieldId_ == "file.attributes" && Value.State() == hc::columns::ValueState::Ready)
+    if (Value.State() == hc::columns::ValueState::Pending) return QObject::tr("조회 중…");
+    if (Value.State() == hc::columns::ValueState::Error) return QObject::tr("조회 오류");
+    if (Value.State() == hc::columns::ValueState::Unsupported) return QObject::tr("지원 안 함");
+    if (Value.State() == hc::columns::ValueState::OnDemand && Column.fieldId_ != "file.size") return QObject::tr("조회 대기");
+    if (Info && Column.template_.isEmpty() && Column.fieldId_ == "file.attributes" && Value.State() == hc::columns::ValueState::Ready)
         return GetFormattedAttrText(static_cast<DWORD>(Value.Raw().toULongLong()), false);
     if (Info && Column.fieldId_ == "file.size" && Value.State() == hc::columns::ValueState::OnDemand)
         return Info->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT ? QObject::tr("<링크>") : QObject::tr("<폴더>");

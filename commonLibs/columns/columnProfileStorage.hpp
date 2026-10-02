@@ -17,7 +17,7 @@ namespace hc::columns
             QJsonObject Widths;
             for (int Mode = 0; Mode < 3; ++Mode)
                 Widths[ModeName(static_cast<LayoutMode>(Mode))] = hc::view::EncodeWidth(Column.widths_[Mode]);
-            Columns.append(QJsonObject{{"id", IdText(Column.id_)}, {"field", Column.fieldId_}, {"title", Column.title_},
+            Columns.append(QJsonObject{{"id", IdText(Column.id_)}, {"field", Column.fieldId_}, {"title", Column.title_}, {"template", Column.template_}, {"sortField", Column.sortField_},
                 {"alignment", Column.alignment_ == Qt::AlignLeft ? "left" : Column.alignment_ == Qt::AlignRight ? "right" : "center"},
                 {"format", QJsonObject{{"size", int(Column.format_.size_)}, {"precision", Column.format_.precision_}, {"date", Column.format_.datePattern_}}},
                 {"widths", Widths}});
@@ -44,6 +44,8 @@ namespace hc::columns
             ColumnDefinition Column;
             Column.id_ = QUuid(Item.value("id").toString());
             Column.fieldId_ = Item.value("field").toString();
+            if ((Item.contains("template") && !Item["template"].isString()) || (Item.contains("sortField") && !Item["sortField"].isString())) return {};
+            Column.template_ = Item.value("template").toString(); Column.sortField_ = Item.value("sortField").toString();
             if (!Item.value("title").isString()) return {};
             Column.title_ = Item.value("title").toString();
             const auto Alignment = Item.value("alignment").toString();

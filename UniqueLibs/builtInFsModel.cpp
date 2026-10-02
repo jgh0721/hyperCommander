@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "columnNativeFields.hpp"
+#include "commonLibs/columns/columnSort.hpp"
 
 #include "commonLibs/cmnDateTime.hpp"
 #include "cmnHCUtils.hpp"
@@ -136,10 +138,15 @@ void CFSDirSizeGatherer::run()
                 Item->directorySize_ = quint64(Item->Size_);
             }
 
-            ( ( CFSModel* )model_ )->createBuiltFsValues( Item, -1 );
+            auto* Model = static_cast<CFSModel*>(model_);
+            QMetaObject::invokeMethod(Model, [Model, Item] {
+                const auto Row = Model->vecNode_.indexOf(Item); if (Row < 0) return;
+                Model->createBuiltFsValues(Item, -1);
+                emit Model->dataChanged(Model->index(Row, 0), Model->index(Row, Model->columnCount() - 1));
+            }, Qt::QueuedConnection);
         }
 
-        model_->dataChanged( model_->index( row, 0 ), model_->index( row, model_->columnCount() - 1 ), QList<int>() << Qt::DisplayRole << Qt::EditRole << CFsModelT::USR_ROLE_SORT );
+
     }
 }
 
@@ -269,10 +276,11 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
 
 void CFSModel::SetColumnView(const ColumnView& View)
 {
+    columnQueries_->Cancel(); columnQueries_->Resume();
     beginResetModel();
     {
         CCmnMutexLocker Locker(&lock);
-        columnView_ = View;
+        columnView_ = View; columnSorts_.clear();
         createBuiltFsValues(vecNode_);
         refreshNameSortRanks();
     }
@@ -303,7 +311,17 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
         switch( Role )
         {
+            case GridSortRole: {
+                if (columnSortRanks_.size() == vecNode_.size() && !columnSorts_.isEmpty()) {
+                    const auto Id = columnView_.VecColumns[Col].definition_.id_;
+                    const auto It = std::find_if(columnSorts_.begin(), columnSorts_.end(), [&](const auto& Sort) { return Sort.columnId_ == Id; });
+                    RoleWith.setData(It != columnSorts_.end() && It->order_ == Qt::DescendingOrder ? -columnSortRanks_[Row] : columnSortRanks_[Row]);
+                } else RoleWith.setData(Row);
+            } break;
+            case ColumnStateRole: { RoleWith.setData(int(evaluateColumn(Item, columnView_.VecColumns[Col], false).State())); } break;
             case Qt::ToolTipRole: {
+                const auto Value = evaluateColumn(Item, columnView_.VecColumns[Col], false);
+                if (!Value.Error().isEmpty()) { RoleWith.setData(Value.Error()); break; }
                 if (Item->storageEntry_) {
                     QStringList Lines; const auto Values = index_.Metadata(*Item->storageEntry_);
                     for (auto It = Values.begin(); It != Values.end(); ++It) Lines.append(It.key() + ": " + It.value());
@@ -318,10 +336,9 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                     if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
                     if (Style == "suffix") { RoleWith.setData(Item->Name_ + "\\"); break; }
                 }
-                if( Item->VecContent.isEmpty() == true || Col >= Item->VecContent.size() )
-                    RoleWith.setData( Item->Name_ );
-                else
-                    RoleWith.setData( Item->VecContent[ Col ] );
+                const auto& Binding = columnView_.VecColumns[Col];
+                const bool Visible = !Binding.definition_.widths_[int(columnView_.profile_.mode_)].hidden_;
+                RoleWith.setData(CColumnMgr::FormatValue(Binding.definition_, evaluateColumn(Item, Binding, Visible && !loading_), Item.get()));
             } break;
 
             case Qt::DecorationRole: {
@@ -357,8 +374,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
             case CFsModelT::USR_ROLE_SORT: {
                 if (Col != 0) {
-                    if (Col < Item->columnValues_.size()) RoleWith.setData(Item->columnValues_[Col].Raw());
-                    else RoleWith.clearData();
+                    RoleWith.setData(evaluateColumn(Item, columnView_.VecColumns[Col], false, true).Raw());
                     break;
                 }
                 if (Col == 0 && nameSortRanks_.size() == vecNode_.size()) {
@@ -571,6 +587,8 @@ void CFSModel::doRefresh()
 
 CFSModel::CFSModel()
 {
+    columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::ReadNativeFields);
+    columnQueries_->Changed = [this](const QSet<QString>& Paths) { columnResultsReady(Paths); };
     displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
         if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) Refresh();
@@ -606,6 +624,7 @@ void CFSModel::SetWatchEnabled(bool Enabled)
 void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason)
 {
     CancelNavigation(); tracker_.SetLocation({});
+    columnQueries_->Reset();
     beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
     placeholder_ = Location; index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
@@ -672,6 +691,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
 
 void CFSModel::refreshProvider()
 {
+    columnQueries_->Reset();
     using namespace hc::storage;
     navigationStop_.request_stop();
     navigationStop_ = std::stop_source{};
@@ -750,6 +770,7 @@ void CFSModel::refreshProvider()
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 {
+    columnQueries_->Reset(); columnSortRanks_.clear();
     index_.Publish(Entries);
     QVector<nsHC::TySpFileSource> Items;
     if (GetRoot()->ReadLocation(GetCurrentPathWithRoot()).kind_ != hc::storage::LocatorKind::Shell || GetRootCount() > 1)
@@ -806,6 +827,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
     refreshNameSortRanks();
     endResetModel();
     refreshDisplayIcons();
+    refreshColumnSortRanks();
 }
 
 void CFSModel::ApplyDisplaySettings()
@@ -815,6 +837,7 @@ void CFSModel::ApplyDisplaySettings()
     displaySettings_ = General;
     refreshNameSortRanks();
     if (IconsChanged) refreshDisplayIcons();
+    refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
         {Qt::DisplayRole, Qt::DecorationRole, CFsModelT::USR_ROLE_HIDDENOPACITY, CFsModelT::USR_ROLE_SORT});
 }
@@ -957,7 +980,7 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
         Item->columnValues_.clear();
         for (const auto& Column : columnView_.VecColumns)
         {
-            const auto Value = CColumnMgr::GetValue(Column.definition_, Item.get(), GetCurrentPathWithRoot());
+            const auto Value = evaluateColumn(Item, Column, false);
             Item->columnValues_.append(Value);
             Item->VecContent.append(CColumnMgr::FormatValue(Column.definition_, Value, Item.get()));
         }
@@ -973,7 +996,7 @@ void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
     }
     if (Column >= columnView_.VecColumns.size()) return;
     const auto& Definition = columnView_.VecColumns[Column].definition_;
-    const auto Value = CColumnMgr::GetValue(Definition, Item.get(), GetCurrentPathWithRoot());
+    const auto Value = evaluateColumn(Item, columnView_.VecColumns[Column], false);
     Item->columnValues_.resize(columnView_.VecColumns.size());
     Item->VecContent.resize(columnView_.VecColumns.size());
     Item->columnValues_[Column] = Value;
@@ -1195,4 +1218,117 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
     }
 
     return QSortFilterProxyModel::filterAcceptsRow( source_row, source_parent );
+}
+
+QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const
+{
+    if (!Item->storageEntry_ || Item->Name_ == "..") return {};
+    const auto& Location = Item->storageEntry_->locator_;
+    if (Location.kind_ != hc::storage::LocatorKind::Local && Location.kind_ != hc::storage::LocatorKind::Smb) return {};
+    return QDir::toNativeSeparators(QDir(GetCurrentPathWithRoot()).filePath(Item->Name_));
+}
+
+hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent) const
+{
+    using namespace hc::columns;
+    if (!QueryFamily(Field).isEmpty()) {
+        const auto Path = queryPath(Item);
+        if (Path.isEmpty()) return CellValue::Missing(Item->Name_ == ".." ? ValueState::Empty : ValueState::Unsupported);
+        if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Field != "file.linkTarget") return CellValue::Missing(ValueState::Empty);
+        return columnQueries_->Read(Path, Field, Request, Urgent);
+    }
+    return CColumnMgr::GetFieldValue(Field, Item.get(), GetCurrentPathWithRoot());
+}
+
+hc::columns::CellValue CFSModel::evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort) const
+{
+    const auto& Definition = Binding.definition_;
+    if (Sort && !Definition.sortField_.isEmpty()) return readField(Item, Definition.sortField_, Request, !Sort);
+    if (Definition.template_.isEmpty()) return readField(Item, Definition.fieldId_, Request, !Sort);
+    return hc::columns::RenderTemplate(Binding.compiled_, Definition.format_, [&](const QString& Field) { return readField(Item, Field, Request, !Sort); });
+}
+
+void CFSModel::columnResultsReady(const QSet<QString>& Paths)
+{
+    if (loading_) return;
+    emit ColumnValuesChanging();
+    int First = rowCount(), Last = -1;
+    for (int Row = 0; Row < vecNode_.size(); ++Row) if (Paths.contains(queryPath(vecNode_[Row]))) {
+        createBuiltFsValues(vecNode_[Row], -1); First = std::min(First, Row); Last = Row;
+    }
+    if (Last >= First && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1), {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole});
+    refreshColumnSortRanks();
+    emit ColumnValuesChanged();
+}
+
+void CFSModel::CancelColumnQueries()
+{
+    columnQueries_->Cancel();
+    columnSorts_ = completedSorts_; emit ColumnSortCancelled(); emit ColumnQueryStatus(tr("컬럼 조회가 중지되었습니다."));
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
+}
+void CFSModel::ResumeColumnQueries()
+{
+    columnQueries_->Resume();
+    refreshColumnSortRanks();
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
+}
+
+void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
+{
+    if (Sorts == columnSorts_ && columnSortRanks_.size() == vecNode_.size()) return;
+    columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
+}
+
+void CFSModel::refreshColumnSortRanks()
+{
+    using namespace hc::columns;
+    if (loading_) return;
+    if (columnSorts_.isEmpty()) {
+        columnQueries_->EndSnapshot(); columnSortRanks_.clear(); completedSorts_.clear();
+        emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : QString{}); return;
+    }
+    QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders; QVector<const Column*> Bindings;
+    for (const auto& Sort : columnSorts_) {
+        const auto It = std::find_if(columnView_.VecColumns.begin(), columnView_.VecColumns.end(), [&](const auto& Col) { return Col.definition_.id_ == Sort.columnId_; });
+        if (It == columnView_.VecColumns.end()) continue;
+        Orders.append(Sort.order_); Bindings.append(&*It);
+    }
+    if (Bindings.isEmpty()) return;
+    QSet<QString> Families;
+    for (const auto* Binding : Bindings) {
+        auto Fields = Binding->compiled_.dependencies_;
+        if (Binding->definition_.template_.isEmpty()) Fields = {Binding->definition_.fieldId_};
+        if (!Binding->definition_.sortField_.isEmpty()) Fields = {Binding->definition_.sortField_};
+        for (const auto& Field : Fields) if (!QueryFamily(Field).isEmpty()) Families.insert(QueryFamily(Field));
+    }
+    if (qint64(vecNode_.size()) * Families.size() > 4096) { emit ColumnQueryStatus(tr("정렬 조회 한도(4096건)를 초과했습니다. 범위를 줄이거나 중지하세요.")); return; }
+    columnQueries_->BeginSnapshot();
+    int Pending = 0; QSet<QString> Jobs;
+    for (const auto& Item : vecNode_) {
+        SortRow Row; Row.parent_ = Item->Name_ == ".."; Row.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+        Row.id_ = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
+        for (const auto* Binding : Bindings) {
+            auto Value = evaluateColumn(Item, *Binding, false, true);
+            if (Value.State() == ValueState::Pending) {
+                ++Pending;
+                auto Fields = Binding->compiled_.dependencies_;
+                if (Binding->definition_.template_.isEmpty()) Fields = {Binding->definition_.fieldId_};
+                if (!Binding->definition_.sortField_.isEmpty()) Fields = {Binding->definition_.sortField_};
+                for (const auto& Field : Fields) if (!QueryFamily(Field).isEmpty()) Jobs.insert(queryPath(Item) + QChar(0) + QueryFamily(Field));
+            }
+            Row.values_.append(Value);
+        }
+        Rows.append(Row);
+    }
+    if (Pending) {
+        if (Jobs.size() > 4096) { emit ColumnQueryStatus(tr("정렬 조회 한도(4096건)를 초과했습니다. 범위를 줄이거나 중지하세요.")); return; }
+        for (const auto& Item : vecNode_) for (const auto* Binding : Bindings) evaluateColumn(Item, *Binding, true, true);
+        emit ColumnQueryStatus(tr("정렬 값을 조회 중… 남은 값 %1개").arg(Pending)); return;
+    }
+    columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
+        displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    columnQueries_->EndSnapshot();
+    completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : QString{});
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
 }

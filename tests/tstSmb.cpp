@@ -10,6 +10,7 @@
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
 #include "qtColumnProfileEditor.hpp"
+#include "columnNativeFields.hpp"
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
@@ -103,7 +104,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -631,6 +632,73 @@ private slots:
             }
             QCOMPARE(Sizes, 2);
         }
+    }
+
+    void columnTemplatesAndAsyncUi()
+    {
+        using namespace hc::columns;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QImage Picture(64, 32, QImage::Format_RGBA8888); Picture.fill(Qt::red); QVERIFY(Picture.save(Directory.filePath("picture.png")));
+        { QFile File(Directory.filePath("text.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(QByteArray(8192, 'a')); }
+        QVERIFY(QDir(Directory.path()).mkdir("folder"));
+        hc::workspace::TabState Tab; Tab.id_ = "columns-stage3"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 4);
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(0));
+        auto Profile = DefaultProfile();
+        const auto Add = [&](const QString& Field, const QString& Title) {
+            ColumnDefinition Column; Column.fieldId_ = Field; Column.title_ = Title;
+            Column.widths_.fill({hc::view::WidthUnit::Pixels, hc::view::WidthMode::Flexible, 180}); Profile.columns_.append(Column); return Column.id_;
+        };
+        const auto Composite = Add({}, "Template"); Profile.columns_.last().template_ = "${file.stem} / ${file.size}";
+        Profile.columns_.last().sortField_ = "file.size"; Profile.columns_.last().format_.size_ = SizeFormat::KiB;
+        const auto Dimensions = Add("file.imageDimensions", "Dimensions");
+        const auto Allocated = Add("file.allocatedSize", "Allocated");
+        Profile.sorts_ = {{Allocated, Qt::DescendingOrder}, {Profile.primaryNameId_, Qt::AscendingOrder}};
+        QVERIFY(View->ApplyColumnProfile(Profile));
+        const auto IndexOf = [&](const QUuid& Id) { for (int Col = 0; Col < Model->columnCount(); ++Col) if (View->ColumnWidths()->ColumnId(Col) == IdText(Id)) return Col; return -1; };
+        const auto RowOf = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Row; return -1; };
+        const auto ImageCell = [&] { return Model->index(RowOf("picture.png"), IndexOf(Dimensions)); };
+        ImageCell().data(); QTRY_COMPARE(ImageCell().data().toString(), QString("64 × 32"));
+        QCOMPARE(ImageCell().data(CFSModel::ColumnStateRole).toInt(), int(ValueState::Ready));
+        QTRY_COMPARE(Model->PendingColumnQueries(), 0);
+        QTRY_VERIFY(Model->index(RowOf("text.txt"), 0).data(CFSModel::GridSortRole).toInt() != Model->index(RowOf("picture.png"), 0).data(CFSModel::GridSortRole).toInt());
+        QCOMPARE(View->ColumnProfile().sorts_.size(), 2);
+        QCOMPARE(Model->index(RowOf("text.txt"), IndexOf(Allocated)).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::Ready));
+        const auto CompositeCell = Model->index(RowOf("text.txt"), IndexOf(Composite));
+        QVERIFY(CompositeCell.data().toString().startsWith("text / ")); QCOMPARE(CompositeCell.data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(8192));
+        const auto First = View->BaseView()->getRow(0).modelIndex(0); QCOMPARE(First.data().toString(), QString(".."));
+        QCOMPARE(View->BaseView()->getRow(1).modelIndex(0).data().toString(), QString("folder"));
+        QTRY_COMPARE(View->BaseView()->getRow(2).modelIndex(0).data().toString(), QString("text.txt"));
+        QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/columns-stage3-panel.png"));
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        int TemplateRow = -1; for (int Index = 0; Index < Editor->Profile().columns_.size(); ++Index) if (Editor->Profile().columns_[Index].id_ == Composite) TemplateRow = Index;
+        Editor->findChild<QListWidget*>("hc.columns.list")->setCurrentRow(TemplateRow);
+        QCOMPARE(Editor->findChild<QListWidget*>("hc.columns.sortRules")->count(), 2);
+        Editor->findChild<QPushButton*>("hc.columns.addSort")->click(); QCOMPARE(Editor->Profile().sorts_.size(), 3);
+        const auto LastSort = Editor->Profile().sorts_.last();
+        Editor->findChild<QPushButton*>("hc.columns.sortUp")->click(); QCOMPARE(Editor->Profile().sorts_[1], LastSort);
+        Editor->findChild<QPushButton*>("hc.columns.sortDown")->click(); QCOMPARE(Editor->Profile().sorts_.last(), LastSort);
+        QVERIFY(Editor->findChild<QComboBox*>("hc.columns.sizeFormat")->isEnabled());
+        QVERIFY(Editor->findChild<QComboBox*>("hc.columns.dateFormat")->isEnabled());
+        auto* Expression = Editor->findChild<QLineEdit*>("hc.columns.template"); QVERIFY(Expression->isEnabled());
+        Expression->setText("${file.unknown}"); QVERIFY(!Editor->ValidateDraft());
+        Expression->setText("${file.name} · ${file.size}"); QVERIFY(Editor->ValidateDraft());
+        QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/columns-stage3-editor.png")); Dialog.reject();
+        QSignalSpy Refreshed(Model, &CFsModelT::sigRefreshCompleted);
+        Picture = QImage(128, 96, QImage::Format_RGBA8888); Picture.fill(Qt::blue); QVERIFY(Picture.save(Directory.filePath("picture.png")));
+        Model->Refresh(); QTRY_VERIFY(Refreshed.count()); ImageCell().data(); QTRY_COMPARE(ImageCell().data().toString(), QString("128 × 96"));
+        auto Version = ReadNativeFields(qEnvironmentVariable("WINDIR") + "/System32/kernel32.dll", "version", {});
+        QCOMPARE(Version["file.fileVersion"].State(), ValueState::Ready); QVERIFY(!Version["file.fileVersion"].Raw().toString().isEmpty());
+        const auto Header = ReadNativeFields(Directory.filePath("picture.png"), "image", {});
+        QCOMPARE(Header["file.imageBitDepth"].Raw().toULongLong(), quint64(32));
+        Profile = View->ColumnProfile(); Add("file.fileVersion", "Version"); QVERIFY(View->ApplyColumnProfile(Profile));
+        Model->CancelColumnQueries(); QCOMPARE(Model->index(RowOf("picture.png"), Model->columnCount() - 1).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::OnDemand));
+        Model->ResumeColumnQueries(); Model->index(RowOf("picture.png"), Model->columnCount() - 1).data();
+        QTRY_COMPARE(Model->PendingColumnQueries(), 0);
     }
 
     void listLayoutSettingsUi()

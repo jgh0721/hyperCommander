@@ -12,6 +12,7 @@ public:
     qsizetype GetCount() const;
     ColumnView GetColumnView(int Index);
     static hc::columns::CellValue GetValue(const hc::columns::ColumnDefinition& Column, const nsHC::CFileSourceT* Info, const QString& ParentPath = {});
+    static hc::columns::CellValue GetFieldValue(const QString& Field, const nsHC::CFileSourceT* Info, const QString& ParentPath);
     static QString FormatValue(const hc::columns::ColumnDefinition& Column, const hc::columns::CellValue& Value, const nsHC::CFileSourceT* Info);
 private:
     QVector<ColumnView> columnViews_;

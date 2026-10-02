@@ -26,6 +26,7 @@ private:
     void updatePreview();
     void cloneProfile();
     void refreshProfiles();
+    void refreshSorts(int Row = 0);
     hc::columns::ColumnProfile draft_;
     QJsonObject library_;
     bool loading_ = false;
@@ -33,7 +34,9 @@ private:
     bool writable_ = true;
     int row_ = -1;
     QComboBox *profiles_, *scope_, *layout_, *field_, *alignment_, *sizeFormat_, *dateFormat_, *unit_, *widthMode_, *sort_, *sortOrder_;
-    QLineEdit *profileTitle_, *title_;
+    QLineEdit *profileTitle_, *title_, *template_;
+    QComboBox* sortField_;
+    QListWidget* sortRules_;
     QSpinBox* precision_;
     QDoubleSpinBox *width_, *minimum_, *maximum_;
     QCheckBox *primary_, *visible_;

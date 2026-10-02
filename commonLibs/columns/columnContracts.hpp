@@ -8,6 +8,7 @@
 #include <QVariant>
 #include <QVector>
 #include <array>
+#include "columnTemplate.hpp"
 #include <variant>
 #include "commonLibs/view/columnWidthPolicy.hpp"
 
@@ -76,6 +77,8 @@ namespace hc::columns
     {
         QUuid id_ = QUuid::createUuid(); // Instance identity, independent of title, field or visual/model position.
         QString fieldId_;
+        QString template_; // Empty for a single field; compiled once when the profile changes.
+        QString sortField_; // Empty uses the typed field, or the composed text for a template.
         QString title_;
         Qt::Alignment alignment_ = Qt::AlignLeft;
         FormatOptions format_;
@@ -135,12 +138,15 @@ namespace hc::columns
         for (const auto& Column : Profile.columns_) {
             if (Column.id_.isNull() || Ids.contains(Column.id_)) return "column-id";
             Ids.insert(Column.id_);
-            if (!IsFieldId(Column.fieldId_)) return "field-id";
+            if (Column.template_.isEmpty() && !IsFieldId(Column.fieldId_)) return "field-id";
+            if (!CompileTemplate(Column.template_).Valid()) return "template";
+            if (!Column.sortField_.isEmpty() && !IsFieldId(Column.sortField_)) return "sort-field";
             if (Column.alignment_ != Qt::AlignLeft && Column.alignment_ != Qt::AlignRight && Column.alignment_ != Qt::AlignCenter) return "alignment";
             if (Column.format_.precision_ < 0 || Column.format_.precision_ > 6 || Column.format_.datePattern_.isEmpty() ||
                 int(Column.format_.size_) < 0 || int(Column.format_.size_) > int(SizeFormat::GiB)) return "format";
             for (const auto& Width : Column.widths_) if (!hc::view::Validate(Width).empty()) return "width";
             if (Column.id_ == Profile.primaryNameId_) {
+                if (!Column.template_.isEmpty()) return "primary-field";
                 if (Column.fieldId_ != "file.name" && Column.fieldId_ != "file.stem") return "primary-field";
                 if (Column.widths_[1].hidden_ || Column.widths_[2].hidden_) return "primary-hidden";
                 PrimaryFound = true;
@@ -179,4 +185,23 @@ namespace hc::columns
         }
         return Raw.toString();
     }
+    inline CellValue RenderTemplate(const CompiledTemplate& Template, const FormatOptions& Options, const std::function<CellValue(const QString&)>& Read)
+    {
+        if (!Template.Valid()) return CellValue::Missing(ValueState::Error, Template.error_);
+        QString Text; std::optional<CellValue> Failure;
+        for (const auto& Part : Template.parts_) {
+            if (!Part.field_) Text += Part.text_;
+            else {
+                const auto Value = Read(Part.text_);
+                if (Value.State() != ValueState::Ready && Value.State() != ValueState::Empty) {
+                    // A later missing dependency must not hide an unfinished query.
+                    if (!Failure || Value.State() == ValueState::Pending || Failure->State() != ValueState::Pending) Failure = Value;
+                }
+                else Text += Format(Value, Options);
+            }
+            if (Text.size() > 65536) return CellValue::Missing(ValueState::Error, "template-result-budget");
+        }
+        return Failure.value_or(CellValue::Ready(Text));
+    }
+
 }

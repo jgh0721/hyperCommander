@@ -27,7 +27,18 @@ namespace hc::columns
             {"file.compressed", QObject::tr("압축"), FieldType::Boolean},
             {"file.encrypted", QObject::tr("암호화"), FieldType::Boolean},
             {"file.sparse", QObject::tr("희소 파일"), FieldType::Boolean},
-            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean}};
+            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean},
+            {"file.allocatedSize", QObject::tr("디스크 할당 크기"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.linkTarget", QObject::tr("링크 대상"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.fileVersion", QObject::tr("파일 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.productVersion", QObject::tr("제품 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.productName", QObject::tr("제품 이름"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.company", QObject::tr("회사"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.description", QObject::tr("파일 설명"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageWidth", QObject::tr("이미지 가로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageHeight", QObject::tr("이미지 세로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageDimensions", QObject::tr("이미지 규격"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageBitDepth", QObject::tr("이미지 비트 깊이"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background}};
     }
     inline const QUuid BuiltInProfileId{"a4ea8e7c-b621-4db7-bc79-b37dab6e7b8d"};
     inline ColumnProfile DefaultProfile()
@@ -127,8 +138,12 @@ namespace hc::columns
     inline bool IsBuiltInProfile(const ColumnProfile& Profile)
     {
         const auto Fields = BuiltInFields();
-        for (const auto& Column : Profile.columns_)
-            if (std::none_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Column.fieldId_; })) return false;
+        const auto Known = [&](const QString& Id) { return std::any_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Id; }); };
+        for (const auto& Column : Profile.columns_) {
+            if (Column.template_.isEmpty() && !Known(Column.fieldId_)) return false;
+            if (!Column.sortField_.isEmpty() && !Known(Column.sortField_)) return false;
+            for (const auto& Id : CompileTemplate(Column.template_).dependencies_) if (!Known(Id)) return false;
+        }
         return Validate(Profile).isEmpty();
     }
 }
