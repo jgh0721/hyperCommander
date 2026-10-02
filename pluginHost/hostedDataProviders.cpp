@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QSet>
 #include <cstring>
+#include <cmath>
 
 namespace hc::plugins
 {
@@ -283,7 +284,9 @@ namespace hc::plugins
                 {
                     const auto Object = Item.toObject(); MetadataField Field; Field.index_ = Object["index"].toInt(); Field.name_ = Object["name"].toString().toStdString();
                     Field.type_ = Type(Object["type"].toInt()); Field.descending_ = Object["descending"].toBool();
-                    for (const auto& Unit : Object["units"].toString().split('|')) Field.units_.push_back(Unit.toStdString()); Fields.push_back(std::move(Field));
+                    for (const auto& Unit : Object["units"].toString().split('|'))
+                        (Object["type"].toInt() == 7 ? Field.choices_ : Field.units_).push_back(Unit.toStdString());
+                    Fields.push_back(std::move(Field));
                 }
                 return Ready<std::vector<MetadataField>>(std::move(Fields));
             }
@@ -296,8 +299,9 @@ namespace hc::plugins
                 const auto Description = Source->Describe();
                 auto Path = S(Description.locator_.root_);
                 std::shared_ptr<IMaterializedFileLease> Lease;
-                if (Description.locator_.kind_ != LocatorKind::Local || !Description.locator_.nesting_.empty() || !QFileInfo(Path).isAbsolute())
+                if ((Description.locator_.kind_ != LocatorKind::Local && Description.locator_.kind_ != LocatorKind::Smb) || !Description.locator_.nesting_.empty() || !QFileInfo(Path).isAbsolute())
                 {
+                    if (!Request.allowMaterialize_) return Ready<MetadataValue>(Unsupported("metadata-local-path-required"));
                     auto Materialized = materializer_->Materialize({Source}, Context).get(); if (!Materialized.HasValue()) return Ready<MetadataValue>(Materialized.Failure());
                     Lease = Materialized.Value(); Path = S(Lease->LocalPath());
                 }
@@ -306,13 +310,13 @@ namespace hc::plugins
                 // Keep the lease until the host reply or watchdog teardown.
                 if (!Reply.HasValue()) return Ready<MetadataValue>(Reply.Failure());
                 Verified = Source->Verify(Context).get(); if (!Verified.HasValue()) return Ready<MetadataValue>(Verified.Failure());
-                const int Sdk = Reply.Value()["type"].toInt(-99); MetadataValue Out;
+                const int Sdk = Reply.Value()["type"].toInt(-99); MetadataValue Out; Out.display_ = Reply.Value()["display"].toString().toStdString();
                 if (Sdk == -3 || Sdk == -4 || Sdk == 0) { Out.status_ = Sdk == -3 ? MetadataStatus::Empty : Sdk == -4 ? MetadataStatus::OnDemand : MetadataStatus::Delayed; return Ready<MetadataValue>(Out); }
                 if (Sdk < 1 || Sdk > 12) return Ready<MetadataValue>(Invalid("hosted-metadata-value-envelope"));
                 Out.status_ = MetadataStatus::Value; Out.type_ = Type(Sdk); const auto Value = Reply.Value()["value"];
                 if (Out.type_ == MetadataType::Integer || Out.type_ == MetadataType::Timestamp)
                 { bool Parsed; Out.value_ = std::int64_t(Value.toString().toLongLong(&Parsed)); if (!Parsed) return Ready<MetadataValue>(Invalid("hosted-metadata-integer-envelope")); }
-                else if (Out.type_ == MetadataType::Real) Out.value_ = Value.toDouble();
+                else if (Out.type_ == MetadataType::Real) { if (!Value.isDouble() || !std::isfinite(Value.toDouble())) return Ready<MetadataValue>(Invalid("hosted-metadata-real-envelope")); Out.value_ = Value.toDouble(); }
                 else if (Out.type_ == MetadataType::Boolean) Out.value_ = Value.toBool();
                 else Out.value_ = Value.toString().toStdString();
                 return Ready<MetadataValue>(std::move(Out));

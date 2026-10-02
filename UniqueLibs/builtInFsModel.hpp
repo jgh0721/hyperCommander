@@ -149,6 +149,7 @@ private:
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
     std::unique_ptr<hc::columns::QueryEngine> columnQueries_;
+    mutable bool requestOnlyValues_ = false;
     QVector<int>                    nameSortRanks_, columnSortRanks_;
     QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_;
     void refreshColumnSortRanks();

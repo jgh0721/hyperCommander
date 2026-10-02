@@ -12,12 +12,14 @@ namespace hc::plugins
         std::vector<std::string> units_;
         MetadataType type_ = MetadataType::Text;
         bool descending_ = false;
+        std::vector<std::string> choices_;
     };
-    struct MetadataRequest { int field_ = 0, unit_ = 0; bool deferSlow_ = true; };
+    struct MetadataRequest { int field_ = 0, unit_ = 0; bool deferSlow_ = true; bool allowMaterialize_ = true; };
     struct MetadataValue
     {
         MetadataStatus status_ = MetadataStatus::Empty;
         MetadataType type_ = MetadataType::Text;
+        std::string display_;
         // Date/time use ISO text; timestamps retain UTC FILETIME ticks as an
         // integer. Neither native pointers nor SDK unions cross this boundary.
         std::variant<std::monostate, std::int64_t, double, bool, std::string> value_;

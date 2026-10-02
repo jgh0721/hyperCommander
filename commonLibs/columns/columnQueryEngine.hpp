@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "columnContracts.hpp"
+#include "metadataColumns.hpp"
 #include <QCache>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -12,6 +13,7 @@ namespace hc::columns
     using FieldValues = QMap<QString, CellValue>;
     inline QString QueryFamily(const QString& Field)
     {
+        if (IsPluginField(Field)) return Field;
         if (Field.startsWith("file.image")) return "image";
         if (QStringList{"file.fileVersion", "file.productVersion", "file.productName", "file.company", "file.description"}.contains(Field)) return "version";
         if (Field == "file.allocatedSize") return "allocation";
@@ -42,6 +44,7 @@ namespace hc::columns
             snapshot_ = true;
         }
         void EndSnapshot() { snapshot_ = false; }
+        void SetLoader(Loader Load, bool Clear = true) { if (Clear) Reset(); else { Cancel(); Resume(); } loader_ = std::move(Load); }
         void Reset() { Cancel(); cache_.clear(); Resume(); }
         void Cancel()
         {

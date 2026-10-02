@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "columnContracts.hpp"
+#include "metadataColumns.hpp"
 
 namespace hc::columns
 {
@@ -135,10 +136,10 @@ namespace hc::columns
         }
         return CellValue::Missing(ValueState::Unsupported);
     }
-    inline bool IsBuiltInProfile(const ColumnProfile& Profile)
+    inline bool IsSupportedProfile(const ColumnProfile& Profile)
     {
         const auto Fields = BuiltInFields();
-        const auto Known = [&](const QString& Id) { return std::any_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Id; }); };
+        const auto Known = [&](const QString& Id) { return IsPluginField(Id) || std::any_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Id; }); };
         for (const auto& Column : Profile.columns_) {
             if (Column.template_.isEmpty() && !Known(Column.fieldId_)) return false;
             if (!Column.sortField_.isEmpty() && !Known(Column.sortField_)) return false;

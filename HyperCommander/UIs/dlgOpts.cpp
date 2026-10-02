@@ -5,6 +5,7 @@
 #include "Components/cmpView.hpp"
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
 #include "UniqueLibs/qtColumnProfileEditor.hpp"
+#include "UniqueLibs/columnPluginFields.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "Qt/cmnQtUtils.hpp"
@@ -181,6 +182,7 @@ bool QMainOpts::SaveSettings()
         if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); SetListView(listView_); LoadSettings(); }
         return false;
     }
+    hc::columns::PluginFields::Instance().Refresh();
     if (ColumnsChanged) {
         listView_->ApplyColumnProfile(columnEditor_->Profile());
         emit listView_->sigViewSettingsChanged();

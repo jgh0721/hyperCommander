@@ -183,7 +183,22 @@ namespace hc::plugins
             auto Narrow = ToAnsi(QString::fromWCharArray(Name.data())); if (!Narrow) return Unsupported("host-wdx-path-encoding");
             Type = Export<int(__stdcall*)(char*, int, int, void*, int, int)>(module_, "ContentGetValue")(Narrow->data(), Request["field"].toInt(), Request["unit"].toInt(), Bytes.data(), int(Bytes.size()), Request["defer"].toBool() ? 1 : 0);
         }
-        if (Type == -3 || Type == -4 || Type == 0) return QJsonObject{{"type", Type}};
+        const auto DisplayText = [&](int Offset) -> std::optional<QString> {
+            if (Wide) {
+                const auto* Begin = reinterpret_cast<const wchar_t*>(Bytes.data() + Offset);
+                const auto* End = std::find(Begin, Begin + (Bytes.size() - Offset) / 2, L'\0');
+                if (End == Begin + (Bytes.size() - Offset) / 2) return {};
+                return QString::fromWCharArray(Begin, int(End - Begin));
+            }
+            const auto* Begin = reinterpret_cast<const char*>(Bytes.data() + Offset);
+            const auto* End = static_cast<const char*>(memchr(Begin, 0, Bytes.size() - Offset));
+            if (!End) return {}; return Ansi(Begin, int(End - Begin));
+        };
+        if (Type == -3) return QJsonObject{{"type", Type}};
+        if (Type == -4 || Type == 0) {
+            const auto Text = DisplayText(0); if (!Text) return Invalid("host-wdx-display-termination");
+            return QJsonObject{{"type", Type}, {"display", *Text}};
+        }
         if (Type < 0) return Error{Type == -2 ? ErrorCategory::Unavailable : ErrorCategory::Unsupported, "host-wdx-value-" + std::to_string(Type), {"wdx"}};
         QJsonValue Value;
         if (Type == 1 || Type == 6) { int Number; std::memcpy(&Number, Bytes.data(), 4); Value = Type == 6 ? QJsonValue(Number != 0) : QJsonValue(QString::number(Number)); }
@@ -206,7 +221,9 @@ namespace hc::plugins
             if (!End) return Invalid("host-wdx-value-termination"); Value = Ansi(Begin, int(End - Begin));
         }
         else return Unsupported("host-wdx-value-type");
-        return QJsonObject{{"type", Type}, {"value", Value}};
+        QJsonObject Reply{{"type", Type}, {"value", Value}};
+        if (Type == 3) { const auto Text = DisplayText(8); if (!Text) return Invalid("host-wdx-display-termination"); Reply["display"] = *Text; }
+        return Reply;
     }
     Result<QJsonObject> TcDataHostService::Handle(WireKind Kind, const QJsonObject& Request)
     {

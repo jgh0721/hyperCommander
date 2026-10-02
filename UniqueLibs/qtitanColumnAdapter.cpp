@@ -132,7 +132,7 @@ void QtitanColumnAdapter::RestoreWorkspaceLayout(const QJsonObject& View)
     if (!Layout.isEmpty()) {
         bool Valid = Layout.value("version") == QJsonValue(1) && LayoutModes.contains(Layout.value("mode").toString()) && Layout.value("profiles").isObject();
         const auto Definition = hc::columns::DecodeProfile(Layout.value("definition").toObject());
-        if (!Definition || !hc::columns::IsBuiltInProfile(*Definition) || Definition->id_ != definition_.id_) Valid = false;
+        if (!Definition || !hc::columns::IsSupportedProfile(*Definition) || Definition->id_ != definition_.id_) Valid = false;
         const auto Profiles = Layout.value("profiles").toObject();
         for (auto It = Profiles.begin(); It != Profiles.end(); ++It) {
             if (!LayoutModes.contains(It.key()) || !It.value().isObject()) { Valid = false; continue; }

@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
 #include "columnNativeFields.hpp"
+#include "columnPluginFields.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 
 #include "commonLibs/cmnDateTime.hpp"
@@ -276,7 +277,7 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
 
 void CFSModel::SetColumnView(const ColumnView& View)
 {
-    columnQueries_->Cancel(); columnQueries_->Resume();
+    columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader(), false);
     beginResetModel();
     {
         CCmnMutexLocker Locker(&lock);
@@ -587,8 +588,13 @@ void CFSModel::doRefresh()
 
 CFSModel::CFSModel()
 {
-    columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::ReadNativeFields);
+    columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::PluginFields::Instance().Loader());
     columnQueries_->Changed = [this](const QSet<QString>& Paths) { columnResultsReady(Paths); };
+    connect(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed, this, [this] {
+        columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader());
+        if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
+        refreshColumnSortRanks();
+    });
     displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
         if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) Refresh();
@@ -691,7 +697,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
 
 void CFSModel::refreshProvider()
 {
-    columnQueries_->Reset();
+    requestOnlyValues_ = false; columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader());
     using namespace hc::storage;
     navigationStop_.request_stop();
     navigationStop_ = std::stop_source{};
@@ -770,7 +776,7 @@ void CFSModel::refreshProvider()
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 {
-    columnQueries_->Reset(); columnSortRanks_.clear();
+    requestOnlyValues_ = false; columnQueries_->Reset(); columnSortRanks_.clear();
     index_.Publish(Entries);
     QVector<nsHC::TySpFileSource> Items;
     if (GetRoot()->ReadLocation(GetCurrentPathWithRoot()).kind_ != hc::storage::LocatorKind::Shell || GetRootCount() > 1)
@@ -1234,8 +1240,10 @@ hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, con
     if (!QueryFamily(Field).isEmpty()) {
         const auto Path = queryPath(Item);
         if (Path.isEmpty()) return CellValue::Missing(Item->Name_ == ".." ? ValueState::Empty : ValueState::Unsupported);
-        if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Field != "file.linkTarget") return CellValue::Missing(ValueState::Empty);
-        return columnQueries_->Read(Path, Field, Request, Urgent);
+        if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Field != "file.linkTarget" && !IsPluginField(Field)) return CellValue::Missing(ValueState::Empty);
+        auto Value = columnQueries_->Read(Path, Field, Request, Urgent);
+        if (IsPluginField(Field) && Value.State() == ValueState::OnDemand) requestOnlyValues_ = true;
+        return Value;
     }
     return CColumnMgr::GetFieldValue(Field, Item.get(), GetCurrentPathWithRoot());
 }
@@ -1269,7 +1277,8 @@ void CFSModel::CancelColumnQueries()
 }
 void CFSModel::ResumeColumnQueries()
 {
-    columnQueries_->Resume();
+    requestOnlyValues_ = false;
+    columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader(true));
     refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
 }
@@ -1286,7 +1295,7 @@ void CFSModel::refreshColumnSortRanks()
     if (loading_) return;
     if (columnSorts_.isEmpty()) {
         columnQueries_->EndSnapshot(); columnSortRanks_.clear(); completedSorts_.clear();
-        emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : QString{}); return;
+        emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{}); return;
     }
     QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders; QVector<const Column*> Bindings;
     for (const auto& Sort : columnSorts_) {
@@ -1329,6 +1338,6 @@ void CFSModel::refreshColumnSortRanks()
     columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
         displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
     columnQueries_->EndSnapshot();
-    completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : QString{});
+    completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
 }

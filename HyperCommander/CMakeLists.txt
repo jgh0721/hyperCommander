@@ -98,6 +98,8 @@ set(PROJECT_UI_SRC
 set(UNIQUELIBS_SRC
         ../UniqueLibs/columnNativeFields.cpp
         ../UniqueLibs/columnNativeFields.hpp
+        ../UniqueLibs/columnPluginFields.cpp
+        ../UniqueLibs/columnPluginFields.hpp
         ../commonLibs/storage/search.cpp
         ../commonLibs/storage/search.hpp
         ../UniqueLibs/qtSearch.cpp

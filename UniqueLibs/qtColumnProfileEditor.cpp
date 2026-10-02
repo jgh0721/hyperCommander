@@ -2,6 +2,7 @@
 #include "qtColumnProfileEditor.hpp"
 #include "cmnHCUtils.hpp"
 #include <QScrollArea>
+#include "columnPluginFields.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 
 using namespace hc::columns;
@@ -87,18 +88,18 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     };
     auto* Content = new QWidget; auto* Form = new QFormLayout(Content);
     field_ = Choice(Content, "hc.columns.field", {});
-    for (const auto& Field : BuiltInFields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
+    for (const auto& Field : PluginFields::Instance().Fields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
     field_->addItem(tr("복합 템플릿"), QString{});
     template_ = new QLineEdit(Content); template_->setObjectName("hc.columns.template"); template_->setPlaceholderText("${file.name} · ${file.size}");
     template_->setMaxLength(4096);
     auto* Insert = new QPushButton(tr("필드 삽입"), Content);
     auto* TemplateRow = new QHBoxLayout; TemplateRow->addWidget(template_, 1); TemplateRow->addWidget(Insert);
     connect(Insert, &QPushButton::clicked, this, [this, Insert] {
-        QMenu Menu(this); for (const auto& Field : BuiltInFields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
+        QMenu Menu(this); for (const auto& Field : PluginFields::Instance().Fields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
         if (const auto* Action = Menu.exec(Insert->mapToGlobal(QPoint(0, Insert->height())))) template_->insert("${" + Action->data().toString() + "}");
     });
     sortField_ = Choice(Content, "hc.columns.sortField", {tr("원래 값 / 템플릿 문자열")});
-    for (const auto& Field : BuiltInFields()) sortField_->addItem(Field.title_, Field.id_);
+    for (const auto& Field : PluginFields::Instance().Fields()) sortField_->addItem(Field.title_, Field.id_);
     title_ = new QLineEdit(Content); title_->setObjectName("hc.columns.title");
     alignment_ = Choice(Content, "hc.columns.alignment", {tr("왼쪽"), tr("가운데"), tr("오른쪽")});
     primary_ = new QCheckBox(tr("주 이름 컬럼으로 사용"), Content); primary_->setObjectName("hc.columns.primary");
@@ -184,9 +185,17 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     connect(profiles_, &QComboBox::currentIndexChanged, this, [this] {
         if (loading_) return;
         const auto Next = DecodeProfile(library_[profiles_->currentData().toString()].toObject());
-        if (!Next || !IsBuiltInProfile(*Next)) return;
+        if (!Next || !IsSupportedProfile(*Next)) return;
         if (Validate(draft_).isEmpty()) library_[IdText(draft_.id_)] = EncodeProfile(draft_);
         draft_ = *Next; dirty_ = true; refreshProfiles(); rebuildList(0);
+    });
+    auto* Reload = new QPushButton(tr("플러그인 필드 새로 읽기"), this); Reload->setObjectName("hc.columns.reloadProviders"); ProfileBar->addWidget(Reload);
+    connect(Reload, &QPushButton::clicked, &PluginFields::Instance(), &PluginFields::Refresh);
+    connect(&PluginFields::Instance(), &PluginFields::Changed, this, [this] {
+        const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
+        for (const auto& Field : PluginFields::Instance().Fields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
+        field_->addItem(tr("복합 템플릿"), QString{}); loadColumn(row_);
+        if (!PluginFields::Instance().Status().isEmpty()) error_->setText(PluginFields::Instance().Status());
     });
     Load(DefaultProfile(), {});
 }
@@ -204,7 +213,7 @@ void QtColumnProfileEditor::refreshProfiles()
 {
     loading_ = true; profiles_->clear();
     for (auto It = library_.begin(); It != library_.end(); ++It)
-        if (const auto Profile = DecodeProfile(It.value().toObject()); Profile && IsBuiltInProfile(*Profile)) profiles_->addItem(Profile->title_, It.key());
+        if (const auto Profile = DecodeProfile(It.value().toObject()); Profile && IsSupportedProfile(*Profile)) profiles_->addItem(Profile->title_, It.key());
     profiles_->setCurrentIndex(profiles_->findData(IdText(draft_.id_))); loading_ = false;
 }
 
@@ -224,6 +233,8 @@ void QtColumnProfileEditor::loadColumn(int Row)
 {
     if (loading_ || Row < 0 || Row >= draft_.columns_.size()) return;
     loading_ = true; row_ = Row; const auto& Column = draft_.columns_[Row]; const auto& Width = Column.widths_[int(draft_.mode_)];
+    if (Column.template_.isEmpty() && field_->findData(Column.fieldId_) < 0) field_->addItem(tr("사용 불가 · %1").arg(Column.fieldId_), Column.fieldId_);
+    if (!Column.sortField_.isEmpty() && sortField_->findData(Column.sortField_) < 0) sortField_->addItem(tr("사용 불가 · %1").arg(Column.sortField_), Column.sortField_);
     field_->setCurrentIndex(field_->findData(Column.template_.isEmpty() ? Column.fieldId_ : QString{})); title_->setText(Column.title_);
     template_->setText(Column.template_); template_->setEnabled(!Column.template_.isEmpty());
     sortField_->setCurrentIndex(std::max(0, sortField_->findData(Column.sortField_)));
@@ -251,7 +262,7 @@ void QtColumnProfileEditor::storeColumn()
     Column.template_ = Field.isEmpty() ? (FieldChanged ? QString("${file.name} · ${file.size}") : template_->text()) : QString{};
     Column.sortField_ = sortField_->currentData().toString();
     if (FieldChanged) {
-        const auto Fields = BuiltInFields();
+        const auto Fields = PluginFields::Instance().Fields();
         for (const auto& Old : Fields) if (Old.id_ == PreviousField && Column.title_ == Old.title_) {
             Column.title_ = field_->currentText(); break;
         }
@@ -268,7 +279,11 @@ void QtColumnProfileEditor::storeColumn()
     if (minimum_->value() >= 0) Width.minimum_ = minimum_->value(); if (maximum_->value() >= 0) Width.maximum_ = maximum_->value();
     Width.hidden_ = !visible_->isChecked();
     if (NewPrimary) for (int Mode : {1, 2}) Column.widths_[Mode] = {hc::view::WidthUnit::Percent, hc::view::WidthMode::Flexible, 100};
-    if (FieldChanged) Column.format_ = {};
+    if (FieldChanged) {
+        Column.format_ = {};
+        for (auto& Sort : draft_.sorts_) if (Sort.columnId_ == Column.id_) Sort.order_ = PluginFields::Instance().Descending(Field) ? Qt::DescendingOrder : Qt::AscendingOrder;
+        refreshSorts();
+    }
     columns_->item(row_)->setText(Column.title_); dirty_ = true;
     const auto SortRow = sort_->findData(IdText(Column.id_)); if (SortRow >= 0) sort_->setItemText(SortRow, Column.title_);
     if (Validate(draft_).isEmpty()) error_->clear();
@@ -281,7 +296,7 @@ bool QtColumnProfileEditor::ValidateDraft()
         const auto Compiled = CompileTemplate(Column.template_);
         if (!Compiled.Valid()) { error_->setText(tr("%1 · %2번째 문자: %3").arg(Column.title_).arg(Compiled.errorOffset_ + 1).arg(Compiled.error_)); return false; }
     }
-    if (!IsBuiltInProfile(draft_)) { error_->setText(tr("필드 참조·정렬 값·너비 설정을 확인하세요.")); return false; }
+    if (!IsSupportedProfile(draft_)) { error_->setText(tr("필드 참조·정렬 값·너비 설정을 확인하세요.")); return false; }
     const auto Error = Validate(draft_);
     if (!Error.isEmpty()) {
         error_->setText(Error == "width" ? tr("너비를 확인하세요. 퍼센트는 0~100이며, 최소값은 최대값 이하이어야 합니다.")

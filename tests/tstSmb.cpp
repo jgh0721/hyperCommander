@@ -10,6 +10,7 @@
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
 #include "qtColumnProfileEditor.hpp"
+#include "columnPluginFields.hpp"
 #include "columnNativeFields.hpp"
 #include "fileJobUi.hpp"
 #include "nativeWritableStorage.hpp"
@@ -104,7 +105,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -632,6 +633,46 @@ private slots:
             }
             QCOMPARE(Sizes, 2);
         }
+    }
+
+    void columnWdxUi()
+    {
+        using namespace hc::columns; using namespace hc::plugins;
+        auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Read(hc::settings::Section::Plugins);
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Put(hc::settings::Section::Plugins, Saved); PluginFields::Instance().Refresh(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; const auto Binary = Directory.filePath("data.dll");
+        QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_tc_data_fixture.dll", Binary));
+        QFile File(Binary); QVERIFY(File.open(QIODevice::ReadOnly));
+        PluginManifest Manifest; Manifest.id_ = "columns.wdx"; Manifest.version_ = "1"; Manifest.binary_ = "data.dll";
+        Manifest.sha256_ = QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); File.close();
+        Manifest.format_ = PluginFormat::Wdx; Manifest.extensions_ = {Extension::Metadata}; Manifest.permissions_ = {Permission::ReadContent};
+        const auto ManifestPath = Directory.filePath("wdx.json"); QFile Json(ManifestPath); QVERIFY(Json.open(QIODevice::WriteOnly)); Json.write(EncodeManifest(Manifest)); Json.close();
+        Settings.SetPlugins("wdx", QJsonArray{QJsonObject{{"path", Binary}, {"hostEnabled", true}, {"hostManifest", ManifestPath}, {"hostReviewed", hc::settings::JsonObject(EncodeManifest(Manifest))}}});
+        QSignalSpy Catalog(&PluginFields::Instance(), &PluginFields::Changed); PluginFields::Instance().Refresh(); QTRY_VERIFY_WITH_TIMEOUT(Catalog.count(), 10000);
+        const auto Fields = PluginFields::Instance().Fields(); QString Integer, Real, Demand, Delayed; int Plugins = 0;
+        for (const auto& Field : Fields) if (Field.provider_ == ProviderKind::Wdx) {
+            ++Plugins; if (Field.id_.endsWith(".0.0")) Integer = Field.id_; if (Field.id_.endsWith(".1.1")) Real = Field.id_;
+            if (Field.id_.endsWith(".8.0")) Demand = Field.id_; if (Field.id_.endsWith(".6.0")) Delayed = Field.id_;
+        }
+        QCOMPARE(Plugins, 10); QVERIFY(!Integer.isEmpty());
+        hc::workspace::TabState Tab; Tab.id_ = "wdx-columns"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() >= 3);
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(0)); auto Profile = DefaultProfile();
+        Profile.columns_[1].fieldId_ = Integer; Profile.columns_[2].fieldId_ = Real; Profile.columns_[3].fieldId_ = Demand;
+        Profile.columns_[4].fieldId_ = Delayed; Profile.columns_[4].widths_[0].hidden_ = false;
+        QVERIFY(View->ApplyColumnProfile(Profile));
+        int Row = 0; for (; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "data.dll") break; QVERIFY(Row < Model->rowCount());
+        QTRY_COMPARE(Model->index(Row, 1).data().toString(), QString("9007199254740993"));
+        QTRY_COMPARE(Model->index(Row, 2).data().toString(), QString("표시값"));
+        QCOMPARE(Model->index(Row, 2).data(CFsModelT::USR_ROLE_SORT).toDouble(), 32.5);
+        QTRY_COMPARE(Model->index(Row, 4).data().toString(), QString("resolved"));
+        Model->index(Row, 3).data(); QTRY_COMPARE(Model->index(Row, 3).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::OnDemand));
+        Model->ResumeColumnQueries(); QTRY_COMPARE(Model->index(Row, 3).data().toString(), QString("explicit"));
+        Settings.SetPlugins("wdx", {}); Catalog.clear(); PluginFields::Instance().Refresh(); QTRY_VERIFY(Catalog.count());
+        Model->index(Row, 1).data(); QTRY_COMPARE(Model->index(Row, 1).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::Unsupported));
+        QVERIFY(IsSupportedProfile(View->ColumnProfile()));
     }
 
     void columnTemplatesAndAsyncUi()
@@ -2121,7 +2162,7 @@ hc.events.unsubscribe(sub)
         auto* Query = main_->findChild<QAction*>("hc.menu.wdx.query"); QVERIFY(Query); Pick(); Query->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.dataPluginDialog"), 5000);
         QPointer<QDialog> Info = main_->findChild<QDialog*>("hc.dataPluginDialog"); auto* Values = Info->findChild<QTableWidget*>(); QVERIFY(Values);
-        QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 7, 5000); QCOMPARE(Values->item(3, 1)->text(), QString("한글 metadata"));
+        QTRY_COMPARE_WITH_TIMEOUT(Values->rowCount(), 10, 5000); QCOMPARE(Values->item(3, 1)->text(), QString("한글 metadata"));
         Values->cellDoubleClicked(6, 1); QTRY_COMPARE_WITH_TIMEOUT(Values->item(6, 1)->text(), QString("resolved"), 5000);
         QVERIFY(Model->MatchesSearch(*Model->GetFileInfo(Selected)->storageEntry_, "resolved"));
         QVERIFY(Info->grab().save(QCoreApplication::applicationDirPath() + "/wdx-metadata.png")); Info->close(); QTRY_VERIFY(Info.isNull());

@@ -30,9 +30,19 @@ private slots:
             return CellValue::Missing(Field == "file.fileVersion" ? ValueState::Pending : ValueState::Unsupported);
         }).State(), ValueState::Pending);
         auto Profile = DefaultProfile(); Profile.columns_[1].template_ = "${file.name}: ${file.allocatedSize}"; Profile.columns_[1].sortField_ = "file.allocatedSize";
-        QVERIFY(IsBuiltInProfile(Profile)); const auto Restored = DecodeProfile(EncodeProfile(Profile)); QVERIFY(Restored); QVERIFY(*Restored == Profile);
-        Profile.columns_[1].template_ = "${file.doesNotExist}"; QVERIFY(!IsBuiltInProfile(Profile));
+        QVERIFY(IsSupportedProfile(Profile)); const auto Restored = DecodeProfile(EncodeProfile(Profile)); QVERIFY(Restored); QVERIFY(*Restored == Profile);
+        Profile.columns_[1].template_ = "${file.doesNotExist}"; QVERIFY(!IsSupportedProfile(Profile));
         Profile = DefaultProfile(); Profile.columns_[0].template_ = "${file.name}"; QVERIFY(!Validate(Profile).isEmpty());
+    }
+    void metadataDisplayAndTypedSort()
+    {
+        using namespace hc::columns; using namespace hc::plugins;
+        MetadataValue Value; Value.status_ = MetadataStatus::Value; Value.type_ = MetadataType::Real; Value.value_ = 0.000002; Value.display_ = "2e-6";
+        const auto Cell = MetadataCell(Value); QCOMPARE(Format(Cell), QString("2e-6")); QCOMPARE(Cell.Raw().toDouble(), 0.000002);
+        Value.type_ = MetadataType::Date; Value.value_ = std::string("2026-10-02"); Value.display_.clear(); QCOMPARE(MetadataCell(Value).Type(), std::optional(FieldType::Date));
+        Value.type_ = MetadataType::Timestamp; Value.value_ = std::int64_t(116444736000000000LL); QCOMPARE(MetadataCell(Value).Raw().toDateTime().toMSecsSinceEpoch(), 0);
+        auto Profile = DefaultProfile(); Profile.columns_[1].fieldId_ = "wdx.0123456789abcdef0123456789abcdef.2.0"; QVERIFY(IsSupportedProfile(Profile));
+        Profile.columns_[1].fieldId_ += ".bad"; QVERIFY(!IsSupportedProfile(Profile));
     }
     void compositeSortValuesAndMissing()
     {
@@ -109,8 +119,8 @@ private slots:
         QCOMPARE(Resolve("file.path", File).Raw().toString(), QString("\\\\server\\share\\report.tar.gz"));
         QCOMPARE(Resolve("file.parentName", File).Raw().toString(), QString("share"));
         auto Profile = DefaultProfile(); Profile.columns_[1].fieldId_ = "file.path";
-        QVERIFY(IsBuiltInProfile(Profile)); Profile.columns_[1].fieldId_ = "wdx.unknown.field";
-        QVERIFY(!IsBuiltInProfile(Profile)); // Unsupported providers remain preserved but not executed.
+        QVERIFY(IsSupportedProfile(Profile)); Profile.columns_[1].fieldId_ = "wdx.unknown.field";
+        QVERIFY(!IsSupportedProfile(Profile)); // Unsupported providers remain preserved but not executed.
     }
     void typedValuesPreservePrecisionAndState()
     {

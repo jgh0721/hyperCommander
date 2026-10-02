@@ -61,18 +61,22 @@ API int __stdcall FsRenMovFileW(wchar_t* From, wchar_t* To, BOOL, BOOL, void*)
 { if (!Files.contains(From) || Files.contains(To)) return 1; Files[To] = std::move(Files[From]); Files.erase(From); return 0; }
 API int __stdcall ContentGetSupportedField(int Index, char* Name, char* Units, int Max)
 {
-    if (Index >= 7) return 0; sprintf_s(Name, Max, "field%d", Index); Units[0] = 0;
-    const int Types[]{2, 3, 6, 11, 4, 10, 11}; return Types[Index];
+    if (Index >= 10) return 0; sprintf_s(Name, Max, "field%d", Index); Units[0] = 0;
+    if (Index == 1) strcpy_s(Units, Max, "base|tenfold"); if (Index == 7) strcpy_s(Units, Max, "alpha|beta");
+    const int Types[]{2, 3, 6, 11, 4, 10, 11, 7, 11, 9}; return Types[Index];
 }
 API int __stdcall ContentGetValueW(wchar_t* Name, int Field, int Unit, void* Value, int Max, int Flags)
 {
     Fault(Name); if (Unit == 99) { memset(Value, 'X', Max); return 11; }
     if (Field == 0) { const long long Number = 9007199254740993LL; memcpy(Value, &Number, 8); return 2; }
-    if (Field == 1) { const double Number = 3.25; memcpy(Value, &Number, 8); return 3; }
+    if (Field == 1) { const double Number = Unit == 1 ? 32.5 : 3.25; memcpy(Value, &Number, 8); wcscpy_s(reinterpret_cast<wchar_t*>(static_cast<char*>(Value) + 8), (Max - 8) / 2, L"표시값"); return 3; }
     if (Field == 2) { const int Number = 1; memcpy(Value, &Number, 4); return 6; }
     if (Field == 3) { wcscpy_s(static_cast<wchar_t*>(Value), Max / 2, L"한글 metadata"); return 11; }
     if (Field == 4) { const WORD Date[]{2026, 9, 12}; memcpy(Value, Date, 6); return 4; }
     if (Field == 5) { const long long Time = 134000000000000000LL; memcpy(Value, &Time, 8); return 10; }
+    if (Field == 7) { strcpy_s(static_cast<char*>(Value), Max, "alpha"); return 7; }
+    if (Field == 8) { if (Flags) { wcscpy_s(static_cast<wchar_t*>(Value), Max / 2, L"요청 필요"); return -4; } wcscpy_s(static_cast<wchar_t*>(Value), Max / 2, L"explicit"); return 11; }
+    if (Field == 9) { strcpy_s(static_cast<char*>(Value), Max, "search only"); return 9; }
     if (Field == 6) { if (Flags) return 0; wcscpy_s(static_cast<wchar_t*>(Value), Max / 2, L"resolved"); return 11; }
     return -1;
 }

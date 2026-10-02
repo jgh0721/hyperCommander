@@ -405,7 +405,7 @@ hc::columns::ColumnProfile CGridView::ColumnProfile() const
 
 bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
 {
-    if (!model_ || !hc::columns::IsBuiltInProfile(Profile)) return false;
+    if (!model_ || !hc::columns::IsSupportedProfile(Profile)) return false;
     const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
     view_->beginUpdate();
     view_->deselectAll(); view_->setModel(nullptr); view_->removeColumns();
@@ -447,7 +447,7 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
             ["ColumnsV2/Defaults/" + columnAdapter_->PaneKey()].toObject();
         Definition = hc::columns::DecodeProfile(Defaults);
     }
-    if (Definition && hc::columns::IsBuiltInProfile(*Definition)) {
+    if (Definition && hc::columns::IsSupportedProfile(*Definition)) {
         ApplyColumnProfile(*Definition);
         if (!Layout.isEmpty()) columnAdapter_->RestoreWorkspaceLayout(View);
     } else columnAdapter_->RestoreWorkspaceLayout(View);

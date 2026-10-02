@@ -43,6 +43,8 @@ namespace hc::columns
             Result.error_ = std::move(Error);
             return Result;
         }
+        CellValue WithDisplay(QString Text) const { auto Copy = *this; Copy.display_ = std::move(Text); return Copy; }
+        const QString& Display() const { return display_; }
         ValueState State() const { return state_; }
         std::optional<FieldType> Type() const { return value_ ? std::optional(static_cast<FieldType>(value_->index())) : std::nullopt; }
         const std::optional<Payload>& Value() const { return value_; }
@@ -55,6 +57,7 @@ namespace hc::columns
         ValueState state_ = ValueState::Empty;
         std::optional<Payload> value_;
         QString error_;
+        QString display_;
     };
 
     struct FieldDefinition
@@ -170,6 +173,7 @@ namespace hc::columns
     inline QString Format(const CellValue& Value, const FormatOptions& Options = {})
     {
         if (Value.State() != ValueState::Ready) return {};
+        if (!Value.Display().isEmpty()) return Value.Display();
         const auto Raw = Value.Raw();
         if (Raw.metaType() == QMetaType::fromType<QDateTime>()) return Raw.toDateTime().toString(Options.datePattern_);
         if (Raw.metaType() == QMetaType::fromType<QDate>()) return Raw.toDate().toString(Qt::ISODate);
