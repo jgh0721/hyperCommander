@@ -59,6 +59,13 @@ target_compile_options(hc_iso_engine_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,M
 add_test(NAME hc.iso_engine COMMAND hc_iso_engine_tests)
 set_tests_properties(hc.iso_engine PROPERTIES TIMEOUT 60)
 hc_enable_qt_deployment(hc_iso_engine_tests TEST)
+qt_add_executable(hc_iso_provider_tests ../BuiltInPlugin/IsoImage/tests/tstIsoProvider.cpp)
+target_link_libraries(hc_iso_provider_tests PRIVATE hc_builtin_iso Qt6::Test)
+target_compile_options(hc_iso_provider_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_iso_provider_tests hc-plugin-host-x64)
+add_test(NAME hc.iso_provider COMMAND hc_iso_provider_tests -o "${CMAKE_BINARY_DIR}/iso-provider-$<CONFIG>.txt,txt")
+set_tests_properties(hc.iso_provider PROPERTIES TIMEOUT 120)
+hc_enable_qt_deployment(hc_iso_provider_tests TEST)
 qt_add_executable(hc_iso_wcx_tests ../BuiltInPlugin/IsoImage/tests/tstIsoWcx.cpp)
 target_link_libraries(hc_iso_wcx_tests PRIVATE hc_builtin_iso Qt6::Test)
 target_compile_options(hc_iso_wcx_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -445,7 +452,7 @@ if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-Deplo
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Test-DeployedRuntime.ps1"
             -Executable "$<TARGET_FILE:HyperCommander>"
-            -TestExecutables "$<TARGET_FILE:hc_settings_tests>|$<TARGET_FILE:hc_automation_tests>|$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
+            -TestExecutables "$<TARGET_FILE:hc_settings_tests>|$<TARGET_FILE:hc_automation_tests>|$<TARGET_FILE:hc_search_tests>|$<TARGET_FILE:hc_workspace_tests>|$<TARGET_FILE:hc_path_tests>|$<TARGET_FILE:hc_storage_tests>|$<TARGET_FILE:hc_command_tests>|$<TARGET_FILE:hc_column_tests>|$<TARGET_FILE:hc_job_tests>|$<TARGET_FILE:hc_write_tests>|$<TARGET_FILE:hc_materialization_tests>|$<TARGET_FILE:hc_wcx_tests>|$<TARGET_FILE:hc_hosted_wcx_tests>|$<TARGET_FILE:hc_viewer_tests>|$<TARGET_FILE:hc_viewer_surface_tests>|$<TARGET_FILE:hc_plugin_tests>|$<TARGET_FILE:hc_plugin_process_tests>|$<TARGET_FILE:hc_hosted_wlx_tests>|$<TARGET_FILE:hc_wlx_detection_tests>|$<TARGET_FILE:hc_wlx_selection_tests>|$<TARGET_FILE:hc_hosted_data_tests>|$<TARGET_FILE:hc_hosted_dopus_tests>|$<TARGET_FILE:hc_dopus_viewer_tests>|$<TARGET_FILE:hc_iso_engine_tests>|$<TARGET_FILE:hc_iso_provider_tests>|$<TARGET_FILE:hc_iso_wcx_tests>|$<TARGET_FILE:hc_iso_job_tests>"
             -OutputRoot "${CMAKE_BINARY_DIR}/deployment/$<CONFIG>"
     )
     # This runs the product and every deployed test executable sequentially. The
@@ -462,7 +469,7 @@ add_custom_target(hc_check
     USES_TERMINAL
     VERBATIM
 )
-add_dependencies(hc_check hc_iso_engine_tests hc_iso_wcx_tests hc_iso_job_tests)
+add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_tests hc_iso_job_tests)
 add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
 add_dependencies(hc_check hc_lua_tests)
 if(TARGET hc_dopus_sdk_abi_tests)

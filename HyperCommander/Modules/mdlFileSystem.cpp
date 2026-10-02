@@ -6,6 +6,9 @@
 #include "cmnHCUtils.hpp"
 #include "cmnTypeDefs_Name.hpp"
 #include "storageProviders.hpp"
+#include "BuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "BuiltInPlugin/IsoImage/isoProvider.hpp"
+#include <QFileInfo>
 
 #include <lm.h>
 
@@ -543,7 +546,15 @@ namespace nsHC
     std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
     {
         if (!readProvider_ && WCX_)
-            readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), ReadLocation("/"), {}, WCX_->Backend(), ancestors_);
+        {
+            const auto Root = ReadLocation("/");
+            const auto Builtin = hc::plugins::BuiltinIsoOptions().binaryPath_;
+            if (Root.nesting_.size() == 1 && QFileInfo(WCX_->PluginPath()).absoluteFilePath().compare(
+                QFileInfo(Builtin).absoluteFilePath(), Qt::CaseInsensitive) == 0)
+                readProvider_ = hc::iso::MakeReadProvider(Root);
+            else
+                readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), Root, {}, WCX_->Backend(), ancestors_);
+        }
         return readProvider_;
     }
 } // nsHC

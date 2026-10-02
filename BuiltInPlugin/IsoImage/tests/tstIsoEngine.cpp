@@ -14,6 +14,32 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void callbackInputAndChildren()
+    {
+        QTemporaryDir Directory; const auto Target = Directory.filePath("image.iso").toUtf8(); auto Settings = Options();
+        const HcIsoSource Empty{nullptr, "parent/child", 1}; QCOMPARE(hcIsoBuild(Target.constData(), &Empty, 1, &Settings), HC_ISO_OK);
+        struct Source { QByteArray bytes_; int mode_ = 0; uint64_t calls_ = 0; } Data{Read(QString::fromUtf8(Target))};
+        const HcIsoInput Input{sizeof(HcIsoInput), uint64_t(Data.bytes_.size()),
+            [](void* Opaque, uint64_t Offset, void* Buffer, uint32_t Capacity, uint32_t* Read) -> int {
+                auto& Data = *static_cast<Source*>(Opaque); ++Data.calls_; *Read = 0;
+                if (Data.mode_ == 1) return HC_ISO_CANCELLED;
+                if (Data.mode_ == 2) return HC_ISO_OK; // No progress must fail, never spin.
+                if (Offset > uint64_t(Data.bytes_.size())) return HC_ISO_IO;
+                *Read = uint32_t(std::min({uint64_t(Capacity), uint64_t(17), uint64_t(Data.bytes_.size()) - Offset}));
+                std::memcpy(Buffer, Data.bytes_.constData() + Offset, *Read); return HC_ISO_OK;
+            }, &Data};
+        HcIsoImage* Raw = nullptr; QCOMPARE(hcIsoOpenInput(&Input, HC_ISO_AUTO, &Raw), HC_ISO_OK); ImagePtr Image(Raw);
+        QVERIFY(Data.calls_ > 100); uint64_t Parent = UINT64_MAX, Child = UINT64_MAX, Found = UINT64_MAX;
+        QCOMPARE(hcIsoGetChild(Image.get(), UINT64_MAX, 0, &Parent), HC_ISO_OK);
+        QCOMPARE(hcIsoFindEntry(Image.get(), "parent", &Found), HC_ISO_OK); QCOMPARE(Found, Parent);
+        QCOMPARE(hcIsoGetChild(Image.get(), Parent, 0, &Child), HC_ISO_OK);
+        QCOMPARE(hcIsoFindEntry(Image.get(), "parent/child", &Found), HC_ISO_OK); QCOMPARE(Found, Child);
+        QCOMPARE(hcIsoGetChild(Image.get(), Parent, 1, &Found), HC_ISO_END);
+        QCOMPARE(hcIsoFindEntry(Image.get(), "absent", &Found), HC_ISO_END);
+        QCOMPARE(hcIsoFindEntry(Image.get(), "parent", nullptr), HC_ISO_INVALID);
+        Image.reset(); Data.mode_ = 1; QCOMPARE(hcIsoOpenInput(&Input, HC_ISO_AUTO, &Raw), HC_ISO_CANCELLED); QVERIFY(!Raw);
+        Data.mode_ = 2; QCOMPARE(hcIsoOpenInput(&Input, HC_ISO_AUTO, &Raw), HC_ISO_IO); QVERIFY(!Raw);
+    }
     void udfWithoutJolietLongNames()
     {
         QTemporaryDir Directory; const auto Target = Directory.filePath("image.iso").toUtf8();

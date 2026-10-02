@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 typedef struct HcIsoImage HcIsoImage;
-enum HcIsoStatus { HC_ISO_OK, HC_ISO_INVALID, HC_ISO_IO, HC_ISO_UNSUPPORTED, HC_ISO_CANCELLED };
+enum HcIsoStatus { HC_ISO_OK, HC_ISO_INVALID, HC_ISO_IO, HC_ISO_UNSUPPORTED, HC_ISO_CANCELLED, HC_ISO_END };
 enum HcIsoNamespace { HC_ISO_AUTO, HC_ISO_PRIMARY, HC_ISO_JOLIET, HC_ISO_UDF };
 // HC_ISO_UDF_BRIDGE includes Joliet; NO_JOLIET preserves longer UDF names.
 enum HcIsoProfile { HC_ISO_9660, HC_ISO_9660_JOLIET, HC_ISO_UDF_BRIDGE, HC_ISO_UDF_NO_JOLIET };
@@ -55,11 +55,26 @@ typedef struct HcIsoEntry {
     const char* path_; // borrowed until hcIsoClose
 } HcIsoEntry;
 
+// Borrowed random-access source; callbacks and Context must survive hcIsoClose.
+// Calls are synchronous. Return an HcIsoStatus; short reads are allowed, but a
+// successful nonempty request must make progress. Serialize calls per image.
+typedef int (*HcIsoReadAt)(void* Context, uint64_t Offset, void* Buffer, uint32_t Capacity, uint32_t* Read);
+typedef struct HcIsoInput {
+    uint32_t structSize_;
+    uint64_t size_;
+    HcIsoReadAt readAt_;
+    void* context_;
+} HcIsoInput;
+
 HC_ISO_API const char* hcIsoLastError(void);
 HC_ISO_API int hcIsoOpen(const char* Path, uint32_t Namespace, HcIsoImage** Image);
+HC_ISO_API int hcIsoOpenInput(const HcIsoInput* Input, uint32_t Namespace, HcIsoImage** Image);
 HC_ISO_API void hcIsoClose(HcIsoImage* Image);
 HC_ISO_API int hcIsoGetInfo(const HcIsoImage* Image, HcIsoInfo* Info);
 HC_ISO_API int hcIsoGetEntry(const HcIsoImage* Image, uint64_t Index, HcIsoEntry* Entry);
+// Root directory uses UINT64_MAX; HC_ISO_END means no such path/child.
+HC_ISO_API int hcIsoFindEntry(const HcIsoImage* Image, const char* Path, uint64_t* Index);
+HC_ISO_API int hcIsoGetChild(const HcIsoImage* Image, uint64_t Directory, uint64_t Child, uint64_t* Index);
 HC_ISO_API int hcIsoRead(HcIsoImage* Image, uint64_t Index, uint64_t Offset,
                        void* Buffer, uint32_t Capacity, uint32_t* Read);
 // Creates a new staging path exclusively; never replaces an existing target.

@@ -53,22 +53,29 @@ struct Entry {
     uint64_t size_ = 0;
     std::vector<Extent> extents_;
     Bytes embedded_;
+    std::vector<size_t> children_;
 };
 class Reader {
 public:
     Reader(const fs::path& Path, uint32_t Namespace);
+    Reader(const HcIsoInput& Input, uint32_t Namespace);
     Bytes ReadAt(uint64_t Offset, uint64_t Size);
     uint32_t Read(size_t Index, uint64_t Offset, std::span<uint8_t> Buffer);
     const std::vector<Entry>& Entries() const { return entries_; }
     const HcIsoInfo& Info() const { return info_; }
+    uint64_t Find(const std::string& Path) const;
+    uint64_t Child(uint64_t Directory, uint64_t Index) const;
 private:
+    void initialize(uint32_t Namespace);
     void readIso(const Bytes& Descriptor, bool Joliet);
     void readUdf();
     void add(Entry Value);
     std::ifstream stream_;
     HcIsoInfo info_{};
     std::vector<Entry> entries_;
-    std::set<std::string> paths_;
+    std::map<std::string, size_t> paths_;
+    std::vector<size_t> rootChildren_;
+    HcIsoInput input_{};
     uint64_t metadataBytes_ = 0;
 };
 struct Node {

@@ -98,6 +98,7 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
     if (State->mode_ == 'Q' || State->mode_ == 'R') Header->Flags |= 8;
     Header->UnpSize = static_cast<unsigned int>(Item.bytes_.size()); Header->PackSize = Header->UnpSize;
     Header->FileCRC = Crc(Item.bytes_); Header->FileTime = (46 << 25) | (9 << 21) | (7 << 16);
+    if (State->mode_ == '0' || State->mode_ == '!') Header->FileCRC = 0;
     return 0;
 }
 extern "C" __declspec(dllexport) int __stdcall ProcessFileW(HANDLE Handle, int Operation, wchar_t*, wchar_t* Destination)
@@ -146,6 +147,7 @@ extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wcha
         Entry Item; Item.name_ = Normalize(Name); const auto Path = std::wstring(Source) + Name;
         const auto Attr = GetFileAttributesW(Path.c_str()); if (Attr == INVALID_FILE_ATTRIBUTES) return E_EREAD;
         Item.directory_ = Attr & FILE_ATTRIBUTE_DIRECTORY; if (!Item.directory_) Item.bytes_ = ReadBytes(Path.c_str());
+        if (State.mode_ == '!' && !Item.bytes_.empty()) Item.bytes_[0] ^= 1; // Same-size corruption, no header CRC.
         std::erase_if(State.entries_, [&](const Entry& Old) { return Old.name_ == Item.name_; }); State.entries_.push_back(std::move(Item));
     }
     if (!Save(Archive, State)) return E_EWRITE;

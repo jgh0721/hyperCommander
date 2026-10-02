@@ -18,8 +18,18 @@ uint32_t Paired(std::span<const uint8_t> Data, size_t Offset, size_t Width)
 Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(Path, std::ios::binary)
 {
     Require(bool(stream_), "Cannot open ISO", HC_ISO_IO);
-    info_.structSize_ = sizeof(info_);
     info_.imageBytes_ = fs::file_size(Path);
+    initialize(Namespace);
+}
+Reader::Reader(const HcIsoInput& Input, uint32_t Namespace) : input_(Input)
+{
+    Require(Input.structSize_ == sizeof(Input) && Input.readAt_, "Invalid random-access source");
+    info_.imageBytes_ = Input.size_;
+    initialize(Namespace);
+}
+void Reader::initialize(uint32_t Namespace)
+{
+    info_.structSize_ = sizeof(info_);
     Require(info_.imageBytes_ >= 18 * Block && info_.imageBytes_ % Block == 0, "Truncated ISO image");
     Bytes Primary, Joliet;
     bool End = false, Udf = false;
@@ -50,11 +60,39 @@ Reader::Reader(const fs::path& Path, uint32_t Namespace) : stream_(Path, std::io
     info_.selectedNamespace_ = Namespace;
     if (Namespace == HC_ISO_UDF) readUdf(); else readIso(Namespace == HC_ISO_JOLIET ? Joliet : Primary, Namespace == HC_ISO_JOLIET);
     info_.entryCount_ = entries_.size();
+    for (size_t I = 0; I < entries_.size(); ++I) {
+        const auto Slash = entries_[I].path_.find_last_of('/');
+        if (Slash == std::string::npos) rootChildren_.push_back(I);
+        else {
+            const auto Parent = paths_.find(entries_[I].path_.substr(0, Slash));
+            Require(Parent != paths_.end() && entries_[Parent->second].directory_, "Missing parent directory");
+            entries_[Parent->second].children_.push_back(I);
+        }
+        metadataBytes_ += sizeof(size_t); Require(metadataBytes_ <= MaxMetadata, "Child index budget exceeded");
+    }
+}
+uint64_t Reader::Find(const std::string& Path) const
+{ const auto It = paths_.find(Path); return It == paths_.end() ? UINT64_MAX : uint64_t(It->second); }
+uint64_t Reader::Child(uint64_t Directory, uint64_t Index) const
+{
+    Require(Directory == UINT64_MAX || (Directory < entries_.size() && entries_[size_t(Directory)].directory_), "Invalid parent directory");
+    const auto& Children = Directory == UINT64_MAX ? rootChildren_ : entries_[size_t(Directory)].children_;
+    return Index < Children.size() ? uint64_t(Children[size_t(Index)]) : UINT64_MAX;
 }
 Bytes Reader::ReadAt(uint64_t Offset, uint64_t Size)
 {
     Require(Offset <= info_.imageBytes_ && Size <= info_.imageBytes_ - Offset && Size <= MaxMetadata, "Extent outside image or read budget");
     Bytes Data(static_cast<size_t>(Size));
+    if (input_.readAt_) {
+        uint64_t Done = 0;
+        while (Done < Size) {
+            const auto Capacity = uint32_t(std::min<uint64_t>(Size - Done, 1024 * 1024)); uint32_t Read = 0;
+            const int Status = input_.readAt_(input_.context_, Offset + Done, Data.data() + size_t(Done), Capacity, &Read);
+            Require(Status == HC_ISO_OK, "ISO source read failed", Status);
+            Require(Read && Read <= Capacity, "Invalid source read progress", HC_ISO_IO); Done += Read;
+        }
+        return Data;
+    }
     stream_.clear(); stream_.seekg(std::streamoff(Offset));
     stream_.read(reinterpret_cast<char*>(Data.data()), std::streamsize(Size));
     Require(uint64_t(stream_.gcount()) == Size, "Short ISO read", HC_ISO_IO);
@@ -82,7 +120,7 @@ uint32_t Reader::Read(size_t Index, uint64_t Offset, std::span<uint8_t> Buffer)
 void Reader::add(Entry Value)
 {
     CleanPath(Value.path_);
-    Require(entries_.size() < MaxEntries && paths_.insert(Value.path_).second, "Duplicate path or entry budget exceeded");
+    Require(entries_.size() < MaxEntries && paths_.emplace(Value.path_, entries_.size()).second, "Duplicate path or entry budget exceeded");
     metadataBytes_ += Value.path_.size() + sizeof(Entry) + Value.extents_.size() * sizeof(Extent);
     Require(metadataBytes_ <= MaxMetadata, "Metadata budget exceeded");
     entries_.push_back(std::move(Value));

@@ -583,6 +583,12 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\BuiltInPlugin\IsoImage\isoJob.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\BuiltInPlugin\IsoImage\builtinIso.hpp" />
     <ClInclude Include="..\BuiltInPlugin\IsoImage\isoJob.hpp" />
+    <ClCompile Include="..\BuiltInPlugin\IsoImage\nativeIsoRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\BuiltInPlugin\IsoImage\isoProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\BuiltInPlugin\IsoImage\isoRewrite.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\BuiltInPlugin\IsoImage\nativeIsoRuntime.hpp" />
+    <ClInclude Include="..\BuiltInPlugin\IsoImage\isoProvider.hpp" />
+    <ClInclude Include="..\BuiltInPlugin\IsoImage\isoRewrite.hpp" />
     <ClCompile Include="..\commonLibs\viewer\viewer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtViewerSurface.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

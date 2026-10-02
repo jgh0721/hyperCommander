@@ -16,6 +16,8 @@
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
 #include "storageProviders.hpp"
+#include "wcxMutation.hpp"
+#include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 #include "qtViewerSurface.hpp"
 #include "qtViewerHost.hpp"
 #include "qtPluginHostSettings.hpp"
@@ -1414,6 +1416,8 @@ hc.events.unsubscribe(sub)
         Panel->ReturnOnCurrentTab(Selected);
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot()).kind_ == hc::storage::LocatorKind::Archive, 10000);
         QVERIFY(names(Model).contains("한글.txt"));
+        QCOMPARE(Model->SnapshotProvider()->Id().value_, std::string("iso"));
+        QCOMPARE(Model->SnapshotProvider()->Capabilities().read_, hc::storage::ReadAccess::RandomAccess);
         const auto PreviousProfile = Grid->ColumnProfile(); auto PreviewProfile = PreviousProfile;
         PreviewProfile.columns_[1].fieldId_ = "file.allocatedSize"; PreviewProfile.columns_[1].format_ = {};
         QVERIFY(Grid->ApplyColumnProfile(PreviewProfile));
@@ -1427,7 +1431,25 @@ hc.events.unsubscribe(sub)
             Options.reject();
         }
         QVERIFY(Grid->ApplyColumnProfile(PreviousProfile));
-        qInfo() << "Built-in ISO create, inspect, read test, archive navigation and extracted column preview passed";
+        // Keep a native read session open across the compatibility writer's
+        // atomic replacement. Old IDs must fail and the refreshed panel reload.
+        {
+            using namespace hc::storage;
+            auto Reader = Model->SnapshotProvider(); auto Root = Model->GetRoot()->ReadLocation("/");
+            auto At = Root; At.nesting_.back().entry_ = "/한글.txt";
+            auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+            auto Stream = Reader->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+            const auto Options = hc::plugins::BuiltinIsoOptions();
+            auto Batch = BeginWcxMutation(Options.binaryPath_.toStdString(), Root, Reader, {}, {}, {}, {}, hc::plugins::MakeApprovedWcxBackend(Options));
+            QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/한글.txt", "/renamed.txt", {}, Entry.Value().id_}}, {});
+            QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+            auto Committed = Batch.Value()->Commit({});
+            QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+            auto Old = Stream.Value()->Read(8, {}).get(); QVERIFY(!Old.HasValue()); QCOMPARE(Old.Failure().category_, ErrorCategory::StaleRevision);
+            Model->Refresh(); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("renamed.txt"), 10000);
+        }
+        qInfo() << "Built-in ISO create, inspect, native read, WCX mutation, archive navigation and extracted column preview passed";
     }
 
     void networkDriveStartup()

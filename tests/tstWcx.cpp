@@ -568,6 +568,28 @@ private slots:
         auto Cursor = Reader->Enumerate(Location(Path), {}).get(); QVERIFY(Cursor.HasValue()); const auto Page = Cursor.Value()->Next(100, {}).get();
         QVERIFY(Page.HasValue()); QVERIFY(Page.Value().entries_.empty());
     }
+    void mutationWithoutHeaderChecksum()
+    {
+        for (const auto Mode : {'0', '!'}) {
+            QTemporaryDir Directory; const auto Path = Directory.filePath("batch.hct");
+            const auto Original = QByteArray("HCWCX01") + Mode; QVERIFY(Put(Path, Original));
+            const auto Input = Directory.filePath("source"); QVERIFY(Put(Input, "verified bytes"));
+            auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString());
+            auto Batch = BeginWcxMutation(Fixture().toStdString(), Location(Path), Reader, Directory.path().toStdString()); QVERIFY(Batch.HasValue());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Put, "/new.txt", {}, Content(Input)}}, {});
+            if (Mode == '!') {
+                QVERIFY(!Prepared.HasValue()); QCOMPARE(Prepared.Failure().code_, "archive-output-content-mismatch");
+                QCOMPARE(FileBytes(Path), Original); QVERIFY(Batch.Value()->Abort().empty());
+            } else {
+                QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+                QVERIFY(Batch.Value()->Commit({}).HasValue());
+                auto Fresh = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString());
+                auto Entry = Fresh->Resolve(Location(Path, "/new.txt"), {}).get(); QVERIFY(Entry.HasValue());
+                auto Stream = Fresh->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+                auto Read = Stream.Value()->Read(100, {}).get(); QVERIFY(Read.HasValue()); QCOMPARE(Bytes(Read.Value()), "verified bytes");
+            }
+        }
+    }
     void mutationDestinationFailures()
     {
         QTemporaryDir Directory; const auto Path = Directory.filePath("batch.hct"); QVERIFY(Put(Path, "HCWCX01"));

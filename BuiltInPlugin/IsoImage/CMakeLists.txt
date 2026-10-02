@@ -80,7 +80,11 @@ add_custom_target(hc_iso_package
     DEPENDS "${HC_ISO_PIN_HEADER}"
     VERBATIM
 )
-qt_add_library(hc_builtin_iso STATIC builtinIso.cpp builtinIso.hpp isoJob.cpp isoJob.hpp)
+qt_add_library(hc_builtin_iso STATIC
+    builtinIso.cpp builtinIso.hpp isoJob.cpp isoJob.hpp
+    nativeIsoRuntime.cpp nativeIsoRuntime.hpp
+    isoProvider.cpp isoProvider.hpp isoRewrite.cpp isoRewrite.hpp
+)
 target_include_directories(hc_builtin_iso PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
 target_link_libraries(hc_builtin_iso PUBLIC hc_plugin_process hc_viewer_core)
 target_compile_options(hc_builtin_iso PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

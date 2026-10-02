@@ -431,6 +431,7 @@ namespace hc::storage
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 std::set<std::string> Seen;
+                std::vector<std::pair<hc::plugins::ArchiveHeader, std::string>> VerifyBytes;
                 for (;;)
                 {
                     auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context); if (!Page.HasValue()) return Page.Failure();
@@ -441,15 +442,47 @@ namespace hc::storage
                         const auto Path = "/" + Name.toStdString();
                         if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
                         const auto& Expected = draft_.at(Path).entry_;
+                        const bool KnownCrc = Expected.hints_.contains("crc")
+                            && (draft_.at(Path).changed_ || Expected.hints_.at("crc") != "0");
                         if (Expected.hints_.contains("encrypted") && !Header.encrypted_) return Invalid("archive-output-encryption-lost");
                         const auto Packed = Header.packedSize_ ? Header.packedSize_ : std::uint64_t(QFileInfo(Output).size());
                         if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
                             return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
                         if (Expected.directory_ != Header.directory_ || (!Expected.directory_ && (Expected.size_ != Header.size_
-                            || (Expected.hints_.contains("crc") && Expected.hints_.at("crc") != std::to_string(Header.crc_)))))
+                            || (Header.crc_ && KnownCrc && Expected.hints_.at("crc") != std::to_string(Header.crc_)))))
                             return Invalid("archive-output-content-mismatch");
+                        // ISO and other WCX formats may have no on-disc CRC.
+                        // Zero cannot prove a payload match: validate actual
+                        // extracted bytes against the staged input checksum.
+                        if (!Expected.directory_ && !Header.crc_ && KnownCrc)
+                            VerifyBytes.emplace_back(Header, Expected.hints_.at("crc"));
                     }
                     if (Page.Value().end_) break;
+                }
+                // Release the listing before another operation on a serialized
+                // WCX module. Keep extraction inside the private staging tree.
+                Cursor.Value().reset();
+                for (const auto& [Header, ExpectedCrc] : VerifyBytes)
+                {
+                    const auto VerifyPath = QFileInfo(Output).dir().filePath("verify-member");
+                    Files.push_back(VerifyPath);
+                    auto Extracted = backend_->Extract(Output.toStdString(), Header, VerifyPath.toStdString(), Context);
+                    if (!Extracted.HasValue()) return Extracted.Failure();
+                    QFile File(VerifyPath);
+                    if (!File.open(QIODevice::ReadOnly) || uint64_t(File.size()) != Header.size_) return Invalid("archive-output-content-mismatch");
+                    uint32_t Check = 0xffffffff;
+                    while (!File.atEnd()) {
+                        if (auto Error = Context.Check({"wcx"})) return *Error;
+                        const auto Bytes = File.read(1024 * 1024);
+                        if (Bytes.isEmpty()) return Invalid("archive-output-verify-read");
+                        Check = Crc(Check, Bytes);
+                    }
+                    if (ExpectedCrc != std::to_string(Check ^ 0xffffffff)) return Invalid("archive-output-content-mismatch");
+                    File.close();
+                    const auto Attributes = GetFileAttributesW(Native(VerifyPath).c_str());
+                    if (Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_READONLY))
+                        SetFileAttributesW(Native(VerifyPath).c_str(), Attributes & ~FILE_ATTRIBUTE_READONLY);
+                    if (!QFile::remove(VerifyPath)) return Invalid("archive-output-verify-cleanup");
                 }
                 for (const auto& [Path, Item] : draft_)
                     if (!Seen.contains(Path))
@@ -530,7 +563,10 @@ namespace hc::storage
         std::shared_ptr<IStorageProvider> Reader, std::string TemporaryBase, ArchiveMutationLimits Limits,
         OperationContext Context, std::shared_ptr<IWritableStorage> DestinationWriter, std::shared_ptr<hc::plugins::IArchiveBackend> Backend)
     {
-        if (!Reader || Reader->Id().value_ != "wcx" || Root.kind_ != LocatorKind::Archive || Root.nesting_.empty() || Root.nesting_.size() > 8
+        // Native ISO reads can feed the existing top-level WCX rewrite path.
+        // Nested containers still require the WCX container resolver until P5.
+        if (!Reader || (Reader->Id().value_ != "wcx" && !(Reader->Id().value_ == "iso" && Root.nesting_.size() == 1))
+            || Root.kind_ != LocatorKind::Archive || Root.nesting_.empty() || Root.nesting_.size() > 8
             || !std::ranges::all_of(Root.nesting_, [](const ContainerHop& Hop) { return Hop.provider_ == "wcx"; })
             || Root.nesting_.back().entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
             || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_ || Limits.maxInputBytes_ > 64ULL * 1024 * 1024 * 1024
