@@ -20,6 +20,24 @@ public:
 class LuaTests : public QObject {
     Q_OBJECT
 private slots:
+    void compiledReadOnlyColumns() {
+        auto Runtime = MakeLuaColumnRuntime(); RuntimeLimits Limits; Limits.instructions_ = 100000; Limits.wallTime_ = std::chrono::milliseconds(75);
+        QVERIFY(Runtime->Prepare("local count=0; return function(item) count=count+1; return {value=item.value, count=count, safe=hc==nil and io==nil and os==nil and load==nil and debug==nil and setmetatable==nil} end", Limits).HasValue());
+        for (int Index = 1; Index <= 3; ++Index) {
+            auto Result = Runtime->Invoke(Object{{"value", std::int64_t(9007199254740993LL)}}); QVERIFY(Result.HasValue());
+            const auto Values = std::get<Object>(Result.Value().data_);
+            QCOMPARE(std::get<std::int64_t>(Values.at("value").data_), 9007199254740993LL);
+            QCOMPARE(std::get<std::int64_t>(Values.at("count").data_), Index); QVERIFY(std::get<bool>(Values.at("safe").data_));
+        }
+        QVERIFY(!Runtime->Prepare("return 42", Limits).HasValue());
+        for (const auto* Source : {"return function(item) while true do end end", "return function(item) return string.rep('x', 16777216) end"}) {
+            QVERIFY(Runtime->Prepare(Source, Limits).HasValue());
+            const auto Result = Runtime->Invoke(Object{}); QVERIFY(!Result.HasValue()); QCOMPARE(Result.Failure().category_, ErrorCategory::BudgetExceeded);
+        }
+        QVERIFY(Runtime->Prepare("return function(item) return {value=1} end", Limits).HasValue()); Runtime->RequestInterrupt();
+        QCOMPARE(Runtime->Invoke(Object{}).Failure().category_, ErrorCategory::Cancelled);
+    }
+
     void rejectedVersionAndFinalizerRevocation() {
         auto Future = std::make_shared<EchoApi>(); Future->version_ = 2;
         ScriptExecution Rejected(Future, "hc.capture()"); QVERIFY(!Rejected.IsRunning());

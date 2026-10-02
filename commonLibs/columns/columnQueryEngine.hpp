@@ -13,6 +13,7 @@ namespace hc::columns
     using FieldValues = QMap<QString, CellValue>;
     inline QString QueryFamily(const QString& Field)
     {
+        if (Field.startsWith("lua.") && Field.count('.') == 2) return Field.section('.', 0, 1);
         if (IsPluginField(Field)) return Field;
         if (Field.startsWith("file.image")) return "image";
         if (QStringList{"file.fileVersion", "file.productVersion", "file.productName", "file.company", "file.description"}.contains(Field)) return "version";

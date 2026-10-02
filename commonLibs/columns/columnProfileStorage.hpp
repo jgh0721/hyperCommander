@@ -12,7 +12,11 @@ namespace hc::columns
     inline QJsonObject EncodeProfile(const ColumnProfile& Profile)
     {
         if (!Validate(Profile).isEmpty()) return {};
-        QJsonArray Columns, Sorts;
+        QJsonArray Columns, Sorts, Scripts;
+        for (const auto& Script : Profile.scripts_) {
+            QJsonArray Outputs; for (const auto& Output : Script.outputs_) Outputs.append(QJsonObject{{"name", Output.name_}, {"title", Output.title_}, {"type", int(Output.type_)}});
+            Scripts.append(QJsonObject{{"id", IdText(Script.id_)}, {"title", Script.title_}, {"source", Script.source_}, {"enabled", Script.enabled_}, {"dependencies", QJsonArray::fromStringList(Script.dependencies_)}, {"outputs", Outputs}});
+        }
         for (const auto& Column : Profile.columns_) {
             QJsonObject Widths;
             for (int Mode = 0; Mode < 3; ++Mode)
@@ -25,7 +29,7 @@ namespace hc::columns
         for (const auto& Sort : Profile.sorts_)
             Sorts.append(QJsonObject{{"column", IdText(Sort.columnId_)}, {"order", Sort.order_ == Qt::AscendingOrder ? "ascending" : "descending"}});
         return {{"version", 1}, {"id", IdText(Profile.id_)}, {"title", Profile.title_},
-            {"primaryName", IdText(Profile.primaryNameId_)}, {"mode", ModeName(Profile.mode_)}, {"columns", Columns}, {"sorts", Sorts}};
+            {"primaryName", IdText(Profile.primaryNameId_)}, {"mode", ModeName(Profile.mode_)}, {"columns", Columns}, {"sorts", Sorts}, {"scripts", Scripts}};
     }
     inline std::optional<ColumnProfile> DecodeProfile(const QJsonObject& Object)
     {
@@ -69,6 +73,19 @@ namespace hc::columns
             const auto Item = Value.toObject(); const auto Order = Item.value("order").toString();
             if (Order != "ascending" && Order != "descending") return {};
             Profile.sorts_.append({QUuid(Item.value("column").toString()), Order == "ascending" ? Qt::AscendingOrder : Qt::DescendingOrder});
+        }
+        if (Object.contains("scripts") && !Object["scripts"].isArray()) return {};
+        for (const auto& Value : Object["scripts"].toArray()) {
+            const auto Item = Value.toObject(); ScriptDefinition Script;
+            if (!Item["title"].isString() || !Item["source"].isString() || !Item["enabled"].isBool() || !Item["dependencies"].isArray() || !Item["outputs"].isArray()) return {};
+            Script.id_ = QUuid(Item["id"].toString()); Script.title_ = Item["title"].toString(); Script.source_ = Item["source"].toString(); Script.enabled_ = Item["enabled"].toBool();
+            for (const auto& Dependency : Item["dependencies"].toArray()) { if (!Dependency.isString()) return {}; Script.dependencies_.append(Dependency.toString()); }
+            for (const auto& Output : Item["outputs"].toArray()) {
+                const auto Field = Output.toObject(); const int Type = Field["type"].toInt(-1);
+                if (!Field["name"].isString() || !Field["title"].isString() || Type < 0 || Type > int(FieldType::Timestamp)) return {};
+                Script.outputs_.append({Field["name"].toString(), Field["title"].toString(), static_cast<FieldType>(Type)});
+            }
+            Profile.scripts_.append(Script);
         }
         return Validate(Profile).isEmpty() ? std::optional(Profile) : std::nullopt;
     }

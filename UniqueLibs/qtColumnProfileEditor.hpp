@@ -30,6 +30,14 @@ private:
     QVector<hc::columns::FieldDefinition> availableFields() const;
     QVector<hc::columns::FieldDefinition> contextFields_;
     void refreshSorts(int Row = 0);
+    void refreshFields();
+    void refreshScripts(int Row = 0);
+    void loadScript();
+    void storeScript();
+    QComboBox* scripts_;
+    QLineEdit *scriptTitle_, *dependencies_;
+    QPlainTextEdit *scriptSource_, *scriptOutputs_;
+    QCheckBox* scriptEnabled_;
     hc::columns::ColumnProfile draft_;
     QJsonObject library_;
     bool loading_ = false;

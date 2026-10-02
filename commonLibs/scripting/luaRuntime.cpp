@@ -65,13 +65,14 @@ sol::object Write(lua_State* State, const ScriptValue& Value) {
         } else return sol::make_object(State, Data);
     }, Value.data_);
 }
-class LuaRuntime final : public IScriptRuntime {
+class LuaRuntime final : public IScriptRuntime, public IColumnRuntime {
 public:
+    explicit LuaRuntime(bool Column = false) : columnMode_(Column) {}
     ~LuaRuntime() override { Unload(); }
     RuntimeDescriptor Describe() const override { return {"sol2", "3.3.0 / " LUA_RELEASE, true, true}; }
     Result<Unit> Load(std::shared_ptr<IScriptHostApi> Api, RuntimeLimits Limits) override {
         Unload();
-        if (!Api || Api->ApiVersion() != 1) return Error{ErrorCategory::InvalidRequest, "api-version"};
+        if (!columnMode_ && (!Api || Api->ApiVersion() != 1)) return Error{ErrorCategory::InvalidRequest, "api-version"};
         if (Limits.heapBytes_ < 1024 * 1024 || Limits.heapBytes_ > 64 * 1024 * 1024 || !Limits.instructions_
             || Limits.wallTime_ <= std::chrono::milliseconds(0) || Limits.wallTime_ > std::chrono::minutes(5) || !Limits.hostCalls_)
             return Error{ErrorCategory::InvalidRequest, "runtime-limits"};
@@ -109,15 +110,48 @@ public:
         } catch (const std::exception& Failure) { return error(Failure.what()); }
         catch (...) { return error("runtime-error"); }
     }
+    Result<Unit> Prepare(std::string_view Source, RuntimeLimits Limits) override {
+        if (!columnMode_ || Source.size() > 65536 || Source.find('\0') != std::string_view::npos)
+            return Error{ErrorCategory::InvalidRequest, "column-source"};
+        auto Loaded = Load({}, Limits); if (!Loaded.HasValue()) return Loaded;
+        beginCall();
+        try {
+            auto Result = sol::state_view(state_).safe_script(std::string(Source), sol::script_pass_on_error, "column.lua", sol::load_mode::text);
+            if (!Result.valid()) { sol::error Failure = Result; return error(Failure.what()); }
+            check();
+            if (Result.return_count() != 1 || Result.get<sol::object>().get_type() != sol::type::function)
+                return Error{ErrorCategory::InvalidRequest, "column-callback-required"};
+            callback_.emplace(Result.get<sol::protected_function>()); return Unit{};
+        } catch (const std::exception& Failure) { return error(Failure.what()); }
+    }
+    Result<ScriptValue> Invoke(const ScriptValue& Input) override {
+        if (!callback_) return Error{ErrorCategory::InvalidRequest, "column-unprepared"};
+        auto Valid = Validate(Input); if (!Valid.HasValue()) return Valid.Failure();
+        beginCall();
+        try {
+            check(); auto Result = (*callback_)(Write(state_, Input));
+            if (!Result.valid()) { sol::error Failure = Result; return error(Failure.what()); }
+            check(); ValueBudget Budget;
+            auto Value = Result.return_count() ? Read(Result.get<sol::object>(), Budget) : ScriptValue{};
+            Valid = Validate(Value); if (!Valid.HasValue()) return Valid.Failure();
+            return Value;
+        } catch (const std::exception& Failure) { return error(Failure.what()); }
+    }
     void RequestInterrupt() override { interrupted_ = true; }
     void Unload() override {
         if (api_) api_->Close();
         // Finalizers have no host rights and remain subject to the interrupted hook.
         interrupted_ = true;
+        callback_.reset();
         if (state_) lua_close(state_);
         state_ = nullptr; api_.reset(); bytes_ = 0;
     }
 private:
+    void beginCall() {
+        instructions_ = 0; calls_ = 0; memory_ = false; quota_ = false; expired_ = false;
+        deadline_ = Clock::now() + limits_.wallTime_;
+        lua_sethook(state_, &hook, LUA_MASKCOUNT, 1000);
+    }
     void check() {
         if (interrupted_) throw std::runtime_error("runtime-interrupted");
         if (Clock::now() >= deadline_) { expired_ = true; throw std::runtime_error("runtime-deadline"); }
@@ -134,6 +168,11 @@ private:
         // Protected calls/coroutines would let scripts repeatedly swallow quota errors.
         // Host errors are returned as values by hc.call instead.
         for (const char* Name : {"dofile", "loadfile", "load", "collectgarbage", "print", "warn", "pcall", "xpcall"}) View[Name] = sol::nil;
+        if (Self->columnMode_) {
+            // Inputs are owned copies. No host pointers or capabilities cross this boundary.
+            for (const char* Name : {"setmetatable", "getmetatable", "rawset"}) View[Name] = sol::nil;
+            return 0;
+        }
         auto Hc = View.create_named_table("hc");
         Hc["apiVersion"] = 1;
         Hc["null"] = sol::make_object(State, Unit{});
@@ -219,6 +258,8 @@ hc.jobs = hc.job
         if (Self->instructions_ > Self->limits_.instructions_) Self->quota_ = true;
         try { Self->check(); } catch (const std::exception& Failure) { luaL_error(State, "%s", Failure.what()); }
     }
+    bool columnMode_ = false;
+    std::optional<sol::protected_function> callback_;
     lua_State* state_ = nullptr;
     std::shared_ptr<IScriptHostApi> api_;
     RuntimeLimits limits_;
@@ -230,6 +271,7 @@ hc.jobs = hc.job
 };
 }
 std::unique_ptr<IScriptRuntime> MakeLuaRuntime() { return std::make_unique<LuaRuntime>(); }
+std::unique_ptr<IColumnRuntime> MakeLuaColumnRuntime() { return std::make_unique<LuaRuntime>(true); }
 Result<Unit> CheckLuaSyntax(std::string_view Source) {
     if (Source.size() > 65536 || Source.find('\0') != std::string_view::npos) return Error{ErrorCategory::InvalidRequest, "runtime-source"};
     auto* State = luaL_newstate(); if (!State) return Error{ErrorCategory::BudgetExceeded, "runtime-memory"};

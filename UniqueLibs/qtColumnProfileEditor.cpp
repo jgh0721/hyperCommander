@@ -3,6 +3,7 @@
 #include "cmnHCUtils.hpp"
 #include <QScrollArea>
 #include "columnPluginFields.hpp"
+#include "commonLibs/scripting/luaRuntime.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 
 using namespace hc::columns;
@@ -123,6 +124,38 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     WidthForm->addRow(tr("최소값"), minimum_); WidthForm->addRow(tr("최대값"), maximum_); WidthForm->addRow(visible_);
     auto* WidthNote = new QLabel(tr("모드마다 너비와 표시 여부를 따로 저장합니다. 두 줄 모드의 주 이름은 별도 줄을 사용합니다."), Widths);
     WidthNote->setWordWrap(true); WidthForm->addRow(WidthNote); AddScrollableTab(Widths, tr("너비·표시"));
+    auto* Lua = new QWidget; auto* LuaForm = new QFormLayout(Lua);
+    scripts_ = Choice(Lua, "hc.columns.scripts", {});
+    auto* ScriptBar = new QHBoxLayout; ScriptBar->addWidget(scripts_, 1);
+    auto* AddScript = new QPushButton(tr("추가"), Lua); AddScript->setObjectName("hc.columns.addScript"); ScriptBar->addWidget(AddScript);
+    auto* RemoveScript = new QPushButton(tr("삭제"), Lua); ScriptBar->addWidget(RemoveScript); LuaForm->addRow(tr("Lua 정의"), ScriptBar);
+    scriptTitle_ = new QLineEdit(Lua); scriptTitle_->setObjectName("hc.columns.scriptTitle");
+    scriptEnabled_ = new QCheckBox(tr("계산 사용"), Lua); scriptEnabled_->setObjectName("hc.columns.scriptEnabled");
+    dependencies_ = new QLineEdit(Lua); dependencies_->setObjectName("hc.columns.dependencies"); dependencies_->setPlaceholderText("file.extension, file.isDirectory");
+    scriptOutputs_ = new QPlainTextEdit(Lua); scriptOutputs_->setObjectName("hc.columns.scriptOutputs"); scriptOutputs_->setMaximumHeight(90);
+    scriptSource_ = new QPlainTextEdit(Lua); scriptSource_->setObjectName("hc.columns.scriptSource"); scriptSource_->setMinimumHeight(130);
+    scriptSource_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    LuaForm->addRow(tr("제목"), scriptTitle_); LuaForm->addRow(scriptEnabled_); LuaForm->addRow(tr("의존 필드 (쉼표 구분)"), dependencies_);
+    LuaForm->addRow(tr("출력: 이름 | 자료형 | 제목"), scriptOutputs_);
+    auto* Types = new QLabel(tr("자료형: text, integer, unsigned, real, boolean, date, time, timestamp"), Lua); Types->setWordWrap(true); LuaForm->addRow(Types);
+    LuaForm->addRow(tr("계산 함수"), scriptSource_);
+    auto* Help = new QLabel(tr("return function(item) ... end 형식으로 작성합니다. item[\"file.size\"]처럼 선언한 의존 값을 읽고 {출력이름=값}을 반환합니다. 파일·명령 실행 API는 제공하지 않습니다. nil은 빈 값이며 큰 unsigned 정수는 문자열로 전달됩니다. 한 번의 계산으로 모든 출력을 반환합니다."), Lua);
+    Help->setWordWrap(true); LuaForm->addRow(Help); AddScrollableTab(Lua, tr("Lua 정의"));
+    connect(AddScript, &QPushButton::clicked, this, [this] {
+        ScriptDefinition Script; Script.title_ = tr("파일 분류"); Script.dependencies_ = {"file.extension", "file.isDirectory"};
+        Script.outputs_ = {{"class", tr("분류"), FieldType::Text}, {"order", tr("순서"), FieldType::Integer}};
+        Script.source_ = "return function(item)\n  local folder = item[\"file.isDirectory\"]\n  local ext = string.lower(item[\"file.extension\"] or \"\")\n  return {class = folder and \"폴더\" or (ext == \"iso\" and \"디스크 이미지\" or \"일반 파일\"), order = folder and 0 or 1}\nend";
+        draft_.scripts_.append(Script); dirty_ = true; refreshScripts(int(draft_.scripts_.size()) - 1); refreshFields(); loadColumn(row_);
+    });
+    connect(RemoveScript, &QPushButton::clicked, this, [this] {
+        const int Row = scripts_->currentIndex(); if (Row < 0) return; draft_.scripts_.removeAt(Row); dirty_ = true; refreshScripts(); refreshFields(); loadColumn(row_);
+    });
+    connect(scripts_, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) loadScript(); });
+    connect(scriptTitle_, &QLineEdit::textEdited, this, [this] { storeScript(); });
+    connect(dependencies_, &QLineEdit::textEdited, this, [this] { storeScript(); });
+    connect(scriptSource_, &QPlainTextEdit::textChanged, this, [this] { storeScript(); });
+    connect(scriptOutputs_, &QPlainTextEdit::textChanged, this, [this] { storeScript(); });
+    connect(scriptEnabled_, &QCheckBox::toggled, this, [this] { storeScript(); });
     Split->setStretchFactor(0, 2); Split->setStretchFactor(1, 3); Split->setChildrenCollapsible(false);
     auto* Sorting = new QHBoxLayout;
     sort_ = Choice(this, "hc.columns.sort", {}); sortOrder_ = Choice(this, "hc.columns.sortOrder", {tr("오름차순"), tr("내림차순")});
@@ -202,7 +235,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
 
 QVector<FieldDefinition> QtColumnProfileEditor::availableFields() const
 {
-    auto Fields = PluginFields::Instance().Fields(); Fields += contextFields_; return Fields;
+    auto Fields = PluginFields::Instance().Fields(); Fields += contextFields_; Fields += ScriptFields(draft_); return Fields;
 }
 void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
 {
@@ -233,6 +266,7 @@ void QtColumnProfileEditor::refreshProfiles()
 
 void QtColumnProfileEditor::rebuildList(int Row)
 {
+    refreshScripts(); refreshFields();
     loading_ = true; columns_->clear(); sort_->clear(); sort_->addItem(tr("지정 안 함"), QString{});
     profileTitle_->setText(draft_.title_); layout_->setCurrentIndex(int(draft_.mode_));
     deleteProfile_->setEnabled(draft_.id_ != BuiltInProfileId);
@@ -306,6 +340,12 @@ void QtColumnProfileEditor::storeColumn()
 
 bool QtColumnProfileEditor::ValidateDraft()
 {
+    const auto ScriptError = ValidateScripts(draft_);
+    if (!ScriptError.isEmpty()) { error_->setText(tr("Lua 정의·출력·의존 필드를 확인하세요: %1").arg(ScriptError)); return false; }
+    for (const auto& Script : draft_.scripts_) {
+        const auto Syntax = hc::script::CheckLuaSyntax(Script.source_.toStdString());
+        if (!Syntax.HasValue()) { error_->setText(Script.title_ + ": " + QString::fromStdString(Syntax.Failure().code_)); return false; }
+    }
     for (const auto& Column : draft_.columns_) {
         const auto Compiled = CompileTemplate(Column.template_);
         if (!Compiled.Valid()) { error_->setText(tr("%1 · %2번째 문자: %3").arg(Column.title_).arg(Compiled.errorOffset_ + 1).arg(Compiled.error_)); return false; }
@@ -411,4 +451,38 @@ void QtColumnProfileEditor::refreshSorts(int Row)
     if (sortRules_->currentRow() >= 0) {
         const auto& Sort = draft_.sorts_[sortRules_->currentRow()]; sort_->setCurrentIndex(sort_->findData(IdText(Sort.columnId_))); sortOrder_->setCurrentIndex(Sort.order_ == Qt::DescendingOrder);
     } else sort_->setCurrentIndex(0);
+}
+
+void QtColumnProfileEditor::refreshFields()
+{
+    const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
+    for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
+    field_->addItem(tr("복합 템플릿"), QString{});
+}
+void QtColumnProfileEditor::refreshScripts(int Row)
+{
+    const QSignalBlocker Block(scripts_); scripts_->clear();
+    for (const auto& Script : draft_.scripts_) scripts_->addItem(Script.title_);
+    scripts_->setCurrentIndex(draft_.scripts_.isEmpty() ? -1 : std::clamp(Row, 0, int(draft_.scripts_.size()) - 1)); loadScript();
+}
+void QtColumnProfileEditor::loadScript()
+{
+    const bool Previous = loading_; loading_ = true; const int Row = scripts_->currentIndex();
+    const auto Script = Row >= 0 ? draft_.scripts_[Row] : ScriptDefinition{};
+    for (auto* Widget : QList<QWidget*>{scriptTitle_, dependencies_, scriptSource_, scriptOutputs_, scriptEnabled_}) Widget->setEnabled(Row >= 0);
+    scriptTitle_->setText(Script.title_); dependencies_->setText(Script.dependencies_.join(", ")); scriptSource_->setPlainText(Script.source_); scriptEnabled_->setChecked(Script.enabled_);
+    const QStringList Types{"text", "integer", "unsigned", "real", "boolean", "date", "time", "timestamp"}; QStringList Outputs;
+    for (const auto& Output : Script.outputs_) Outputs.append(Output.name_ + " | " + Types.value(int(Output.type_)) + " | " + Output.title_);
+    scriptOutputs_->setPlainText(Outputs.join('\n')); loading_ = Previous;
+}
+void QtColumnProfileEditor::storeScript()
+{
+    const int Row = scripts_->currentIndex(); if (loading_ || Row < 0) return;
+    auto& Script = draft_.scripts_[Row]; Script.title_ = scriptTitle_->text(); Script.source_ = scriptSource_->toPlainText(); Script.enabled_ = scriptEnabled_->isChecked();
+    Script.dependencies_ = dependencies_->text().split(',', Qt::SkipEmptyParts); for (auto& Dependency : Script.dependencies_) Dependency = Dependency.trimmed();
+    Script.outputs_.clear(); const QStringList Types{"text", "integer", "unsigned", "real", "boolean", "date", "time", "timestamp"};
+    for (const auto& Line : scriptOutputs_->toPlainText().split('\n', Qt::SkipEmptyParts)) {
+        const auto Parts = Line.split('|'); Script.outputs_.append({Parts.value(0).trimmed(), Parts.value(2).trimmed(), static_cast<FieldType>(Types.indexOf(Parts.value(1).trimmed()))});
+    }
+    scripts_->setItemText(Row, Script.title_); dirty_ = true; refreshFields(); loadColumn(row_);
 }

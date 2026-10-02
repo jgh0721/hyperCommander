@@ -2,6 +2,7 @@
 #include "builtInFsModel.hpp"
 #include "columnNativeFields.hpp"
 #include "columnPluginFields.hpp"
+#include "commonLibs/columns/luaColumns.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 
 #include "commonLibs/cmnDateTime.hpp"
@@ -277,11 +278,16 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
 
 void CFSModel::SetColumnView(const ColumnView& View)
 {
-    columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader(), false);
+    columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), View.profile_), false);
     beginResetModel();
     {
         CCmnMutexLocker Locker(&lock);
-        columnView_ = View; columnSorts_.clear();
+        columnView_ = View; columnSorts_.clear(); scriptRevisions_.clear();
+        for (const auto& Script : View.profile_.scripts_) {
+            QJsonArray Outputs; for (const auto& Output : Script.outputs_) Outputs.append(QJsonArray{Output.name_, int(Output.type_)});
+            const auto Revision = QJsonDocument(QJsonObject{{"source", Script.source_}, {"dependencies", QJsonArray::fromStringList(Script.dependencies_)}, {"outputs", Outputs}}).toJson(QJsonDocument::Compact);
+            scriptRevisions_[Script.id_] = QString::fromLatin1(QCryptographicHash::hash(Revision, QCryptographicHash::Sha256).toHex());
+        }
         createBuiltFsValues(vecNode_);
         refreshNameSortRanks();
     }
@@ -588,10 +594,10 @@ void CFSModel::doRefresh()
 
 CFSModel::CFSModel()
 {
-    columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::PluginFields::Instance().Loader());
+    columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     columnQueries_->Changed = [this](const QSet<QString>& Paths) { columnResultsReady(Paths); };
     connect(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed, this, [this] {
-        columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader());
+        columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
         if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
         refreshColumnSortRanks();
     });
@@ -697,7 +703,7 @@ void CFSModel::SetProviderEnabled(bool Enabled)
 
 void CFSModel::refreshProvider()
 {
-    requestOnlyValues_ = false; columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader());
+    requestOnlyValues_ = false; columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     using namespace hc::storage;
     navigationStop_.request_stop();
     navigationStop_ = std::stop_source{};
@@ -1229,7 +1235,7 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
 QVector<hc::columns::FieldDefinition> CFSModel::AvailableColumns() const
 {
     using namespace hc::columns;
-    auto Fields = PluginFields::Instance().Fields();
+    auto Fields = PluginFields::Instance().Fields(); Fields += ScriptFields(columnView_.profile_);
     if (SnapshotProvider()) for (const auto& Column : SnapshotProvider()->Columns())
         Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot});
     return Fields;
@@ -1246,6 +1252,23 @@ QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const
 hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent) const
 {
     using namespace hc::columns;
+    if (Field.startsWith("lua.")) {
+        if (Item->Name_ == "..") return CellValue::Missing(ValueState::Empty);
+        const auto* Script = FindScript(columnView_.profile_, Field);
+        if (!Script || !Script->enabled_) return CellValue::Missing(ValueState::Unsupported, "script-disabled-or-missing");
+        QJsonObject Values; std::optional<CellValue> Missing;
+        for (const auto& Dependency : Script->dependencies_) {
+            const auto Value = readField(Item, Dependency, Request, Urgent);
+            if (Value.State() == ValueState::Ready) Values[Dependency] = EncodeScriptInput(Value);
+            else if (Value.State() != ValueState::Empty && (!Missing || Value.State() == ValueState::Pending)) Missing = Value;
+        }
+        if (Missing) return *Missing;
+        const auto Identity = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
+        const auto Envelope = QJsonDocument(QJsonObject{{"identity", Identity}, {"values", Values},
+            {"source", scriptRevisions_.value(Script->id_)}}).toJson(QJsonDocument::Compact);
+        if (Envelope.size() > 65536) return CellValue::Missing(ValueState::Error, "script-input-budget");
+        return columnQueries_->Read(QString::fromUtf8(Envelope), Field, Request, Urgent);
+    }
     if (IsVfsColumn(Field)) {
         if (!Item->storageEntry_ || !SnapshotProvider()) return CellValue::Missing(ValueState::Unsupported);
         for (const auto& Definition : SnapshotProvider()->Columns()) if (QString::fromStdString(Definition.key_) == Field) {
@@ -1277,8 +1300,11 @@ void CFSModel::columnResultsReady(const QSet<QString>& Paths)
 {
     if (loading_) return;
     emit ColumnValuesChanging();
+    QSet<QString> ScriptItems;
+    for (const auto& Path : Paths) if (Path.startsWith('{')) ScriptItems.insert(QJsonDocument::fromJson(Path.toUtf8()).object()["identity"].toString());
     int First = rowCount(), Last = -1;
-    for (int Row = 0; Row < vecNode_.size(); ++Row) if (Paths.contains(queryPath(vecNode_[Row]))) {
+    for (int Row = 0; Row < vecNode_.size(); ++Row) if (Paths.contains(queryPath(vecNode_[Row])) ||
+        ScriptItems.contains(vecNode_[Row]->storageEntry_ ? hc::workspace::SelectionKey(*vecNode_[Row]->storageEntry_) : vecNode_[Row]->Name_)) {
         createBuiltFsValues(vecNode_[Row], -1); First = std::min(First, Row); Last = Row;
     }
     if (Last >= First && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1), {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole});
@@ -1288,14 +1314,19 @@ void CFSModel::columnResultsReady(const QSet<QString>& Paths)
 
 void CFSModel::CancelColumnQueries()
 {
-    columnQueries_->Cancel();
-    columnSorts_ = completedSorts_; emit ColumnSortCancelled(); emit ColumnQueryStatus(tr("컬럼 조회가 중지되었습니다."));
-    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
+    const bool HadPending = columnQueries_->Pending() != 0;
+    const bool SortChanged = columnSorts_ != completedSorts_;
+    columnQueries_->Cancel(); columnSorts_ = completedSorts_;
+    if (SortChanged) emit ColumnSortCancelled();
+    emit ColumnQueryStatus(tr("컬럼 조회가 중지되었습니다."));
+    // Ready cached values did not change. Invalidating all rows would force a
+    // synchronous grid sort even when there was no query to cancel.
+    if (HadPending && rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
 }
 void CFSModel::ResumeColumnQueries()
 {
     requestOnlyValues_ = false;
-    columnQueries_->SetLoader(hc::columns::PluginFields::Instance().Loader(true));
+    columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(true), columnView_.profile_, QUuid::createUuid().toString()));
     refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
 }

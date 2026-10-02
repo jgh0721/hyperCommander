@@ -139,7 +139,8 @@ namespace hc::columns
     inline bool IsSupportedProfile(const ColumnProfile& Profile)
     {
         const auto Fields = BuiltInFields();
-        const auto Known = [&](const QString& Id) { return IsPluginField(Id) || IsVfsColumn(Id) || std::any_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Id; }); };
+        const auto Known = [&](const QString& Id) { return FindScript(Profile, Id) || IsPluginField(Id) || IsVfsColumn(Id) || std::any_of(Fields.begin(), Fields.end(), [&](const auto& Field) { return Field.id_ == Id; }); };
+        for (const auto& Script : Profile.scripts_) for (const auto& Dependency : Script.dependencies_) if (!Known(Dependency)) return false;
         for (const auto& Column : Profile.columns_) {
             if (Column.template_.isEmpty() && !Known(Column.fieldId_)) return false;
             if (!Column.sortField_.isEmpty() && !Known(Column.sortField_)) return false;

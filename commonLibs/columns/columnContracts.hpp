@@ -4,6 +4,7 @@
 #include <QLocale>
 #include <QObject>
 #include <QSet>
+#include <QMap>
 #include <QUuid>
 #include <QVariant>
 #include <QVector>
@@ -94,6 +95,20 @@ namespace hc::columns
         Qt::SortOrder order_ = Qt::AscendingOrder;
         bool operator==(const SortDefinition&) const = default;
     };
+    struct ScriptOutput {
+        QString name_, title_;
+        FieldType type_ = FieldType::Text;
+        bool operator==(const ScriptOutput&) const = default;
+    };
+    struct ScriptDefinition {
+        QUuid id_ = QUuid::createUuid();
+        QString title_, source_;
+        QStringList dependencies_;
+        QVector<ScriptOutput> outputs_;
+        bool enabled_ = true;
+        bool operator==(const ScriptDefinition&) const = default;
+    };
+    inline QString ScriptPrefix(const ScriptDefinition& Script) { return "lua." + Script.id_.toString(QUuid::Id128) + "."; }
     struct ColumnProfile
     {
         QUuid id_ = QUuid::createUuid();
@@ -102,6 +117,7 @@ namespace hc::columns
         LayoutMode mode_ = LayoutMode::Details;
         QVector<ColumnDefinition> columns_;
         QVector<SortDefinition> sorts_;
+        QVector<ScriptDefinition> scripts_;
         bool operator==(const ColumnProfile&) const = default;
     };
     inline QString IdText(const QUuid& Id) { return Id.toString(QUuid::WithoutBraces); }
@@ -133,9 +149,47 @@ namespace hc::columns
         }
         return true;
     }
+    inline const ScriptDefinition* FindScript(const ColumnProfile& Profile, const QString& Field) {
+        for (const auto& Script : Profile.scripts_) for (const auto& Output : Script.outputs_)
+            if (ScriptPrefix(Script) + Output.name_ == Field) return &Script;
+        return nullptr;
+    }
+    inline QVector<FieldDefinition> ScriptFields(const ColumnProfile& Profile) {
+        QVector<FieldDefinition> Result;
+        for (const auto& Script : Profile.scripts_) for (const auto& Output : Script.outputs_)
+            Result.append({ScriptPrefix(Script) + Output.name_, Script.title_ + " / " + Output.title_, Output.type_, ProviderKind::Lua, EvaluationCost::Background});
+        return Result;
+    }
+    inline QString ValidateScripts(const ColumnProfile& Profile) {
+        if (Profile.scripts_.size() > 32) return "script-count";
+        QSet<QUuid> Ids; QMap<QUuid, int> Marks;
+        for (const auto& Script : Profile.scripts_) {
+            if (Script.id_.isNull() || Ids.contains(Script.id_) || Script.source_.toUtf8().size() > 65536 || Script.source_.contains(QChar(0)) ||
+                Script.outputs_.isEmpty() || Script.outputs_.size() > 32 || Script.dependencies_.size() > 32) return "script-definition";
+            Ids.insert(Script.id_); QSet<QString> Names;
+            for (const auto& Output : Script.outputs_) {
+                if (Output.name_.isEmpty() || Output.name_.size() > 64 || Names.contains(Output.name_) || int(Output.type_) < 0 || int(Output.type_) > int(FieldType::Timestamp)) return "script-output";
+                for (const auto Ch : Output.name_) if (!Ch.isLetterOrNumber() && Ch != '_') return "script-output";
+                Names.insert(Output.name_);
+            }
+            for (const auto& Dependency : Script.dependencies_) if (!IsFieldId(Dependency)) return "script-dependency";
+        }
+        std::function<bool(const ScriptDefinition&)> Visit = [&](const ScriptDefinition& Script) {
+            if (Marks.value(Script.id_) == 1) return false;
+            if (Marks.value(Script.id_) == 2) return true;
+            Marks[Script.id_] = 1;
+            for (const auto& Dependency : Script.dependencies_) if (Dependency.startsWith("lua.")) {
+                const auto* Other = FindScript(Profile, Dependency); if (!Other || !Visit(*Other)) return false;
+            }
+            Marks[Script.id_] = 2; return true;
+        };
+        for (const auto& Script : Profile.scripts_) if (!Visit(Script)) return "script-cycle-or-missing-dependency";
+        return {};
+    }
     inline QString Validate(const ColumnProfile& Profile)
     {
         if (Profile.id_.isNull() || Profile.columns_.isEmpty() || ModeName(Profile.mode_).isEmpty()) return "profile";
+        if (const auto Error = ValidateScripts(Profile); !Error.isEmpty()) return Error;
         QSet<QUuid> Ids;
         bool PrimaryFound = false;
         for (const auto& Column : Profile.columns_) {

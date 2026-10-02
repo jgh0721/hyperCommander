@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/columnWidthSettings.hpp"
 #include <QtTest>
+#include "commonLibs/columns/luaColumns.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 #include <atomic>
@@ -13,6 +14,28 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void luaColumnsAndDependencyValidation()
+    {
+        using namespace hc::columns;
+        auto Profile = DefaultProfile(); ScriptDefinition Script;
+        Script.title_ = "test"; Script.dependencies_ = {"file.size"};
+        Script.outputs_ = {{"value", "Value", FieldType::UnsignedInteger}, {"label", "Label", FieldType::Text}};
+        Script.source_ = "return function(item) return {value=item['file.size'], label='한글'} end";
+        Profile.scripts_.append(Script); const auto Field = ScriptPrefix(Script) + "value"; Profile.columns_[1].fieldId_ = Field;
+        QVERIFY(IsSupportedProfile(Profile)); QVERIFY(DecodeProfile(EncodeProfile(Profile)).value() == Profile);
+        auto Load = WithLuaColumns({}, Profile); QJsonObject Values{{"file.size", EncodeScriptInput(CellValue::Ready(quint64(UINT64_MAX)))}};
+        const auto Job = QString::fromUtf8(QJsonDocument(QJsonObject{{"values", Values}}).toJson(QJsonDocument::Compact));
+        const auto Result = Load(Job, QueryFamily(Field), {});
+        QCOMPARE(Result[Field].Raw().toULongLong(), quint64(UINT64_MAX)); QCOMPARE(Result[ScriptPrefix(Script) + "label"].Raw().toString(), QString("한글"));
+        QCOMPARE(ScriptCell(hc::script::ScriptValue(2.5), FieldType::Integer).State(), ValueState::Error);
+        Profile.scripts_[0].dependencies_.append(Field); QVERIFY(!ValidateScripts(Profile).isEmpty());
+        Profile.scripts_[0].dependencies_ = {"file.size"}; ScriptDefinition Other = Script; Other.id_ = QUuid::createUuid();
+        Profile.scripts_.append(Other); Profile.scripts_[0].dependencies_ = {ScriptPrefix(Other) + "value"}; Profile.scripts_[1].dependencies_ = {Field};
+        QVERIFY(!ValidateScripts(Profile).isEmpty());
+        Profile.scripts_[1].dependencies_ = {"file.unknown"}; QVERIFY(!IsSupportedProfile(Profile));
+        Profile.scripts_[1].dependencies_ = {"file.size"}; QVERIFY(IsSupportedProfile(Profile));
+    }
+
     void templateCompilerAndStorage()
     {
         using namespace hc::columns;
