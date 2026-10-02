@@ -7,6 +7,7 @@
 #include <future>
 #include <functional>
 #include <map>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -111,6 +112,30 @@ namespace hc::storage
     };
     struct OperationContext;
     using PasswordPrompt = std::function<Result<Password>(const std::string& Archive, unsigned Attempt, const OperationContext& Context)>;
+    enum class WorkloadIntent { Explicit, Automatic };
+    struct WorkloadPolicy
+    {
+        WorkloadIntent intent_ = WorkloadIntent::Explicit;
+        std::uint64_t automaticFileBytes_ = 256ULL * 1024 * 1024;
+        std::uint64_t automaticEntries_ = 100000;
+        std::size_t automaticDepth_ = 8;
+        std::uint64_t automaticExpansionRatio_ = 1000;
+        bool IsAutomatic() const { return intent_ == WorkloadIntent::Automatic; }
+    };
+    enum class ProviderInteractionKind { Password, Credentials, Volume, Conflict };
+    struct ProviderInteractionRequest
+    {
+        ProviderInteractionKind kind_ = ProviderInteractionKind::Password;
+        std::string id_, subject_;
+        unsigned attempt_ = 1;
+    };
+    struct ProviderInteractionReply
+    {
+        bool accepted_ = false;
+        Password value_;
+    };
+    using InteractionPrompt = std::function<Result<ProviderInteractionReply>(const ProviderInteractionRequest&, const OperationContext&)>;
+    using InteractionStart = std::function<Task<ProviderInteractionReply>(const ProviderInteractionRequest&, const OperationContext&)>;
     struct OperationContext
     {
         std::string requestId_;
@@ -118,7 +143,8 @@ namespace hc::storage
         std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::time_point::max();
         std::size_t maxPageItems_ = 256;
         std::size_t maxReadBytes_ = 1024 * 1024;
-        std::size_t maxEnumerationEntries_ = 100000;
+        // Legacy caller-requested scope, not a product-wide enumeration cap.
+        std::size_t maxEnumerationEntries_ = std::numeric_limits<std::size_t>::max();
         bool denyConcurrentMutation_ = false;
         bool freshEnumerationMetadata_ = false;
         // Browsing may retain directory-enumeration metadata when opening an
@@ -126,6 +152,19 @@ namespace hc::storage
         // Mutation planners leave this false even when requesting fresh data.
         bool allowUnavailableChildMetadata_ = false;
         PasswordPrompt passwordPrompt_;
+        WorkloadPolicy workload_;
+        InteractionPrompt interactionPrompt_;
+        // Scheduler/UI bridges return a promise-backed future immediately.
+        // Its lifetime must not depend on a blocked caller or held I/O mutex.
+        InteractionStart interactionStart_;
+        bool providerInteractions_ = false;
+        // Progress is monotonic work completed, distinct from host liveness.
+        std::function<void(std::uint64_t)> progress_;
+        std::size_t EnumerationLimit() const
+        {
+            return workload_.IsAutomatic() ? std::min(maxEnumerationEntries_,
+                static_cast<std::size_t>(std::min<std::uint64_t>(workload_.automaticEntries_, std::numeric_limits<std::size_t>::max()))) : maxEnumerationEntries_;
+        }
         std::optional<Error> Check(const ProviderId& Provider) const
         {
             if (stopToken_.stop_requested())
@@ -160,6 +199,31 @@ namespace hc::storage
         std::vector<std::byte> bytes_;
         bool eof_ = false;
     };
+    enum class ReadAccess { Unknown, Sequential, ForwardSeek, RandomAccess, Materialized };
+    enum class BatchSupport { None, Emulated, Native };
+    enum class ProviderConcurrency { SerializedPerModule, SerializedPerSession, IndependentReaders };
+    enum class CommitSemantics { ReadOnly, BestEffort, AtomicReplace };
+    struct EngineConstraints
+    {
+        std::optional<std::uint64_t> maxFileBytes_, maxEntries_;
+        std::optional<std::size_t> maxNameBytes_;
+        std::string reason_;
+    };
+    struct ProviderCapabilities
+    {
+        ReadAccess read_ = ReadAccess::Unknown;
+        BatchSupport batch_ = BatchSupport::None;
+        ProviderConcurrency concurrency_ = ProviderConcurrency::SerializedPerModule;
+        CommitSemantics commit_ = CommitSemantics::ReadOnly;
+        EngineConstraints constraints_;
+    };
+    struct EntryId
+    {
+        std::string sessionEpoch_;
+        ResourceRevision containerRevision_;
+        std::string token_;
+        bool operator==(const EntryId&) const = default;
+    };
     enum class Operation { Enumerate, Stat, OpenRead, Write };
     enum class Availability { Supported, Conditional, Unsupported };
     struct SupportDecision
@@ -184,6 +248,8 @@ namespace hc::storage
         virtual ~IReadStream() = default;
         // One outstanding operation per stream; every OpenRead creates a new cursor.
         virtual bool CanSeek() const = 0;
+        // CanSeek alone does not prove direct/random access to the source.
+        virtual ReadAccess Access() const { return ReadAccess::Unknown; }
         virtual Task<ReadChunk> Read(std::size_t MaxBytes, OperationContext Context) = 0;
         virtual Task<Unit> Seek(std::uint64_t Offset, OperationContext Context) = 0;
     };
@@ -195,6 +261,7 @@ namespace hc::storage
         // A copied mount-time schema; this accessor performs no I/O.
         virtual std::vector<PresentationColumn> Columns() const { return {}; }
         virtual ProviderId Id() const = 0;
+        virtual ProviderCapabilities Capabilities() const { return {}; }
         virtual Task<SupportDecision> Supports(Operation Request, OperationContext Context) = 0;
         virtual Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) = 0;
         virtual Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) = 0;

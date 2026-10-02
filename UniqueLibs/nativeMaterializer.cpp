@@ -338,7 +338,7 @@ namespace hc::storage
             OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer, ProducedSize Size)
         {
             if (const auto Failure = Context.Check({"materializer"})) return *Failure;
-            if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400) || Parents.size() > 8
+            if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400)
                 || (Size != ProducedSize::Exact && Size != ProducedSize::Bounded))
                 return Error{ErrorCategory::InvalidRequest, "invalid-content-producer"};
             auto Depth = Entry.locator_.nesting_.size();
@@ -347,12 +347,7 @@ namespace hc::storage
                 if (!Parent || Parent->Depth() >= limits_.maxDepth_) return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
                 Depth = std::max(Depth, Parent->Depth() + 1);
             }
-            if (Depth > limits_.maxDepth_ || Entry.size_ > limits_.maxFileBytes_)
-                return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
-            if (Entry.locator_.kind_ == LocatorKind::Archive && !CompressedBytes)
-                return Error{ErrorCategory::InvalidRequest, "compressed-size-required"};
-            if (CompressedBytes && Entry.size_ && (!*CompressedBytes || (Entry.size_ - 1) / *CompressedBytes >= limits_.maxExpansionRatio_))
-                return Error{ErrorCategory::BudgetExceeded, "materialization-expansion-budget"};
+            if (const auto Policy = CheckMaterialization(Entry, Depth, CompressedBytes, limits_, Context)) return *Policy;
             auto Created = Create(Entry); if (!Created.HasValue()) return Created.Failure();
             auto Item = std::move(Created.Value());
             auto Guard = qScopeGuard([&] { if (Item) Schedule(std::move(Item)); });
@@ -414,13 +409,7 @@ namespace hc::storage
                     }
                     const auto& Limits = store_->limits_;
                     if (entry_.directory_ || (entry_.attributes_ & 0x400)) return fail({ErrorCategory::Unsupported, "materialization-file-required"});
-                    if (entry_.size_ > Limits.maxFileBytes_ || depth_ > Limits.maxDepth_)
-                        return fail({ErrorCategory::BudgetExceeded, "materialization-file-budget"});
-                    if (entry_.locator_.kind_ == LocatorKind::Archive && !request_.compressedBytes_)
-                        return fail({ErrorCategory::InvalidRequest, "compressed-size-required"});
-                    if (request_.compressedBytes_ && entry_.size_ && (!*request_.compressedBytes_
-                        || (entry_.size_ - 1) / *request_.compressedBytes_ >= Limits.maxExpansionRatio_))
-                        return fail({ErrorCategory::BudgetExceeded, "materialization-expansion-budget"});
+                    if (const auto Policy = CheckMaterialization(entry_, depth_, request_.compressedBytes_, Limits, Context.operation_)) return fail(*Policy);
                     const auto Verified = request_.source_->Verify(Context.operation_).get(); if (!Verified.HasValue()) return fail(Verified.Failure());
                     auto Created = store_->Create(entry_);
                     if (!Created.HasValue())
@@ -523,7 +512,7 @@ namespace hc::storage
             }
             Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest Request, OperationContext Context) override
             {
-                if (!Request.source_ || !Context.maxReadBytes_ || Request.parents_.size() > 8)
+                if (!Request.source_ || !Context.maxReadBytes_)
                     return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::InvalidRequest, "invalid-materialization-request"});
                 std::lock_guard Lock(mutex_);
                 for (auto It = jobs_.begin(); It != jobs_.end();)
@@ -553,8 +542,8 @@ namespace hc::storage
     }
     static Result<std::shared_ptr<Store>> OpenStore(const std::string& BaseDirectory, MaterializationLimits Limits)
     {
-        if (!Limits.maxFileBytes_ || !Limits.maxTotalBytes_ || !Limits.maxActiveFiles_ || Limits.maxActiveFiles_ > 64
-            || !Limits.maxDepth_ || Limits.maxDepth_ > 8 || !Limits.maxExpansionRatio_)
+        if (!Limits.maxFileBytes_ || !Limits.maxTotalBytes_ || !Limits.maxActiveFiles_
+            || !Limits.maxDepth_ || !Limits.maxExpansionRatio_)
             return Error{ErrorCategory::InvalidRequest, "invalid-materialization-limits"};
         const auto Base = QString::fromUtf8(BaseDirectory.data(), static_cast<qsizetype>(BaseDirectory.size()));
         if (Base.toUtf8().toStdString() != BaseDirectory) return Error{ErrorCategory::InvalidRequest, "invalid-path-encoding"};

@@ -196,7 +196,7 @@ namespace hc::storage
                 }
                 entries_.clear();
                 const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& Path) -> Result<bool> {
-                    if (entries_.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
+                    if (entries_.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                     const bool Directory = Header.directory_;
                     if (entries_.contains(Path) && !(Directory && entries_.at(Path).directory_ && entries_.at(Path).hints_.empty()))
                         return Error{ErrorCategory::InvalidRequest, "duplicate-archive-entry"};
@@ -217,7 +217,7 @@ namespace hc::storage
                     {
                         if (entries_.contains(Parent) && !entries_.at(Parent).directory_) return Error{ErrorCategory::InvalidRequest, "archive-file-parent"};
                         if (!entries_.contains(Parent)) entries_[Parent] = makeEntry(Parent, true);
-                        if (entries_.size() > Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
+                        if (entries_.size() > Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                     }
                     return false;
                 });

@@ -222,7 +222,7 @@ namespace hc::storage
                             for (DWORD Index = 0; Index < Read; ++Index)
                             {
                                 if (Shares[Index].shi1_type != STYPE_DISKTREE) continue;
-                                if (Entries.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
+                                if (Entries.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
                                 WIN32_FILE_ATTRIBUTE_DATA Data{};
                                 Data.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
                                 const auto Name = Utf8(Shares[Index].shi1_netname);
@@ -250,7 +250,7 @@ namespace hc::storage
                             {
                                 if (const auto Failure = Context.Check(Id)) return *Failure;
                                 if (wcscmp(Found.cFileName, L".") == 0 || wcscmp(Found.cFileName, L"..") == 0) continue;
-                                if (Entries.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
+                                if (Entries.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
                                 const auto Name = Utf8(Found.cFileName);
                                 WIN32_FILE_ATTRIBUTE_DATA Data{Found.dwFileAttributes, Found.ftCreationTime, Found.ftLastAccessTime, Found.ftLastWriteTime, Found.nFileSizeHigh, Found.nFileSizeLow};
                                 const auto ChildPath = At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name;
@@ -351,7 +351,7 @@ namespace hc::storage
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     auto Items = Reader(At, Context);
                     if (!Items.HasValue()) return Items.Failure();
-                    if (Items.Value().size() > Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
+                    if (Items.Value().size() > Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
                     for (auto& Item : Items.Value())
                     {
                         Item.id_.providerId_ = Id;
@@ -439,7 +439,7 @@ namespace hc::storage
                 if (Status == S_FALSE) break;
                 if (FAILED(Status)) return NativeError(Status, Id);
                 auto FreeChild = qScopeGuard([&] { CoTaskMemFree(Child); });
-                if (Entries.size() >= Context.maxEnumerationEntries_) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
+                if (Entries.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
                 const auto Absolute = ILCombine(Root, Child);
                 if (!Absolute) return Error{ErrorCategory::Internal, "shell-id-allocation", Id};
                 auto FreeAbsolute = qScopeGuard([&] { CoTaskMemFree(Absolute); });

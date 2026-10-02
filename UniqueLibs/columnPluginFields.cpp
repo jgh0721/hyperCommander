@@ -79,6 +79,7 @@ namespace hc::columns {
             if (!State || !State->entries_.contains(Family)) return Fail(ValueState::Unsupported, "plugin-field-unavailable");
             const auto Entry = State->entries_.value(Family);
             OperationContext Context; Context.stopToken_ = Stop; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            Context.workload_.intent_ = Explicit ? WorkloadIntent::Explicit : WorkloadIntent::Automatic;
             auto Storage = MakeNativeReadProvider(Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local);
             auto Item = Storage->Resolve({Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()}, Context).get();
             if (!Item.HasValue()) return Fail(ValueState::Error, QString::fromStdString(Item.Failure().code_));

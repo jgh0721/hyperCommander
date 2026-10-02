@@ -2,6 +2,8 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "memoryStorage.hpp"
+#include "commonLibs/storage/resourceQuota.hpp"
+#include "commonLibs/storage/providerSession.hpp"
 #include <cstring>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -60,6 +62,46 @@ class MaterializationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void explicitPolicyAndConcurrentReservations()
+    {
+        OperationContext Context; QCOMPARE(Context.EnumerationLimit(), SIZE_MAX);
+        EntrySnapshot Entry; Entry.size_ = 5ULL * 1024 * 1024 * 1024; Entry.locator_.kind_ = LocatorKind::Archive;
+        QVERIFY(!CheckMaterialization(Entry, 16, 1, {}, Context));
+        Context.workload_.intent_ = WorkloadIntent::Automatic;
+        QCOMPARE(Context.EnumerationLimit(), std::size_t(100000));
+        QVERIFY(CheckMaterialization(Entry, 16, 1, {}, Context).has_value());
+        ResourceQuota Quota({100, 10, 1, 2, 1000});
+        for (unsigned Index = 0; Index < 1000; ++Index) {
+            auto Lease = Quota.Acquire(ResourceKind::Buffer, 10); QVERIFY(Lease.HasValue());
+            auto Busy = Quota.Acquire(ResourceKind::Buffer, 1); QVERIFY(!Busy.HasValue()); QVERIFY(Busy.Failure().retryable_);
+            auto Moved = std::move(Lease.Value()); QCOMPARE(Quota.Used(ResourceKind::Buffer), std::uint64_t(10));
+        }
+        QCOMPARE(Quota.Used(ResourceKind::Buffer), std::uint64_t(0));
+        auto TooLarge = Quota.Acquire(ResourceKind::Buffer, UINT64_MAX); QVERIFY(!TooLarge.HasValue()); QVERIFY(!TooLarge.Failure().retryable_);
+        ProviderSessionSnapshot Session{"epoch", ProviderSessionState::Ready}; EntryId Id{"epoch", {"revision"}, "item"};
+        QVERIFY(ValidateEntryId(Id, Session, {"revision"}).HasValue());
+        Session.epoch_ = "restart"; QCOMPARE(ValidateEntryId(Id, Session, {"revision"}).Failure().category_, ErrorCategory::StaleRevision);
+    }
+    void explicitLargeSparseContentAndAutomaticGuard()
+    {
+        QTemporaryDir Directory; auto Store = MakeNativeContentStore(Directory.path().toStdString()); QVERIFY(Store.HasValue());
+        EntrySnapshot Entry; Entry.name_ = "large.bin"; Entry.size_ = (1ULL << 32) + 7;
+        OperationContext Automatic; Automatic.workload_.intent_ = WorkloadIntent::Automatic;
+        bool Produced = false;
+        const auto Producer = [&](const std::string& Path, OperationContext) -> Result<Unit> {
+            Produced = true; HANDLE File = CreateFileW(QString::fromStdString(Path).toStdWString().c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (File == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "sparse-open"};
+            DWORD Done = 0; LARGE_INTEGER Size; Size.QuadPart = Entry.size_;
+            const bool Good = DeviceIoControl(File, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &Done, nullptr)
+                && SetFilePointerEx(File, Size, nullptr, FILE_BEGIN) && SetEndOfFile(File);
+            CloseHandle(File); if (!Good) return Error{ErrorCategory::Unavailable, "sparse-create"}; return Unit{};
+        };
+        auto Guarded = Store.Value()->Produce(Entry, {}, {}, Automatic, Producer); QVERIFY(!Guarded.HasValue()); QVERIFY(!Produced);
+        auto Large = Store.Value()->Produce(Entry, {}, {}, {}, Producer); QVERIFY2(Large.HasValue(), Large.HasValue() ? "" : Large.Failure().code_.c_str());
+        QVERIFY(Produced); QCOMPARE(Large.Value()->Describe().size_, Entry.size_);
+        Large.Value().reset(); auto Manager = MakeNativeMaterializer(Directory.path().toStdString()); QVERIFY(Manager.HasValue());
+        QVERIFY(Manager.Value()->DrainCleanup().errors_.empty());
+    }
     void lastReferenceReleasedOnDifferentThread()
     {
         QTemporaryDir Directory;
@@ -184,10 +226,11 @@ private slots:
     {
         QTemporaryDir Directory; auto Service = Manager(Directory.path()); QVERIFY(Service);
         auto Source = std::make_shared<FaultContent>(); Source->entry_.locator_.kind_ = LocatorKind::Archive;
-        auto Missing = Service->Materialize({Source}, {}).get(); QVERIFY(!Missing.HasValue());
+        OperationContext Automatic; Automatic.workload_.intent_ = WorkloadIntent::Automatic;
+        auto Missing = Service->Materialize({Source}, Automatic).get(); QVERIFY(!Missing.HasValue());
         QCOMPARE(Missing.Failure().code_, std::string("compressed-size-required"));
         Source->entry_.size_ = 1001;
-        auto Expanded = Service->Materialize({Source, {}, 1}, {}).get(); QVERIFY(!Expanded.HasValue());
+        auto Expanded = Service->Materialize({Source, {}, 1}, Automatic).get(); QVERIFY(!Expanded.HasValue());
         QCOMPARE(Expanded.Failure().code_, std::string("materialization-expansion-budget"));
         auto Traversal = Service->Materialize({Content("safe", "../../outside.txt")}, {}).get(); QVERIFY(Traversal.HasValue());
         QVERIFY(QString::fromStdString(Traversal.Value()->LocalPath()).startsWith(Directory.path() + "/hc-materialized-v1/"));

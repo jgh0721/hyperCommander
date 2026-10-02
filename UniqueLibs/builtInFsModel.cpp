@@ -766,7 +766,7 @@ void CFSModel::refreshProvider()
             {
                 auto Page = Cursor.Value()->Next(Context.maxPageItems_, Context).get();
                 if (!Page.HasValue()) return Page.Failure();
-                if (Page.Value().entries_.size() > Context.maxEnumerationEntries_ - Entries.size())
+                if (Page.Value().entries_.size() > Context.EnumerationLimit() - Entries.size())
                     return Error{ErrorCategory::BudgetExceeded, "entry-limit", Provider->Id()};
                 if (Page.Value().entries_.empty() && !Page.Value().end_)
                     return Error{ErrorCategory::Internal, "cursor-no-progress", Provider->Id()};

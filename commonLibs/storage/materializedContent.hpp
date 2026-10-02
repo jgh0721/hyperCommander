@@ -30,13 +30,30 @@ namespace hc::storage
     };
     struct MaterializationLimits
     {
-        std::uint64_t maxFileBytes_ = 256ULL * 1024 * 1024;
-        std::uint64_t maxTotalBytes_ = 1024ULL * 1024 * 1024;
+        // Optional administrator/store constraints. Explicit work has no
+        // product file/total-byte ceiling; automatic policy is in its context.
+        std::uint64_t maxFileBytes_ = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t maxTotalBytes_ = std::numeric_limits<std::uint64_t>::max();
         std::size_t maxActiveFiles_ = 64;
-        std::size_t maxDepth_ = 8;
+        std::size_t maxDepth_ = std::numeric_limits<std::size_t>::max();
         std::uint64_t maxExpansionRatio_ = 1000;
         bool operator==(const MaterializationLimits&) const = default;
     };
+    inline std::optional<Error> CheckMaterialization(const EntrySnapshot& Entry, std::size_t Depth,
+        std::optional<std::uint64_t> Compressed, const MaterializationLimits& Limits, const OperationContext& Context)
+    {
+        if (Entry.size_ > Limits.maxFileBytes_ || Depth > Limits.maxDepth_)
+            return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
+        if (!Context.workload_.IsAutomatic()) return {};
+        if (Entry.size_ > Context.workload_.automaticFileBytes_ || Depth > Context.workload_.automaticDepth_)
+            return Error{ErrorCategory::BudgetExceeded, "automatic-materialization-budget", {}, {}, true, "open-explicitly"};
+        if (Entry.locator_.kind_ == LocatorKind::Archive && !Compressed)
+            return Error{ErrorCategory::InvalidRequest, "compressed-size-required"};
+        const auto Ratio = std::min(Limits.maxExpansionRatio_, Context.workload_.automaticExpansionRatio_);
+        if (Compressed && Entry.size_ && (!*Compressed || !Ratio || (Entry.size_ - 1) / *Compressed >= Ratio))
+            return Error{ErrorCategory::BudgetExceeded, "materialization-expansion-budget", {}, {}, true, "open-explicitly"};
+        return {};
+    }
     class IMaterializedFileLease
     {
     public:
