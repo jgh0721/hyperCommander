@@ -4,9 +4,7 @@
 
 namespace hc::operations
 {
-namespace
-{
-    QByteArray Encode(const ItemOutcome& Item)
+    QByteArray EncodeOutcome(const ItemOutcome& Item)
     {
         QByteArray Bytes; QDataStream Out(&Bytes, QIODevice::WriteOnly); Out.setVersion(QDataStream::Qt_6_0);
         Out << quint32(1) << QByteArray::fromStdString(Item.item_) << quint8(Item.status_)
@@ -21,7 +19,7 @@ namespace
         }
         return Bytes;
     }
-    Result<ItemOutcome> Decode(const QByteArray& Bytes)
+    Result<ItemOutcome> DecodeOutcome(const QByteArray& Bytes)
     {
         const auto Corrupt = [] { return Error{storage::ErrorCategory::Unavailable, "result-record-corrupt"}; };
         QDataStream In(Bytes); In.setVersion(QDataStream::Qt_6_0);
@@ -49,7 +47,6 @@ namespace
         if (In.status() != QDataStream::Ok || !In.atEnd()) return Corrupt();
         return Item;
     }
-}
 Result<std::shared_ptr<IItemOutcomeStore>> PagedItemOutcomeStore::Create(const QString& Parent)
 {
     auto Records = storage::DiskRecords::Create(Parent); if (!Records.HasValue()) return Records.Failure();
@@ -59,14 +56,14 @@ std::uint64_t PagedItemOutcomeStore::Count() const { std::lock_guard Lock(mutex_
 Result<std::uint64_t> PagedItemOutcomeStore::Append(const ItemOutcome& Item)
 {
     std::lock_guard Lock(mutex_);
-    auto Written = records_->Append(Encode(Item)); if (!Written.HasValue()) return Written.Failure();
+    auto Written = records_->Append(EncodeOutcome(Item)); if (!Written.HasValue()) return Written.Failure();
     auto Flushed = records_->Flush(); if (!Flushed.HasValue()) return Flushed.Failure();
     return Written.Value();
 }
 Result<storage::Unit> PagedItemOutcomeStore::Replace(std::uint64_t Row, const ItemOutcome& Item)
 {
     std::lock_guard Lock(mutex_);
-    auto Written = records_->Replace(Row, Encode(Item)); if (!Written.HasValue()) return Written.Failure();
+    auto Written = records_->Replace(Row, EncodeOutcome(Item)); if (!Written.HasValue()) return Written.Failure();
     return records_->Flush();
 }
 Result<ItemOutcomePage> PagedItemOutcomeStore::Read(std::uint64_t Offset, std::size_t MaxItems, const storage::OperationContext& Context) const
@@ -78,7 +75,7 @@ Result<ItemOutcomePage> PagedItemOutcomeStore::Read(std::uint64_t Offset, std::s
     for (auto Row = Offset; Row < End; ++Row) {
         if (auto Failure = Context.Check({})) return *Failure;
         auto Bytes = records_->Read(Row); if (!Bytes.HasValue()) return Bytes.Failure();
-        auto Item = Decode(Bytes.Value()); if (!Item.HasValue()) return Item.Failure();
+        auto Item = DecodeOutcome(Bytes.Value()); if (!Item.HasValue()) return Item.Failure();
         Page.items_.push_back(std::move(Item.Value()));
     }
     Page.end_ = End == records_->Count(); return Page;

@@ -141,11 +141,19 @@ private slots:
             auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString());
             auto Alpha = Root; Alpha.nesting_.back().entry_ = "/alpha.txt";
             auto Entry = Reader->Resolve(Alpha, {}).get(); QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str());
-            auto Batch = BeginWcxMutation(Fixture().toStdString(), Root, Reader, Directory.path().toStdString()); QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
+            std::vector<WriteRecoveryRecord> Records; OperationContext Context;
+            Context.writeCheckpoint_ = [&](const WriteRecoveryRecord& Record, std::optional<uint64_t> Row) -> Result<uint64_t> {
+                if (Row) Records.at(*Row) = Record;
+                else { Records.push_back(Record); Row = Records.size() - 1; }
+                return *Row;
+            };
+            auto Batch = BeginWcxMutation(Fixture().toStdString(), Root, Reader, Directory.path().toStdString(), {}, Context); QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
             auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/alpha.txt", "/renamed.txt", {}, Entry.Value().id_},
-                {ArchiveChangeKind::Put, "/new.txt", {}, Content(Directory.filePath("new.txt"))}}, {});
+                {ArchiveChangeKind::Put, "/new.txt", {}, Content(Directory.filePath("new.txt"))}}, Context);
             QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QCOMPARE(FileBytes(Path), Original);
-            auto Committed = Batch.Value()->Commit({}); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+            auto Committed = Batch.Value()->Commit(Context); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+            QCOMPARE(Records.size(), size_t(1)); QCOMPARE(Records[0].phase_, WritePhase::Finished);
+            QCOMPARE(QDir::fromNativeSeparators(QString::fromStdString(Records[0].destination_.root_)), Path);
             QVERIFY(!Batch.Value()->Commit({}).HasValue()); QVERIFY(!Reader->Stat(Entry.Value().id_, {}).get().HasValue());
             auto Fresh = MakeWcxReadProvider(Fixture().toStdString(), Root, Directory.path().toStdString()); auto Added = Root; Added.nesting_.back().entry_ = "/new.txt";
             auto New = Fresh->Resolve(Added, {}).get(); QVERIFY(New.HasValue()); auto Stream = Fresh->OpenRead(New.Value().id_, {}).get(); QVERIFY(Stream.HasValue());

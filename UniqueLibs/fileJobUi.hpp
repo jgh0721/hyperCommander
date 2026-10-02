@@ -36,6 +36,7 @@ private:
         hc::operations::FileOperation Operation, const std::string& Label);
     void updateJobs();
     void updateSelection();
+    void loadResultPage(const std::string& Id);
     void answer(hc::operations::InteractionChoice Choice);
     std::string selectedId() const;
     std::shared_ptr<hc::operations::IJobJournal> journal_;
@@ -54,4 +55,11 @@ private:
     std::map<hc::operations::InteractionChoice, QPushButton*> choices_;
     QTimer* timer_ = nullptr;
     bool closing_ = false;
+    QPushButton* previousPage_ = nullptr;
+    QPushButton* nextPage_ = nullptr;
+    uint64_t resultOffset_ = 0, pageGeneration_ = 0;
+    std::string resultPageId_;
+    uint64_t loadedOffset_ = UINT64_MAX;
+    std::vector<hc::operations::ItemOutcome> resultPage_;
+    bool pageLoading_ = false;
 };

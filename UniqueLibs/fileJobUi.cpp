@@ -1,6 +1,9 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
 #include "qtJobJournal.hpp"
+#include "nativeWritableStorage.hpp"
+#include "commonLibs/operations/itemOutcomeStore.hpp"
+#include "commonLibs/operations/writeRecovery.hpp"
 #include <QtConcurrent>
 #include <QStandardPaths>
 
@@ -27,6 +30,9 @@ namespace
     }
     QString ErrorText(const Error& Value)
     {
+        if (Value.code_ == "recovery-committed-checkpoints") return QObject::tr("중단 전 목적지 저장 완료 기록(건):");
+        if (Value.code_ == "recovery-artifact-preserved") return QObject::tr("확인을 위해 보존한 파일:");
+        if (Value.code_ == "write-recovery-original-missing") return QObject::tr("원본 위치와 백업을 찾을 수 없습니다. 보존된 파일을 확인하세요.");
         if (Value.code_ == "destination-added-hidden-attribute")
             return QObject::tr("파일 내용은 복사되었지만 대상에서 숨김 속성이 추가되었습니다. 대상 서버의 숨김 파일 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
         if (Value.code_ == "destination-attributes-mismatch")
@@ -62,6 +68,12 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     progress_ = new QProgressBar(dialog_); Layout->addWidget(progress_);
     details_ = new QPlainTextEdit(dialog_); details_->setReadOnly(true);
     details_->setObjectName("hc.jobs.details"); Layout->addWidget(details_);
+    auto* Pages = new QHBoxLayout;
+    previousPage_ = new QPushButton(tr("이전 결과"), dialog_); previousPage_->setObjectName("hc.jobs.previousResults");
+    nextPage_ = new QPushButton(tr("다음 결과"), dialog_); nextPage_->setObjectName("hc.jobs.nextResults");
+    Pages->addWidget(previousPage_); Pages->addWidget(nextPage_); Pages->addStretch(); Layout->addLayout(Pages);
+    connect(previousPage_, &QPushButton::clicked, this, [this] { resultOffset_ = resultOffset_ >= 200 ? resultOffset_ - 200 : 0; updateSelection(); });
+    connect(nextPage_, &QPushButton::clicked, this, [this] { resultOffset_ += 200; updateSelection(); });
     renamed_ = new QLineEdit(dialog_); renamed_->setPlaceholderText(tr("새 이름"));
     renamed_->setAccessibleName(tr("충돌한 항목의 새 이름"));
     renamed_->setObjectName("hc.jobs.newName"); Layout->addWidget(renamed_);
@@ -116,7 +128,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
         updateSelection();
     });
     connect(cancel_, &QPushButton::clicked, this, [this] { scheduler_.Cancel(selectedId()); updateSelection(); });
-    connect(jobs_, &QComboBox::currentIndexChanged, this, [this] { renamed_->clear(); updateSelection(); });
+    connect(jobs_, &QComboBox::currentIndexChanged, this, [this] { renamed_->clear(); resultOffset_ = 0; updateSelection(); });
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, [this] { updateJobs(); });
     timer_->start(100);
@@ -135,7 +147,32 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
         }
         updateSelection();
     });
-    Recovery->setFuture(QtConcurrent::run([Journal = journal_] { return Journal->Recover(); }));
+    Recovery->setFuture(QtConcurrent::run([Journal = journal_]() -> Result<std::vector<JobResult>> {
+        auto Results = Journal->Recover(); if (!Results.HasValue()) return Results.Failure();
+        for (auto& Job : Results.Value()) {
+            if (!Job.writes_ || !Job.snapshot_.error_ || Job.snapshot_.error_->code_ != "job-interrupted") continue;
+            uint64_t CommittedWrites = 0;
+            for (uint64_t Row = 0; Row < Job.writes_->Count(); ++Row) {
+                auto Page = Job.writes_->Read(Row, 1); if (!Page.HasValue()) return Page.Failure();
+                auto Record = DecodeWriteRecovery(Page.Value().items_.front()); if (!Record.HasValue()) return Record.Failure();
+                if (Record.Value().phase_ == WritePhase::Aborted) continue;
+                if (Record.Value().phase_ == WritePhase::Finished) {
+                    ++CommittedWrites;
+                    continue;
+                }
+                auto Recovered = RecoverNativeWrite(Record.Value());
+                if (!Recovered.HasValue()) { Job.cleanupErrors_.push_back(Recovered.Failure()); continue; }
+                // Keep the interrupted checkpoint: recovery is idempotent and
+                // preserved artifacts must remain visible on subsequent starts.
+                Job.cleanupErrors_.insert(Job.cleanupErrors_.end(), Recovered.Value().cleanupErrors_.begin(), Recovered.Value().cleanupErrors_.end());
+                if (Recovered.Value().destinationCommitted_) ++CommittedWrites;
+                for (const auto& At : Recovered.Value().preservedArtifacts_)
+                    Job.cleanupErrors_.push_back({ErrorCategory::Unavailable, "recovery-artifact-preserved", {}, {}, false, At.root_});
+            }
+            if (CommittedWrites) Job.cleanupErrors_.push_back({ErrorCategory::Unavailable, "recovery-committed-checkpoints", {}, {}, false, std::to_string(CommittedWrites)});
+        }
+        return Results;
+    }));
     updateSelection();
 }
 
@@ -210,6 +247,7 @@ void FileJobUi::updateJobs()
 
 void FileJobUi::updateSelection()
 {
+    previousPage_->setEnabled(false); nextPage_->setEnabled(false);
     auto Current = scheduler_.Snapshot(selectedId());
     if (!Current.HasValue()) if (const auto Found = results_.find(selectedId()); Found != results_.end()) Current = Found->second.snapshot_;
     const bool Valid = Current.HasValue();
@@ -252,8 +290,10 @@ void FileJobUi::updateSelection()
     if (Snapshot.error_) Details += "\n" + ErrorText(*Snapshot.error_);
     if (const auto It = results_.find(Snapshot.id_); It != results_.end())
     {
+        loadResultPage(Snapshot.id_);
         std::size_t Shown = 0;
-        for (const auto& Item : It->second.items_)
+        const auto& Items = It->second.outcomes_ ? resultPage_ : It->second.items_;
+        for (const auto& Item : Items)
         {
             if (++Shown > 200) { Details += tr("\n표시 한도: 처음 200개 항목. 전체 결과는 작업 이력에 보관됩니다."); break; }
             Details += "\n" + DisplayPath(Item.item_) + " — " + (Item.status_ == ItemOutcome::Status::Completed ? tr("완료")
@@ -261,10 +301,32 @@ void FileJobUi::updateSelection()
             if (Item.error_) Details += ": " + ErrorText(*Item.error_);
             if (Item.destinationCommitted_ && !Item.sourceRemoved_) Details += tr(" (목적지 저장됨, 원본 유지)");
         }
-        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1").arg(ErrorText(Error));
+        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1 %2").arg(ErrorText(Error), QString::fromStdString(Error.userAction_));
     }
     Details = Details.trimmed();
     if (details_->toPlainText() != Details) details_->setPlainText(Details);
+}
+
+void FileJobUi::loadResultPage(const std::string& Id)
+{
+    const auto Found = results_.find(Id);
+    if (Found == results_.end() || !Found->second.outcomes_) return;
+    auto Store = Found->second.outcomes_;
+    if (resultPageId_ == Id && loadedOffset_ == resultOffset_) {
+        previousPage_->setEnabled(!pageLoading_ && resultOffset_ > 0);
+        nextPage_->setEnabled(!pageLoading_ && resultOffset_ + resultPage_.size() < Store->Count()); return;
+    }
+    resultPageId_ = Id; loadedOffset_ = resultOffset_; resultPage_.clear(); pageLoading_ = true;
+    const auto Generation = ++pageGeneration_; const auto Offset = resultOffset_;
+    auto* Watcher = new QFutureWatcher<Result<ItemOutcomePage>>(this);
+    connect(Watcher, &QFutureWatcher<Result<ItemOutcomePage>>::finished, this, [this, Watcher, Generation] {
+        auto Page = Watcher->result(); Watcher->deleteLater(); if (Generation != pageGeneration_) return;
+        pageLoading_ = false;
+        if (Page.HasValue()) resultPage_ = std::move(Page.Value().items_);
+        else resultPage_.push_back({"", ItemOutcome::Status::Failed, Page.Failure()});
+        updateSelection();
+    });
+    Watcher->setFuture(QtConcurrent::run([Store, Offset] { return Store->Read(Offset, 200); }));
 }
 
 void FileJobUi::answer(InteractionChoice Choice)

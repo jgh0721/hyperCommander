@@ -50,6 +50,7 @@ qt_add_library(hc_viewer_core STATIC
     commonLibs/operations/jobScheduler.cpp
     commonLibs/operations/jobScheduler.hpp
     commonLibs/operations/providerInteractionTask.hpp
+    commonLibs/operations/writeRecovery.hpp
 )
 # The core uses the kit's CRT settings but has no Qt headers or linkage.
 set_target_properties(hc_viewer_core PROPERTIES AUTOMOC OFF AUTOUIC OFF)
@@ -58,6 +59,11 @@ target_compile_options(hc_viewer_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:
 qt_add_library(hc_viewer_qt STATIC
     UniqueLibs/qtJobJournal.cpp
     UniqueLibs/qtJobJournal.hpp
+    UniqueLibs/qtDurableOutcomes.cpp
+    UniqueLibs/qtPagedStorage.cpp
+    UniqueLibs/qtPagedStorage.hpp
+    UniqueLibs/qtItemOutcomeStore.cpp
+    UniqueLibs/qtItemOutcomeStore.hpp
     UniqueLibs/qtViewerProvider.cpp
     UniqueLibs/qtViewerProvider.hpp
     UniqueLibs/qtViewerSurface.cpp

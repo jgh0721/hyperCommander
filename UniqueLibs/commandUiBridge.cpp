@@ -877,6 +877,10 @@ CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Sing
     const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
     if (!View || View->BaseModel() != Model) return Context;
     const auto Grid = View->BaseView();
+    if (!Single && Model->IsPaged() && Model->property("hc.selectAllEntries").toBool()) {
+        auto Manifest = Model->SelectAllEntries();
+        if (Manifest.HasValue()) { Context.selectionManifest_ = Manifest.Value(); Context.selection_.clear(); return Context; }
+    }
     QList<QModelIndex> Selected;
     if (!Single)
         for (const auto Row : Grid->selection()->selectedRowIndexes()) Selected.push_back(SourceIndex(Row));
@@ -981,6 +985,10 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     auto Reader = Model->SnapshotProvider();
     if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
     auto Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider() : Kind == LocatorKind::Archive ? nullptr : MakeNativeWritableStorage(Kind, Reader);
+    if (Invocation.context_.selectionManifest_) {
+        if (Invocation.context_.selectionManifest_->Provider() != Reader) return Error{ErrorCategory::StaleRevision, "selection-provider-changed"};
+        Request.selection_ = Invocation.context_.selectionManifest_; Request.selectionRoot_ = Invocation.context_.location_; Request.selectionWriter_ = Writer;
+    }
     if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
         for (const auto& Selected : Invocation.context_.selection_)
         {
@@ -1094,6 +1102,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         && !SameArchiveContainer(Request.destination_, Invocation.context_.location_);
     const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
         || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
+    if (Request.selection_ && (CrossMove || ArchiveMutation))
+        return Error{ErrorCategory::Unsupported, "archive-manifest-mutation-requires-batch-adapter"};
     if (CrossMove)
     {
         MoveOperationRequest Move;

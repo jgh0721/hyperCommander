@@ -4,6 +4,7 @@
 
 namespace hc::operations
 {
+    class IItemOutcomeStore;
     using storage::Error;
     using storage::Result;
     enum class JobState { Queued, Preparing, Running, WaitingForUser, Paused, Committing, Completed, Failed, Cancelled };
@@ -67,6 +68,9 @@ namespace hc::operations
         JobSnapshot snapshot_;
         std::vector<ItemOutcome> items_;
         std::vector<Error> cleanupErrors_;
+        // items_ is a bounded compatibility preview when this store is present.
+        std::shared_ptr<IItemOutcomeStore> outcomes_;
+        std::shared_ptr<IItemOutcomeStore> writes_;
     };
     struct JobHandle
     {
@@ -79,7 +83,7 @@ namespace hc::operations
         // Acquire all lanes together and retain them across pause/interaction.
         std::vector<std::string> resourceLanes_;
         storage::OperationContext operation_;
-        std::size_t maxItemResults_ = 100000;
+        std::size_t maxItemResults_ = std::numeric_limits<std::size_t>::max();
         std::uint32_t maxRetries_ = 3;
         std::chrono::milliseconds initialRetryDelay_{50};
         std::chrono::milliseconds maximumRetryDelay_{2000};
@@ -129,6 +133,10 @@ namespace hc::operations
         virtual Result<storage::Unit> Checkpoint(const JobResult& Result) = 0;
         virtual Result<std::vector<JobResult>> Recover() = 0;
         virtual Result<storage::Unit> Forget(const std::string& Id) = 0;
+        virtual Result<std::shared_ptr<IItemOutcomeStore>> OpenItems(const std::string&)
+        { return std::shared_ptr<IItemOutcomeStore>{}; }
+        virtual Result<std::shared_ptr<IItemOutcomeStore>> OpenWrites(const std::string&)
+        { return std::shared_ptr<IItemOutcomeStore>{}; }
     };
     class JobScheduler
     {

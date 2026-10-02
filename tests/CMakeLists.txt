@@ -8,6 +8,15 @@ target_compile_options(hc_paged_storage_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CX
 add_test(NAME hc.paged_storage COMMAND hc_paged_storage_tests -o "${CMAKE_BINARY_DIR}/paged-storage-$<CONFIG>.txt,txt")
 set_tests_properties(hc.paged_storage PROPERTIES TIMEOUT 600 LABELS "storage;large-list")
 hc_enable_qt_deployment(hc_paged_storage_tests TEST)
+qt_add_executable(hc_operation_recovery_tests tstOperationRecovery.cpp
+    ../UniqueLibs/qtJobJournal.cpp ../UniqueLibs/qtDurableOutcomes.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp
+    ../UniqueLibs/nativeWritableStorage.cpp ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp)
+target_link_libraries(hc_operation_recovery_tests PRIVATE hc_viewer_core Qt6::Test)
+target_include_directories(hc_operation_recovery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_options(hc_operation_recovery_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.operation_recovery COMMAND hc_operation_recovery_tests -o "${CMAKE_BINARY_DIR}/operation-recovery-$<CONFIG>.txt,txt")
+set_tests_properties(hc.operation_recovery PROPERTIES TIMEOUT 180)
+hc_enable_qt_deployment(hc_operation_recovery_tests TEST)
 qt_add_executable(hc_lua_tests tstLuaRuntime.cpp)
 target_link_libraries(hc_lua_tests PRIVATE hc_script_runtime Qt6::Test)
 target_compile_options(hc_lua_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -115,7 +124,8 @@ if(HC_DOPUS_SDK_DIRECTORY)
 endif()
 qt_add_library(hc_tc_data_fixture SHARED tcDataFixture.cpp)
 target_compile_options(hc_tc_data_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-qt_add_executable(hc_hosted_data_tests tstHostedData.cpp ../UniqueLibs/nativeMaterializer.cpp ../UniqueLibs/storageProviders.cpp ../UniqueLibs/qtJobJournal.cpp)
+qt_add_executable(hc_hosted_data_tests tstHostedData.cpp ../UniqueLibs/nativeMaterializer.cpp ../UniqueLibs/storageProviders.cpp ../UniqueLibs/qtJobJournal.cpp
+    ../UniqueLibs/qtDurableOutcomes.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp)
 target_include_directories(hc_hosted_data_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_link_libraries(hc_hosted_data_tests PRIVATE hc_plugin_process hc_viewer_core Qt6::Test)
 target_compile_options(hc_hosted_data_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -470,6 +480,7 @@ add_custom_target(hc_check
     VERBATIM
 )
 add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_tests hc_iso_job_tests)
+add_dependencies(hc_check hc_operation_recovery_tests)
 add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
 add_dependencies(hc_check hc_lua_tests)
 if(TARGET hc_dopus_sdk_abi_tests)

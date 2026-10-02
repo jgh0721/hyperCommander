@@ -529,7 +529,8 @@ namespace hc::storage
                     auto Prepared = parent_->Prepare({std::move(Change)}, Context); if (!Prepared.HasValue()) return Prepared;
                     const auto Fresh = native_->Stat(original_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure());
                 }
-                auto Written = writer_->BeginWrite(original_.locator_, {true, original_.id_.revision_}, Context); if (!Written.HasValue()) return Written.Failure();
+                auto WriteContext = Context; WriteContext.expectedWriteBytes_ = uint64_t(QFileInfo(QString::fromStdString(Lease.Value()->LocalPath())).size());
+                auto Written = writer_->BeginWrite(original_.locator_, {true, original_.id_.revision_}, WriteContext); if (!Written.HasValue()) return Written.Failure();
                 output_ = std::move(Written.Value());
                 QFile File(QString::fromStdString(Lease.Value()->LocalPath())); if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "archive-prepared-open"};
                 while (!File.atEnd())

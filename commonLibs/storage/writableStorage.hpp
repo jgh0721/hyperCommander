@@ -22,6 +22,8 @@ namespace hc::storage
         Locator destination_;
         std::vector<Error> cleanupErrors_;
         std::vector<Locator> preservedArtifacts_;
+        std::string transaction_, destinationIdentity_;
+        bool destinationCommitted_ = true;
     };
     class IWriteSession
     {

@@ -100,7 +100,8 @@ namespace hc::operations
                         return failed(Opened.Failure());
                     }
                     stream_ = std::move(Opened.Value());
-                    auto Created = request_.destinationWriter_->BeginWrite(current().destination_, expected_, Context.operation_);
+                    auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = current().source_.entry_.size_;
+                    auto Created = request_.destinationWriter_->BeginWrite(current().destination_, expected_, WriteContext);
                     if (!Created.HasValue()) return failed(Created.Failure());
                     session_ = std::move(Created.Value());
                     phase_ = Phase::Read;
@@ -368,8 +369,88 @@ namespace hc::operations
             bool replaceAllowed_ = false, destinationCommitted_ = false;
         };
     }
+    namespace {
+    // A selected directory snapshot is a lease, not an in-memory source array.
+    // Each independent root is coordinated in one bounded continuation; errors
+    // preserve completed roots and remain visible in the shared outcome store.
+    class SelectionTask final : public IJobTask {
+    public:
+        explicit SelectionTask(FileOperationRequest Request) : request_(std::move(Request)) {}
+        JobStep Advance(JobStepContext Context) override
+        {
+            if (!confirmed_ && request_.operation_ == FileOperation::Delete && request_.confirmDelete_) {
+                if (!Context.answer_) {
+                    JobStep Step{JobState::WaitingForUser};
+                    Step.interaction_ = InteractionRequest{"", InteractionKind::DeleteConfirmation, "confirm-permanent-delete",
+                        {InteractionChoice::Confirm, InteractionChoice::Cancel}}; return Step;
+                }
+                if (Context.answer_->choice_ != InteractionChoice::Confirm) return failed({ErrorCategory::InvalidRequest, "delete-confirmation-required"});
+                confirmed_ = true; Context.answer_.reset();
+            }
+            if (inner_) {
+                auto Step = inner_->Advance(Context);
+                if (Step.item_ && !Step.replaceItem_) ++emitted_;
+                if (Step.replaceItem_) *Step.replaceItem_ += outcomeBase_;
+                if (Step.progress_) {
+                    innerBytes_ = Step.progress_->bytesDone_;
+                    Step.progress_->bytesDone_ += completedBytes_; Step.progress_->bytesTotal_.reset();
+                }
+                if (Step.next_ == JobState::Completed || Step.next_ == JobState::Failed) {
+                    auto Errors = inner_->Finalize(Step.next_); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); inner_.reset();
+                    if (Step.next_ == JobState::Failed && !Step.item_) {
+                        Step.item_ = ItemOutcome{Serialize(current_.locator_), ItemOutcome::Status::Failed, Step.error_, false, false, current_}; ++emitted_;
+                    }
+                    Step.next_ = JobState::Running; Context.answer_.reset();
+                    completedBytes_ += innerBytes_; innerBytes_ = 0;
+                }
+                return Step;
+            }
+            if (offset_ == request_.selection_->Count()) return JobStep{JobState::Completed};
+            auto Page = request_.selection_->Read(offset_, 1, Context.operation_);
+            if (!Page.HasValue()) return failed(Page.Failure());
+            if (Page.Value().entries_.size() != 1) return failed({ErrorCategory::Internal, "selection-no-progress"});
+            current_ = Page.Value().entries_[0]; ++offset_;
+            auto Reader = request_.selection_->Provider();
+            if (current_.id_.providerId_ != Reader->Id() || !SafeName(current_.name_)
+                || Child(request_.selectionRoot_, current_.name_) != current_.locator_)
+                return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
+            auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false;
+            Request.sources_ = {{current_, Reader, request_.selectionWriter_}};
+            auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
+            if (!Prepared.HasValue()) return failed(Prepared.Failure());
+            inner_ = std::move(Prepared.Value().task_); outcomeBase_ = emitted_;
+            return JobStep{JobState::Running};
+        }
+        std::vector<Error> Finalize(JobState State) override
+        {
+            if (inner_) { auto Errors = inner_->Finalize(State); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); inner_.reset(); }
+            request_.selection_.reset(); return cleanup_;
+        }
+    private:
+        static JobStep failed(Error Error) { JobStep Step{JobState::Failed}; Step.error_ = std::move(Error); return Step; }
+        FileOperationRequest request_;
+        std::unique_ptr<IJobTask> inner_;
+        EntrySnapshot current_;
+        uint64_t offset_ = 0;
+        uint64_t completedBytes_ = 0, innerBytes_ = 0;
+        size_t emitted_ = 0, outcomeBase_ = 0;
+        bool confirmed_ = false;
+        std::vector<Error> cleanup_;
+    };
+    }
     Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)
     {
+        if (Request.selection_) {
+            if (!Request.sources_.empty() || !Request.selection_->Provider() || !Request.selection_->Count()
+                || (Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Move && Request.operation_ != FileOperation::Delete)
+                || (Request.operation_ != FileOperation::Copy && !Request.selectionWriter_)
+                || (Request.operation_ != FileOperation::Delete && !Request.destinationWriter_))
+                return Error{ErrorCategory::InvalidRequest, "invalid-selection-batch"};
+            JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context;
+            Job.resourceLanes_.push_back(LaneFor(Request.selectionRoot_));
+            if (Request.operation_ != FileOperation::Delete) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
+            return PreparedJob{std::move(Job), std::make_unique<SelectionTask>(std::move(Request))};
+        }
         if (Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
             || !Request.maxEntries_ || Request.maxEntries_ > 100000 || !Request.maxDepth_ || Request.maxDepth_ > 256 || !Request.maxBytes_
             || Request.sources_.size() > Request.maxEntries_ || (Request.operation_ != FileOperation::MakeDirectory && Request.sources_.empty())

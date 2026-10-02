@@ -1,5 +1,6 @@
 ﻿#include "isoJob.hpp"
 #include "builtinIso.hpp"
+#include "isoRewrite.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QDirIterator>
@@ -47,6 +48,7 @@ public:
             // Inner commits only publish temporary source copies. The outer job
             // enters its irreversible boundary only for the final ISO target.
             auto InnerContext = Context; InnerContext.committing_ = innerCommitting_;
+            InnerContext.operation_.writeCheckpoint_ = {}; // Private input copies are not published destinations.
             auto Step = copy_->Advance(std::move(InnerContext)); innerCommitting_ = Step.next_ == JobState::Committing;
             if (Step.item_ && Step.item_->source_) copiedSources_.push_back(*Step.item_->source_);
             Step.item_.reset();
@@ -73,23 +75,23 @@ public:
             }
             if (iterator_->hasNext()) return progress("이미지 파일 목록 확인");
             iterator_.reset();
-            QFile Ini(temp_->filePath("pkplugin.ini"));
-            const auto Settings = "[IsoImage]\r\nProfile=" + QByteArray::number(request_.profile_) + "\r\nVolumeLabel=" + request_.volumeLabel_.toUtf8() + "\r\n";
-            if (!Ini.open(QIODevice::WriteOnly) || Ini.write(Settings) != Settings.size()) return failed({ErrorCategory::Unavailable, "iso-options-write"}); Ini.close();
-            auto Options = hc::plugins::BuiltinIsoOptions(); Options.defaultIniPath_ = Ini.fileName(); backend_ = hc::plugins::MakeApprovedWcxBackend(Options);
             phase_ = Phase::Build; return progress("ISO 작성 및 원본 내용 대조");
         }
         if (phase_ == Phase::Build) {
-            const auto Result = backend_->Update({temp_->filePath("image.iso").toStdString(), temp_->filePath("input").toStdString(), names_, {}, ImageLimit}, Context.operation_);
-            if (!Result.HasValue()) return failed(Result.Failure());
-            auto Listing = backend_->Enumerate(temp_->filePath("image.iso").toStdString(), true, Context.operation_); if (!Listing.HasValue()) return failed(Listing.Failure());
-            listing_ = std::move(Listing.Value()); phase_ = Phase::Inspect; return progress("작성 결과 재확인");
+            RewriteRequest Rewrite; Rewrite.profile_ = request_.profile_; Rewrite.volumeLabel_ = request_.volumeLabel_.toStdString();
+            Rewrite.maxImageBytes_ = ImageLimit; Rewrite.temporaryBase_ = temp_->path();
+            for (auto Name : names_) {
+                const bool Directory = Name.ends_with('/'); if (Directory) Name.pop_back();
+                Rewrite.sources_.push_back({Directory ? "" : QDir(temp_->filePath("input")).filePath(QString::fromStdString(Name)).toStdString(), Name, Directory});
+            }
+            auto Prepared = PrepareRewrite(std::move(Rewrite), Context.operation_).get();
+            if (!Prepared.HasValue()) return failed(Prepared.Failure());
+            preparedImage_ = std::move(Prepared.Value()); phase_ = Phase::Inspect; return progress("작성 결과 재확인");
         }
         if (phase_ == Phase::Inspect) {
-            auto Page = listing_->Next(128, Context.operation_); if (!Page.HasValue()) return failed(Page.Failure());
-            if (!Page.Value().end_) return progress("작성 결과 재확인"); listing_.reset();
-            auto Session = writer_->BeginWrite(request_.destination_, expected_, Context.operation_); if (!Session.HasValue()) return failed(Session.Failure());
-            output_ = std::move(Session.Value()); image_ = std::make_unique<QFile>(temp_->filePath("image.iso"));
+            auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = uint64_t(QFileInfo(preparedImage_->Path()).size());
+            auto Session = writer_->BeginWrite(request_.destination_, expected_, WriteContext); if (!Session.HasValue()) return failed(Session.Failure());
+            output_ = std::move(Session.Value()); image_ = std::make_unique<QFile>(preparedImage_->Path());
             if (!image_->open(QIODevice::ReadOnly)) return failed({ErrorCategory::Unavailable, "iso-staging-open"});
             phase_ = Phase::CopyOutput; return progress("대상 볼륨에 저장");
         }
@@ -121,7 +123,7 @@ public:
     }
     std::vector<Error> Finalize(JobState State) override
     {
-        listing_.reset(); backend_.reset(); image_.reset(); iterator_.reset();
+        image_.reset(); preparedImage_.reset(); iterator_.reset();
         if (copy_) { auto Errors = copy_->Finalize(State); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); copy_.reset(); }
         if (output_) { auto Removed = output_->Abort(); if (!Removed.HasValue()) cleanup_.push_back(Removed.Failure()); output_.reset(); }
         if (temp_) { if (!temp_->remove()) { temp_->setAutoRemove(false); cleanup_.push_back({ErrorCategory::Unavailable, "iso-staging-cleanup:" + temp_->path().toStdString()}); } temp_.reset(); }
@@ -141,8 +143,7 @@ private:
     std::vector<EntrySnapshot> copiedSources_;
     size_t rechecked_ = 0;
     std::vector<std::string> names_;
-    std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
-    std::unique_ptr<hc::plugins::IArchiveListing> listing_;
+    std::shared_ptr<PreparedImage> preparedImage_;
     std::shared_ptr<IWritableStorage> writer_;
     std::unique_ptr<IWriteSession> output_;
     std::unique_ptr<QFile> image_;

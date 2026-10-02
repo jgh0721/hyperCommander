@@ -13,6 +13,7 @@
 #include "columnPluginFields.hpp"
 #include "columnNativeFields.hpp"
 #include "fileJobUi.hpp"
+#include "commonLibs/operations/itemOutcomeStore.hpp"
 #include "nativeWritableStorage.hpp"
 #include "nativeMaterializer.hpp"
 #include "storageProviders.hpp"
@@ -107,7 +108,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -743,6 +744,10 @@ private slots:
         auto Selection = Model->SelectAllEntries(); QVERIFY(Selection.HasValue()); QCOMPARE(Selection.Value()->Count(), 100000ULL);
         QCOMPARE(Selection.Value()->Provider(), Model->SnapshotProvider());
         QCOMPARE(Selection.Value()->Read(99999, 1).Value().entries_.front().name_, std::string("item100000.txt"));
+        View->EnsureKeyboardFocusOnView(); QVERIFY(QApplication::focusWidget());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_A, Qt::ControlModifier);
+        QVERIFY(Model->property("hc.selectAllEntries").toBool());
+        View->BaseView()->deselectAll(); QVERIFY(!Model->property("hc.selectAllEntries").toBool());
         auto Profile = View->ColumnProfile(); Profile.sorts_ = {{Profile.columns_[0].id_, Qt::DescendingOrder}};
         Clock.restart(); QVERIFY(View->ApplyColumnProfile(Profile));
         QTRY_COMPARE_WITH_TIMEOUT(Model->GetName(Model->index(1, 0)), QString("item100000.txt"), 120000); const auto SortMs = Clock.elapsed();
@@ -2945,6 +2950,36 @@ hc.events.unsubscribe(sub)
         QVERIFY(!QFile::exists(Copy.fileName())); QVERIFY(QFile::exists(File.fileName()));
     }
 
+    void fileJobResultPagesUi()
+    {
+        using namespace hc::operations;
+        using namespace hc::storage;
+        QTemporaryDir Directory; auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        for (int Row = 0; Row < 201; ++Row) {
+            QFile File(Directory.filePath(QString("entry%1.txt").arg(Row))); QVERIFY(File.open(QIODevice::WriteOnly)); File.close();
+            auto Entry = Reader->Resolve({LocatorKind::Local, File.fileName().toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+            Request.sources_.push_back({Entry.Value(), Reader, Writer});
+        }
+        auto Root = Reader->Resolve({LocatorKind::Local, Directory.path().toStdString()}, {}).get(); QVERIFY(Root.HasValue());
+        Request.sources_ = {{Root.Value(), Reader, Writer}};
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        auto Job = Jobs.Submit(std::move(Request), {}); QVERIFY2(Job.HasValue(), Job.HasValue() ? "" : Job.Failure().code_.c_str());
+        QTRY_VERIFY_WITH_TIMEOUT(Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 30000);
+        const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Done.outcomes_->Count(), 202ull); Jobs.Show();
+        auto* Next = Window.findChild<QPushButton*>("hc.jobs.nextResults");
+        auto* Previous = Window.findChild<QPushButton*>("hc.jobs.previousResults");
+        auto* Details = Window.findChild<QPlainTextEdit*>("hc.jobs.details"); QVERIFY(Next && Previous && Details);
+        QTRY_VERIFY(Next->isEnabled()); QVERIFY(!Previous->isEnabled()); Next->click();
+        QTRY_VERIFY(Previous->isEnabled()); QVERIFY(!Next->isEnabled());
+        auto Last = Done.outcomes_->Read(200, 1); QVERIFY(Last.HasValue());
+        auto At = ParseLocator(Last.Value().items_[0].item_); QVERIFY(At.HasValue());
+        QVERIFY(Details->toPlainText().contains(QString::fromStdString(At.Value().root_)));
+        Previous->click(); QTRY_VERIFY(Next->isEnabled()); QVERIFY(!Previous->isEnabled());
+    }
     void closingWindowCancelsWaitingFileJob()
     {
         using namespace hc::operations;

@@ -214,6 +214,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         this, [this] {
             resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
             resetPath_ = model_->property("hc.snapshotLocation").toString();
+            model_->setProperty("hc.selectAllEntries", false);
             view_->deselectAll();
         }, Qt::DirectConnection);
     disconnect(selectionRestore_);
@@ -805,6 +806,7 @@ void CGridView::oo_grid_editorPosting( Qtitan::EditorEventArgs* Args )
 
 void CGridView::oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )
 {
+    if (model_) model_->setProperty("hc.selectAllEntries", false);
     UNREFERENCED_PARAMETER( NewSelection );
     UNREFERENCED_PARAMETER( OldSelection );
 
@@ -822,6 +824,9 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             return false;
 
         const auto KeyEvent = dynamic_cast< QKeyEvent* >( Event );
+        if (KeyEvent->matches(QKeySequence::SelectAll) && qobject_cast<CFSModel*>(model_)) {
+            view_->selectAll(); model_->setProperty("hc.selectAllEntries", true); return true;
+        }
         const auto StCommandMgr = TyStCommandMgr::GetInstance();
 
         qDebug() << __FUNCTION__ << " : " << KeyEvent << KeyEvent->text();

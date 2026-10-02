@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "jobScheduler.hpp"
 #include "../storage/writableStorage.hpp"
+#include "../storage/entryIndex.hpp"
 
 namespace hc::operations
 {
@@ -16,6 +17,9 @@ namespace hc::operations
     {
         FileOperation operation_ = FileOperation::Copy;
         std::vector<OperationSource> sources_;
+        std::shared_ptr<storage::ISelectionManifest> selection_;
+        storage::Locator selectionRoot_;
+        std::shared_ptr<storage::IWritableStorage> selectionWriter_;
         // Copy/move: destination directory. Mkdir/rename: complete destination.
         storage::Locator destination_;
         std::shared_ptr<storage::IWritableStorage> destinationWriter_;

@@ -1,5 +1,7 @@
 ﻿#include "jobScheduler.hpp"
 #include <condition_variable>
+#include "itemOutcomeStore.hpp"
+#include "writeRecovery.hpp"
 #include <stdexcept>
 #include <random>
 #include "providerInteractionTask.hpp"
@@ -40,6 +42,7 @@ namespace hc::operations
             bool executing_ = false;
             bool lanesHeld_ = false;
             bool commitEntered_ = false;
+            bool itemsOpened_ = false;
             std::uint64_t interactionSequence_ = 0;
             std::chrono::steady_clock::time_point readyAt_{};
         };
@@ -127,7 +130,7 @@ namespace hc::operations
 
     Result<JobHandle> JobScheduler::Submit(JobRequest Request, std::unique_ptr<IJobTask> Task)
     {
-        if (!Task || !Request.maxItemResults_ || Request.maxItemResults_ > 1000000 || Request.maxRetries_ > 16
+        if (!Task || !Request.maxItemResults_ || Request.maxRetries_ > 16
             || Request.initialRetryDelay_.count() < 1 || Request.maximumRetryDelay_ < Request.initialRetryDelay_
             || Request.maximumRetryDelay_ > std::chrono::minutes(1) || Request.resourceLanes_.size() > 64)
             return Error{ErrorCategory::InvalidRequest, "invalid-job-request"};
@@ -339,6 +342,19 @@ namespace hc::operations
             JobStep Step;
             if (!Abort && Shared->journal_)
             {
+                if (!Value->itemsOpened_) {
+                    try {
+                        auto Opened = Shared->journal_->OpenItems(Value->result_.snapshot_.id_);
+                        if (!Opened.HasValue()) Abort = Opened.Failure();
+                        else {
+                            Value->result_.outcomes_ = std::move(Opened.Value());
+                            auto Writes = Shared->journal_->OpenWrites(Value->result_.snapshot_.id_);
+                            if (!Writes.HasValue()) Abort = Writes.Failure();
+                            else Value->result_.writes_ = std::move(Writes.Value());
+                        }
+                    } catch (...) { Abort = Error{ErrorCategory::Unavailable, "job-outcomes-open-exception"}; }
+                    Value->itemsOpened_ = true;
+                }
                 JobResult Checkpoint;
                 { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
                 try { auto Saved = Shared->journal_->Checkpoint(Checkpoint); if (!Saved.HasValue()) Abort = Saved.Failure(); }
@@ -347,10 +363,43 @@ namespace hc::operations
             if (Abort) { Step.next_ = Abort->category_ == ErrorCategory::Cancelled ? JobState::Cancelled : JobState::Failed; Step.error_ = Abort; }
             else
             {
+                if (Value->result_.writes_) Context.operation_.writeCheckpoint_ = [Store = Value->result_.writes_](
+                    const storage::WriteRecoveryRecord& Record, std::optional<uint64_t> Row) -> Result<uint64_t> {
+                    const auto Item = EncodeWriteRecovery(Record);
+                    if (!Row) return Store->Append(Item);
+                    auto Updated = Store->Replace(*Row, Item); if (!Updated.HasValue()) return Updated.Failure();
+                    return *Row;
+                };
                 try { Step = Value->task_->Advance(std::move(Context)); }
                 catch (...) { Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::Internal, "job-task-exception"}; }
             }
             JobState Terminal = JobState::Running;
+            // Disk writes and replacement reads must never hold the scheduler
+            // mutex: cancellation and unrelated lanes stay responsive.
+            std::optional<ItemOutcome> PreviousItem;
+            if (Value->result_.outcomes_ && (Step.item_ || Step.replaceItem_)) {
+                auto& Store = Value->result_.outcomes_;
+                std::optional<Error> Failure;
+                try {
+                    if (Step.retry_) Failure = Error{ErrorCategory::Internal, "invalid-retry-result"};
+                    else if (Step.replaceItem_) {
+                        auto Old = Store->Read(*Step.replaceItem_, 1);
+                        if (!Old.HasValue()) Failure = Old.Failure();
+                        else if (!Step.item_ || Old.Value().items_.size() != 1
+                            || Old.Value().items_[0].item_ != Step.item_->item_
+                            || (Old.Value().items_[0].destinationCommitted_ && !Step.item_->destinationCommitted_)
+                            || (Old.Value().items_[0].sourceRemoved_ && !Step.item_->sourceRemoved_))
+                            Failure = Error{ErrorCategory::Internal, "invalid-item-result-update"};
+                        else {
+                            PreviousItem = Old.Value().items_[0];
+                            auto Saved = Store->Replace(*Step.replaceItem_, *Step.item_); if (!Saved.HasValue()) Failure = Saved.Failure();
+                        }
+                    } else if (Store->Count() >= Value->request_.maxItemResults_)
+                        Failure = Error{ErrorCategory::BudgetExceeded, "item-result-budget"};
+                    else { auto Saved = Store->Append(*Step.item_); if (!Saved.HasValue()) Failure = Saved.Failure(); }
+                } catch (...) { Failure = Error{ErrorCategory::Unavailable, "job-outcome-write-exception"}; }
+                if (Failure) { Step = JobStep{JobState::Failed}; Step.error_ = *Failure; }
+            }
             {
                 std::lock_guard Lock(Shared->mutex_);
                 auto& Snapshot = Value->result_.snapshot_;
@@ -362,7 +411,7 @@ namespace hc::operations
                     Step.error_ = Error{ErrorCategory::Internal, "invalid-retry-result"};
                 }
                 if (Step.progress_) { Snapshot.progress_ = std::move(*Step.progress_); Shared->notify(*Value, "job.progress", true); }
-                if (Step.replaceItem_ && (!Step.item_ || *Step.replaceItem_ >= Value->result_.items_.size()
+                if (!Value->result_.outcomes_ && Step.replaceItem_ && (!Step.item_ || *Step.replaceItem_ >= Value->result_.items_.size()
                     || Value->result_.items_[*Step.replaceItem_].item_ != Step.item_->item_
                     || (Value->result_.items_[*Step.replaceItem_].destinationCommitted_ && !Step.item_->destinationCommitted_)
                     || (Value->result_.items_[*Step.replaceItem_].sourceRemoved_ && !Step.item_->sourceRemoved_)))
@@ -372,13 +421,13 @@ namespace hc::operations
                 }
                 if (Step.item_)
                 {
-                    if (!Step.replaceItem_ && Value->result_.items_.size() == Value->request_.maxItemResults_)
+                    if (!Value->result_.outcomes_ && !Step.replaceItem_ && Value->result_.items_.size() == Value->request_.maxItemResults_)
                     { Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::BudgetExceeded, "item-result-budget"}; Step.retry_ = false; }
                     else
                     {
                         if (Step.replaceItem_)
                         {
-                            switch (Value->result_.items_[*Step.replaceItem_].status_)
+                            switch (PreviousItem ? PreviousItem->status_ : Value->result_.items_[*Step.replaceItem_].status_)
                             {
                             case ItemOutcome::Status::Completed: --Snapshot.completedItems_; break;
                             case ItemOutcome::Status::Skipped: --Snapshot.skippedItems_; break;
@@ -391,8 +440,10 @@ namespace hc::operations
                         case ItemOutcome::Status::Skipped: ++Snapshot.skippedItems_; break;
                         case ItemOutcome::Status::Failed: ++Snapshot.failedItems_; break;
                         }
-                        if (Step.replaceItem_) Value->result_.items_[*Step.replaceItem_] = std::move(*Step.item_);
-                        else Value->result_.items_.push_back(std::move(*Step.item_));
+                        if (Step.replaceItem_) {
+                            if (*Step.replaceItem_ < Value->result_.items_.size()) Value->result_.items_[*Step.replaceItem_] = std::move(*Step.item_);
+                        } else if (!Value->result_.outcomes_ || Value->result_.items_.size() < 200)
+                            Value->result_.items_.push_back(std::move(*Step.item_));
                     }
                 }
                 if (Step.retry_)

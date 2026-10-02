@@ -89,6 +89,15 @@ namespace hc::storage
         std::variant<T, Error> value_;
     };
     using Unit = std::monostate;
+    enum class WritePhase { Writing, Prepared, BackedUp, Published, Finished, Aborted };
+    struct WriteRecoveryRecord
+    {
+        std::string transaction_;
+        Locator destination_, stage_, backup_;
+        std::string stageIdentity_, originalIdentity_;
+        WritePhase phase_ = WritePhase::Writing;
+    };
+    using WriteCheckpoint = std::function<Result<std::uint64_t>(const WriteRecoveryRecord&, std::optional<std::uint64_t>)>;
     template<class T> using Task = std::future<Result<T>>;
     template<class T> Task<T> Ready(Result<T> Value)
     {
@@ -146,6 +155,9 @@ namespace hc::storage
         // Legacy caller-requested scope, not a product-wide enumeration cap.
         std::size_t maxEnumerationEntries_ = std::numeric_limits<std::size_t>::max();
         bool denyConcurrentMutation_ = false;
+        // Known output size reserves physical staging space, not total work.
+        std::optional<std::uint64_t> expectedWriteBytes_;
+        WriteCheckpoint writeCheckpoint_;
         bool freshEnumerationMetadata_ = false;
         // Browsing may retain directory-enumeration metadata when opening an
         // individual child is denied. Such entries have no verified revision.
@@ -280,11 +292,13 @@ namespace hc::storage
         virtual Task<Unit> Verify(OperationContext)
         { return Ready<Unit>(Error{ErrorCategory::Unsupported, "content-verification-unavailable"}); }
     };
+    class ISelectionManifest;
     struct CommandContext
     {
         std::string tabId_;
         Locator location_;
         std::vector<ResourceId> selection_;
+        std::shared_ptr<ISelectionManifest> selectionManifest_;
     };
 
     class IProviderRegistry

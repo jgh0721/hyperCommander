@@ -4,6 +4,9 @@
 
 namespace hc::operations
 {
+    QByteArray EncodeOutcome(const ItemOutcome& Item);
+    Result<ItemOutcome> DecodeOutcome(const QByteArray& Bytes);
+    Result<std::shared_ptr<IItemOutcomeStore>> OpenDurableOutcomes(const QString& Path);
     class PagedItemOutcomeStore final : public IItemOutcomeStore
     {
     public:

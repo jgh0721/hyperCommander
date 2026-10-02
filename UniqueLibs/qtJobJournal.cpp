@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QLockFile>
+#include "qtItemOutcomeStore.hpp"
 
 namespace hc::operations
 {
@@ -23,7 +24,7 @@ namespace hc::operations
         QJsonObject Encode(const JobResult& Result)
         {
             const auto& Snapshot = Result.snapshot_; QJsonArray Items, Cleanup;
-            for (const auto& Item : Result.items_)
+            for (const auto& Item : Result.outcomes_ ? std::vector<ItemOutcome>{} : Result.items_)
             {
                 QJsonObject Value{{"item", S(Item.item_)}, {"status", int(Item.status_)}, {"destinationCommitted", Item.destinationCommitted_}, {"sourceRemoved", Item.sourceRemoved_}};
                 if (Item.error_) Value.insert("error", EncodeError(*Item.error_));
@@ -31,15 +32,16 @@ namespace hc::operations
                 Items.append(Value);
             }
             for (const auto& Error : Result.cleanupErrors_) Cleanup.append(EncodeError(Error));
-            QJsonObject Out{{"version", 1}, {"id", S(Snapshot.id_)}, {"correlation", S(Snapshot.correlationId_)}, {"state", int(Snapshot.state_)},
+            QJsonObject Out{{"version", Result.outcomes_ ? 2 : 1}, {"id", S(Snapshot.id_)}, {"correlation", S(Snapshot.correlationId_)}, {"state", int(Snapshot.state_)},
                 {"current", S(Snapshot.progress_.currentItem_)}, {"bytes", QString::number(Snapshot.progress_.bytesDone_)},
                 {"completed", QString::number(Snapshot.completedItems_)}, {"skipped", QString::number(Snapshot.skippedItems_)}, {"failed", QString::number(Snapshot.failedItems_)},
                 {"items", Items}, {"cleanup", Cleanup}};
+            Out.insert("writes", bool(Result.writes_));
             if (Snapshot.error_) Out.insert("error", EncodeError(*Snapshot.error_)); return Out;
         }
         Result<JobResult> Decode(QJsonObject Object)
         {
-            if (Object["version"] != 1 || !Id(Object["id"].toString().toStdString()) || !Object["items"].isArray() || !Object["cleanup"].isArray()) return Failure("job-journal-format");
+            if ((Object["version"] != 1 && Object["version"] != 2) || !Id(Object["id"].toString().toStdString()) || !Object["items"].isArray() || !Object["cleanup"].isArray()) return Failure("job-journal-format");
             const int State = Object["state"].toInt(-1); if (State < 0 || State > int(JobState::Cancelled)) return Failure("job-journal-state");
             JobResult Out; auto& Snapshot = Out.snapshot_; Snapshot.id_ = Object["id"].toString().toStdString(); Snapshot.correlationId_ = Object["correlation"].toString().toStdString();
             Snapshot.state_ = JobState(State); Snapshot.progress_.currentItem_ = Object["current"].toString().toStdString();
@@ -72,6 +74,15 @@ namespace hc::operations
         {
         public:
             explicit FileJournal(QString Directory) : directory_(std::move(Directory)) {}
+            Result<std::shared_ptr<IItemOutcomeStore>> OpenItems(const std::string& JobId) override
+            {
+                if (!Id(JobId)) return Failure("job-journal-id");
+                std::lock_guard Lock(mutex_);
+                if (!QDir::isAbsolutePath(directory_) || !QDir().mkpath(directory_)) return Failure("job-journal-directory");
+                return openItems(JobId);
+            }
+            Result<std::shared_ptr<IItemOutcomeStore>> OpenWrites(const std::string& JobId) override
+            { return OpenItems(JobId + "-writes"); }
             Result<Unit> Checkpoint(const JobResult& Result) override
             {
                 if (!Id(Result.snapshot_.id_)) return Failure("job-journal-id");
@@ -94,15 +105,36 @@ namespace hc::operations
                 QLockFile Guard(QDir(directory_).filePath("writer.lock")); if (!Guard.tryLock(1000)) return Failure("job-journal-busy");
                 const auto Files = QDir(directory_).entryInfoList({"*.json"}, QDir::Files, QDir::Time);
                 if (Files.size() > 1024) return Failure("job-journal-history-full");
-                qint64 Total = 0;
                 for (const auto& Info : Files)
                 {
-                    Total += Info.size(); if (Total > 128LL * 1024 * 1024) return Failure("job-journal-recovery-budget");
                     QFile File(Info.absoluteFilePath()); if (Info.isSymLink() || Info.size() > 16 * 1024 * 1024 || !File.open(QIODevice::ReadOnly)) return Failure("job-journal-read");
                     QJsonParseError Error; const auto Document = QJsonDocument::fromJson(File.readAll(), &Error);
                     if (Error.error != QJsonParseError::NoError || !Document.isObject()) return Failure("job-journal-json");
                     auto Decoded = Decode(Document.object()); if (!Decoded.HasValue()) return Decoded.Failure();
                     if (S(Decoded.Value().snapshot_.id_) + ".json" != Info.fileName()) return Failure("job-journal-id-mismatch");
+                    if (Document.object()["version"] == 2) {
+                        if (!QFile::exists(QDir(directory_).filePath(S(Decoded.Value().snapshot_.id_) + ".items"))) return Failure("job-outcomes-missing");
+                        auto Store = openItems(Decoded.Value().snapshot_.id_); if (!Store.HasValue()) return Store.Failure();
+                        Decoded.Value().outcomes_ = Store.Value();
+                        auto& Snapshot = Decoded.Value().snapshot_;
+                        Snapshot.completedItems_ = Snapshot.skippedItems_ = Snapshot.failedItems_ = 0;
+                        for (uint64_t Row = 0; Row < Store.Value()->Count();) {
+                            auto Page = Store.Value()->Read(Row, 256); if (!Page.HasValue()) return Page.Failure();
+                            for (const auto& Item : Page.Value().items_) {
+                                if (Item.status_ == ItemOutcome::Status::Completed) ++Snapshot.completedItems_;
+                                else if (Item.status_ == ItemOutcome::Status::Skipped) ++Snapshot.skippedItems_;
+                                else ++Snapshot.failedItems_;
+                                if (Decoded.Value().items_.size() < 200) Decoded.Value().items_.push_back(Item);
+                            }
+                            Row += Page.Value().items_.size();
+                        }
+                    }
+                    if (Document.object()["writes"].toBool()) {
+                        const auto Key = Decoded.Value().snapshot_.id_ + "-writes";
+                        if (!QFile::exists(QDir(directory_).filePath(S(Key) + ".items"))) return Failure("job-writes-missing");
+                        auto Writes = openItems(Key); if (!Writes.HasValue()) return Writes.Failure();
+                        Decoded.Value().writes_ = Writes.Value();
+                    }
                     Results.push_back(std::move(Decoded.Value()));
                 }
                 return Results;
@@ -111,11 +143,24 @@ namespace hc::operations
             {
                 if (!Id(JobId)) return Failure("job-journal-id"); std::lock_guard Lock(mutex_);
                 const auto Path = QDir(directory_).filePath(S(JobId) + ".json");
-                if (!QFile::exists(Path)) return Unit{};
+                if (!QDir(directory_).exists()) return Unit{};
                 QLockFile Guard(QDir(directory_).filePath("writer.lock")); if (!Guard.tryLock(1000)) return Failure("job-journal-busy");
-                if (!QFile::remove(Path)) return Failure("job-journal-remove"); return Unit{};
+                if (QFile::exists(Path) && !QFile::remove(Path)) return Failure("job-journal-remove");
+                const auto Items = QDir(directory_).filePath(S(JobId) + ".items");
+                if (QFile::exists(Items) && !QFile::remove(Items)) return Failure("job-outcomes-remove");
+                const auto Writes = QDir(directory_).filePath(S(JobId) + "-writes.items");
+                if (QFile::exists(Writes) && !QFile::remove(Writes)) return Failure("job-writes-remove");
+                stores_.erase(JobId); stores_.erase(JobId + "-writes"); return Unit{};
             }
         private:
+            Result<std::shared_ptr<IItemOutcomeStore>> openItems(const std::string& JobId)
+            {
+                if (auto Existing = stores_[JobId].lock()) return Existing;
+                auto Opened = OpenDurableOutcomes(QDir(directory_).filePath(S(JobId) + ".items"));
+                if (Opened.HasValue()) stores_[JobId] = Opened.Value();
+                return Opened;
+            }
+            std::map<std::string, std::weak_ptr<IItemOutcomeStore>> stores_;
             QString directory_; std::mutex mutex_;
         };
     }
