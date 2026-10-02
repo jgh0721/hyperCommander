@@ -14,6 +14,19 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void numericDateAndProviderFormats()
+    {
+        using namespace hc::columns;
+        FormatOptions Options; Options.grouping_ = true; Options.plusSign_ = true; Options.precision_ = 3;
+        QCOMPARE(Format(CellValue::Ready(quint64(9007199254740993ULL)), Options), QLocale().positiveSign() + QLocale().toString(quint64(9007199254740993ULL)));
+        QCOMPARE(Format(CellValue::Ready(-12.5), Options), QLocale().toString(-12.5, 'f', 3));
+        const auto Raw = CellValue::Ready(3.25).WithDisplay("plugin text"); QCOMPARE(Format(Raw, Options), QString("plugin text"));
+        Options.providerDisplay_ = false; QCOMPARE(Format(Raw, Options), QLocale().positiveSign() + QLocale().toString(3.25, 'f', 3));
+        Options.utc_ = true; Options.datePattern_ = "yyyy/MM/dd HH:mm";
+        QCOMPARE(Format(CellValue::Ready(QDateTime::fromString("2026-10-02T12:30:00+09:00", Qt::ISODate)), Options), QString("2026/10/02 03:30"));
+        auto Profile = DefaultProfile(); Profile.columns_[1].format_ = Options; QVERIFY(DecodeProfile(EncodeProfile(Profile)).value() == Profile);
+    }
+
     void luaColumnsAndDependencyValidation()
     {
         using namespace hc::columns;

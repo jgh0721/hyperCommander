@@ -13,7 +13,7 @@ namespace Qtitan { class Grid; class GridBandedTableView; }
 class QtitanColumnAdapter final : public QObject
 {
 public:
-    QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View);
+    QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View, bool Transient = false);
     void Bind(const ColumnView& Columns);
     void Request();
     void Apply();
@@ -62,6 +62,7 @@ private:
     int nameColumn_ = -1;
     QString viewId_;
     hc::columns::ColumnProfile definition_;
+    bool transient_ = false;
     bool defaultPresentation_ = false;
     bool applying_ = false;
     bool dragging_ = false;

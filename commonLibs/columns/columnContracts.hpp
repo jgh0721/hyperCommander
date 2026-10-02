@@ -69,12 +69,14 @@ namespace hc::columns
         ProviderKind provider_ = ProviderKind::BuiltIn;
         EvaluationCost cost_ = EvaluationCost::Snapshot;
         bool sortable_ = true;
+        Qt::Alignment defaultAlignment_ = {};
     };
     struct FormatOptions
     {
         SizeFormat size_ = SizeFormat::Bytes;
         int precision_ = 2;
         QString datePattern_ = "yyyy-MM-dd HH:mm:ss";
+        bool grouping_ = false, plusSign_ = false, utc_ = false, providerDisplay_ = true;
         bool operator==(const FormatOptions&) const = default;
     };
     struct ColumnDefinition
@@ -227,11 +229,12 @@ namespace hc::columns
     inline QString Format(const CellValue& Value, const FormatOptions& Options = {})
     {
         if (Value.State() != ValueState::Ready) return {};
-        if (!Value.Display().isEmpty()) return Value.Display();
+        if (Options.providerDisplay_ && !Value.Display().isEmpty()) return Value.Display();
         const auto Raw = Value.Raw();
-        if (Raw.metaType() == QMetaType::fromType<QDateTime>()) return Raw.toDateTime().toString(Options.datePattern_);
-        if (Raw.metaType() == QMetaType::fromType<QDate>()) return Raw.toDate().toString(Qt::ISODate);
-        if (Raw.metaType() == QMetaType::fromType<QTime>()) return Raw.toTime().toString(Qt::ISODate);
+        if (Raw.metaType() == QMetaType::fromType<QDateTime>()) return (Options.utc_ ? Raw.toDateTime().toUTC() : Raw.toDateTime().toLocalTime()).toString(Options.datePattern_);
+        if (Raw.metaType() == QMetaType::fromType<QDate>()) return Raw.toDate().toString(Options.datePattern_ == "yyyy-MM-dd HH:mm:ss" ? "yyyy-MM-dd" : Options.datePattern_);
+        if (Raw.metaType() == QMetaType::fromType<QTime>()) return Raw.toTime().toString(Options.datePattern_ == "yyyy-MM-dd HH:mm:ss" ? "HH:mm:ss" : Options.datePattern_);
+        QLocale Locale; if (!Options.grouping_) Locale.setNumberOptions(Locale.numberOptions() | QLocale::OmitGroupSeparator);
         if (Raw.metaType() == QMetaType::fromType<quint64>() && Options.size_ != SizeFormat::Bytes) {
             auto Number = static_cast<double>(Raw.toULongLong());
             int Unit = Options.size_ == SizeFormat::Adaptive ? 0 : int(Options.size_) - 1;
@@ -239,7 +242,15 @@ namespace hc::columns
                 while (Number >= 1024 && Unit < 6) { Number /= 1024; ++Unit; }
             } else for (int Index = 0; Index < Unit; ++Index) Number /= 1024;
             const QStringList Units{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
-            return QLocale().toString(Number, 'f', Options.precision_) + ' ' + Units[Unit];
+            return (Options.plusSign_ ? Locale.positiveSign() : QString{}) + Locale.toString(Number, 'f', Options.precision_) + ' ' + Units[Unit];
+        }
+        QString Number;
+        if (*Value.Type() == FieldType::Integer) Number = Locale.toString(Raw.toLongLong());
+        else if (*Value.Type() == FieldType::UnsignedInteger) Number = Locale.toString(Raw.toULongLong());
+        else if (*Value.Type() == FieldType::Real) Number = Locale.toString(Raw.toDouble(), 'f', Options.precision_);
+        if (!Number.isEmpty()) {
+            if (Options.plusSign_ && !Number.startsWith(Locale.negativeSign())) Number.prepend(Locale.positiveSign());
+            return Number;
         }
         return Raw.toString();
     }

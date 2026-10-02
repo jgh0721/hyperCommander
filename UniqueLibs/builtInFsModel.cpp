@@ -1237,8 +1237,24 @@ QVector<hc::columns::FieldDefinition> CFSModel::AvailableColumns() const
     using namespace hc::columns;
     auto Fields = PluginFields::Instance().Fields(); Fields += ScriptFields(columnView_.profile_);
     if (SnapshotProvider()) for (const auto& Column : SnapshotProvider()->Columns())
-        Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot});
+        Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot, true, Column.flags_ & 4 ? Qt::AlignCenter : Column.flags_ & 1 ? Qt::AlignRight : Qt::AlignLeft});
     return Fields;
+}
+
+QVector<hc::columns::PreviewSample> CFSModel::ColumnSamples(const QStringList& Selection) const
+{
+    using namespace hc::columns; QVector<PreviewSample> Samples;
+    const auto Fields = AvailableColumns();
+    for (const auto& Item : vecNode_) {
+        if (Item->Name_ == "..") continue;
+        PreviewSample Sample; Sample.identity_ = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
+        if (!Selection.isEmpty() && !Selection.contains(Sample.identity_)) continue;
+        Sample.path_ = queryPath(Item); Sample.name_ = Item->Name_; Sample.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+        for (const auto& Field : Fields) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = readField(Item, Field.id_, false, false);
+        if (Item->storageEntry_ && SnapshotProvider()) Sample.source_ = std::make_shared<hc::storage::ProviderContentSource>(SnapshotProvider(), *Item->storageEntry_);
+        Samples.append(std::move(Sample)); if (Samples.size() == 50) break;
+    }
+    return Samples;
 }
 
 QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const

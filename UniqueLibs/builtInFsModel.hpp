@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "columnPreview.hpp"
 
 #include "columnMgr.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
@@ -74,6 +75,7 @@ public:
     void CancelColumnQueries();
     void ResumeColumnQueries();
     QVector<hc::columns::FieldDefinition> AvailableColumns() const;
+    QVector<hc::columns::PreviewSample> ColumnSamples(const QStringList& Selection = {}) const;
     int PendingColumnQueries() const { return columnQueries_->Pending(); }
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;

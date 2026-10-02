@@ -8,6 +8,7 @@ namespace hc::columns {
     public:
         static PluginFields& Instance();
         void Refresh();
+        void RefreshIfChanged();
         QVector<FieldDefinition> Fields() const;
         bool Descending(const QString& Field) const;
         QueryEngine::Loader Loader(bool Explicit = false) const;
@@ -19,6 +20,7 @@ namespace hc::columns {
         struct State;
         std::shared_ptr<State> state_;
         QString status_;
+        QByteArray configuration_;
         bool busy_ = false, refreshAgain_ = false;
     };
 }

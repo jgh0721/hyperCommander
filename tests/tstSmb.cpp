@@ -105,7 +105,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -662,12 +662,17 @@ private slots:
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(0)); auto Profile = DefaultProfile();
         Profile.columns_[1].fieldId_ = Integer; Profile.columns_[2].fieldId_ = Real; Profile.columns_[3].fieldId_ = Demand;
         Profile.columns_[4].fieldId_ = Delayed; Profile.columns_[4].widths_[0].hidden_ = false;
+        ScriptDefinition Derived; Derived.title_ = "WDX derived"; Derived.dependencies_ = {Integer}; Derived.outputs_ = {{"next", "Next", FieldType::Integer}};
+        Derived.source_ = "return function(item) return {next=item['" + Integer + "']+1} end"; Profile.scripts_.append(Derived);
+        Profile.columns_[5].fieldId_ = ScriptPrefix(Derived) + "next"; Profile.columns_[5].widths_[0].hidden_ = false;
+        Profile.sorts_ = {{Profile.columns_[5].id_, Qt::DescendingOrder}, {Profile.columns_[1].id_, Qt::AscendingOrder}};
         QVERIFY(View->ApplyColumnProfile(Profile));
         int Row = 0; for (; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "data.dll") break; QVERIFY(Row < Model->rowCount());
         QTRY_COMPARE(Model->index(Row, 1).data().toString(), QString("9007199254740993"));
         QTRY_COMPARE(Model->index(Row, 2).data().toString(), QString("표시값"));
         QCOMPARE(Model->index(Row, 2).data(CFsModelT::USR_ROLE_SORT).toDouble(), 32.5);
         QTRY_COMPARE(Model->index(Row, 4).data().toString(), QString("resolved"));
+        QTRY_COMPARE(Model->index(Row, 5).data(CFsModelT::USR_ROLE_SORT).toLongLong(), qint64(9007199254740994LL));
         Model->index(Row, 3).data(); QTRY_COMPARE(Model->index(Row, 3).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::OnDemand));
         Model->ResumeColumnQueries(); QTRY_COMPARE(Model->index(Row, 3).data().toString(), QString("explicit"));
         Settings.SetPlugins("wdx", {}); Catalog.clear(); PluginFields::Instance().Refresh(); QTRY_VERIFY(Catalog.count());
@@ -734,6 +739,64 @@ private slots:
         const auto ScrollMs = Clock.elapsed(); Clock.restart(); Model->CancelColumnQueries(); const auto CancelMs = Clock.elapsed();
         qInfo() << "100k column baseline load/sort/20-scroll/cancel ms" << LoadMs << SortMs << ScrollMs << CancelMs;
         QCOMPARE(Model->PendingColumnQueries(), 0); QVERIFY(CancelMs < 500);
+    }
+    void columnPreviewAndScopesUi()
+    {
+        using namespace hc::columns;
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace(); });
+        QTemporaryDir Directory; QImage Image(16, 8, QImage::Format_RGBA8888); Image.fill(Qt::blue); QVERIFY(Image.save(Directory.filePath("picture.png")));
+        { QFile File(Directory.filePath("a.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("sample"); }
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        hc::workspace::TabState Tab; Tab.id_ = "columns-preview"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Left->RestoreWorkspace(Pane); Pane.tabs_[0].id_ += "-right"; Right->RestoreWorkspace(Pane);
+        QTRY_VERIFY(!model(Left)->IsLoading() && names(model(Left)).contains("picture.png")); QTRY_VERIFY(!model(Right)->IsLoading());
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Other = static_cast<CGridView*>(Right->GetFocusView(0));
+        auto* Model = static_cast<CFSModel*>(model(Left)); auto Profile = DefaultProfile();
+        ScriptDefinition Script; Script.title_ = "Pixels"; Script.outputs_ = {{"area", "Area", FieldType::Integer}};
+        Script.dependencies_ = {"file.imageWidth", "file.imageHeight"}; Script.source_ = "return function(item) return {area=item['file.imageWidth']*item['file.imageHeight']} end";
+        Profile.scripts_.append(Script); Profile.columns_[1].fieldId_ = ScriptPrefix(Script) + "area"; Profile.columns_[2].fieldId_ = "file.imageWidth";
+        QVERIFY(View->ApplyColumnProfile(Profile)); int Row = -1; for (int Index = 0; Index < Model->rowCount(); ++Index) if (Model->GetName(Model->index(Index, 0)) == "picture.png") Row = Index;
+        const auto Key = hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_); View->RestoreSelection({Key}, Key);
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); auto* Preview = Editor->findChild<QTableWidget*>("hc.columns.preview"); auto* Mode = Editor->findChild<QComboBox*>("hc.columns.sampleMode");
+        Mode->setCurrentIndex(2); QCOMPARE(Preview->rowCount(), 1); QVERIFY(Preview->item(0, 1)->text() != "128");
+        auto* Calculate = Editor->findChild<QPushButton*>("hc.columns.calculate"); Calculate->click();
+        Editor->findChild<QPushButton*>("hc.columns.stopPreview")->click(); QTest::qWait(100);
+        QVERIFY(Preview->item(0, 1)->text() != "128"); // Cancelled work cannot populate the draft afterwards.
+        Calculate->click();
+        QTRY_COMPARE(Preview->item(0, 1)->text(), QString("128")); QCOMPARE(Preview->item(0, 2)->text(), QString("16"));
+        Preview->setCurrentCell(0, 1); QVERIFY(Editor->findChild<QLabel*>("hc.columns.valueDetail")->text().contains("128"));
+        Editor->findChild<QListWidget*>("hc.columns.list")->setCurrentRow(1); Editor->findChild<QCheckBox*>("hc.columns.plusSign")->setChecked(true);
+        QCOMPARE(Preview->item(0, 1)->text(), QString("+128")); // A format edit keeps ready values and starts no new query.
+        auto* Search = Editor->findChild<QLineEdit*>("hc.columns.search"); Search->setText("imageWidth");
+        auto* Field = Editor->findChild<QComboBox*>("hc.columns.field"); QVERIFY(Field->findData("file.imageWidth") >= 0); QVERIFY(Field->findData("file.company") < 0); Search->clear();
+        Mode->setCurrentIndex(3); Editor->findChild<QLineEdit*>("hc.columns.samplePath")->setText(Directory.filePath("picture.png"));
+        Editor->findChild<QPushButton*>("hc.columns.readSample")->click(); QTRY_COMPARE(Preview->rowCount(), 1); QTRY_COMPARE(Preview->item(0, 0)->text(), QString("picture.png"));
+        Calculate->click(); QTRY_COMPARE(Preview->item(0, 1)->text(), QString("+128")); Editor->findChild<QPushButton*>("hc.columns.stopPreview")->click();
+        Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(2); QVERIFY(Dialog.SaveSettings());
+        QVERIFY(View->ColumnProfile() == Other->ColumnProfile()); QCOMPARE(View->CaptureSelection(), QStringList{Key});
+        const auto Applied = View->ColumnProfile(); Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(3);
+        auto* Title = Editor->findChild<QLineEdit*>("hc.columns.title"); Title->setFocus(); Title->selectAll(); QTest::keyClicks(Title, "New tab only");
+        QVERIFY(Dialog.SaveSettings()); QVERIFY(View->ColumnProfile() == Applied); QVERIFY(Other->ColumnProfile() == Applied);
+        const auto Default = DecodeProfile(Settings.Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Defaults/" + View->ColumnWidths()->PaneKey()].toObject());
+        QVERIFY(Default); QCOMPARE(Default->columns_[1].title_, QString("New tab only"));
+        auto* Native = Editor->findChild<Qtitan::Grid*>("hc.columns.previewGrid")->view<Qtitan::GridBandedTableView>();
+        QTRY_COMPARE(Native->modelController()->getGridRowCount(), 1);
+        QCOMPARE(Native->getRow(0).modelIndex(0).data().toString(), QString("picture.png"));
+        QCOMPARE(Native->getRow(0).modelIndex(1).data().toString(), QString("+128"));
+        QTest::qWait(150); // Let the native grid finish its deferred layout before capturing pixels.
+        QModelRoleData Roles[]{QModelRoleData(Qt::DecorationRole)}; Qtitan::GridModelDataBinding::ModelRoleData Span(Roles);
+        QVERIFY(Native->modelController()->getModelMultiValue(Native->getRow(0).modelIndex(0), Span));
+        QCOMPARE(Roles[0].data().value<QIcon>().cacheKey(), Preview->item(0, 0)->icon().cacheKey());
+        qInfo() << "Column dialog / minimum / preferred:" << Dialog.size() << Dialog.minimumSizeHint() << Dialog.sizeHint();
+        QVERIFY(Dialog.height() <= Dialog.screen()->availableGeometry().height());
+        QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/columns-stage7-preview.png")); Dialog.reject();
+        QMainOpts Failure(main_); Failure.SetListView(View); Failure.ShowListSettingsPage(); Failure.show(); QCoreApplication::processEvents();
+        auto* Draft = Failure.findChild<QtColumnProfileEditor*>(); Draft->findChild<QPushButton*>("hc.columns.add")->click();
+        QLockFile Lock(Settings.FileName() + ".lock"); QVERIFY(Lock.tryLock());
+        QTimer Close; connect(&Close, &QTimer::timeout, &Failure, [] { for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Message = qobject_cast<QMessageBox*>(Widget)) Message->reject(); }); Close.start(10);
+        QVERIFY(!Failure.SaveSettings()); Close.stop(); Lock.unlock(); QVERIFY(View->ColumnProfile() == Applied); QVERIFY(Draft->Dirty()); Failure.reject();
     }
     void columnTemplatesAndAsyncUi()
     {
@@ -846,7 +909,7 @@ private slots:
         Editor->findChild<QComboBox*>("hc.columns.unit")->setCurrentIndex(0);
         Editor->findChild<QDoubleSpinBox*>("hc.columns.width")->setValue(220);
         Editor->findChild<QComboBox*>("hc.columns.layout")->setCurrentIndex(2);
-        QCOMPARE(Editor->findChild<QTableWidget*>("hc.columns.preview")->rowCount(), 6);
+        QCOMPARE(Editor->findChild<QTableWidget*>("hc.columns.preview")->rowCount(), 3);
         Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(1);
         QCOMPARE(model(Left)->columnCount(), 8); QCOMPARE(View->CaptureWorkspaceView(), Before);
         QVERIFY(Editor->ValidateDraft()); QVERIFY(Dialog.SaveSettings());
@@ -1229,9 +1292,24 @@ hc.events.unsubscribe(sub)
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
         QVERIFY(!Model->LastNavigationError()); QVERIFY(Model->GetRoot()->IsRemote());
         QCOMPARE(Model->WorkspaceLocation().kind_, hc::storage::LocatorKind::Smb);
+        using namespace hc::columns;
+        auto Profile = DefaultProfile(); ScriptDefinition Script; Script.title_ = "SMB snapshot";
+        Script.dependencies_ = {"file.name"}; Script.outputs_ = {{"label", "Label", FieldType::Text}};
+        Script.source_ = "return function(item) return {label=item['file.name']..':SMB'} end";
+        Profile.scripts_.append(Script); Profile.columns_[1].fieldId_ = ScriptPrefix(Script) + "label";
+        QVERIFY(static_cast<CGridView*>(Panel->GetFocusView(0))->ApplyColumnProfile(Profile));
+        const auto CheckColumn = [&] {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) != "..") {
+                const auto Cell = Model->index(Row, 1); Cell.data();
+                QTRY_COMPARE_WITH_TIMEOUT(Cell.data().toString(), Model->GetName(Model->index(Row, 0)) + ":SMB", 10000); return;
+            }
+            QFAIL("The authorized SMB share must contain a sample entry");
+        };
+        CheckColumn();
         const auto Expected = names(Model); const auto Saved = Panel->CaptureWorkspace();
         Panel->RestoreWorkspace(Saved); Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(!Model->LastNavigationError()); QCOMPARE(names(Model), Expected);
+        CheckColumn();
         auto Missing = Saved; Missing.tabs_[0].location_.root_ += "\\__hc_m7_missing_" + QUuid::createUuid().toString(QUuid::Id128).toStdString();
         Panel->RestoreWorkspace(Missing); Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->rowCount(), 0);
@@ -1316,7 +1394,20 @@ hc.events.unsubscribe(sub)
         Panel->ReturnOnCurrentTab(Selected);
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot()).kind_ == hc::storage::LocatorKind::Archive, 10000);
         QVERIFY(names(Model).contains("한글.txt"));
-        qInfo() << "Built-in ISO create, inspect, read test and automatic archive navigation passed";
+        const auto PreviousProfile = Grid->ColumnProfile(); auto PreviewProfile = PreviousProfile;
+        PreviewProfile.columns_[1].fieldId_ = "file.allocatedSize"; PreviewProfile.columns_[1].format_ = {};
+        QVERIFY(Grid->ApplyColumnProfile(PreviewProfile));
+        {
+            QMainOpts Options(main_); Options.SetListView(Grid); Options.ShowListSettingsPage(); Options.show(); QCoreApplication::processEvents();
+            Options.findChild<QComboBox*>("hc.columns.sampleMode")->setCurrentIndex(1);
+            Options.findChild<QCheckBox*>("hc.columns.extractSamples")->setChecked(true);
+            Options.findChild<QPushButton*>("hc.columns.calculate")->click();
+            auto* Preview = Options.findChild<QTableWidget*>("hc.columns.preview"); QCOMPARE(Preview->rowCount(), 1);
+            QTRY_VERIFY2_WITH_TIMEOUT(Preview->item(0, 1)->text().toULongLong() > 0, qPrintable(Preview->item(0, 1)->toolTip()), 10000);
+            Options.reject();
+        }
+        QVERIFY(Grid->ApplyColumnProfile(PreviousProfile));
+        qInfo() << "Built-in ISO create, inspect, read test, archive navigation and extracted column preview passed";
     }
 
     void networkDriveStartup()
@@ -2087,9 +2178,17 @@ hc.events.unsubscribe(sub)
             const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Format); QCOMPARE(Choices.size(), 1u); QVERIFY(Choices.front().options_.approval_.approved_);
             QCOMPARE(Choices.front().options_.binaryPath_, Binary);
         }
+        QTemporaryDir WdxPackage; const auto WdxBinary = WdxPackage.filePath("data.dll"); QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_tc_data_fixture.dll", WdxBinary));
+        QFile WdxFile(WdxBinary); QVERIFY(WdxFile.open(QIODevice::ReadOnly)); PluginManifest Wdx;
+        Wdx.id_ = "mixed.wdx"; Wdx.version_ = "1"; Wdx.binary_ = "data.dll"; Wdx.format_ = PluginFormat::Wdx; Wdx.extensions_ = {Extension::Metadata}; Wdx.permissions_ = {Permission::ReadContent};
+        Wdx.sha256_ = QCryptographicHash::hash(WdxFile.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); WdxFile.close();
+        QFile WdxJson(WdxPackage.filePath("wdx.json")); QVERIFY(WdxJson.open(QIODevice::WriteOnly)); WdxJson.write(EncodeManifest(Wdx)); WdxJson.close();
+        hc::settings::AppSettings().SetPlugins("wdx", QJsonArray{QJsonObject{{"path",WdxBinary},{"hostEnabled",true},{"hostManifest",WdxJson.fileName()},{"hostReviewed",hc::settings::JsonObject(EncodeManifest(Wdx))}}});
         QSignalSpy ColumnCatalog(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed);
         hc::columns::PluginFields::Instance().Refresh(); QTRY_VERIFY_WITH_TIMEOUT(ColumnCatalog.count(), 10000);
-        QString ViewerField;
+        QString ViewerField, WdxField;
+        for (const auto& Field : hc::columns::PluginFields::Instance().Fields()) if (Field.id_.startsWith("wdx.") && Field.id_.endsWith(".0.0")) WdxField = Field.id_;
+        QVERIFY2(!WdxField.isEmpty(), qPrintable(hc::columns::PluginFields::Instance().Status()));
         for (const auto& Field : hc::columns::PluginFields::Instance().Fields()) if (Field.id_.startsWith("dopusviewer.") && Field.id_.endsWith(".1.0")) ViewerField = Field.id_;
         QVERIFY(!ViewerField.isEmpty());
         auto MetadataRead = QtConcurrent::run([Load = hc::columns::PluginFields::Instance().Loader(), Path = Root.filePath("sample.bitmap"), ViewerField] { return Load(Path, ViewerField, {}); });
@@ -2114,14 +2213,31 @@ hc.events.unsubscribe(sub)
         const auto VfsColumns = Model->SnapshotProvider()->Columns(); QCOMPARE(VfsColumns.size(), 3u);
         auto ColumnProfile = hc::columns::DefaultProfile(); ColumnProfile.columns_[1].fieldId_ = QString::fromStdString(VfsColumns[0].key_);
         ColumnProfile.columns_[2].fieldId_ = QString::fromStdString(VfsColumns[1].key_); ColumnProfile.columns_[3].fieldId_ = ViewerField;
+        hc::columns::ScriptDefinition VfsScript; VfsScript.title_ = "VFS derived"; VfsScript.dependencies_ = {ColumnProfile.columns_[1].fieldId_};
+        VfsScript.outputs_ = {{"double", "Double", hc::columns::FieldType::Integer}};
+        VfsScript.source_ = "return function(item) return {double=item['" + ColumnProfile.columns_[1].fieldId_ + "']*2} end"; ColumnProfile.scripts_.append(VfsScript);
+        ColumnProfile.columns_[4].fieldId_ = hc::columns::ScriptPrefix(VfsScript) + "double"; ColumnProfile.columns_[4].widths_[0].hidden_ = false;
+        ColumnProfile.columns_[5].fieldId_ = WdxField; ColumnProfile.columns_[5].widths_[0].hidden_ = false;
+        ColumnProfile.sorts_ = {{ColumnProfile.columns_[4].id_, Qt::DescendingOrder}, {ColumnProfile.columns_[1].id_, Qt::AscendingOrder}};
         QVERIFY(Grid->ApplyColumnProfile(ColumnProfile));
         for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "sample.bitmap") {
             QCOMPARE(Model->index(Row, 2).data().toString(), QString("VFS value 한글"));
             QCOMPARE(Model->index(Row, 1).data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(13));
             QCOMPARE(Model->index(Row, 3).data(CFSModel::ColumnStateRole).toInt(), int(hc::columns::ValueState::Unsupported)); // No extraction to feed the viewer.
         }
-        QMainOpts ColumnsDialog(main_); ColumnsDialog.SetListView(Grid); ColumnsDialog.ShowListSettingsPage();
-        auto* FieldChoice = ColumnsDialog.findChild<QComboBox*>("hc.columns.field"); QVERIFY(FieldChoice->findData(ColumnProfile.columns_[2].fieldId_) >= 0);
+        {
+            QMainOpts ColumnsDialog(main_); ColumnsDialog.SetListView(Grid); ColumnsDialog.ShowListSettingsPage(); ColumnsDialog.show(); QCoreApplication::processEvents();
+            auto* FieldChoice = ColumnsDialog.findChild<QComboBox*>("hc.columns.field"); QVERIFY(FieldChoice->findData(ColumnProfile.columns_[2].fieldId_) >= 0);
+            ColumnsDialog.findChild<QComboBox*>("hc.columns.sampleMode")->setCurrentIndex(1);
+            auto* Preview = ColumnsDialog.findChild<QTableWidget*>("hc.columns.preview"); QCOMPARE(Preview->rowCount(), 1);
+            auto* Calculate = ColumnsDialog.findChild<QPushButton*>("hc.columns.calculate"); Calculate->click();
+            QTRY_COMPARE(Preview->item(0, 4)->text(), QString("26")); QTRY_COMPARE(Preview->item(0, 3)->text(), QString("지원 안 함"));
+            ColumnsDialog.findChild<QCheckBox*>("hc.columns.extractSamples")->setChecked(true); Calculate->click();
+            QTRY_VERIFY2_WITH_TIMEOUT(Preview->item(0, 3)->text() == "2", qPrintable(Preview->item(0, 3)->toolTip()), 15000);
+            QTRY_COMPARE_WITH_TIMEOUT(Preview->item(0, 5)->text(), QString("9007199254740993"), 15000);
+            QCOMPARE(Preview->item(0, 1)->text(), QString("13")); QCOMPARE(Preview->item(0, 4)->text(), QString("26"));
+            QVERIFY(ColumnsDialog.grab().save(QCoreApplication::applicationDirPath() + "/columns-mixed-providers.png")); ColumnsDialog.reject();
+        }
         for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
         {
             Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);

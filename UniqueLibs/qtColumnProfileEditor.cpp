@@ -2,8 +2,14 @@
 #include "qtColumnProfileEditor.hpp"
 #include "cmnHCUtils.hpp"
 #include <QScrollArea>
+#include <QFileIconProvider>
 #include "columnPluginFields.hpp"
-#include "commonLibs/scripting/luaRuntime.hpp"
+#include "commonLibs/columns/luaColumns.hpp"
+#include "nativeMaterializer.hpp"
+#include "storageProviders.hpp"
+#include "qtitanColumnAdapter.hpp"
+#include "column_Defs.hpp"
+#include <QtitanGrid.h>
 #include "commonLibs/columns/columnSort.hpp"
 
 using namespace hc::columns;
@@ -40,6 +46,7 @@ namespace
 QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
 {
     setObjectName("hc.columns.editor");
+    installEventFilter(this);
     auto* Root = new QVBoxLayout(this); Root->setContentsMargins(0, 0, 0, 0);
     auto* ProfileBar = new QHBoxLayout;
     profiles_ = Choice(this, "hc.columns.profiles", {});
@@ -50,7 +57,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* Delete = new QPushButton(tr("삭제"), this); deleteProfile_ = Delete; ProfileBar->addWidget(Delete); Root->addLayout(ProfileBar);
     auto* Modes = new QHBoxLayout;
     layout_ = Choice(this, "hc.columns.layout", {tr("한 줄"), tr("두 줄: 이름 위"), tr("두 줄: 이름 아래")});
-    scope_ = Choice(this, "hc.columns.scope", {tr("현재 탭"), tr("현재 탭 + 이 패널의 새 탭 기본값")});
+    scope_ = Choice(this, "hc.columns.scope", {tr("현재 탭"), tr("현재 탭 + 이 패널의 새 탭 기본값"), tr("양쪽 패널의 현재 탭"), tr("이 패널의 새 탭 기본값만")});
     Modes->addWidget(new QLabel(tr("표시 모드"))); Modes->addWidget(layout_, 1);
     Modes->addWidget(new QLabel(tr("적용 범위"))); Modes->addWidget(scope_, 2); Root->addLayout(Modes);
     auto* Split = new QSplitter(this); Root->addWidget(Split, 3);
@@ -88,6 +95,10 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         Scroll->setWidget(Page); Details->addTab(Scroll, Title);
     };
     auto* Content = new QWidget; auto* Form = new QFormLayout(Content);
+    fieldSearch_ = new QLineEdit(Content); fieldSearch_->setObjectName("hc.columns.search"); fieldSearch_->setPlaceholderText(tr("필드 이름 또는 식별자 검색"));
+    fieldCategory_ = Choice(Content, "hc.columns.category", {tr("전체"), tr("내장"), "WDX", "DOpus", "Lua"});
+    fieldInfo_ = new QLabel(Content); fieldInfo_->setObjectName("hc.columns.fieldInfo"); fieldInfo_->setWordWrap(true);
+    Form->addRow(tr("검색"), fieldSearch_); Form->addRow(tr("공급자"), fieldCategory_);
     field_ = Choice(Content, "hc.columns.field", {});
     for (const auto& Field : availableFields()) field_->addItem(Field.title_ + (Field.cost_ == EvaluationCost::Background ? tr(" (비동기)") : QString{}), Field.id_);
     field_->addItem(tr("복합 템플릿"), QString{});
@@ -108,6 +119,12 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     precision_ = new QSpinBox(Content); precision_->setObjectName("hc.columns.precision"); precision_->setRange(0, 6);
     dateFormat_ = Choice(Content, "hc.columns.dateFormat", {"yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "HH:mm:ss", "yyyy/MM/dd HH:mm"}); dateFormat_->setEditable(true);
     Form->addRow(tr("내용"), field_); Form->addRow(tr("템플릿"), TemplateRow); Form->addRow(tr("정렬 값"), sortField_); Form->addRow(tr("컬럼 제목"), title_); Form->addRow(tr("내용 정렬"), alignment_);
+    Form->addRow(fieldInfo_);
+    grouping_ = new QCheckBox(tr("숫자 자릿수 구분"), Content); grouping_->setObjectName("hc.columns.grouping");
+    plusSign_ = new QCheckBox(tr("양수에 + 표시"), Content); plusSign_->setObjectName("hc.columns.plusSign");
+    utc_ = new QCheckBox(tr("날짜·시간을 UTC로 표시"), Content); utc_->setObjectName("hc.columns.utc");
+    providerDisplay_ = new QCheckBox(tr("플러그인 표시 문자열 사용"), Content); providerDisplay_->setObjectName("hc.columns.providerDisplay");
+    Form->addRow(grouping_); Form->addRow(plusSign_); Form->addRow(utc_); Form->addRow(providerDisplay_);
     Form->addRow(primary_); Form->addRow(tr("크기 형식"), sizeFormat_); Form->addRow(tr("소수 자릿수"), precision_); Form->addRow(tr("날짜 형식"), dateFormat_);
     auto* FormatNote = new QLabel(tr("같은 필드를 여러 컬럼에 추가해 서로 다른 형식으로 표시할 수 있습니다. 정렬은 원래 값을 기준으로 합니다."), Content);
     FormatNote->setWordWrap(true); Form->addRow(FormatNote); AddScrollableTab(Content, tr("내용·형식"));
@@ -124,7 +141,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     WidthForm->addRow(tr("최소값"), minimum_); WidthForm->addRow(tr("최대값"), maximum_); WidthForm->addRow(visible_);
     auto* WidthNote = new QLabel(tr("모드마다 너비와 표시 여부를 따로 저장합니다. 두 줄 모드의 주 이름은 별도 줄을 사용합니다."), Widths);
     WidthNote->setWordWrap(true); WidthForm->addRow(WidthNote); AddScrollableTab(Widths, tr("너비·표시"));
-    auto* Lua = new QWidget; auto* LuaForm = new QFormLayout(Lua);
+    auto* Lua = new QWidget; auto* LuaForm = new QFormLayout(Lua); LuaForm->setRowWrapPolicy(QFormLayout::WrapAllRows); LuaForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     scripts_ = Choice(Lua, "hc.columns.scripts", {});
     auto* ScriptBar = new QHBoxLayout; ScriptBar->addWidget(scripts_, 1);
     auto* AddScript = new QPushButton(tr("추가"), Lua); AddScript->setObjectName("hc.columns.addScript"); ScriptBar->addWidget(AddScript);
@@ -157,13 +174,14 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     connect(scriptOutputs_, &QPlainTextEdit::textChanged, this, [this] { storeScript(); });
     connect(scriptEnabled_, &QCheckBox::toggled, this, [this] { storeScript(); });
     Split->setStretchFactor(0, 2); Split->setStretchFactor(1, 3); Split->setChildrenCollapsible(false);
+    auto* SortingPage = new QWidget; auto* SortingLayout = new QVBoxLayout(SortingPage);
     auto* Sorting = new QHBoxLayout;
     sort_ = Choice(this, "hc.columns.sort", {}); sortOrder_ = Choice(this, "hc.columns.sortOrder", {tr("오름차순"), tr("내림차순")});
-    Sorting->addWidget(new QLabel(tr("정렬 기준"))); Sorting->addWidget(sort_, 1); Sorting->addWidget(sortOrder_); Root->addLayout(Sorting);
+    Sorting->addWidget(new QLabel(tr("정렬 기준"))); Sorting->addWidget(sort_, 1); Sorting->addWidget(sortOrder_); SortingLayout->addLayout(Sorting);
     auto* AddSort = new QPushButton(tr("정렬 추가"), this); AddSort->setObjectName("hc.columns.addSort"); Sorting->addWidget(AddSort);
     auto* RemoveSort = new QPushButton(tr("정렬 제거"), this); Sorting->addWidget(RemoveSort);
-    sortRules_ = new QListWidget(this); sortRules_->setObjectName("hc.columns.sortRules"); sortRules_->setMaximumHeight(80); Root->addWidget(sortRules_);
-    auto* Priority = new QHBoxLayout; Root->addLayout(Priority); Priority->addStretch();
+    sortRules_ = new QListWidget(this); sortRules_->setObjectName("hc.columns.sortRules"); sortRules_->setMinimumHeight(100); SortingLayout->addWidget(sortRules_, 1);
+    auto* Priority = new QHBoxLayout; SortingLayout->addLayout(Priority); Priority->addStretch();
     for (int Direction : {-1, 1}) {
         auto* Move = new QPushButton(Direction < 0 ? tr("우선순위 올림") : tr("우선순위 내림"), this);
         Move->setObjectName(Direction < 0 ? "hc.columns.sortUp" : "hc.columns.sortDown"); Priority->addWidget(Move);
@@ -185,9 +203,57 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         if (loading_ || Row < 0 || Row >= draft_.sorts_.size()) return;
         const QSignalBlocker One(sort_), Two(sortOrder_); sort_->setCurrentIndex(sort_->findData(IdText(draft_.sorts_[Row].columnId_))); sortOrder_->setCurrentIndex(draft_.sorts_[Row].order_ == Qt::DescendingOrder);
     });
-    Root->addWidget(new QLabel(tr("예제 미리 보기"), this));
+    AddScrollableTab(SortingPage, tr("정렬"));
+    auto* Samples = new QHBoxLayout; Root->addLayout(Samples);
+    sampleMode_ = Choice(this, "hc.columns.sampleMode", {tr("예제"), tr("현재 폴더 (최대 50개)"), tr("선택 항목"), tr("경로로 지정")}); Samples->addWidget(sampleMode_, 1);
+    Samples->addWidget(new QLabel(tr("폭"), this)); previewWidth_ = new QSpinBox(this); previewWidth_->setObjectName("hc.columns.previewWidth"); previewWidth_->setRange(0, 8000); previewWidth_->setSpecialValueText(tr("창 너비")); Samples->addWidget(previewWidth_);
+    connect(previewWidth_, &QSpinBox::valueChanged, this, &QtColumnProfileEditor::layoutPreview);
+    auto* Calculate = new QPushButton(tr("값 계산"), this); Calculate->setObjectName("hc.columns.calculate"); Samples->addWidget(Calculate);
+    auto* Stop = new QPushButton(tr("중지"), this); Stop->setObjectName("hc.columns.stopPreview"); Samples->addWidget(Stop);
+    auto* Manual = new QHBoxLayout; Root->addLayout(Manual);
+    samplePath_ = new QLineEdit(this); samplePath_->setObjectName("hc.columns.samplePath"); samplePath_->setPlaceholderText(tr("미리 볼 파일 또는 폴더의 전체 경로")); Manual->addWidget(samplePath_, 1);
+    auto* ReadSample = new QPushButton(tr("표본 읽기"), this); ReadSample->setObjectName("hc.columns.readSample"); Manual->addWidget(ReadSample);
+    samplePath_->hide(); ReadSample->hide();
+    extractSamples_ = new QCheckBox(tr("가상 파일을 임시 파일로 풀어 조회 (파일당 64 MiB 이하)"), this); extractSamples_->setObjectName("hc.columns.extractSamples"); Root->addWidget(extractSamples_);
+    sampleStatus_ = new QLabel(this); sampleStatus_->setObjectName("hc.columns.sampleStatus"); sampleStatus_->setWordWrap(true); Root->addWidget(sampleStatus_);
+    previewQueries_ = std::make_unique<QueryEngine>(QueryEngine::Loader{}, this);
+    previewQueries_->Changed = [this](const auto&) { updatePreview(); };
+    connect(Calculate, &QPushButton::clicked, this, &QtColumnProfileEditor::startPreview);
+    connect(Stop, &QPushButton::clicked, this, [this] { stopPreview(); updatePreview(); });
+    connect(ReadSample, &QPushButton::clicked, this, &QtColumnProfileEditor::loadManualSamples);
+    connect(sampleMode_, &QComboBox::currentIndexChanged, this, [this, ReadSample] {
+        stopPreview(); ++manualGeneration_; samplePath_->setVisible(sampleMode_->currentIndex() == 3); ReadSample->setVisible(sampleMode_->currentIndex() == 3); updatePreview();
+    });
+    connect(extractSamples_, &QCheckBox::toggled, this, [this] { stopPreview(); updatePreview(); });
     preview_ = new QTableWidget(this); preview_->setObjectName("hc.columns.preview"); preview_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    preview_->viewport()->installEventFilter(this); preview_->verticalHeader()->hide(); preview_->setSelectionBehavior(QAbstractItemView::SelectRows); preview_->setMinimumHeight(130); Root->addWidget(preview_, 2);
+    preview_->viewport()->installEventFilter(this); preview_->verticalHeader()->hide(); preview_->setSelectionBehavior(QAbstractItemView::SelectRows); preview_->hide();
+    previewGrid_ = new Qtitan::Grid(this); previewGrid_->setObjectName("hc.columns.previewGrid"); previewGrid_->setProperty("hc.fileGrid", true); previewGrid_->setViewType(Qtitan::Grid::BandedTableView);
+    auto* PreviewView = previewGrid_->view<Qtitan::GridBandedTableView>(); PreviewView->options().setAutoCreateColumns(false); PreviewView->options().setGroupsHeader(false);
+    PreviewView->options().setColumnMovingEnabled(false); PreviewView->options().setFieldChooserEnabled(false); PreviewView->options().setGridLines(Qtitan::LinesNone);
+    PreviewView->setFileManagerMode(true); PreviewView->options().setModelDecoration(true); PreviewView->options().setRowAutoHeight(true); PreviewView->tableOptions().setColumnsQuickCustomization(false);
+    PreviewView->bandedOptions().setBandsHeader(false); PreviewView->bandedOptions().setBandsQuickCustomization(false); PreviewView->addBand("Preview");
+    previewAdapter_ = new QtitanColumnAdapter(this, previewGrid_, PreviewView, true);
+    previewFrame_ = new QScrollArea(this); previewFrame_->setObjectName("hc.columns.previewFrame"); previewFrame_->setFrameShape(QFrame::NoFrame); previewFrame_->setWidget(previewGrid_); previewFrame_->setMinimumHeight(140); previewFrame_->setMaximumHeight(260); previewFrame_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding); Root->addWidget(previewFrame_, 1);
+    previewFrame_->viewport()->installEventFilter(this);
+    connect(PreviewView, &Qtitan::GridViewBase::cellClicked, this, [this](Qtitan::CellClickEventArgs* Args) {
+        const auto Index = Args->cell().modelIndex(); if (Index.isValid()) preview_->setCurrentCell(Index.row(), Index.column());
+    });
+    connect(PreviewView, &Qtitan::GridViewBase::focusRowChanged, this, [this, PreviewView](int, int Row) {
+        if (Row < 0 || Row >= preview_->rowCount()) return;
+        const auto Index = PreviewView->getRow(Row).modelIndex(std::max(0, preview_->currentColumn()));
+        if (Index.isValid()) preview_->setCurrentCell(Index.row(), Index.column());
+    });
+    connect(PreviewView, &Qtitan::GridViewBase::focusColumnChanged, this, [this, PreviewView](int, int Column) {
+        if (Column < 0 || Column >= preview_->columnCount()) return;
+        const auto Index = PreviewView->focusedRow().modelIndex(Column); if (Index.isValid()) preview_->setCurrentCell(Index.row(), Index.column());
+    });
+    auto* DetailToggle = new QToolButton(this); DetailToggle->setObjectName("hc.columns.detailToggle"); DetailToggle->setText(tr("값 상세")); DetailToggle->setCheckable(true); DetailToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); DetailToggle->setArrowType(Qt::RightArrow); Root->addWidget(DetailToggle);
+    valueDetail_ = new QLabel(this); valueDetail_->setObjectName("hc.columns.valueDetail"); valueDetail_->setWordWrap(true); valueDetail_->setTextInteractionFlags(Qt::TextSelectableByMouse); Root->addWidget(valueDetail_); valueDetail_->hide();
+    connect(DetailToggle, &QToolButton::toggled, this, [this, DetailToggle](bool Expanded) { valueDetail_->setVisible(Expanded); DetailToggle->setArrowType(Expanded ? Qt::DownArrow : Qt::RightArrow); });
+    connect(preview_, &QTableWidget::currentCellChanged, this, [this](int Row, int Col) { if (const auto* Cell = preview_->item(Row, Col)) valueDetail_->setText(Cell->toolTip()); });
+    connect(fieldSearch_, &QLineEdit::textChanged, this, [this] { refreshFields(); loadColumn(row_); });
+    connect(fieldCategory_, &QComboBox::currentIndexChanged, this, [this] { refreshFields(); loadColumn(row_); });
+    for (auto* Check : {grouping_, plusSign_, utc_, providerDisplay_}) connect(Check, &QCheckBox::toggled, this, [this] { storeColumn(); });
     error_ = new QLabel(this); error_->setObjectName("hc.columns.error"); error_->setWordWrap(true); Root->addWidget(error_);
     connect(columns_, &QListWidget::currentRowChanged, this, &QtColumnProfileEditor::loadColumn);
     for (auto* Combo : {field_, alignment_, sizeFormat_, unit_, widthMode_, sortField_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] { storeColumn(); });
@@ -225,9 +291,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* Reload = new QPushButton(tr("플러그인 필드 새로 읽기"), this); Reload->setObjectName("hc.columns.reloadProviders"); ProfileBar->addWidget(Reload);
     connect(Reload, &QPushButton::clicked, &PluginFields::Instance(), &PluginFields::Refresh);
     connect(&PluginFields::Instance(), &PluginFields::Changed, this, [this] {
-        const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
-        for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
-        field_->addItem(tr("복합 템플릿"), QString{}); loadColumn(row_);
+        stopPreview(); previewQueries_->Reset(); refreshFields(); loadColumn(row_);
         if (!PluginFields::Instance().Status().isEmpty()) error_->setText(PluginFields::Instance().Status());
     });
     Load(DefaultProfile(), {});
@@ -281,7 +345,11 @@ void QtColumnProfileEditor::loadColumn(int Row)
 {
     if (loading_ || Row < 0 || Row >= draft_.columns_.size()) return;
     loading_ = true; row_ = Row; const auto& Column = draft_.columns_[Row]; const auto& Width = Column.widths_[int(draft_.mode_)];
-    if (Column.template_.isEmpty() && field_->findData(Column.fieldId_) < 0) field_->addItem(tr("사용 불가 · %1").arg(Column.fieldId_), Column.fieldId_);
+    if (Column.template_.isEmpty() && field_->findData(Column.fieldId_) < 0) {
+        QString Label = tr("사용 불가 · %1").arg(Column.fieldId_);
+        for (const auto& Definition : availableFields()) if (Definition.id_ == Column.fieldId_) Label = tr("현재 선택 · %1").arg(Definition.title_);
+        field_->addItem(Label, Column.fieldId_);
+    }
     if (!Column.sortField_.isEmpty() && sortField_->findData(Column.sortField_) < 0) sortField_->addItem(tr("사용 불가 · %1").arg(Column.sortField_), Column.sortField_);
     field_->setCurrentIndex(field_->findData(Column.template_.isEmpty() ? Column.fieldId_ : QString{})); title_->setText(Column.title_);
     template_->setText(Column.template_); template_->setEnabled(!Column.template_.isEmpty());
@@ -289,8 +357,15 @@ void QtColumnProfileEditor::loadColumn(int Row)
     alignment_->setCurrentIndex(Column.alignment_ == Qt::AlignLeft ? 0 : Column.alignment_ == Qt::AlignRight ? 2 : 1);
     primary_->setChecked(Column.id_ == draft_.primaryNameId_); primary_->setEnabled(Column.fieldId_ == "file.name" || Column.fieldId_ == "file.stem");
     sizeFormat_->setCurrentIndex(int(Column.format_.size_)); precision_->setValue(Column.format_.precision_); dateFormat_->setCurrentText(Column.format_.datePattern_);
-    sizeFormat_->setEnabled(Column.fieldId_ == "file.size" || Column.fieldId_ == "file.allocatedSize" || !Column.template_.isEmpty()); precision_->setEnabled(sizeFormat_->isEnabled());
-    dateFormat_->setEnabled(Column.fieldId_ == "file.created" || Column.fieldId_ == "file.modified" || Column.fieldId_ == "file.accessed" || !Column.template_.isEmpty());
+    grouping_->setChecked(Column.format_.grouping_); plusSign_->setChecked(Column.format_.plusSign_); utc_->setChecked(Column.format_.utc_); providerDisplay_->setChecked(Column.format_.providerDisplay_);
+    const auto Fields = availableFields(); const auto Field = std::find_if(Fields.begin(), Fields.end(), [&](const auto& Item) { return Item.id_ == Column.fieldId_; });
+    const bool Composite = !Column.template_.isEmpty(); const bool Numeric = Field != Fields.end() && (Field->type_ == FieldType::Integer || Field->type_ == FieldType::UnsignedInteger || Field->type_ == FieldType::Real);
+    const bool Date = Field != Fields.end() && (Field->type_ == FieldType::Date || Field->type_ == FieldType::Time || Field->type_ == FieldType::Timestamp);
+    sizeFormat_->setEnabled(Composite || (Field != Fields.end() && Field->type_ == FieldType::UnsignedInteger)); precision_->setEnabled(Composite || Numeric);
+    grouping_->setEnabled(Composite || Numeric); plusSign_->setEnabled(Composite || Numeric); dateFormat_->setEnabled(Composite || Date); utc_->setEnabled(Composite || Date);
+    const QStringList Types{tr("문자열"), tr("정수"), tr("부호 없는 정수"), tr("실수"), tr("참/거짓"), tr("날짜"), tr("시간"), tr("날짜·시간")};
+    fieldInfo_->setText(Field == Fields.end() ? (Composite ? tr("템플릿: 참조 필드의 형식을 조합합니다.") : tr("현재 위치에서 사용할 수 없는 필드입니다.")) :
+        Field->id_ + " · " + Types.value(int(Field->type_)) + " · " + (Field->cost_ == EvaluationCost::Snapshot ? tr("목록 값: 즉시 표시") : tr("비동기 값: 값 계산을 눌러 조회")));
     unit_->setCurrentIndex(int(Width.unit_)); widthMode_->setCurrentIndex(int(Width.mode_)); width_->setValue(Width.value_);
     minimum_->setValue(Width.minimum_.value_or(-1)); maximum_->setValue(Width.maximum_.value_or(-1)); visible_->setChecked(!Width.hidden_);
     loading_ = false; updatePreview();
@@ -316,7 +391,7 @@ void QtColumnProfileEditor::storeColumn()
         }
     }
     Column.alignment_ = alignment_->currentIndex() == 0 ? Qt::AlignLeft : alignment_->currentIndex() == 2 ? Qt::AlignRight : Qt::AlignCenter;
-    Column.format_ = {static_cast<SizeFormat>(sizeFormat_->currentIndex()), precision_->value(), dateFormat_->currentText()};
+    Column.format_ = {static_cast<SizeFormat>(sizeFormat_->currentIndex()), precision_->value(), dateFormat_->currentText(), grouping_->isChecked(), plusSign_->isChecked(), utc_->isChecked(), providerDisplay_->isChecked()};
     const bool NewPrimary = primary_->isChecked() && draft_.primaryNameId_ != Column.id_ && (Field == "file.name" || Field == "file.stem");
     if (NewPrimary) draft_.primaryNameId_ = Column.id_;
     if (draft_.primaryNameId_ == Column.id_ && !primary_->isChecked()) {
@@ -329,6 +404,7 @@ void QtColumnProfileEditor::storeColumn()
     if (NewPrimary) for (int Mode : {1, 2}) Column.widths_[Mode] = {hc::view::WidthUnit::Percent, hc::view::WidthMode::Flexible, 100};
     if (FieldChanged) {
         Column.format_ = {};
+        for (const auto& Definition : availableFields()) if (Definition.id_ == Field && Definition.defaultAlignment_) Column.alignment_ = Definition.defaultAlignment_;
         for (auto& Sort : draft_.sorts_) if (Sort.columnId_ == Column.id_) Sort.order_ = PluginFields::Instance().Descending(Field) ? Qt::DescendingOrder : Qt::AscendingOrder;
         refreshSorts();
     }
@@ -360,58 +436,193 @@ bool QtColumnProfileEditor::ValidateDraft()
     error_->clear(); return writable_;
 }
 
+namespace {
+    QString PreviewPath(const PreviewSample& Sample) { return Sample.path_.isEmpty() ? "sample:" + Sample.identity_ : Sample.path_; }
+    QString StateText(ValueState State) {
+        return QStringList{QObject::tr("완료"), QObject::tr("빈 값"), QObject::tr("계산 중"), QObject::tr("계산 대기"), QObject::tr("지원 안 함"), QObject::tr("오류")}.value(int(State));
+    }
+}
+void QtColumnProfileEditor::SetSamples(QVector<PreviewSample> Current, QVector<PreviewSample> Selected)
+{
+    stopPreview(); previewQueries_->Reset(); currentSamples_ = std::move(Current); selectedSamples_ = std::move(Selected);
+    previewSignature_.clear(); sampleMode_->setCurrentIndex(0); updatePreview();
+}
+QVector<PreviewSample> QtColumnProfileEditor::previewSamples() const
+{
+    if (sampleMode_->currentIndex() == 1) return currentSamples_;
+    if (sampleMode_->currentIndex() == 2) return selectedSamples_;
+    if (sampleMode_->currentIndex() == 3) return manualSamples_;
+    QVector<FileSnapshot> Files(3);
+    Files[0].name_ = "archive.tar.gz"; Files[0].size_ = 1536; Files[0].attributes_ = 0x20;
+    Files[1].name_ = ".config"; Files[1].size_ = 1048576; Files[1].attributes_ = 2;
+    Files[2].name_ = tr("문서"); Files[2].directory_ = true; Files[2].attributes_ = 0x10;
+    QVector<PreviewSample> Samples;
+    for (auto& File : Files) {
+        File.parentPath_ = "C:\\Projects"; File.created_ = File.modified_ = File.accessed_ = QDateTime(QDate(2026, 10, 2), QTime(10, 30));
+        PreviewSample Sample; Sample.identity_ = "example:" + File.name_; Sample.name_ = File.name_; Sample.directory_ = File.directory_;
+        for (const auto& Field : BuiltInFields()) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = Resolve(Field.id_, File);
+        Samples.append(Sample);
+    }
+    return Samples;
+}
+QueryEngine::Loader QtColumnProfileEditor::previewLoader() const
+{
+    const auto Base = PluginFields::Instance().Loader(true); const auto Samples = previewSamples(); const bool Extract = extractSamples_->isChecked();
+    auto Loader = [Base, Samples, Extract](const QString& Path, const QString& Family, std::stop_token Stop) -> FieldValues {
+        if (!Path.startsWith("sample:")) return Base(Path, Family, Stop);
+        const auto Fail = [](ValueState State, const QString& Reason) { return FieldValues{{"__error", CellValue::Missing(State, Reason)}}; };
+        const auto Sample = std::find_if(Samples.begin(), Samples.end(), [&](const auto& Item) { return PreviewPath(Item) == Path; });
+        if (!Extract || Sample == Samples.end() || !Sample->source_ || Sample->directory_) return Fail(ValueState::Unsupported, "native-path-required");
+        const auto Entry = Sample->source_->Describe();
+        if (Entry.size_ > 64ULL * 1024 * 1024) return Fail(ValueState::Unsupported, "preview-extraction-size-limit");
+        using namespace hc::storage;
+        OperationContext Context; Context.stopToken_ = Stop; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        // Reuse the host's shared store quota. Different quotas on the same
+        // pinned root conflict; this preview bounds each read and uses two workers.
+        Context.maxReadBytes_ = 64ULL * 1024 * 1024;
+        auto Store = MakeNativeMaterializer(QDir::tempPath().toStdString());
+        if (!Store.HasValue()) return Fail(ValueState::Error, QString::fromStdString(Store.Failure().code_));
+        MaterializationRequest Request{Sample->source_};
+        if (const auto Packed = Entry.hints_.find("packedSize"); Packed != Entry.hints_.end()) {
+            bool Valid = false; const auto Bytes = QString::fromStdString(Packed->second).toULongLong(&Valid);
+            if (Valid) Request.compressedBytes_ = Bytes;
+        }
+        auto Lease = Store.Value()->Materialize(std::move(Request), Context).get();
+        if (!Lease.HasValue()) return Fail(ValueState::Error, QString::fromStdString(Lease.Failure().code_));
+        return Base(QString::fromStdString(Lease.Value()->LocalPath()), Family, Stop);
+    };
+    return WithLuaColumns(std::move(Loader), draft_, previewRetry_);
+}
+void QtColumnProfileEditor::stopPreview()
+{
+    ++manualGeneration_; manualStop_.request_stop(); calculating_ = false; previewComputed_ = false; if (previewQueries_) previewQueries_->Cancel();
+}
+void QtColumnProfileEditor::startPreview()
+{
+    if (!ValidateDraft()) return;
+    updatePreview(); previewRetry_ = QUuid::createUuid().toString(); previewQueries_->SetLoader(previewLoader()); calculating_ = true; updatePreview();
+}
+void QtColumnProfileEditor::loadManualSamples()
+{
+    stopPreview(); const auto Path = QDir::toNativeSeparators(samplePath_->text().trimmed()); if (Path.isEmpty()) return;
+    manualStop_ = std::stop_source{}; const auto Generation = ++manualGeneration_; sampleStatus_->setText(tr("표본 정보를 읽고 있습니다…"));
+    auto* Watcher = new QFutureWatcher<PreviewSample>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation] {
+        const auto Sample = Watcher->result(); Watcher->deleteLater(); if (Generation != manualGeneration_) return;
+        manualSamples_ = {Sample}; previewQueries_->Reset(); previewSignature_.clear(); updatePreview();
+    });
+    Watcher->setFuture(QtConcurrent::run([Path, Stop = manualStop_.get_token()] {
+        using namespace hc::storage;
+        PreviewSample Sample; Sample.path_ = Path; Sample.identity_ = Path; Sample.name_ = Path;
+        const auto Kind = Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local; auto Provider = MakeNativeReadProvider(Kind);
+        OperationContext Context; Context.stopToken_ = Stop; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        auto Entry = Provider->Resolve({Kind, Path.toStdString()}, Context).get();
+        if (!Entry.HasValue()) { Sample.values_["__error"] = CellValue::Missing(ValueState::Error, QString::fromStdString(Entry.Failure().code_)); return Sample; }
+        Sample.name_ = QString::fromStdString(Entry.Value().name_); Sample.directory_ = Entry.Value().directory_;
+        Sample.source_ = std::make_shared<ProviderContentSource>(Provider, Entry.Value());
+        QFileInfo Info(Path); FileSnapshot File; File.name_ = Sample.name_; File.directory_ = Sample.directory_; File.parentPath_ = Info.absolutePath();
+        if (!File.directory_) File.size_ = Entry.Value().size_; File.created_ = Info.birthTime(); File.modified_ = Info.lastModified(); File.accessed_ = Info.lastRead();
+        File.attributes_ = Entry.Value().attributes_;
+        for (const auto& Field : BuiltInFields()) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = Resolve(Field.id_, File);
+        return Sample;
+    }));
+}
+CellValue QtColumnProfileEditor::readSample(const PreviewSample& Sample, const QString& Field)
+{
+    if (Field.startsWith("lua.")) {
+        if (!ValidateScripts(draft_).isEmpty()) return CellValue::Missing(ValueState::Error, "invalid-script-dependency");
+        const auto* Script = FindScript(draft_, Field); if (!Script || !Script->enabled_) return CellValue::Missing(ValueState::Unsupported, "script-disabled-or-missing");
+        QJsonObject Values; std::optional<CellValue> Missing;
+        for (const auto& Dependency : Script->dependencies_) {
+            const auto Value = readSample(Sample, Dependency);
+            if (Value.State() == ValueState::Ready) Values[Dependency] = EncodeScriptInput(Value);
+            else if (Value.State() != ValueState::Empty && (!Missing || Value.State() == ValueState::Pending)) Missing = Value;
+        }
+        if (Missing) return *Missing;
+        const auto Job = QJsonDocument(QJsonObject{{"identity", Sample.identity_}, {"values", Values}, {"source", QString::fromLatin1(previewSignature_.toHex())}}).toJson(QJsonDocument::Compact);
+        if (Job.size() > 65536) return CellValue::Missing(ValueState::Error, "script-input-budget");
+        const auto Value = previewQueries_->Read(QString::fromUtf8(Job), Field, calculating_);
+        return !calculating_ && Value.State() == ValueState::Pending ? CellValue::Missing(ValueState::OnDemand) : Value;
+    }
+    if (!QueryFamily(Field).isEmpty()) {
+        if (Sample.directory_ && Field != "file.linkTarget" && !IsPluginField(Field)) return CellValue::Missing(ValueState::Empty);
+        const auto Value = previewQueries_->Read(PreviewPath(Sample), Field, calculating_);
+        return !calculating_ && Value.State() == ValueState::Pending ? CellValue::Missing(ValueState::OnDemand) : Value;
+    }
+    return Sample.values_.value(Field, Sample.values_.value("__error", CellValue::Missing(ValueState::Unsupported)));
+}
 void QtColumnProfileEditor::updatePreview()
 {
-    if (!preview_) return;
+    if (!preview_ || !previewQueries_ || !previewGrid_) return;
+    // Invalid drafts keep the last valid preview, with Apply blocked by validation.
+    if (!Validate(draft_).isEmpty()) return;
+    auto* Native = previewGrid_->view<Qtitan::GridBandedTableView>(); Native->setModel(nullptr); Native->beginUpdate(); Native->removeColumns();
+    auto Samples = previewSamples(); QJsonArray Inputs, Columns;
+    for (const auto& Sample : Samples) Inputs.append(Sample.identity_);
+    for (const auto& Column : draft_.columns_) Columns.append(QJsonArray{Column.fieldId_, Column.template_, Column.sortField_});
+    const auto Signature = QCryptographicHash::hash(QJsonDocument(QJsonObject{{"inputs", Inputs}, {"columns", Columns}, {"scripts", EncodeProfile(draft_)["scripts"]},
+        {"mode", sampleMode_->currentIndex()}, {"extract", extractSamples_->isChecked()}}).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256);
+    if (Signature != previewSignature_) { stopPreview(); previewSignature_ = Signature; previewQueries_->SetLoader(previewLoader(), false); previewQueries_->Cancel(); }
+    const int SelectedRow = preview_->currentRow(), SelectedColumn = preview_->currentColumn(); const QSignalBlocker Block(preview_);
     preview_->clearSpans(); preview_->clear();
-    QVector<ColumnDefinition> Visible;
-    for (const auto& Column : draft_.columns_) if (!Column.widths_[int(draft_.mode_)].hidden_ &&
-        (draft_.mode_ == LayoutMode::Details || Column.id_ != draft_.primaryNameId_)) Visible.append(Column);
-    preview_->setColumnCount(std::max(1, int(Visible.size())));
-    QStringList Labels; for (const auto& Column : Visible) Labels.append(Column.title_); preview_->setHorizontalHeaderLabels(Labels);
-    const bool Two = draft_.mode_ != LayoutMode::Details; preview_->setRowCount(Two ? 6 : 3);
-    QVector<FileSnapshot> Samples(3);
-    Samples[0].name_ = "archive.tar.gz"; Samples[0].size_ = 1536; Samples[0].attributes_ = 0x20;
-    Samples[1].name_ = ".config"; Samples[1].size_ = 1048576; Samples[1].attributes_ = 0x2;
-    Samples[2].name_ = tr("문서"); Samples[2].directory_ = true; Samples[2].attributes_ = 0x10;
-    for (auto& File : Samples) { File.parentPath_ = "C:\\Projects"; File.created_ = File.modified_ = File.accessed_ = QDateTime(QDate(2026, 10, 2), QTime(10, 30)); }
+    const auto Binding = BindColumnProfile(draft_); QVector<ColumnDefinition> Visible;
+    for (const auto& Column : Binding.VecColumns) Visible.append(Column.definition_);
+    preview_->setColumnCount(Visible.size()); QStringList Labels; for (const auto& Column : Visible) Labels.append(Column.title_); preview_->setHorizontalHeaderLabels(Labels);
+    preview_->setRowCount(Samples.size());
+    const auto ValueFor = [&](const PreviewSample& Sample, const ColumnDefinition& Column, bool Sort) {
+        if (Sort && !Column.sortField_.isEmpty()) return readSample(Sample, Column.sortField_);
+        return Column.template_.isEmpty() ? readSample(Sample, Column.fieldId_) : RenderTemplate(CompileTemplate(Column.template_), Column.format_, [&](const auto& Field) { return readSample(Sample, Field); });
+    };
     if (!draft_.sorts_.isEmpty()) {
-        QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders;
-        for (const auto& Sort : draft_.sorts_) Orders.append(Sort.order_);
-        for (const auto& File : Samples) {
-            SortRow Row; Row.id_ = File.name_; Row.directory_ = File.directory_;
+        QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders; for (const auto& Sort : draft_.sorts_) Orders.append(Sort.order_);
+        for (const auto& Sample : Samples) {
+            SortRow Row; Row.id_ = Sample.identity_; Row.directory_ = Sample.directory_;
             for (const auto& Sort : draft_.sorts_) {
-                const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Col) { return Col.id_ == Sort.columnId_; });
-                if (It == draft_.columns_.end()) { Row.values_.append(CellValue::Missing(ValueState::Empty)); continue; }
-                Row.values_.append(!It->sortField_.isEmpty() ? Resolve(It->sortField_, File) : It->template_.isEmpty() ? Resolve(It->fieldId_, File)
-                    : RenderTemplate(CompileTemplate(It->template_), It->format_, [&](const QString& Field) { return Resolve(Field, File); }));
+                const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) { return Column.id_ == Sort.columnId_; });
+                Row.values_.append(It == draft_.columns_.end() ? CellValue::Missing(ValueState::Empty) : ValueFor(Sample, *It, true));
             }
             Rows.append(Row);
         }
-        const auto Ranks = SortRanks(Rows, Orders); auto Sorted = Samples;
-        for (int Index = 0; Index < Samples.size(); ++Index) Sorted[Ranks[Index]] = Samples[Index]; Samples = Sorted;
+        const auto Ranks = SortRanks(Rows, Orders); auto Sorted = Samples; for (int Index = 0; Index < Samples.size(); ++Index) Sorted[Ranks[Index]] = Samples[Index]; Samples = Sorted;
     }
-    for (int Row = 0; Row < Samples.size(); ++Row) {
-        const auto& File = Samples[Row]; const int DetailRow = Two ? Row * 2 + (draft_.mode_ == LayoutMode::NameFirst ? 1 : 0) : Row;
-        for (int Index = 0; Index < Visible.size(); ++Index) {
-            const auto& Column = Visible[Index]; auto Value = Column.template_.isEmpty() ? Resolve(Column.fieldId_, File) : RenderTemplate(CompileTemplate(Column.template_), Column.format_, [&](const QString& Field) { return Resolve(Field, File); });
-            auto Text = Value.State() == ValueState::OnDemand ? tr("<폴더>") : Format(Value, Column.format_);
-            if (Column.fieldId_ == "file.attributes") Text = GetFormattedAttrText(quint32(File.attributes_), false);
-            auto* Cell = new QTableWidgetItem(Text); Cell->setTextAlignment(Column.alignment_ | Qt::AlignVCenter); preview_->setItem(DetailRow, Index, Cell);
-            const auto Width = hc::view::Resolve(Column.widths_[int(draft_.mode_)], preview_->viewport()->width());
-            if (Width) preview_->setColumnWidth(Index, std::max(50, Width->width_));
-        }
-        if (Two) {
-            const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) { return Column.id_ == draft_.primaryNameId_; });
-            const int NameRow = Row * 2 + (draft_.mode_ == LayoutMode::NameFirst ? 0 : 1);
-            if (preview_->columnCount() > 1) preview_->setSpan(NameRow, 0, 1, preview_->columnCount());
-            if (It != draft_.columns_.end()) {
-                auto* Cell = new QTableWidgetItem(Format(Resolve(It->fieldId_, File), It->format_));
-                Cell->setTextAlignment(It->alignment_ | Qt::AlignVCenter); preview_->setItem(NameRow, 0, Cell);
-            }
-        }
+    const auto MakeCell = [&](const PreviewSample& Sample, const ColumnDefinition& Column) {
+        const auto Value = ValueFor(Sample, Column, false), Sort = ValueFor(Sample, Column, true);
+        QString Text = Value.State() == ValueState::Ready ? Format(Value, Column.format_) : Value.State() == ValueState::Empty ? QString{} : StateText(Value.State());
+        if (Column.fieldId_ == "file.attributes" && Value.State() == ValueState::Ready) Text = GetFormattedAttrText(quint32(Value.Raw().toULongLong()), false);
+        if (Column.fieldId_ == "file.size" && Value.State() == ValueState::OnDemand && Sample.directory_) Text = tr("<폴더>");
+        auto* Cell = new QTableWidgetItem(Text); Cell->setTextAlignment(Column.alignment_ | Qt::AlignVCenter);
+        Cell->setToolTip(tr("%1 · %2\n원래 값: %3\n표시: %4\n정렬 값: %5 · %6%7").arg(Sample.name_, StateText(Value.State()), Value.Raw().toString(), Text, Sort.Raw().toString(), StateText(Sort.State()), Value.Error().isEmpty() ? QString{} : "\n" + Value.Error()));
+        return Cell;
+    };
+    const QFileIconProvider Icons;
+    for (int Row = 0; Row < Samples.size(); ++Row) for (int Index = 0; Index < Visible.size(); ++Index) {
+        auto* Cell = MakeCell(Samples[Row], Visible[Index]);
+        if (Visible[Index].id_ == draft_.primaryNameId_) Cell->setIcon(Icons.icon(Samples[Row].directory_ ? QFileIconProvider::Folder : QFileIconProvider::File));
+        preview_->setItem(Row, Index, Cell);
     }
-    preview_->verticalHeader()->setDefaultSectionSize(std::max(28, fontMetrics().height() + 10));
+    layoutPreview();
+    previewGrid_->setPalette(palette()); previewGrid_->viewport()->setPalette(palette());
+    auto& Appearance = Native->fileManagerOptions();
+    Appearance.cursorColor = Appearance.selectedColor = palette().color(QPalette::Highlight);
+    Appearance.cursorTextColor = Appearance.selectedTextColor = palette().color(QPalette::HighlightedText);
+    Appearance.backgroundColor = palette().color(QPalette::Base);
+    Native->options().setBackgroundColor(Appearance.backgroundColor);
+    // The table was rebuilt while detached. Its indexes can be reused, so the
+    // grid's decoration/font role cache must not retain the previous samples.
+    Native->modelController()->clearRoleCache(); Native->setModel(preview_->model());
+    for (const auto& Bound : Binding.VecColumns) {
+        auto* Column = Native->addColumn(Bound.Index, Bound.definition_.title_); Column->setBandIndex(0); Column->setTextAlignment(Bound.definition_.alignment_);
+        Column->setTextColor(palette().color(QPalette::Text)); Column->setSortEnabled(false); Column->setFilterButtonVisible(false); Column->editorRepository()->setEditorActivationPolicy(Qtitan::GridEditor::ActivationPolicy());
+    }
+    for (int Position = 0; Position < draft_.columns_.size(); ++Position) for (const auto& Bound : Binding.VecColumns)
+        if (Bound.definition_.id_ == draft_.columns_[Position].id_) Native->getColumnByModelColumn(Bound.Index)->setVisualIndex(Position);
+    previewAdapter_->Bind(Binding); previewAdapter_->UseProfileWidths(); previewAdapter_->Apply(); Native->endUpdate();
+    if (SelectedRow >= 0 && SelectedRow < preview_->rowCount() && SelectedColumn < preview_->columnCount()) preview_->setCurrentCell(SelectedRow, SelectedColumn);
+    if (const auto* Cell = preview_->currentItem()) valueDetail_->setText(Cell->toolTip()); else valueDetail_->clear();
+    quint64 Bytes = 0; int Virtual = 0; for (const auto& Sample : Samples) if (Sample.path_.isEmpty() && Sample.source_ && !Sample.directory_) { ++Virtual; Bytes += Sample.source_->Describe().size_; }
+    if (calculating_ && !previewQueries_->Pending()) { calculating_ = false; previewComputed_ = true; }
+    sampleStatus_->setText(tr("표본 %1개 · %2%3").arg(Samples.size()).arg(previewQueries_->Pending() ? tr("계산 중 %1건").arg(previewQueries_->Pending()) : previewComputed_ ? tr("계산 완료") : tr("목록 값 표시 · 느린 값은 ‘값 계산’으로 조회"))
+        .arg(Virtual ? tr(" · 가상 파일 %1개, 최대 %2 MiB 읽기").arg(Virtual).arg(double(Bytes) / 1048576, 0, 'f', 2) : QString{}));
 }
 
 void QtColumnProfileEditor::cloneProfile()
@@ -428,13 +639,22 @@ void QtColumnProfileEditor::cloneProfile()
 }
 
 QJsonObject QtColumnProfileEditor::Library() const { auto Result = library_; Result[IdText(draft_.id_)] = EncodeProfile(draft_); return Result; }
-bool QtColumnProfileEditor::NewTabDefault() const { return scope_->currentIndex() == 1; }
-void QtColumnProfileEditor::resizeEvent(QResizeEvent* Event) { QWidget::resizeEvent(Event); updatePreview(); }
+bool QtColumnProfileEditor::NewTabDefault() const { return scope_->currentIndex() == 1 || scope_->currentIndex() == 3; }
+void QtColumnProfileEditor::layoutPreview()
+{
+    if (!previewGrid_ || !previewFrame_) return;
+    // Geometry changes must not rebuild the model or restart asynchronous values.
+    previewGrid_->resize(previewWidth_->value() ? previewWidth_->value() : previewFrame_->viewport()->width(), std::max(130, previewFrame_->viewport()->height()));
+    if (previewAdapter_) previewAdapter_->Request();
+}
+void QtColumnProfileEditor::resizeEvent(QResizeEvent* Event) { QWidget::resizeEvent(Event); layoutPreview(); }
 bool QtColumnProfileEditor::eventFilter(QObject* Watched, QEvent* Event)
 {
-    // Layout settles after the editor resize; measure the actual preview viewport.
-    if (preview_ && Watched == preview_->viewport() && Event->type() == QEvent::Resize)
+    if (Watched == this && previewGrid_ && (Event->type() == QEvent::PaletteChange || Event->type() == QEvent::FontChange || Event->type() == QEvent::StyleChange))
         QTimer::singleShot(0, this, &QtColumnProfileEditor::updatePreview);
+    // Layout settles after the editor resize; measure the actual preview viewport.
+    if (previewFrame_ && Watched == previewFrame_->viewport() && Event->type() == QEvent::Resize)
+        QTimer::singleShot(0, this, &QtColumnProfileEditor::layoutPreview);
     return QWidget::eventFilter(Watched, Event);
 }
 
@@ -456,7 +676,12 @@ void QtColumnProfileEditor::refreshSorts(int Row)
 void QtColumnProfileEditor::refreshFields()
 {
     const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
-    for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
+    for (const auto& Field : availableFields()) {
+        sortField_->addItem(Field.title_, Field.id_);
+        if (fieldCategory_->currentIndex() && int(Field.provider_) != fieldCategory_->currentIndex() - 1) continue;
+        if (!(Field.title_ + ' ' + Field.id_).contains(fieldSearch_->text(), Qt::CaseInsensitive)) continue;
+        field_->addItem(Field.title_, Field.id_);
+    }
     field_->addItem(tr("복합 템플릿"), QString{});
 }
 void QtColumnProfileEditor::refreshScripts(int Row)
@@ -485,4 +710,10 @@ void QtColumnProfileEditor::storeScript()
         const auto Parts = Line.split('|'); Script.outputs_.append({Parts.value(0).trimmed(), Parts.value(2).trimmed(), static_cast<FieldType>(Types.indexOf(Parts.value(1).trimmed()))});
     }
     scripts_->setItemText(Row, Script.title_); dirty_ = true; refreshFields(); loadColumn(row_);
+}
+
+QtColumnProfileEditor::~QtColumnProfileEditor()
+{
+    stopPreview(); delete previewAdapter_;
+    if (previewGrid_) previewGrid_->view<Qtitan::GridBandedTableView>()->setModel(nullptr);
 }

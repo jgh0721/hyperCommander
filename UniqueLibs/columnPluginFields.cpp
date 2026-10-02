@@ -14,15 +14,25 @@ namespace hc::columns {
     };
     PluginFields& PluginFields::Instance() { static auto* Value = new PluginFields(qApp); return *Value; }
     PluginFields::PluginFields(QObject* Parent) : QObject(Parent) { Refresh(); }
+    void PluginFields::RefreshIfChanged() {
+        const auto Plugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject();
+        const auto Configuration = QJsonDocument(QJsonObject{{"wdx", Plugins["wdx"]}, {"dopusViewer", Plugins["dopusViewer"]}}).toJson(QJsonDocument::Compact);
+        if (Configuration != configuration_) Refresh();
+    }
     void PluginFields::Refresh() {
         if (busy_) { refreshAgain_ = true; return; } busy_ = true;
+        const auto Plugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject();
+        configuration_ = QJsonDocument(QJsonObject{{"wdx", Plugins["wdx"]}, {"dopusViewer", Plugins["dopusViewer"]}}).toJson(QJsonDocument::Compact);
         auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), PluginFormat::Wdx);
         const auto Viewers = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), PluginFormat::DopusViewer);
         Choices.insert(Choices.end(), Viewers.begin(), Viewers.end());
         auto* Watcher = new QFutureWatcher<std::pair<std::shared_ptr<State>, QString>>(this);
         connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
-            auto Result = Watcher->result(); Watcher->deleteLater(); state_ = std::move(Result.first); status_ = Result.second; busy_ = false; emit Changed();
-            if (refreshAgain_) { refreshAgain_ = false; Refresh(); }
+            auto Result = Watcher->result(); Watcher->deleteLater(); busy_ = false;
+            // A newer configuration supersedes this result. Publishing the old
+            // catalog would briefly invalidate fields and preview dependencies.
+            if (refreshAgain_) { refreshAgain_ = false; Refresh(); return; }
+            state_ = std::move(Result.first); status_ = Result.second; emit Changed();
         });
         Watcher->setFuture(QtConcurrent::run([Choices] {
             auto Result = std::shared_ptr<State>(new State, [](State* Value) { (void)QtConcurrent::run([Value] { delete Value; }); });
@@ -32,7 +42,8 @@ namespace hc::columns {
                 OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
                 if (!Options.approval_.approved_) { Errors.append(Choice.name_ + ": approval-required"); continue; }
                 auto Inspected = InspectManifestFile(Options.manifestPath_, Context);
-                if (!Inspected.HasValue() || QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive)) { Errors.append(Choice.name_ + ": manifest-mismatch"); continue; }
+                if (!Inspected.HasValue()) { Errors.append(Choice.name_ + ": " + QString::fromStdString(Inspected.Failure().code_)); continue; }
+                if (QFileInfo(Options.binaryPath_).canonicalFilePath().compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive)) { Errors.append(Choice.name_ + ": manifest-mismatch"); continue; }
                 auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, {}, Context, Options.defaultIniPath_);
                 if (!Started.HasValue()) { Errors.append(Choice.name_ + ": " + QString::fromStdString(Started.Failure().code_)); continue; }
                 auto Process = std::shared_ptr<PluginProcess>(Started.Value().release(), [](PluginProcess* Value) { (void)QtConcurrent::run([Value] { delete Value; }); });

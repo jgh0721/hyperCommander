@@ -16,8 +16,8 @@ QJsonObject EncodePolicies(const QMap<QString, ColumnWidthPolicy>& Policies)
 }
 }
 
-QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View)
-    : QObject(Owner), owner_(Owner), grid_(Grid), view_(View)
+QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View, bool Transient)
+    : QObject(Owner), owner_(Owner), grid_(Grid), view_(View), transient_(Transient)
 {
     timer_.setSingleShot(true);
     timer_.setInterval(16);
@@ -97,7 +97,7 @@ void QtitanColumnAdapter::activateLayout(const QString& Mode)
     layoutMode_ = Mode;
     defaults_ = defaultsForLayout(Mode);
     profile_ = profileForLayout(Mode);
-    settings_ = LoadWidthPolicies(hc::settings::AppSettings(), profile_, defaults_);
+    settings_ = transient_ ? hc::view::WidthSettings{defaults_, true} : LoadWidthPolicies(hc::settings::AppSettings(), profile_, defaults_);
     inherited_ = settings_.columns_;
     const auto Overrides = layoutWidths_.value(Mode).toObject();
     for (auto It = Overrides.begin(); It != Overrides.end(); ++It) {
@@ -239,7 +239,7 @@ bool QtitanColumnAdapter::SetPolicy(const QString& Id, const ColumnWidthPolicy& 
     return true;
 }
 
-bool QtitanColumnAdapter::save() { return workspaceOwned_ || (!profile_.isEmpty() && SaveWidths(hc::settings::AppSettings(), profile_, settings_)); }
+bool QtitanColumnAdapter::save() { return transient_ || workspaceOwned_ || (!profile_.isEmpty() && SaveWidths(hc::settings::AppSettings(), profile_, settings_)); }
 
 void QtitanColumnAdapter::SetWorkspaceOverrides(const QJsonObject& Columns)
 {

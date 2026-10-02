@@ -3,6 +3,7 @@
 
 #include "dlgDefaultCMD.hpp"
 #include "Components/cmpView.hpp"
+#include "cmpPanel.hpp"
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
 #include "UniqueLibs/qtColumnProfileEditor.hpp"
 #include "UniqueLibs/columnPluginFields.hpp"
@@ -81,8 +82,11 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     dopusViewerSettings_ = new QPluginHostSettings(hc::plugins::PluginFormat::DopusViewer, PluginTabs); PluginTabs->addTab(dopusViewerSettings_, tr("DOpus 뷰어·정보"));
 
     initialize();
+    // Scrollable settings pages must not make the initial window as tall as
+    // their full content. Qt still enforces the font-dependent minimum size.
+    resize(1100, 800);
 
-    QMetaObject::invokeMethod( this, "LoadSettings", Qt::QueuedConnection );
+    QTimer::singleShot(0, this, [this] { LoadSettings(); layout()->activate(); resize(1100, std::max(800, minimumSizeHint().height())); });
 }
 
 QMainOpts::~QMainOpts()
@@ -143,6 +147,10 @@ void QMainOpts::SetListView(CGridView* View)
 {
     listView_ = View;
     const auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    QStringList Selected = View ? View->CaptureSelection() : QStringList{};
+    if (Selected.isEmpty() && View && !View->CaptureFocus().isEmpty()) Selected.append(View->CaptureFocus());
+    columnEditor_->SetSamples(Model ? Model->ColumnSamples() : QVector<hc::columns::PreviewSample>{}, Model && !Selected.isEmpty() ? Model->ColumnSamples(Selected) : QVector<hc::columns::PreviewSample>{});
+    columnEditor_->SetPreviewWidth(View ? View->width() : 0);
     columnEditor_->SetContextFields(Model ? Model->AvailableColumns() : QVector<hc::columns::FieldDefinition>{});
     columnEditor_->Load(View ? View->ColumnProfile() : hc::columns::DefaultProfile(),
         hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Profiles"].toObject(),
@@ -157,6 +165,19 @@ void QMainOpts::ShowListSettingsPage()
 bool QMainOpts::SaveSettings()
 {
     const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
+    QVector<QPointer<CGridView>> Targets; QVector<hc::columns::ColumnProfile> PreviousProfiles;
+    const auto PreviousSettings = hc::settings::AppSettings().Object();
+    if (ColumnsChanged && columnEditor_->ApplyCurrent()) {
+        Targets.append(listView_);
+        if (columnEditor_->BothPanels() && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) {
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            if (View && View != listView_) Targets.append(View);
+        }
+        for (const auto& View : Targets) {
+            if (!View || !View->BaseModel() || !View->ColumnWidths()->Writable()) { ShowListSettingsPage(); return false; }
+            PreviousProfiles.append(View->ColumnProfile());
+        }
+    }
     if (ColumnsChanged) {
         if (!columnEditor_->ValidateDraft()) { ShowListSettingsPage(); return false; }
         auto Columns = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject();
@@ -185,12 +206,16 @@ bool QMainOpts::SaveSettings()
         if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); hc::settings::AppSettings().BeginEdit(); SetListView(listView_); LoadSettings(); }
         return false;
     }
-    hc::columns::PluginFields::Instance().Refresh();
     if (ColumnsChanged) {
-        listView_->ApplyColumnProfile(columnEditor_->Profile());
-        emit listView_->sigViewSettingsChanged();
+        for (int Index = 0; Index < Targets.size(); ++Index) if (!Targets[Index] || !Targets[Index]->ApplyColumnProfile(columnEditor_->Profile())) {
+            for (int Restore = 0; Restore < Index; ++Restore) if (Targets[Restore]) Targets[Restore]->ApplyColumnProfile(PreviousProfiles[Restore]);
+            const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
+            QMessageBox::warning(this, tr("컬럼 적용 실패"), Restored ? tr("기존 설정을 복구했습니다. 편집 내용을 확인한 후 다시 적용하세요.") : tr("패널 적용 및 설정 복구에 실패했습니다. 디스크 설정을 다시 읽어 주세요.")); return false;
+        }
+        for (const auto& View : Targets) if (View) emit View->sigViewSettingsChanged();
         columnEditor_->MarkSaved();
     }
+    hc::columns::PluginFields::Instance().RefreshIfChanged();
     const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(ui.cbxColorScheme->currentText());
     emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
     emit NotifyColorSchemeChanged(Scheme);

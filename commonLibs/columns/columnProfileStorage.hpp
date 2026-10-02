@@ -23,7 +23,7 @@ namespace hc::columns
                 Widths[ModeName(static_cast<LayoutMode>(Mode))] = hc::view::EncodeWidth(Column.widths_[Mode]);
             Columns.append(QJsonObject{{"id", IdText(Column.id_)}, {"field", Column.fieldId_}, {"title", Column.title_}, {"template", Column.template_}, {"sortField", Column.sortField_},
                 {"alignment", Column.alignment_ == Qt::AlignLeft ? "left" : Column.alignment_ == Qt::AlignRight ? "right" : "center"},
-                {"format", QJsonObject{{"size", int(Column.format_.size_)}, {"precision", Column.format_.precision_}, {"date", Column.format_.datePattern_}}},
+                {"format", QJsonObject{{"size", int(Column.format_.size_)}, {"precision", Column.format_.precision_}, {"date", Column.format_.datePattern_}, {"grouping", Column.format_.grouping_}, {"plus", Column.format_.plusSign_}, {"utc", Column.format_.utc_}, {"providerDisplay", Column.format_.providerDisplay_}}},
                 {"widths", Widths}});
         }
         for (const auto& Sort : Profile.sorts_)
@@ -60,6 +60,9 @@ namespace hc::columns
             if (!Size.isDouble() || Size.toInt(-1) < 0 || Size.toInt(-1) > int(SizeFormat::GiB) ||
                 !Precision.isDouble() || Precision.toInt(-1) < 0 || Precision.toInt(-1) > 6 || !Format.value("date").isString()) return {};
             Column.format_ = {static_cast<SizeFormat>(Size.toInt()), Precision.toInt(), Format.value("date").toString()};
+            for (const auto* Key : {"grouping", "plus", "utc", "providerDisplay"}) if (Format.contains(Key) && !Format[Key].isBool()) return {};
+            Column.format_.grouping_ = Format["grouping"].toBool(); Column.format_.plusSign_ = Format["plus"].toBool();
+            Column.format_.utc_ = Format["utc"].toBool(); Column.format_.providerDisplay_ = Format["providerDisplay"].toBool(true);
             const auto Widths = Item.value("widths").toObject();
             if (Widths.size() != 3) return {};
             for (int Index = 0; Index < 3; ++Index) {

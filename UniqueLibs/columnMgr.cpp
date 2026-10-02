@@ -51,7 +51,7 @@ hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsH
 
 QString CColumnMgr::FormatValue(const hc::columns::ColumnDefinition& Column, const hc::columns::CellValue& Value, const nsHC::CFileSourceT* Info)
 {
-    if (!Value.Display().isEmpty()) return Value.Display();
+    if (Column.format_.providerDisplay_ && !Value.Display().isEmpty()) return Value.Display();
     if (Value.State() == hc::columns::ValueState::Pending) return QObject::tr("조회 중…");
     if (Value.State() == hc::columns::ValueState::Error) return QObject::tr("조회 오류");
     if (Value.State() == hc::columns::ValueState::Unsupported) return QObject::tr("지원 안 함");
