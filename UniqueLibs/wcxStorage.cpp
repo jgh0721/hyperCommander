@@ -203,7 +203,6 @@ namespace hc::storage
                     auto Entry = makeEntry(Path, Directory);
                     Entry.attributes_ = Header.attributes_; Entry.size_ = Header.size_;
                     Entry.modifiedUtcMs_ = Header.modifiedUtcMs_;
-                    if (Entry.size_ > 64ULL * 1024 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "archive-size-budget"};
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
                     if (Header.encrypted_) Entry.hints_["encrypted"] = "1";

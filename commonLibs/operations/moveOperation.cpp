@@ -1,5 +1,6 @@
 ﻿#include "moveOperation.hpp"
 #include <set>
+#include "selectionPlan.hpp"
 
 namespace hc::operations
 {
@@ -174,13 +175,26 @@ namespace hc::operations
             std::size_t emitted_ = 0, index_ = 0;
         };
     }
-    Result<JobHandle> SubmitMoveOperation(JobScheduler& Scheduler, MoveOperationRequest Request, OperationContext Context)
+    Result<PreparedJob> PrepareMoveOperation(MoveOperationRequest Request, OperationContext Context)
     {
+        if (Request.selection_) {
+            if (!Request.sources_.empty() || !Request.sourceReader_ || Request.selection_->Provider() != Request.sourceReader_
+                || !Request.selection_->Count() || Request.selection_->Count() > Request.maxEntries_ || Request.selectionRoot_.root_.empty()
+                || (Request.selectionRoot_.kind_ == LocatorKind::Archive && Request.selectionRoot_.nesting_.empty()))
+                return Error{ErrorCategory::InvalidRequest, "invalid-move-selection"};
+            JobRequest Job; Job.operation_ = Context; Job.correlationId_ = Request.correlationId_; Job.maxItemResults_ = Request.maxEntries_;
+            Job.resourceLanes_ = {ResourceLane(Request.selectionRoot_), ResourceLane(Request.destination_)};
+            auto Selection = Request.selection_; auto Root = Request.selectionRoot_; auto Limit = Request.maxEntries_; Request.selection_.reset();
+            return PreparedJob{std::move(Job), std::make_unique<SelectionPlan>(Selection, Root,
+                [Request = std::move(Request)](std::vector<EntrySnapshot> Entries, OperationContext Operation) mutable -> Result<PreparedJob> {
+                    Request.sources_ = std::move(Entries); return PrepareMoveOperation(std::move(Request), Operation);
+                }, Limit)};
+        }
         const auto ValidEndpoint = [](const ArchiveMoveEndpoint& Endpoint) {
             return Endpoint.reader_ && Endpoint.begin_ && Endpoint.root_.kind_ == LocatorKind::Archive && !Endpoint.root_.root_.empty()
                 && !Endpoint.root_.nesting_.empty() && Endpoint.root_.nesting_.size() <= 8 && Endpoint.root_.nesting_.back().entry_ == "/";
         };
-        if (!Request.sourceReader_ || Request.sources_.empty() || !Request.maxEntries_ || Request.maxEntries_ > 100000
+        if (!Request.sourceReader_ || Request.sources_.empty() || !Request.maxEntries_
             || Request.sources_.size() > Request.maxEntries_ || !Request.maxDepth_ || Request.maxDepth_ > 32 || !Request.maxBytes_
             || (Request.sourceArchive_ ? !ValidEndpoint(*Request.sourceArchive_) || Request.sourceArchive_->reader_ != Request.sourceReader_ : !Request.sourceWriter_)
             || (Request.destinationArchive_ ? !ValidEndpoint(*Request.destinationArchive_) || Request.destination_.kind_ != LocatorKind::Archive
@@ -247,7 +261,12 @@ namespace hc::operations
             Copy = PrepareFileOperation(std::move(Native), Context);
         }
         if (!Copy.HasValue()) return Copy.Failure();
-        if (SharedOuter) return Scheduler.Submit(std::move(Copy.Value().request_), std::move(Copy.Value().task_));
-        return Scheduler.Submit(std::move(Copy.Value().request_), std::make_unique<MoveTask>(std::move(Request), std::move(Copy.Value().task_)));
+        if (SharedOuter) return std::move(Copy.Value());
+        return PreparedJob{std::move(Copy.Value().request_), std::make_unique<MoveTask>(std::move(Request), std::move(Copy.Value().task_))};
+    }
+    Result<JobHandle> SubmitMoveOperation(JobScheduler& Scheduler, MoveOperationRequest Request, OperationContext Context)
+    {
+        auto Prepared = PrepareMoveOperation(std::move(Request), Context); if (!Prepared.HasValue()) return Prepared.Failure();
+        return Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_));
     }
 }

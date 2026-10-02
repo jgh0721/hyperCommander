@@ -1,5 +1,6 @@
 ﻿#include "approvedWcxBackend.hpp"
 #include <QFileInfo>
+#include <QThreadPool>
 
 namespace hc::plugins
 {
@@ -42,19 +43,32 @@ namespace hc::plugins
                 return Host.Value()->Update(std::move(Request), Context);
             }
         private:
-            Result<std::shared_ptr<IArchiveBackend>> connect(OperationContext Context) const
+            Result<std::shared_ptr<IArchiveBackend>> connect(OperationContext Context)
             {
+                std::unique_lock Lock(mutex_, std::defer_lock);
+                while (!Lock.try_lock_for(std::chrono::milliseconds(25))) if (const auto Stop = Context.Check({"wcx"})) return *Stop;
                 if (const auto Failure = Context.Check({"wcx"})) return *Failure;
                 if (!options_.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
                 auto Inspected = InspectManifestFile(options_.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+                if (Inspected.Value().manifest_ != options_.approval_.reviewed_)
+                    return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
                 const auto ExpectedBinary = QFileInfo(options_.binaryPath_).canonicalFilePath();
                 if (ExpectedBinary.isEmpty() || ExpectedBinary.compare(Inspected.Value().binaryPath_, Qt::CaseInsensitive) != 0)
                     return Error{ErrorCategory::InvalidRequest, "plugin-configured-binary-mismatch", {"wcx"}};
+                if (process_ && process_->Snapshot().running_) return MakeHostedArchiveBackend(process_);
+                // Faulted epochs are never replayed. A subsequent operation may
+                // start a newly admitted host; old listings keep the old epoch.
+                process_.reset();
                 auto Started = PluginProcess::Start(options_.executable_, options_.manifestPath_, options_.approval_, options_.limits_, Context, options_.defaultIniPath_);
                 if (!Started.HasValue()) return Started.Failure();
-                return MakeHostedArchiveBackend(std::shared_ptr<PluginProcess>(std::move(Started.Value())));
+                process_ = std::shared_ptr<PluginProcess>(Started.Value().release(), [](PluginProcess* Value) {
+                    QThreadPool::globalInstance()->start([Value] { delete Value; });
+                });
+                return MakeHostedArchiveBackend(process_);
             }
             ApprovedWcxOptions options_;
+            std::timed_mutex mutex_;
+            std::shared_ptr<PluginProcess> process_;
         };
     }
     std::shared_ptr<IArchiveBackend> MakeApprovedWcxBackend(ApprovedWcxOptions Options) { return std::make_shared<Backend>(std::move(Options)); }

@@ -26,7 +26,7 @@ namespace hc::plugins
         // Prepared copies only. The operation coordinator owns final commit.
         std::string archive_, inputDirectory_;
         std::vector<std::string> add_, remove_;
-        std::uint64_t maxOutputBytes_ = 256ULL * 1024 * 1024;
+        std::uint64_t maxOutputBytes_ = std::numeric_limits<std::uint64_t>::max();
         bool encrypt_ = false;
     };
     class IArchiveBackend

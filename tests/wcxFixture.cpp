@@ -51,7 +51,7 @@ bool Load(const wchar_t* Path, ArchiveState& State)
     State.mode_ = Bytes[7]; std::size_t Offset = 8;
     const auto Number = [&]() -> std::uint32_t { std::uint32_t Value = 0; if (Bytes.size() - Offset < 4) { Offset = Bytes.size(); return 0xffffffff; }
         std::memcpy(&Value, Bytes.data() + Offset, 4); Offset += 4; return Value; };
-    const auto Count = Number(); if (Count > 10000) return false;
+    const auto Count = Number(); if (Count > (Bytes.size() - 12) / 12) return false;
     for (std::uint32_t Index = 0; Index < Count; ++Index) {
         const auto NameLength = Number(), ByteLength = Number(), Directory = Number();
         if (NameLength > 1023 || ByteLength > 64 * 1024 * 1024 || Bytes.size() - Offset < NameLength * 2ULL + ByteLength) return false;
@@ -97,6 +97,7 @@ extern "C" __declspec(dllexport) int __stdcall ReadHeaderExW(HANDLE Handle, tHea
     Header->Flags = 0x12345600;
     if (State->mode_ == 'Q' || State->mode_ == 'R') Header->Flags |= 8;
     Header->UnpSize = static_cast<unsigned int>(Item.bytes_.size()); Header->PackSize = Header->UnpSize;
+    if (State->mode_ == 'B') { Header->UnpSizeHigh = 16; Header->UnpSize = 1; }
     Header->FileCRC = Crc(Item.bytes_); Header->FileTime = (46 << 25) | (9 << 21) | (7 << 16);
     if (State->mode_ == '0' || State->mode_ == '!') Header->FileCRC = 0;
     return 0;

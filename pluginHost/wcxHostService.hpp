@@ -17,5 +17,7 @@ namespace hc::plugins
         std::map<std::uint64_t, std::unique_ptr<IArchiveListing>> listings_;
         std::uint64_t serial_ = 0, upload_ = 0, uploadSize_ = 0;
         QByteArray data_, hash_;
+        std::optional<ArchiveUpdate> streamed_;
+        std::uint64_t added_ = 0, removed_ = 0, received_ = 0;
     };
 }

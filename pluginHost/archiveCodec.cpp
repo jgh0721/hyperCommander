@@ -39,12 +39,12 @@ namespace hc::plugins
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
         if (Object.size() != 6 || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
-        auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value() || Limit.Value() > 128ULL * 1024 * 1024 * 1024) return Invalid();
+        auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value()) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         Out.encrypt_ = Object["encrypt"].toBool();
         for (const auto& [Key, Target] : {std::pair{"add", &Out.add_}, {"remove", &Out.remove_}})
         {
-            const auto Names = Object[Key].toArray(); if (Names.size() > 100000) return Invalid();
+            const auto Names = Object[Key].toArray();
             for (const auto Name : Names) { if (!String(Name, 4096)) return Invalid(); Target->push_back(Name.toString().toStdString()); }
         }
         return Out;
@@ -57,7 +57,7 @@ namespace hc::plugins
             : std::clamp(static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Context.deadline_ - std::chrono::steady_clock::now()).count()), 0LL, Maximum);
         // v1 hosts only understand this bounded legacy envelope. v2 carries
         // the independent policy and caller deadline outside this shim.
-        return {{"maxEntries", QString::number(std::min(Context.EnumerationLimit(), std::size_t(100000)))}, {"pageItems", QString::number(Context.maxPageItems_)}, {"milliseconds", QString::number(Milliseconds)}};
+        return {{"maxEntries", QString::number(Context.EnumerationLimit())}, {"pageItems", QString::number(Context.maxPageItems_)}, {"milliseconds", QString::number(Milliseconds)}};
     }
     Result<OperationContext> DecodeContext(const QJsonObject& Object)
     {

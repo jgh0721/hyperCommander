@@ -132,7 +132,7 @@ namespace hc::operations
     {
         if (!Task || !Request.maxItemResults_ || Request.maxRetries_ > 16
             || Request.initialRetryDelay_.count() < 1 || Request.maximumRetryDelay_ < Request.initialRetryDelay_
-            || Request.maximumRetryDelay_ > std::chrono::minutes(1) || Request.resourceLanes_.size() > 64)
+            || Request.maximumRetryDelay_ > std::chrono::minutes(1))
             return Error{ErrorCategory::InvalidRequest, "invalid-job-request"};
         for (const auto& Lane : Request.resourceLanes_)
             if (Lane.empty() || Lane.size() > 1024) return Error{ErrorCategory::InvalidRequest, "invalid-resource-lane"};

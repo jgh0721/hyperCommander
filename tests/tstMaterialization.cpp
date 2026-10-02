@@ -177,6 +177,22 @@ private slots:
         QVERIFY(Manager->DrainCleanup().errors_.empty()); QVERIFY(LeaseDirectories(Directory.path()).isEmpty());
         QVERIFY(Manager->Materialize({Content("hello")}, {}).get().HasValue());
     }
+    void growingOutputChargesActualBytes()
+    {
+        QTemporaryDir Directory; MaterializationLimits Limits; Limits.maxTotalBytes_ = 8;
+        auto Store = MakeNativeContentStore(Directory.path().toStdString(), Limits); QVERIFY(Store.HasValue());
+        auto Entry = Content("x")->Describe(); Entry.size_ = UINT64_MAX;
+        const auto Produce = [&](int Count) {
+            return Store.Value()->Produce(Entry, {}, {}, {}, [Count](const std::string& Path, OperationContext Context) -> Result<Unit> {
+                QFile File(QString::fromStdString(Path)); if (!File.open(QIODevice::WriteOnly) || File.write(QByteArray(Count, 'x')) != Count || !File.flush())
+                    return Error{ErrorCategory::Unavailable, "test-write"};
+                if (Context.progress_) Context.progress_(Count); return Unit{};
+            }, ProducedSize::Growing);
+        };
+        auto First = Produce(5); QVERIFY(First.HasValue()); QCOMPARE(First.Value()->Describe().size_, 5ull);
+        auto TooMuch = Produce(4); QVERIFY(!TooMuch.HasValue()); QCOMPARE(TooMuch.Failure().code_, "materialization-total-budget");
+        auto Second = Produce(3); QVERIFY(Second.HasValue()); QCOMPARE(Second.Value()->Describe().size_, 3ull);
+    }
     void sharedLifetimeAndReadOnlyContent()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());

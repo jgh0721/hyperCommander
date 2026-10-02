@@ -25,9 +25,9 @@ namespace hc::operations
         std::shared_ptr<storage::IWritableStorage> destinationWriter_;
         ConflictPolicy conflict_ = ConflictPolicy::Ask;
         bool confirmDelete_ = true;
-        std::size_t maxEntries_ = 100000;
+        std::size_t maxEntries_ = std::numeric_limits<std::size_t>::max();
         std::size_t maxDepth_ = 32;
-        std::uint64_t maxBytes_ = 64ULL * 1024 * 1024 * 1024;
+        std::uint64_t maxBytes_ = std::numeric_limits<std::uint64_t>::max();
         std::string correlationId_;
     };
     // Pure construction/validation, no I/O; allows coordinators to compose tasks

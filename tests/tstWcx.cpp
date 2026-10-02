@@ -45,6 +45,21 @@ namespace
         };
         return Request;
     }
+    class Selection final : public ISelectionManifest {
+    public:
+        Selection(std::shared_ptr<IStorageProvider> Reader, std::vector<EntrySnapshot> Entries) : reader_(std::move(Reader)), entries_(std::move(Entries)) {}
+        uint64_t Count() const override { return entries_.size(); }
+        std::shared_ptr<IStorageProvider> Provider() const override { return reader_; }
+        Result<EntryPage> Read(uint64_t Offset, size_t Count, const OperationContext& Context) const override {
+            if (const auto Stop = Context.Check(reader_->Id())) return *Stop;
+            if (Offset > entries_.size()) return Error{ErrorCategory::InvalidRequest, "test-selection-offset"};
+            const auto Last = Offset + std::min<uint64_t>(Count, entries_.size() - Offset);
+            return EntryPage{{entries_.begin() + Offset, entries_.begin() + Last}, {}, Last == entries_.size()};
+        }
+    private:
+        std::shared_ptr<IStorageProvider> reader_;
+        std::vector<EntrySnapshot> entries_;
+    };
     struct BatchGate
     {
         std::promise<void> prepared_;
@@ -131,6 +146,33 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void manifestArchiveCopyAndDelete()
+    {
+        QTemporaryDir Directory; const auto Path = Directory.filePath("target.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        QVERIFY(QDir().mkdir(Directory.filePath("input"))); std::vector<EntrySnapshot> Entries;
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        const Locator Root{LocatorKind::Local, QDir::toNativeSeparators(Directory.filePath("input")).toStdString()};
+        for (const auto* Name : {"one.bin", "two.bin"}) {
+            const auto File = Directory.filePath(QString("input/") + Name); QVERIFY(Put(File, Name));
+            auto Entry = Reader->Resolve({LocatorKind::Local, File.toStdString()}, {}).get(); QVERIFY(Entry.HasValue()); Entries.push_back(Entry.Value());
+        }
+        auto Request = ArchiveRequest(Path, Directory.path()); Request.selectionRoot_ = Root;
+        Request.selection_ = std::make_shared<Selection>(Reader, Entries);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = SubmitArchiveOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        auto Copied = Job.Value().completion_.get(); QVERIFY2(Copied.snapshot_.state_ == JobState::Completed, Copied.snapshot_.error_ ? Copied.snapshot_.error_->code_.c_str() : "incomplete");
+        auto Delete = ArchiveRequest(Path, Directory.path()); Delete.operation_ = FileOperation::Delete; Delete.confirmDelete_ = false; Entries.clear();
+        for (const auto* Name : {"/one.bin", "/two.bin"}) { auto Entry = Delete.reader_->Resolve(Location(Path, Name), {}).get(); QVERIFY(Entry.HasValue()); Entries.push_back(Entry.Value()); }
+        Delete.selectionRoot_ = Delete.archive_; Delete.selection_ = std::make_shared<Selection>(Delete.reader_, Entries);
+        Job = SubmitArchiveOperation(Scheduler, Delete); QVERIFY(Job.HasValue()); QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        auto Fresh = ArchiveRequest(Path, Directory.path()); QVERIFY(!Fresh.reader_->Resolve(Location(Path, "/one.bin"), {}).get().HasValue());
+    }
+    void metadataBeyondOldByteLimit()
+    {
+        QTemporaryDir Directory; const auto Path = Directory.filePath("large.hct"); QVERIFY(Put(Path, "HCWCX01B"));
+        auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString());
+        auto Entry = Reader->Resolve(Location(Path, "/alpha.txt"), {}).get(); QVERIFY(Entry.HasValue()); QCOMPARE(Entry.Value().size_, 64ull * 1024 * 1024 * 1024 + 1);
+    }
     void nestedMutation()
     {
         for (int Depth : {2, 3}) {
@@ -281,6 +323,7 @@ private slots:
         }
         const auto Original = FileBytes(Path);
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        if (Depth >= 2) { Request.selectionRoot_ = SourceRoot; Request.selection_ = std::make_shared<Selection>(Request.sourceReader_, std::move(Request.sources_)); Request.sources_.clear(); }
         auto Submitted = SubmitMoveOperation(Scheduler, std::move(Request)); QVERIFY2(Submitted.HasValue(), Submitted.HasValue() ? "" : Submitted.Failure().code_.c_str());
         QTRY_VERIFY_WITH_TIMEOUT(Submitted.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 30000);
         const auto Result = Submitted.Value().completion_.get();

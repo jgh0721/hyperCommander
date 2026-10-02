@@ -73,6 +73,16 @@ class JobTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void selectionLanesBeyondOldLimit()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        for (const bool Distinct : {false, true}) {
+            JobRequest Request;
+            for (int Index = 0; Index < 257; ++Index) Request.resourceLanes_.push_back("archive:" + std::to_string(Distinct ? Index : 0));
+            auto Job = Scheduler.Submit(std::move(Request), std::make_unique<ScriptTask>(std::make_shared<Probe>()));
+            QVERIFY(Job.HasValue()); QVERIFY(Ready(Job.Value())); QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        }
+    }
     void providerPromptReleasesSchedulerWorker_data()
     { QTest::addColumn<bool>("Cancel"); QTest::newRow("reply") << false; QTest::newRow("cancel") << true; }
     void providerPromptReleasesSchedulerWorker()

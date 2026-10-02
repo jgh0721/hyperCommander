@@ -95,7 +95,7 @@ namespace hc::plugins
                 try { Current->context_.progress_(Current->completed_); }
                 catch (...) { Current->progressFailure_ = Error{ErrorCategory::Internal, "archive-progress-callback-failed", {"wcx"}}; return 0; }
             }
-            if (!Current->output_.empty() && QFileInfo(QString::fromStdString(Current->output_)).size() > static_cast<qint64>(Current->limit_))
+            if (!Current->output_.empty() && uint64_t(QFileInfo(QString::fromStdString(Current->output_)).size()) > Current->limit_)
             { Current->exceeded_ = true; return 0; }
             return 1;
         }
@@ -210,9 +210,10 @@ namespace hc::plugins
                         // both each member and the cumulative expansion, using
                         // the physical archive when a member has no own size.
                         const auto Packed = Header.Value().packedSize_ ? Header.Value().packedSize_ : archiveBytes_;
-                        if (Header.Value().size_ > 64ULL * 1024 * 1024 * 1024 - testedBytes_ || !Packed
-                            || (Header.Value().size_ - 1) / Packed >= 1000 || !archiveBytes_
-                            || (testedBytes_ + Header.Value().size_ - 1) / archiveBytes_ >= 1000)
+                        if (Header.Value().size_ > UINT64_MAX - testedBytes_ || (Context.workload_.IsAutomatic()
+                            && (Header.Value().size_ > Context.workload_.automaticFileBytes_ || !Packed
+                            || (Header.Value().size_ - 1) / Packed >= Context.workload_.automaticExpansionRatio_ || !archiveBytes_
+                            || (testedBytes_ + Header.Value().size_ - 1) / archiveBytes_ >= Context.workload_.automaticExpansionRatio_)))
                             return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget", {"wcx"}};
                         testedBytes_ += Header.Value().size_;
                     }
@@ -274,7 +275,7 @@ namespace hc::plugins
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
-                if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_ || Request.maxOutputBytes_ > 128ULL * 1024 * 1024 * 1024) return Invalid("invalid-archive-update");
+                if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;
                 if (Plugin->missingEncryptionMetadata_) return Error{ErrorCategory::Unsupported, "wcx-encryption-metadata-upgrade-required", {"wcx"}};
                 if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE)
@@ -282,7 +283,7 @@ namespace hc::plugins
                 if (Request.encrypt_ && !Request.add_.empty() && !(Plugin->caps_ & PK_CAPS_ENCRYPT))
                     return Error{ErrorCategory::Unsupported, "wcx-encrypted-write-unsupported", {"wcx"}};
                 const auto Multi = [](const std::vector<std::string>& Names) -> Result<std::wstring> {
-                    if (Names.size() > 100000) return Invalid("archive-update-count"); std::wstring Out;
+                    std::wstring Out;
                     for (const auto& Name : Names)
                     {
                         if (Name.empty() || Name.find('\0') != Name.npos || Name.size() > 4096) return Invalid("archive-update-name");
@@ -291,7 +292,6 @@ namespace hc::plugins
                         for (qsizetype Index = 0; Index < Parts.size(); ++Index)
                             if (Parts[Index] == "." || Parts[Index] == ".." || (Parts[Index].isEmpty() && Index != Parts.size() - 1)) return Invalid("archive-update-name");
                         auto Value = QDir::toNativeSeparators(Text).toStdWString(); Out += Value; Out += L'\0';
-                        if (Out.size() > 64 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "archive-update-name-budget", {"wcx"}};
                     }
                     Out += L'\0'; return Out;
                 };
@@ -307,7 +307,7 @@ namespace hc::plugins
                 State.attempts_ = 0;
                 if (const auto Stop = Context.Check({"wcx"})) return *Stop;
                 if (!Request.add_.empty()) { auto Checked = Check(Plugin->pack_(Archive.data(), nullptr, Input.data(), Added.Value().data(), PK_PACK_SAVE_PATHS | (Request.encrypt_ ? PK_PACK_ENCRYPT : 0)), State); if (!Checked.HasValue()) return Checked; }
-                if (QFileInfo(QString::fromStdString(Request.archive_)).size() > static_cast<qint64>(Request.maxOutputBytes_)) return Error{ErrorCategory::BudgetExceeded, "archive-output-budget", {"wcx"}};
+                if (std::uint64_t(QFileInfo(QString::fromStdString(Request.archive_)).size()) > Request.maxOutputBytes_) return Error{ErrorCategory::BudgetExceeded, "archive-output-budget", {"wcx"}};
                 return Check(0, State);
             }
         private:

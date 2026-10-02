@@ -53,6 +53,32 @@ namespace hc::plugins
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
                 if (!process_) return Invalid();
+                if (!process_->Session().epoch_.empty()) {
+                    ArchiveUpdate Header{Request.archive_, Request.inputDirectory_, {}, {}, Request.maxOutputBytes_, Request.encrypt_};
+                    auto Begun = process_->ArchiveCall(WireKind::ArchiveUpdateBegin, {{"update", EncodeArchiveUpdate(Header)},
+                        {"added", QString::number(Request.add_.size())}, {"removed", QString::number(Request.remove_.size())}, {"context", EncodeContext(Context)}}, Context);
+                    if (!Begun.HasValue()) return Begun.Failure(); auto Id = WireUnsigned(Begun.Value()["upload"]); if (!Id.HasValue() || !Id.Value()) return Invalid();
+                    auto Cleanup = qScopeGuard([&] { auto Clean = CleanupContext(); process_->ArchiveCall(WireKind::ArchiveRelease, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(Clean)}}, Clean); });
+                    uint64_t Offset = 0;
+                    for (const auto& [Key, Names] : {std::pair{"add", &Request.add_}, {"remove", &Request.remove_}}) {
+                        for (size_t Row = 0; Row < Names->size();) {
+                            QJsonArray Page; qsizetype Size = 0;
+                            while (Row < Names->size() && Size < 24 * 1024) {
+                                const auto Name = QString::fromStdString((*Names)[Row++]);
+                                if (Name.size() > 4096 || Name.contains(QChar::Null)) return Invalid();
+                                Size += QJsonDocument(QJsonArray{Name}).toJson(QJsonDocument::Compact).size(); Page.append(Name);
+                            }
+                            QJsonObject Packet{{"add", QJsonArray{}}, {"remove", QJsonArray{}}}; Packet[Key] = Page;
+                            const auto Bytes = QJsonDocument(Packet).toJson(QJsonDocument::Compact);
+                            auto Written = process_->ArchiveData({{"upload", QString::number(Id.Value())}, {"offset", QString::number(Offset)}}, Bytes, Context);
+                            if (!Written.HasValue()) return Written.Failure(); Offset += Bytes.size();
+                            auto Received = WireUnsigned(Written.Value()["received"]); if (!Received.HasValue() || Received.Value() != Offset) return Invalid();
+                        }
+                    }
+                    auto Applied = process_->ArchiveCall(WireKind::ArchiveUpdateApply, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(Context, 3600000)}}, Context);
+                    if (!Applied.HasValue()) return Applied.Failure(); Cleanup.dismiss();
+                    return Applied.Value()["complete"].toBool() ? Result<Unit>(Unit{}) : Result<Unit>(Invalid());
+                }
                 const auto Bytes = QJsonDocument(EncodeArchiveUpdate(Request)).toJson(QJsonDocument::Compact);
                 if (Bytes.size() > 128 * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "host-archive-update-budget", {"wcx"}};
                 auto Begun = process_->ArchiveCall(WireKind::ArchiveUpdateBegin, {{"size", QString::number(Bytes.size())}, {"sha256", QString::fromLatin1(QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex())}, {"context", EncodeContext(Context)}}, Context);

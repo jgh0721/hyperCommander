@@ -3,6 +3,7 @@
 #include "dopusAbi.hpp"
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTemporaryFile>
 #include <map>
 #include <vector>
 
@@ -19,7 +20,12 @@ namespace hc::plugins
         storage::Result<std::shared_ptr<storage::IReadStream>> OpenStream(const QJsonObject& Request, storage::OperationContext Context);
     private:
         struct Record { WIN32_FIND_DATAW file_; QJsonObject columns_; };
-        struct Cursor { std::vector<Record> entries_; std::size_t next_ = 0; };
+        struct Cursor {
+            std::shared_ptr<QTemporaryFile> file_;
+            std::uint64_t count_ = 0, next_ = 0;
+            storage::Result<storage::Unit> Append(const Record& Value);
+            storage::Result<Record> Read();
+        };
         storage::Error failure(const char* Operation);
         storage::Result<std::wstring> path(const QJsonValue& Remote);
         storage::Result<QJsonObject> enumerate(const QJsonObject& Request);
@@ -36,7 +42,6 @@ namespace hc::plugins
         QJsonArray columns_;
         std::map<int, Cursor> cursors_;
         int nextCursor_ = 1;
-        std::size_t retainedEntries_ = 0;
         storage::OperationContext context_;
     };
 }

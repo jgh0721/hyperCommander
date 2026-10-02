@@ -1102,11 +1102,10 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         && !SameArchiveContainer(Request.destination_, Invocation.context_.location_);
     const bool ArchiveMutation = Request.destination_.kind_ == LocatorKind::Archive
         || (Kind == LocatorKind::Archive && Request.operation_ != hc::operations::FileOperation::Copy);
-    if (Request.selection_ && (CrossMove || ArchiveMutation))
-        return Error{ErrorCategory::Unsupported, "archive-manifest-mutation-requires-batch-adapter"};
     if (CrossMove)
     {
         MoveOperationRequest Move;
+        Move.selection_ = Request.selection_; Move.selectionRoot_ = Request.selectionRoot_;
         Move.sourceReader_ = Reader; Move.sourceWriter_ = Writer; Move.destination_ = Request.destination_; Move.correlationId_ = Request.correlationId_;
         for (const auto& Source : Request.sources_) Move.sources_.push_back(Source.entry_);
         if (Kind == LocatorKind::Archive)
@@ -1122,8 +1121,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         {
             auto Writer = DestinationWriter(); if (!Writer.HasValue()) return Writer.Failure(); Move.destinationWriter_ = Writer.Value();
         }
-        Move.maxBytes_ = std::min(Move.sourceArchive_ ? Move.sourceArchive_->limits_.maxInputBytes_ : 64ull * 1024 * 1024 * 1024,
-            Move.destinationArchive_ ? Move.destinationArchive_->limits_.maxInputBytes_ : 64ull * 1024 * 1024 * 1024);
+        Move.maxBytes_ = std::min(Move.sourceArchive_ ? Move.sourceArchive_->limits_.maxInputBytes_ : UINT64_MAX,
+            Move.destinationArchive_ ? Move.destinationArchive_->limits_.maxInputBytes_ : UINT64_MAX);
         Started = fileJobs_->Submit(std::move(Move), Invocation.operation_);
     }
     else if (ArchiveMutation)
@@ -1138,6 +1137,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         if (Request.operation_ != hc::operations::FileOperation::Delete && !SameArchiveContainer(Request.destination_, Target.Value().root_))
             return Error{ErrorCategory::InvalidRequest, "archive-destination-container-mismatch"};
         ArchiveOperationRequest Archive;
+        Archive.selection_ = Request.selection_; Archive.selectionRoot_ = Request.selectionRoot_;
         Archive.operation_ = Request.operation_; Archive.archive_ = Target.Value().root_; Archive.destination_ = Request.destination_;
         Archive.limits_ = Target.Value().limits_;
         Archive.sources_ = std::move(Request.sources_); Archive.reader_ = Target.Value().reader_; Archive.begin_ = std::move(Target.Value().begin_); Archive.correlationId_ = Request.correlationId_;

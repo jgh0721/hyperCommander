@@ -9,6 +9,7 @@
 #include <QCryptographicHash>
 #include <QSet>
 #include <QScopeGuard>
+#include <QDataStream>
 
 namespace hc::plugins
 {
@@ -24,6 +25,20 @@ namespace hc::plugins
         quint64 Ticks(FILETIME Value) { return (quint64(Value.dwHighDateTime) << 32) | Value.dwLowDateTime; }
     }
     DopusVfsHostService::DopusVfsHostService(HMODULE Module, PluginManifest Manifest) : module_(Module), manifest_(std::move(Manifest)) {}
+    Result<Unit> DopusVfsHostService::Cursor::Append(const Record& Value)
+    {
+        if (!file_) { file_ = std::make_shared<QTemporaryFile>(); if (!file_->open()) return HostError("dopus-list-spool-open"); }
+        QDataStream Out(file_.get()); Out.setVersion(QDataStream::Qt_6_0);
+        Out << QByteArray(reinterpret_cast<const char*>(&Value.file_), sizeof(Value.file_)) << QJsonDocument(Value.columns_).toJson(QJsonDocument::Compact);
+        if (Out.status() != QDataStream::Ok) return HostError("dopus-list-spool-write");
+        ++count_; return Unit{};
+    }
+    Result<DopusVfsHostService::Record> DopusVfsHostService::Cursor::Read()
+    {
+        QDataStream In(file_.get()); In.setVersion(QDataStream::Qt_6_0); QByteArray Info, Columns; In >> Info >> Columns;
+        if (In.status() != QDataStream::Ok || Info.size() != sizeof(WIN32_FIND_DATAW)) return HostError("dopus-list-spool-read");
+        Record Value{}; memcpy(&Value.file_, Info.constData(), sizeof(Value.file_)); Value.columns_ = QJsonDocument::fromJson(Columns).object(); return Value;
+    }
     DopusVfsHostService::~DopusVfsHostService()
     {
         if (abort_.Valid()) SetEvent(abort_.Get());
@@ -124,12 +139,12 @@ namespace hc::plugins
                 struct HeapGuard { HANDLE heap_; ~HeapGuard() { HeapDestroy(heap_); } } Cleanup{Heap};
                 dopus::VfsReadDirectoryData Data{sizeof(Data), nullptr, Name.Value().data(), 1, abort_.Get(), Heap, nullptr};
                 if (!Read(instance_, nullptr, &Data)) return failure("read-directory");
-                Cursor Value; QSet<const void*> Seen; std::size_t TextBytes = 0;
+                Cursor Value; QSet<const void*> Seen;
                 for (auto* Header = Data.files_; Header; Header = Header->next_) {
                     if (Seen.contains(Header) || !HeapValidate(Heap, 0, Header)) return Invalid("dopus-vfs-directory-chain"); Seen.insert(Header);
                     const auto Bytes = HeapSize(Heap, 0, Header);
                     if (Header->size_ < sizeof(*Header) || Header->count_ < 0 || Header->entrySize_ < sizeof(dopus::VfsFileData) ||
-                        quint64(Header->size_) + quint64(Header->count_) * Header->entrySize_ > Bytes || retainedEntries_ + Value.entries_.size() + Header->count_ > 65536) return Invalid("dopus-vfs-directory-size");
+                        quint64(Header->size_) + quint64(Header->count_) * Header->entrySize_ > Bytes) return Invalid("dopus-vfs-directory-size");
                     for (int Index = 0; Index < Header->count_; ++Index) {
                         const auto* Entry = reinterpret_cast<const dopus::VfsFileData*>(reinterpret_cast<const char*>(Header) + Header->size_ + std::size_t(Index) * Header->entrySize_);
                         if (Entry->columnCount_ < 0 || Entry->columnCount_ > 64 || (Entry->columnCount_ && !Entry->columns_)) return Invalid("dopus-vfs-column-count");
@@ -138,13 +153,14 @@ namespace hc::plugins
                             const auto& Cell = Entry->columns_[Col]; const auto Key = QString::number(Cell.id_);
                             if (!Cell.value_ || Record.columns_.contains(Key) || std::none_of(columns_.begin(), columns_.end(), [&](const auto& Def) { return Def.toObject()["id"].toInt() == Cell.id_; })) return Invalid("dopus-vfs-column-id");
                             const auto* End = std::find(Cell.value_, Cell.value_ + 4096, L'\0'); if (End == Cell.value_ + 4096) return Invalid("dopus-vfs-column-termination");
-                            TextBytes += (End - Cell.value_) * 2; if (TextBytes > 8 * 1024 * 1024) return Invalid("dopus-vfs-column-budget");
                             Record.columns_[Key] = QString::fromWCharArray(Cell.value_, int(End - Cell.value_));
                         }
-                        Value.entries_.push_back(std::move(Record));
+                        if (const auto Stop = context_.Check({"dopus-vfs"})) return *Stop;
+                        if (Value.count_ >= context_.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-list-budget"};
+                        auto Saved = Value.Append(Record); if (!Saved.HasValue()) return Saved.Failure();
                     }
                 }
-                retainedEntries_ += Value.entries_.size(); const auto Id = nextCursor_++; cursors_.emplace(Id, std::move(Value)); return QJsonObject{{"cursor", Id}, {"end", false}};
+                if (Value.file_ && !Value.file_->seek(0)) return HostError("dopus-list-spool-seek"); const auto Id = nextCursor_++; cursors_.emplace(Id, std::move(Value)); return QJsonObject{{"cursor", Id}, {"end", false}};
             }
             if (!Name.Value().ends_with(L'\\')) Name.Value() += L'\\'; Name.Value() += L'*'; Cursor Value{}; WIN32_FIND_DATAW Data{};
             const auto Find = Export<dopus::VfsFindFirst>(module_, "VFS_FindFirstFileW")(instance_, nullptr, Name.Value().data(), &Data, abort_.Get());
@@ -158,44 +174,46 @@ namespace hc::plugins
                 instance_, Find, Export<dopus::VfsFindClose>(module_, "VFS_FindClose")};
             // The official RAR sample holds an archive mutex until FindClose.
             // Its reader thread deadlocks if a caller retains an enumeration
-            // while opening a file. Snapshot a bounded list before returning
+            // while opening a file. Spool the list to disk before returning
             // the first page; the native find handle never crosses an IPC call.
             for (;;)
             {
-                if (retainedEntries_ + Value.entries_.size() >= 65536) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-list-budget"};
-                Value.entries_.push_back({Data, {}});
+                if (const auto Stop = context_.Check({"dopus-vfs"})) return *Stop;
+                if (Value.count_ >= context_.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "dopus-vfs-list-budget"};
+                auto Saved = Value.Append({Data, {}}); if (!Saved.HasValue()) return Saved.Failure();
                 if (!Export<dopus::VfsFindNext>(module_, "VFS_FindNextFileW")(instance_, nullptr, Find, &Data))
                 {
                     const auto Code = Export<dopus::VfsError>(module_, "VFS_GetLastError")(instance_);
                     if (Code && Code != ERROR_NO_MORE_FILES) return failure("next"); break;
                 }
             }
-            retainedEntries_ += Value.entries_.size();
+            if (Value.file_ && !Value.file_->seek(0)) return HostError("dopus-list-spool-seek");
             const auto Id = nextCursor_++; cursors_.emplace(Id, std::move(Value)); return QJsonObject{{"cursor", Id}, {"end", false}};
         }
         if (!Integer(Request["cursor"], 1, INT_MAX)) return Invalid("dopus-vfs-cursor");
         const auto At = cursors_.find(Request["cursor"].toInt()); if (At == cursors_.end()) return Invalid("dopus-vfs-cursor");
         if (Action == "close" && Request.size() == 2)
-        { retainedEntries_ -= At->second.entries_.size(); cursors_.erase(At); return QJsonObject{}; }
+        { cursors_.erase(At); return QJsonObject{}; }
         if (Action != "next" || Request.size() != 3 || !Integer(Request["count"], 1, 256)) return Invalid("dopus-vfs-page");
         auto& Cursor = At->second; QJsonArray Entries; int Examined = 0; qsizetype PageBytes = 64;
-        while (Cursor.next_ < Cursor.entries_.size() && Entries.size() < Request["count"].toInt() && ++Examined <= 1024)
+        while (Cursor.next_ < Cursor.count_ && Entries.size() < Request["count"].toInt() && ++Examined <= 1024)
         {
-            const auto& Record = Cursor.entries_[Cursor.next_++]; const auto& Data = Record.file_; const auto End = std::find(std::begin(Data.cFileName), std::end(Data.cFileName), L'\0');
+            const auto Position = Cursor.file_->pos();
+            auto Record = Cursor.Read(); if (!Record.HasValue()) return Record.Failure(); ++Cursor.next_; const auto& Data = Record.Value().file_; const auto End = std::find(std::begin(Data.cFileName), std::end(Data.cFileName), L'\0');
             if (End == std::end(Data.cFileName)) return Invalid("dopus-vfs-name-termination");
             const auto Name = QString::fromWCharArray(Data.cFileName);
             if (Name.isEmpty() || Name.contains('/') || Name.contains('\\') || Name.contains(':')) return Invalid("dopus-vfs-entry-name");
             if (Name != "." && Name != "..") {
-                const QJsonObject Entry{{"columns", Record.columns_}, {"name", Name}, {"attributes", qint64(Data.dwFileAttributes)},
+                const QJsonObject Entry{{"columns", Record.Value().columns_}, {"name", Name}, {"attributes", qint64(Data.dwFileAttributes)},
                     {"size", QString::number((quint64(Data.nFileSizeHigh) << 32) | Data.nFileSizeLow)},
                     {"modified", QString::number(Ticks(Data.ftLastWriteTime))}, {"created", QString::number(Ticks(Data.ftCreationTime))}};
                 const auto Bytes = QJsonDocument(Entry).toJson(QJsonDocument::Compact).size() + 1;
                 if (Bytes > WirePayloadLimit - 1024) return Invalid("dopus-vfs-column-entry-budget");
-                if (!Entries.isEmpty() && PageBytes + Bytes > WirePayloadLimit - 1024) { --Cursor.next_; break; }
+                if (!Entries.isEmpty() && PageBytes + Bytes > WirePayloadLimit - 1024) { --Cursor.next_; if (!Cursor.file_->seek(Position)) return HostError("dopus-list-spool-seek"); break; }
                 PageBytes += Bytes; Entries.append(Entry);
             }
         }
-        return QJsonObject{{"entries", Entries}, {"end", Cursor.next_ == Cursor.entries_.size()}};
+        return QJsonObject{{"entries", Entries}, {"end", Cursor.next_ == Cursor.count_}};
     }
     bool DopusVfsHostService::batchAvailable(std::wstring Path, UINT Operation, std::wstring Destination)
     {
@@ -210,19 +228,21 @@ namespace hc::plugins
     }
     Result<bool> DopusVfsHostService::batch(std::wstring Path, const std::vector<std::wstring>& Files, UINT Operation, std::wstring Destination)
     {
-        if (Files.empty() || Files.size() > 256) return Invalid("dopus-vfs-batch-count");
+        if (Files.empty()) return Invalid("dopus-vfs-batch-count");
         if (!batchAvailable(Path, Operation, Destination)) return false;
         const auto Call = Export<dopus::VfsBatch>(module_, "VFS_BatchOperationW");
         for (std::size_t First = 0; First < Files.size();)
         {
             std::vector<wchar_t> Names;
-            for (auto Index = First; Index < Files.size(); ++Index)
+            if (const auto Stop = context_.Check({"dopus-vfs"})) return *Stop;
+            const auto Last = std::min(Files.size(), First + 256);
+            for (auto Index = First; Index < Last; ++Index)
             { Names.insert(Names.end(), Files[Index].begin(), Files[Index].end()); Names.push_back(0); }
             Names.push_back(0);
             // A plugin must positively report each processed entry. Missing
             // result writes cannot turn partial archive changes into success.
             // The supplied RAR sample uses -1 to recognize unprocessed files.
-            std::vector<int> Results(Files.size() - First, -1);
+            std::vector<int> Results(Last - First, -1);
             dopus::VfsBatchData Data{sizeof(Data), nullptr, abort_.Get(), Operation, int(Results.size()), Names.data(), Results.data(),
                 Destination.empty() ? nullptr : Destination.data(), Operation == 3 ? (1u << 11) | (1u << 12) : 0, nullptr};
             const auto Code = Call(instance_, nullptr, Path.data(), &Data);
@@ -280,6 +300,8 @@ namespace hc::plugins
     {
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
         if (!Local(Request["local"].toString())) return Invalid("dopus-vfs-local-path");
+        if (Write && context_.workload_.IsAutomatic() && uint64_t(QFileInfo(Request["local"].toString()).size()) > context_.workload_.automaticFileBytes_)
+            return Error{ErrorCategory::BudgetExceeded, "automatic-content-budget"};
         const auto Open = Export<dopus::VfsOpenFile>(module_, "VFS_CreateFileW");
         const auto Close = Export<dopus::VfsCloseFile>(module_, "VFS_CloseFile");
         const auto Read = Export<dopus::VfsReadFile>(module_, "VFS_ReadFile"); const auto Put = Export<dopus::VfsWriteFile>(module_, "VFS_WriteFile");
@@ -292,7 +314,7 @@ namespace hc::plugins
             QTemporaryDir Stage; if (!Stage.isValid()) return HostError("dopus-vfs-batch-stage");
             const auto Leaf = QString::fromStdWString(Name.Value().substr(Separator + 1));
             const auto Staged = Stage.filePath(Leaf);
-            if (Write && (QFileInfo(Request["local"].toString()).size() > 256LL * 1024 * 1024 || !QFile::copy(Request["local"].toString(), Staged))) return HostError("dopus-vfs-batch-stage-copy");
+            if (Write && (!QFile::copy(Request["local"].toString(), Staged))) return HostError("dopus-vfs-batch-stage-copy");
             auto Done = batch(Parent, {Write ? QDir::toNativeSeparators(Staged).toStdWString() : Name.Value()}, Write ? 1 : 2, Write ? std::wstring{} : QDir::toNativeSeparators(Stage.path()).toStdWString());
             if (!Done.HasValue()) return Done.Failure();
             if (Done.Value())
@@ -300,8 +322,10 @@ namespace hc::plugins
                 if (!Write)
                 {
                     QFile Input(Staged), Output(Request["local"].toString());
-                    if (!Input.open(QIODevice::ReadOnly) || Input.size() > 256LL * 1024 * 1024 || !Output.open(QIODevice::WriteOnly | QIODevice::Truncate)) return HostError("dopus-vfs-batch-extract-output");
-                    while (!Input.atEnd()) { const auto Bytes = Input.read(256 * 1024); if (Bytes.isEmpty() || Output.write(Bytes) != Bytes.size()) return HostError("dopus-vfs-batch-extract-copy"); }
+                    if (!Input.open(QIODevice::ReadOnly) || !Output.open(QIODevice::WriteOnly | QIODevice::Truncate)) return HostError("dopus-vfs-batch-extract-output");
+                    if (context_.workload_.IsAutomatic() && uint64_t(Input.size()) > context_.workload_.automaticFileBytes_)
+                        return Error{ErrorCategory::BudgetExceeded, "automatic-content-budget"};
+                    while (!Input.atEnd()) { if (const auto Stop = context_.Check({"dopus-vfs"})) return *Stop; if (context_.progress_) context_.progress_(Input.pos()); const auto Bytes = Input.read(256 * 1024); if (Bytes.isEmpty() || Output.write(Bytes) != Bytes.size()) return HostError("dopus-vfs-batch-extract-copy"); }
                     if (!Output.flush()) return HostError("dopus-vfs-batch-extract-flush");
                 }
                 return QJsonObject{};
@@ -356,11 +380,41 @@ namespace hc::plugins
         if (!instance_) return Invalid("dopus-vfs-not-initialized");
         if (!manifest_.extensions_.contains(Extension::StorageRead)) return Unsupported("dopus-vfs-storage-extension");
         if (Kind == WireKind::StorageEnumerate) return enumerate(Request);
+        if (Kind == WireKind::StorageGet && Request["action"] == "batch-extract") {
+            // Automatic readers use the sized single-file route for policy checks.
+            if (Context.workload_.IsAutomatic()) return Unsupported("dopus-vfs-automatic-batch");
+            if (Request.size() != 4 || !Request["files"].isArray() || !Local(Request["local"].toString())
+                || !QFileInfo(Request["local"].toString()).isDir() || !manifest_.permissions_.contains(Permission::ReadContent)) return Invalid("dopus-vfs-batch-request");
+            auto Container = path(Request["path"]); if (!Container.HasValue()) return Container.Failure();
+            std::vector<std::wstring> Files; QSet<QString> Names;
+            for (const auto& Item : Request["files"].toArray()) {
+                auto File = path(Item); if (!File.HasValue() || Item.toString() == "\\") return Invalid("dopus-vfs-batch-file");
+                const auto Leaf = Item.toString().section('\\', -1).toCaseFolded();
+                if (Names.contains(Leaf)) return Invalid("dopus-vfs-batch-duplicate-name"); Names.insert(Leaf);
+                Files.push_back(std::move(File.Value()));
+            }
+            auto Done = batch(Container.Value(), Files, 2, QDir::toNativeSeparators(Request["local"].toString()).toStdWString());
+            if (!Done.HasValue()) return Done.Failure(); if (!Done.Value()) return Unsupported("dopus-vfs-batch-declined");
+            return QJsonObject{{"processed", int(Files.size())}};
+        }
         if (Kind == WireKind::StorageGet && Request.size() == 3 && Request["info"].isObject()) return transfer(Request, false);
         if (Kind != WireKind::StorageMutate) return Invalid("dopus-vfs-command");
         if (!manifest_.extensions_.contains(Extension::StorageWrite) || !manifest_.permissions_.contains(Permission::WriteContent)) return Error{ErrorCategory::AccessDenied, "dopus-vfs-write-denied"};
         if (capabilities_ & dopus::VfsReadOnly) return Unsupported("dopus-vfs-read-only");
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
+        if (Request["action"] == "batch-add") {
+            if (Request.size() != 3 || !Request["files"].isArray()) return Invalid("dopus-vfs-batch-request");
+            std::vector<std::wstring> Files; QSet<QString> Names;
+            for (const auto& Item : Request["files"].toArray()) {
+                if (!Local(Item.toString()) || !QFileInfo(Item.toString()).isFile()) return Invalid("dopus-vfs-batch-local-file");
+                const auto Info = QFileInfo(Item.toString());
+                if (Names.contains(Info.fileName().toCaseFolded())) return Invalid("dopus-vfs-batch-duplicate-name"); Names.insert(Info.fileName().toCaseFolded());
+                if (Context.workload_.IsAutomatic() && uint64_t(Info.size()) > Context.workload_.automaticFileBytes_) return Error{ErrorCategory::BudgetExceeded, "automatic-content-budget"};
+                Files.push_back(QDir::toNativeSeparators(Item.toString()).toStdWString());
+            }
+            auto Done = batch(Name.Value(), Files, 1); if (!Done.HasValue()) return Done.Failure();
+            if (!Done.Value()) return Unsupported("dopus-vfs-batch-declined"); return QJsonObject{{"processed", int(Files.size())}};
+        }
         if (Request["action"] == "batch-delete" && Request.size() == 3 && Request["files"].isArray())
         {
             std::vector<std::wstring> Files;

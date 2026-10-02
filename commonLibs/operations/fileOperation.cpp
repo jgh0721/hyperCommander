@@ -452,7 +452,7 @@ namespace hc::operations
             return PreparedJob{std::move(Job), std::make_unique<SelectionTask>(std::move(Request))};
         }
         if (Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
-            || !Request.maxEntries_ || Request.maxEntries_ > 100000 || !Request.maxDepth_ || Request.maxDepth_ > 256 || !Request.maxBytes_
+            || !Request.maxEntries_ || !Request.maxDepth_ || Request.maxDepth_ > 256 || !Request.maxBytes_
             || Request.sources_.size() > Request.maxEntries_ || (Request.operation_ != FileOperation::MakeDirectory && Request.sources_.empty())
             || (Request.operation_ == FileOperation::MakeDirectory && !Request.sources_.empty())
             || (Request.operation_ == FileOperation::Rename && Request.sources_.size() != 1)

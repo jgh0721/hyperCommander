@@ -11,7 +11,7 @@ namespace hc::plugins
         QString defaultIniPath_;
         storage::PasswordPrompt passwordPrompt_;
     };
-    // Construction/destruction performs no I/O. Each worker call opens a host;
-    // enumeration keeps that host only for the returned listing's lifetime.
+    // Worker calls share an admitted host until it fails or this backend closes.
+    // Listings retain their epoch; final process reaping runs off the GUI thread.
     std::shared_ptr<IArchiveBackend> MakeApprovedWcxBackend(ApprovedWcxOptions Options);
 }

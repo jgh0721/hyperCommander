@@ -687,6 +687,7 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\UniqueLibs\qtItemOutcomeStore.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtDurableOutcomes.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\commonLibs\operations\writeRecovery.hpp" />
+    <ClInclude Include="..\commonLibs\operations\selectionPlan.hpp" />
     <ClInclude Include="..\commonLibs\storage\entryIndex.hpp" />
     <ClCompile Include="..\UniqueLibs\qtPagedStorage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\UniqueLibs\qtJobJournal.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

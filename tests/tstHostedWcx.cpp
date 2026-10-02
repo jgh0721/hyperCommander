@@ -62,11 +62,40 @@ namespace
         }
         return Bytes;
     }
+    std::set<DWORD> HostChildren()
+    {
+        std::set<DWORD> Pids; const auto Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (Snapshot == INVALID_HANDLE_VALUE) return Pids;
+        PROCESSENTRY32W Entry{}; Entry.dwSize = sizeof(Entry);
+        if (Process32FirstW(Snapshot, &Entry)) do {
+            if (Entry.th32ParentProcessID == GetCurrentProcessId() && _wcsicmp(Entry.szExeFile, L"hc-plugin-host-x64.exe") == 0) Pids.insert(Entry.th32ProcessID);
+        } while (Process32NextW(Snapshot, &Entry));
+        CloseHandle(Snapshot); return Pids;
+    }
 }
 class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void listingBeyondLegacyContextClamp_data()
+    { QTest::addColumn<bool>("V2"); QTest::newRow("v1") << false; QTest::newRow("v2") << true; }
+    void listingBeyondLegacyContextClamp()
+    {
+        QFETCH(bool, V2); QTemporaryDir Directory; auto Started = Start(Directory, true, 30000, {}, false, 30000, V2); QVERIFY(Started.HasValue());
+        auto Backend = MakeHostedArchiveBackend(Started.Value()); const auto Path = Directory.filePath("large.hct"); QVERIFY(Put(Path, Archive(100001)));
+        auto Cursor = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Cursor.HasValue()); size_t Count = 0;
+        for (;;) { auto Page = Cursor.Value()->Next(128, {}); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str()); Count += Page.Value().entries_.size(); if (Page.Value().end_) break; }
+        QCOMPARE(Count, size_t(100001));
+    }
+    void streamedUpdateBeyondOldCount()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 30000); QVERIFY(Started.HasValue());
+        auto Backend = MakeHostedArchiveBackend(Started.Value()); const auto Path = Directory.filePath("update.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        ArchiveUpdate Update; Update.archive_ = Path.toStdString(); Update.inputDirectory_ = Directory.path().toStdString();
+        for (int Index = 0; Index < 100001; ++Index) Update.remove_.push_back("absent-" + std::to_string(Index));
+        auto Applied = Backend->Update(std::move(Update), {}); QVERIFY2(Applied.HasValue(), Applied.HasValue() ? "" : Applied.Failure().code_.c_str());
+        auto Listed = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listed.HasValue()); QCOMPARE(Listed.Value()->Next(128, {}).Value().entries_.size(), size_t(2));
+    }
     void nestedHostedMutation()
     {
         for (const char Mode : {char(0), 'P', 'J'}) {
@@ -557,6 +586,7 @@ private slots:
         Options.approval_.granted_ = Options.approval_.reviewed_.permissions_;
         const auto Path = Directory.filePath("approved.hct"); QVERIFY(Put(Path, "HCWCX01"));
         auto Backend = MakeApprovedWcxBackend(Options);
+        const auto Before = HostChildren();
         const auto Native = QDir::toNativeSeparators(Options.binaryPath_).toStdWString();
         QVERIFY(!GetModuleHandleW(Native.c_str()));
         ArchiveHeader Header;
@@ -567,13 +597,18 @@ private slots:
         }
         QVERIFY(Backend->Extract(Path.toStdString(), Header, Directory.filePath("output").toStdString(), {}).HasValue());
         QCOMPARE(Read(Directory.filePath("output")), QByteArray("alpha"));
+        const auto AfterExtract = HostChildren();
+        std::vector<DWORD> NewHosts; std::set_difference(AfterExtract.begin(), AfterExtract.end(), Before.begin(), Before.end(), std::back_inserter(NewHosts));
+        QCOMPARE(NewHosts.size(), size_t(1)); const auto Pid = NewHosts.front();
         QVERIFY(Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"alpha.txt"}}, {}).HasValue());
+        QVERIFY(HostChildren().contains(Pid));
         QVERIFY(!GetModuleHandleW(Native.c_str()));
         // A backend retained by a mount must not retain an old approval after a manifest edit.
         auto Changed = Options.approval_.reviewed_; Changed.version_ = "2";
         QVERIFY(Put(Options.manifestPath_, EncodeManifest(Changed)));
         auto Denied = Backend->Enumerate(Path.toStdString(), false, {});
         QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().category_, ErrorCategory::AccessDenied);
+        Backend.reset(); QTRY_VERIFY(!HostChildren().contains(Pid));
     }
     void approvedBackendRejectsUnreviewedAndWrongBinary()
     {

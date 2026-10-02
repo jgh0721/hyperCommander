@@ -15,10 +15,10 @@ namespace hc::storage
     };
     struct ArchiveMutationLimits
     {
-        std::size_t maxEntries_ = 100000;
+        std::size_t maxEntries_ = std::numeric_limits<std::size_t>::max();
         std::size_t maxDepth_ = 32;
-        std::uint64_t maxInputBytes_ = 1024ULL * 1024 * 1024;
-        std::uint64_t maxArchiveBytes_ = 256ULL * 1024 * 1024;
+        std::uint64_t maxInputBytes_ = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t maxArchiveBytes_ = std::numeric_limits<std::uint64_t>::max();
     };
     class IArchiveMutationSession
     {

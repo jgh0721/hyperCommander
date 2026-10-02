@@ -285,7 +285,8 @@ namespace hc::plugins
             {
                 if (const auto Stop = Context.Check(provider_->Id())) return *Stop;
                 if (done_ || !file_.isOpen()) return Invalid("hosted-storage-write-closed");
-                if (Bytes.size() > Context.maxReadBytes_ || std::uint64_t(file_.size()) + Bytes.size() > 256ULL * 1024 * 1024) return Error{ErrorCategory::BudgetExceeded, "hosted-storage-write-budget"};
+                if (Bytes.size() > Context.maxReadBytes_ || Bytes.size() > uint64_t(INT64_MAX) - uint64_t(file_.size())
+                    || (Context.workload_.IsAutomatic() && std::uint64_t(file_.size()) + Bytes.size() > Context.workload_.automaticFileBytes_)) return Error{ErrorCategory::BudgetExceeded, "hosted-storage-write-budget"};
                 if (file_.write(reinterpret_cast<const char*>(Bytes.data()), qint64(Bytes.size())) != qint64(Bytes.size())) return Error{ErrorCategory::Unavailable, "hosted-storage-stage-write"}; return Unit{};
             }
             Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) override

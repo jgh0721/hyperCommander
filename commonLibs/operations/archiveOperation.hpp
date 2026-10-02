@@ -13,6 +13,8 @@ namespace hc::operations
         storage::Locator destination_;
         std::shared_ptr<storage::IStorageProvider> reader_;
         std::vector<OperationSource> sources_;
+        std::shared_ptr<storage::ISelectionManifest> selection_;
+        storage::Locator selectionRoot_;
         std::function<Result<std::unique_ptr<storage::IArchiveMutationSession>>(storage::OperationContext)> begin_;
         // Copy planning with atomic removal in a sibling/ancestor container.
         // Supplied only by the shared-outer-archive move coordinator.

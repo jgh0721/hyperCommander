@@ -36,7 +36,7 @@ namespace hc::plugins
             if (Request.size() != 2) return Invalid();
             const auto Key = Request.contains("cursor") ? "cursor" : "upload"; auto Id = WireUnsigned(Request[Key]); if (!Id.HasValue()) return Id.Failure();
             if (Request.contains("cursor")) listings_.erase(Id.Value());
-            else if (Id.Value() == upload_) { upload_ = 0; data_.clear(); hash_.clear(); }
+            else if (Id.Value() == upload_) { upload_ = 0; data_.clear(); hash_.clear(); streamed_.reset(); }
             return QJsonObject{{"released", true}};
         }
         if (Kind == WireKind::ArchiveExtract)
@@ -49,6 +49,15 @@ namespace hc::plugins
         if (!write_) return Error{ErrorCategory::AccessDenied, writeFailure_, {"wcx"}};
         if (Kind == WireKind::ArchiveUpdateBegin)
         {
+            if (SessionContext && Request.contains("update")) {
+                if (upload_) return Error{ErrorCategory::Unavailable, "host-archive-update-busy", {"wcx"}, {}, true};
+                auto Header = DecodeArchiveUpdate(Request["update"].toObject());
+                auto Added = WireUnsigned(Request["added"]), Removed = WireUnsigned(Request["removed"]);
+                if (Request.size() != 4 || !Header.HasValue() || !Added.HasValue() || !Removed.HasValue()
+                    || !Header.Value().add_.empty() || !Header.Value().remove_.empty()) return Invalid();
+                streamed_ = std::move(Header.Value()); added_ = Added.Value(); removed_ = Removed.Value(); received_ = 0;
+                upload_ = ++serial_; return QJsonObject{{"upload", QString::number(upload_)}};
+            }
             auto Size = WireUnsigned(Request["size"]);
             if (Request.size() != 3 || !Size.HasValue() || !Size.Value() || Size.Value() > 128ULL * 1024 * 1024 || !Request["sha256"].isString() || Request["sha256"].toString().size() != 64) return Invalid();
             if (upload_) return Error{ErrorCategory::Unavailable, "host-archive-update-busy", {"wcx"}, {}, true};
@@ -58,6 +67,7 @@ namespace hc::plugins
         auto Id = WireUnsigned(Request["upload"]); if (!Id.HasValue() || !upload_ || Id.Value() != upload_) return Invalid();
         if (Kind == WireKind::ArchiveUpdateData)
         {
+            if (streamed_) return Invalid("host-archive-update-protocol");
             auto Offset = WireUnsigned(Request["offset"]);
             if (Request.size() != 4 || !Offset.HasValue() || Offset.Value() != std::uint64_t(data_.size()) || !Request["data"].isString() || Request["data"].toString().size() > 65536) return Invalid();
             const auto Encoded = Request["data"].toString().toLatin1(); const auto Bytes = QByteArray::fromBase64(Encoded, QByteArray::AbortOnBase64DecodingErrors);
@@ -65,6 +75,12 @@ namespace hc::plugins
             data_.append(Bytes); return QJsonObject{{"received", QString::number(data_.size())}};
         }
         if (Kind != WireKind::ArchiveUpdateApply || Request.size() != 2) return Invalid();
+        if (streamed_) {
+            if (streamed_->add_.size() != added_ || streamed_->remove_.size() != removed_) return Invalid("host-archive-update-count");
+            auto Update = std::move(*streamed_); streamed_.reset(); upload_ = 0;
+            auto Applied = backend_->Update(std::move(Update), Context.Value()); if (!Applied.HasValue()) return Applied.Failure();
+            return QJsonObject{{"complete", true}};
+        }
         upload_ = 0; auto Bytes = std::exchange(data_, {});
         if (std::uint64_t(Bytes.size()) != uploadSize_ || QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != hash_) return Invalid("host-archive-update-integrity");
         QJsonParseError Error; const auto Document = QJsonDocument::fromJson(Bytes, &Error);
@@ -77,6 +93,23 @@ namespace hc::plugins
     {
         if (const auto Stop = Context.Check({"wcx"})) return *Stop;
         auto Id = WireUnsigned(Request["upload"]), Offset = WireUnsigned(Request["offset"]);
+        if (streamed_) {
+            if (!write_ || Request.size() != 2 || !Id.HasValue() || Id.Value() != upload_ || !Offset.HasValue() || Offset.Value() != received_
+                || Bytes.isEmpty() || Bytes.size() > WirePayloadLimit / 2) return Invalid();
+            const auto Page = QJsonDocument::fromJson(Bytes);
+            if (!Page.isObject() || Page.object().size() != 2 || !Page["add"].isArray() || !Page["remove"].isArray()) return Invalid();
+            std::vector<std::string> Added, Removed;
+            for (const auto& [Key, Names] : {std::pair{"add", &Added}, {"remove", &Removed}})
+                for (const auto& Name : Page[Key].toArray()) {
+                    if (!Name.isString() || Name.toString().isEmpty() || Name.toString().size() > 4096 || Name.toString().contains(QChar::Null)) return Invalid();
+                    Names->push_back(Name.toString().toStdString());
+                }
+            if (Added.size() > added_ - streamed_->add_.size() || Removed.size() > removed_ - streamed_->remove_.size()
+                || uint64_t(Bytes.size()) > UINT64_MAX - received_) return Invalid();
+            streamed_->add_.insert(streamed_->add_.end(), std::make_move_iterator(Added.begin()), std::make_move_iterator(Added.end()));
+            streamed_->remove_.insert(streamed_->remove_.end(), std::make_move_iterator(Removed.begin()), std::make_move_iterator(Removed.end()));
+            received_ += Bytes.size(); return QJsonObject{{"received", QString::number(received_)}};
+        }
         if (!write_ || Request.size() != 2 || !Id.HasValue() || !Offset.HasValue() || !upload_ || Id.Value() != upload_
             || Offset.Value() != std::uint64_t(data_.size()) || Bytes.isEmpty() || Bytes.size() > WirePayloadLimit / 2
             || std::uint64_t(data_.size()) > uploadSize_ || std::uint64_t(Bytes.size()) > uploadSize_ - std::uint64_t(data_.size())) return Invalid();

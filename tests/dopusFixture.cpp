@@ -145,6 +145,14 @@ API int VFS_ReadDirectoryW(HANDLE Handle, void*, VfsReadDirectoryData* Data)
     if (Find == INVALID_HANDLE_VALUE) return Result(Handle, FALSE);
     std::vector<WIN32_FIND_DATAW> Entries;
     do { Entries.push_back(File); } while (FindNextFileW(Find, &File)); FindClose(Find);
+    if (wcsstr(Data->path_, L"large-list")) {
+        Entries.clear(); Entries.reserve(65537);
+        for (int Index = 0; Index < 65537; ++Index) {
+            WIN32_FIND_DATAW Entry{}; Entry.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+            const auto Name = L"entry" + std::to_wstring(Index) + L".txt"; wcscpy_s(Entry.cFileName, Name.c_str());
+            Entry.nFileSizeLow = Index; Entries.push_back(Entry);
+        }
+    }
     const auto Bytes = sizeof(VfsFileHeader) + Entries.size() * sizeof(VfsFileData);
     auto* Header = static_cast<VfsFileHeader*>(HeapAlloc(Data->heap_, HEAP_ZERO_MEMORY, Bytes)); Require(Header);
     Header->size_ = sizeof(*Header); Header->count_ = int(Entries.size()); Header->entrySize_ = sizeof(VfsFileData); Data->files_ = Header;

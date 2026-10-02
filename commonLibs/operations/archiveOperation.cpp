@@ -1,5 +1,6 @@
 ﻿#include "archiveOperation.hpp"
 #include "../storage/materializedContent.hpp"
+#include "selectionPlan.hpp"
 #include <set>
 #include <deque>
 
@@ -268,10 +269,25 @@ namespace hc::operations
     }
     Result<PreparedJob> PrepareArchiveOperation(ArchiveOperationRequest Request, OperationContext Context)
     {
+        if (Request.selection_) {
+            if (!Request.sources_.empty() || !Request.selection_->Provider() || !Request.selection_->Count()
+                || Request.selection_->Count() > Request.limits_.maxEntries_ || Request.selectionRoot_.root_.empty()
+                || (Request.selectionRoot_.kind_ == LocatorKind::Archive && Request.selectionRoot_.nesting_.empty()))
+                return Error{ErrorCategory::InvalidRequest, "invalid-archive-selection"};
+            JobRequest Job; Job.operation_ = Context; Job.correlationId_ = Request.correlationId_; Job.maxItemResults_ = Request.limits_.maxEntries_;
+            Job.resourceLanes_ = {ResourceLane(Request.archive_), ResourceLane(Request.selectionRoot_)};
+            auto Selection = Request.selection_; auto Root = Request.selectionRoot_; auto Limit = Request.limits_.maxEntries_;
+            auto Reader = Selection->Provider(); Request.selection_.reset();
+            return PreparedJob{std::move(Job), std::make_unique<SelectionPlan>(Selection, Root,
+                [Request = std::move(Request), Reader](std::vector<EntrySnapshot> Entries, OperationContext Operation) mutable -> Result<PreparedJob> {
+                    for (auto& Entry : Entries) Request.sources_.push_back({std::move(Entry), Reader, {}});
+                    return PrepareArchiveOperation(std::move(Request), Operation);
+                }, Limit)};
+        }
         const auto ValidLocation = [&](const Locator& At) { return SameArchiveContainer(At, Request.archive_) && At.nesting_.back().entry_.starts_with('/'); };
         if (!Request.reader_ || !Request.begin_ || Request.archive_.kind_ != LocatorKind::Archive || Request.archive_.root_.empty()
             || (Request.archive_.nesting_.empty() || Request.archive_.nesting_.size() > 8) || Request.archive_.nesting_.back().entry_ != "/"
-            || !Request.limits_.maxEntries_ || Request.limits_.maxEntries_ > 100000 || !Request.limits_.maxDepth_ || Request.limits_.maxDepth_ > 32
+            || !Request.limits_.maxEntries_ || !Request.limits_.maxDepth_ || Request.limits_.maxDepth_ > 32
             || !Request.limits_.maxInputBytes_ || Request.sources_.size() > Request.limits_.maxEntries_
             || (Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Delete && Request.operation_ != FileOperation::Rename && Request.operation_ != FileOperation::MakeDirectory && Request.operation_ != FileOperation::Move)
             || (Request.beginRemoval_ && Request.operation_ != FileOperation::Copy)
@@ -293,7 +309,7 @@ namespace hc::operations
         JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context; Job.maxItemResults_ = Request.limits_.maxEntries_;
         Job.resourceLanes_.push_back(Lane(Request.archive_.root_));
         for (const auto& Source : Request.sources_)
-            if (Source.entry_.locator_.kind_ == LocatorKind::Archive) Job.resourceLanes_.push_back(Lane(Source.entry_.locator_.root_));
+            Job.resourceLanes_.push_back(ResourceLane(Source.entry_.locator_));
         return PreparedJob{std::move(Job), std::make_unique<ArchiveTask>(std::move(Request))};
     }
     Result<JobHandle> SubmitArchiveOperation(JobScheduler& Scheduler, ArchiveOperationRequest Request, OperationContext Context)

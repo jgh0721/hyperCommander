@@ -339,7 +339,7 @@ namespace hc::storage
         {
             if (const auto Failure = Context.Check({"materializer"})) return *Failure;
             if (!Producer || Entry.directory_ || (Entry.attributes_ & 0x400)
-                || (Size != ProducedSize::Exact && Size != ProducedSize::Bounded))
+                || (Size != ProducedSize::Exact && Size != ProducedSize::Bounded && Size != ProducedSize::Growing))
                 return Error{ErrorCategory::InvalidRequest, "invalid-content-producer"};
             auto Depth = Entry.locator_.nesting_.size();
             for (const auto& Parent : Parents)
@@ -347,8 +347,9 @@ namespace hc::storage
                 if (!Parent || Parent->Depth() >= limits_.maxDepth_) return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
                 Depth = std::max(Depth, Parent->Depth() + 1);
             }
-            if (const auto Policy = CheckMaterialization(Entry, Depth, CompressedBytes, limits_, Context)) return *Policy;
-            auto Created = Create(Entry); if (!Created.HasValue()) return Created.Failure();
+            auto Reservation = Entry; if (Size == ProducedSize::Growing) Reservation.size_ = 0;
+            if (const auto Policy = CheckMaterialization(Reservation, Depth, CompressedBytes, limits_, Context)) return *Policy;
+            auto Created = Create(Reservation); if (!Created.HasValue()) return Created.Failure();
             auto Item = std::move(Created.Value());
             auto Guard = qScopeGuard([&] { if (Item) Schedule(std::move(Item)); });
             const auto Fail = [&](Error Failure) -> Result<std::shared_ptr<IMaterializedFileLease>> {
@@ -360,9 +361,31 @@ namespace hc::storage
             // WCX opens the destination by path. Keep its parent and ownership
             // manifest pinned while releasing the initial writable file handle.
             Item->file_.Close();
+            std::optional<Error> GrowthFailure;
+            std::stop_source Stop;
+            std::stop_callback Cancel(Context.stopToken_, [&] { Stop.request_stop(); });
+            const auto Account = [&](uint64_t Bytes) -> Result<Unit> {
+                auto Current = Entry; Current.size_ = Bytes;
+                if (Bytes > Entry.size_) return Error{ErrorCategory::BudgetExceeded, "produced-size-budget"};
+                if (const auto Policy = CheckMaterialization(Current, Depth, CompressedBytes, limits_, Context)) return *Policy;
+                std::lock_guard Lock(mutex_);
+                if (Bytes > Item->bytes_ && Bytes - Item->bytes_ > limits_.maxTotalBytes_ - bytes_)
+                    return Error{ErrorCategory::BudgetExceeded, "materialization-total-budget"};
+                bytes_ = bytes_ - Item->bytes_ + Bytes; Item->bytes_ = Bytes; return Unit{};
+            };
+            if (Size == ProducedSize::Growing) {
+                Context.stopToken_ = Stop.get_token();
+                Context.progress_ = [&, Progress = Context.progress_](uint64_t Done) {
+                    const auto Observed = QFileInfo(Item->content_).size();
+                    auto Charged = Account(Observed < 0 ? 0 : uint64_t(Observed));
+                    if (!Charged.HasValue()) { GrowthFailure = Charged.Failure(); Stop.request_stop(); }
+                    if (Progress) Progress(Done);
+                };
+            }
             try
             {
                 const auto Produced = Producer(Item->content_.toStdString(), Context);
+                if (GrowthFailure) return Fail(*GrowthFailure);
                 if (!Produced.HasValue()) return Fail(Produced.Failure());
             }
             catch (...) { return Fail({ErrorCategory::Internal, "content-producer-exception"}); }
@@ -376,6 +399,7 @@ namespace hc::storage
             if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1
                 || (Size == ProducedSize::Exact ? Bytes != Entry.size_ : Bytes > Entry.size_))
                 return Fail({ErrorCategory::InvalidRequest, "invalid-produced-content"});
+            if (Size == ProducedSize::Growing) { auto Charged = Account(Bytes); if (!Charged.HasValue()) return Fail(Charged.Failure()); }
             // The immutable read handle now denies write/delete. Release unused
             // reservation so a chain of small candidates does not consume one
             // full archive ceiling per level; actual live bytes remain charged.

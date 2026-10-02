@@ -508,7 +508,7 @@ namespace hc::storage
                 // build() independently bounds and integrity-tests expansion.
                 return Store.Value()->Produce(Output, {}, Output.size_, Context, [&](const std::string& Path, OperationContext Context) {
                     return build(QString::fromStdString(Path), Context);
-                }, ProducedSize::Bounded);
+                }, ProducedSize::Growing);
             }
             Result<Unit> prepare(std::vector<ArchiveChange> Changes, OperationContext Context)
             {
@@ -569,9 +569,9 @@ namespace hc::storage
         if (!Reader || (Reader->Id().value_ != "wcx" && !(Reader->Id().value_ == "iso" && Root.nesting_.size() == 1))
             || Root.kind_ != LocatorKind::Archive || Root.nesting_.empty() || Root.nesting_.size() > 8
             || !std::ranges::all_of(Root.nesting_, [](const ContainerHop& Hop) { return Hop.provider_ == "wcx"; })
-            || Root.nesting_.back().entry_ != "/" || !Limits.maxEntries_ || Limits.maxEntries_ > 100000
-            || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_ || Limits.maxInputBytes_ > 64ULL * 1024 * 1024 * 1024
-            || !Limits.maxArchiveBytes_ || Limits.maxArchiveBytes_ > 128ULL * 1024 * 1024 * 1024)
+            || Root.nesting_.back().entry_ != "/" || !Limits.maxEntries_
+            || !Limits.maxDepth_ || Limits.maxDepth_ > 32 || !Limits.maxInputBytes_
+            || !Limits.maxArchiveBytes_)
             return Invalid("invalid-archive-mutation-request");
         const auto Kind = Root.root_.starts_with("\\\\") || Root.root_.starts_with("//") ? LocatorKind::Smb : LocatorKind::Local;
         auto NativeReader = MakeNativeReadProvider(Kind);

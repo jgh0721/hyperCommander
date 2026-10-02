@@ -4,7 +4,7 @@
 
 namespace hc::storage
 {
-    enum class ProducedSize { Exact, Bounded };
+    enum class ProducedSize { Exact, Bounded, Growing };
     class INativeContentStore
     {
     public:
@@ -13,6 +13,8 @@ namespace hc::storage
         // returning, observe cancellation/budgets, and never retain the path.
         // Bounded reserves Entry.size_ as a ceiling until release and returns
         // the actual size in the lease description.
+        // Growing charges observed live bytes on producer progress and at close;
+        // Entry.size_ remains the caller's ceiling, not an up-front reservation.
         virtual Result<std::shared_ptr<IMaterializedFileLease>> Produce(EntrySnapshot Entry,
             std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
             OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer,

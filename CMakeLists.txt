@@ -51,6 +51,7 @@ qt_add_library(hc_viewer_core STATIC
     commonLibs/operations/jobScheduler.hpp
     commonLibs/operations/providerInteractionTask.hpp
     commonLibs/operations/writeRecovery.hpp
+    commonLibs/operations/selectionPlan.hpp
 )
 # The core uses the kit's CRT settings but has no Qt headers or linkage.
 set_target_properties(hc_viewer_core PROPERTIES AUTOMOC OFF AUTOUIC OFF)

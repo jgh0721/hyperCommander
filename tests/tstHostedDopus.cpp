@@ -26,6 +26,47 @@ class HostedDopusTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void diskListingBeyondOldLimit()
+    {
+        QTemporaryDir Package, Root, Cache; QVERIFY(QDir(Root.path()).mkdir("large-list"));
+        auto Process = Start(Package, true, false, 30000); QVERIFY(Process.HasValue());
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"large"}, Store.Value(), true, Root.path()); QVERIFY(Mounted.HasValue());
+        auto At = Mounted.Value().root_; At.root_ += "large-list";
+        auto Cursor = Mounted.Value().reader_->Enumerate(At, {}).get(); QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+        uint64_t Count = 0;
+        for (;;) {
+            auto Page = Cursor.Value()->Next(256, {}).get(); QVERIFY(Page.HasValue());
+            for (const auto& Entry : Page.Value().entries_) { QCOMPARE(Entry.size_, Count); ++Count; }
+            if (Page.Value().end_) break;
+        }
+        QCOMPARE(Count, 65537ull); Cursor.Value().reset();
+        OperationContext Small; Small.maxEnumerationEntries_ = 7;
+        auto Limited = Mounted.Value().reader_->Enumerate(At, Small).get(); QVERIFY(!Limited.HasValue());
+        QCOMPARE(Limited.Failure().category_, ErrorCategory::BudgetExceeded); QVERIFY(Process.Value()->Ping().HasValue());
+    }
+    void multipleBatchesBeyondOldLimit()
+    {
+        QTemporaryDir Package, Root, Input, Output; auto Process = Start(Package, true, false, 30000, true); QVERIFY(Process.HasValue());
+        QVERIFY(Process.Value()->DataCall(WireKind::StorageEnumerate, {{"action", "mount"}, {"root", Root.path()}}).HasValue());
+        QJsonArray Local, Remote;
+        for (int Index = 0; Index < 513; ++Index) {
+            const auto Name = QString("batch%1.txt").arg(Index); QVERIFY(Put(Input.filePath(Name), Name.toUtf8()));
+            Local.append(Input.filePath(Name)); Remote.append("\\" + Name);
+        }
+        auto Added = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "batch-add"}, {"path", "\\"}, {"files", Local}});
+        QVERIFY2(Added.HasValue(), Added.HasValue() ? "" : Added.Failure().code_.c_str()); QCOMPARE(Added.Value()["processed"].toInt(), 513);
+        auto Extracted = Process.Value()->DataCall(WireKind::StorageGet, {{"action", "batch-extract"}, {"path", "\\"}, {"files", Remote}, {"local", Output.path()}});
+        QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str()); QCOMPARE(Extracted.Value()["processed"].toInt(), 513);
+        QCOMPARE(Read(Output.filePath("batch512.txt")), QByteArray("batch512.txt"));
+        auto Deleted = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "batch-delete"}, {"path", "\\"}, {"files", Remote}});
+        QVERIFY(Deleted.HasValue()); QCOMPARE(Deleted.Value()["processed"].toInt(), 513); QVERIFY(QDir(Root.path()).entryList(QDir::Files).isEmpty());
+        for (int Index = 0; Index < 512; ++Index) QVERIFY(Put(Root.filePath(QString("batch%1.txt").arg(Index)), "x"));
+        QVERIFY(Put(Root.filePath("batch-partial"), "keep")); Remote[512] = "\\batch-partial";
+        auto Partial = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "batch-delete"}, {"path", "\\"}, {"files", Remote}});
+        QVERIFY(!Partial.HasValue()); QVERIFY(Partial.Failure().code_.starts_with("dopus-vfs-batch-entry:512:"));
+        QCOMPARE(QDir(Root.path()).entryList(QDir::Files), QStringList{"batch-partial"}); QVERIFY(Process.Value()->Ping().HasValue());
+    }
     void binaryStreamFramesAndStaleLifetime()
     {
         QTemporaryDir Package, Root, Cache; auto Process = Start(Package); QVERIFY(Process.HasValue());
@@ -141,6 +182,19 @@ private slots:
         QVERIFY(Files > 0); qInfo() << "Official RAR files verified:" << Files;
         auto Support = Mounted.Value().writer_->Supports(Mutation::CreateContent, Mounted.Value().root_, {}); QVERIFY(Support.HasValue()); QCOMPARE(Support.Value().availability_, Availability::Unsupported);
         Process->Close(); QVERIFY(!Process->Snapshot().forcedTermination_); QCOMPARE(Process->Snapshot().exitCode_.value_or(1), std::uint32_t(0));
+    }
+    void writeBeyondOldByteLimit()
+    {
+        QTemporaryDir Package, Root, Cache; auto Process = Start(Package, true, false, 30000); QVERIFY(Process.HasValue());
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"large-write"}, Store.Value(), true, Root.path()); QVERIFY(Mounted.HasValue());
+        auto At = Mounted.Value().root_; At.root_ += "large.bin";
+        auto Session = Mounted.Value().writer_->BeginWrite(At, {}, {}); QVERIFY(Session.HasValue());
+        const QByteArray Block(1024 * 1024, 'z');
+        for (int Count = 0; Count < 257; ++Count) QVERIFY(Session.Value()->Append(std::as_bytes(std::span(Block.constData(), size_t(Block.size()))), {}).HasValue());
+        auto Committed = Session.Value()->Commit({}); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+        QFile File(Root.filePath("large.bin")); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.size(), 257ll * 1024 * 1024);
+        QVERIFY(File.seek(256ll * 1024 * 1024)); QCOMPARE(File.read(1024 * 1024), Block);
     }
     void vfsReadWriteAndLifetime()
     {
