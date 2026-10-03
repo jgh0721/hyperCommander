@@ -157,58 +157,7 @@ public:
 private:
     std::shared_ptr<State> state_; const std::map<UInt32, const UpdateItem*>& items_; const UpdateItem* item_ = nullptr; Output* output_ = nullptr;
 };
-Result<Unit> CheckZipReplacementExtras(Archive& Original, const std::set<QString>& Removed) {
-    QFile File(QString::fromStdString(Original.state_->archive_)); if (!File.open(QIODevice::ReadOnly)) return Failure("zip-metadata-open");
-    const auto ReadAt = [&](uint64_t Offset, qsizetype Size) { return Offset <= uint64_t(File.size()) && File.seek(qint64(Offset)) ? File.read(Size) : QByteArray{}; };
-    const auto U16 = [](const QByteArray& B, int At) { return qFromLittleEndian<quint16>(B.constData() + At); };
-    const auto U32 = [](const QByteArray& B, int At) { return qFromLittleEndian<quint32>(B.constData() + At); };
-    const auto U64 = [](const QByteArray& B, int At) { return qFromLittleEndian<quint64>(B.constData() + At); };
-    const auto Bad = [] { return Failure("zip-replaced-extra-preservation-unsupported", ErrorCategory::Unsupported); };
-    const auto ExtrasSafe = [&](const QByteArray& Bytes) {
-        for (qsizetype At = 0; At < Bytes.size();) {
-            if (Bytes.size() - At < 4) return false; const auto Id = U16(Bytes, int(At)), Size = U16(Bytes, int(At + 2)); At += 4;
-            if (Size > Bytes.size() - At || (Id != 0x0001 && Id != 0x000a && Id != 0x5455 && Id != 0x7075 && Id != 0x6375 && Id != 0x9901)) return false;
-            // Only the standard NTFS timestamp subrecord is represented by the
-            // SDK properties above; unknown NTFS tags must not disappear.
-            if (Id == 0x000a && (Size != 32 || U32(Bytes, int(At)) != 0 || U16(Bytes, int(At + 4)) != 1 || U16(Bytes, int(At + 6)) != 24)) return false;
-            At += Size;
-        }
-        return true;
-    };
-    std::set<uint64_t> RemovedOffsets;
-    for (UInt32 I = 0; I < Original.count_; ++I) {
-        auto H = Original.Header(I); if (!H.HasValue()) return H.Failure(); if (!Removed.contains(EntryKey(QString::fromStdString(H.Value().name_)))) continue;
-        Property Offset; if (Original.archive_->GetProperty(I, kpidOffset, &Offset) != S_OK || (Offset.vt != VT_UI8 && Offset.vt != VT_UI4)) return Bad();
-        RemovedOffsets.insert(Offset.Number()); const auto Local = ReadAt(Offset.Number(), 30);
-        if (Local.size() != 30 || U32(Local, 0) != 0x04034b50) return Bad();
-        const auto Extra = ReadAt(Offset.Number() + 30 + U16(Local, 26), U16(Local, 28));
-        if (Extra.size() != U16(Local, 28) || !ExtrasSafe(Extra)) return Bad();
-    }
-    const auto TailAt = std::max<qint64>(0, File.size() - 65557); const auto Tail = ReadAt(uint64_t(TailAt), File.size() - TailAt);
-    qsizetype End = -1; for (auto At = Tail.size() - 22; At >= 0; --At) if (U32(Tail, int(At)) == 0x06054b50 && At + 22 + U16(Tail, int(At + 20)) == Tail.size()) { End = At; break; }
-    if (End < 0) return Bad(); uint64_t Central = U32(Tail, int(End + 16));
-    if (Central == UINT32_MAX) {
-        const auto Locator = ReadAt(uint64_t(TailAt + End - 20), 20); if (Locator.size() != 20 || U32(Locator, 0) != 0x07064b50) return Bad();
-        const auto Zip64 = ReadAt(U64(Locator, 8), 56); if (Zip64.size() != 56 || U32(Zip64, 0) != 0x06064b50) return Bad(); Central = U64(Zip64, 48);
-    }
-    for (UInt32 I = 0; I < Original.count_; ++I) {
-        if (const auto Stop = Original.state_->context_.Check({"7zip"})) return *Stop;
-        const auto Header = ReadAt(Central, 46); if (Header.size() != 46 || U32(Header, 0) != 0x02014b50) return Bad();
-        const auto Extra = ReadAt(Central + 46 + U16(Header, 28), U16(Header, 30)); if (Extra.size() != U16(Header, 30)) return Bad();
-        uint64_t Offset = U32(Header, 42);
-        if (Offset == UINT32_MAX) {
-            bool Found = false;
-            for (qsizetype At = 0; At + 4 <= Extra.size();) {
-                const auto Id = U16(Extra, int(At)), Size = U16(Extra, int(At + 2)); At += 4; if (Size > Extra.size() - At) return Bad();
-                if (Id == 1) { const auto Skip = (U32(Header, 24) == UINT32_MAX ? 8 : 0) + (U32(Header, 20) == UINT32_MAX ? 8 : 0); if (Size < Skip + 8) return Bad(); Offset = U64(Extra, int(At + Skip)); Found = true; break; } At += Size;
-            }
-            if (!Found) return Bad();
-        }
-        if (RemovedOffsets.contains(Offset) && !ExtrasSafe(Extra)) return Bad();
-        Central += 46 + U16(Header, 28) + U16(Header, 30) + U16(Header, 32);
-    }
-    return Unit{};
-}
+#include "sevenZipMetadata.inl"
 Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto Target = QString::fromStdString(Request.archive_);
@@ -260,6 +209,10 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         auto Header = Original->Header(I); if (!Header.HasValue()) return Header.Failure(); const auto& H = Header.Value(); const auto Key = EntryKey(QString::fromStdString(H.name_));
         if (!SafeUpdateName(Key) || !OldNames.emplace(Key, I).second || !Names.insert(Key.toCaseFolded()).second) return Failure("7zip-ambiguous-update-name", ErrorCategory::Unsupported);
         if (H.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Failure("7zip-link-update-unsupported", ErrorCategory::Unsupported);
+        Property Posix; if (Original->archive_->GetProperty(I, kpidPosixAttrib, &Posix) != S_OK) return Failure("7zip-posix-property");
+        const auto Mode = Posix.Number() ? Posix.Number() : (H.attributes_ & 0x8000) ? H.attributes_ >> 16 : 0;
+        const auto Kind = Mode & 0170000;
+        if (Kind && Kind != (H.directory_ ? 0040000 : 0100000)) return Failure("7zip-special-file-update-unsupported", ErrorCategory::Unsupported);
         if (H.encrypted_) {
             Request.encrypt_ = true;
             if (Format == "zip") {
@@ -272,11 +225,12 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             }
         }
         // Explicit origins distinguish rename/replacement from unrelated adds.
-        // Unsupported security/POSIX properties still require a lossless adapter.
+        // POSIX mode follows the original attributes; native security properties
+        // still need a format-specific writer (ZIP ACL extras are copied below).
         if (Removed.contains(Key) && !Request.add_.empty()) {
             for (const auto Id : {kpidComment, kpidCTime, kpidATime, kpidPosixAttrib, kpidNtSecure}) {
                 Property P; if (Original->archive_->GetProperty(I, Id, &P) != S_OK || (P.vt != VT_EMPTY && !(P.vt == VT_BSTR && P.Text().isEmpty()) && !(P.vt == VT_FILETIME && !P.filetime.dwHighDateTime && !P.filetime.dwLowDateTime)
-                    && (Id == kpidPosixAttrib || Id == kpidNtSecure || !OriginNames.contains(Key))))
+                    && (Id == kpidNtSecure || !OriginNames.contains(Key))))
                     return Failure("7zip-replaced-metadata-preservation-unsupported:" + std::to_string(Id) + ":" + std::to_string(P.vt), ErrorCategory::Unsupported);
             }
         }
@@ -289,9 +243,6 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         Com<ExtractCallback> Test{new ExtractCallback(Shared, nullptr, UINT32_MAX)};
         const auto Code = Original->archive_->Extract(nullptr, UINT32_MAX, 1, Test.value_);
         if (Code != S_OK || Shared->error_) return Shared->Result(Code);
-    }
-    if (Original && Format == "zip" && !Removed.empty() && !Request.add_.empty()) {
-        auto Safe = CheckZipReplacementExtras(*Original, Removed); if (!Safe.HasValue()) return Safe;
     }
     Names.clear(); for (const auto& Item : Items) Names.insert(Item.name_.toCaseFolded());
     for (const auto& Raw : Request.add_) {
@@ -314,12 +265,10 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             Item.metadata_ = OldNames.at(Origins.at(Name));
             auto Old = Original->Header(Item.metadata_); if (!Old.HasValue()) return Old.Failure();
             if (Old.Value().directory_ != Item.directory_) return Failure("7zip-metadata-origin-kind", ErrorCategory::InvalidRequest);
-            if (Origins.at(Name) != Name) {
-                Property Attributes, Time;
-                if (Original->archive_->GetProperty(Item.metadata_, kpidAttrib, &Attributes) != S_OK || Original->archive_->GetProperty(Item.metadata_, kpidMTime, &Time) != S_OK) return Failure("7zip-metadata-origin-properties");
-                if (Attributes.vt == VT_UI4) Item.attributes_ = Attributes.ulVal;
-                if (Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
-            }
+            Property Attributes, Time;
+            if (Original->archive_->GetProperty(Item.metadata_, kpidAttrib, &Attributes) != S_OK || Original->archive_->GetProperty(Item.metadata_, kpidMTime, &Time) != S_OK) return Failure("7zip-metadata-origin-properties");
+            if (Attributes.vt == VT_UI4) Item.attributes_ = Attributes.ulVal;
+            if (Origins.at(Name) != Name && Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
         }
         if (!Item.directory_) {
             Item.input_ = std::shared_ptr<Input>(new Input(Shared), [](Input* Value) { Value->Release(); });
@@ -383,9 +332,14 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     if (!Prepared.flush()) return Failure("7zip-prepared-flush"); Prepared.close();
     auto VerifyContext = Context;
     if (Shared->password_) VerifyContext.passwordPrompt_ = [Shared](const std::string&, unsigned, const OperationContext&) -> Result<storage::Password> { return storage::Password(Shared->password_->Value()); };
+    std::map<QString, const UpdateItem*> Expected; for (const auto& Item : Items) Expected.emplace(Item.name_, &Item);
+    if (Original && Format == "zip" && !Origins.empty()) {
+        auto Fresh = Open(Module, Prepared.fileName().toStdString(), VerifyContext); if (!Fresh.HasValue()) return Fresh.Failure();
+        auto Restored = zipMetadata::Restore(*Original, *Fresh.Value(), Prepared.fileName(), Expected, Request.maxOutputBytes_, Context);
+        if (!Restored.HasValue()) return Restored;
+    }
     auto Checked = Open(Module, Prepared.fileName().toStdString(), VerifyContext); if (!Checked.HasValue()) return Checked.Failure(); auto& Verified = *Checked.Value();
     if (Verified.count_ != Items.size() || Verified.format_ != Format) return Failure("7zip-output-entry-count");
-    std::map<QString, const UpdateItem*> Expected; for (const auto& Item : Items) Expected.emplace(Item.name_, &Item);
     std::map<UInt32, const UpdateItem*> NewItems;
     if (Original) for (const auto Id : {kpidComment}) { Property Before, After; if (Original->archive_->GetArchiveProperty(Id, &Before) != S_OK || Verified.archive_->GetArchiveProperty(Id, &After) != S_OK || !SameProperty(Before, After)) return Failure("7zip-archive-metadata-not-preserved", ErrorCategory::Unsupported); }
     for (UInt32 I = 0; I < Verified.count_; ++I) {
@@ -405,7 +359,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             if (std::abs(H.modifiedUtcMs_ - Milliseconds) > (Format == "zip" ? 2000 : 0)
                 || (H.attributes_ & PortableAttributes) != (Item.attributes_ & PortableAttributes)) return Failure("7zip-input-metadata-not-preserved", ErrorCategory::Unsupported);
         }
-        if (Item.metadata_ != UINT32_MAX) for (const auto Id : {kpidComment, kpidCTime, kpidATime}) {
+        if (Item.metadata_ != UINT32_MAX) for (const auto Id : {kpidComment, kpidCTime, kpidATime, kpidPosixAttrib}) {
             Property Before, After;
             if (Original->archive_->GetProperty(Item.metadata_, Id, &Before) != S_OK || Verified.archive_->GetProperty(I, Id, &After) != S_OK || !SameProperty(Before, After))
                 return Failure("7zip-replaced-metadata-not-preserved:" + std::to_string(Id), ErrorCategory::Unsupported);

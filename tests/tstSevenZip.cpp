@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QProcess>
+#include <QtEndian>
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/wcxMutation.hpp"
@@ -79,6 +80,31 @@ private slots:
         QCOMPARE(Names.size(), size_t(Count));
         for (int I = 0; I < Count; ++I) QVERIFY(Names.contains(QString("entry-%1").arg(I, 6, 10, QChar('0')).toStdString()));
         qInfo() << "ZIP64 entries" << Count << "input-and-create-ms" << CreateMs << "paged-read-ms" << Timer.elapsed();
+        Listed.Value().reset(); QVERIFY(QDir(Dir.path()).mkdir("renamed"));
+        ArchiveUpdate Rename{Create.archive_, Dir.path().toStdString(), {"renamed/"}, {"entry-000000"}}; Rename.metadataOrigins_ = {"entry-000000"};
+        auto Changed = Backend->Update(Rename, {}); QVERIFY2(Changed.HasValue(), Changed.HasValue() ? "" : Changed.Failure().code_.c_str());
+        Listed = Backend->Enumerate(Create.archive_, true, {}); QVERIFY(Listed.HasValue()); Names.clear();
+        for (;;) { auto Page = Listed.Value()->Next(257, {}); QVERIFY(Page.HasValue()); for (const auto& H : Page.Value().entries_) QVERIFY(Names.insert(H.name_).second); if (Page.Value().end_) break; }
+        QCOMPARE(Names.size(), size_t(Count)); QVERIFY(Names.contains("renamed")); QVERIFY(!Names.contains("entry-000000"));
+    }
+    void zip64OffsetMetadata() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for ZIP64 metadata offsets beyond 4 GiB");
+        QTemporaryDir Dir; const auto Source = Dir.filePath("large"); constexpr qint64 Size = (qint64(1) << 32) + 4096;
+        const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(Source.utf16()), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        DWORD Returned = 0; LARGE_INTEGER End; End.QuadPart = Size;
+        const bool Sized = DeviceIoControl(Handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &Returned, nullptr) && SetFilePointerEx(Handle, End, nullptr, FILE_BEGIN) && SetEndOfFile(Handle); CloseHandle(Handle); QVERIFY(Sized);
+        QVERIFY(Put(Dir.filePath("meta"), "metadata payload")); QVERIFY(Put(Dir.filePath("renamed-meta"), "metadata payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); const auto Target = Dir.filePath("offsets.zip"); QElapsedTimer Timer; Timer.start();
+        ArchiveUpdate Create{Target.toStdString(), Dir.path().toStdString(), {"large", "meta"}}; Create.creation_ = ArchiveCreationOptions{0, false};
+        auto Done = Backend->Update(Create, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str()); QVERIFY(QFileInfo(Target).size() > Size);
+        ArchiveUpdate Rename{Create.archive_, Dir.path().toStdString(), {"renamed-meta"}, {"meta"}}; Rename.metadataOrigins_ = {"meta"};
+        Done = Backend->Update(Rename, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QFile File(Target); QVERIFY(File.open(QIODevice::ReadOnly)); QVERIFY(File.seek(File.size() - 4096)); const auto Tail = File.readAll(); File.close();
+        const auto Last = Tail.lastIndexOf(QByteArray::fromHex("504b0102")); QVERIFY(Last >= 0); QCOMPARE(qFromLittleEndian<quint32>(Tail.constData() + Last + 42), UINT32_MAX);
+        QVERIFY(Tail.contains(QByteArray::fromHex("504b0606"))); QVERIFY(Tail.contains("renamed-meta"));
+        // The official tool reads all stored bytes and checks CRCs independently.
+        QProcess Check; Check.start(QDir(root_).filePath("../sevenzip-tools/official/7z.exe"), {"t", Target, "-y"}); QVERIFY(Check.waitForFinished(120000)); QCOMPARE(Check.exitCode(), 0);
+        qInfo() << "ZIP64 metadata offset round trip bytes" << Size << "elapsed-ms" << Timer.elapsed();
     }
     void creation_data() {
         QTest::addColumn<QString>("Format"); QTest::addColumn<bool>("Solid"); QTest::addColumn<bool>("Encrypt"); QTest::addColumn<unsigned>("Level");
@@ -207,8 +233,64 @@ private slots:
         Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}, {"keep.txt", "new"}}, {});
         QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), After);
         ArchiveUpdate Mapped{Target.toStdString(), Dir.path().toStdString(), {"new"}, {"keep.txt", "new"}}; Mapped.metadataOrigins_ = {"keep.txt"};
-        Done = Backend->Update(Mapped, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), After);
-        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("comments.zip"), After)); }
+        Done = Backend->Update(Mapped, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QCOMPARE(Read(Target).count(QByteArray::fromHex("feca040041424344")), 2);
+        QVERIFY(Read(Target).contains("entry comment")); QVERIFY(Read(Target).endsWith("archive comment"));
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("comments.zip"), Read(Target))); }
+    }
+    void sevenZipPosixMetadata() {
+        // Copy archive with an uncompressed header carrying UNIX mode 0100751;
+        // both header CRCs were rebuilt independently and checked by official 7z.
+        const auto Fixture = QByteArray::fromBase64("N3q8ryccAARTh/QQEQAAAAAAAABKAAAAAAAAAPc9pPBwcmVzZXJ2ZWQgcGF5bG9hZAEEBgABCREABwsBAAEBAAwRAAgKAXXiZ88AAAUBERMAawBlAGUAcAAuAHQAeAB0AAAAGQAUCgEA1B4a5zdT3QEVBgEAIIDpgQAA");
+        QTemporaryDir Dir; const auto Target = Dir.filePath("posix.7z"); QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("renamed.txt"), "preserved payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {"renamed.txt"}, {"keep.txt"}}; Change.metadataOrigins_ = {"keep.txt"};
+        for (int Step = 0; Step < 2; ++Step) {
+            auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            auto Listed = Backend->Enumerate(Change.archive_, true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(2, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+            QCOMPARE(Page.Value().entries_.size(), size_t(1)); const auto& Header = Page.Value().entries_[0]; QCOMPARE(Header.attributes_ >> 16, 0100751u);
+            QVERIFY(Backend->Extract(Change.archive_, Header, Dir.filePath("restored").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("restored")), Step ? QByteArray("replacement payload") : QByteArray("preserved payload"));
+            Change.remove_ = {"renamed.txt"}; Change.metadataOrigins_.clear(); QVERIFY(Put(Dir.filePath("renamed.txt"), "replacement payload"));
+        }
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("posix.7z"), Read(Target))); }
+    }
+    void zipSecurityAndPosixMetadata_data() {
+        QTest::addColumn<QByteArray>("Fixture");
+        // Independent Python zipfile fixtures: UNIX 0100751, UID 1000/GID 1001,
+        // a stored NT security descriptor and distinct local/central extensions.
+        QTest::newRow("dos-times") << QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlB14mfPEQAAABEAAAAIAD8Aa2VlcC50eHRTRB8AFAAAAAAAACW8ltsBAASAAAAAAAAAAAAAAAAAAAAAAHV4CwABBOgDAAAE6QMAAO++CQBsb2NhbC10YWdwcmVzZXJ2ZWQgcGF5bG9hZFBLAQIUAxQAAAAAAIMYIlB14mfPEQAAABEAAAAIAD8ADQAAAAAAIADpgQAAAABrZWVwLnR4dFNEHwAUAAAAAAAAJbyW2wEABIAAAAAAAAAAAAAAAAAAAAAAdXgLAAEE6AMAAATpAwAA774JAGNlbnRyLXRhZ2VudHJ5IGNvbW1lbnRQSwUGAAAAAAEAAQCCAAAAdgAAAA8AYXJjaGl2ZSBjb21tZW50");
+        QTest::newRow("unix-times") << QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlB14mfPEQAAABEAAAAIAFAAa2VlcC50eHRTRB8AFAAAAAAAACW8ltsBAASAAAAAAAAAAAAAAAAAAAAAAHV4CwABBOgDAAAE6QMAAO++CQBsb2NhbC10YWdVVA0AB6ZdDV6lXQ1epF0NXnByZXNlcnZlZCBwYXlsb2FkUEsBAhQDFAAAAAAAgxgiUHXiZ88RAAAAEQAAAAgAUAANAAAAAAAgAOmBAAAAAGtlZXAudHh0U0QfABQAAAAAAAAlvJbbAQAEgAAAAAAAAAAAAAAAAAAAAAB1eAsAAQToAwAABOkDAADvvgkAY2VudHItdGFnVVQNAAemXQ1epV0NXqRdDV5lbnRyeSBjb21tZW50UEsFBgAAAAABAAEAkwAAAIcAAAAPAGFyY2hpdmUgY29tbWVudA==");
+    }
+    void zipSecurityAndPosixMetadata() {
+        QFETCH(QByteArray, Fixture);
+        QTemporaryDir Dir; const auto Target = Dir.filePath(QString("security-") + QTest::currentDataTag() + ".zip"); QVERIFY(Put(Target, Fixture));
+        QVERIFY(Put(Dir.filePath("renamed.txt"), "preserved payload")); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {"renamed.txt"}, {"keep.txt"}}; Change.metadataOrigins_ = {"keep.txt"};
+        for (int Step = 0; Step < 2; ++Step) {
+            auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            const auto Bytes = Read(Target); QCOMPARE(Bytes.count(QByteArray::fromHex("53441f001400000000000025bc96db0100048000000000000000000000000000000000")), 2);
+            QCOMPARE(Bytes.count(QByteArray::fromHex("75780b000104e803000004e9030000")), 2);
+            QCOMPARE(Bytes.count("local-tag"), 1); QCOMPARE(Bytes.count("centr-tag"), 1);
+            const auto Central = Bytes.indexOf(QByteArray::fromHex("504b0102")); QVERIFY(Central >= 0);
+            QCOMPARE(quint8(Bytes[Central + 5]), quint8(3)); QCOMPARE(qFromLittleEndian<quint32>(Bytes.constData() + Central + 38), quint32((0100751u << 16) | 0x20));
+            auto Listed = Backend->Enumerate(Change.archive_, true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(2, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+            QCOMPARE(Page.Value().entries_.size(), size_t(1)); auto Extracted = Backend->Extract(Change.archive_, Page.Value().entries_[0], Dir.filePath("restored").toStdString(), {}); QVERIFY(Extracted.HasValue());
+            QCOMPARE(Read(Dir.filePath("restored")), Step ? QByteArray("replacement payload") : QByteArray("preserved payload"));
+            Change.remove_ = {"renamed.txt"}; Change.metadataOrigins_.clear(); QVERIFY(Put(Dir.filePath("renamed.txt"), "replacement payload"));
+        }
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath(QString("security-") + QTest::currentDataTag() + ".zip"), Read(Target))); }
+        Change.remove_ = {"keep.txt"}; Change.metadataOrigins_ = {"keep.txt"};
+        // Payload hashes, alignment and malformed extension lengths cannot be
+        // carried over as opaque metadata. Failure must leave the input intact.
+        for (const auto& Id : {QByteArray::fromHex("464b0900"), QByteArray::fromHex("1ea10900"), QByteArray::fromHex("55580900"), QByteArray::fromHex("efbeffff")}) {
+            auto Bad = Fixture; Bad.replace(QByteArray::fromHex("efbe0900"), Id); QVERIFY(Put(Target, Bad));
+            auto Failed = Backend->Update(Change, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Read(Target), Bad);
+        }
+        auto Special = Fixture; const auto Central = Special.indexOf(QByteArray::fromHex("504b0102")); QVERIFY(Central >= 0);
+        qToLittleEndian<quint32>((0010644u << 16) | 0x20, Special.data() + Central + 38); QVERIFY(Put(Target, Special));
+        auto Unsupported = Backend->Update(Change, {}); QVERIFY(!Unsupported.HasValue()); QCOMPARE(Unsupported.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), Special);
+        QVERIFY(Put(Target, Fixture)); Change.maxOutputBytes_ = 250;
+        auto Limited = Backend->Update(Change, {}); QVERIFY(!Limited.HasValue()); QCOMPARE(Limited.Failure().category_, ErrorCategory::BudgetExceeded); QCOMPARE(Read(Target), Fixture);
     }
     void metadataRenameAndReplacement() {
         // Independently generated ZIP: file/archive comments and three NTFS times.
@@ -221,8 +303,9 @@ private slots:
         auto Invalid = Rename; Invalid.metadataOrigins_ = {"missing"}; QVERIFY(!Backend->Update(Invalid, {}).HasValue()); QCOMPARE(Read(Target), Fixture);
         auto Unknown = Fixture; Unknown.replace(QByteArray::fromHex("0a0020000000000001001800"), QByteArray::fromHex("0a0020000000000002001800"));
         const auto UnknownTarget = Dir.filePath("unknown-ntfs.zip"); QVERIFY(Put(UnknownTarget, Unknown));
-        auto Unsupported = Rename; Unsupported.archive_ = UnknownTarget.toStdString(); auto Rejected = Backend->Update(Unsupported, {});
-        QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(UnknownTarget), Unknown);
+        auto Preserve = Rename; Preserve.archive_ = UnknownTarget.toStdString(); auto Preserved = Backend->Update(Preserve, {});
+        QVERIFY2(Preserved.HasValue(), Preserved.HasValue() ? "" : Preserved.Failure().code_.c_str());
+        QCOMPARE(Read(UnknownTarget).count(QByteArray::fromHex("020018000000056936c0d50180696c6836c0d50100d3d36736c0d501")), 2);
         auto Done = Backend->Update(Rename, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
         QVERIFY(Read(Target).contains("entry comment")); QVERIFY(Read(Target).endsWith("archive comment"));
         QVERIFY(Put(Dir.filePath("renamed.txt"), "replacement payload"));

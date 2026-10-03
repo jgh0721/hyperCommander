@@ -320,7 +320,7 @@ set_tests_properties(hc.sevenzip PROPERTIES TIMEOUT 180 ENVIRONMENT "HC_SEVENZIP
 hc_enable_qt_deployment(hc_sevenzip_tests TEST)
 option(HC_ARCHIVE_STRESS_TESTS "Run archive acceptance tests exceeding 4 GiB and 65535 entries" OFF)
 if(HC_ARCHIVE_STRESS_TESTS)
-    add_test(NAME hc.archive_stress COMMAND hc_sevenzip_tests largeFile64Bit zip64EntryCount
+    add_test(NAME hc.archive_stress COMMAND hc_sevenzip_tests largeFile64Bit zip64EntryCount zip64OffsetMetadata
         -o "${CMAKE_BINARY_DIR}/archive-stress-$<CONFIG>.txt,txt")
     set_tests_properties(hc.archive_stress PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE LABELS "archive;large-data"
         ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS};HC_ARCHIVE_STRESS=1")
