@@ -111,7 +111,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -1365,6 +1365,65 @@ hc.events.unsubscribe(sub)
     {
         QTest::addColumn<int>("ProfileIndex"); QTest::newRow("joliet-udf") << 2; QTest::newRow("long-name-udf") << 3;
     }
+    void sevenZipCreateUi_data() { QTest::addColumn<QString>("Format"); QTest::newRow("7z") << QString("7z"); QTest::newRow("zip") << QString("zip"); }
+    void sevenZipCreateUi()
+    {
+        QFETCH(QString, Format);
+        using namespace hc::operations;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Output = Directory.filePath("created." + Format);
+        { QFile File(Directory.filePath("한글.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("ZIP UI input"), 12); }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid);
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated(); return true; }
+            }
+            return false;
+        };
+        QVERIFY(Focus("한글.txt"));
+        auto* Create = main_->findChild<QAction*>("hc.menu.archive.create"); QVERIFY(Create);
+        auto& Scheduler = TyStCommandMgr::GetInstance()->Bridge()->FileJobs()->Scheduler();
+        QSet<QString> ExistingJobs; for (const auto& Job : Scheduler.Snapshots()) ExistingJobs.insert(QString::fromStdString(Job.id_));
+        bool DialogSeen = false;
+        QTimer::singleShot(0, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.archive.create"); if (!Dialog) return;
+            const auto CloseDialog = qScopeGuard([Dialog] { Dialog->accept(); });
+            DialogSeen = true;
+            auto* Path = Dialog->findChild<QLineEdit*>("hc.archive.create.path"); Path->setText(Output);
+            Dialog->findChild<QComboBox*>("hc.archive.create.format")->setCurrentIndex(Format == "7z" ? 0 : 1);
+            QVERIFY(Dialog->rect().contains(Path->mapTo(Dialog, QPoint(0, 0))));
+            QVERIFY(Dialog->grab().save(QDir::current().filePath(QString("archive-create-%1.png").arg(Format))));
+            Dialog->accept();
+        });
+        Create->trigger(); QVERIFY(DialogSeen);
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshots().size() > size_t(ExistingJobs.size()), 5000);
+        std::string Job; for (const auto& Value : Scheduler.Snapshots()) if (!ExistingJobs.contains(QString::fromStdString(Value.id_))) Job = Value.id_;
+        QVERIFY(!Job.empty());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Job).Value().state_), 30000);
+        const auto Snapshot = Scheduler.Snapshot(Job).Value();
+        QVERIFY2(Snapshot.state_ == JobState::Completed, Snapshot.error_ ? Snapshot.error_->code_.c_str() : "archive job failed");
+        for (auto* Dialog : main_->findChildren<QDialog*>("hc.fileJobs")) Dialog->hide();
+        QTRY_VERIFY(!Model->IsLoading()); Model->Refresh(); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("created." + Format));
+        QVERIFY(Focus("created." + Format));
+        auto Selected = Grid->BaseView()->focusedRow().modelIndex(0); Panel->ReturnOnCurrentTab(Selected);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("한글.txt"), 10000);
+        using namespace hc::storage;
+        const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); QVERIFY(Pack); QVERIFY(Pack->GetWCX()->WritePolicy().HasValue());
+        auto Reader = Model->SnapshotProvider(); auto Root = Model->GetRoot()->ReadLocation("/"); auto At = Root; At.nesting_.back().entry_ = "/한글.txt";
+        auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        const auto Options = hc::plugins::BuiltinSevenZipOptions();
+        auto Batch = BeginWcxMutation(Options.binaryPath_.toStdString(), Root, Reader, {}, {}, {}, {}, hc::plugins::MakeApprovedWcxBackend(Options));
+        QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
+        auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/한글.txt", "/renamed.txt", {}, Entry.Value().id_}}, {});
+        QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+        auto Committed = Batch.Value()->Commit({}); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+        Model->Refresh(); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("renamed.txt"), 10000);
+        QVERIFY(!GetModuleHandleW(L"7z.dll")); Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+    }
     void isoPluginUi()
     {
         QFETCH(int, ProfileIndex);
@@ -1997,7 +2056,7 @@ hc.events.unsubscribe(sub)
             QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
             QVERIFY(!names(Model).empty());
             const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); QVERIFY(Pack);
-            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_); QVERIFY(!Pack->GetWCX()->WritePolicy().HasValue());
+            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_); QCOMPARE(Pack->GetWCX()->WritePolicy().HasValue(), !QString(Name).endsWith(".rar"));
             QVERIFY(!GetModuleHandleW(L"7z.dll"));
             Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
         }

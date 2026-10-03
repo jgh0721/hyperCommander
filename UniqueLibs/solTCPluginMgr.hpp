@@ -278,3 +278,7 @@ private:
 };
 
 using TyStPlugInMgr = nsCmn::nsConcurrent::TSingleton<CTCPlugInMgr>;
+
+namespace hc::plugins {
+hc::storage::Result<hc::storage::Password> AskArchivePassword(const std::string& Archive, unsigned Attempt, const hc::storage::OperationContext& Context);
+}

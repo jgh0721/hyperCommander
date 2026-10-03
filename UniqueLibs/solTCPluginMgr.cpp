@@ -9,7 +9,7 @@
 #include <QInputDialog>
 #include <QTimer>
 
-namespace
+namespace hc::plugins
 {
     hc::storage::Result<hc::storage::Password> AskArchivePassword(const std::string& Archive, unsigned Attempt, const hc::storage::OperationContext& Context)
     {
@@ -359,6 +359,9 @@ hc::storage::Result<hc::storage::Unit> CTCPlugInWCX::WritePolicy() const
 {
     if (!wcx_.hostEnabled_) return hc::storage::Unit{};
     if (!wcx_.hostApproval_.approved_) return hc::storage::Error{hc::storage::ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
+    if (wcx_.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip
+        && !ArchiveFile.endsWith(".7z", Qt::CaseInsensitive) && !ArchiveFile.endsWith(".zip", Qt::CaseInsensitive))
+        return hc::storage::Error{hc::storage::ErrorCategory::Unsupported, "7zip-format-read-only", {"7zip"}};
     return hc::plugins::ArchiveWritePolicy(wcx_.hostApproval_.reviewed_);
 }
 
@@ -384,7 +387,7 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
             Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
             Options.manifestPath_ = wcx_.hostManifest_; Options.binaryPath_ = wcx_.FileFullPath; Options.approval_ = wcx_.hostApproval_;
             Options.limits_.requestMs_ = 30000;
-            Options.passwordPrompt_ = AskArchivePassword;
+            Options.passwordPrompt_ = hc::plugins::AskArchivePassword;
             backend_ = hc::plugins::MakeApprovedWcxBackend(std::move(Options));
             break;
         }
@@ -828,7 +831,7 @@ void CTCPlugInMgr::Refresh()
     const auto SevenZip = hc::plugins::BuiltinSevenZipOptions();
     if (SevenZip.approval_.approved_) {
         TyPlugInWCX Plugin;
-        Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
+        Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT | PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE;
         Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
         VecWCX.push_back(std::move(Plugin));

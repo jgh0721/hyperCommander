@@ -6,6 +6,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QScopeGuard>
+#include <QTemporaryDir>
+#include <QCryptographicHash>
+#include <QRegularExpression>
+#include <QtEndian>
+#include <map>
+#include <set>
 #include <atomic>
 #include <mutex>
 
@@ -154,6 +160,7 @@ struct Property : PROPVARIANT {
     QString Text() const { return vt == VT_BSTR ? QString::fromWCharArray(bstrVal, SysStringLen(bstrVal)) : QString{}; }
 };
 struct Archive {
+    QString format_;
     std::shared_ptr<State> state_ = std::make_shared<State>();
     Com<OpenCallback> callback_{new OpenCallback(state_)};
     Com<Input> input_{new Input(state_)};
@@ -189,7 +196,7 @@ struct Archive {
 };
 class Output final : public ISequentialOutStream {
 public:
-    Output(QFile* File, uint64_t Limit, std::shared_ptr<State> State) : file_(File), limit_(Limit), state_(std::move(State)) {}
+    Output(QFile* File, uint64_t Limit, std::shared_ptr<State> State, bool Hash = false) : file_(File), limit_(Limit), state_(std::move(State)), hashEnabled_(Hash) {}
     HC_COM_REFS;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID Id, void** Value) noexcept override {
         *Value = nullptr; if (Id == IID_IUnknown || Id == IID_ISequentialOutStream) *Value = static_cast<ISequentialOutStream*>(this);
@@ -199,11 +206,13 @@ public:
         if (Done) *Done = 0; if (state_->Check(written_) != S_OK) return E_ABORT;
         if (Size > limit_ - written_) return state_->Fail(Failure("7zip-output-size", ErrorCategory::BudgetExceeded));
         if (file_ && file_->write(static_cast<const char*>(Data), Size) != Size) return state_->Fail(Failure("7zip-output-write"));
+        if (hashEnabled_) hash_.addData(QByteArrayView(static_cast<const char*>(Data), Size));
         written_ += Size; if (Done) *Done = Size; return state_->Check(written_);
     }
     uint64_t written_ = 0;
+    QCryptographicHash hash_{QCryptographicHash::Sha256};
 private:
-    QFile* file_; uint64_t limit_; std::shared_ptr<State> state_;
+    QFile* file_; uint64_t limit_; std::shared_ptr<State> state_; bool hashEnabled_;
 };
 class ExtractCallback final : public IArchiveExtractCallback, public ICryptoGetTextPassword {
 public:
@@ -252,7 +261,7 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         Property Name, Id; if (Get(Index, NArchive::NHandlerPropID::kName, &Name) != S_OK || Get(Index, NArchive::NHandlerPropID::kClassID, &Id) != S_OK) return Failure("7zip-format-property");
         if (!QStringList{"7z", "zip", "Rar", "Rar5"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
-        auto Value = std::make_unique<Archive>(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
+        auto Value = std::make_unique<Archive>(); Value->format_ = Name.Text().toLower(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
         if (!Value->input_->Open(FilePath, FilePath.endsWith(".001"))) return Failure("7zip-input-open", ErrorCategory::NotFound);
         GUID Class{}; memcpy(&Class, Id.bstrVal, sizeof(Class));
         if (Create(&Class, &IID_IInArchive, reinterpret_cast<void**>(&Value->archive_.value_)) != S_OK) continue;
@@ -296,6 +305,7 @@ public:
 private:
     std::unique_ptr<Archive> archive_; UInt32 index_ = 0; bool test_;
 };
+#include "sevenZipUpdate.inl"
 class Backend final : public IArchiveBackend {
 public:
     explicit Backend(HMODULE Module) : module_(Module) {}
@@ -324,7 +334,7 @@ public:
         auto Done = hc::plugins::Extract(Archive, *Selected, Expected, &File, false); if (!Done.HasValue()) return Done;
         if (!File.flush()) return Failure("7zip-output-flush"); Cleanup.dismiss(); return Unit{};
     }
-    Result<Unit> Update(ArchiveUpdate, OperationContext) override { return Failure("7zip-read-only", ErrorCategory::Unsupported); }
+    Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override { return UpdateArchive(module_, std::move(Request), Context); }
 private:
     HMODULE module_;
 };

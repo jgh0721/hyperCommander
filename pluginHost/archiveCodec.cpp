@@ -34,14 +34,21 @@ namespace hc::plugins
     QJsonObject EncodeArchiveUpdate(const ArchiveUpdate& Update)
     {
         QJsonArray Added, Removed; for (const auto& Name : Update.add_) Added.append(Text(Name)); for (const auto& Name : Update.remove_) Removed.append(Text(Name));
-        return {{"archive", Text(Update.archive_)}, {"inputDirectory", Text(Update.inputDirectory_)}, {"add", Added}, {"remove", Removed}, {"maxOutputBytes", QString::number(Update.maxOutputBytes_)}, {"encrypt", Update.encrypt_}};
+        QJsonObject Object{{"archive", Text(Update.archive_)}, {"inputDirectory", Text(Update.inputDirectory_)}, {"add", Added}, {"remove", Removed}, {"maxOutputBytes", QString::number(Update.maxOutputBytes_)}, {"encrypt", Update.encrypt_}};
+        if (Update.creation_) Object["creation"] = QJsonObject{{"level", int(Update.creation_->level_)}, {"solid", Update.creation_->solid_}};
+        return Object;
     }
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
-        if (Object.size() != 6 || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
+        if ((Object.size() != 6 && Object.size() != 7) || (Object.size() == 7 && !Object.contains("creation")) || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
         auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value()) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         Out.encrypt_ = Object["encrypt"].toBool();
+        if (Object.contains("creation")) {
+            const auto Options = Object["creation"].toObject(); const auto Level = Options["level"].toInt(-1);
+            if (Options.size() != 2 || !Options["solid"].isBool() || Level < 0 || Level > 9 || Options["level"].toDouble(-1) != Level) return Invalid();
+            Out.creation_ = ArchiveCreationOptions{unsigned(Level), Options["solid"].toBool()};
+        }
         for (const auto& [Key, Target] : {std::pair{"add", &Out.add_}, {"remove", &Out.remove_}})
         {
             const auto Names = Object[Key].toArray();

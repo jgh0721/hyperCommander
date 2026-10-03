@@ -1,4 +1,6 @@
-﻿#include "stdafx.h"
+﻿#include "BuiltInPlugin/SevenZip/sevenZipJob.hpp"
+#include <QCheckBox>
+#include "stdafx.h"
 #include "commandUiBridge.hpp"
 #include "HyperCommander/UIs/dlgOpts.hpp"
 #include "UIs/cmpPanel.hpp"
@@ -553,6 +555,8 @@ void CommandUiBridge::createActions()
     auto* Jobs = Files->addAction(tr("작업 목록"));
     connect(Jobs, &QAction::triggered, this, [this] { fileJobs_->Show(); });
     Files->addSeparator();
+    auto* CreateArchive = Files->addAction(tr("선택 항목으로 7z·ZIP 생성…")); CreateArchive->setObjectName("hc.menu.archive.create");
+    connect(CreateArchive, &QAction::triggered, this, [this] { openArchive(); });
     auto* CreateIso = Files->addAction(tr("선택 항목으로 ISO 생성…")); CreateIso->setObjectName("hc.menu.iso.create");
     auto* InspectIso = Files->addAction(tr("ISO 구조 확인…")); InspectIso->setObjectName("hc.menu.iso.inspect");
     connect(CreateIso, &QAction::triggered, this, [this] { openIso(false); });
@@ -569,6 +573,50 @@ void CommandUiBridge::createActions()
     connect(DopusMetadata, &QAction::triggered, this, [this] { openDataPlugin(true, true); });
     connect(Storage, &QAction::triggered, this, [this] { openDataPlugin(false); });
     connect(Metadata, &QAction::triggered, this, [this] { openDataPlugin(true); });
+}
+
+void CommandUiBridge::openArchive()
+{
+    const auto Context = captureFiles({}, false);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
+    auto Reader = Model->SnapshotProvider();
+    std::vector<hc::operations::OperationSource> Sources;
+    for (int Row = 0; Row < Model->rowCount(); ++Row) {
+        const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+        if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
+            Sources.push_back({*Item->storageEntry_, Reader, {}});
+    }
+    const auto CurrentDirectory = QString::fromStdString(Context.location_.root_);
+    if (Sources.empty()) { QMessageBox::information(main_, tr("압축 파일 생성"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
+    QDialog Dialog(main_); Dialog.setObjectName("hc.archive.create"); Dialog.setWindowTitle(tr("선택 항목으로 압축 파일 생성")); Dialog.resize(620, 280);
+    auto* Layout = new QVBoxLayout(&Dialog); auto* Form = new QFormLayout; Layout->addLayout(Form);
+    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("archive.7z"), &Dialog); Output->setObjectName("hc.archive.create.path"); Form->addRow(tr("저장 경로(&P)"), Output);
+    auto* Format = new QComboBox(&Dialog); Format->setObjectName("hc.archive.create.format"); Format->addItems({"7z", "ZIP"}); Form->addRow(tr("형식(&F)"), Format);
+    auto* Level = new QComboBox(&Dialog); Level->setObjectName("hc.archive.create.level");
+    for (const auto& Pair : {std::pair{0, tr("압축 안 함")}, {1, tr("빠르게")}, {5, tr("보통")}, {9, tr("최대 압축")}}) Level->addItem(Pair.second, Pair.first);
+    Level->setCurrentIndex(2); Form->addRow(tr("압축 수준(&L)"), Level);
+    auto* Solid = new QCheckBox(tr("솔리드 압축 (7z)"), &Dialog); Solid->setObjectName("hc.archive.create.solid"); Solid->setChecked(true); Form->addRow(Solid);
+    auto* Encrypt = new QCheckBox(tr("암호화 (AES-256)"), &Dialog); Encrypt->setObjectName("hc.archive.create.encrypt"); Form->addRow(Encrypt);
+    auto* Note = new QLabel(tr("암호화하면 작업 시작 시 암호를 입력합니다. 7z는 파일 이름도 암호화하며, ZIP 암호는 영문·숫자·기호를 사용하십시오. 기존 파일은 작성·검증 후 교체합니다."), &Dialog); Note->setWordWrap(true); Layout->addWidget(Note);
+    connect(Format, &QComboBox::currentIndexChanged, &Dialog, [Format, Output, Solid] {
+        Solid->setEnabled(Format->currentIndex() == 0); auto Path = Output->text();
+        if (Path.endsWith(".7z", Qt::CaseInsensitive)) Path.chop(3); else if (Path.endsWith(".zip", Qt::CaseInsensitive)) Path.chop(4);
+        Output->setText(Path + (Format->currentIndex() == 0 ? ".7z" : ".zip"));
+    });
+    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Buttons->button(QDialogButtonBox::Ok)->setText(tr("생성")); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소")); Layout->addWidget(Buttons);
+    connect(Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
+    if (Dialog.exec() != QDialog::Accepted) return;
+    hc::sevenzip::CreateRequest Request; Request.sources_ = std::move(Sources); Request.format_ = Format->currentIndex() == 0 ? "7z" : "zip";
+    auto Path = QDir::fromNativeSeparators(Output->text()); const auto Suffix = "." + QString::fromStdString(Request.format_); if (!Path.endsWith(Suffix, Qt::CaseInsensitive)) Path += Suffix;
+    Request.destination_ = {Path.startsWith("//") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+    Request.options_ = {Level->currentData().toUInt(), Solid->isChecked()}; Request.encrypt_ = Encrypt->isChecked(); Request.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    OperationContext Operation; Operation.passwordPrompt_ = hc::plugins::AskArchivePassword;
+    const auto Destination = Request.destination_; auto Prepared = hc::sevenzip::PrepareCreate(std::move(Request), Operation);
+    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("압축 파일 생성"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("압축 파일 생성 · %1").arg(QFileInfo(Path).fileName()));
+    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("압축 파일 생성"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    auto Parent = Destination; Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); affectedLocations_[Submitted.Value().id_] = {Parent};
 }
 
 void CommandUiBridge::openIso(bool Inspect)

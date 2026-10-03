@@ -1,7 +1,7 @@
 file(MAKE_DIRECTORY "${OUTPUT}")
 file(COPY_FILE "${CORE}" "${OUTPUT}/7z.dll" ONLY_IF_DIFFERENT)
 file(SHA256 "${CORE}" CORE_HASH)
-set(MANIFEST "{\n  \"schemaVersion\": 1,\n  \"id\": \"hc.builtin.sevenzip\",\n  \"version\": \"26.03\",\n  \"binary\": \"7z.dll\",\n  \"sha256\": \"${CORE_HASH}\",\n  \"format\": \"7zip\",\n  \"architecture\": \"x64\",\n  \"execution\": \"isolated\",\n  \"protocol\": {\"major\": 1, \"minimumMinor\": 0, \"maximumMinor\": 0},\n  \"extensions\": [\"archive.read\"],\n  \"permissions\": [\"content.read\"]\n}\n")
+set(MANIFEST "{\n  \"schemaVersion\": 1,\n  \"id\": \"hc.builtin.sevenzip\",\n  \"version\": \"26.03\",\n  \"binary\": \"7z.dll\",\n  \"sha256\": \"${CORE_HASH}\",\n  \"format\": \"7zip\",\n  \"architecture\": \"x64\",\n  \"execution\": \"isolated\",\n  \"protocol\": {\"major\": 1, \"minimumMinor\": 0, \"maximumMinor\": 0},\n  \"extensions\": [\"archive.read\", \"archive.write\"],\n  \"permissions\": [\"content.read\", \"content.write\"]\n}\n")
 file(CONFIGURE OUTPUT "${OUTPUT}/sevenzip.json" CONTENT "${MANIFEST}" NEWLINE_STYLE CRLF)
 string(ASCII 239 187 191 UTF8_BOM)
 file(CONFIGURE OUTPUT "${HEADER}" CONTENT "${UTF8_BOM}#pragma once\ninline constexpr char HcBuiltinSevenZipManifest[] = R\"hc7z(${MANIFEST})hc7z\";\n" NEWLINE_STYLE CRLF)

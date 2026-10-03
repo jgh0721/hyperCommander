@@ -289,7 +289,7 @@ namespace hc::storage
                         {
                             const auto Reported = std::stoull(Item.entry_.hints_.at("packedSize"));
                             const auto Packed = Reported ? Reported : original_.size_;
-                            if (Item.entry_.size_ && (!Packed || (Item.entry_.size_ - 1) / Packed >= 1000)) return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
+                            if (Context.workload_.IsAutomatic() && Item.entry_.size_ && (!Packed || (Item.entry_.size_ - 1) / Packed >= Context.workload_.automaticExpansionRatio_)) return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
                         }
                     }
                     for (auto Up = Parent(Path); Up != "/"; Up = Parent(Up))
@@ -446,7 +446,7 @@ namespace hc::storage
                             && (draft_.at(Path).changed_ || Expected.hints_.at("crc") != "0");
                         if (Expected.hints_.contains("encrypted") && !Header.encrypted_) return Invalid("archive-output-encryption-lost");
                         const auto Packed = Header.packedSize_ ? Header.packedSize_ : std::uint64_t(QFileInfo(Output).size());
-                        if (!Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= 1000))
+                        if (Context.workload_.IsAutomatic() && !Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= Context.workload_.automaticExpansionRatio_))
                             return Error{ErrorCategory::BudgetExceeded, "archive-expansion-budget"};
                         if (Expected.directory_ != Header.directory_ || (!Expected.directory_ && (Expected.size_ != Header.size_
                             || (Header.crc_ && KnownCrc && Expected.hints_.at("crc") != std::to_string(Header.crc_)))))

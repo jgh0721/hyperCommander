@@ -8,7 +8,7 @@ namespace hc::plugins
     {
     public:
         WcxHostService(std::string Binary, bool Write, std::string WriteFailure = "host-archive-write-not-approved");
-        explicit WcxHostService(std::shared_ptr<IArchiveBackend> Backend) : backend_(std::move(Backend)), write_(false), writeFailure_("archive-read-only") {}
+        explicit WcxHostService(std::shared_ptr<IArchiveBackend> Backend, bool Write = false) : backend_(std::move(Backend)), write_(Write), writeFailure_("archive-read-only") {}
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request, storage::PasswordPrompt Prompt = {}, std::optional<storage::OperationContext> SessionContext = {});
         storage::Result<QJsonObject> AppendBinary(const QJsonObject& Request, const QByteArray& Bytes, storage::OperationContext Context);
     private:

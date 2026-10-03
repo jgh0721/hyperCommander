@@ -121,7 +121,7 @@ namespace
             }
             else if (Expected.Value().format_ == PluginFormat::SevenZip)
             {
-                archives_ = std::make_unique<WcxHostService>(MakeSevenZipBackend(module_));
+                archives_ = std::make_unique<WcxHostService>(MakeSevenZipBackend(module_), ArchiveWritePolicy(Expected.Value()).HasValue());
             }
             else if (Expected.Value().format_ == PluginFormat::Wcx)
             {

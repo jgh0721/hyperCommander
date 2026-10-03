@@ -35,6 +35,7 @@ private:
     void createActions();
     void openDataPlugin(bool Metadata, bool Dopus = false);
     void openIso(bool Inspect);
+    void openArchive();
     void openSearch();
     CFSModel* findModel(const std::string& TabId) const;
     hc::storage::Result<hc::commands::CommandOutcome> execute(const hc::commands::CommandInvocation& Invocation);

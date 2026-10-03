@@ -21,6 +21,11 @@ namespace hc::plugins
         virtual ~IArchiveListing() = default;
         virtual storage::Result<ArchivePage> Next(std::size_t Count, storage::OperationContext Context) = 0;
     };
+    struct ArchiveCreationOptions
+    {
+        unsigned level_ = 5;
+        bool solid_ = true;
+    };
     struct ArchiveUpdate
     {
         // Prepared copies only. The operation coordinator owns final commit.
@@ -28,6 +33,9 @@ namespace hc::plugins
         std::vector<std::string> add_, remove_;
         std::uint64_t maxOutputBytes_ = std::numeric_limits<std::uint64_t>::max();
         bool encrypt_ = false;
+        // Only creation accepts explicit compression settings. Updates retain
+        // stored settings or fail if the engine cannot preserve them.
+        std::optional<ArchiveCreationOptions> creation_;
     };
     class IArchiveBackend
     {

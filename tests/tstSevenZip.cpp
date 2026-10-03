@@ -1,9 +1,13 @@
-﻿#include <QtTest>
+﻿#define NOMINMAX
+#include <QtTest>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include "UniqueLibs/wcxStorage.hpp"
 #include "BuiltInPlugin/SevenZip/sevenZipBackend.hpp"
+#include "BuiltInPlugin/SevenZip/sevenZipJob.hpp"
+#include "UniqueLibs/storageProviders.hpp"
+#include "pluginHost/archiveCodec.hpp"
 #include <Windows.h>
 
 using namespace hc::storage;
@@ -22,6 +26,121 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void creation_data() {
+        QTest::addColumn<QString>("Format"); QTest::addColumn<bool>("Solid"); QTest::addColumn<bool>("Encrypt"); QTest::addColumn<unsigned>("Level");
+        for (const auto Format : {QString("7z"), QString("zip")}) for (const auto Level : {0u, 5u, 9u})
+            QTest::newRow(qPrintable(Format + QString::number(Level))) << Format << false << false << Level;
+        QTest::newRow("solid") << QString("7z") << true << false << 5u;
+        QTest::newRow("7z-aes") << QString("7z") << true << true << 5u;
+        QTest::newRow("zip-aes") << QString("zip") << false << true << 5u;
+    }
+    void creation() {
+        QFETCH(QString, Format); QFETCH(bool, Solid); QFETCH(bool, Encrypt); QFETCH(unsigned, Level);
+        QTemporaryDir Dir; QVERIFY(QDir().mkdir(Dir.filePath("input"))); QVERIFY(QDir().mkdir(Dir.filePath("input/empty")));
+        const auto Data = QByteArray(2 * 1024 * 1024, 'z'); QVERIFY(Put(Dir.filePath("input/한글.txt"), Data)); QVERIFY(Put(Dir.filePath("input/zero"), {})); QVERIFY(Put(Dir.filePath("input/second"), "second payload"));
+        const auto Target = Dir.filePath("result." + Format);
+        ArchiveUpdate Update{Target.toStdString(), Dir.filePath("input").toStdString(), {"한글.txt", "zero", "empty/", "second"}};
+        Update.encrypt_ = Encrypt; Update.creation_ = ArchiveCreationOptions{Level, Solid};
+        const auto Wire = EncodeArchiveUpdate(Update); auto Decoded = DecodeArchiveUpdate(Wire); QVERIFY(Decoded.HasValue()); QCOMPARE(Decoded.Value().creation_->level_, Level);
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Context = PasswordContext("secret");
+        auto Done = Backend->Update(Update, Context); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto Listed = Backend->Enumerate(Target.toStdString(), true, Context); QVERIFY2(Listed.HasValue(), Listed.HasValue() ? "" : Listed.Failure().code_.c_str());
+        auto Page = Listed.Value()->Next(16, Context); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str()); QCOMPARE(Page.Value().entries_.size(), size_t(4));
+        Listed.Value().reset(); bool Found = false;
+        for (const auto& H : Page.Value().entries_) if (H.name_ == "한글.txt") {
+            Found = true; QCOMPARE(H.encrypted_, Encrypt); QVERIFY(Backend->Extract(Target.toStdString(), H, Dir.filePath("restored").toStdString(), Context).HasValue()); QCOMPARE(Read(Dir.filePath("restored")), Data);
+        }
+        QVERIFY(Found); QVERIFY(!GetModuleHandleW(L"7z.dll"));
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS");
+        if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath(QString::fromLatin1(QTest::currentDataTag()) + "." + Format), Read(Target))); }
+    }
+    void updateAndFailureAtomicity_data() { QTest::addColumn<QString>("Format"); QTest::newRow("7z") << QString("7z"); QTest::newRow("zip") << QString("zip"); }
+    void updateAndFailureAtomicity() {
+        QFETCH(QString, Format); QTemporaryDir Dir; QVERIFY(QDir().mkdir(Dir.filePath("input")));
+        QVERIFY(Put(Dir.filePath("input/keep"), QByteArray(1024 * 1024, 'k'))); QVERIFY(Put(Dir.filePath("input/remove"), "remove"));
+        const auto Target = Dir.filePath("result." + Format); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Create{Target.toStdString(), Dir.filePath("input").toStdString(), {"keep", "remove"}}; Create.creation_ = ArchiveCreationOptions{5, false};
+        auto Made = Backend->Update(Create, {}); QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+        const auto Before = Read(Target); QVERIFY(Put(Dir.filePath("input/new"), "new payload"));
+        ArchiveUpdate Change{Target.toStdString(), Dir.filePath("input").toStdString(), {"new"}, {"remove"}};
+        auto Limited = Change; Limited.maxOutputBytes_ = 10; auto Failed = Backend->Update(Limited, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Read(Target), Before);
+        std::stop_source Stop; Stop.request_stop(); OperationContext Cancel; Cancel.stopToken_ = Stop.get_token(); QVERIFY(!Backend->Update(Change, Cancel).HasValue()); QCOMPARE(Read(Target), Before);
+        auto Bad = Change; Bad.add_ = {"../escape"}; QVERIFY(!Backend->Update(Bad, {}).HasValue()); QCOMPARE(Read(Target), Before);
+        Bad = Change; Bad.add_ = {"KEEP"}; QVERIFY(!Backend->Update(Bad, {}).HasValue()); QCOMPARE(Read(Target), Before);
+        auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto List = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(List.HasValue()); auto Page = List.Value()->Next(16, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(2)); List.Value().reset();
+        for (const auto& H : Page.Value().entries_) { QVERIFY(H.name_ != "remove"); QVERIFY(Backend->Extract(Target.toStdString(), H, Dir.filePath("restored").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("restored")), Read(Dir.filePath("input/" + QString::fromStdString(H.name_)))); }
+        ArchiveUpdate Empty{Target.toStdString(), Dir.filePath("input").toStdString(), {}, {"new", "keep"}};
+        Done = Backend->Update(Empty, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        List = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(List.HasValue()); Page = List.Value()->Next(16, {}); QVERIFY(Page.HasValue()); QVERIFY(Page.Value().entries_.empty());
+    }
+    void unsupportedUpdatesPreserveOriginal() {
+        QTemporaryDir Dir; auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        QVERIFY(Put(Dir.filePath("new"), "new"));
+        for (const auto* Name : {"encrypted.7z", "aes.zip", "test_read_format_rar5_compressed.rar", "split.7z.001"}) {
+            const auto Source = QDir(root_).filePath(Name); if (!QFileInfo::exists(Source)) continue;
+            const auto Target = Dir.filePath(Name); QVERIFY(QFile::copy(Source, Target)); const auto Before = Read(Target);
+            auto Result = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}}, PasswordContext("secret"));
+            QVERIFY(!Result.HasValue()); QCOMPARE(Read(Target), Before);
+        }
+    }
+    void solidUpdatePreservation() {
+        QTemporaryDir Dir; QVERIFY(Put(Dir.filePath("keep"), QByteArray(1024 * 1024, 'k'))); QVERIFY(Put(Dir.filePath("remove"), "remove")); QVERIFY(Put(Dir.filePath("new"), "new"));
+        const auto Target = Dir.filePath("solid.7z"); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Create{Target.toStdString(), Dir.path().toStdString(), {"keep", "remove"}}; Create.creation_ = ArchiveCreationOptions{5, true};
+        auto Done = Backend->Update(Create, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        // Appending preserves the original block and its stored dictionary.
+        Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        const auto Before = Read(Target);
+        Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {}, {"remove"}}, {});
+        QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), Before);
+    }
+    void zipCommentsAndExtraFields() {
+        QTemporaryDir Dir; const auto Target = Dir.filePath("comments.zip");
+        // Stored ZIP with archive/file comments and an opaque 0xCAFE extra field
+        // in both headers. This fixture is independent of the SDK writer.
+        const auto Fixture = QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlB14mfPEQAAABEAAAAIAAgAa2VlcC50eHT+ygQAQUJDRHByZXNlcnZlZCBwYXlsb2FkUEsBAhQAFAAAAAAAgxgiUHXiZ88RAAAAEQAAAAgACAANAAAAAAAgAAAAAAAAAGtlZXAudHh0/soEAEFCQ0RlbnRyeSBjb21tZW50UEsFBgAAAAABAAEASwAAAD8AAAAPAGFyY2hpdmUgY29tbWVudA==");
+        QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("new"), "new")); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}}, {});
+        QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        const auto After = Read(Target); QVERIFY(After.endsWith("archive comment")); QVERIFY(After.contains("entry comment"));
+        QCOMPARE(After.count(QByteArray::fromHex("feca040041424344")), 2); QVERIFY(After.contains("preserved payload"));
+        // The generic rename request cannot express auxiliary metadata transfer.
+        Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}, {"keep.txt", "new"}}, {});
+        QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), After);
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("comments.zip"), After)); }
+    }
+    void schedulerPublication() {
+        using namespace hc::operations;
+        QTemporaryDir Dir; const auto Source = Dir.filePath("source"), Target = Dir.filePath("result.zip"); QVERIFY(Put(Source, QByteArray(1024, 'a')));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Entry = Reader->Resolve({LocatorKind::Local, Source.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        hc::sevenzip::CreateRequest Request; Request.sources_.push_back({Entry.Value(), Reader, {}}); Request.destination_ = {LocatorKind::Local, Target.toStdString()}; Request.format_ = "zip";
+        const auto Folder = Dir.filePath("folder"); QVERIFY(QDir().mkdir(Folder)); QVERIFY(Put(Folder + "/child", "child"));
+        const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Folder).utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        const auto Ticks = (uint64_t(1577934246000LL) + 11644473600000ULL) * 10000; FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)};
+        const bool Saved = SetFileTime(Handle, nullptr, nullptr, &Time); CloseHandle(Handle); QVERIFY(Saved);
+        auto FolderEntry = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(FolderEntry.HasValue()); Request.sources_.push_back({FolderEntry.Value(), Reader, {}});
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Prepared = hc::sevenzip::PrepareCreate(Request); QVERIFY(Prepared.HasValue());
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Job.Value().completion_.wait_for(std::chrono::seconds(0)) == std::future_status::ready, 30000);
+        auto Result = Job.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "job state"); QVERIFY(Result.cleanupErrors_.empty());
+        const auto Before = Read(Target); QVERIFY(!Before.isEmpty());
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Listed = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Listed.HasValue());
+        auto Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); bool DirectorySeen = false;
+        for (const auto& Header : Page.Value().entries_) if (Header.directory_) { QCOMPARE(Header.modifiedUtcMs_, FolderEntry.Value().modifiedUtcMs_); DirectorySeen = true; }
+        QVERIFY(DirectorySeen); Listed.Value().reset();
+        Prepared = hc::sevenzip::PrepareCreate(Request); QVERIFY(Prepared.HasValue()); Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(Job.Value().id_).Value().state_ == JobState::WaitingForUser, 5000);
+        QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Job.Value().completion_.wait_for(std::chrono::seconds(0)) == std::future_status::ready, 5000); QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Cancelled); QCOMPARE(Read(Target), Before);
+        Prepared = hc::sevenzip::PrepareCreate(Request); QVERIFY(Prepared.HasValue()); Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(Job.Value().id_).Value().state_ == JobState::WaitingForUser, 5000);
+        const auto Waiting = Scheduler.Snapshot(Job.Value().id_).Value(); QVERIFY(Put(Target, "external change"));
+        QVERIFY(Scheduler.Reply(Job.Value().id_, {Waiting.interaction_->id_, InteractionChoice::Replace, {}}).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Job.Value().completion_.wait_for(std::chrono::seconds(0)) == std::future_status::ready, 30000);
+        Result = Job.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Read(Target), QByteArray("external change"));
+    }
     void initTestCase() {
         const auto Path = qEnvironmentVariable("HC_SEVENZIP_CORPUS");
         QVERIFY2(QFileInfo::exists(Path), "Build hc_sevenzip_corpus or set HC_SEVENZIP_CORPUS to the generated corpus.json");

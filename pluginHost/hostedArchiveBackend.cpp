@@ -54,7 +54,8 @@ namespace hc::plugins
             {
                 if (!process_) return Invalid();
                 if (!process_->Session().epoch_.empty()) {
-                    ArchiveUpdate Header{Request.archive_, Request.inputDirectory_, {}, {}, Request.maxOutputBytes_, Request.encrypt_};
+                    // Names are streamed below; avoid duplicating large vectors.
+                    ArchiveUpdate Header{Request.archive_, Request.inputDirectory_, {}, {}, Request.maxOutputBytes_, Request.encrypt_, Request.creation_};
                     auto Begun = process_->ArchiveCall(WireKind::ArchiveUpdateBegin, {{"update", EncodeArchiveUpdate(Header)},
                         {"added", QString::number(Request.add_.size())}, {"removed", QString::number(Request.remove_.size())}, {"context", EncodeContext(Context)}}, Context);
                     if (!Begun.HasValue()) return Begun.Failure(); auto Id = WireUnsigned(Begun.Value()["upload"]); if (!Id.HasValue() || !Id.Value()) return Invalid();
