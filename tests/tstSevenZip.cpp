@@ -9,6 +9,8 @@
 #include "UniqueLibs/storageProviders.hpp"
 #include "pluginHost/archiveCodec.hpp"
 #include <Windows.h>
+#include <winioctl.h>
+#include <set>
 
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -26,6 +28,56 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void storedArchiveSignature() {
+        QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
+        QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));
+        ArchiveUpdate Create{Dir.filePath("outer.zip").toStdString(), Dir.path().toStdString(), {Name.toStdString()}};
+        Create.creation_ = ArchiveCreationOptions{0, false}; auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Done = Backend->Update(Create, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto Listed = Backend->Enumerate(Create.archive_, true, {}); QVERIFY(Listed.HasValue());
+        auto Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1));
+        QCOMPARE(Page.Value().entries_.front().name_, Name.toStdString());
+    }
+    void largeFile64Bit() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for the 4 GiB acceptance test");
+        QTemporaryDir Dir; const auto Source = Dir.filePath("large.bin");
+        constexpr qint64 Size = (qint64(1) << 32) + 4096;
+        const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(Source.utf16()), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        DWORD Returned = 0; const bool Sparse = DeviceIoControl(Handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &Returned, nullptr);
+        LARGE_INTEGER End; End.QuadPart = Size;
+        const bool Sized = Sparse && SetFilePointerEx(Handle, End, nullptr, FILE_BEGIN) && SetEndOfFile(Handle); CloseHandle(Handle); QVERIFY(Sized);
+        { QFile File(Source); QVERIFY(File.open(QIODevice::ReadWrite)); QCOMPARE(File.write("head"), 4); QVERIFY(File.seek(Size - 4)); QCOMPARE(File.write("tail"), 4); }
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        for (const auto* Format : {"7z", "zip"}) {
+            QElapsedTimer Timer; Timer.start(); const auto Target = Dir.filePath(QString("large.") + Format);
+            ArchiveUpdate Create{Target.toStdString(), Dir.path().toStdString(), {"large.bin"}}; Create.creation_ = ArchiveCreationOptions{1, false};
+            auto Made = Backend->Update(Create, {}); QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+            const auto CreateMs = Timer.restart(); auto Listed = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Listed.HasValue());
+            auto Page = Listed.Value()->Next(2, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1));
+            const auto Header = Page.Value().entries_.front(); QCOMPARE(Header.size_, uint64_t(Size)); Listed.Value().reset();
+            const auto Restored = Dir.filePath("restored"); auto Extracted = Backend->Extract(Target.toStdString(), Header, Restored.toStdString(), {});
+            QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str()); QCOMPARE(QFileInfo(Restored).size(), Size);
+            QCryptographicHash Expected(QCryptographicHash::Sha256), Actual(QCryptographicHash::Sha256);
+            QFile Input(Source), Output(Restored); QVERIFY(Input.open(QIODevice::ReadOnly)); QVERIFY(Output.open(QIODevice::ReadOnly));
+            QVERIFY(Expected.addData(&Input)); QVERIFY(Actual.addData(&Output)); QCOMPARE(Actual.result(), Expected.result()); Output.close();
+            qInfo() << "64-bit round trip" << Format << "bytes" << Size << "create-ms" << CreateMs << "read-verify-ms" << Timer.elapsed();
+            QVERIFY(QFile::remove(Restored));
+        }
+    }
+    void zip64EntryCount() {
+        if (!qEnvironmentVariableIsSet("HC_ARCHIVE_STRESS")) QSKIP("Enable HC_ARCHIVE_STRESS for the ZIP64 entry-count acceptance test");
+        QTemporaryDir Dir; constexpr int Count = 65537; QElapsedTimer Timer; Timer.start();
+        ArchiveUpdate Create{Dir.filePath("many.zip").toStdString(), Dir.path().toStdString()}; Create.creation_ = ArchiveCreationOptions{0, false};
+        for (int I = 0; I < Count; ++I) { const auto Name = QString("entry-%1").arg(I, 6, 10, QChar('0')); QVERIFY(QDir(Dir.path()).mkdir(Name)); Create.add_.push_back(Name.toStdString() + '/'); }
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Made = Backend->Update(Create, {});
+        QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str()); const auto CreateMs = Timer.restart();
+        auto Listed = Backend->Enumerate(Create.archive_, true, {}); QVERIFY(Listed.HasValue()); std::set<std::string> Names;
+        for (;;) { auto Page = Listed.Value()->Next(257, {}); QVERIFY(Page.HasValue()); for (const auto& Header : Page.Value().entries_) { QVERIFY(Header.directory_); QVERIFY(Names.insert(Header.name_).second); } if (Page.Value().end_) break; }
+        QCOMPARE(Names.size(), size_t(Count));
+        for (int I = 0; I < Count; ++I) QVERIFY(Names.contains(QString("entry-%1").arg(I, 6, 10, QChar('0')).toStdString()));
+        qInfo() << "ZIP64 entries" << Count << "input-and-create-ms" << CreateMs << "paged-read-ms" << Timer.elapsed();
+    }
     void creation_data() {
         QTest::addColumn<QString>("Format"); QTest::addColumn<bool>("Solid"); QTest::addColumn<bool>("Encrypt"); QTest::addColumn<unsigned>("Level");
         for (const auto Format : {QString("7z"), QString("zip")}) for (const auto Level : {0u, 5u, 9u})

@@ -19,6 +19,7 @@
 #include "storageProviders.hpp"
 #include "wcxMutation.hpp"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "BuiltInPlugin/IsoImage/isoRewrite.hpp"
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include "BuiltInPlugin/AlzEgg/builtinUnEgg.hpp"
 
@@ -111,7 +112,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -1658,6 +1659,8 @@ hc.events.unsubscribe(sub)
     {
         auto* Panel = panels_.front();
         auto* Model = model(Panel);
+        Panel->ChangeCurrentPath(unc_, {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetCurrentPathWithRoot() == unc_, 15000);
         const auto Missing = unc_ + "\\__hc_missing_" + QUuid::createUuid().toString(QUuid::Id128);
         QVERIFY(!QDir(Missing).exists());
         QElapsedTimer Timer;
@@ -1685,6 +1688,8 @@ hc.events.unsubscribe(sub)
     {
         auto* Panel = panels_.front();
         auto* Model = static_cast<CFSModel*>(model(Panel));
+        Panel->ChangeCurrentPath(unc_, {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetCurrentPathWithRoot() == unc_, 15000);
         for (bool Cancel : {true, false})
         {
             auto Provider = std::make_shared<GatedProvider>();
@@ -1995,6 +2000,40 @@ hc.events.unsubscribe(sub)
             QVERIFY(Table->isVisible()); QVERIFY(Options.grab().save(QCoreApplication::applicationDirPath() + "/wcx-product-options.png"));
         }
         Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+    }
+    void builtinNestedArchives_data()
+    {
+        QTest::addColumn<QString>("Outer"); QTest::addColumn<QString>("Inner");
+        for (const auto* Outer : {"7z", "zip"}) for (const auto* Inner : {"plain.7z", "plain.zip", "defaults.alz", "defaults.egg", "test_read_format_rar5_compressed.rar", "inner.iso"})
+            QTest::newRow(qPrintable(QString(Outer) + '-' + Inner)) << QString(Outer) << QString(Inner);
+    }
+    void builtinNestedArchives()
+    {
+        QFETCH(QString, Outer); QFETCH(QString, Inner); using namespace hc::plugins;
+        // Put the actual outer archive on the live share when this suite uses SMB.
+        QTemporaryDir Directory(QDir(unc_).filePath("hc-builtin-nested-XXXXXX")); QVERIFY(Directory.isValid());
+        if (Inner == "inner.iso") {
+            QFile File(Directory.filePath("payload.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("nested ISO"), 10); File.close();
+            hc::iso::RewriteRequest Request; Request.profile_ = HC_ISO_UDF_BRIDGE; Request.temporaryBase_ = Directory.path();
+            Request.sources_ = {{File.fileName().toStdString(), "payload.txt", false}};
+            auto Prepared = hc::iso::PrepareRewrite(Request).get(); QVERIFY(Prepared.HasValue()); QVERIFY(QFile::copy(Prepared.Value()->Path(), Directory.filePath(Inner)));
+        } else {
+            const auto Corpus = qEnvironmentVariable(Inner.endsWith(".egg") || Inner.endsWith(".alz") ? "HC_UNEGG_CORPUS" : "HC_SEVENZIP_CORPUS");
+            QVERIFY(!Corpus.isEmpty()); QVERIFY(QFile::copy(QDir(QFileInfo(Corpus).absolutePath()).filePath(Inner), Directory.filePath(Inner)));
+        }
+        const auto Name = "outer." + Outer; const auto Path = Directory.filePath(Name);
+        ArchiveUpdate Create{Path.toStdString(), Directory.path().toStdString(), {Inner.toStdString()}}; Create.creation_ = ArchiveCreationOptions{1, false};
+        auto Made = MakeApprovedWcxBackend(BuiltinSevenZipOptions())->Update(Create, {}); QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        const auto Restore = qScopeGuard([&] { Panel->ChangeCurrentPath(unc_, {}); QThreadPool::globalInstance()->waitForDone(); });
+        const auto Index = [&](const QString& Wanted) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Wanted) return Model->index(Row, 0); return QModelIndex{}; };
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        QVERIFY(Index(Name).isValid()); Model->ChangeDirectory(Index(Name)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        QVERIFY(Index(Inner).isValid()); Model->ChangeDirectory(Index(Inner)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+        QVERIFY(!names(Model).empty()); QCOMPARE(Model->WorkspaceLocation().nesting_.size(), 2);
+        Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Inner).isValid());
+        Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Name).isValid());
     }
     void builtinUnEggNavigation()
     {

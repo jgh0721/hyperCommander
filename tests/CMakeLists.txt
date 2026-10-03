@@ -318,6 +318,13 @@ add_dependencies(hc_sevenzip_tests hc-plugin-host-x64 hc_sevenzip_corpus)
 add_test(NAME hc.sevenzip COMMAND hc_sevenzip_tests -o "${CMAKE_BINARY_DIR}/sevenzip-$<CONFIG>.txt,txt")
 set_tests_properties(hc.sevenzip PROPERTIES TIMEOUT 180 ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS}")
 hc_enable_qt_deployment(hc_sevenzip_tests TEST)
+option(HC_ARCHIVE_STRESS_TESTS "Run archive acceptance tests exceeding 4 GiB and 65535 entries" OFF)
+if(HC_ARCHIVE_STRESS_TESTS)
+    add_test(NAME hc.archive_stress COMMAND hc_sevenzip_tests largeFile64Bit zip64EntryCount
+        -o "${CMAKE_BINARY_DIR}/archive-stress-$<CONFIG>.txt,txt")
+    set_tests_properties(hc.archive_stress PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE LABELS "archive;large-data"
+        ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS};HC_ARCHIVE_STRESS=1")
+endif()
 if(NOT HC_UNEGG_USE STREQUAL "NONE")
     set(HC_UNEGG_CORPUS "${CMAKE_BINARY_DIR}/unegg-corpus/corpus.json" CACHE FILEPATH "ALZ/EGG verification corpus")
     get_filename_component(HC_UNEGG_CORPUS_DIR "${HC_UNEGG_CORPUS}" DIRECTORY)
@@ -507,6 +514,17 @@ if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-Deplo
 endif()
 
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
+option(HC_LIVE_SMB_ARCHIVE_TESTS "Validate nested archives on HC_SMB_SERVER/HC_SMB_SHARE" OFF)
+if(HC_LIVE_SMB_ARCHIVE_TESTS)
+    if(NOT TARGET hc_smb_tests OR HC_UNEGG_USE STREQUAL "NONE")
+        message(FATAL_ERROR "Live archive matrix requires HC_BUILD_SMB_TESTS and an approved HC_UNEGG_USE")
+    endif()
+    add_test(NAME hc.archive_nested_smb COMMAND hc_smb_tests builtinNestedArchives passwordAndNestedArchivesUi
+        missingDirectoryAndRecovery cancelledAndLateNavigation -o "${CMAKE_BINARY_DIR}/archive-smb-$<CONFIG>.txt,txt")
+    set_tests_properties(hc.archive_nested_smb PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE LABELS "archive;smb;live"
+        ENVIRONMENT "HC_UI_LOCAL_ROOT=;HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS};HC_UNEGG_CORPUS=${HC_UNEGG_CORPUS}")
+endif()
+
 add_custom_target(hc_check
     COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"

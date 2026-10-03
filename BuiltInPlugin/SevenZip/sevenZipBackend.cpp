@@ -257,7 +257,10 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     const auto Get = reinterpret_cast<HRESULT(WINAPI*)(UInt32, PROPID, PROPVARIANT*)>(GetProcAddress(Module, "GetHandlerProperty2"));
     if (!Create || !Formats || !Get) return Failure("7zip-exports", ErrorCategory::Unsupported);
     UInt32 Count = 0; if (Formats(&Count) != S_OK) return Failure("7zip-formats");
-    for (UInt32 Index = 0; Index < Count; ++Index) {
+    // Probe signatures at offset zero before allowing SFX scanning. Otherwise a
+    // stored RAR/7z member inside a ZIP can be mistaken for the outer archive.
+    const UInt64 StartOnly = 0;
+    for (unsigned Scan = 0; Scan < 2; ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
         Property Name, Id; if (Get(Index, NArchive::NHandlerPropID::kName, &Name) != S_OK || Get(Index, NArchive::NHandlerPropID::kClassID, &Id) != S_OK) return Failure("7zip-format-property");
         if (!QStringList{"7z", "zip", "Rar", "Rar5"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
@@ -265,7 +268,7 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         if (!Value->input_->Open(FilePath, FilePath.endsWith(".001"))) return Failure("7zip-input-open", ErrorCategory::NotFound);
         GUID Class{}; memcpy(&Class, Id.bstrVal, sizeof(Class));
         if (Create(&Class, &IID_IInArchive, reinterpret_cast<void**>(&Value->archive_.value_)) != S_OK) continue;
-        const auto Code = Value->archive_->Open(Value->input_.value_, nullptr, Value->callback_.value_);
+        const auto Code = Value->archive_->Open(Value->input_.value_, Scan ? nullptr : &StartOnly, Value->callback_.value_);
         if (Value->state_->error_) return Value->state_->Result(Code);
         if (Code != S_OK && Value->state_->attempts_) return Failure("7zip-password-or-header-error", ErrorCategory::AccessDenied);
         if (Code == S_FALSE) continue;
