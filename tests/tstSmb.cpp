@@ -20,6 +20,7 @@
 #include "wcxMutation.hpp"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "BuiltInPlugin/AlzEgg/builtinUnEgg.hpp"
 
 #include "qtViewerSurface.hpp"
 #include "qtViewerHost.hpp"
@@ -110,7 +111,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -1935,6 +1936,40 @@ hc.events.unsubscribe(sub)
             QVERIFY(Table->isVisible()); QVERIFY(Options.grab().save(QCoreApplication::applicationDirPath() + "/wcx-product-options.png"));
         }
         Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+    }
+    void builtinUnEggNavigation()
+    {
+        using namespace hc::plugins;
+        const auto Options = BuiltinUnEggOptions();
+        const auto Original = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        auto Restore = qScopeGuard([&] {
+            Panel->ChangeCurrentPath(unc_, {});
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Original); TyStPlugInMgr::GetInstance()->Refresh();
+        });
+        hc::settings::AppSettings().SetPlugins("wcx", {}); TyStPlugInMgr::GetInstance()->Refresh();
+        if (!Options.approval_.approved_) {
+            QVERIFY(TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("egg").isEmpty()); return;
+        }
+        const auto Corpus = qEnvironmentVariable("HC_UNEGG_CORPUS"); QVERIFY(!Corpus.isEmpty());
+        const auto Root = QFileInfo(Corpus).absolutePath();
+        hc::settings::AppSettings().SetPlugins("wcx", QJsonArray{QJsonObject{{"path", "user-priority.wcx64"}, {"extensions", QJsonArray{"egg"}}}});
+        TyStPlugInMgr::GetInstance()->Refresh(); const auto Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("egg");
+        QCOMPARE(Choices.size(), 2); QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
+        hc::settings::AppSettings().SetPlugins("wcx", {}); TyStPlugInMgr::GetInstance()->Refresh();
+        for (const auto* Name : {"defaults.alz", "defaults.egg"}) {
+            QTemporaryDir Directory; QVERIFY(QFile::copy(QDir(Root).filePath(Name), Directory.filePath(Name)));
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+            QModelIndex Selected;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) Selected = Model->index(Row, 0);
+            QVERIFY(Selected.isValid()); Model->ChangeDirectory(Selected); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+            QVERIFY(!names(Model).empty()); const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); QVERIFY(Pack);
+            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_); QVERIFY(!Pack->GetWCX()->WritePolicy().HasValue());
+            QVERIFY(!GetModuleHandleW(L"UnEGG64.dll"));
+            Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+        }
+        QVERIFY(hc::settings::AppSettings().Plugins("wcx").isEmpty());
     }
     void builtinSevenZipNavigation()
     {

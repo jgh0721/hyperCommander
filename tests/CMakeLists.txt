@@ -318,6 +318,25 @@ add_dependencies(hc_sevenzip_tests hc-plugin-host-x64 hc_sevenzip_corpus)
 add_test(NAME hc.sevenzip COMMAND hc_sevenzip_tests -o "${CMAKE_BINARY_DIR}/sevenzip-$<CONFIG>.txt,txt")
 set_tests_properties(hc.sevenzip PROPERTIES TIMEOUT 180 ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS}")
 hc_enable_qt_deployment(hc_sevenzip_tests TEST)
+if(NOT HC_UNEGG_USE STREQUAL "NONE")
+    set(HC_UNEGG_CORPUS "${CMAKE_BINARY_DIR}/unegg-corpus/corpus.json" CACHE FILEPATH "ALZ/EGG verification corpus")
+    get_filename_component(HC_UNEGG_CORPUS_DIR "${HC_UNEGG_CORPUS}" DIRECTORY)
+    add_custom_command(OUTPUT "${HC_UNEGG_CORPUS}"
+        COMMAND "${HC_CORPUS_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/New-UnEggCorpus.ps1"
+            -OutputDirectory "${HC_UNEGG_CORPUS_DIR}"
+        VERBATIM)
+    add_custom_target(hc_unegg_corpus DEPENDS "${HC_UNEGG_CORPUS}")
+    qt_add_executable(hc_unegg_tests tstUnEgg.cpp ${HC_WCX_TEST_SOURCES})
+    target_include_directories(hc_unegg_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander "${CMAKE_BINARY_DIR}/_deps/UnEGG/include")
+    target_link_libraries(hc_unegg_tests PRIVATE hc_builtin_unegg hc_unegg_backend hc_wcx_backend Qt6::Test)
+    target_compile_definitions(hc_unegg_tests PRIVATE UNICODE _UNICODE)
+    target_compile_options(hc_unegg_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+    add_dependencies(hc_unegg_tests hc-plugin-host-x64 hc_unegg_corpus)
+    add_test(NAME hc.unegg COMMAND hc_unegg_tests -o "${CMAKE_BINARY_DIR}/unegg-$<CONFIG>.txt,txt")
+    set_tests_properties(hc.unegg PROPERTIES TIMEOUT 180 ENVIRONMENT "HC_UNEGG_CORPUS=${HC_UNEGG_CORPUS}")
+    hc_enable_qt_deployment(hc_unegg_tests TEST)
+endif()
 qt_add_executable(hc_materialization_tests
     tstMaterialization.cpp
     ../UniqueLibs/nativeMaterializer.cpp
@@ -460,7 +479,7 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
             -Executable "$<TARGET_FILE:hc_smb_tests>" -ArchiveOnly -Dpr 1 -TimeoutSeconds 120)
-    set_tests_properties(hc.archive_ui PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS}")
+    set_tests_properties(hc.archive_ui PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS};HC_UNEGG_CORPUS=${HC_UNEGG_CORPUS}")
     add_test(NAME hc.data_plugin_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
@@ -499,6 +518,9 @@ add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_t
 add_dependencies(hc_check hc_operation_recovery_tests)
 add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
 add_dependencies(hc_check hc_lua_tests hc_sevenzip_tests)
+if(TARGET hc_unegg_tests)
+    add_dependencies(hc_check hc_unegg_tests)
+endif()
 if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()

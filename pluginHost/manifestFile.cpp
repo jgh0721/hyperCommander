@@ -15,7 +15,7 @@ namespace hc::plugins
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"plugin"}}; }
-        const std::map<QString, PluginFormat> Formats{{"7zip", PluginFormat::SevenZip}, {"wcx", PluginFormat::Wcx}, {"wlx", PluginFormat::Wlx}, {"wfx", PluginFormat::Wfx}, {"wdx", PluginFormat::Wdx}, {"dopus-vfs", PluginFormat::DopusVfs}, {"dopus-viewer", PluginFormat::DopusViewer}};
+        const std::map<QString, PluginFormat> Formats{{"unegg", PluginFormat::UnEgg}, {"7zip", PluginFormat::SevenZip}, {"wcx", PluginFormat::Wcx}, {"wlx", PluginFormat::Wlx}, {"wfx", PluginFormat::Wfx}, {"wdx", PluginFormat::Wdx}, {"dopus-vfs", PluginFormat::DopusVfs}, {"dopus-viewer", PluginFormat::DopusViewer}};
         const std::map<QString, Architecture> Architectures{{"x64", Architecture::X64}, {"x86", Architecture::X86}, {"arm64", Architecture::Arm64}};
         const std::map<QString, ExecutionMode> Executions{{"isolated", ExecutionMode::Isolated}, {"trusted-in-process", ExecutionMode::TrustedInProcess}};
         const std::map<QString, Extension> Extensions{{"archive.read", Extension::ArchiveRead}, {"archive.write", Extension::ArchiveWrite},

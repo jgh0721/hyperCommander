@@ -17,6 +17,7 @@
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <QtInstall Condition="'$(QtInstall)' == ''">D:\Qt\Qt-6.12.0-VC2026-X64-H-MD-2026-09-04</QtInstall>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
+    <HcUnEggUse Condition="'$(HcUnEggUse)' == ''">NONE</HcUnEggUse>
     <HcNativePluginBuild>$(SolutionDir)_build\msbuild-plugin-host-$([System.String]::Copy('$(Configuration)').ToLowerInvariant())</HcNativePluginBuild>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -67,7 +68,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SolutionDir)externalLibs\qlementine\lib\include;$(HcNativePluginBuild)\qlementine\lib\include;$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);$(HcNativePluginBuild)\BuiltInPlugin\SevenZip\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)externalLibs\qlementine\lib\include;$(HcNativePluginBuild)\qlementine\lib\include;$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);$(HcNativePluginBuild)\BuiltInPlugin\SevenZip\$(Configuration);$(HcNativePluginBuild)\BuiltInPlugin\AlzEgg\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>QLEMENTINE_STATIC_DEFINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -584,6 +585,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClInclude Include="..\BuiltInPlugin\IsoImage\builtinIso.hpp" />
     <ClCompile Include="..\BuiltInPlugin\SevenZip\builtinSevenZip.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\BuiltInPlugin\SevenZip\builtinSevenZip.hpp" />
+    <ClCompile Include="..\BuiltInPlugin\AlzEgg\builtinUnEgg.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\BuiltInPlugin\AlzEgg\builtinUnEgg.hpp" />
     <ClInclude Include="..\BuiltInPlugin\IsoImage\isoJob.hpp" />
     <ClCompile Include="..\BuiltInPlugin\IsoImage\nativeIsoRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\BuiltInPlugin\IsoImage\isoProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -730,10 +733,10 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <Target Name="DeployNativePluginHost" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot;" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot; -UnEggUse &quot;$(HcUnEggUse)&quot;" />
   </Target>
   <Target Name="PrepareNativeBuiltinIso" BeforeTargets="ClCompile" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot; -PrepareOnly" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)tools\Deploy-NativePluginHost.ps1&quot; -Configuration &quot;$(Configuration)&quot; -QtRoot &quot;$(QtInstall)&quot; -Executable &quot;$(TargetPath)&quot; -VisualStudioRoot &quot;$(VSInstallDir).&quot; -BuildDirectory &quot;$(HcNativePluginBuild)&quot; -UnEggUse &quot;$(HcUnEggUse)&quot; -PrepareOnly" />
   </Target>
   <ItemGroup>
     <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnFluentSystemIcons.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

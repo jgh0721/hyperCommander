@@ -3,6 +3,7 @@
 #include "solTCPluginMgr.hpp"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "BuiltInPlugin/AlzEgg/builtinUnEgg.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
 #include <QInputDialog>
@@ -830,6 +831,14 @@ void CTCPlugInMgr::Refresh()
         Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
         Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
+    const auto UnEgg = hc::plugins::BuiltinUnEggOptions();
+    if (UnEgg.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = UnEgg.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
+        Plugin.Exts = {QStringLiteral("alz"), QStringLiteral("egg")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = UnEgg.manifestPath_; Plugin.hostApproval_ = UnEgg.approval_;
         VecWCX.push_back(std::move(Plugin));
     }
     qSwap( VecWLX, vecWLX );

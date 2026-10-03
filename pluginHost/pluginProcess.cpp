@@ -239,7 +239,7 @@ namespace hc::plugins
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
-        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx, PluginFormat::DopusVfs, PluginFormat::DopusViewer, PluginFormat::SevenZip};
+        HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx, PluginFormat::DopusVfs, PluginFormat::DopusViewer, PluginFormat::SevenZip, PluginFormat::UnEgg};
         Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer, Extension::StorageRead, Extension::StorageWrite, Extension::Metadata, Extension::ContentConvert}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();

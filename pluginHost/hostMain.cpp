@@ -2,6 +2,7 @@
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
 #include "BuiltInPlugin/SevenZip/sevenZipBackend.hpp"
+#include "BuiltInPlugin/AlzEgg/unEggBackend.hpp"
 #include "nativeViewerHostService.hpp"
 #include "tcDataHostService.hpp"
 #include "dopusVfsHostService.hpp"
@@ -114,6 +115,10 @@ namespace
                 auto Initialized = viewer_->Initialize(Hello["defaultIni"].toString());
                 if (!Initialized.HasValue()) return Initialized.Failure();
             }
+            else if (Expected.Value().format_ == PluginFormat::UnEgg)
+            {
+                archives_ = std::make_unique<WcxHostService>(MakeUnEggBackend(module_));
+            }
             else if (Expected.Value().format_ == PluginFormat::SevenZip)
             {
                 archives_ = std::make_unique<WcxHostService>(MakeSevenZipBackend(module_));
@@ -151,6 +156,13 @@ namespace
             if (viewer_) return viewer_->Probe();
             if (data_) return data_->Probe();
             if (dopusVfs_) return dopusVfs_->Probe();
+            if (GetProcAddress(module_, "EGG_CreateEgg"))
+            {
+                for (const auto Name : {"EGG_CreateEgg", "EGG_DestroyEgg", "EGG_IsValidArchive", "EGG_OpenArchive", "EGG_CloseArchive",
+                    "EGG_Extract", "EGG_Test", "EGG_GetFileCount", "EGG_GetFileHeader"})
+                    if (!GetProcAddress(module_, Name)) return HostError("host-unegg-exports");
+                return QJsonObject{{"format", "unegg"}, {"unicode", true}, {"caps", 0}, {"processId", qint64(GetCurrentProcessId())}};
+            }
             if (GetProcAddress(module_, "GetNumberOfFormats") && GetProcAddress(module_, "CreateObject"))
                 return QJsonObject{{"format", "7zip"}, {"unicode", true}, {"caps", 0}, {"processId", qint64(GetCurrentProcessId())}};
             for (const auto Name : {"OpenArchiveW", "ReadHeaderExW", "ProcessFileW", "CloseArchive"})

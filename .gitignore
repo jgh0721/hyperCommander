@@ -65,4 +65,5 @@ AGENTS.md
 !/tools/Deploy-NativePluginHost.ps1
 !/tools/Install-QtitanDataGrid.ps1
 !/tools/New-SevenZipCorpus.ps1
+!/tools/New-UnEggCorpus.ps1
 /documentation/source/*.rst

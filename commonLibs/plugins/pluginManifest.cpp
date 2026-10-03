@@ -80,6 +80,7 @@ namespace hc::plugins
         switch (Manifest.format_)
         {
         case PluginFormat::Wcx: Allowed = {Extension::ArchiveRead, Extension::ArchiveWrite}; break;
+        case PluginFormat::UnEgg:
         case PluginFormat::SevenZip: Allowed = {Extension::ArchiveRead}; break;
         case PluginFormat::DopusViewer: Allowed = {Extension::Viewer, Extension::Metadata, Extension::ContentConvert}; break;
         case PluginFormat::Wlx: Allowed = {Extension::Viewer}; break;
