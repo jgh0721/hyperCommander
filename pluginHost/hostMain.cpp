@@ -1,6 +1,7 @@
 ﻿#include "pipeChannel.hpp"
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
+#include "BuiltInPlugin/SevenZip/sevenZipBackend.hpp"
 #include "nativeViewerHostService.hpp"
 #include "tcDataHostService.hpp"
 #include "dopusVfsHostService.hpp"
@@ -113,6 +114,10 @@ namespace
                 auto Initialized = viewer_->Initialize(Hello["defaultIni"].toString());
                 if (!Initialized.HasValue()) return Initialized.Failure();
             }
+            else if (Expected.Value().format_ == PluginFormat::SevenZip)
+            {
+                archives_ = std::make_unique<WcxHostService>(MakeSevenZipBackend(module_));
+            }
             else if (Expected.Value().format_ == PluginFormat::Wcx)
             {
                 struct Defaults { int size_; DWORD low_, high_; char ini_[MAX_PATH]; };
@@ -146,6 +151,8 @@ namespace
             if (viewer_) return viewer_->Probe();
             if (data_) return data_->Probe();
             if (dopusVfs_) return dopusVfs_->Probe();
+            if (GetProcAddress(module_, "GetNumberOfFormats") && GetProcAddress(module_, "CreateObject"))
+                return QJsonObject{{"format", "7zip"}, {"unicode", true}, {"caps", 0}, {"processId", qint64(GetCurrentProcessId())}};
             for (const auto Name : {"OpenArchiveW", "ReadHeaderExW", "ProcessFileW", "CloseArchive"})
                 if (!GetProcAddress(module_, Name)) return HostError("host-wcx-unicode-exports");
             const auto Caps = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetPackerCaps"));

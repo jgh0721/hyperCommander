@@ -19,6 +19,8 @@
 #include "storageProviders.hpp"
 #include "wcxMutation.hpp"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+
 #include "qtViewerSurface.hpp"
 #include "qtViewerHost.hpp"
 #include "qtPluginHostSettings.hpp"
@@ -108,7 +110,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -1933,6 +1935,38 @@ hc.events.unsubscribe(sub)
             QVERIFY(Table->isVisible()); QVERIFY(Options.grab().save(QCoreApplication::applicationDirPath() + "/wcx-product-options.png"));
         }
         Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+    }
+    void builtinSevenZipNavigation()
+    {
+        using namespace hc::plugins; using namespace hc::storage;
+        const auto Corpus = qEnvironmentVariable("HC_SEVENZIP_CORPUS"); QVERIFY(!Corpus.isEmpty());
+        const auto Root = QFileInfo(Corpus).absolutePath(); const auto Options = BuiltinSevenZipOptions();
+        const auto Original = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        auto Restore = qScopeGuard([&] {
+            Panel->ChangeCurrentPath(unc_, {});
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Original); TyStPlugInMgr::GetInstance()->Refresh();
+        });
+        hc::settings::AppSettings().SetPlugins("wcx", QJsonArray{QJsonObject{{"path", "user-priority.wcx64"}, {"extensions", QJsonArray{"7z"}}}});
+        TyStPlugInMgr::GetInstance()->Refresh();
+        auto Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("7z"); QCOMPARE(Choices.size(), 2);
+        QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
+        hc::settings::AppSettings().SetPlugins("wcx", {}); TyStPlugInMgr::GetInstance()->Refresh();
+        for (const auto* Name : {"plain.7z", "plain.zip", "test_read_format_rar5_compressed.rar"}) {
+            QTemporaryDir Directory; QVERIFY(QFile::copy(QDir(Root).filePath(Name), Directory.filePath(Name)));
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+            QModelIndex Selected;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) Selected = Model->index(Row, 0);
+            QVERIFY(Selected.isValid()); Model->ChangeDirectory(Selected);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+            QVERIFY(!names(Model).empty());
+            const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); QVERIFY(Pack);
+            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_); QVERIFY(!Pack->GetWCX()->WritePolicy().HasValue());
+            QVERIFY(!GetModuleHandleW(L"7z.dll"));
+            Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+        }
+        QVERIFY(hc::settings::AppSettings().Plugins("wcx").isEmpty());
     }
     void wcxHostApprovalUi_data()
     {

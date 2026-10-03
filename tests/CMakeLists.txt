@@ -302,6 +302,22 @@ add_dependencies(hc_hosted_wcx_tests hc-plugin-host-x64 hc_wcx_fixture hc_plugin
 add_test(NAME hc.hosted_wcx COMMAND hc_hosted_wcx_tests)
 set_tests_properties(hc.hosted_wcx PROPERTIES TIMEOUT 45)
 hc_enable_qt_deployment(hc_hosted_wcx_tests TEST)
+set(HC_SEVENZIP_CORPUS "${CMAKE_BINARY_DIR}/sevenzip-corpus/corpus.json" CACHE FILEPATH "Generated 7-Zip and libarchive verification corpus")
+get_filename_component(HC_SEVENZIP_CORPUS_DIR "${HC_SEVENZIP_CORPUS}" DIRECTORY)
+find_program(HC_CORPUS_POWERSHELL NAMES powershell REQUIRED)
+add_custom_command(OUTPUT "${HC_SEVENZIP_CORPUS}"
+    COMMAND "${HC_CORPUS_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/New-SevenZipCorpus.ps1"
+        -OutputDirectory "${HC_SEVENZIP_CORPUS_DIR}" -ToolsDirectory "${CMAKE_BINARY_DIR}/sevenzip-tools"
+    VERBATIM)
+add_custom_target(hc_sevenzip_corpus DEPENDS "${HC_SEVENZIP_CORPUS}")
+qt_add_executable(hc_sevenzip_tests tstSevenZip.cpp ${HC_WCX_TEST_SOURCES})
+target_include_directories(hc_sevenzip_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_sevenzip_tests PRIVATE hc_builtin_sevenzip hc_sevenzip_backend hc_wcx_backend Qt6::Test)
+target_compile_options(hc_sevenzip_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_sevenzip_tests hc-plugin-host-x64 hc_sevenzip_corpus)
+add_test(NAME hc.sevenzip COMMAND hc_sevenzip_tests -o "${CMAKE_BINARY_DIR}/sevenzip-$<CONFIG>.txt,txt")
+set_tests_properties(hc.sevenzip PROPERTIES TIMEOUT 180 ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS}")
+hc_enable_qt_deployment(hc_sevenzip_tests TEST)
 qt_add_executable(hc_materialization_tests
     tstMaterialization.cpp
     ../UniqueLibs/nativeMaterializer.cpp
@@ -444,7 +460,7 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
             -Executable "$<TARGET_FILE:hc_smb_tests>" -ArchiveOnly -Dpr 1 -TimeoutSeconds 120)
-    set_tests_properties(hc.archive_ui PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
+    set_tests_properties(hc.archive_ui PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE ENVIRONMENT "HC_SEVENZIP_CORPUS=${HC_SEVENZIP_CORPUS}")
     add_test(NAME hc.data_plugin_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
@@ -482,7 +498,7 @@ add_custom_target(hc_check
 add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_tests hc_iso_job_tests)
 add_dependencies(hc_check hc_operation_recovery_tests)
 add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
-add_dependencies(hc_check hc_lua_tests)
+add_dependencies(hc_check hc_lua_tests hc_sevenzip_tests)
 if(TARGET hc_dopus_sdk_abi_tests)
     add_dependencies(hc_check hc_dopus_sdk_abi_tests)
 endif()

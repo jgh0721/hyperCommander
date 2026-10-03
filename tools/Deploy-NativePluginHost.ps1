@@ -15,7 +15,7 @@ $QtCMake = Join-Path $QtRoot 'bin/qt-cmake.bat'
 & $QtCMake -S $Root -B $BuildDir -G 'Visual Studio 18 2026' -A x64 -T 'v145,host=x64' `
     -DBUILD_TESTING=OFF -DHC_BUILD_SMB_TESTS=OFF
 if ($LASTEXITCODE -ne 0) { throw "Plugin host configure failed: $LASTEXITCODE" }
-& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package hc_script_runtime qlementine --parallel 4
+& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package hc_sevenzip_package hc_script_runtime qlementine --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Built-in ISO/script/Qlementine runtime build failed: $LASTEXITCODE" }
 if ($PrepareOnly) { return }
 & $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 hc-search-index --parallel 4
@@ -33,6 +33,11 @@ Get-ChildItem -LiteralPath (Join-Path $BuildDir "$Configuration/BuiltInPlugin/Is
     Copy-Item -LiteralPath $_.FullName -Destination $BuiltinDestination
 }
 $DebugSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
+$SevenZipDestination = Join-Path $Destination 'BuiltInPlugin/SevenZip'
+[IO.Directory]::CreateDirectory($SevenZipDestination) | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $BuildDir "$Configuration/BuiltInPlugin/SevenZip") -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $SevenZipDestination
+}
 & $QtCMake "-DHC_DEPLOY_EXE=$Executable" "-DHC_QT_BIN=$QtRoot/bin" `
     "-DHC_GUI_DLL=$QtRoot/bin/Qt6Gui$DebugSuffix.dll" "-DHC_CONFIG=$Configuration" `
     "-DHC_VS_DIR=$VisualStudioRoot" -DHC_WITH_TEST=OFF -DHC_WITH_PLUGINS=ON `

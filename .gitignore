@@ -1,4 +1,4 @@
-﻿# Common
+# Common
 
 .vs/
 .idea/
@@ -64,4 +64,5 @@ AGENTS.md
 /tools/**/*.ps1
 !/tools/Deploy-NativePluginHost.ps1
 !/tools/Install-QtitanDataGrid.ps1
+!/tools/New-SevenZipCorpus.ps1
 /documentation/source/*.rst

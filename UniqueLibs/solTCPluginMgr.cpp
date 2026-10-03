@@ -2,6 +2,7 @@
 #include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
 #include "BuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
 #include <QInputDialog>
@@ -823,6 +824,14 @@ void CTCPlugInMgr::Refresh()
         VecWCX.push_back(std::move(Plugin));
     }
 
+    const auto SevenZip = hc::plugins::BuiltinSevenZipOptions();
+    if (SevenZip.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
+        Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
     qSwap( VecWLX, vecWLX );
     qSwap( VecWCX, vecWCX );
 }

@@ -67,7 +67,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SolutionDir)externalLibs\qlementine\lib\include;$(HcNativePluginBuild)\qlementine\lib\include;$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)externalLibs\qlementine\lib\include;$(HcNativePluginBuild)\qlementine\lib\include;$(HcNativePluginBuild)\BuiltInPlugin\IsoImage\$(Configuration);$(HcNativePluginBuild)\BuiltInPlugin\SevenZip\$(Configuration);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>QLEMENTINE_STATIC_DEFINE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -582,6 +582,8 @@ copy /y "$(SolutionDir)externalLibs\Everything\src\dll\*.dll" "$(TargetDir)"</Co
     <ClCompile Include="..\BuiltInPlugin\IsoImage\builtinIso.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\BuiltInPlugin\IsoImage\isoJob.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\BuiltInPlugin\IsoImage\builtinIso.hpp" />
+    <ClCompile Include="..\BuiltInPlugin\SevenZip\builtinSevenZip.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\BuiltInPlugin\SevenZip\builtinSevenZip.hpp" />
     <ClInclude Include="..\BuiltInPlugin\IsoImage\isoJob.hpp" />
     <ClCompile Include="..\BuiltInPlugin\IsoImage\nativeIsoRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\BuiltInPlugin\IsoImage\isoProvider.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
