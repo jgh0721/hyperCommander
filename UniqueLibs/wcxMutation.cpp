@@ -51,6 +51,7 @@ namespace hc::storage
             EntrySnapshot entry_;
             std::shared_ptr<IContentSource> content_;
             bool changed_ = false;
+            std::string metadataOrigin_;
         };
         class Session final : public IArchiveMutationSession
         {
@@ -205,7 +206,8 @@ namespace hc::storage
                             const auto Path = SafePath(Entry.locator_.nesting_.back().entry_, limits_.maxDepth_); if (!Path.HasValue()) return Path.Failure();
                             if (Parent(Path.Value()) != At.nesting_.back().entry_ || Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)
                                 return Invalid("archive-provider-entry-parent");
-                            if (!draft_.emplace(Path.Value(), DraftEntry{Entry}).second) return Invalid("duplicate-archive-entry");
+                            const auto Raw = Entry.hints_.find("wcxName");
+                            if (!draft_.emplace(Path.Value(), DraftEntry{Entry, {}, false, Raw == Entry.hints_.end() ? std::string{} : Raw->second}).second) return Invalid("duplicate-archive-entry");
                             if (draft_.size() > limits_.maxEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                             if (Entry.directory_) Pending.push_back(Entry.locator_);
                         }
@@ -263,6 +265,7 @@ namespace hc::storage
                         const auto Expected = expected(Change.path_, Change.destination_); if (!Expected.HasValue()) return Expected;
                         if (draft_.contains(Change.path_) && draft_.at(Change.path_).entry_.directory_) return Invalid("archive-directory-replace");
                         DraftEntry Item; Item.changed_ = true; Item.entry_.directory_ = Change.kind_ == ArchiveChangeKind::MakeDirectory;
+                        if (draft_.contains(Change.path_)) Item.metadataOrigin_ = draft_.at(Change.path_).metadataOrigin_;
                         if (!Item.entry_.directory_)
                         {
                             if (!Change.content_) return Invalid("archive-content-required");
@@ -382,7 +385,7 @@ namespace hc::storage
                     return Pair.second.entry_.hints_.contains("rebuildEncrypted");
                 });
                 if (Rebuild && draft_.empty()) return Error{ErrorCategory::Unsupported, "archive-encrypted-empty-rebuild-unsupported"};
-                std::vector<std::string> Added, Removed;
+                std::vector<std::string> Added, Removed, Origins;
                 for (auto& [Path, Item] : draft_)
                 {
                     if (Rebuild) {
@@ -408,6 +411,7 @@ namespace hc::storage
                     }
                     auto Name = Path.substr(1); if (Item.entry_.directory_) Name += "/";
                     Added.push_back(std::move(Name));
+                    Origins.push_back(Rebuild ? std::string{} : Item.metadataOrigin_);
                 }
                 for (const auto& [Path, Item] : before_)
                     if (!draft_.contains(Path) || draft_.at(Path).changed_)
@@ -427,7 +431,8 @@ namespace hc::storage
                 } else {
                     const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
                 }
-                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt}, Context);
+                if (std::ranges::all_of(Origins, [](const auto& Name) { return Name.empty(); })) Origins.clear();
+                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt, {}, std::move(Origins)}, Context);
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 std::set<std::string> Seen;

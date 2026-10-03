@@ -844,6 +844,22 @@ private slots:
         auto Backend = MakeHostedArchiveBackend(Host); const auto Path = Directory.filePath("batch.hct"); QVERIFY(Put(Path, "HCWCX01"));
         QVERIFY(Backend->Update({Path.toStdString(), Directory.path().toStdString()}, {}).HasValue()); QVERIFY(Host->Ping().HasValue());
     }
+    void metadataOriginsArePagedAndValidated()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 30000); QVERIFY(Started.HasValue());
+        auto Host = Started.Value(); auto Backend = MakeHostedArchiveBackend(Host); const auto Path = Directory.filePath("origins.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        ArchiveUpdate Update{Path.toStdString(), Directory.path().toStdString()};
+        for (int I = 0; I < 1500; ++I) { const auto Name = "new-" + std::to_string(I); QVERIFY(Put(Directory.filePath(QString::fromStdString(Name)), "x")); Update.add_.push_back(Name); Update.metadataOrigins_.push_back(std::string(900, 'o') + std::to_string(I)); }
+        QVERIFY(QJsonDocument(EncodeArchiveUpdate(Update)).toJson(QJsonDocument::Compact).size() > WirePayloadLimit);
+        auto Applied = Backend->Update(Update, {}); QVERIFY2(Applied.HasValue(), Applied.HasValue() ? "" : Applied.Failure().code_.c_str());
+        Update.metadataOrigins_.pop_back(); QVERIFY(!Backend->Update(Update, {}).HasValue()); QVERIFY(Host->Ping().HasValue());
+        const auto Context = EncodeContext({}); ArchiveUpdate Header{Path.toStdString(), Directory.path().toStdString()};
+        auto Begun = Host->ArchiveCall(WireKind::ArchiveUpdateBegin, {{"update", EncodeArchiveUpdate(Header)}, {"added", "1"}, {"removed", "0"}, {"origins", "1"}, {"context", Context}}); QVERIFY(Begun.HasValue());
+        const auto Id = Begun.Value()["upload"];
+        auto Bad = Host->ArchiveData({{"upload", Id}, {"offset", "0"}}, R"({"add":["new-0"],"remove":[],"origins":[]})", {}); QVERIFY(!Bad.HasValue());
+        auto Missing = Host->ArchiveCall(WireKind::ArchiveUpdateApply, {{"upload", Id}, {"context", Context}}); QVERIFY(!Missing.HasValue());
+        QVERIFY(Host->ArchiveCall(WireKind::ArchiveRelease, {{"upload", Id}, {"context", Context}}).HasValue()); QVERIFY(Host->Ping().HasValue());
+    }
     void realSevenZipPlugin()
     {
         const auto Plugin = qEnvironmentVariable("HC_WCX_PLUGIN"); if (Plugin.isEmpty()) QSKIP("Set HC_WCX_PLUGIN to the separately obtained x64 7zip WCX binary");

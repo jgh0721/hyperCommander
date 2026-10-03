@@ -33,9 +33,13 @@ namespace hc::plugins
         std::vector<std::string> add_, remove_;
         std::uint64_t maxOutputBytes_ = std::numeric_limits<std::uint64_t>::max();
         bool encrypt_ = false;
-        // Only creation accepts explicit compression settings. Updates retain
-        // stored settings or fail if the engine cannot preserve them.
+        // Only creation accepts explicit compression settings. An SDK may reduce
+        // a solid dictionary after deletion without changing codec or encryption.
         std::optional<ArchiveCreationOptions> creation_;
+        // Optional adapter metadata hints, aligned with add_. Empty elements mean
+        // new content; other elements identify the replaced/renamed old record.
+        // Native adapters can preserve properties absent from generic snapshots.
+        std::vector<std::string> metadataOrigins_;
     };
     class IArchiveBackend
     {

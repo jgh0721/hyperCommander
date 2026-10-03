@@ -2,8 +2,10 @@
 #include <QtTest>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QProcess>
 #include "BuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include "UniqueLibs/wcxStorage.hpp"
+#include "UniqueLibs/wcxMutation.hpp"
 #include "BuiltInPlugin/SevenZip/sevenZipBackend.hpp"
 #include "BuiltInPlugin/SevenZip/sevenZipJob.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -129,12 +131,54 @@ private slots:
     void unsupportedUpdatesPreserveOriginal() {
         QTemporaryDir Dir; auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
         QVERIFY(Put(Dir.filePath("new"), "new"));
-        for (const auto* Name : {"encrypted.7z", "aes.zip", "test_read_format_rar5_compressed.rar", "split.7z.001"}) {
+        for (const auto* Name : {"test_read_format_rar5_compressed.rar", "split.7z.001"}) {
             const auto Source = QDir(root_).filePath(Name); if (!QFileInfo::exists(Source)) continue;
             const auto Target = Dir.filePath(Name); QVERIFY(QFile::copy(Source, Target)); const auto Before = Read(Target);
             auto Result = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}}, PasswordContext("secret"));
             QVERIFY(!Result.HasValue()); QCOMPARE(Read(Target), Before);
         }
+    }
+    void encryptedUpdate_data() {
+        QTest::addColumn<QString>("Name");
+        for (const auto* Name : {"encrypted.7z", "content-encrypted.7z", "aes.zip", "aes128.zip", "aes192.zip", "zipcrypto.zip"}) QTest::newRow(Name) << QString(Name);
+    }
+    void encryptedUpdate() {
+        QFETCH(QString, Name); QTemporaryDir Dir; const auto Target = Dir.filePath(Name);
+        if (Name == "content-encrypted.7z" || Name == "aes128.zip" || Name == "aes192.zip") {
+            const auto Cli = qEnvironmentVariable("HC_SEVENZIP_CLI", QDir(root_).filePath("../sevenzip-tools/official/7z.exe")); QVERIFY(QFileInfo::exists(Cli));
+            QStringList Args{"a", Target, "-psecret", "-mx=1", "-y"};
+            if (Name.endsWith(".7z")) Args << "-t7z" << "-mhe=off";
+            else Args << "-tzip" << (Name == "aes128.zip" ? "-mem=AES128" : "-mem=AES192");
+            Args << "*"; QProcess Process; Process.setWorkingDirectory(QDir(root_).filePath("input")); Process.start(Cli, Args);
+            QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0);
+        } else QVERIFY(QFile::copy(QDir(root_).filePath(Name), Target));
+        const auto Before = Read(Target); QVERIFY(Put(Dir.filePath("new"), "new encrypted payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {"new"}, {"payload.bin"}};
+        auto Done = Backend->Update(Change, PasswordContext("wrong")); QVERIFY(!Done.HasValue()); QCOMPARE(Read(Target), Before);
+        OperationContext Cancel; Cancel.passwordPrompt_ = [](const std::string&, unsigned, const OperationContext&) -> Result<hc::storage::Password> { return Error{ErrorCategory::Cancelled, "cancel-password"}; };
+        Done = Backend->Update(Change, Cancel); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Cancelled); QCOMPARE(Read(Target), Before);
+        const auto Context = PasswordContext("secret"); Done = Backend->Update(Change, Context); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto UnprotectedHeaders = Backend->Enumerate(Target.toStdString(), false, {});
+        QCOMPARE(UnprotectedHeaders.HasValue(), Name != "encrypted.7z"); if (UnprotectedHeaders.HasValue()) UnprotectedHeaders.Value().reset();
+        auto Listed = Backend->Enumerate(Target.toStdString(), true, Context); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(64, Context); QVERIFY(Page.HasValue()); Listed.Value().reset();
+        bool Found = false;
+        for (const auto& H : Page.Value().entries_) {
+            QVERIFY(H.name_ != "payload.bin"); if (H.directory_) continue; if (H.size_ || Name.endsWith(".zip")) QVERIFY(H.encrypted_);
+            Done = Backend->Extract(Target.toStdString(), H, Dir.filePath("restored").toStdString(), Context); QVERIFY(Done.HasValue());
+            if (H.name_ == "new") { Found = true; QCOMPARE(Read(Dir.filePath("restored")), QByteArray("new encrypted payload")); }
+            else QCOMPARE(Read(Dir.filePath("restored")), Read(QDir(root_).filePath("input/" + QString::fromStdString(H.name_))));
+        }
+        QVERIFY(Found);
+        for (const auto& Names : {std::pair{"new", "renamed-new"}, std::pair{"renamed-new", "new"}}) {
+            Locator Root{LocatorKind::Archive, Target.toStdString(), {{"wcx", "/"}}};
+            auto Reader = MakeWcxReadProvider({}, Root, Dir.path().toStdString(), Backend); auto At = Root; At.nesting_.back().entry_ = std::string("/") + Names.first;
+            auto Entry = Reader->Resolve(At, Context).get(); QVERIFY(Entry.HasValue());
+            auto Batch = BeginWcxMutation({}, Root, Reader, Dir.path().toStdString(), {}, Context, {}, Backend); QVERIFY(Batch.HasValue());
+            auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, At.nesting_.back().entry_, std::string("/") + Names.second, {}, Entry.Value().id_}}, Context);
+            QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Batch.Value()->Commit(Context).HasValue());
+        }
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS");
+        if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("updated-" + Name), Read(Target))); }
     }
     void solidUpdatePreservation() {
         QTemporaryDir Dir; QVERIFY(Put(Dir.filePath("keep"), QByteArray(1024 * 1024, 'k'))); QVERIFY(Put(Dir.filePath("remove"), "remove")); QVERIFY(Put(Dir.filePath("new"), "new"));
@@ -143,9 +187,11 @@ private slots:
         auto Done = Backend->Update(Create, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
         // Appending preserves the original block and its stored dictionary.
         Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
-        const auto Before = Read(Target);
         Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {}, {"remove"}}, {});
-        QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), Before);
+        QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto List = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(List.HasValue()); auto Page = List.Value()->Next(16, {}); QVERIFY(Page.HasValue()); List.Value().reset();
+        QCOMPARE(Page.Value().entries_.size(), size_t(2));
+        for (const auto& H : Page.Value().entries_) { QVERIFY(H.name_ != "remove"); QVERIFY(Backend->Extract(Target.toStdString(), H, Dir.filePath("restored").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("restored")), Read(Dir.filePath(QString::fromStdString(H.name_)))); }
     }
     void zipCommentsAndExtraFields() {
         QTemporaryDir Dir; const auto Target = Dir.filePath("comments.zip");
@@ -157,10 +203,42 @@ private slots:
         QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
         const auto After = Read(Target); QVERIFY(After.endsWith("archive comment")); QVERIFY(After.contains("entry comment"));
         QCOMPARE(After.count(QByteArray::fromHex("feca040041424344")), 2); QVERIFY(After.contains("preserved payload"));
-        // The generic rename request cannot express auxiliary metadata transfer.
+        // Unmapped metadata and opaque extra fields must not be silently lost.
         Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"new"}, {"keep.txt", "new"}}, {});
         QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), After);
+        ArchiveUpdate Mapped{Target.toStdString(), Dir.path().toStdString(), {"new"}, {"keep.txt", "new"}}; Mapped.metadataOrigins_ = {"keep.txt"};
+        Done = Backend->Update(Mapped, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), After);
         const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS"); if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("comments.zip"), After)); }
+    }
+    void metadataRenameAndReplacement() {
+        // Independently generated ZIP: file/archive comments and three NTFS times.
+        const auto Fixture = QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlB14mfPEQAAABEAAAAIACQAa2VlcC50eHQKACAAAAAAAAEAGAAAAAVpNsDVAYBpbGg2wNUBANPTZzbA1QFwcmVzZXJ2ZWQgcGF5bG9hZFBLAQIUABQAAAAAAIMYIlB14mfPEQAAABEAAAAIACQADQAAAAAAIAAAAAAAAABrZWVwLnR4dAoAIAAAAAAAAQAYAAAABWk2wNUBgGlsaDbA1QEA09NnNsDVAWVudHJ5IGNvbW1lbnRQSwUGAAAAAAEAAQBnAAAAWwAAAA8AYXJjaGl2ZSBjb21tZW50");
+        QTemporaryDir Dir; const auto Target = Dir.filePath("metadata.zip"); QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("renamed.txt"), "preserved payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Rename{Target.toStdString(), Dir.path().toStdString(), {"renamed.txt"}, {"keep.txt"}}; Rename.metadataOrigins_ = {"keep.txt"};
+        auto Wire = EncodeArchiveUpdate(Rename); auto Decoded = DecodeArchiveUpdate(Wire); QVERIFY(Decoded.HasValue()); QCOMPARE(Decoded.Value().metadataOrigins_, Rename.metadataOrigins_);
+        Wire["metadataOrigins"] = QJsonArray{}; QVERIFY(!DecodeArchiveUpdate(Wire).HasValue());
+        auto Invalid = Rename; Invalid.metadataOrigins_ = {"missing"}; QVERIFY(!Backend->Update(Invalid, {}).HasValue()); QCOMPARE(Read(Target), Fixture);
+        auto Unknown = Fixture; Unknown.replace(QByteArray::fromHex("0a0020000000000001001800"), QByteArray::fromHex("0a0020000000000002001800"));
+        const auto UnknownTarget = Dir.filePath("unknown-ntfs.zip"); QVERIFY(Put(UnknownTarget, Unknown));
+        auto Unsupported = Rename; Unsupported.archive_ = UnknownTarget.toStdString(); auto Rejected = Backend->Update(Unsupported, {});
+        QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(UnknownTarget), Unknown);
+        auto Done = Backend->Update(Rename, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QVERIFY(Read(Target).contains("entry comment")); QVERIFY(Read(Target).endsWith("archive comment"));
+        QVERIFY(Put(Dir.filePath("renamed.txt"), "replacement payload"));
+        Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"renamed.txt"}, {"renamed.txt"}}, {});
+        QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QVERIFY(Read(Target).contains("entry comment")); QVERIFY(Read(Target).endsWith("archive comment"));
+        // Exercise provenance through the common mutation coordinator and host.
+        const auto Common = Dir.filePath("common.zip"); QVERIFY(Put(Common, Fixture)); Locator Root{LocatorKind::Archive, Common.toStdString(), {{"wcx", "/"}}};
+        auto Reader = MakeWcxReadProvider({}, Root, Dir.path().toStdString(), Backend); auto At = Root; At.nesting_.back().entry_ = "/keep.txt";
+        auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        auto Batch = BeginWcxMutation({}, Root, Reader, Dir.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Batch.HasValue());
+        auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/keep.txt", "/common-name.txt", {}, Entry.Value().id_}}, {});
+        QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QCOMPARE(Read(Common), Fixture); QVERIFY(Batch.Value()->Commit({}).HasValue());
+        QVERIFY(Read(Common).contains("entry comment")); QVERIFY(Read(Common).endsWith("archive comment"));
+        const auto Artifacts = qEnvironmentVariable("HC_SEVENZIP_WRITE_ARTIFACTS");
+        if (!Artifacts.isEmpty()) { QVERIFY(QDir().mkpath(Artifacts)); QVERIFY(Put(QDir(Artifacts).filePath("metadata.zip"), Read(Target))); QVERIFY(Put(QDir(Artifacts).filePath("metadata-common.zip"), Read(Common))); }
     }
     void schedulerPublication() {
         using namespace hc::operations;

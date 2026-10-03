@@ -36,11 +36,12 @@ namespace hc::plugins
         QJsonArray Added, Removed; for (const auto& Name : Update.add_) Added.append(Text(Name)); for (const auto& Name : Update.remove_) Removed.append(Text(Name));
         QJsonObject Object{{"archive", Text(Update.archive_)}, {"inputDirectory", Text(Update.inputDirectory_)}, {"add", Added}, {"remove", Removed}, {"maxOutputBytes", QString::number(Update.maxOutputBytes_)}, {"encrypt", Update.encrypt_}};
         if (Update.creation_) Object["creation"] = QJsonObject{{"level", int(Update.creation_->level_)}, {"solid", Update.creation_->solid_}};
+        if (!Update.metadataOrigins_.empty()) { QJsonArray Origins; for (const auto& Name : Update.metadataOrigins_) Origins.append(Text(Name)); Object["metadataOrigins"] = Origins; }
         return Object;
     }
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
-        if ((Object.size() != 6 && Object.size() != 7) || (Object.size() == 7 && !Object.contains("creation")) || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
+        if (Object.size() != 6 + Object.contains("creation") + Object.contains("metadataOrigins") || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
         auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value()) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         Out.encrypt_ = Object["encrypt"].toBool();
@@ -53,6 +54,13 @@ namespace hc::plugins
         {
             const auto Names = Object[Key].toArray();
             for (const auto Name : Names) { if (!String(Name, 4096)) return Invalid(); Target->push_back(Name.toString().toStdString()); }
+        }
+        if (Object.contains("metadataOrigins")) {
+            if (!Object["metadataOrigins"].isArray() || Object["metadataOrigins"].toArray().size() != qsizetype(Out.add_.size())) return Invalid();
+            for (const auto Name : Object["metadataOrigins"].toArray()) {
+                if (!Name.isString() || (!Name.toString().isEmpty() && !String(Name, 4096))) return Invalid();
+                Out.metadataOrigins_.push_back(Name.toString().toStdString());
+            }
         }
         return Out;
     }
