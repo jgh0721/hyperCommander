@@ -372,7 +372,11 @@ private slots:
         QWidget Main; Main.resize(640, 360); auto* Layout = new QVBoxLayout(&Main);
         QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
         auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main));
-        Activate(Main); QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Main.winId())); Surface->setFocus();
+        // Native activation can be displaced by pending events from the previous
+        // test window. Retry acquisition while pumping events, but still require
+        // real foreground ownership before asserting the hosted child's focus.
+        QTRY_COMPARE_WITH_TIMEOUT(([&] { Activate(Main); return GetForegroundWindow(); })(), reinterpret_cast<HWND>(Main.winId()), 5000);
+        Surface->setFocus();
         const auto Drain = qScopeGuard([&] { Surface->Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
         QSignalSpy Ready(Surface, &QtPluginViewerSurface::Ready); QSignalSpy Failed(Surface, &QtPluginViewerSurface::Failed);
         Surface->Open(options(Directory, Approval), MemoryContent("first", "first.txt"));
