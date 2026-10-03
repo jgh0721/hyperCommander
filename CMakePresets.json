@@ -2,6 +2,17 @@
   "version": 3,
   "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
   "configurePresets": [
+    {
+      "name": "vc2026-validation-noncommercial",
+      "displayName": "VC2026 archive validation (personal/noncommercial UnEGG)",
+      "inherits": "vc2026-qt612",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "HC_BUILD_SMB_TESTS": "ON",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON",
+        "HC_UNEGG_USE": "NONCOMMERCIAL"
+      }
+    },
     { "name": "vc2026-readiness-p2", "displayName": "JSON settings validation", "inherits": "vc2026-qt612", "binaryDir": "${sourceDir}/_build/readiness-p2", "cacheVariables": { "HC_BUILD_SMB_TESTS": "ON" } },
     {
       "name": "vc2026-readiness-p1",
