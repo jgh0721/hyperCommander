@@ -149,7 +149,7 @@ private:
 };
 #include "sevenZipMetadata.inl"
 #include "sevenZipGroups.inl"
-Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
+Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto Target = QString::fromStdString(Request.archive_);
     const auto Root = QDir::cleanPath(QString::fromStdString(Request.inputDirectory_));
@@ -413,3 +413,4 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Target).utf16()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return Failure("7zip-prepared-publish:" + std::to_string(GetLastError()));
     return Unit{};
 }
+#include "sevenZipEnvelope.inl"

@@ -31,6 +31,37 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void archiveEnvelopes_data() {
+        QTest::addColumn<QString>("Format"); QTest::addColumn<bool>("Sfx");
+        QTest::newRow("7z-trailer") << QString("7z") << false; QTest::newRow("7z-sfx") << QString("7z") << true;
+        QTest::newRow("zip-trailer") << QString("zip") << false; QTest::newRow("zip-prefix") << QString("zip") << true;
+    }
+    void archiveEnvelopes() {
+        QFETCH(QString, Format); QFETCH(bool, Sfx); QTemporaryDir Dir;
+        const auto Bare = Dir.filePath("bare." + Format), Target = Dir.filePath("wrapped.exe");
+        const auto Cli = QDir(root_).filePath("../sevenzip-tools/official/7z.exe");
+        QVERIFY(Put(Dir.filePath("keep"), "keep payload")); QVERIFY(Put(Dir.filePath("added"), "new payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); QVERIFY(Backend->Update({Bare.toStdString(), Dir.path().toStdString(), {"keep"}}, {}).HasValue());
+        const auto Prefix = !Sfx ? QByteArray{} : Format == "7z" ? Read(QDir(root_).filePath("../sevenzip-tools/official/7z.sfx")) : QByteArray(512, 'x');
+        if (Sfx) QVERIFY(!Prefix.isEmpty()); const QByteArray Trailer("opaque trailer\0bytes", 20);
+        const auto Before = Prefix + Read(Bare) + Trailer; QVERIFY(Put(Target, Before));
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {"added"}};
+        auto Small = Change; Small.maxOutputBytes_ = Prefix.size() + Trailer.size(); QVERIFY(!Backend->Update(Small, {}).HasValue()); QCOMPARE(Read(Target), Before);
+        auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        const auto Bytes = Read(Target); QVERIFY(Bytes.startsWith(Prefix)); QVERIFY(Bytes.endsWith(Trailer));
+        QProcess Process; Process.start(Cli, {"t", Target}); QVERIFY(Process.waitForFinished(30000)); QVERIFY2(Process.exitCode() <= 1, Process.readAllStandardOutput().constData());
+        Locator Root{LocatorKind::Archive, Target.toStdString(), {{"wcx", "/"}}}; auto Reader = MakeWcxReadProvider({}, Root, Dir.path().toStdString(), Backend);
+        auto At = Root; At.nesting_.back().entry_ = "/added"; auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        auto Session = BeginWcxMutation({}, Root, Reader, Dir.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Session.HasValue());
+        Done = Session.Value()->Prepare({{ArchiveChangeKind::Rename, "/added", "/renamed", {}, Entry.Value().id_}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str()); QVERIFY(Session.Value()->Commit({}).HasValue());
+        QVERIFY(Read(Target).startsWith(Prefix)); QVERIFY(Read(Target).endsWith(Trailer));
+        if (Sfx && Format == "7z") {
+            auto Signed = Prefix; const auto Pe = qFromLittleEndian<quint32>(Signed.constData() + 60); const auto Optional = Pe + 24;
+            const auto Directories = qFromLittleEndian<quint16>(Signed.constData() + Optional) == 0x20b ? 112 : 96;
+            qToLittleEndian<quint32>(5, Signed.data() + Optional + Directories - 4); qToLittleEndian<quint32>(Before.size(), Signed.data() + Optional + Directories + 32); qToLittleEndian<quint32>(8, Signed.data() + Optional + Directories + 36);
+            const auto Fixture = Signed + Read(Bare) + Trailer; QVERIFY(Put(Target, Fixture)); Done = Backend->Update(Change, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().code_, std::string("7zip-sfx-signature-update")); QCOMPARE(Read(Target), Fixture);
+        }
+    }
     void mixedZipEncryption() {
         QTemporaryDir Dir; const auto Target = Dir.filePath("mixed.zip"), Cli = QDir(root_).filePath("../sevenzip-tools/official/7z.exe");
         QProcess Process; Process.setWorkingDirectory(Dir.path());
