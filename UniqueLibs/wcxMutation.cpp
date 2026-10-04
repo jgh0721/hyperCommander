@@ -51,6 +51,7 @@ namespace hc::storage
             EntrySnapshot entry_;
             std::shared_ptr<IContentSource> content_;
             bool changed_ = false;
+            bool reuseData_ = false;
             std::string metadataOrigin_;
         };
         class Session final : public IArchiveMutationSession
@@ -204,12 +205,12 @@ namespace hc::storage
                                 || !SameArchiveContainer(Entry.locator_, root_)
                                 || Entry.id_.providerId_ != reader_->Id()) return Invalid("archive-provider-entry-mismatch");
                             const auto Path = SafePath(Entry.locator_.nesting_.back().entry_, limits_.maxDepth_); if (!Path.HasValue()) return Path.Failure();
-                            if (Parent(Path.Value()) != At.nesting_.back().entry_ || Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)
+                            if (Parent(Path.Value()) != At.nesting_.back().entry_ || ((Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) && !Entry.hints_.contains("metadataRename")))
                                 return Invalid("archive-provider-entry-parent");
                             const auto Raw = Entry.hints_.find("wcxName");
-                            if (!draft_.emplace(Path.Value(), DraftEntry{Entry, {}, false, Raw == Entry.hints_.end() ? std::string{} : Raw->second}).second) return Invalid("duplicate-archive-entry");
+                            if (!draft_.emplace(Path.Value(), DraftEntry{Entry, {}, false, false, Raw == Entry.hints_.end() ? std::string{} : Raw->second}).second) return Invalid("duplicate-archive-entry");
                             if (draft_.size() > limits_.maxEntries_) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
-                            if (Entry.directory_) Pending.push_back(Entry.locator_);
+                            if (Entry.directory_ && !(Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) Pending.push_back(Entry.locator_);
                         }
                         if (Page.Value().end_) break;
                     }
@@ -251,7 +252,8 @@ namespace hc::storage
                             if (Change.kind_ == ArchiveChangeKind::Rename)
                             {
                                 auto Item = draft_.at(Path);
-                                if (!Item.entry_.directory_ && !Item.content_) Item.content_ = std::make_shared<ProviderContentSource>(reader_, Item.entry_);
+                                Item.reuseData_ = Item.entry_.hints_.contains("metadataRename");
+                                if (!Item.reuseData_ && !Item.entry_.directory_ && !Item.content_) Item.content_ = std::make_shared<ProviderContentSource>(reader_, Item.entry_);
                                 Item.changed_ = true;
                                 Renamed.emplace_back(Change.target_ + Path.substr(Change.path_.size()), std::move(Item));
                             }
@@ -265,6 +267,7 @@ namespace hc::storage
                         const auto Expected = expected(Change.path_, Change.destination_); if (!Expected.HasValue()) return Expected;
                         if (draft_.contains(Change.path_) && draft_.at(Change.path_).entry_.directory_) return Invalid("archive-directory-replace");
                         DraftEntry Item; Item.changed_ = true; Item.entry_.directory_ = Change.kind_ == ArchiveChangeKind::MakeDirectory;
+                        if (draft_.contains(Change.path_) && (draft_.at(Change.path_).entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) return Error{ErrorCategory::Unsupported, "archive-special-content-replace"};
                         if (draft_.contains(Change.path_)) Item.metadataOrigin_ = draft_.at(Change.path_).metadataOrigin_;
                         if (!Item.entry_.directory_)
                         {
@@ -387,9 +390,12 @@ namespace hc::storage
                 for (const auto& [Path, Item] : before_) if (Item.entry_.hints_.contains("encrypted")) EncryptedOrigins.insert(Item.metadataOrigin_);
                 if (Rebuild && draft_.empty()) return Error{ErrorCategory::Unsupported, "archive-encrypted-empty-rebuild-unsupported"};
                 std::vector<std::string> Added, Removed, Origins;
+                std::vector<bool> Reused;
                 for (auto& [Path, Item] : draft_)
                 {
                     if (Rebuild) {
+                        if (Item.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Error{ErrorCategory::Unsupported, "archive-special-rebuild"};
+                        Item.reuseData_ = false;
                         if (!Item.entry_.directory_ && !Item.content_) Item.content_ = std::make_shared<ProviderContentSource>(reader_, Item.entry_);
                         Item.changed_ = true;
                     }
@@ -398,8 +404,8 @@ namespace hc::storage
                         const bool Protected = Rebuild || (Item.metadataOrigin_.empty() ? Encrypt : EncryptedOrigins.contains(Item.metadataOrigin_));
                         if (Protected) Item.entry_.hints_["encrypted"] = "1"; else Item.entry_.hints_.erase("encrypted");
                     }
-                    const auto Made = MakeParents(Path, Item.entry_.directory_); if (!Made.HasValue()) return Made;
-                    if (!Item.entry_.directory_)
+                    if (!Item.reuseData_) { const auto Made = MakeParents(Path, Item.entry_.directory_); if (!Made.HasValue()) return Made; }
+                    if (!Item.entry_.directory_ && !Item.reuseData_)
                     {
                         if (!Item.content_ || Item.entry_.size_ > limits_.maxInputBytes_ - Total) return Error{ErrorCategory::BudgetExceeded, "archive-input-budget"};
                         const auto Current = Item.content_->Describe();
@@ -415,7 +421,7 @@ namespace hc::storage
                     }
                     auto Name = Path.substr(1); if (Item.entry_.directory_) Name += "/";
                     Added.push_back(std::move(Name));
-                    Origins.push_back(Rebuild ? std::string{} : Item.metadataOrigin_);
+                    Origins.push_back(Rebuild ? std::string{} : Item.metadataOrigin_); Reused.push_back(Item.reuseData_);
                 }
                 for (const auto& [Path, Item] : before_)
                     if (!draft_.contains(Path) || draft_.at(Path).changed_)
@@ -436,7 +442,8 @@ namespace hc::storage
                     const auto Copied = copySource(std::make_shared<ProviderContentSource>(native_, original_), Output, Context); if (!Copied.HasValue()) return Copied;
                 }
                 if (std::ranges::all_of(Origins, [](const auto& Name) { return Name.empty(); })) Origins.clear();
-                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt, {}, std::move(Origins)}, Context);
+                if (std::ranges::none_of(Reused, [](bool Flag) { return Flag; })) Reused.clear();
+                auto Updated = backend_->Update({Output.toStdString(), InputRoot.toStdString(), std::move(Added), std::move(Removed), limits_.maxArchiveBytes_, Encrypt, {}, std::move(Origins), std::move(Reused)}, Context);
                 if (!Updated.HasValue()) return Updated;
                 auto Cursor = backend_->Enumerate(Output.toStdString(), true, Context); if (!Cursor.HasValue()) return Cursor.Failure();
                 std::set<std::string> Seen;
@@ -452,7 +459,8 @@ namespace hc::storage
                         if (!draft_.contains(Path) || !Seen.insert(Path).second) return Invalid("archive-output-entry-mismatch");
                         const auto& Expected = draft_.at(Path).entry_;
                         const bool KnownCrc = Expected.hints_.contains("crc")
-                            && (draft_.at(Path).changed_ || Expected.hints_.at("crc") != "0");
+                            && ((draft_.at(Path).changed_ && !draft_.at(Path).reuseData_) || Expected.hints_.at("crc") != "0");
+                        if ((Expected.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) != (Header.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) return Invalid("archive-output-special-kind-changed");
                         if (Expected.hints_.contains("encrypted") && !Header.encrypted_) return Invalid("archive-output-encryption-lost");
                         const auto Packed = Header.packedSize_ ? Header.packedSize_ : std::uint64_t(QFileInfo(Output).size());
                         if (Context.workload_.IsAutomatic() && !Expected.directory_ && Expected.size_ && (!Packed || (Expected.size_ - 1) / Packed >= Context.workload_.automaticExpansionRatio_))
@@ -463,7 +471,7 @@ namespace hc::storage
                         // ISO and other WCX formats may have no on-disc CRC.
                         // Zero cannot prove a payload match: validate actual
                         // extracted bytes against the staged input checksum.
-                        if (!Expected.directory_ && !Header.crc_ && KnownCrc)
+                        if (!Expected.directory_ && !(Expected.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) && !Header.crc_ && KnownCrc)
                             VerifyBytes.emplace_back(Header, Expected.hints_.at("crc"));
                     }
                     if (Page.Value().end_) break;

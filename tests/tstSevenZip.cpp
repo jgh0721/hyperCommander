@@ -31,6 +31,39 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void specialEntries_data() {
+        QTest::addColumn<QString>("Format"); QTest::addColumn<QByteArray>("Fixture");
+        QTest::newRow("zip") << QString("zip") << QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlB14mfPEQAAABEAAAAEAAAAa2VlcHByZXNlcnZlZCBwYXlsb2FkUEsDBBQAAAAAAIMYIlALSPDLBAAAAAQAAAAEAAAAbGlua2tlZXBQSwMEFAAAAAAAgxgiUAAAAAAAAAAAAAAAAAQAAABmaWZvUEsBAhQDFAAAAAAAgxgiUHXiZ88RAAAAEQAAAAQAAAAAAAAAAAAAAKSBAAAAAGtlZXBQSwECFAMUAAAAAACDGCJQC0jwywQAAAAEAAAABAAAAAAAAAAAAAAA/6EzAAAAbGlua1BLAQIUAxQAAAAAAIMYIlAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAACkEVkAAABmaWZvUEsFBgAAAAADAAMAlgAAAHsAAAAAAA==");
+        QTest::newRow("7z") << QString("7z") << QByteArray::fromBase64("N3q8ryccAATOxlo3FQAAAAAAAAB6AAAAAAAAAKDGtnRwcmVzZXJ2ZWQgcGF5bG9hZGtlZXABBAYAAQkVAAcLAQABAQAMFQAIDQIJEQoBdeJnzwtI8MsAAAUDDgEgDwGAER8AawBlAGUAcAAAAGwAaQBuAGsAAABmAGkAZgBvAAAAFQ4BAACApIEAgP+hAICkERQaAQAAl1xLGcHVAQCXXEsZwdUBAJdcSxnB1QEAAA==");
+    }
+    void specialEntries() {
+        QFETCH(QString, Format); QFETCH(QByteArray, Fixture); QTemporaryDir Dir; const auto Target = Dir.filePath("special." + Format);
+        QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("added"), "new data")); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {"added"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto Listed = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+        for (const auto& H : Page.Value().entries_) if (H.name_ == "link" || H.name_ == "fifo") {
+            QVERIFY(H.metadataRename_); QVERIFY(H.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT);
+            QVERIFY(!Backend->Extract(Target.toStdString(), H, Dir.filePath("unsafe").toStdString(), {}).HasValue()); QVERIFY(!QFileInfo::exists(Dir.filePath("unsafe")));
+        }
+        // Renaming links never materializes a native link or a regular file.
+        Locator Root{LocatorKind::Archive, Target.toStdString(), {{"wcx", "/"}}}; auto Reader = MakeWcxReadProvider({}, Root, Dir.path().toStdString(), Backend);
+        std::vector<ArchiveChange> Changes;
+        for (const auto& Pair : {std::pair{"link", "renamed"}, {"fifo", "pipe"}}) {
+            auto At = Root; At.nesting_.back().entry_ = std::string("/") + Pair.first; auto Entry = Reader->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+            Changes.push_back({ArchiveChangeKind::Rename, At.nesting_.back().entry_, std::string("/") + Pair.second, {}, Entry.Value().id_});
+        }
+        auto Session = BeginWcxMutation({}, Root, Reader, Dir.path().toStdString(), {}, {}, {}, Backend); QVERIFY(Session.HasValue());
+        Done = Session.Value()->Prepare(Changes, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str()); QVERIFY(Session.Value()->Commit({}).HasValue());
+        const auto Cli = QDir(root_).filePath("../sevenzip-tools/official/7z.exe"); QProcess Process;
+        Process.start(Cli, {"l", "-slt", Target}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); const auto Text = Process.readAllStandardOutput(); QVERIFY(Text.contains("lrwxrwxrwx")); QVERIFY(Text.contains("prw-r--r--"));
+        Process.start(Cli, {"x", "-so", Target, "renamed"}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); QCOMPARE(Process.readAllStandardOutput(), QByteArray("keep"));
+        const auto Before = Read(Target); ArchiveUpdate Invalid{Target.toStdString(), Dir.path().toStdString(), {"sub/link"}, {"renamed"}}; Invalid.metadataOrigins_ = {"renamed"}; Invalid.reuseData_ = {true};
+        auto Wire = EncodeArchiveUpdate(Invalid); auto Decoded = DecodeArchiveUpdate(Wire); QVERIFY(Decoded.HasValue()); QCOMPARE(Decoded.Value().reuseData_, Invalid.reuseData_);
+        Done = Backend->Update(Invalid, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().code_, std::string("7zip-special-parent-change")); QCOMPARE(Read(Target), Before);
+        Invalid.reuseData_.clear(); Invalid.add_ = {"added"}; Done = Backend->Update(Invalid, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Read(Target), Before);
+        Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {}, {"renamed", "pipe"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        Listed = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Listed.HasValue()); Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(2));
+    }
     void archiveEnvelopes_data() {
         QTest::addColumn<QString>("Format"); QTest::addColumn<bool>("Sfx");
         QTest::newRow("7z-trailer") << QString("7z") << false; QTest::newRow("7z-sfx") << QString("7z") << true;

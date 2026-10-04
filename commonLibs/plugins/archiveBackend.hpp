@@ -13,6 +13,8 @@ namespace hc::plugins
         bool encrypted_ = false;
         // Some adapters cannot update encrypted solid archives in place.
         bool rebuildEncrypted_ = false;
+        // This adapter can reuse the stored payload when only its name changes.
+        bool metadataRename_ = false;
     };
     struct ArchivePage { std::vector<ArchiveHeader> entries_; bool end_ = false; };
     class IArchiveListing
@@ -40,6 +42,9 @@ namespace hc::plugins
         // new content; other elements identify the replaced/renamed old record.
         // Native adapters can preserve properties absent from generic snapshots.
         std::vector<std::string> metadataOrigins_;
+        // Optional flags aligned with add_. True requires an explicit origin
+        // and reuses its payload; no filesystem input is opened for that member.
+        std::vector<bool> reuseData_;
     };
     class IArchiveBackend
     {

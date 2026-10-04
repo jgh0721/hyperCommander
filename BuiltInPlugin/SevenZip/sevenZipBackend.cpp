@@ -180,10 +180,11 @@ struct Archive {
         if (Anti.Boolean())
             return Failure("7zip-special-entry", ErrorCategory::Unsupported);
         Header.name_ = Name.toStdString(); Header.size_ = Size.Number(); Header.packedSize_ = Packed.Number(); Header.directory_ = Dir.Boolean();
+        Header.metadataRename_ = format_ == "7z" || format_ == "zip";
         Header.encrypted_ = Encrypted.Boolean(); Header.attributes_ = uint32_t(Attr.Number()); Header.crc_ = uint32_t(Crc.Number());
         Property Posix; if (!Read(kpidPosixAttrib, Posix)) return Failure("7zip-entry-properties");
         const auto Mode = Posix.Number() ? Posix.Number() : (Attr.Number() & 0x8000) ? Attr.Number() >> 16 : 0;
-        if (!Link.Text().isEmpty() || !Hard.Text().isEmpty() || (Mode & 0170000) == 0120000) Header.attributes_ |= FILE_ATTRIBUTE_REPARSE_POINT;
+        if (!Link.Text().isEmpty() || !Hard.Text().isEmpty() || ((Mode & 0170000) && (Mode & 0170000) != (Header.directory_ ? 0040000 : 0100000))) Header.attributes_ |= FILE_ATTRIBUTE_REPARSE_POINT;
         if (Time.vt == VT_FILETIME) { const auto Ticks = (uint64_t(Time.filetime.dwHighDateTime) << 32) | Time.filetime.dwLowDateTime; Header.modifiedUtcMs_ = int64_t(Ticks / 10000) - 11644473600000LL; }
         if (state_->context_.workload_.IsAutomatic() && Header.size_ > state_->context_.workload_.automaticFileBytes_)
             return Failure("automatic-content-budget", ErrorCategory::BudgetExceeded);

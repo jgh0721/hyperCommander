@@ -274,6 +274,7 @@ namespace hc::plugins
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
+                if (std::ranges::any_of(Request.reuseData_, [](bool Flag) { return Flag; })) return Error{ErrorCategory::Unsupported, "wcx-metadata-rename-unsupported", {"wcx"}};
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;

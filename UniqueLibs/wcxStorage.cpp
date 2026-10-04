@@ -206,6 +206,7 @@ namespace hc::storage
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
                     if (Header.encrypted_) Entry.hints_["encrypted"] = "1";
+                    if (Header.metadataRename_) Entry.hints_["metadataRename"] = "1";
                     if (Header.rebuildEncrypted_) Entry.hints_["rebuildEncrypted"] = "1";
                     // Deletion must use the plugin's exact directory marker:
                     // some WCX plugins expose directories without a final slash.

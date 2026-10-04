@@ -12,6 +12,7 @@ struct UpdateItem {
     bool renamed_ = false;
     QByteArray legacyMd5_;
     QString zipEncryption_;
+    bool reuseData_ = false;
 };
 QString EntryKey(QString Name) { Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1); return Name; }
 bool SafeUpdateName(const QString& Name) {
@@ -77,11 +78,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetUpdateItemInfo(UInt32 Index, Int32* Data, Int32* Props, UInt32* Old) noexcept override {
         if (Index >= items_.size()) return E_INVALIDARG;
-        const auto& Item = items_[Index]; *Data = *Props = Item.old_ == UINT32_MAX; *Old = Item.old_; return state_->Check();
+        const auto& Item = items_[Index]; *Data = Item.old_ == UINT32_MAX; *Props = *Data || Item.reuseData_; *Old = Item.old_; return state_->Check();
     }
     HRESULT STDMETHODCALLTYPE GetProperty(UInt32 Index, PROPID Id, PROPVARIANT* Value) noexcept override {
         PropVariantInit(Value); if (Index >= items_.size()) return E_INVALIDARG; const auto& Item = items_[Index];
         if (Id == kpidPath) { Value->vt = VT_BSTR; Value->bstrVal = SysAllocStringLen(reinterpret_cast<const wchar_t*>(Item.name_.utf16()), UINT(Item.name_.size())); if (!Value->bstrVal) return E_OUTOFMEMORY; }
+        else if (Item.reuseData_) { if (!original_ || original_->GetProperty(Item.old_, Id, Value) != S_OK) return E_FAIL; }
         else if (Id == kpidIsDir) { Value->vt = VT_BOOL; Value->boolVal = Item.directory_ ? VARIANT_TRUE : VARIANT_FALSE; }
         else if (Id == kpidSize) { Value->vt = VT_UI8; Value->uhVal.QuadPart = Item.size_; }
         else if (Id == kpidAttrib) { Value->vt = VT_UI4; Value->ulVal = Item.attributes_; }
@@ -195,28 +197,43 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
 
     std::map<QString, QString> CipherByName; std::set<QString> Ciphers;
     std::map<QString, UInt32> OldNames; std::set<QString> Removed, Names;
-    std::map<QString, QString> Origins; std::set<QString> OriginNames;
+    std::map<QString, QString> Origins, Destinations; std::set<QString> OriginNames, Reused;
     std::vector<UpdateItem> Items;
     for (const auto& Name : Request.remove_) { const auto Key = EntryKey(QString::fromStdString(Name)); if (!SafeUpdateName(Key) || !Removed.insert(Key).second) return Failure("7zip-remove-name", ErrorCategory::InvalidRequest); }
     if (!Request.metadataOrigins_.empty() && Request.metadataOrigins_.size() != Request.add_.size()) return Failure("7zip-metadata-origin-count", ErrorCategory::InvalidRequest);
+    if (!Request.reuseData_.empty() && Request.reuseData_.size() != Request.add_.size()) return Failure("7zip-reuse-count", ErrorCategory::InvalidRequest);
     for (size_t I = 0; I < Request.add_.size(); ++I) {
         const auto Name = EntryKey(QString::fromStdString(Request.add_[I]));
         auto Origin = Request.metadataOrigins_.empty() ? QString{} : EntryKey(QString::fromStdString(Request.metadataOrigins_[I]));
         if (Origin.isEmpty() && Removed.contains(Name)) Origin = Name;
+        if (!Request.reuseData_.empty() && Request.reuseData_[I]) {
+            if (Origin.isEmpty() || Request.metadataOrigins_.empty() || Origin == Name) return Failure("7zip-reuse-origin", ErrorCategory::InvalidRequest);
+            Reused.insert(Name);
+        }
         if (!Origin.isEmpty()) {
             if (!Removed.contains(Origin) || !SafeUpdateName(Origin) || !OriginNames.insert(Origin).second || !Origins.emplace(Name, Origin).second)
                 return Failure("7zip-metadata-origin-invalid", ErrorCategory::InvalidRequest);
+            Destinations.emplace(Origin, Name);
         }
     }
     if (Original) for (UInt32 I = 0; I < Original->count_; ++I) {
         if (const auto Stop = Context.Check({"7zip"})) return *Stop;
         auto Header = Original->Header(I); if (!Header.HasValue()) return Header.Failure(); const auto& H = Header.Value(); const auto Key = EntryKey(QString::fromStdString(H.name_));
         if (!SafeUpdateName(Key) || !OldNames.emplace(Key, I).second || !Names.insert(Key.toCaseFolded()).second) return Failure("7zip-ambiguous-update-name", ErrorCategory::Unsupported);
-        if (H.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Failure("7zip-link-update-unsupported", ErrorCategory::Unsupported);
+        const bool Special = (H.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        if (Special && Destinations.contains(Key)) {
+            const auto& To = Destinations.at(Key);
+            if (!Reused.contains(To)) return Failure("7zip-special-data-replacement", ErrorCategory::Unsupported);
+            // Relative link payloads are preserved byte-for-byte. Moving their
+            // parent would change their resolution and needs target rewriting.
+            if (To.section('/', 0, -2) != Key.section('/', 0, -2)) return Failure("7zip-special-parent-change", ErrorCategory::Unsupported);
+        }
+        Property Hard; if (Original->archive_->GetProperty(I, kpidHardLink, &Hard) != S_OK) return Failure("7zip-hardlink-property");
+        if ((!Removed.contains(Key) || OriginNames.contains(Key)) && !Hard.Text().isEmpty() && Removed.contains(EntryKey(Hard.Text()))) return Failure("7zip-hardlink-target-change", ErrorCategory::Unsupported);
         Property Posix; if (Original->archive_->GetProperty(I, kpidPosixAttrib, &Posix) != S_OK) return Failure("7zip-posix-property");
         const auto Mode = Posix.Number() ? Posix.Number() : (H.attributes_ & 0x8000) ? H.attributes_ >> 16 : 0;
         const auto Kind = Mode & 0170000;
-        if (Kind && Kind != (H.directory_ ? 0040000 : 0100000)) return Failure("7zip-special-file-update-unsupported", ErrorCategory::Unsupported);
+        if (Kind && Kind != (H.directory_ ? 0040000 : 0100000) && !Special) return Failure("7zip-special-file-kind", ErrorCategory::Unsupported);
         if (Format == "7z" && H.size_) {
             Property Chain; if (Original->archive_->GetProperty(I, kpidMethod, &Chain) != S_OK) return Failure("7zip-coder-property");
             auto Merged = MergeCodecs(Codecs, Chain.Text()); if (!Merged.HasValue()) return Merged;
@@ -263,6 +280,15 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         const auto Name = EntryKey(QString::fromStdString(Raw));
         if (!SafeUpdateName(Name) || !Names.insert(Name.toCaseFolded()).second) return Failure("7zip-add-name-collision", ErrorCategory::InvalidRequest);
         UpdateItem Item; Item.name_ = Name; Item.path_ = QDir(Root).filePath(Name); Item.directory_ = Raw.ends_with('/') || Raw.ends_with('\\');
+        if (Reused.contains(Name)) {
+            Item.old_ = Item.metadata_ = OldNames.at(Origins.at(Name)); Item.reuseData_ = Item.renamed_ = true;
+            auto H = Original->Header(Item.old_); if (!H.HasValue()) return H.Failure();
+            if (H.Value().directory_ != Item.directory_) return Failure("7zip-reuse-kind", ErrorCategory::InvalidRequest);
+            Item.size_ = H.Value().size_; Item.attributes_ = H.Value().attributes_;
+            Property Time; if (Original->archive_->GetProperty(Item.old_, kpidMTime, &Time) != S_OK) return Failure("7zip-reuse-time");
+            if (Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
+            Item.zipEncryption_ = CipherByName.at(Origins.at(Name)); Items.push_back(std::move(Item)); continue;
+        }
         // Check every ancestor, not only the final file, before pinning input.
         for (auto Path = Item.path_;; Path = QFileInfo(Path).absolutePath()) {
             const auto Attr = GetFileAttributesW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Path).utf16()));
@@ -373,7 +399,7 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
             if (H.encrypted_ != !Item.zipEncryption_.isEmpty()) return Failure("zip-entry-encryption-changed");
             if (H.encrypted_) { Property P; if (Verified.archive_->GetProperty(I, kpidMethod, &P) != S_OK) return Failure("zip-entry-encryption-query"); auto Cipher = P.Text().section(' ', 0, 0); Cipher.remove('-'); if (Cipher != Item.zipEncryption_) return Failure("zip-entry-cipher-changed"); }
         }
-        if (Item.old_ != UINT32_MAX) for (const auto Id : {kpidCRC, kpidAttrib, kpidMTime, kpidCTime, kpidATime, kpidComment, kpidMethod, kpidEncrypted, kpidPosixAttrib, kpidNtSecure}) {
+        if (Item.old_ != UINT32_MAX) for (const auto Id : {kpidCRC, kpidAttrib, kpidMTime, kpidCTime, kpidATime, kpidComment, kpidMethod, kpidEncrypted, kpidPosixAttrib, kpidNtSecure, kpidSymLink, kpidHardLink}) {
             Property Before, After;
             if (Original->archive_->GetProperty(Item.old_, Id, &Before) != S_OK || Verified.archive_->GetProperty(I, Id, &After) != S_OK
                 || (!SameProperty(Before, After) && !(Id == kpidMethod && Format == "7z" && Solid && SameSolidMethod(Before, After))))

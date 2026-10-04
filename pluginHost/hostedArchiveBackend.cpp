@@ -53,32 +53,35 @@ namespace hc::plugins
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
                 if (!process_) return Invalid();
-                if (!Request.metadataOrigins_.empty() && Request.metadataOrigins_.size() != Request.add_.size()) return Invalid();
+                if ((!Request.metadataOrigins_.empty() && Request.metadataOrigins_.size() != Request.add_.size()) || (!Request.reuseData_.empty() && Request.reuseData_.size() != Request.add_.size())) return Invalid();
                 if (!process_->Session().epoch_.empty()) {
                     // Names are streamed below; avoid duplicating large vectors.
                     ArchiveUpdate Header{Request.archive_, Request.inputDirectory_, {}, {}, Request.maxOutputBytes_, Request.encrypt_, Request.creation_};
                     QJsonObject Begin{{"update", EncodeArchiveUpdate(Header)}, {"added", QString::number(Request.add_.size())},
                         {"removed", QString::number(Request.remove_.size())}, {"context", EncodeContext(Context)}};
                     if (!Request.metadataOrigins_.empty()) Begin["origins"] = QString::number(Request.metadataOrigins_.size());
+                    if (!Request.reuseData_.empty()) Begin["reused"] = QString::number(Request.reuseData_.size());
                     auto Begun = process_->ArchiveCall(WireKind::ArchiveUpdateBegin, Begin, Context);
                     if (!Begun.HasValue()) return Begun.Failure(); auto Id = WireUnsigned(Begun.Value()["upload"]); if (!Id.HasValue() || !Id.Value()) return Invalid();
                     auto Cleanup = qScopeGuard([&] { auto Clean = CleanupContext(); process_->ArchiveCall(WireKind::ArchiveRelease, {{"upload", QString::number(Id.Value())}, {"context", EncodeContext(Clean)}}, Clean); });
                     uint64_t Offset = 0;
                     for (const auto& [Key, Names] : {std::pair{"add", &Request.add_}, {"remove", &Request.remove_}}) {
                         for (size_t Row = 0; Row < Names->size();) {
-                            QJsonArray Page, Origins; qsizetype Size = 0;
+                            QJsonArray Page, Origins, Reused; qsizetype Size = 0;
                             while (Row < Names->size() && Size < 24 * 1024) {
                                 if (Names == &Request.add_ && !Request.metadataOrigins_.empty()) {
                                     const auto Origin = QString::fromStdString(Request.metadataOrigins_[Row]);
                                     if (Origin.size() > 4096 || Origin.contains(QChar::Null)) return Invalid();
                                     Size += QJsonDocument(QJsonArray{Origin}).toJson(QJsonDocument::Compact).size(); Origins.append(Origin);
                                 }
+                                if (Names == &Request.add_ && !Request.reuseData_.empty()) { Reused.append(bool(Request.reuseData_[Row])); Size += 6; }
                                 const auto Name = QString::fromStdString((*Names)[Row++]);
                                 if (Name.size() > 4096 || Name.contains(QChar::Null)) return Invalid();
                                 Size += QJsonDocument(QJsonArray{Name}).toJson(QJsonDocument::Compact).size(); Page.append(Name);
                             }
                             QJsonObject Packet{{"add", QJsonArray{}}, {"remove", QJsonArray{}}}; Packet[Key] = Page;
                             if (!Request.metadataOrigins_.empty()) Packet["origins"] = Origins;
+                            if (!Request.reuseData_.empty()) Packet["reused"] = Reused;
                             const auto Bytes = QJsonDocument(Packet).toJson(QJsonDocument::Compact);
                             auto Written = process_->ArchiveData({{"upload", QString::number(Id.Value())}, {"offset", QString::number(Offset)}}, Bytes, Context);
                             if (!Written.HasValue()) return Written.Failure(); Offset += Bytes.size();

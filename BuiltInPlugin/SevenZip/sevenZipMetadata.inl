@@ -110,7 +110,7 @@ Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, const U
     // creation/access properties. Keep their original absence instead.
     if (!HadTimes) Times.clear();
     bool Ntfs = false;
-    for (auto F : B.Value()) { if (F.id_ == 0x5855 || F.id_ == 0x554e) continue; if (F.id_ == 0x4b46) { if (Item.legacyMd5_.size() != 16) return Bad(); F.data_ = "MD5" + Item.legacyMd5_; } if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
+    for (auto F : B.Value()) { if (F.id_ == 0x5855 || F.id_ == 0x554e) continue; if (F.id_ == 0x4b46) { if (Item.reuseData_) { for (const auto& Source : Original.Value()) if (Source.id_ == F.id_) { F.data_ = Source.data_; break; } } else { if (Item.legacyMd5_.size() != 16) return Bad(); F.data_ = "MD5" + Item.legacyMd5_; } } if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
     if (!Ntfs && !Times.isEmpty()) Out.push_back({0x000a, QByteArray(4, 0) + Times});
     for (const auto& F : Out) if (F.data_.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported);
     const auto Bytes = Encode(Out); if (Bytes.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported); return Bytes;

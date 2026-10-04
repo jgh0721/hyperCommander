@@ -20,16 +20,18 @@ namespace hc::plugins
     }
     QJsonObject EncodeArchiveHeader(const ArchiveHeader& Header)
     {
-        return {{"name", Text(Header.name_)}, {"size", QString::number(Header.size_)}, {"packedSize", QString::number(Header.packedSize_)},
+        QJsonObject Out{{"name", Text(Header.name_)}, {"size", QString::number(Header.size_)}, {"packedSize", QString::number(Header.packedSize_)},
             {"attributes", QString::number(Header.attributes_)}, {"crc", QString::number(Header.crc_)}, {"modifiedUtcMs", QString::number(Header.modifiedUtcMs_)}, {"directory", Header.directory_}, {"encrypted", Header.encrypted_}, {"rebuildEncrypted", Header.rebuildEncrypted_}};
+        if (Header.metadataRename_) Out["metadataRename"] = true;
+        return Out;
     }
     Result<ArchiveHeader> DecodeArchiveHeader(const QJsonObject& Object)
     {
-        if (Object.size() != 9 || !Object["rebuildEncrypted"].isBool() || !String(Object["name"], 1024) || Object["name"].toString().isEmpty() || !Object["directory"].isBool() || !Object["encrypted"].isBool() || !Object["modifiedUtcMs"].isString()) return Invalid();
+        if (Object.size() != 9 + Object.contains("metadataRename") || (Object.contains("metadataRename") && !Object["metadataRename"].isBool()) || !Object["rebuildEncrypted"].isBool() || !String(Object["name"], 1024) || Object["name"].toString().isEmpty() || !Object["directory"].isBool() || !Object["encrypted"].isBool() || !Object["modifiedUtcMs"].isString()) return Invalid();
         auto Size = WireUnsigned(Object["size"]), Packed = WireUnsigned(Object["packedSize"]), Attributes = WireUnsigned(Object["attributes"]), Crc = WireUnsigned(Object["crc"]);
         if (!Size.HasValue() || !Packed.HasValue() || !Attributes.HasValue() || !Crc.HasValue() || Attributes.Value() > UINT32_MAX || Crc.Value() > UINT32_MAX) return Invalid();
         bool Ok = false; auto Time = Object["modifiedUtcMs"].toString().toLongLong(&Ok); if (!Ok) return Invalid();
-        return ArchiveHeader{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool(), Object["rebuildEncrypted"].toBool()};
+        return ArchiveHeader{Object["name"].toString().toStdString(), Size.Value(), Packed.Value(), static_cast<std::uint32_t>(Attributes.Value()), static_cast<std::uint32_t>(Crc.Value()), Time, Object["directory"].toBool(), Object["encrypted"].toBool(), Object["rebuildEncrypted"].toBool(), Object["metadataRename"].toBool()};
     }
     QJsonObject EncodeArchiveUpdate(const ArchiveUpdate& Update)
     {
@@ -37,11 +39,12 @@ namespace hc::plugins
         QJsonObject Object{{"archive", Text(Update.archive_)}, {"inputDirectory", Text(Update.inputDirectory_)}, {"add", Added}, {"remove", Removed}, {"maxOutputBytes", QString::number(Update.maxOutputBytes_)}, {"encrypt", Update.encrypt_}};
         if (Update.creation_) Object["creation"] = QJsonObject{{"level", int(Update.creation_->level_)}, {"solid", Update.creation_->solid_}};
         if (!Update.metadataOrigins_.empty()) { QJsonArray Origins; for (const auto& Name : Update.metadataOrigins_) Origins.append(Text(Name)); Object["metadataOrigins"] = Origins; }
+        if (!Update.reuseData_.empty()) { QJsonArray Flags; for (bool Flag : Update.reuseData_) Flags.append(Flag); Object["reuseData"] = Flags; }
         return Object;
     }
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
-        if (Object.size() != 6 + Object.contains("creation") + Object.contains("metadataOrigins") || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
+        if (Object.size() != 6 + Object.contains("creation") + Object.contains("metadataOrigins") + Object.contains("reuseData") || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
         auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value()) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         Out.encrypt_ = Object["encrypt"].toBool();
@@ -61,6 +64,10 @@ namespace hc::plugins
                 if (!Name.isString() || (!Name.toString().isEmpty() && !String(Name, 4096))) return Invalid();
                 Out.metadataOrigins_.push_back(Name.toString().toStdString());
             }
+        }
+        if (Object.contains("reuseData")) {
+            if (!Object["reuseData"].isArray() || Object["reuseData"].toArray().size() != qsizetype(Out.add_.size())) return Invalid();
+            for (const auto Flag : Object["reuseData"].toArray()) { if (!Flag.isBool()) return Invalid(); Out.reuseData_.push_back(Flag.toBool()); }
         }
         return Out;
     }
@@ -94,7 +101,7 @@ namespace hc::plugins
     }
     Result<OperationContext> DecodeContextV2(const QJsonObject& Object)
     {
-        if (Object.size() != 9 || !Object["automatic"].isBool()) return Invalid();
+        if (Object.size() != 9 + Object.contains("metadataRename") || (Object.contains("metadataRename") && !Object["metadataRename"].isBool()) || !Object["automatic"].isBool()) return Invalid();
         auto Entries = WireUnsigned(Object["entries"]), Page = WireUnsigned(Object["page"]), Read = WireUnsigned(Object["read"]),
             Bytes = WireUnsigned(Object["autoBytes"]), Count = WireUnsigned(Object["autoEntries"]), Depth = WireUnsigned(Object["autoDepth"]), Ratio = WireUnsigned(Object["autoRatio"]);
         if (!Entries.HasValue() || Entries.Value() > SIZE_MAX || !Page.HasValue() || !Page.Value() || Page.Value() > 100000
