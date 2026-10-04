@@ -31,6 +31,36 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void mixedZipEncryption() {
+        QTemporaryDir Dir; const auto Target = Dir.filePath("mixed.zip"), Cli = QDir(root_).filePath("../sevenzip-tools/official/7z.exe");
+        QProcess Process; Process.setWorkingDirectory(Dir.path());
+        const QStringList Modes{"plain", "AES128", "AES192", "AES256", "ZipCrypto"};
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString()};
+        for (const auto& Mode : Modes) {
+            QVERIFY(Put(Dir.filePath(Mode), "original " + Mode.toUtf8())); QVERIFY(Put(Dir.filePath("new-" + Mode), "replacement " + Mode.toUtf8()));
+            QStringList Args{"a", "-tzip", Target, Mode}; if (Mode != "plain") Args << "-psecret" << "-mem=" + Mode;
+            Process.start(Cli, Args); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0);
+            Change.add_.push_back(("new-" + Mode).toStdString()); Change.remove_.push_back(Mode.toStdString()); Change.metadataOrigins_.push_back(Mode.toStdString());
+        }
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); const auto Before = Read(Target);
+        auto Done = Backend->Update(Change, PasswordContext("wrong")); QVERIFY(!Done.HasValue()); QCOMPARE(Read(Target), Before);
+        auto Limited = Change; Limited.maxOutputBytes_ = 20; Done = Backend->Update(Limited, PasswordContext("secret")); QVERIFY(!Done.HasValue()); QCOMPARE(Read(Target), Before);
+        Done = Backend->Update(Change, PasswordContext("secret")); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        auto Listed = Backend->Enumerate(Change.archive_, true, PasswordContext("secret")); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(16, {}); QVERIFY(Page.HasValue()); Listed.Value().reset(); QCOMPARE(Page.Value().entries_.size(), size_t(5));
+        Process.start(Cli, {"l", "-slt", Target, "-psecret"}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); const auto Listing = QString::fromUtf8(Process.readAllStandardOutput());
+        for (const auto& H : Page.Value().entries_) {
+            const auto Name = QString::fromStdString(H.name_), Mode = Name.mid(4); QCOMPARE(H.encrypted_, Mode != "plain");
+            const auto At = Listing.indexOf("Path = " + Name + "\r\n"); QVERIFY2(At >= 0, qPrintable(Listing)); const auto Block = Listing.mid(At).section("\r\n\r\n", 0, 0);
+            if (Mode != "plain") { auto Expected = Mode; if (Mode.startsWith("AES")) Expected.insert(3, '-'); QVERIFY2(Block.contains("Method = " + Expected), qPrintable(Block)); }
+            Process.start(Cli, {"x", "-so", Target, Name, "-psecret"}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); QCOMPARE(Process.readAllStandardOutput(), "replacement " + Mode.toUtf8());
+        }
+        const auto Context = PasswordContext("secret"); Locator Root{LocatorKind::Archive, Target.toStdString(), {{"wcx", "/"}}};
+        auto Reader = MakeWcxReadProvider({}, Root, Dir.path().toStdString(), Backend); auto At = Root; At.nesting_.back().entry_ = "/new-plain";
+        auto Entry = Reader->Resolve(At, Context).get(); QVERIFY(Entry.HasValue()); auto Batch = BeginWcxMutation({}, Root, Reader, Dir.path().toStdString(), {}, Context, {}, Backend); QVERIFY(Batch.HasValue());
+        auto Prepared = Batch.Value()->Prepare({{ArchiveChangeKind::Rename, "/new-plain", "/common-plain", {}, Entry.Value().id_}}, Context); QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str()); QVERIFY(Batch.Value()->Commit(Context).HasValue());
+        Listed = Backend->Enumerate(Change.archive_, true, Context); QVERIFY(Listed.HasValue()); Page = Listed.Value()->Next(16, Context); QVERIFY(Page.HasValue()); bool Plain = false;
+        for (const auto& H : Page.Value().entries_) if (H.name_ == "common-plain") { Plain = true; QVERIFY(!H.encrypted_); } QVERIFY(Plain);
+    }
     void unknownSevenZipSecurityIsNotDiscarded() {
         // Draft ACL/unknown FilesInfo record 0x1a. The upstream decoder reports
         // UnsupportedFeatureWarning while still exposing the readable payload.

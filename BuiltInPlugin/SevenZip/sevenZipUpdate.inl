@@ -11,6 +11,7 @@ struct UpdateItem {
     UInt32 metadata_ = UINT32_MAX;
     bool renamed_ = false;
     QByteArray legacyMd5_;
+    QString zipEncryption_;
 };
 QString EntryKey(QString Name) { Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1); return Name; }
 bool SafeUpdateName(const QString& Name) {
@@ -147,6 +148,7 @@ private:
     std::shared_ptr<State> state_; const std::map<UInt32, const UpdateItem*>& items_; const UpdateItem* item_ = nullptr; Output* output_ = nullptr;
 };
 #include "sevenZipMetadata.inl"
+#include "sevenZipGroups.inl"
 Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto Target = QString::fromStdString(Request.archive_);
@@ -191,6 +193,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
 
     } else if (Format != "7z" && Format != "zip") return Failure("7zip-create-format", ErrorCategory::Unsupported);
 
+    std::map<QString, QString> CipherByName; std::set<QString> Ciphers;
     std::map<QString, UInt32> OldNames; std::set<QString> Removed, Names;
     std::map<QString, QString> Origins; std::set<QString> OriginNames;
     std::vector<UpdateItem> Items;
@@ -218,6 +221,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             Property Chain; if (Original->archive_->GetProperty(I, kpidMethod, &Chain) != S_OK) return Failure("7zip-coder-property");
             auto Merged = MergeCodecs(Codecs, Chain.Text()); if (!Merged.HasValue()) return Merged;
         }
+        CipherByName[Key] = {};
         if (H.encrypted_) {
             Request.encrypt_ = true;
             if (Format == "zip") {
@@ -225,8 +229,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
                 const auto Match = QRegularExpression("^(AES-(128|192|256)|ZipCrypto)( |$)").match(P.Text());
                 if (!Match.hasMatch()) return Failure("zip-encryption-preservation-unsupported", ErrorCategory::Unsupported);
                 auto Mode = Match.captured(1); Mode.remove('-');
-                if (!Encryption.isEmpty() && Encryption != Mode) return Failure("zip-mixed-encryption-update-unsupported", ErrorCategory::Unsupported);
-                Encryption = Mode;
+                CipherByName[Key] = Mode; Ciphers.insert(Mode);
             }
         }
         // Explicit origins distinguish rename/replacement from unrelated adds.
@@ -241,6 +244,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         }
         if (!Removed.contains(Key)) Items.push_back({I, Key, {}, H.directory_, H.size_});
     }
+    if (!Ciphers.empty()) Encryption = Ciphers.size() == 1 ? *Ciphers.begin() : "AES256";
     for (const auto& Name : Removed) if (!OldNames.contains(Name)) return Failure("7zip-remove-missing", ErrorCategory::NotFound);
     if (Original && Format == "zip") {
         auto Signatures = zipMetadata::CheckSignatures(*Original, OriginNames, Context); if (!Signatures.HasValue()) return Signatures.Failure();
@@ -280,6 +284,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             if (Attributes.vt == VT_UI4) Item.attributes_ = Attributes.ulVal;
             if (Origins.at(Name) != Name && Time.vt == VT_FILETIME) Item.modified_ = Time.filetime;
         }
+        if (Format == "zip") Item.zipEncryption_ = Origins.contains(Name) ? CipherByName.at(Origins.at(Name)) : Request.encrypt_ ? (Encryption.isEmpty() ? "AES256" : Encryption) : QString{};
         if (!Item.directory_) {
             Item.input_ = std::shared_ptr<Input>(new Input(Shared), [](Input* Value) { Value->Release(); });
             if (!Item.input_->Open(Item.path_)) return Failure("7zip-input-pin"); Item.size_ = Item.input_->Size();
@@ -296,6 +301,9 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     for (const auto& Item : Items) for (auto Parent = Item.name_.section('/', 0, -2); !Parent.isEmpty(); Parent = Parent.section('/', 0, -2))
         if (Files.contains(Parent.toCaseFolded())) return Failure("7zip-file-parent", ErrorCategory::InvalidRequest);
 
+    std::set<QString> ZipGroups; for (const auto& Item : Items) if (Format == "zip" && Item.old_ == UINT32_MAX) ZipGroups.insert(Item.zipEncryption_);
+    if (ZipGroups.size() == 1) Encryption = *ZipGroups.begin();
+    const bool WriteEncrypted = Format == "zip" && !ZipGroups.empty() ? !Encryption.isEmpty() : Request.encrypt_;
     Com<IOutArchive> Writer;
     if (Original) {
         if (Original->archive_->QueryInterface(IID_IOutArchive, reinterpret_cast<void**>(&Writer.value_)) != S_OK) return Failure("7zip-update-interface", ErrorCategory::Unsupported);
@@ -320,7 +328,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         if (!Codecs.empty()) for (size_t I = 0; I < Codecs.size(); ++I) Set(std::to_wstring(I).c_str(), Codecs[I].option_);
         else Set(L"0", !Original && Request.creation_ && Request.creation_->level_ == 0 ? "Copy" : "LZMA2");
         if (Request.encrypt_) Set(L"he", EncryptHeaders || !Original ? "on" : "off");
-    } else { Set(L"cu", "on"); if (!Method.isEmpty()) Set(L"m", Method); if (Request.encrypt_) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
+    } else { Set(L"cu", "on"); if (!Method.isEmpty()) Set(L"m", Method); if (WriteEncrypted) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
     std::vector<const wchar_t*> KeyPointers; std::vector<PROPVARIANT> Variants(Values.size());
     for (size_t I = 0; I < Values.size(); ++I) {
         KeyPointers.push_back(Keys[I].c_str()); PropVariantInit(&Variants[I]);
@@ -334,12 +342,17 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     QTemporaryDir Staging(QFileInfo(Target).dir().filePath(".hc-7zip-XXXXXX"));
     if (!Staging.isValid()) return Failure("7zip-prepared-directory");
     QFile Prepared(Staging.filePath("archive." + Format));
-    if (!Prepared.open(QIODevice::ReadWrite | QIODevice::NewOnly)) return Failure("7zip-prepared-open");
-    Com<UpdateOutput> Stream{new UpdateOutput(&Prepared, Request.maxOutputBytes_, Shared)};
-    Com<UpdateCallback> Callback{new UpdateCallback(Items, Shared, Request.encrypt_, Format == "zip", Original ? Original->archive_.value_ : nullptr)};
-    const auto Code = Writer->UpdateItems(Stream.value_, UInt32(Items.size()), Callback.value_);
-    if (Code != S_OK || Shared->error_) return Shared->Result(Code);
-    if (!Prepared.flush()) return Failure("7zip-prepared-flush"); Prepared.close();
+    if (Format == "zip" && ZipGroups.size() > 1) {
+        auto Written = WriteZipGroups(Module, Writer.value_, Original.get(), Items, Prepared.fileName(), Method, Request.creation_.value_or(ArchiveCreationOptions{}).level_, Request.maxOutputBytes_, Shared);
+        if (!Written.HasValue()) return Written;
+    } else {
+        if (!Prepared.open(QIODevice::ReadWrite | QIODevice::NewOnly)) return Failure("7zip-prepared-open");
+        Com<UpdateOutput> Stream{new UpdateOutput(&Prepared, Request.maxOutputBytes_, Shared)};
+        Com<UpdateCallback> Callback{new UpdateCallback(Items, Shared, WriteEncrypted, Format == "zip", Original ? Original->archive_.value_ : nullptr)};
+        const auto Code = Writer->UpdateItems(Stream.value_, UInt32(Items.size()), Callback.value_);
+        if (Code != S_OK || Shared->error_) return Shared->Result(Code);
+        if (!Prepared.flush()) return Failure("7zip-prepared-flush"); Prepared.close();
+    }
     auto VerifyContext = Context;
     if (Shared->password_) VerifyContext.passwordPrompt_ = [Shared](const std::string&, unsigned, const OperationContext&) -> Result<storage::Password> { return storage::Password(Shared->password_->Value()); };
     std::map<QString, const UpdateItem*> Expected; for (const auto& Item : Items) Expected.emplace(Item.name_, &Item);
@@ -355,7 +368,11 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     for (UInt32 I = 0; I < Verified.count_; ++I) {
         auto Header = Verified.Header(I); if (!Header.HasValue()) return Header.Failure(); const auto& H = Header.Value(); const auto Found = Expected.find(EntryKey(QString::fromStdString(H.name_)));
         if (Found == Expected.end()) return Failure("7zip-output-name"); const auto& Item = *Found->second;
-        if (H.directory_ != Item.directory_ || (!H.directory_ && (H.size_ != Item.size_ || (Item.old_ == UINT32_MAX && Request.encrypt_ && Item.size_ && !H.encrypted_)))) return Failure("7zip-output-content");
+        if (H.directory_ != Item.directory_ || (!H.directory_ && (H.size_ != Item.size_ || (Item.old_ == UINT32_MAX && (Format == "zip" ? !Item.zipEncryption_.isEmpty() : Request.encrypt_) && Item.size_ && !H.encrypted_)))) return Failure("7zip-output-content");
+        if (Format == "zip" && Item.old_ == UINT32_MAX && Item.size_) {
+            if (H.encrypted_ != !Item.zipEncryption_.isEmpty()) return Failure("zip-entry-encryption-changed");
+            if (H.encrypted_) { Property P; if (Verified.archive_->GetProperty(I, kpidMethod, &P) != S_OK) return Failure("zip-entry-encryption-query"); auto Cipher = P.Text().section(' ', 0, 0); Cipher.remove('-'); if (Cipher != Item.zipEncryption_) return Failure("zip-entry-cipher-changed"); }
+        }
         if (Item.old_ != UINT32_MAX) for (const auto Id : {kpidCRC, kpidAttrib, kpidMTime, kpidCTime, kpidATime, kpidComment, kpidMethod, kpidEncrypted, kpidPosixAttrib, kpidNtSecure}) {
             Property Before, After;
             if (Original->archive_->GetProperty(Item.old_, Id, &Before) != S_OK || Verified.archive_->GetProperty(I, Id, &After) != S_OK

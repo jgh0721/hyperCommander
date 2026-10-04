@@ -375,15 +375,16 @@ namespace hc::storage
                     return Unit{};
                 };
                 std::uint64_t Total = 0;
-                // New content inherits the archive's protection as well. In a
-                // mixed archive all files in this update batch are encrypted;
-                // unchanged plaintext members need not be rewritten.
+                // New members inherit archive protection. Replacements/renames
+                // retain the destination member's protection via provenance.
                 const bool Encrypt = std::ranges::any_of(before_, [](const auto& Pair) {
                     return Pair.second.entry_.hints_.contains("encrypted");
                 });
                 const bool Rebuild = Encrypt && std::ranges::any_of(before_, [](const auto& Pair) {
                     return Pair.second.entry_.hints_.contains("rebuildEncrypted");
                 });
+                std::set<std::string> EncryptedOrigins;
+                for (const auto& [Path, Item] : before_) if (Item.entry_.hints_.contains("encrypted")) EncryptedOrigins.insert(Item.metadataOrigin_);
                 if (Rebuild && draft_.empty()) return Error{ErrorCategory::Unsupported, "archive-encrypted-empty-rebuild-unsupported"};
                 std::vector<std::string> Added, Removed, Origins;
                 for (auto& [Path, Item] : draft_)
@@ -393,7 +394,10 @@ namespace hc::storage
                         Item.changed_ = true;
                     }
                     if (!Item.changed_) continue;
-                    if (Encrypt && !Item.entry_.directory_) Item.entry_.hints_["encrypted"] = "1";
+                    if (!Item.entry_.directory_) {
+                        const bool Protected = Rebuild || (Item.metadataOrigin_.empty() ? Encrypt : EncryptedOrigins.contains(Item.metadataOrigin_));
+                        if (Protected) Item.entry_.hints_["encrypted"] = "1"; else Item.entry_.hints_.erase("encrypted");
+                    }
                     const auto Made = MakeParents(Path, Item.entry_.directory_); if (!Made.HasValue()) return Made;
                     if (!Item.entry_.directory_)
                     {
