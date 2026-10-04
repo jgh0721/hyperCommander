@@ -9,6 +9,7 @@ struct UpdateItem {
     QByteArray digest_;
     std::shared_ptr<Input> input_;
     UInt32 metadata_ = UINT32_MAX;
+    bool renamed_ = false;
 };
 QString EntryKey(QString Name) { Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1); return Name; }
 bool SafeUpdateName(const QString& Name) {
@@ -274,6 +275,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         Item.attributes_ = Info.dwFileAttributes; Item.modified_ = Info.ftLastWriteTime;
         if (Origins.contains(Name)) {
             Item.metadata_ = OldNames.at(Origins.at(Name));
+            Item.renamed_ = Origins.at(Name) != Name;
             auto Old = Original->Header(Item.metadata_); if (!Old.HasValue()) return Old.Failure();
             if (Old.Value().directory_ != Item.directory_) return Failure("7zip-metadata-origin-kind", ErrorCategory::InvalidRequest);
             Property Attributes, Time;

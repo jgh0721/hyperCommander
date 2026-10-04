@@ -44,6 +44,26 @@ private slots:
             QCOMPARE(Done.Failure().code_, std::string("7zip-unrepresented-metadata-update")); QCOMPARE(Read(Target), Fixture);
         }
     }
+    void legacyZipMetadata() {
+        const auto Fixture = QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlAVaixCBwAAAAcAAAAIACoAa2VlcC50eHRVWAwApV0NXqZdDV7oA+kDTlUWAE5VQ1gIAGsAZQBlAHAALgB0AHgAdABwYXlsb2FkUEsBAhQAFAAAAAAAgxgiUBVqLEIHAAAABwAAAAgARAAAAAAAAAAgAAAAAAAAAGtlZXAudHh0VVgIAKVdDV6mXQ1eTlU0AE5VQ1gIAA4AawBlAGUAcAAuAHQAeAB0AGwAZQBnAGEAYwB5ACAAYwBvAG0AbQBlAG4AdABQSwUGAAAAAAEAAQB6AAAAVwAAAAAA");
+        QTemporaryDir Dir; const auto Target = Dir.filePath("legacy.zip"), Name = QString::fromUtf8("새 이름.txt"); QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath(Name), "payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {Name.toStdString()}, {"keep.txt"}}; Change.metadataOrigins_ = {"keep.txt"};
+        for (int Step = 0; Step < 2; ++Step) {
+            auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            const auto Bytes = Read(Target); const auto Local = Bytes.indexOf(QByteArray::fromHex("55580c00")); const auto Central = Bytes.indexOf(QByteArray::fromHex("55580800")); QVERIFY(Local >= 0 && Central >= 0);
+            QCOMPARE(qFromLittleEndian<quint32>(Bytes.constData() + Local + 4), 1577934245u); QCOMPARE(qFromLittleEndian<quint32>(Bytes.constData() + Central + 4), 1577934245u);
+            const auto MTime = qFromLittleEndian<quint32>(Bytes.constData() + Local + 8); if (Step) QVERIFY(MTime > 1577934246u); else QCOMPARE(MTime, 1577934246u);
+            QCOMPARE(qFromLittleEndian<quint32>(Bytes.constData() + Central + 8), MTime); QCOMPARE(Bytes.mid(Local + 12, 4), QByteArray::fromHex("e803e903"));
+            QByteArray Unicode(Name.size() * 2, 0); for (qsizetype I = 0; I < Name.size(); ++I) qToLittleEndian<quint16>(Name[I].unicode(), Unicode.data() + I * 2);
+            QCOMPARE(Bytes.count(Unicode), 2); QVERIFY(Bytes.contains(QByteArray::fromHex("6c0065006700610063007900200063006f006d006d0065006e007400")));
+            auto Listed = Backend->Enumerate(Change.archive_, true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(4, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+            QCOMPARE(Page.Value().entries_.front().name_, Name.toStdString()); QVERIFY(Backend->Extract(Change.archive_, Page.Value().entries_.front(), Dir.filePath("out").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("out")), Step ? QByteArray("replacement") : QByteArray("payload"));
+            Change.remove_ = {Name.toStdString()}; Change.metadataOrigins_.clear(); QVERIFY(Put(Dir.filePath(Name), "replacement"));
+        }
+        auto Bad = Fixture; Bad.replace("NUCX", "BAD!"); QVERIFY(Put(Target, Bad)); Change.remove_ = {"keep.txt"}; Change.metadataOrigins_ = {"keep.txt"};
+        QVERIFY(!Backend->Update(Change, {}).HasValue()); QCOMPARE(Read(Target), Bad);
+    }
     void storedArchiveSignature() {
         QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
         QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));

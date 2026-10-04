@@ -29,6 +29,18 @@ QByteArray Encode(const std::vector<Field>& Fields) {
     return Out;
 }
 bool Generated(uint16_t Id) { return Id == 1 || Id == 0x5455 || Id == 0x7075 || Id == 0x6375 || Id == 0x9901; }
+Result<QByteArray> XceedName(const QByteArray& Data, const QString& Name) {
+    // Xceed's NUCX layout: local has name length; central adds comment length.
+    // https://github.com/pmqs/zipdetails/blob/main/bin/zipdetails
+    if (Data.size() < 6 || Data.first(4) != "NUCX") return Bad();
+    const auto Length = qsizetype(U16(Data, 4)) * 2;
+    const bool Central = Data.size() != 6 + Length;
+    if (Central && (Data.size() < 8 || Data.size() != 8 + Length + qsizetype(U16(Data, 6)) * 2)) return Bad();
+    if (Name.size() > UINT16_MAX) return Bad();
+    QByteArray Out = Data.first(Central ? 8 : 6); Put16(Out, 4, uint16_t(Name.size()));
+    QByteArray Encoded(Name.size() * 2, 0); for (qsizetype I = 0; I < Name.size(); ++I) Put16(Encoded, I * 2, Name[I].unicode());
+    Out += Encoded; if (Central) Out += Data.mid(8 + Length); return Out;
+}
 Result<QByteArray> Persistent(const QByteArray& Bytes) {
     auto Parsed = Fields(Bytes); if (!Parsed.HasValue()) return Parsed.Failure(); std::vector<Field> Out;
     for (auto F : Parsed.Value()) {
@@ -38,8 +50,13 @@ Result<QByteArray> Persistent(const QByteArray& Bytes) {
         // Legacy UNIX times and alternate-name records need their own rewrite
         // rules as well; preserving stale values would mislead other readers.
         if ((F.id_ >= 0x0014 && F.id_ <= 0x0019) || F.id_ == 0x4b46 || F.id_ == 0xa11e || F.id_ == 0xd935 || F.id_ == 0x000d || F.id_ == 0x756e
-            || F.id_ == 0x5855 || F.id_ == 0x4f4c || F.id_ == 0x554e || F.id_ == 0x2605)
+            || F.id_ == 0x4f4c || F.id_ == 0x2605)
             return Failure("zip-dependent-extra-unsupported:" + std::to_string(F.id_), ErrorCategory::Unsupported);
+        if (F.id_ == 0x5855) {
+            if (F.data_.size() != 8 && F.data_.size() != 12) return Bad();
+            Put32(F.data_, 4, 0); // mtime is rewritten; atime and UID/GID stay exact.
+        }
+        if (F.id_ == 0x554e) { auto Normal = XceedName(F.data_, {}); if (!Normal.HasValue()) return Normal.Failure(); F.data_ = std::move(Normal.Value()); }
         if (F.id_ == 0x000a) {
             if (F.data_.size() < 4) return Bad(); auto Tags = Fields(F.data_.mid(4)); if (!Tags.HasValue()) return Tags.Failure();
             std::vector<Field> Unknown;
@@ -51,7 +68,8 @@ Result<QByteArray> Persistent(const QByteArray& Bytes) {
     }
     return Encode(Out);
 }
-Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, uint64_t Modified) {
+Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, const UpdateItem& Item) {
+    const auto Modified = (uint64_t(Item.modified_.dwHighDateTime) << 32) | Item.modified_.dwLowDateTime;
     auto Keep = Persistent(Old); if (!Keep.HasValue()) return Keep.Failure();
     auto A = Fields(Fresh), B = Fields(Keep.Value()), Original = Fields(Old); if (!A.HasValue() || !B.HasValue() || !Original.HasValue()) return Bad();
     std::vector<Field> Out; QByteArray Times;
@@ -63,6 +81,14 @@ Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, uint64_
     }
     bool HadTimes = false;
     for (auto F : Original.Value()) {
+        if (F.id_ == 0x5855) {
+            if (!Item.renamed_) {
+                if (Modified < 116444736000000000ULL || (Modified - 116444736000000000ULL) / 10000000 > UINT32_MAX) return Bad();
+                Put32(F.data_, 4, uint32_t((Modified - 116444736000000000ULL) / 10000000));
+            }
+            Out.push_back(std::move(F));
+        }
+        if (F.id_ == 0x554e) { auto Name = XceedName(F.data_, Item.name_ + (Item.directory_ ? "/" : "")); if (!Name.HasValue()) return Name.Failure(); F.data_ = std::move(Name.Value()); Out.push_back(std::move(F)); }
         if (F.id_ == 0x000a) {
             auto Tags = Fields(F.data_.mid(4)); if (!Tags.HasValue()) return Bad();
             for (const auto& Tag : Tags.Value()) if (Tag.id_ == 1) HadTimes = true;
@@ -82,7 +108,7 @@ Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, uint64_
     // creation/access properties. Keep their original absence instead.
     if (!HadTimes) Times.clear();
     bool Ntfs = false;
-    for (auto F : B.Value()) { if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
+    for (auto F : B.Value()) { if (F.id_ == 0x5855 || F.id_ == 0x554e) continue; if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
     if (!Ntfs && !Times.isEmpty()) Out.push_back({0x000a, QByteArray(4, 0) + Times});
     for (const auto& F : Out) if (F.data_.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported);
     const auto Bytes = Encode(Out); if (Bytes.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported); return Bytes;
@@ -149,14 +175,14 @@ Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, con
     std::map<uint64_t, const Record*> Originals; for (const auto& R : A.Value().records_) Originals.emplace(R.offset_, &R);
     std::set<uint64_t> FreshOffsets; for (const auto& R : B.Value().records_) FreshOffsets.insert(R.offset_);
     std::map<uint64_t, const Record*> Transfers;
-    std::map<uint64_t, uint64_t> Modified;
+    std::map<uint64_t, const UpdateItem*> Updates;
     for (UInt32 I = 0; I < Fresh.count_; ++I) {
         auto H = Fresh.Header(I); if (!H.HasValue()) return H.Failure(); const auto Found = Expected.find(EntryKey(QString::fromStdString(H.Value().name_))); if (Found == Expected.end()) return Bad();
         const auto Origin = Found->second->metadata_; if (Origin == UINT32_MAX) continue;
         Property Before, After;
         if (Original.archive_->GetProperty(Origin, kpidOffset, &Before) != S_OK || Fresh.archive_->GetProperty(I, kpidOffset, &After) != S_OK || (Before.vt != VT_UI4 && Before.vt != VT_UI8) || (After.vt != VT_UI4 && After.vt != VT_UI8) || !Originals.contains(Before.Number()) || !FreshOffsets.contains(After.Number())) return Bad();
         if (!Transfers.emplace(After.Number(), Originals.at(Before.Number())).second) return Bad();
-        const auto& Time = Found->second->modified_; Modified.emplace(After.Number(), (uint64_t(Time.dwHighDateTime) << 32) | Time.dwLowDateTime);
+        Updates.emplace(After.Number(), Found->second);
     }
     // Release the SDK reader before replacing this private staging file.
     if (Fresh.archive_->Close() != S_OK) return Bad(); Fresh.input_.value_->Release(); Fresh.input_.value_ = nullptr;
@@ -168,7 +194,7 @@ Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, con
     for (const auto& [Offset, Ptr] : Ordered) {
         auto& R = *Ptr; R.output_ = uint64_t(Output.pos());
         if (Transfers.contains(Offset)) {
-            const auto& From = *Transfers.at(Offset); auto Local = Merge(R.localExtra_, From.localExtra_, Modified.at(Offset)), Central = Merge(R.extra_, From.extra_, Modified.at(Offset));
+            const auto& From = *Transfers.at(Offset); auto Local = Merge(R.localExtra_, From.localExtra_, *Updates.at(Offset)), Central = Merge(R.extra_, From.extra_, *Updates.at(Offset));
             if (!Local.HasValue()) return Local.Failure(); if (!Central.HasValue()) return Central.Failure(); R.localExtra_ = std::move(Local.Value()); R.extra_ = std::move(Central.Value());
             Put16(R.central_, 4, U16(From.central_, 4)); Put32(R.central_, 38, U32(From.central_, 38));
         }
