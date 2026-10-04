@@ -10,6 +10,7 @@ struct UpdateItem {
     std::shared_ptr<Input> input_;
     UInt32 metadata_ = UINT32_MAX;
     bool renamed_ = false;
+    QByteArray legacyMd5_;
 };
 QString EntryKey(QString Name) { Name.replace('\\', '/'); if (Name.endsWith('/')) Name.chop(1); return Name; }
 bool SafeUpdateName(const QString& Name) {
@@ -249,6 +250,9 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         if (!Removed.contains(Key)) Items.push_back({I, Key, {}, H.directory_, H.size_});
     }
     for (const auto& Name : Removed) if (!OldNames.contains(Name)) return Failure("7zip-remove-missing", ErrorCategory::NotFound);
+    if (Original && Format == "zip") {
+        auto Signatures = zipMetadata::CheckSignatures(*Original, Context); if (!Signatures.HasValue()) return Signatures;
+    }
     if (Original && Request.encrypt_) {
         // Authenticate all existing payloads before asking the writer to retain
         // or repack them. One cached password is used for read and write callbacks.
@@ -287,10 +291,11 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
             Item.input_ = std::shared_ptr<Input>(new Input(Shared), [](Input* Value) { Value->Release(); });
             if (!Item.input_->Open(Item.path_)) return Failure("7zip-input-pin"); Item.size_ = Item.input_->Size();
             if (Context.workload_.IsAutomatic() && Item.size_ > Context.workload_.automaticFileBytes_) return Failure("automatic-content-budget", ErrorCategory::BudgetExceeded);
-            QCryptographicHash Hash(QCryptographicHash::Sha256); QByteArray Buffer(1024 * 1024, Qt::Uninitialized);
-            for (;;) { UInt32 Done = 0; const auto Code = Item.input_->Read(Buffer.data(), UInt32(Buffer.size()), &Done); if (Code != S_OK) return Shared->Result(Code); if (!Done) break; Hash.addData(QByteArrayView(Buffer.constData(), Done)); }
+            QCryptographicHash Hash(QCryptographicHash::Sha256), Legacy(QCryptographicHash::Md5); QByteArray Buffer(1024 * 1024, Qt::Uninitialized);
+            for (;;) { UInt32 Done = 0; const auto Code = Item.input_->Read(Buffer.data(), UInt32(Buffer.size()), &Done); if (Code != S_OK) return Shared->Result(Code); if (!Done) break; const auto Bytes = QByteArrayView(Buffer.constData(), Done); Hash.addData(Bytes); if (Format == "zip" && Item.metadata_ != UINT32_MAX) Legacy.addData(Bytes); }
             Item.digest_ = Hash.result();
-        }
+            Item.legacyMd5_ = Legacy.result(); // ZIP compatibility checksum, never an authentication decision.
+        } else Item.legacyMd5_ = QCryptographicHash::hash({}, QCryptographicHash::Md5);
         Items.push_back(std::move(Item));
     }
     if (Items.size() > UINT32_MAX || Items.size() > Context.EnumerationLimit()) return Failure("7zip-sdk-item-count", ErrorCategory::BudgetExceeded);

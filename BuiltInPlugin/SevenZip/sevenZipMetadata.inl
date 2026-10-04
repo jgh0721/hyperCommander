@@ -49,9 +49,10 @@ Result<QByteArray> Persistent(const QByteArray& Bytes) {
         // alignment; copying their bytes would falsely claim valid semantics.
         // Legacy UNIX times and alternate-name records need their own rewrite
         // rules as well; preserving stale values would mislead other readers.
-        if ((F.id_ >= 0x0014 && F.id_ <= 0x0019) || F.id_ == 0x4b46 || F.id_ == 0xa11e || F.id_ == 0xd935 || F.id_ == 0x000d || F.id_ == 0x756e
+        if ((F.id_ >= 0x0014 && F.id_ <= 0x0019) || F.id_ == 0xa11e || F.id_ == 0xd935 || F.id_ == 0x000d || F.id_ == 0x756e
             || F.id_ == 0x4f4c || F.id_ == 0x2605)
             return Failure("zip-dependent-extra-unsupported:" + std::to_string(F.id_), ErrorCategory::Unsupported);
+        if (F.id_ == 0x4b46) { if (F.data_.size() != 19 || F.data_.first(3) != "MD5") return Bad(); F.data_ = "MD5" + QByteArray(16, 0); }
         if (F.id_ == 0x5855) {
             if (F.data_.size() != 8 && F.data_.size() != 12) return Bad();
             Put32(F.data_, 4, 0); // mtime is rewritten; atime and UID/GID stay exact.
@@ -108,7 +109,7 @@ Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, const U
     // creation/access properties. Keep their original absence instead.
     if (!HadTimes) Times.clear();
     bool Ntfs = false;
-    for (auto F : B.Value()) { if (F.id_ == 0x5855 || F.id_ == 0x554e) continue; if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
+    for (auto F : B.Value()) { if (F.id_ == 0x5855 || F.id_ == 0x554e) continue; if (F.id_ == 0x4b46) { if (Item.legacyMd5_.size() != 16) return Bad(); F.data_ = "MD5" + Item.legacyMd5_; } if (F.id_ == 0x000a) { F.data_ = F.data_.first(4) + Times + F.data_.mid(4); Ntfs = true; } Out.push_back(std::move(F)); }
     if (!Ntfs && !Times.isEmpty()) Out.push_back({0x000a, QByteArray(4, 0) + Times});
     for (const auto& F : Out) if (F.data_.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported);
     const auto Bytes = Encode(Out); if (Bytes.size() > UINT16_MAX) return Failure("zip-extra-size-overflow", ErrorCategory::Unsupported); return Bytes;
@@ -133,6 +134,7 @@ Result<Directory> Parse(QFile& File, OperationContext Context) {
         Count = U64(Zip64, 32); Size = U64(Zip64, 40); Central = U64(Zip64, 48); Limit = At;
     }
     if (Central > Limit || Size != Limit - Central || Count > Size / 46) return Bad();
+    if (Central >= 24 && Read(File, Central - 16, 16) == "APK Sig Block 42") return Failure("zip-apk-signature-update", ErrorCategory::Unsupported);
     Directory Out; Out.central_ = Central; Out.comment_ = Tail.mid(End + 22); auto At = Central;
     for (uint64_t I = 0; I < Count; ++I) {
         if (const auto Stop = Context.Check({"7zip"})) return *Stop;
@@ -161,11 +163,32 @@ Result<Directory> Parse(QFile& File, OperationContext Context) {
         R.data_ = R.offset_ + 30 + LN + LE; if (R.data_ > Central || R.packed_ > Central - R.data_) return Bad();
         Out.records_.push_back(std::move(R)); At += 46 + Bytes.size();
     }
-    if (At != Limit) return Bad();
+    if (At != Limit) {
+        const auto Signature = Read(File, At, 6);
+        if (Signature.size() == 6 && U32(Signature, 0) == 0x05054b50) return Failure("zip-central-signature-update", ErrorCategory::Unsupported);
+        return Bad();
+    }
     std::map<uint64_t, Record*> Ordered; for (auto& R : Out.records_) if (!Ordered.emplace(R.offset_, &R).second) return Bad();
     if (!Ordered.empty() && Ordered.begin()->first != 0) return Bad();
     for (auto It = Ordered.begin(); It != Ordered.end(); ++It) { const auto Next = std::next(It); auto& R = *It->second; R.end_ = Next == Ordered.end() ? Central : Next->first; if (R.data_ > R.end_ || R.packed_ > R.end_ - R.data_) return Bad(); }
     return Out;
+}
+Result<Unit> CheckSignatures(Archive& Original, OperationContext Context) {
+    QFile File(QString::fromStdString(Original.state_->archive_)); if (!File.open(QIODevice::ReadOnly)) return Failure("zip-metadata-open");
+    auto Directory = Parse(File, Context); if (!Directory.HasValue()) return Directory.Failure();
+    for (const auto& R : Directory.Value().records_) {
+        // JAR signature manifests bind the other members' digests. Retaining
+        // their bytes after mutation is not a valid signature-preservation path.
+        const auto Name = R.name_.toUpper();
+        if (Name.startsWith("META-INF/") && (Name.endsWith(".SF") || Name.endsWith(".RSA") || Name.endsWith(".DSA") || Name.endsWith(".EC")))
+            return Failure("zip-jar-signature-update", ErrorCategory::Unsupported);
+        for (const auto* Bytes : {&R.extra_, &R.localExtra_}) {
+            auto Parsed = Fields(*Bytes); if (!Parsed.HasValue()) return Parsed.Failure();
+            for (const auto& F : Parsed.Value()) if (F.id_ >= 0x0014 && F.id_ <= 0x0019)
+                return Failure("zip-signature-or-strong-encryption-update", ErrorCategory::Unsupported);
+        }
+    }
+    return Unit{};
 }
 Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, const std::map<QString, const UpdateItem*>& Expected, uint64_t Limit, OperationContext Context) {
     QFile Old(QString::fromStdString(Original.state_->archive_)), Input(Path);

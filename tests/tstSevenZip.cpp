@@ -64,6 +64,31 @@ private slots:
         auto Bad = Fixture; Bad.replace("NUCX", "BAD!"); QVERIFY(Put(Target, Bad)); Change.remove_ = {"keep.txt"}; Change.metadataOrigins_ = {"keep.txt"};
         QVERIFY(!Backend->Update(Change, {}).HasValue()); QCOMPARE(Read(Target), Bad);
     }
+    void zipContentHashesAndSignatures() {
+        const auto Fixture = QByteArray::fromBase64("UEsDBBQAAAAAAIMYIlAVaixCBwAAAAcAAAAIABcAa2VlcC50eHRGSxMATUQ1Mhw89IbtUJFk7eweGYH+yHBheWxvYWRQSwECFAAUAAAAAACDGCJQFWosQgcAAAAHAAAACAAXAAAAAAAAACAAAAAAAAAAa2VlcC50eHRGSxMATUQ1Mhw89IbtUJFk7eweGYH+yFBLBQYAAAAAAQABAE0AAABEAAAAAAA=");
+        QTemporaryDir Dir; const auto Target = Dir.filePath("hash.zip"); QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("renamed"), "payload"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {"renamed"}, {"keep.txt"}}; Change.metadataOrigins_ = {"keep.txt"};
+        for (const auto Data : {QByteArray("payload"), QByteArray("replacement")}) {
+            QVERIFY(Put(Dir.filePath("renamed"), Data)); auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            QCOMPARE(Read(Target).count(QByteArray::fromHex("464b1300") + "MD5" + QCryptographicHash::hash(Data, QCryptographicHash::Md5)), 2);
+            Change.remove_ = {"renamed"}; Change.metadataOrigins_.clear();
+        }
+        auto Signed = Fixture; Signed.replace(QByteArray::fromHex("464b1300"), QByteArray::fromHex("16001300")); QVERIFY(Put(Target, Signed));
+        ArchiveUpdate Append{Target.toStdString(), Dir.path().toStdString(), {"renamed"}}; auto Failed = Backend->Update(Append, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Failed.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Read(Target), Signed);
+        // A central-directory signature and an APK signing-block marker are
+        // archive-wide contracts, independent of metadata-origin mappings.
+        for (bool Apk : {false, true}) {
+            auto Bytes = Fixture; auto End = Bytes.indexOf(QByteArray::fromHex("504b0506")); const auto Central = qFromLittleEndian<quint32>(Bytes.constData() + End + 16);
+            if (Apk) {
+                QByteArray Block(32, 0); qToLittleEndian<quint64>(24, Block.data()); qToLittleEndian<quint64>(24, Block.data() + 8); Block.replace(16, 16, "APK Sig Block 42"); Bytes.insert(Central, Block); End += Block.size(); qToLittleEndian<quint32>(Central + Block.size(), Bytes.data() + End + 16);
+            } else {
+                const auto Block = QByteArray::fromHex("504b05050400") + "sign"; Bytes.insert(End, Block); End += Block.size(); const auto Size = qFromLittleEndian<quint32>(Bytes.constData() + End + 12); qToLittleEndian<quint32>(Size + Block.size(), Bytes.data() + End + 12);
+            }
+            QVERIFY(Put(Target, Bytes)); Failed = Backend->Update(Append, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Read(Target), Bytes);
+        }
+        const auto Jar = Dir.filePath("signed.jar.zip"); QVERIFY(QDir().mkpath(Dir.filePath("META-INF"))); QVERIFY(Put(Dir.filePath("META-INF/TEST.SF"), "signed manifest"));
+        QVERIFY(Backend->Update({Jar.toStdString(), Dir.path().toStdString(), {"META-INF/TEST.SF"}}, {}).HasValue()); const auto Before = Read(Jar); Append.archive_ = Jar.toStdString(); Failed = Backend->Update(Append, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Failed.Failure().code_, std::string("zip-jar-signature-update")); QCOMPARE(Read(Jar), Before);
+    }
     void storedArchiveSignature() {
         QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
         QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));
