@@ -111,20 +111,7 @@ bool SameProperty(const Property& A, const Property& B) {
     default: return false; // Unknown preservation semantics require explicit support.
     }
 }
-bool SameSolidMethod(const Property& Before, const Property& After) {
-    // The SDK reduces the LZMA2 dictionary when a rewritten solid block becomes
-    // smaller. Accept only that normalization, not a codec/filter/crypto change.
-    const QRegularExpression Pattern("^LZMA2:([0-9]+)([kmb]?)(.*)$");
-    const auto A = Pattern.match(Before.Text()), B = Pattern.match(After.Text());
-    if (!A.hasMatch() || !B.hasMatch() || A.captured(3) != B.captured(3)) return false;
-    const auto Dictionary = [](const QRegularExpressionMatch& M) -> uint64_t {
-        bool Ok = false; const auto Number = M.captured(1).toULongLong(&Ok); if (!Ok) return 0;
-        const auto Unit = M.captured(2); const unsigned Shift = Unit == "k" ? 10 : Unit == "m" ? 20 : Unit == "b" ? 0 : 64;
-        if (Shift == 64) return Number < 63 ? uint64_t(1) << Number : 0;
-        return Number <= (UINT64_MAX >> Shift) ? Number << Shift : 0;
-    };
-    const auto Old = Dictionary(A), New = Dictionary(B); return Old && New && New <= Old;
-}
+#include "sevenZipMethods.inl"
 class VerifyCallback final : public IArchiveExtractCallback, public ICryptoGetTextPassword {
 public:
     VerifyCallback(std::shared_ptr<State> State, const std::map<UInt32, const UpdateItem*>& NewItems) : state_(std::move(State)), items_(NewItems) {}
@@ -171,6 +158,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     std::unique_ptr<Archive> Original;
     auto Shared = std::make_shared<State>(); Shared->context_ = Context; Shared->archive_ = Request.archive_;
     QString Format = QFileInfo(Target).suffix().toLower(), Method, Encryption;
+    std::vector<CodecToken> Codecs;
     bool EncryptHeaders = false;
     bool ZipAlignment = false;
     bool Solid = Request.creation_.value_or(ArchiveCreationOptions{}).solid_;
@@ -200,8 +188,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         Request.encrypt_ = Request.encrypt_ || EncryptHeaders;
         Solid = SolidProp.Boolean(); Method = MethodProp.Text();
         if (Format == "7z") Method.remove(QRegularExpression(" 7zAES$"));
-        if (Format == "7z" && !Method.isEmpty() && !QRegularExpression("^(LZMA2:[0-9]+[kmb]?|Copy)$").match(Method).hasMatch())
-            return Failure("7zip-update-method-preservation-unsupported:" + Method.toStdString(), ErrorCategory::Unsupported);
+
     } else if (Format != "7z" && Format != "zip") return Failure("7zip-create-format", ErrorCategory::Unsupported);
 
     std::map<QString, UInt32> OldNames; std::set<QString> Removed, Names;
@@ -227,6 +214,10 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         const auto Mode = Posix.Number() ? Posix.Number() : (H.attributes_ & 0x8000) ? H.attributes_ >> 16 : 0;
         const auto Kind = Mode & 0170000;
         if (Kind && Kind != (H.directory_ ? 0040000 : 0100000)) return Failure("7zip-special-file-update-unsupported", ErrorCategory::Unsupported);
+        if (Format == "7z" && H.size_) {
+            Property Chain; if (Original->archive_->GetProperty(I, kpidMethod, &Chain) != S_OK) return Failure("7zip-coder-property");
+            auto Merged = MergeCodecs(Codecs, Chain.Text()); if (!Merged.HasValue()) return Merged;
+        }
         if (H.encrypted_) {
             Request.encrypt_ = true;
             if (Format == "zip") {
@@ -326,9 +317,8 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     if (!Origins.empty()) { Set(L"tc", "on"); Set(L"ta", "on"); }
     if (Format == "7z") {
         Set(L"s", Solid ? "on" : "off"); Set(L"f", "off");
-        if (Method == "Copy" || (!Original && Request.creation_ && Request.creation_->level_ == 0)) Set(L"0", "Copy");
-        else if (Method.startsWith("LZMA2:")) Set(L"0", "LZMA2:d" + Method.mid(6));
-        else Set(L"0", "LZMA2");
+        if (!Codecs.empty()) for (size_t I = 0; I < Codecs.size(); ++I) Set(std::to_wstring(I).c_str(), Codecs[I].option_);
+        else Set(L"0", !Original && Request.creation_ && Request.creation_->level_ == 0 ? "Copy" : "LZMA2");
         if (Request.encrypt_) Set(L"he", EncryptHeaders || !Original ? "on" : "off");
     } else { Set(L"cu", "on"); if (!Method.isEmpty()) Set(L"m", Method); if (Request.encrypt_) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
     std::vector<const wchar_t*> KeyPointers; std::vector<PROPVARIANT> Variants(Values.size());

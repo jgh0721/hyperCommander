@@ -112,6 +112,27 @@ private slots:
             if (!Step) { QVERIFY(Put(Dir.filePath("new"), "new")); Done = Backend->Update({Change.archive_, Dir.path().toStdString(), {"new"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str()); }
         }
     }
+    void codecChains_data() {
+        QTest::addColumn<QStringList>("Options"); QTest::addColumn<QString>("Method");
+        QTest::newRow("lzma") << QStringList{"-m0=LZMA:d1m:lc2:lp1:pb1"} << QString("LZMA:");
+        QTest::newRow("ppmd") << QStringList{"-m0=PPMd:mem1m:o6"} << QString("PPMD:o6:");
+        QTest::newRow("bzip2") << QStringList{"-m0=BZip2"} << QString("BZip2");
+        QTest::newRow("deflate") << QStringList{"-m0=Deflate"} << QString("Deflate");
+        QTest::newRow("bcj") << QStringList{"-m0=BCJ", "-m1=LZMA2:d1m"} << QString("BCJ LZMA2:");
+        QTest::newRow("delta") << QStringList{"-m0=Delta:4", "-m1=LZMA2:d1m"} << QString("Delta:4 LZMA2:");
+        QTest::newRow("arm64") << QStringList{"-m0=ARM64", "-m1=LZMA2:d1m"} << QString("ARM64 LZMA2:");
+    }
+    void codecChains() {
+        QFETCH(QStringList, Options); QFETCH(QString, Method); QTemporaryDir Dir; const auto Target = Dir.filePath("codecs.7z");
+        const auto Cli = QDir(root_).filePath("../sevenzip-tools/official/7z.exe"); QVERIFY(Put(Dir.filePath("keep"), QByteArray(256 * 1024, 'k'))); QVERIFY(Put(Dir.filePath("remove"), QByteArray(4096, 'r')));
+        QProcess Process; Process.setWorkingDirectory(Dir.path()); Process.start(Cli, QStringList{"a", Target, "keep", "remove", "-ms=on"} + Options); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0);
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Done = Backend->Update({Target.toStdString(), Dir.path().toStdString(), {}, {"remove"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QVERIFY(Put(Dir.filePath("renamed"), Read(Dir.filePath("keep")))); ArchiveUpdate Rename{Target.toStdString(), Dir.path().toStdString(), {"renamed"}, {"keep"}}; Rename.metadataOrigins_ = {"keep"};
+        Done = Backend->Update(Rename, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        Process.start(Cli, {"l", "-slt", Target}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); const auto Listing = Process.readAllStandardOutput(); QVERIFY2(Listing.contains(Method.toUtf8()), Listing.constData());
+        if (Method == "LZMA:") QVERIFY(Listing.contains(":lc2:lp1:pb1"));
+        Process.start(Cli, {"x", "-so", Target, "renamed"}); QVERIFY(Process.waitForFinished(30000)); QCOMPARE(Process.exitCode(), 0); QCOMPARE(Process.readAllStandardOutput(), Read(Dir.filePath("keep")));
+    }
     void storedArchiveSignature() {
         QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
         QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));
