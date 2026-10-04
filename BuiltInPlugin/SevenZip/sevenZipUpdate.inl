@@ -177,6 +177,17 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         auto Opened = Open(Module, Request.archive_, Context); if (!Opened.HasValue()) return Opened.Failure(); Original = std::move(Opened.Value());
         Format = Original->format_; Shared = Original->state_;
         if (Format != "7z" && Format != "zip") return Failure("7zip-format-read-only", ErrorCategory::Unsupported);
+        // 26.03 skips unknown FilesInfo properties (including experimental ACL
+        // records) but CanUpdate() ignores UnsupportedFeatureWarning. Its ACL
+        // reader/writer and raw-property exposure are commented out upstream.
+        // Check the decoded header warning, including encrypted/encoded headers,
+        // before any writer can silently discard properties it cannot represent.
+        if (Format == "7z") {
+            Property Warnings, ReadOnly;
+            if (Original->archive_->GetArchiveProperty(kpidWarningFlags, &Warnings) != S_OK || Original->archive_->GetArchiveProperty(kpidReadOnly, &ReadOnly) != S_OK)
+                return Failure("7zip-metadata-capability-query");
+            if (Warnings.Number() || ReadOnly.Boolean()) return Failure("7zip-unrepresented-metadata-update", ErrorCategory::Unsupported);
+        }
         Property Offset, Size, Volume, SolidProp, MethodProp;
         for (const auto Pair : {std::pair<PROPID, Property*>{kpidOffset, &Offset}, {kpidPhySize, &Size}, {kpidIsVolume, &Volume}, {kpidSolid, &SolidProp}, {kpidMethod, &MethodProp}})
             if (Original->archive_->GetArchiveProperty(Pair.first, Pair.second) != S_OK) return Failure("7zip-update-properties");

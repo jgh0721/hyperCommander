@@ -31,6 +31,19 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void unknownSevenZipSecurityIsNotDiscarded() {
+        // Draft ACL/unknown FilesInfo record 0x1a. The upstream decoder reports
+        // UnsupportedFeatureWarning while still exposing the readable payload.
+        const auto Fixture = QByteArray::fromBase64("N3q8ryccAATYnjGTEQAAAAAAAABqAAAAAAAAAP88NRtwcmVzZXJ2ZWQgcGF5bG9hZAEEBgABCREABwsBAAEBAAwRAAgKAXXiZ88AAAUBERMAawBlAGUAcAAuAHQAeAB0AAAAGQAUCgEA1B4a5zdT3QEVBgEAIIDpgRoeAAEAAAAUAAAAAQAEgAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        QTemporaryDir Dir; const auto Target = Dir.filePath("security.7z"); QVERIFY(Put(Target, Fixture)); QVERIFY(Put(Dir.filePath("new"), "new"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Listed = Backend->Enumerate(Target.toStdString(), true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(4, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+        QCOMPARE(Page.Value().entries_.size(), size_t(1)); QVERIFY(Backend->Extract(Target.toStdString(), Page.Value().entries_[0], Dir.filePath("out").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("out")), QByteArray("preserved payload"));
+        for (const auto& Change : {ArchiveUpdate{Target.toStdString(), Dir.path().toStdString(), {"new"}}, ArchiveUpdate{Target.toStdString(), Dir.path().toStdString(), {}, {"keep.txt"}}}) {
+            auto Done = Backend->Update(Change, {}); QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Unsupported);
+            QCOMPARE(Done.Failure().code_, std::string("7zip-unrepresented-metadata-update")); QCOMPARE(Read(Target), Fixture);
+        }
+    }
     void storedArchiveSignature() {
         QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
         QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));
