@@ -89,6 +89,29 @@ private slots:
         const auto Jar = Dir.filePath("signed.jar.zip"); QVERIFY(QDir().mkpath(Dir.filePath("META-INF"))); QVERIFY(Put(Dir.filePath("META-INF/TEST.SF"), "signed manifest"));
         QVERIFY(Backend->Update({Jar.toStdString(), Dir.path().toStdString(), {"META-INF/TEST.SF"}}, {}).HasValue()); const auto Before = Read(Jar); Append.archive_ = Jar.toStdString(); Failed = Backend->Update(Append, {}); QVERIFY(!Failed.HasValue()); QCOMPARE(Failed.Failure().code_, std::string("zip-jar-signature-update")); QCOMPARE(Read(Jar), Before);
     }
+    void zipAlignment_data() {
+        QTest::addColumn<QByteArray>("Fixture");
+        QTest::newRow("apache") << qUncompress(QByteArray::fromBase64("AAAgknic7doxCsIwFIDhZ4x2EdqhglMprnoKV5dcIWAHtWAGF8HNk/QkHsJBcPAsJm0VK3iAwv+FkAfJS+Y8nlkPdSrBZTY3091yFfk4TC3PeF8ULqsesSQCAAAAAAB6y9lTebAb0ykDLK7mPPFxmFru8dFuy6y6UQYAAAAAAKCfwtc+/xQBBiqVf90A4zYjb9emN0CJJL953fLBd16UNC++80b1pvLDhfP11S9kWCOS"));
+        QTest::newRow("android") << qUncompress(QByteArray::fromBase64("AAAghnic7dq9CsIwEMDxs0a7COlQwbG46toXcO2SVyi0g1qwQxfBzQfzIRykDj6LOb+wgg9Q+P9CyBFyyZzjXDY0sajjbO6mm+Uq9LFOIze7Lcs6ba9WIgEAAAAAAL1V5/tqlxeuUwZYnNxh4mOdRi62yddV2p4pAwAAAAAA0E/6tU8+RYBBEMu/boC35LVqb8BvRrdw8J0RRs+3XDYa617gR6EnH9fdAaxoInY="));
+    }
+    void zipAlignment() {
+        QFETCH(QByteArray, Fixture); QTemporaryDir Dir; const auto Target = Dir.filePath("aligned.zip"); QVERIFY(Put(Target, Fixture));
+        const auto Name = QString(180, 'n'); QVERIFY(Put(Dir.filePath(Name), QByteArray(8193, 'r'))); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        ArchiveUpdate Change{Target.toStdString(), Dir.path().toStdString(), {Name.toStdString()}, {"keep"}}; Change.metadataOrigins_ = {"keep"};
+        auto Done = Backend->Update(Change, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        for (int Step = 0; Step < 2; ++Step) {
+            const auto Bytes = Read(Target); const auto End = Bytes.lastIndexOf(QByteArray::fromHex("504b0506")); QVERIFY(End >= 0); auto At = qsizetype(qFromLittleEndian<quint32>(Bytes.constData() + End + 16));
+            for (int I = 0; I < 2; ++I) {
+                QCOMPARE(Bytes.mid(At, 4), QByteArray::fromHex("504b0102")); const auto Local = qFromLittleEndian<quint32>(Bytes.constData() + At + 42);
+                const auto DataAt = Local + 30 + qFromLittleEndian<quint16>(Bytes.constData() + Local + 26) + qFromLittleEndian<quint16>(Bytes.constData() + Local + 28); QCOMPARE(DataAt % 4096, 0u);
+                QCOMPARE(qFromLittleEndian<quint16>(Bytes.constData() + Local + 8), quint16(0));
+                At += 46 + qFromLittleEndian<quint16>(Bytes.constData() + At + 28) + qFromLittleEndian<quint16>(Bytes.constData() + At + 30) + qFromLittleEndian<quint16>(Bytes.constData() + At + 32);
+            }
+            auto Listed = Backend->Enumerate(Change.archive_, true, {}); QVERIFY(Listed.HasValue()); auto Page = Listed.Value()->Next(4, {}); QVERIFY(Page.HasValue()); Listed.Value().reset();
+            for (const auto& H : Page.Value().entries_) { QVERIFY(Backend->Extract(Change.archive_, H, Dir.filePath("out").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("out")), H.name_ == "tail" ? QByteArray("tail payload") : H.name_ == "new" ? QByteArray("new") : QByteArray(8193, 'r')); }
+            if (!Step) { QVERIFY(Put(Dir.filePath("new"), "new")); Done = Backend->Update({Change.archive_, Dir.path().toStdString(), {"new"}}, {}); QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str()); }
+        }
+    }
     void storedArchiveSignature() {
         QTemporaryDir Dir; const auto Name = QString("test_read_format_rar5_compressed.rar");
         QVERIFY(QFile::copy(QDir(root_).filePath(Name), Dir.filePath(Name)));

@@ -49,9 +49,10 @@ Result<QByteArray> Persistent(const QByteArray& Bytes) {
         // alignment; copying their bytes would falsely claim valid semantics.
         // Legacy UNIX times and alternate-name records need their own rewrite
         // rules as well; preserving stale values would mislead other readers.
-        if ((F.id_ >= 0x0014 && F.id_ <= 0x0019) || F.id_ == 0xa11e || F.id_ == 0xd935 || F.id_ == 0x000d || F.id_ == 0x756e
+        if ((F.id_ >= 0x0014 && F.id_ <= 0x0019) || F.id_ == 0x000d || F.id_ == 0x756e
             || F.id_ == 0x4f4c || F.id_ == 0x2605)
             return Failure("zip-dependent-extra-unsupported:" + std::to_string(F.id_), ErrorCategory::Unsupported);
+        if (F.id_ == 0xa11e || F.id_ == 0xd935) { if (F.data_.size() < 2) return Bad(); F.data_.truncate(2); }
         if (F.id_ == 0x4b46) { if (F.data_.size() != 19 || F.data_.first(3) != "MD5") return Bad(); F.data_ = "MD5" + QByteArray(16, 0); }
         if (F.id_ == 0x5855) {
             if (F.data_.size() != 8 && F.data_.size() != 12) return Bad();
@@ -117,6 +118,8 @@ Result<QByteArray> Merge(const QByteArray& Fresh, const QByteArray& Old, const U
 struct Record {
     QByteArray central_, name_, extra_, comment_, local_, localExtra_;
     uint64_t offset_ = 0, data_ = 0, packed_ = 0, end_ = 0, output_ = 0;
+    uint16_t alignment_ = 0;
+    bool keepMethod_ = false;
 };
 struct Directory { std::vector<Record> records_; QByteArray comment_; uint64_t central_ = 0; };
 Result<Directory> Parse(QFile& File, OperationContext Context) {
@@ -156,11 +159,20 @@ Result<Directory> Parse(QFile& File, OperationContext Context) {
         const auto LN = U16(R.local_, 26), LE = U16(R.local_, 28); const auto Local = Read(File, R.offset_ + 30, qsizetype(LN) + LE);
         if (Local.size() != qsizetype(LN) + LE || Local.first(LN) != R.name_) return Bad();
         R.localExtra_ = Local.mid(LN); auto LocalFields = Fields(R.localExtra_); if (!LocalFields.HasValue()) return Bad();
-        // Inserting metadata also shifts retained records. Alignment contracts
-        // therefore apply to the entire archive, not only replaced entries.
-        for (const auto* List : {&Extras.Value(), &LocalFields.Value()}) for (const auto& F : *List)
-            if (F.id_ == 0xa11e || F.id_ == 0xd935) return Failure("zip-alignment-preservation-unsupported", ErrorCategory::Unsupported);
         R.data_ = R.offset_ + 30 + LN + LE; if (R.data_ > Central || R.packed_ > Central - R.data_) return Bad();
+        std::optional<uint16_t> Alignment, Kind;
+        for (const auto* List : {&Extras.Value(), &LocalFields.Value()}) {
+            bool Seen = false;
+            for (const auto& F : *List) if (F.id_ == 0xa11e || F.id_ == 0xd935) {
+                if (Seen || F.data_.size() < 2) return Bad(); Seen = true; const auto Word = U16(F.data_, 0);
+                const auto Value = uint16_t(Word & (F.id_ == 0xa11e ? 0x7fff : 0xffff));
+                if ((F.id_ == 0xd935 && !Value) || (Alignment && (*Alignment != Value || *Kind != F.id_))) return Bad(); Alignment = Value; Kind = F.id_;
+                R.keepMethod_ = R.keepMethod_ || F.id_ == 0xd935 || !(Word & 0x8000);
+            }
+        }
+        R.alignment_ = Alignment.value_or(0);
+        // SDK output is repaired below; input alignment is validated by the
+        // preflight, not here, because the temporary writer may shift offsets.
         Out.records_.push_back(std::move(R)); At += 46 + Bytes.size();
     }
     if (At != Limit) {
@@ -173,10 +185,23 @@ Result<Directory> Parse(QFile& File, OperationContext Context) {
     for (auto It = Ordered.begin(); It != Ordered.end(); ++It) { const auto Next = std::next(It); auto& R = *It->second; R.end_ = Next == Ordered.end() ? Central : Next->first; if (R.data_ > R.end_ || R.packed_ > R.end_ - R.data_) return Bad(); }
     return Out;
 }
-Result<Unit> CheckSignatures(Archive& Original, OperationContext Context) {
+struct Inspection { bool alignment_ = false; QString method_; };
+Result<Inspection> CheckSignatures(Archive& Original, const std::set<QString>& Origins, OperationContext Context) {
     QFile File(QString::fromStdString(Original.state_->archive_)); if (!File.open(QIODevice::ReadOnly)) return Failure("zip-metadata-open");
     auto Directory = Parse(File, Context); if (!Directory.HasValue()) return Directory.Failure();
+    Inspection Result; UInt32 Index = 0;
     for (const auto& R : Directory.Value().records_) {
+        auto H = Original.Header(Index++); if (!H.HasValue()) return H.Failure();
+        if (R.alignment_) {
+            if (R.data_ % R.alignment_) return Failure("zip-invalid-source-alignment", ErrorCategory::Unsupported);
+            Result.alignment_ = true;
+            if (R.keepMethod_ && Origins.contains(EntryKey(QString::fromStdString(H.Value().name_)))) {
+                const std::map<uint16_t, QString> Methods{{0, "Copy"}, {8, "Deflate"}, {9, "Deflate64"}, {12, "BZip2"}, {14, "LZMA"}, {98, "PPMd"}};
+                const auto Id = U16(R.local_, 8); if (!Methods.contains(Id)) return Failure("zip-aligned-method-unsupported", ErrorCategory::Unsupported);
+                if (!Result.method_.isEmpty() && Result.method_ != Methods.at(Id)) return Failure("zip-aligned-mixed-methods", ErrorCategory::Unsupported);
+                Result.method_ = Methods.at(Id);
+            }
+        }
         // JAR signature manifests bind the other members' digests. Retaining
         // their bytes after mutation is not a valid signature-preservation path.
         const auto Name = R.name_.toUpper();
@@ -188,6 +213,24 @@ Result<Unit> CheckSignatures(Archive& Original, OperationContext Context) {
                 return Failure("zip-signature-or-strong-encryption-update", ErrorCategory::Unsupported);
         }
     }
+    return Result;
+}
+Result<Unit> Align(Record& R, const Record& From) {
+    if (!From.alignment_) return Unit{};
+    if (From.keepMethod_ && U16(From.local_, 8) != U16(R.local_, 8)) return Failure("zip-aligned-method-changed", ErrorCategory::Unsupported);
+    auto Local = Fields(R.localExtra_), Central = Fields(R.extra_), OldLocal = Fields(From.localExtra_), OldCentral = Fields(From.extra_);
+    if (!Local.HasValue() || !Central.HasValue() || !OldLocal.HasValue() || !OldCentral.HasValue()) return Bad();
+    const auto IsAlignment = [](const Field& F) { return F.id_ == 0xa11e || F.id_ == 0xd935; };
+    std::erase_if(Local.Value(), IsAlignment); std::erase_if(Central.Value(), IsAlignment);
+    std::optional<Field> Padding;
+    for (const auto& F : OldCentral.Value()) if (IsAlignment(F)) { Padding = Field{F.id_, F.data_.first(2)}; Central.Value().push_back(*Padding); }
+    for (const auto& F : OldLocal.Value()) if (IsAlignment(F)) Padding = Field{F.id_, F.data_.first(2)};
+    if (!Padding) return Bad(); Local.Value().push_back(*Padding);
+    const auto Base = R.output_ + 30 + R.name_.size() + Encode(Local.Value()).size();
+    const auto Count = (From.alignment_ - Base % From.alignment_) % From.alignment_;
+    Local.Value().back().data_ += QByteArray(qsizetype(Count), 0);
+    R.localExtra_ = Encode(Local.Value()); R.extra_ = Encode(Central.Value());
+    if (R.localExtra_.size() > UINT16_MAX || R.extra_.size() > UINT16_MAX) return Bad();
     return Unit{};
 }
 Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, const std::map<QString, const UpdateItem*>& Expected, uint64_t Limit, OperationContext Context) {
@@ -198,14 +241,18 @@ Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, con
     std::map<uint64_t, const Record*> Originals; for (const auto& R : A.Value().records_) Originals.emplace(R.offset_, &R);
     std::set<uint64_t> FreshOffsets; for (const auto& R : B.Value().records_) FreshOffsets.insert(R.offset_);
     std::map<uint64_t, const Record*> Transfers;
+    std::map<uint64_t, const Record*> Aligned;
     std::map<uint64_t, const UpdateItem*> Updates;
     for (UInt32 I = 0; I < Fresh.count_; ++I) {
         auto H = Fresh.Header(I); if (!H.HasValue()) return H.Failure(); const auto Found = Expected.find(EntryKey(QString::fromStdString(H.Value().name_))); if (Found == Expected.end()) return Bad();
-        const auto Origin = Found->second->metadata_; if (Origin == UINT32_MAX) continue;
+        const auto Origin = Found->second->metadata_ != UINT32_MAX ? Found->second->metadata_ : Found->second->old_; if (Origin == UINT32_MAX) continue;
         Property Before, After;
         if (Original.archive_->GetProperty(Origin, kpidOffset, &Before) != S_OK || Fresh.archive_->GetProperty(I, kpidOffset, &After) != S_OK || (Before.vt != VT_UI4 && Before.vt != VT_UI8) || (After.vt != VT_UI4 && After.vt != VT_UI8) || !Originals.contains(Before.Number()) || !FreshOffsets.contains(After.Number())) return Bad();
-        if (!Transfers.emplace(After.Number(), Originals.at(Before.Number())).second) return Bad();
-        Updates.emplace(After.Number(), Found->second);
+        const auto* From = Originals.at(Before.Number()); if (From->alignment_) Aligned.emplace(After.Number(), From);
+        if (Found->second->metadata_ != UINT32_MAX) {
+            if (!Transfers.emplace(After.Number(), From).second) return Bad();
+            Updates.emplace(After.Number(), Found->second);
+        }
     }
     // Release the SDK reader before replacing this private staging file.
     if (Fresh.archive_->Close() != S_OK) return Bad(); Fresh.input_.value_->Release(); Fresh.input_.value_ = nullptr;
@@ -221,6 +268,7 @@ Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, con
             if (!Local.HasValue()) return Local.Failure(); if (!Central.HasValue()) return Central.Failure(); R.localExtra_ = std::move(Local.Value()); R.extra_ = std::move(Central.Value());
             Put16(R.central_, 4, U16(From.central_, 4)); Put32(R.central_, 38, U32(From.central_, 38));
         }
+        if (Aligned.contains(Offset)) { auto Done = Align(R, *Aligned.at(Offset)); if (!Done.HasValue()) return Done; }
         Put16(R.local_, 28, uint16_t(R.localExtra_.size()));
         if (!Write(R.local_) || !Write(R.name_) || !Write(R.localExtra_)) return Shared->Result(E_FAIL);
         for (auto At = R.data_; At < R.end_;) { const auto Size = qsizetype(std::min<uint64_t>(1024 * 1024, R.end_ - At)); const auto Bytes = Read(Input, At, Size); if (Bytes.size() != Size || !Write(Bytes)) return Shared->Result(E_FAIL); At += Size; }
@@ -251,6 +299,7 @@ Result<Unit> Restore(Archive& Original, Archive& Fresh, const QString& Path, con
     if (Parsed.Value().records_.size() != B.Value().records_.size() || Parsed.Value().comment_ != B.Value().comment_) return Bad();
     for (size_t I = 0; I < Parsed.Value().records_.size(); ++I) {
         const auto& Want = B.Value().records_[I]; const auto& Got = Parsed.Value().records_[I];
+        if (Aligned.contains(Want.offset_) && Got.data_ % Aligned.at(Want.offset_)->alignment_) return Bad();
         if (Got.offset_ != Want.output_ || Got.name_ != Want.name_ || Got.extra_ != Want.extra_ || Got.localExtra_ != Want.localExtra_ || Got.central_ != Want.central_ || Got.local_ != Want.local_ || Got.comment_ != Want.comment_) return Bad();
         if (Transfers.contains(Want.offset_)) {
             const auto* Before = Transfers.at(Want.offset_);

@@ -172,6 +172,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     auto Shared = std::make_shared<State>(); Shared->context_ = Context; Shared->archive_ = Request.archive_;
     QString Format = QFileInfo(Target).suffix().toLower(), Method, Encryption;
     bool EncryptHeaders = false;
+    bool ZipAlignment = false;
     bool Solid = Request.creation_.value_or(ArchiveCreationOptions{}).solid_;
     if (Request.creation_ && (Existing || Request.creation_->level_ > 9)) return Failure("7zip-creation-options-on-update", ErrorCategory::InvalidRequest);
     if (Existing) {
@@ -251,7 +252,8 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     }
     for (const auto& Name : Removed) if (!OldNames.contains(Name)) return Failure("7zip-remove-missing", ErrorCategory::NotFound);
     if (Original && Format == "zip") {
-        auto Signatures = zipMetadata::CheckSignatures(*Original, Context); if (!Signatures.HasValue()) return Signatures;
+        auto Signatures = zipMetadata::CheckSignatures(*Original, OriginNames, Context); if (!Signatures.HasValue()) return Signatures.Failure();
+        ZipAlignment = Signatures.Value().alignment_; Method = Signatures.Value().method_;
     }
     if (Original && Request.encrypt_) {
         // Authenticate all existing payloads before asking the writer to retain
@@ -328,7 +330,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
         else if (Method.startsWith("LZMA2:")) Set(L"0", "LZMA2:d" + Method.mid(6));
         else Set(L"0", "LZMA2");
         if (Request.encrypt_) Set(L"he", EncryptHeaders || !Original ? "on" : "off");
-    } else { Set(L"cu", "on"); if (Request.encrypt_) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
+    } else { Set(L"cu", "on"); if (!Method.isEmpty()) Set(L"m", Method); if (Request.encrypt_) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
     std::vector<const wchar_t*> KeyPointers; std::vector<PROPVARIANT> Variants(Values.size());
     for (size_t I = 0; I < Values.size(); ++I) {
         KeyPointers.push_back(Keys[I].c_str()); PropVariantInit(&Variants[I]);
@@ -351,7 +353,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     auto VerifyContext = Context;
     if (Shared->password_) VerifyContext.passwordPrompt_ = [Shared](const std::string&, unsigned, const OperationContext&) -> Result<storage::Password> { return storage::Password(Shared->password_->Value()); };
     std::map<QString, const UpdateItem*> Expected; for (const auto& Item : Items) Expected.emplace(Item.name_, &Item);
-    if (Original && Format == "zip" && !Origins.empty()) {
+    if (Original && Format == "zip" && (!Origins.empty() || ZipAlignment)) {
         auto Fresh = Open(Module, Prepared.fileName().toStdString(), VerifyContext); if (!Fresh.HasValue()) return Fresh.Failure();
         auto Restored = zipMetadata::Restore(*Original, *Fresh.Value(), Prepared.fileName(), Expected, Request.maxOutputBytes_, Context);
         if (!Restored.HasValue()) return Restored;
