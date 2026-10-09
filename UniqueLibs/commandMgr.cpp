@@ -9,7 +9,7 @@
 #include "cmnBase.hpp"
 
 /// 외부 라이브러리
-#include <externalLibs/QtitanDataGrid/src/src/grid/QtnGridBase.h>
+#include <QtnGridBase.h>
 
 #include "builtInFsModel.hpp"
 

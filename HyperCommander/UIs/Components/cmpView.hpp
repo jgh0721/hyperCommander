@@ -103,6 +103,7 @@ private:
     Qtitan::Grid*                   grid_ = nullptr;
     Qtitan::GridBandedTableView*    view_ = nullptr;
 
+    QJsonObject                     appliedDisplaySettings_;
     CFsModelT*                      model_ = nullptr;
     QAbstractProxyModel*            proxy_ = nullptr;
     QtitanColumnAdapter*            columnAdapter_ = nullptr;

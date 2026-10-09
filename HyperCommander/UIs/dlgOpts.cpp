@@ -249,6 +249,13 @@ void QMainOpts::SaveSettings_ColorScheme()
     ColorScheme.FileList_Cursor     = ui.btnLstCursorColor->text();
     ColorScheme.FileList_Selected   = ui.btnLstSelectColor->text();
 
+    if (ui.btnDlgFGColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("dialogText");
+    if (ui.btnDlgBGColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("dialogBackground");
+    if (ui.btnLstFGColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("listText");
+    if (ui.btnLstBGColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("listBackground");
+    if (ui.btnLstCursorColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("listCursor");
+    if (ui.btnLstSelectColor->property("hc.explicitColor").toBool()) ColorScheme.explicitColors_.insert("listSelection");
+
     for( int row = 0; row < ui.tblFileSetColor->rowCount(); ++row )
     {
         const auto FileSet = ui.tblFileSetColor->item( row, 0 )->text();
@@ -260,6 +267,21 @@ void QMainOpts::SaveSettings_ColorScheme()
 
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     StColorSchemeMgr->UpsertColorScheme( ColorScheme, true );
+    // The dark toggle can resolve automatic colors to a different palette.
+    // Reflect those values before a second Apply so they do not become overrides.
+    const auto Resolved = StColorSchemeMgr->GetColorScheme(ColorScheme.Name);
+    setButtonColor(ui.btnDlgFGColor, Resolved.Dialog_FGColor);
+    ui.btnDlgFGColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("dialogText"));
+    setButtonColor(ui.btnDlgBGColor, Resolved.Dialog_BGColor);
+    ui.btnDlgBGColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("dialogBackground"));
+    setButtonColor(ui.btnLstFGColor, Resolved.FileList_FGColor);
+    ui.btnLstFGColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("listText"));
+    setButtonColor(ui.btnLstBGColor, Resolved.FileList_BGColor);
+    ui.btnLstBGColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("listBackground"));
+    setButtonColor(ui.btnLstCursorColor, Resolved.FileList_Cursor);
+    ui.btnLstCursorColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("listCursor"));
+    setButtonColor(ui.btnLstSelectColor, Resolved.FileList_Selected);
+    ui.btnLstSelectColor->setProperty("hc.explicitColor", Resolved.explicitColors_.contains("listSelection"));
 }
 
 void QMainOpts::SaveSettings_PluginList()
@@ -283,6 +305,12 @@ void QMainOpts::RefreshColorScheme( const QString& SchemeName )
         return;
 
     ui.edtColorSchemeName->setText( ColorScheme.Name );
+    ui.btnDlgFGColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("dialogText"));
+    ui.btnDlgBGColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("dialogBackground"));
+    ui.btnLstFGColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("listText"));
+    ui.btnLstBGColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("listBackground"));
+    ui.btnLstCursorColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("listCursor"));
+    ui.btnLstSelectColor->setProperty("hc.explicitColor", ColorScheme.explicitColors_.contains("listSelection"));
     ui.chkIsDarkMode->setChecked( ColorScheme.IsDarkMode );
     ui.chkInverseCursor->setChecked(ColorScheme.IsInverseCursor);
     ui.chkInverseSelection->setChecked(ColorScheme.IsInverseSelect);
@@ -466,7 +494,10 @@ void QMainOpts::on_btnDlgFGColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnDlgFGColor, Selected );
+        ui.btnDlgFGColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::on_btnDlgBGColor_clicked( bool checked )
@@ -474,7 +505,10 @@ void QMainOpts::on_btnDlgBGColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnDlgBGColor, Selected );
+        ui.btnDlgBGColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::on_btnLstFGColor_clicked( bool checked )
@@ -482,7 +516,10 @@ void QMainOpts::on_btnLstFGColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnLstFGColor, Selected );
+        ui.btnLstFGColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::on_btnLstBGColor_clicked( bool checked )
@@ -490,7 +527,10 @@ void QMainOpts::on_btnLstBGColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnLstBGColor, Selected );
+        ui.btnLstBGColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::on_btnLstCursorColor_clicked( bool checked )
@@ -498,7 +538,10 @@ void QMainOpts::on_btnLstCursorColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnLstCursorColor, Selected );
+        ui.btnLstCursorColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::on_btnLstSelectColor_clicked( bool checked )
@@ -506,7 +549,10 @@ void QMainOpts::on_btnLstSelectColor_clicked( bool checked )
     const auto Selected = QColorDialog::getColor( Qt::white, this );
 
     if( Selected.isValid() == true )
+    {
         setButtonColor( ui.btnLstSelectColor, Selected );
+        ui.btnLstSelectColor->setProperty("hc.explicitColor", true);
+    }
 }
 
 void QMainOpts::oo_refreshFileSetColor()
@@ -873,6 +919,8 @@ void QMainOpts::setButtonColor( QPushButton* Button, const QColor& Color )
 
 void QMainOpts::resetColorScheme( const QString& Name )
 {
+    for (auto* Button : {ui.btnDlgFGColor, ui.btnDlgBGColor, ui.btnLstFGColor, ui.btnLstBGColor, ui.btnLstCursorColor, ui.btnLstSelectColor})
+        Button->setProperty("hc.explicitColor", false);
     ui.edtColorSchemeName->setText( Name );
     ui.chkIsDarkMode->setChecked( false );
     ui.chkInverseCursor->setChecked(false);

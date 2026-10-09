@@ -1,0 +1,3 @@
+[submodule "externalLibs/waterColorStyle"]
+	path = externalLibs/waterColorStyle
+	url = https://github.com/jgh0721/waterColorStyle.git

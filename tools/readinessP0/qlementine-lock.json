@@ -1,8 +1,0 @@
-{
-  "repository": "https://github.com/oclero/qlementine",
-  "commit": "209e549c415f1d828883f9f21a633eb535f9d67d",
-  "archiveUrl": "https://codeload.github.com/oclero/qlementine/zip/209e549c415f1d828883f9f21a633eb535f9d67d",
-  "sha256": "fb0b76796956cbe5879c85f778c048cdddba8912ecc7448adaf9c18eef261794",
-  "version": "1.5.0.0",
-  "purpose": "P0 compatibility experiment; product integration is P1"
-}

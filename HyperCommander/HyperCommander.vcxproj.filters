@@ -54,15 +54,6 @@
     <Filter Include="라이브러리\외부 라이브러리">
       <UniqueIdentifier>{b8dca86f-ebea-4ab5-9ff4-de3d7065bbe5}</UniqueIdentifier>
     </Filter>
-    <Filter Include="라이브러리\외부 라이브러리\QtitanDataGrid">
-      <UniqueIdentifier>{e6ebd350-1783-4d78-9685-db89d6aa1774}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="라이브러리\외부 라이브러리\QtitanDataGrid\Base">
-      <UniqueIdentifier>{8c0a5b37-370d-4be8-92d9-40bacc9353bb}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="라이브러리\외부 라이브러리\QtitanDataGrid\Grid">
-      <UniqueIdentifier>{614ea088-60c2-4d21-bfa9-324b18fc3d27}</UniqueIdentifier>
-    </Filter>
     <Filter Include="라이브러리\외부 라이브러리\TotalCommander">
       <UniqueIdentifier>{54ad314e-592e-4119-aef1-afcab5afc6b0}</UniqueIdentifier>
     </Filter>
@@ -104,15 +95,6 @@
     <ClCompile Include="stdafx.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBaseResources.qrc">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtRcc>
-    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridResources.qrc">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtRcc>
-    <QtRcc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTranslations.qrc">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtRcc>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -159,138 +141,6 @@
     </ClCompile>
     <ClCompile Include="..\commonLibs\cmnTextUtils.cpp">
       <Filter>라이브러리\공통 라이브러리</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle_win.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelper.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClCompile>
-    <ClCompile Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.cpp">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
     </ClCompile>
     <ClCompile Include="UIs\dlgGridStyle.cpp">
       <Filter>UI Files</Filter>
@@ -479,108 +329,6 @@
     <QtMoc Include="HyperCommander.hpp">
       <Filter>헤더 파일</Filter>
     </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractScrollArea.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnAbstractTabBar.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnBackstageWidget.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnColorButton.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStyle.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCommonStylePrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnCustomLayout.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnMaterialWidget.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenu.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPopupMenuPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnScrollWidgetBar.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToggleSwitch.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnToolTip.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnCardGrid.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGrid.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBandedTableView.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridBase.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardView.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridCardViewPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridControls.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDragObjects.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridEditors.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilter.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridFilterWindow.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridGraphics.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelController.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridRowsLayout.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableView.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTableViewPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeView.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridViewGraphics.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
-    <QtMoc Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnTreeGrid.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </QtMoc>
     <QtMoc Include="UIs\dlgGridStyle.hpp">
       <Filter>UI Files</Filter>
     </QtMoc>
@@ -732,57 +480,6 @@
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnTextUtils.hpp">
       <Filter>라이브러리\공통 라이브러리</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanDef.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtitanMSVSDebug.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnPlatform_win.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnSegoeMDL2Assets.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleHelperPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnStyleOption.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowsColor.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBar_win.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnWindowTitleBarGlow_win.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\base\QtnXML.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Base</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridColumnHeaderLayout.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridDef.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridModelControllerPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridSQL.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridStyleSheet.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
-    </ClInclude>
-    <ClInclude Include="..\externalLibs\QtitanDataGrid\src\src\grid\QtnGridTreeViewPrivate.h">
-      <Filter>라이브러리\외부 라이브러리\QtitanDataGrid\Grid</Filter>
     </ClInclude>
     <ClInclude Include="..\commonLibs\cmnProcess.hpp">
       <Filter>라이브러리\공통 라이브러리</Filter>

@@ -2,11 +2,33 @@
 #include "colorSchemeMgr.hpp"
 
 #include <private/qcssparser_p.h>
+#include <fmstyle/ThemeColors.h>
 
 #include "cmnTypeDefs_Opts.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
+
+namespace {
+struct ColorBinding {
+    const char* key_;
+    QColor TyColorScheme::*field_;
+    fm::style::Token token_;
+};
+const ColorBinding ColorBindings[] = {
+    {"dialogText", &TyColorScheme::Dialog_FGColor, fm::style::Token::Fg},
+    {"dialogBackground", &TyColorScheme::Dialog_BGColor, fm::style::Token::Win},
+    {"listText", &TyColorScheme::FileList_FGColor, fm::style::Token::Fg},
+    {"listBackground", &TyColorScheme::FileList_BGColor, fm::style::Token::Surface},
+    {"listCursor", &TyColorScheme::FileList_Cursor, fm::style::Token::AccentSoft},
+    // HC marks retain per-file foregrounds and invert by swapping the two colors.
+    // Use the neutral selection token instead of the white-on-accent fill.
+    {"listSelection", &TyColorScheme::FileList_Selected, fm::style::Token::SelIn}
+};
+fm::style::ThemeColors defaultColors(bool Dark) {
+    return fm::style::ThemeColors(Dark ? fm::style::Variant::Dark : fm::style::Variant::Light, fm::style::Design::Watercolor);
+}
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -28,12 +50,19 @@ void CColorSchemeMgr::Refresh()
         Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
         Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
         Scheme.FileList_Font = retrieveFont(Fonts["list"].toObject(), 14);
-        Scheme.Dialog_FGColor = QColor::fromString(Colors["dialogText"].toString());
-        Scheme.Dialog_BGColor = QColor::fromString(Colors["dialogBackground"].toString());
-        Scheme.FileList_FGColor = QColor::fromString(Colors["listText"].toString());
-        Scheme.FileList_BGColor = QColor::fromString(Colors["listBackground"].toString());
-        Scheme.FileList_Cursor = QColor::fromString(Colors["listCursor"].toString());
-        Scheme.FileList_Selected = QColor::fromString(Colors["listSelection"].toString());
+        const auto Defaults = defaultColors(Scheme.IsDarkMode);
+        const auto Legacy = Fallback["colors"].toObject();
+        const auto Explicit = Record.value("colorOverrides").toObject();
+        for (const auto& Binding : ColorBindings) {
+            const auto Value = QColor::fromString(Colors[Binding.key_].toString());
+            // Old files contain fully materialized defaults but no provenance.
+            // Equal legacy defaults follow the new theme; explicit metadata wins.
+            const bool Override = Record.value("colorOverrides").isObject()
+                ? Explicit[Binding.key_].toBool()
+                : Value.isValid() && Value != QColor::fromString(Legacy[Binding.key_].toString());
+            Scheme.*Binding.field_ = Override ? Value : Defaults[Binding.token_];
+            if (Override) Scheme.explicitColors_.insert(Binding.key_);
+        }
         const auto FileSets = Record["fileSets"].toObject();
         for (auto File = FileSets.begin(); File != FileSets.end(); ++File) {
             const auto Pair = File.value().toObject();
@@ -75,7 +104,18 @@ void CColorSchemeMgr::SetCurrentColorScheme( const QString& Name )
 void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool IsWriteToFile )
 {
     if (ColorScheme.Name.trimmed().isEmpty()) return;
-    mapNameToScheme[ColorScheme.Name] = ColorScheme;
+    auto Resolved = ColorScheme;
+    const auto Previous = mapNameToScheme.value(ColorScheme.Name);
+    const auto Defaults = defaultColors(ColorScheme.IsDarkMode);
+    for (const auto& Binding : ColorBindings) {
+        const auto Value = ColorScheme.*Binding.field_;
+        const auto Old = Previous.Name.isEmpty() ? Defaults[Binding.token_] : Previous.*Binding.field_;
+        if (Previous.explicitColors_.contains(Binding.key_) || Value != Old)
+            Resolved.explicitColors_.insert(Binding.key_);
+        if (!Resolved.explicitColors_.contains(Binding.key_))
+            Resolved.*Binding.field_ = Defaults[Binding.token_];
+    }
+    mapNameToScheme[ColorScheme.Name] = Resolved;
     if (IsWriteToFile) {
         auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
         auto Schemes = Appearance["schemes"].toObject();
@@ -87,6 +127,10 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
             Record["inverseSelection"] = Scheme.IsInverseSelect;
             Record["fonts"] = QJsonObject{{"menu",EncodeFont(Scheme.Menu_Font)},{"dialog",EncodeFont(Scheme.Dialog_Font)},{"list",EncodeFont(Scheme.FileList_Font)}};
             Record["colors"] = QJsonObject{{"dialogText",Scheme.Dialog_FGColor.name(QColor::HexRgb)},{"dialogBackground",Scheme.Dialog_BGColor.name(QColor::HexRgb)},{"listText",Scheme.FileList_FGColor.name(QColor::HexRgb)},{"listBackground",Scheme.FileList_BGColor.name(QColor::HexRgb)},{"listCursor",Scheme.FileList_Cursor.name(QColor::HexRgb)},{"listSelection",Scheme.FileList_Selected.name(QColor::HexRgb)}};
+            QJsonObject Overrides;
+            for (const auto& Binding : ColorBindings)
+                Overrides[Binding.key_] = Scheme.explicitColors_.contains(Binding.key_);
+            Record["colorOverrides"] = Overrides;
             QJsonObject FileSets;
             for (auto It = Scheme.MapNameToColors.begin(); It != Scheme.MapNameToColors.end(); ++It)
                 if (!It.key().isEmpty()) FileSets[It.key()] = QJsonObject{{"foreground",It.value().first.name(QColor::HexRgb)},{"background",It.value().second.name(QColor::HexRgb)}};
@@ -95,8 +139,8 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
         Appearance["schemes"] = Schemes; Appearance["selected"] = ColorScheme.Name;
         if (!hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance)) return;
     }
-    currentColorScheme = ColorScheme;
-    if (!hc::settings::AppSettings().Editing()) emit sigColorSchemeChanged(ColorScheme);
+    currentColorScheme = Resolved;
+    if (!hc::settings::AppSettings().Editing()) emit sigColorSchemeChanged(Resolved);
 }
 
 void CColorSchemeMgr::RemoveColorScheme( const QString& Name, bool IsWriteToFile )

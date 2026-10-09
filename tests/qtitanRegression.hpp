@@ -4,12 +4,12 @@
 #include <QElapsedTimer>
 #include <QPersistentModelIndex>
 #include <QStandardItemModel>
-#include "../externalLibs/QtitanDataGrid/src/src/grid/QtnGridTreeView.h"
-#include "../externalLibs/QtitanDataGrid/src/src/grid/QtnGridFilter.h"
+#include <QtnGridTreeView.h>
+#include <QtnGridFilter.h>
 #include <QtTest>
 #include <QtitanGrid.h>
-#include "../externalLibs/QtitanDataGrid/src/src/grid/QtnGridViewGraphics.h"
-#include "../externalLibs/QtitanDataGrid/src/src/grid/QtnGridEditors.h"
+#include <QtnGridViewGraphics.h>
+#include <QtnGridEditors.h>
 
 namespace hc::tests {
 class GridCountingModel : public QAbstractTableModel

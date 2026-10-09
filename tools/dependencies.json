@@ -12,12 +12,12 @@
     },
     {
       "name": "QtitanDataGrid",
-      "version": "9.3.0 with local HC-QTN-006/007/008 extensions",
+      "version": "9.3.0 with waterColorStyle and HC-QTN-006/007/008/009 extensions",
       "license": "LicenseRef-Commercial-QtitanDataGrid",
       "source": "https://www.devmachines.com/qtitandatagrid-overview.html",
-      "root": "externalLibs/QtitanDataGrid",
-      "inputs": ["src/src"],
-      "note": "Locally provisioned commercial source. Never track or upload source or generated inventory artifacts."
+      "root": "externalLibs/waterColorStyle/third_party/QtitanDataGrid",
+      "inputs": ["upstream/9.3.0", "patches", "integration.json"],
+      "note": "Licensed source and ordered patches live in the private nested submodule; only its gitlink belongs in the public parent. Keep generated inventories local."
     },
     {
       "name": "fmt",
@@ -65,13 +65,17 @@
       "note": "License identifier records the embedded notice; original revision and distribution review remain unresolved."
     },
     {
-      "name": "Qlementine",
-      "version": "1.5.0.0+209e549c415f",
-      "license": "MIT; bundled Inter: OFL-1.1; bundled Roboto Mono 3.000: Apache-2.0",
-      "source": "https://github.com/oclero/qlementine/tree/209e549c415f1d828883f9f21a633eb535f9d67d",
-      "root": "externalLibs/qlementine",
-      "inputs": ["lib", "cmake", "CMakeLists.txt", "LICENSE", "UPSTREAM.txt", "upstream.json", "licenses"],
-      "note": "Static product dependency; no style plugin. UPSTREAM.txt records the local patch and font identification."
+      "name": "waterColorStyle",
+      "version": "Git submodule revision recorded by the parent gitlink",
+      "license": "MIT",
+      "source": "https://github.com/jgh0721/waterColorStyle",
+      "root": "externalLibs/waterColorStyle",
+      "inputs": [
+        "src",
+        "CMakeLists.txt",
+        "LICENSE"
+      ],
+      "note": "Static product style. License deployed to licenses/waterColorStyle; commercial Qtitan is inventoried separately."
     }
   ]
 }

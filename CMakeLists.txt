@@ -24,25 +24,18 @@ qt_standard_project_setup(REQUIRES 6.12)
 
 include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )
-include(cmake/HyperCommanderQlementine.cmake)
+# Product builds consume only the libraries; standalone waterColor tests stay isolated.
+set(FMSTYLE_WITH_QTITAN ON CACHE BOOL "" FORCE)
+foreach(Option IN ITEMS DEMO LABS GALLERY DESIGNER_PLUGIN EXAMPLES TESTS)
+    set(FMSTYLE_BUILD_${Option} OFF CACHE BOOL "" FORCE)
+endforeach()
+if(QTITAN_SOURCE_DIR)
+    message(FATAL_ERROR "Product builds require generated Qtitan sources; clear QTITAN_SOURCE_DIR.")
+endif()
+add_subdirectory(externalLibs/waterColorStyle watercolor EXCLUDE_FROM_ALL)
 include(cmake/QtDeployment.cmake)
 set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
 add_subdirectory(commonLibs/scripting)
-
-set(HC_QTITAN_PACKAGE "" CACHE FILEPATH "Licensed QtitanDataGrid 9.3.0 ZIP for local reprovisioning")
-set(HC_QTITAN_PRIVATE_PATCH "${PROJECT_SOURCE_DIR}/externalLibs/QtitanDataGrid/.hc-patches/qtitan-9.3-hc.zip"
-    CACHE FILEPATH "Private Qtitan extension package; never distribute or commit")
-if(HC_QTITAN_PACKAGE)
-    find_program(HC_QTITAN_POWERSHELL NAMES powershell REQUIRED)
-    add_custom_target(hc_install_qtitan
-        COMMAND "${HC_QTITAN_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-            -File "${PROJECT_SOURCE_DIR}/tools/Install-QtitanDataGrid.ps1"
-            -PackagePath "${HC_QTITAN_PACKAGE}" -PrivatePatchPath "${HC_QTITAN_PRIVATE_PATCH}"
-        COMMENT "Provision licensed Qtitan source and verified private extensions locally"
-        VERBATIM
-    )
-endif()
-
 
 qt_add_library(hc_viewer_core STATIC
     commonLibs/viewer/viewer.cpp
@@ -100,15 +93,29 @@ option(HC_BUILD_SCRIPT_COMPARISON "Build optional runtime comparison executables
 if(HC_BUILD_SCRIPT_COMPARISON)
     add_subdirectory(tools/runtimeComparison)
 endif()
-option(HC_BUILD_READINESS_P0 "Build the isolated Qlementine/Qtitan readiness experiment" OFF)
-if(HC_BUILD_READINESS_P0)
-    add_subdirectory(tools/readinessP0)
-endif()
 hc_finalize_qt_deployment()
 add_dependencies(hc_deploy hc_iso_package)
+
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    # Build the maintained .vcxproj, not the generated CMake project. Keep its
+    # objects, output, and CMake-built dependencies separate from normal builds.
+    add_custom_target(hc_native_vs_product
+        COMMAND "${CMAKE_VS_MSBUILD_COMMAND}" "${PROJECT_SOURCE_DIR}/HyperCommander.sln"
+            /t:Build "/p:Configuration=$<CONFIG>" /p:Platform=x64 /m:4 /p:CL_MPCount=4
+            "/p:QtInstall=$<TARGET_FILE_DIR:Qt6::Core>/.."
+            "/p:OutDir=${CMAKE_BINARY_DIR}/native-vs/$<CONFIG>/"
+            "/p:IntDir=${CMAKE_BINARY_DIR}/native-vs-obj/$<CONFIG>/"
+            "/p:HcNativePluginBuild=${CMAKE_BINARY_DIR}/native-vs-dependencies/$<CONFIG>"
+        USES_TERMINAL VERBATIM)
+endif()
+
+# Keep the statically linked style's license beside both deployment entry points.
 add_custom_command(TARGET hc_deploy POST_BUILD
-    COMMAND "${CMAKE_COMMAND}"
-        "-DHC_QLEMENTINE_ROOT=${PROJECT_SOURCE_DIR}/externalLibs/qlementine"
-        "-DHC_QLEMENTINE_DESTINATION=$<TARGET_FILE_DIR:HyperCommander>/licenses/qlementine"
-        -P "${PROJECT_SOURCE_DIR}/cmake/DeployQlementine.cmake"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "$<TARGET_FILE_DIR:HyperCommander>/licenses/waterColorStyle"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/externalLibs/waterColorStyle/LICENSE"
+        "$<TARGET_FILE_DIR:HyperCommander>/licenses/waterColorStyle/LICENSE"
     VERBATIM)
+install(FILES externalLibs/waterColorStyle/LICENSE
+    DESTINATION licenses/waterColorStyle COMPONENT Runtime)

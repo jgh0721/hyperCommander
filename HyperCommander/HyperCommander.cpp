@@ -14,76 +14,63 @@
 #include "externalEditorMgr.hpp"
 #include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
-#include <oclero/qlementine/resources/ResourceInitialization.hpp>
-#include <oclero/qlementine/style/QlementineStyle.hpp>
+#include <fmstyle/ThemeManager.h>
+#include <fmstyle/WatercolorStyle.h>
 #include <QtitanGrid.h>
 #include "solFavoriteDirMgr.hpp"
 #include "solTCPluginMgr.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
-#include "externalLibs/QtitanDataGrid/src/src/base/QtnCommonStyle.h"
+#include <QtnCommonStyle.h>
 
 namespace {
-// Keep Qtitan's drawing extensions and delegate ordinary controls to Qlementine.
-// Both styles have a single owner chain, including across live theme changes.
+// QApplication owns the proxy, which owns the installed WatercolorStyle.
+// Live Light/Dark changes update tokens without replacing either style object.
 class ProductStyle final : public Qtitan::CommonStyle {
 public:
-    ProductStyle() : Qtitan::CommonStyle(new oclero::qlementine::QlementineStyle) {
-        qlementine_ = static_cast<oclero::qlementine::QlementineStyle*>(baseStyle());
-    }
+    explicit ProductStyle(QStyle* Base) : Qtitan::CommonStyle(Base) {}
     void Apply(const TyColorScheme& Scheme) {
-        const bool Dark = Scheme.IsDarkMode;
-        auto Tokens = (Dark ? oclero::qlementine::Theme::makeDark() : oclero::qlementine::Theme::makeLight()).toJson().object();
-        const QJsonObject Colors{{"useSystemFonts", true},
-            {"backgroundColorMain1", Scheme.FileList_BGColor.name()},
-            {"backgroundColorMain2", Scheme.Dialog_BGColor.name()},
-            {"backgroundColorMain3", Dark ? "#293241" : "#E8EDF5"},
-            {"backgroundColorWorkspace", Scheme.FileList_BGColor.name()},
-            {"backgroundColorTabBar", Scheme.Dialog_BGColor.name()},
-            {"secondaryColor", Scheme.Dialog_FGColor.name()},
-            {"secondaryAlternativeColor", Dark ? "#AAB5C5" : "#586174"},
-            {"primaryColor", Dark ? "#9BBEFF" : "#2457C5"},
-            {"primaryColorForeground", Dark ? "#102342" : "#FFFFFF"},
-            {"borderColor", Dark ? "#536174" : "#BAC4D2"}};
-        for (auto It = Colors.begin(); It != Colors.end(); ++It) Tokens[It.key()] = It.value();
-        auto Theme = oclero::qlementine::Theme::fromJsonDoc(QJsonDocument(Tokens));
-        if (!Theme) return;
-        Theme->fontRegular = Scheme.Dialog_Font;
-        Theme->fontBold = Scheme.Dialog_Font; Theme->fontBold.setBold(true);
-        const int ControlHeight = QFontMetrics(Scheme.Dialog_Font).height() + 12;
-        Theme->controlHeightLarge = qMax(Theme->controlHeightLarge, ControlHeight);
-        Theme->controlHeightMedium = qMax(Theme->controlHeightMedium, ControlHeight - 4);
-        // Placeholder hints describe an available action, so keep them readable
-        // instead of inheriting the base theme's disabled-text contrast.
-        for (const auto Group : {QPalette::Active, QPalette::Inactive})
-            Theme->palette.setColor(Group, QPalette::PlaceholderText, QColor(Dark ? "#AAB5C5" : "#586174"));
-        // setTheme/setPalette can synchronously repaint widgets. Publish all
-        // custom drawing colors before those notifications reach the grid.
-        header_ = Theme->backgroundColorMain3; text_ = Scheme.Dialog_FGColor;
-        hover_ = Scheme.FileList_Cursor; selected_ = Scheme.FileList_Selected;
-        border_ = Theme->borderColor;
-        QPixmapCache::clear();
-        qlementine_->setTheme(*Theme);
-        QApplication::setPalette(Theme->palette);
+        using namespace fm::style;
+        auto& Manager = ThemeManager::instance();
+        {
+            ThemeManager::Batch Batch(Manager);
+            Manager.clearOverrides();
+            const auto VariantValue = Scheme.IsDarkMode ? Variant::Dark : Variant::Light;
+            if (Scheme.explicitColors_.contains("dialogText"))
+                Manager.setOverride(VariantValue, Token::Fg, Scheme.Dialog_FGColor);
+            if (Scheme.explicitColors_.contains("dialogBackground"))
+                Manager.setOverride(VariantValue, Token::Win, Scheme.Dialog_BGColor);
+            Manager.setScheme(Scheme.IsDarkMode ? ThemeManager::Scheme::Dark : ThemeManager::Scheme::Light);
+            QPixmapCache::clear();
+        }
         QApplication::setFont(Scheme.Dialog_Font);
         QApplication::setFont(Scheme.Menu_Font, "QMenu");
         QApplication::setFont(Scheme.Menu_Font, "QMenuBar");
         setProperty("hc.theme", Scheme.Name);
+        const auto Accent = Manager.colors()[Token::Accent];
         for (const auto Pair : {qMakePair(Qtitan::GridThemeManager::SortAscendingIcon, false),
                                qMakePair(Qtitan::GridThemeManager::SortDescendingIcon, true)}) {
             QPixmap Pixmap(16, 16); Pixmap.fill(Qt::transparent);
-            QPainter Painter(&Pixmap); Painter.setPen(Qt::NoPen); Painter.setBrush(Theme->primaryColor);
+            QPainter Painter(&Pixmap); Painter.setPen(Qt::NoPen); Painter.setBrush(Accent);
             Painter.drawPolygon(Pair.second ? QPolygon{{3, 5}, {13, 5}, {8, 11}} : QPolygon{{3, 11}, {13, 11}, {8, 5}});
             Painter.end(); Qtitan::GridBase::themeManager()->setIcon(Pair.first, QIcon(Pixmap));
         }
-        Qtitan::GridBase::themeManager()->updateViews();
+        // Grid consumers apply their palette and file colors later in the same
+        // signal delivery. Avoid painting an intermediate palette synchronously.
+        if (!refreshPending_) {
+            refreshPending_ = true;
+            QTimer::singleShot(0, this, [this] {
+                refreshPending_ = false;
+                Qtitan::GridBase::themeManager()->updateViews();
+            });
+        }
     }
     QSize sizeFromContents(ContentsType Type, const QStyleOption* Option, const QSize& Contents, const QWidget* Widget = nullptr) const override {
         auto Size = Qtitan::CommonStyle::sizeFromContents(Type, Option, Contents, Widget);
         if (Type == CT_ComboBox || Type == CT_LineEdit || Type == CT_SpinBox)
             Size.setHeight(qMax(Size.height(), Option->fontMetrics.height() + 12));
         if (Type == CT_ComboBox)
-            Size.setWidth(qMax(Size.width(), Contents.width() + qlementine_->theme().spacing * 3 + qlementine_->theme().iconSize.width()));
+            Size.setWidth(qMax(Size.width(), Contents.width() + 32));
         return Size;
     }
     using Qtitan::CommonStyle::polish;
@@ -107,29 +94,12 @@ public:
         return Qtitan::CommonStyle::eventFilter(Object, Event);
     }
     QRect subElementRect(SubElement Element, const QStyleOption* Option, const QWidget* Widget = nullptr) const override {
-        // Qtitan measures an editor before assigning its text. Qlementine would
-        // otherwise return an empty content box, hiding the cell's contents.
+        // Qtitan measures an editor before assigning its text. Keep the complete
+        // content box for editors and persistent controls in empty cells.
         // Persistent controls in a settings table also need the entire empty
         // cell; the delegate has no display text to measure in those cells.
         if (Element == SE_ItemViewItemText && (isGrid(Widget) || (Widget && Widget->property("hc.cellControls").toBool()))) return Option->rect;
         return Qtitan::CommonStyle::subElementRect(Element, Option, Widget);
-    }
-    void drawControl(ControlElement Element, const QStyleOption* Option, QPainter* Painter, const QWidget* Widget = nullptr) const override {
-        const auto* Header = qstyleoption_cast<const QStyleOptionHeader*>(Option);
-        if (Header && isGrid(Widget)) {
-            if (Element == CE_HeaderSection) {
-                Painter->fillRect(Header->rect, Header->state.testFlag(State_Sunken) ? selected_ :
-                    Header->state.testFlag(State_MouseOver) ? hover_ : header_);
-                Painter->save(); Painter->setPen(border_);
-                Painter->drawLine(Header->rect.bottomLeft(), Header->rect.bottomRight());
-                Painter->drawLine(Header->rect.topRight(), Header->rect.bottomRight()); Painter->restore(); return;
-            }
-            if (Element == CE_HeaderLabel) {
-                auto Copy = *Header; Copy.palette.setColor(QPalette::ButtonText, text_); Copy.palette.setColor(QPalette::Text, text_);
-                Qtitan::CommonStyle::drawControl(Element, &Copy, Painter, Widget); return;
-            }
-        }
-        Qtitan::CommonStyle::drawControl(Element, Option, Painter, Widget);
     }
 private:
     static void fitComboHeight(QWidget* Widget) {
@@ -141,17 +111,18 @@ private:
             if (Current->property("hc.fileGrid").toBool()) return true;
         return false;
     }
-    oclero::qlementine::QlementineStyle* qlementine_ = nullptr;
-    QColor header_, text_, hover_, selected_, border_;
+    bool refreshPending_ = false;
 };
 }
 
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
-    // Anchor the statically linked themes, SVGs, and font resources.
-    oclero::qlementine::resources::initializeResources();
-    auto* Style = new ProductStyle;
+    auto& Theme = fm::style::ThemeManager::instance();
+    Theme.setDesign(fm::style::Design::Watercolor);
+    Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
+    Theme.install(*this);
+    auto* Style = new ProductStyle(QApplication::style());
     QApplication::setStyle(Style);
 
     auto Font = QApplication::font();

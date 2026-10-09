@@ -391,7 +391,8 @@ target_link_libraries(hc_job_tests PRIVATE Qt6::Test)
 add_test(NAME hc.jobs COMMAND hc_job_tests)
 set_tests_properties(hc.jobs PROPERTIES TIMEOUT 30)
 if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
-    add_test(NAME hc.qtitan COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1")
+    add_test(NAME hc.qtitan COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/tools/Test-QtitanCompatibility.ps1"
+        -GeneratedRoot "${CMAKE_BINARY_DIR}/watercolor/third_party/QtitanDataGrid/src")
     set_tests_properties(hc.qtitan PROPERTIES TIMEOUT 30)
 endif()
 
@@ -551,13 +552,6 @@ foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests 
     hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)
 endforeach()
 
-qt_add_executable(hc_qlementine_tests tstQlementine.cpp)
-target_link_libraries(hc_qlementine_tests PRIVATE qlementine::qlementine Qt6::Test)
-target_compile_options(hc_qlementine_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-add_test(NAME hc.qlementine COMMAND hc_qlementine_tests)
-set_tests_properties(hc.qlementine PROPERTIES TIMEOUT 30)
-hc_enable_qt_deployment(hc_qlementine_tests TEST PLUGINS)
-add_dependencies(hc_check hc_qlementine_tests)
 
 qt_add_executable(hc_settings_tests tstSettings.cpp)
 target_include_directories(hc_settings_tests PRIVATE "${PROJECT_SOURCE_DIR}")

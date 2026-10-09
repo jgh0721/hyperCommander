@@ -1,6 +1,10 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "vc2026-validation-noncommercial",
@@ -13,12 +17,14 @@
         "HC_UNEGG_USE": "NONCOMMERCIAL"
       }
     },
-    { "name": "vc2026-readiness-p2", "displayName": "JSON settings validation", "inherits": "vc2026-qt612", "binaryDir": "${sourceDir}/_build/readiness-p2", "cacheVariables": { "HC_BUILD_SMB_TESTS": "ON" } },
     {
-      "name": "vc2026-readiness-p1",
-      "displayName": "Product Qlementine integration validation",
+      "name": "vc2026-readiness-p2",
+      "displayName": "JSON settings validation",
       "inherits": "vc2026-qt612",
-      "binaryDir": "${sourceDir}/_build/readiness-p1"
+      "binaryDir": "${sourceDir}/_build/readiness-p2",
+      "cacheVariables": {
+        "HC_BUILD_SMB_TESTS": "ON"
+      }
     },
     {
       "hidden": true,
@@ -41,23 +47,44 @@
       "cacheVariables": {
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
-    },
-    {
-      "name": "vc2026-readiness-p0",
-      "displayName": "Isolated Qlementine / Qtitan P0",
-      "inherits": "vc2026-qt612",
-      "binaryDir": "${sourceDir}/_build/readiness-p0",
-      "cacheVariables": { "HC_BUILD_READINESS_P0": "ON" }
     }
   ],
   "buildPresets": [
-    { "name": "vc2026-readiness-p2-debug", "configurePreset": "vc2026-readiness-p2", "configuration": "Debug", "targets": ["HyperCommander", "hc_smb_tests", "hc_settings_tests", "hc_workspace_tests", "hc_column_tests", "hc_automation_tests"] },
-    { "name": "vc2026-readiness-p2-release", "configurePreset": "vc2026-readiness-p2", "configuration": "Release", "targets": ["HyperCommander", "hc_smb_tests", "hc_settings_tests", "hc_workspace_tests", "hc_column_tests", "hc_automation_tests"] },
-    { "name": "vc2026-readiness-p1-debug", "configurePreset": "vc2026-readiness-p1", "configuration": "Debug", "targets": ["HyperCommander", "hc_qlementine_tests"] },
-    { "name": "vc2026-readiness-p1-release", "configurePreset": "vc2026-readiness-p1", "configuration": "Release", "targets": ["HyperCommander", "hc_qlementine_tests"] },
-    { "name": "vc2026-debug", "configurePreset": "vc2026-qt612", "configuration": "Debug" },
-    { "name": "vc2026-release", "configurePreset": "vc2026-qt612", "configuration": "Release" },
-    { "name": "vc2026-readiness-p0-debug", "configurePreset": "vc2026-readiness-p0", "configuration": "Debug", "targets": ["hc_readiness_p0", "hc_readiness_p0_inventory"] },
-    { "name": "vc2026-readiness-p0-release", "configurePreset": "vc2026-readiness-p0", "configuration": "Release", "targets": ["hc_readiness_p0", "hc_readiness_p0_inventory"] }
+    {
+      "name": "vc2026-readiness-p2-debug",
+      "configurePreset": "vc2026-readiness-p2",
+      "configuration": "Debug",
+      "targets": [
+        "HyperCommander",
+        "hc_smb_tests",
+        "hc_settings_tests",
+        "hc_workspace_tests",
+        "hc_column_tests",
+        "hc_automation_tests"
+      ]
+    },
+    {
+      "name": "vc2026-readiness-p2-release",
+      "configurePreset": "vc2026-readiness-p2",
+      "configuration": "Release",
+      "targets": [
+        "HyperCommander",
+        "hc_smb_tests",
+        "hc_settings_tests",
+        "hc_workspace_tests",
+        "hc_column_tests",
+        "hc_automation_tests"
+      ]
+    },
+    {
+      "name": "vc2026-debug",
+      "configurePreset": "vc2026-qt612",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vc2026-release",
+      "configurePreset": "vc2026-qt612",
+      "configuration": "Release"
+    }
   ]
 }

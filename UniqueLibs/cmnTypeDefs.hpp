@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QString>
+#include <QSet>
 
 #include "cmnTypeDefs_Name.hpp"
 
@@ -100,6 +101,8 @@ struct TyColorScheme
 {
     QString             Name;
     bool                IsDarkMode = false;
+    // Resolved colors remain separate from persisted user intent.
+    QSet<QString>       explicitColors_;
 
     // Main
     QFont               Menu_Font;

@@ -12,9 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          # This runner has licensed, ignored QtitanDataGrid source provisioned locally.
+          # Preserve local runner configuration; licensed sources come from submodules.
           clean: false
           persist-credentials: false
+      - name: Initialize licensed nested submodules
+        shell: powershell
+        run: |
+          # The self-hosted runner supplies read access to the private Qtitan repo.
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and test with the qualified Qt kit
         shell: powershell
         run: |

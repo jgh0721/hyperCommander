@@ -38,6 +38,9 @@
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
 #include "colorSchemeMgr.hpp"
+#include <fmstyle/ThemeManager.h>
+#include <fmstyle/WatercolorStyle.h>
+#include <QProxyStyle>
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
@@ -112,7 +115,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction())), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -409,6 +412,155 @@ private slots:
         }
     }
 
+    void watercolorSettingsUi()
+    {
+        using namespace hc::settings;
+        using namespace fm::style;
+        auto& Settings = AppSettings();
+        const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        });
+        auto* Proxy = qobject_cast<QProxyStyle*>(qApp->style());
+        QVERIFY(Proxy);
+        QPointer<QStyle> Style(qApp->style()), Base(Proxy->baseStyle());
+        QVERIFY(qobject_cast<WatercolorStyle*>(Base.data()));
+        QCOMPARE(Base->parent(), Style.data());
+        QVERIFY(Settings.Put(Section::Appearance, BuiltInAppearance()));
+        Colors->Refresh();
+        for (const bool Dark : {false, true}) {
+            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
+            auto Scheme = Colors->GetColorScheme(Name);
+            const ThemeColors Defaults(Dark ? Variant::Dark : Variant::Light, Design::Watercolor);
+            QVERIFY(Scheme.explicitColors_.isEmpty());
+            QCOMPARE(Scheme.Dialog_BGColor, Defaults[Token::Win]);
+            QCOMPARE(Scheme.FileList_BGColor, Defaults[Token::Surface]);
+            // Saving unrelated font changes must not freeze resolved theme colors.
+            Scheme.Dialog_Font.setPointSize(17);
+            Colors->UpsertColorScheme(Scheme, true);
+            QVERIFY(Settings.Commit());
+            Colors->Refresh();
+            Scheme = Colors->GetColorScheme(Name);
+            QVERIFY(Scheme.explicitColors_.isEmpty());
+            QCOMPARE(Scheme.Dialog_Font.pointSize(), 17);
+            emit Colors->sigColorSchemeChanged(Scheme);
+            QCOMPARE(ThemeManager::instance().design(), Design::Watercolor);
+            QCOMPARE(ThemeManager::instance().effectiveVariant(), Dark ? Variant::Dark : Variant::Light);
+            QCOMPARE(QApplication::palette().color(QPalette::Window), Defaults[Token::Win]);
+        }
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QComboBox*>("cbxColorScheme")->setCurrentText(QStringLiteral("기본 라이트"));
+            Dialog.findChild<QCheckBox*>("chkIsDarkMode")->setChecked(true);
+            QVERIFY(Dialog.SaveSettings());
+            QVERIFY(Dialog.SaveSettings());
+            const auto Changed = Colors->GetColorScheme(QStringLiteral("기본 라이트"));
+            QVERIFY(Changed.IsDarkMode);
+            QVERIFY(Changed.explicitColors_.isEmpty());
+            Dialog.accept();
+        }
+        // Legacy custom colors migrate, including an explicit color equal to the
+        // old default when the file already records the user's override intent.
+        auto Appearance = BuiltInAppearance();
+        auto Schemes = Appearance["schemes"].toObject();
+        const auto Name = QStringLiteral("기본 라이트");
+        auto Record = Schemes[Name].toObject();
+        auto Values = Record["colors"].toObject();
+        Values["dialogBackground"] = "#e1e8d7";
+        Values["listText"] = "#29462b";
+        Record["colors"] = Values; Schemes[Name] = Record; Appearance["schemes"] = Schemes;
+        QVERIFY(Settings.Put(Section::Appearance, Appearance));
+        Colors->Refresh();
+        auto Scheme = Colors->GetColorScheme(Name);
+        QCOMPARE(Scheme.explicitColors_.size(), 2);
+        QCOMPARE(Scheme.Dialog_BGColor, QColor("#e1e8d7"));
+        Scheme.FileList_Cursor = QColor("#E0EBFF"); // Explicit old default.
+        Scheme.explicitColors_.insert("listCursor");
+        Colors->UpsertColorScheme(Scheme, true);
+        QVERIFY(Settings.Commit());
+        Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
+        const auto Saved = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()[Name].toObject();
+        QVERIFY(Saved["colorOverrides"].toObject()["listCursor"].toBool());
+        Colors->Refresh();
+        Scheme = Colors->GetColorScheme(Name);
+        QCOMPARE(Scheme.FileList_Cursor, QColor("#E0EBFF"));
+        QCOMPARE(Scheme.FileList_FGColor, QColor("#29462b"));
+        emit Colors->sigColorSchemeChanged(Scheme);
+        QCOMPARE(QApplication::palette().color(QPalette::Window), QColor("#e1e8d7"));
+        for (int Index = 0; Index < 12; ++Index) {
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Index % 2 ? Name : QStringLiteral("기본 다크")));
+            QCoreApplication::processEvents();
+            QCOMPARE(qApp->style(), Style.data());
+            QCOMPARE(Proxy->baseStyle(), Base.data());
+        }
+    }
+
+    void watercolorGridStateUi()
+    {
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Original = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            emit Colors->sigColorSchemeChanged(Original);
+            main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory;
+        QVERIFY(Directory.isValid());
+        for (int Index = 0; Index < 150; ++Index) {
+            QFile File(Directory.filePath(QString("theme-%1.txt").arg(Index, 3, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("theme");
+        }
+        hc::workspace::TabState Tab; Tab.id_ = "theme-state";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
+        auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 151, 10000);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        auto* Base = View->BaseView();
+        Panel->sig_NotifyPanelActivated();
+        Base->setFocusedColumnIndex(0); Base->setFocusedRowIndex(80);
+        Base->selectRow(80); Base->selectRow(81);
+        QCoreApplication::processEvents();
+        auto* Column = static_cast<Qtitan::GridTableColumn*>(Base->getColumnByModelColumn(0));
+        Column->setWidth(280);
+        const auto Focus = View->CaptureFocus();
+        const auto Selection = View->CaptureSelection();
+        QVERIFY(Base->showEditor(Qtitan::GridEditor::NotActivate));
+        auto* Editor = Base->activeEditor(); QVERIFY(Editor);
+        auto* Input = qobject_cast<QLineEdit*>(Editor->getCellWidget()); QVERIFY(Input);
+        Input->selectAll();
+        QTest::keyClicks(Input, "pending-name.txt");
+        QVERIFY(Editor->isContextModified());
+        Input->setSelection(7, 4);
+        const auto Cursor = Input->cursorPosition();
+        QTest::qWait(100); // Let editor activation and deferred column sizing settle.
+        const auto Scroll = Base->verticalScrollBar()->value();
+        QVERIFY(Scroll > 0);
+        const auto Layout = View->CaptureWorkspaceView();
+        for (int Index = 0; Index < 8; ++Index) {
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Index % 2
+                ? QStringLiteral("기본 라이트") : QStringLiteral("기본 다크")));
+            QCoreApplication::processEvents();
+            QCOMPARE(Base->activeEditor(), Editor);
+            QCOMPARE(Input->text(), QStringLiteral("pending-name.txt"));
+            QVERIFY(Editor->isContextModified());
+            QCOMPARE(Input->cursorPosition(), Cursor);
+            QCOMPARE(Input->selectedText(), QStringLiteral("-nam"));
+            QCOMPARE(View->CaptureFocus(), Focus);
+            QCOMPARE(View->CaptureSelection(), Selection);
+            QCOMPARE(Base->verticalScrollBar()->value(), Scroll);
+            QCOMPARE(View->CaptureWorkspaceView(), Layout);
+            Grid->grab().save(Index % 2 ? "watercolor-light.png" : "watercolor-dark.png");
+        }
+        Base->hideEditor(); // Cancel the pending rename.
+        QVERIFY(QFileInfo::exists(Directory.filePath("theme-079.txt")));
+        QVERIFY(!QFileInfo::exists(Directory.filePath("pending-name.txt")));
+    }
+
     void firstRunAppearanceUi()
     {
         using namespace hc::settings;
@@ -556,8 +708,17 @@ private slots:
                         false, true, true, Row == 2, false, Cell, Qt::AlignLeft);
                     QCOMPARE(Pixels.pixelColor(qRound((Cell.right() - 5) * Dpr), qRound(Cell.center().y() * Dpr)), Paint.backgroundBrush.color());
                 }
+                QImage ExpectedHeader(Header.size(), QImage::Format_ARGB32_Premultiplied);
+                ExpectedHeader.fill(Qt::transparent);
+                QStyleOptionHeader HeaderOption;
+                HeaderOption.initFrom(Grid);
+                HeaderOption.rect = ExpectedHeader.rect();
+                HeaderOption.state = QStyle::State_Enabled | QStyle::State_Active;
+                QPainter HeaderPainter(&ExpectedHeader);
+                qApp->style()->drawControl(QStyle::CE_HeaderSection, &HeaderOption, &HeaderPainter, Grid);
+                HeaderPainter.end();
                 QCOMPARE(Pixels.pixelColor(qRound((Header.left() + 5) * Dpr), qRound((Header.top() + 5) * Dpr)),
-                    QColor(Dark ? "#293241" : "#E8EDF5"));
+                    ExpectedHeader.pixelColor(5, 5));
                 if (Mask == 3) main_->grab().save(Dark ? "appearance-dark.png" : "appearance-light.png");
             }
         }

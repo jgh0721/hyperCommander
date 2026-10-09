@@ -244,7 +244,8 @@ set_target_properties(HyperCommander
 target_link_libraries(HyperCommander
         PRIVATE
         hc_script_runtime
-        qlementine::qlementine
+        Qtitan::Grid
+        Fm::style
         Qt::Core
         Qt::Concurrent
         Qt::Gui
@@ -269,7 +270,6 @@ add_custom_command(TARGET HyperCommander POST_BUILD
         "${PROJECT_SOURCE_DIR}/commonLibs/scripting/ThirdPartyNotices.txt"
         "$<TARGET_FILE_DIR:HyperCommander>/LuaThirdPartyNotices.txt"
     VERBATIM)
-hc_deploy_qlementine_notices(HyperCommander)
 hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 add_dependencies(HyperCommander hc-plugin-host-x64)
 
@@ -302,3 +302,11 @@ if(HC_BUILD_SMB_TESTS)
     add_dependencies(hc_smb_tests hc_wcx_fixture hc-plugin-host-x64)
     hc_enable_qt_deployment(hc_smb_tests TEST PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
 endif()
+
+add_custom_command(TARGET HyperCommander POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "$<TARGET_FILE_DIR:HyperCommander>/licenses/waterColorStyle"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/externalLibs/waterColorStyle/LICENSE"
+        "$<TARGET_FILE_DIR:HyperCommander>/licenses/waterColorStyle/LICENSE"
+    VERBATIM)

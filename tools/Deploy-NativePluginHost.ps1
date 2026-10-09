@@ -11,20 +11,27 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path $PSScriptRoot -Parent
 $BuildDir = if ($BuildDirectory) { [IO.Path]::GetFullPath($BuildDirectory) } else { Join-Path $Root ('_build/msbuild-plugin-host-' + $Configuration.ToLowerInvariant()) }
 $QtCMake = Join-Path $QtRoot 'bin/qt-cmake.bat'
+if (-not (Test-Path -LiteralPath $QtCMake -PathType Leaf)) { throw "Qt CMake is missing: $QtCMake" }
 # Use the same host sources and deployment rules as the primary CMake build.
 # Separate per-configuration directories also permit concurrent native builds.
-& $QtCMake -S $Root -B $BuildDir -G 'Visual Studio 18 2026' -A x64 -T 'v145,host=x64' `
-    -DBUILD_TESTING=OFF -DHC_BUILD_SMB_TESTS=OFF "-DHC_UNEGG_USE=$UnEggUse"
-if ($LASTEXITCODE -ne 0) { throw "Plugin host configure failed: $LASTEXITCODE" }
-& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package hc_sevenzip_package hc_unegg_package hc_script_runtime qlementine --parallel 4
-if ($LASTEXITCODE -ne 0) { throw "Built-in ISO/script/Qlementine runtime build failed: $LASTEXITCODE" }
+# Native stderr warnings must not terminate Windows PowerShell before the
+# configure exit code is checked (notably when CI redirects both streams).
+try {
+    $ErrorActionPreference = 'Continue'
+    & $QtCMake -S $Root -B $BuildDir -G 'Visual Studio 18 2026' -A x64 -T 'v145,host=x64' `
+        -DBUILD_TESTING=OFF -DHC_BUILD_SMB_TESTS=OFF "-DHC_UNEGG_USE=$UnEggUse" -U 'HC_QTITAN_*'
+    $ConfigureResult = $LASTEXITCODE
+} finally { $ErrorActionPreference = 'Stop' }
+if ($ConfigureResult -ne 0) { throw "Plugin host configure failed: $ConfigureResult" }
+& $QtCMake --build $BuildDir --config $Configuration --target hc_iso_package hc_sevenzip_package hc_unegg_package hc_script_runtime qtitan_grid fmstyle --parallel 4
+if ($LASTEXITCODE -ne 0) { throw "Built-in ISO/script/style runtime build failed: $LASTEXITCODE" }
 if ($PrepareOnly) { return }
 & $QtCMake --build $BuildDir --config $Configuration --target hc-plugin-host-x64 hc-search-index --parallel 4
 if ($LASTEXITCODE -ne 0) { throw "Plugin host build failed: $LASTEXITCODE" }
 $Destination = Split-Path ([IO.Path]::GetFullPath($Executable)) -Parent
-& $QtCMake "-DHC_QLEMENTINE_ROOT=$Root/externalLibs/qlementine" `
-    "-DHC_QLEMENTINE_DESTINATION=$Destination/licenses/qlementine" -P "$Root/cmake/DeployQlementine.cmake"
-if ($LASTEXITCODE -ne 0) { throw "Qlementine notice deployment failed: $LASTEXITCODE" }
+$StyleNotices = Join-Path $Destination 'licenses/waterColorStyle'
+[IO.Directory]::CreateDirectory($StyleNotices) | Out-Null
+Copy-Item -LiteralPath (Join-Path $Root 'externalLibs/waterColorStyle/LICENSE') -Destination (Join-Path $StyleNotices 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $Root 'commonLibs/scripting/ThirdPartyNotices.txt') -Destination (Join-Path $Destination 'LuaThirdPartyNotices.txt')
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-plugin-host-x64.exe") -Destination $Destination
 Copy-Item -LiteralPath (Join-Path $BuildDir "$Configuration/hc-search-index.exe") -Destination $Destination

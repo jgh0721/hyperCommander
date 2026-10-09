@@ -1,6 +1,6 @@
-﻿#include "BuiltInPlugin/SevenZip/sevenZipJob.hpp"
+﻿#include "stdafx.h"
+#include "BuiltInPlugin/SevenZip/sevenZipJob.hpp"
 #include <QCheckBox>
-#include "stdafx.h"
 #include "commandUiBridge.hpp"
 #include "HyperCommander/UIs/dlgOpts.hpp"
 #include "UIs/cmpPanel.hpp"

@@ -11,6 +11,8 @@
 #include "Modules/mdlFileModel.hpp"
 
 #include <QtitanGrid.h>
+#include <QtnGridEditors.h>
+#include <QScopeGuard>
 
 #include "QtitanMSVSDebug.h"
 
@@ -204,6 +206,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         Controller->setProperty("hc.emptySortGuard", true);
     }
 
+    appliedDisplaySettings_ = {};
     model_ = Source;
     proxy_ = Proxy;
     // HC-QTN-005: 8.2.0 can retain selection ranges across a model reset.
@@ -320,6 +323,10 @@ void CGridView::ApplyDisplaySettings()
 {
     if (!model_ || !view_) return;
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    // A theme-only notification must not refresh/sort the entire controller:
+    // doing so can close an editor and move the viewport.
+    if (General == appliedDisplaySettings_) return;
+    appliedDisplaySettings_ = General;
     const auto Selection = CaptureSelection(); const auto Focus = CaptureFocus();
     view_->beginUpdate();
     if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ApplyDisplaySettings();
@@ -342,6 +349,27 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 
     if( view_ == nullptr )
         return;
+
+    // Qtitan reloads the active editor even for appearance-only dataChanged.
+    // Only the file-name column is editable here; retain its draft and caret.
+    QPointer<Qtitan::GridEditor> Editor = view_->activeEditor();
+    QPointer<QLineEdit> Input = Editor ? qobject_cast<QLineEdit*>(Editor->getCellWidget()) : nullptr;
+    const auto Draft = Input ? Input->text() : QString{};
+    const int Cursor = Input ? Input->cursorPosition() : 0;
+    const int SelectionStart = Input ? Input->selectionStart() : -1;
+    const int SelectionLength = Input ? Input->selectedText().size() : 0;
+    const bool Modified = Editor && Editor->isContextModified();
+    const auto RestoreEditor = qScopeGuard([&] {
+        if (!Input || !Editor || view_->activeEditor() != Editor) return;
+        Input->setText(Draft);
+        if (Modified) emit Input->textEdited(Draft);
+        Input->setCursorPosition(Cursor);
+        if (SelectionStart >= 0) {
+            const bool Backward = Cursor == SelectionStart;
+            Input->setSelection(Backward ? SelectionStart + SelectionLength : SelectionStart,
+                Backward ? -SelectionLength : SelectionLength);
+        }
+    });
 
     if( model_ != nullptr )
         model_->SetColorScheme( ColorScheme );
