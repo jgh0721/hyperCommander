@@ -218,7 +218,7 @@ public:
 
     TyOsValue<bool>                     OpenArchive( const QString& FileFullPath, int Mode = PK_OM_LIST );
     TyOsValue<CPackFSModel*>            CreatePackModel();
-    // Src = 압축 파일 내에서의 경로 디렉토리 구분자는 /, \ 
+    // Src is an archive-relative path; both slash directions are accepted.
     void                                ExtractFile( const QString& Src, const QString& Dst );
     void                                CloseArchive();
 
