@@ -73,11 +73,15 @@ Result<QByteArray> DiskRecords::Read(std::uint64_t Row) const
 {
     std::lock_guard Lock(state_->mutex_);
     if (Row >= state_->count_) return Invalid("index-row-out-of-range");
-    if (!state_->data_.flush() || !state_->offsets_.flush() || !state_->offsets_.seek(qint64(Row * 16))) return DiskError("index-read-failed");
+    // Adjacent records already have the offset/data cursors in place.
+    // Keep random access without repeating seek calls for sequential reads.
+    if (!state_->data_.flush() || !state_->offsets_.flush() ||
+        (state_->offsets_.pos() != qint64(Row * 16) && !state_->offsets_.seek(qint64(Row * 16)))) return DiskError("index-read-failed");
     QDataStream In(&state_->offsets_); quint64 Offset = 0, Size = 0; In >> Offset >> Size;
     const auto End = state_->data_.size();
     if (In.status() != QDataStream::Ok || End < 0 || Offset > quint64(End) || Size > quint64(End) - Offset ||
-        Size > quint64(std::numeric_limits<qsizetype>::max()) || !state_->data_.seek(qint64(Offset))) return DiskError("index-corrupt");
+        Size > quint64(std::numeric_limits<qsizetype>::max()) ||
+        (state_->data_.pos() != qint64(Offset) && !state_->data_.seek(qint64(Offset)))) return DiskError("index-corrupt");
     auto Bytes = state_->data_.read(qint64(Size));
     if (quint64(Bytes.size()) != Size) return DiskError("index-read-failed");
     return Bytes;
@@ -165,8 +169,10 @@ Result<std::shared_ptr<PagedEntryIndex>> PagedEntryIndex::Project(const Less& Co
     if (auto Failure = Context.Check({})) return *Failure;
     struct Row { EntrySnapshot entry_; QByteArray bytes_; std::uint64_t ordinal_ = 0; };
     const auto Before = [&](const Row& A, const Row& B) {
-        if (Compare) { if (Compare(A.entry_, B.entry_)) return true; if (Compare(B.entry_, A.entry_)) return false; }
-        return A.ordinal_ < B.ordinal_;
+        if (!Compare) return A.ordinal_ < B.ordinal_;
+        // On equal keys the earlier ordinal wins. Test whether the later row
+        // precedes it, so stable ordering needs only one expensive comparison.
+        return A.ordinal_ < B.ordinal_ ? !Compare(B.entry_, A.entry_) : Compare(A.entry_, B.entry_);
     };
     // Runs contain original ordinals for stable ties across merge passes.
     const auto Encode = [](const Row& Value) { QByteArray Bytes; QDataStream Out(&Bytes, QIODevice::WriteOnly); Out << quint64(Value.ordinal_) << Value.bytes_; return Bytes; };
