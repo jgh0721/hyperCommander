@@ -1,5 +1,8 @@
-# The package holds only HyperViewer.dll and its manifest. The manifest's package root is ROOT:
-# the helper is ROOT/HyperEditor.exe and every DLL it loads from ROOT or Libs/ is pinned.
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
+# The package holds HyperViewer.dll and its manifest. The in-process Qt viewer uses
+# product DLLs from ROOT; HyperEditor.exe remains a separate F4 application.
 if(NOT PACKAGE OR PACKAGE MATCHES "^/" OR PACKAGE MATCHES "[.][.]" OR PACKAGE MATCHES "[\\]")
     message(FATAL_ERROR "HyperViewer package path is invalid: ${PACKAGE}")
 endif()
@@ -13,11 +16,10 @@ foreach(ENTRY IN LISTS STALE)
 endforeach()
 file(COPY_FILE "${VIEWER}" "${OUTPUT}/HyperViewer.dll" ONLY_IF_DIFFERENT)
 file(SHA256 "${VIEWER}" VIEWER_HASH)
-file(SHA256 "${RUNTIME}/HyperEditor.exe" EDITOR_HASH)
-# Plugins the helper loads through its embedded qt.conf (Plugins=Libs).
+# Qt plugins loaded by the viewer from the product runtime (Plugins=Libs).
 file(GLOB PLUGINS "${RUNTIME}/Libs/platforms/qwindows*.dll" "${RUNTIME}/Libs/imageformats/*.dll"
     "${RUNTIME}/Libs/iconengines/*.dll" "${RUNTIME}/Libs/styles/*.dll" "${RUNTIME}/Libs/printsupport/*.dll")
-file(GET_RUNTIME_DEPENDENCIES EXECUTABLES "${RUNTIME}/HyperEditor.exe" LIBRARIES ${PLUGINS}
+file(GET_RUNTIME_DEPENDENCIES LIBRARIES "${VIEWER}" ${PLUGINS}
     DIRECTORIES "${RUNTIME}" RESOLVED_DEPENDENCIES_VAR RESOLVED UNRESOLVED_DEPENDENCIES_VAR UNRESOLVED
     PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-")
 file(REAL_PATH "${RUNTIME}" ROOT)
@@ -48,7 +50,6 @@ set(MANIFEST [=[{
   "protocol":{"major":1,"minimumMinor":0,"maximumMinor":0},
   "extensions":["viewer"], "permissions":["content.read","content.write","ui","process.child"],
   "compatibility":"hyperviewer-v1",
-  "helpers":{"HyperEditor.exe":"@EDITOR_HASH@"},
   "dependencies":@DEPENDENCIES@
 }
 ]=])

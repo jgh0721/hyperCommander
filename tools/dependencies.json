@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "Qt",
+      "version": "6.12.0 custom VC2026 x64 Hybrid CRT kit",
+      "license": "NOASSERTION",
+      "source": "https://www.qt.io/",
+      "root": "D:/Qt/Qt-6.12.0-VC2026-X64-H-MD-2026-10-10",
+      "inputs": ["bin/qt-cmake.bat", "bin/Qt6Core.dll", "bin/Qt6Cored.dll", "bin/Qt6Widgets.dll", "bin/Qt6Widgetsd.dll", "plugins/platforms/qoffscreen.dll", "plugins/platforms/qoffscreend.dll"],
+      "note": "Selected build/runtime inputs only; private modules bind to this kit. Distribution qualification is separate."
+    },
+    {
+      "name": "QtitanDataGrid",
+      "version": "9.3.0 with waterColorStyle and HC-QTN-006/007/008/009 extensions",
+      "license": "LicenseRef-Commercial-QtitanDataGrid",
+      "source": "https://www.devmachines.com/qtitandatagrid-overview.html",
+      "root": "externalLibs/waterColorStyle/third_party/QtitanDataGrid",
+      "inputs": ["upstream/9.3.0", "patches", "integration.json"],
+      "note": "Licensed source and ordered patches live in the private nested submodule; only its gitlink belongs in the public parent. Keep generated inventories local."
+    },
+    {
+      "name": "fmt",
+      "version": "10.2.0",
+      "license": "MIT",
+      "source": "https://github.com/fmtlib/fmt",
+      "root": "commonLibs/fmt-10.2.0",
+      "inputs": ["include", "LICENSE"],
+      "note": "Header-only build; vendored license is the evidence."
+    },
+    {
+      "name": "Everything SDK",
+      "version": "NOASSERTION",
+      "license": "MIT",
+      "source": "https://www.voidtools.com/support/everything/sdk/",
+      "root": "externalLibs/Everything",
+      "inputs": ["src/include/Everything.h", "src/lib/Everything64.lib", "src/dll/Everything64.dll"],
+      "note": "License statement in Everything.h. Everything64.lib imports Everything64.dll; SDK version requires confirmation."
+    },
+    {
+      "name": "Total Commander plugin headers",
+      "version": "NOASSERTION",
+      "license": "NOASSERTION",
+      "source": "https://www.ghisler.com/plugins.htm",
+      "root": "externalLibs/TotalCommander",
+      "inputs": ["tc_listplug.h", "wcxhead.h"],
+      "note": "Header provenance, SDK revision and redistribution terms require confirmation; no plugin binary is bundled by this inventory."
+    },
+    {
+      "name": "QDirectoryEdit",
+      "version": "NOASSERTION",
+      "license": "NOASSERTION",
+      "source": "NOASSERTION",
+      "root": "externalLibs/QDirectoryEdit",
+      "inputs": ["QDirectoryEdit.cpp", "QDirectoryEdit.hpp"],
+      "note": "Origin and license are not declared in the inspected source header; unresolved inventory item."
+    },
+    {
+      "name": "Double Commander detect parser port",
+      "version": "NOASSERTION",
+      "license": "GPL-2.0-or-later",
+      "source": "UniqueLibs/cmnHCUtils.hpp: CDetectParser attribution",
+      "root": "UniqueLibs",
+      "inputs": ["cmnHCUtils.hpp", "cmnHCUtils.cpp"],
+      "note": "License identifier records the embedded notice; original revision and distribution review remain unresolved."
+    },
+    {
+      "name": "waterColorStyle",
+      "version": "Git submodule revision recorded by the parent gitlink",
+      "license": "MIT",
+      "source": "https://github.com/jgh0721/waterColorStyle",
+      "root": "externalLibs/waterColorStyle",
+      "inputs": [
+        "src",
+        "CMakeLists.txt",
+        "LICENSE"
+      ],
+      "note": "Static product style. License deployed to licenses/waterColorStyle; commercial Qtitan is inventoried separately."
+    }
+  ]
+}

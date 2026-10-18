@@ -67,20 +67,21 @@ namespace hc::plugins
         }
         if (!Manifest.compatibility_.empty() && Manifest.compatibility_ != "total7zip" && Manifest.compatibility_ != "hyperviewer-v1") return Invalid("plugin-compatibility");
         const bool Helpers = !Manifest.helpers_.empty();
-        if (Helpers != Manifest.permissions_.contains(Permission::ChildProcess)) return Invalid("plugin-helper-permission");
+        const bool ViewerChildBudget = Manifest.compatibility_ == "hyperviewer-v1" && Manifest.id_ == "builtin.hyperviewer";
+        if ((Helpers || ViewerChildBudget) != Manifest.permissions_.contains(Permission::ChildProcess)) return Invalid("plugin-helper-permission");
         const bool Total7zip = Manifest.compatibility_ == "total7zip" && Manifest.format_ == PluginFormat::Wcx
             && Manifest.extensions_.contains(Extension::ArchiveWrite) && Manifest.helpers_.contains("64/7zG.exe")
             && Manifest.dependencies_.contains("64/7z.dll");
-        // The built-in viewer's package root is the product ROOT: the DLL lives in its Addons folder and
-        // the helper beside the shared Qt runtime, whose qt.conf is embedded in the pinned helper.
+        // The built-in viewer DLL owns its Qt workspace. The separate RHWP runtime
+        // may start a renderer under the reviewed product process budget.
         const bool HyperViewer = Manifest.compatibility_ == "hyperviewer-v1" && Manifest.id_ == "builtin.hyperviewer"
             && Manifest.format_ == PluginFormat::DopusViewer && Manifest.binary_ == std::string(hc::layout::HyperViewerPackage) + "/HyperViewer.dll"
             && Manifest.extensions_ == std::set<Extension>{Extension::Viewer}
-            && Manifest.helpers_.contains("HyperEditor.exe")
+            && Manifest.helpers_.empty() && Manifest.permissions_.contains(Permission::ChildProcess)
             && Manifest.permissions_.contains(Permission::WriteContent);
         if (Helpers && (Manifest.execution_ != ExecutionMode::Isolated || !Manifest.permissions_.contains(Permission::UserInterface)
             || (!Total7zip && !HyperViewer))) return Invalid("plugin-helper-profile");
-        if (Manifest.compatibility_ == "hyperviewer-v1" && (!Helpers || !HyperViewer)) return Invalid("plugin-helper-profile");
+        if (Manifest.compatibility_ == "hyperviewer-v1" && !HyperViewer) return Invalid("plugin-helper-profile");
         if (Manifest.compatibility_ == "total7zip" && Manifest.extensions_.contains(Extension::ArchiveWrite) && !Helpers)
             return Invalid("plugin-helper-required");
         if (!ValidRange(Manifest.protocol_)) return Invalid("plugin-protocol-range");

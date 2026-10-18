@@ -1,4 +1,6 @@
 ﻿#include "pipeChannel.hpp"
+#include <QCoreApplication>
+#include <QEventLoop>
 
 namespace hc::plugins
 {
@@ -21,6 +23,8 @@ namespace hc::plugins
                 : WaitForMultipleObjects(HandleCount, Handles, FALSE, 20);
             if (Wait == WAIT_OBJECT_0) return Unit{};
             if (Peer && Wait == WAIT_OBJECT_0 + 1) { DWORD ExitCode = 0; GetExitCodeProcess(Peer, &ExitCode); Cancel(); return HostError("host-exited", ExitCode); }
+            if (PumpMessages && QCoreApplication::instance())
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
             if (PumpMessages && Wait == WAIT_OBJECT_0 + HandleCount)
             {
                 // Bounded batches prevent a message flood from starving IPC and

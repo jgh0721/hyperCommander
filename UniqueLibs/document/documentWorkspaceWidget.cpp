@@ -125,7 +125,8 @@ namespace hc::document
         : QWidget(Parent), recoveryRoot_(std::move(RecoveryRoot)),
           workspaceId_(QUuid::createUuid().toString(QUuid::Id128)), hosted_(Hosted)
     {
-        DocumentThemeAdapter::Install(*qApp);
+        if (Hosted) DocumentThemeAdapter::InstallLocal(*this);
+        else DocumentThemeAdapter::Install(*qApp);
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
         setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(1000, 700);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
@@ -340,10 +341,8 @@ namespace hc::document
     void DocumentWorkspaceWidget::showPreferences()
     {
         if (preferences_) { preferences_->showNormal(); preferences_->raise(); preferences_->activateWindow(); return; }
-        // A hosted workspace has a foreign-process native parent. A modal Qt
-        // dialog owned by that embedded child can be hidden behind the host
-        // while its nested event loop blocks input. Use an independent modeless
-        // window in F3, with explicit lifetime management and no host disabling.
+        // The DLL viewer owns its top-level window in the isolated host.
+        // Preferences remain modeless so each viewer window accepts input independently.
         auto* Dialog = new DocumentSettingsDialog(settingsPath_, findChildren<QAction*>(), hosted_ ? nullptr : this);
         preferences_ = Dialog; Dialog->setAttribute(Qt::WA_DeleteOnClose);
         connect(Dialog, &DocumentSettingsDialog::PreferencesSaved, this, &DocumentWorkspaceWidget::refreshPreferences);
@@ -353,9 +352,7 @@ namespace hc::document
         Dialog->move(qBound(Available.left(), Center.x() - Dialog->width() / 2, qMax(Available.left(), Available.right() - Dialog->width())),
             qBound(Available.top(), Center.y() - Dialog->height() / 2, qMax(Available.top(), Available.bottom() - Dialog->height())));
         Dialog->show();
-        // The hosted process starts with STARTF_USESHOWWINDOW/SW_HIDE. Its
-        // first top-level ShowWindow can consume that startup state and stay
-        // hidden; this user-invoked dialog needs an explicit second show.
+        // Keep the preferences window visible when the host starts hidden.
         if (hosted_) ShowWindow(reinterpret_cast<HWND>(Dialog->winId()), SW_SHOWNORMAL);
         Dialog->raise(); Dialog->activateWindow();
     }
@@ -801,6 +798,7 @@ namespace hc::document
         const auto Action = Request["action"].toString();
         if (Request.contains("protocolVersion") && Request["protocolVersion"].toInt() != HostVersion) return Error("document-protocol-version");
         if (Action == "state") return Snapshot();
+        if (Action == "present" || Action == "conceal") return {{"accepted", hosted_}};
         if (Action == "escape") { escapeViewer(); return {{"accepted", hosted_ && closeViewerOnEscape_}}; }
         if (Action == "preferences") { findChild<QAction*>("documentPreferences")->trigger(); return {{"accepted", true}}; }
         if (Action == "new") return newDocument();
@@ -1038,6 +1036,12 @@ namespace hc::document
             if (documents_.size() == Count) return false;
         }
         return IsIdle();
+    }
+    bool DocumentWorkspaceWidget::RequestViewerClose()
+    {
+        if (!hosted_ || !RequestClose()) return false;
+        finishWindowClose();
+        return true;
     }
     void DocumentWorkspaceWidget::tryFinishClose()
     {

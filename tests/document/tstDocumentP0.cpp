@@ -251,9 +251,7 @@ private slots:
         do { State = Native(Viewer, Module, {{"action", "state"}}); QTest::qWait(50); } while (!State.contains("documents") && ReadyTimer.elapsed() < 12000);
         QVERIFY2(State.contains("documents"), QJsonDocument(State).toJson(QJsonDocument::Compact).constData());
         const auto Runtime = Native(Viewer, Module, {{"action", "hostRuntime"}});
-        QCOMPARE(Runtime["version"].toInt(), 1); QVERIFY(Runtime["jobPolicyAvailable"].toBool());
-        QVERIFY(Runtime["killOnClose"].toBool()); QVERIFY(!Runtime["breakaway"].toBool());
-        QVERIFY(!Runtime["uiRestricted"].toBool());
+        QCOMPARE(Runtime["version"].toInt(), 1);
         QCOMPARE(Runtime["rhwpRuntimeRoot"].toString(), QCoreApplication::applicationDirPath());
         QVERIFY(Runtime["rhwpHostCommands"].toBool()); QVERIFY(!Runtime["rhwpHostEdit"].toBool());
         QCOMPARE(Native(Viewer, Module, {{"action", "rhwpState"}, {"version", 1}, {"documentId", "stale"}})["error"].toString(), QString("rhwp-host-stale-document"));
@@ -264,17 +262,12 @@ private slots:
         }
 #ifdef HC_TEST_RHWP_HOST_RUNTIME
         QVERIFY(Runtime["rhwpPolicyAvailable"].toBool());
-        QCOMPARE(Runtime["processLimit"].toInt(), 9);
-        QCOMPARE(Runtime["processMemoryBytes"].toString(), QString("0"));
-        QCOMPARE(Runtime["jobMemoryBytes"].toString(), QString("0"));
 #else
         auto RejectedHwp = Root.filePath("unsupported.HWP").toStdWString();
         QVERIFY(!SendMessageW(Viewer, dopus::ViewerLoadW, 0, reinterpret_cast<LPARAM>(RejectedHwp.c_str())));
         auto RejectedHwpx = Root.filePath("unsupported.hwpx").toStdWString();
         QVERIFY(!SendMessageW(Viewer, dopus::ViewerLoadW, 0, reinterpret_cast<LPARAM>(RejectedHwpx.c_str())));
-        // A native pin alone does not qualify the DLL's process allowance.
-        QCOMPARE(Runtime["processLimit"].toInt(), 1);
-        QCOMPARE(Runtime["processMemoryBytes"].toString(), QString("0"));
+        // An SDK load uses the current process; the caller owns its Job policy.
 #endif
         QCOMPARE(Native(Viewer, Module, {{"action", "openHost"}, {"path", Root.filePath("two.txt")}, {"protocolVersion", 99}})["error"].toString(), QString("document-protocol-version"));
         QCOMPARE(Native(Viewer, Module, {{"action", "cancelHost"}, {"protocolVersion", 99}})["error"].toString(), QString("document-protocol-version"));
@@ -286,12 +279,8 @@ private slots:
         QVERIFY(!Native(Viewer, Module, {{"action", "replaceText"}, {"documentId", One}, {"text", "helper edit 한글\n"}}).contains("error"));
         const auto Output = Root.filePath("saved.txt"); Native(Viewer, Module, {{"action", "saveAs"}, {"documentId", One}, {"path", Output}});
         QTRY_VERIFY(QFile::exists(Output)); QCOMPARE(Read(Output), QString("helper edit 한글\n").toUtf8());
-        auto Child = GetWindow(Viewer, GW_CHILD); QVERIFY(Child);
-        DWORD ChildOwner = 0; GetWindowThreadProcessId(Child, &ChildOwner); QVERIFY(ChildOwner != Owner);
-        MoveWindow(Viewer, 0, 0, 600, 400, TRUE);
-        RECT ContainerRect{}, ChildRect{};
-        QTRY_VERIFY(GetClientRect(Viewer, &ContainerRect) && GetClientRect(Child, &ChildRect)
-            && ContainerRect.right == ChildRect.right && ContainerRect.bottom == ChildRect.bottom);
+        QVERIFY(Native(Viewer, Module, {{"action", "present"}})["accepted"].toBool());
+        QVERIFY(!GetWindow(Viewer, GW_CHILD));
         QVERIFY(qAbs(Native(Viewer, Module, {{"action", "state"}})["dpr"].toDouble() - Parent.devicePixelRatioF()) < 0.01);
         Native(Viewer, Module, {{"action", "activate"}, {"documentId", Two}});
         QCOMPARE(Native(Viewer, Module, {{"action", "state"}})["documents"].toArray().size(), 2);

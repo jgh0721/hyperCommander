@@ -1,6 +1,7 @@
 ﻿#include "documentThemeAdapter.hpp"
 #include <QApplication>
 #include <QPlainTextEdit>
+#include <QWidget>
 #include <QFontDatabase>
 #include <fmstyle/ThemeManager.h>
 namespace hc::document
@@ -9,6 +10,15 @@ namespace hc::document
     {
         auto& Theme = fm::style::ThemeManager::instance();
         if (!Theme.isInstalled()) { Theme.setDesign(fm::style::Design::Watercolor); Theme.install(App); }
+    }
+    void DocumentThemeAdapter::InstallLocal(QWidget& Widget)
+    {
+        auto& Theme = fm::style::ThemeManager::instance();
+        Theme.setDesign(fm::style::Design::Watercolor);
+        Widget.setPalette(Theme.colors().toPalette());
+        QObject::connect(&Theme, &fm::style::ThemeManager::changed, &Widget, [&Widget] {
+            Widget.setPalette(fm::style::ThemeManager::instance().colors().toPalette());
+        });
     }
     bool DocumentThemeAdapter::SetMode(const QString& Mode)
     {

@@ -115,8 +115,9 @@ namespace hc::plugins
             if (!Dpi || !SetThreadDpiAwarenessContext(Dpi)) return HostError("host-viewer-dpi", GetLastError());
             WNDCLASSW Class{}; Class.lpfnWndProc = windowProc; Class.hInstance = GetModuleHandleW(nullptr); Class.lpszClassName = WindowClass;
             if (!RegisterClassW(&Class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return HostError("host-viewer-window-class", GetLastError());
-            container_ = CreateWindowExW(0, WindowClass, L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                0, 0, Request["width"].toInt(), Request["height"].toInt(), Parent, nullptr, Class.hInstance, this);
+            const bool Standalone = manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1";
+            container_ = CreateWindowExW(0, WindowClass, L"", Standalone ? WS_OVERLAPPED : WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                0, 0, Request["width"].toInt(), Request["height"].toInt(), Standalone ? nullptr : Parent, nullptr, Class.hInstance, this);
             if (!container_) return HostError("host-viewer-container", GetLastError());
             if (dopus_)
             {
@@ -131,10 +132,13 @@ namespace hc::plugins
                 viewer_ = nullptr; close(); return Error{ErrorCategory::Unsupported, "host-viewer-load-rejected", {"plugin-viewer"}};
             }
             MoveWindow(viewer_, 0, 0, Request["width"].toInt(), Request["height"].toInt(), TRUE);
-            closeMessage_ = RegisterWindowMessageW(WlxCloseMessage); inputOwner_ = this;
-            inputHook_ = SetWindowsHookExW(WH_GETMESSAGE, inputHook, nullptr, GetCurrentThreadId());
-            if (!closeMessage_ || !inputHook_) { const auto Error = GetLastError(); close(); return HostError("host-viewer-input-hook", Error); }
-            ShowWindow(viewer_, SW_SHOWNOACTIVATE); ShowWindow(container_, SW_SHOWNOACTIVATE);
+            if (!Standalone) {
+                closeMessage_ = RegisterWindowMessageW(WlxCloseMessage); inputOwner_ = this;
+                inputHook_ = SetWindowsHookExW(WH_GETMESSAGE, inputHook, nullptr, GetCurrentThreadId());
+                if (!closeMessage_ || !inputHook_) { const auto Error = GetLastError(); close(); return HostError("host-viewer-input-hook", Error); }
+            }
+            ShowWindow(viewer_, SW_SHOWNOACTIVATE);
+            if (!Standalone) ShowWindow(container_, SW_SHOWNOACTIVATE);
             return QJsonObject{{"window", QString::number(reinterpret_cast<quintptr>(container_), 16)},
                 {"viewer", QString::number(reinterpret_cast<quintptr>(viewer_), 16)}, {"processId", qint64(GetCurrentProcessId())}};
         }
@@ -153,20 +157,8 @@ namespace hc::plugins
         if (Kind == WireKind::ViewerFocus)
         {
             if (!Request.isEmpty()) return Invalid("host-viewer-focus-fields");
-            if (manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1") {
-                // Preparation has no user input target. Attaching its queue can
-                // reset HC's focus/key state even though the viewer is hidden.
-                // Join only on an explicit focus request for the foreground view,
-                // then retain the attachment until close for real OS key routing.
-                if (!IsWindowVisible(container_) || GetForegroundWindow() != GetAncestor(container_, GA_ROOT)) return QJsonObject{{"focused", false}};
-                if (!inputThread_) {
-                    const auto Thread = GetWindowThreadProcessId(GetParent(container_), nullptr);
-                    if (Thread != GetCurrentThreadId()) {
-                        if (!AttachThreadInput(GetCurrentThreadId(), Thread, TRUE)) return HostError("host-viewer-input-attach", GetLastError());
-                        inputThread_ = Thread;
-                    }
-                }
-            }
+            if (manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1")
+                return QJsonObject{{"focused", false}};
             SetFocus(viewer_); return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}};
         }
         if (Kind == WireKind::DocumentCommand)

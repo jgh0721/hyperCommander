@@ -683,7 +683,7 @@ foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5 2)
 endforeach()
 
 qt_add_executable(hc_document_p3_tests document/tstDocumentP3.cpp)
-target_link_libraries(hc_document_p3_tests PRIVATE hc_document_widgets hc_plugin_viewer_qt Qt6::Test Qt6::Concurrent)
+target_link_libraries(hc_document_p3_tests PRIVATE hc_document_widgets hc_plugin_viewer_qt hc_viewer_qt Qt6::Test Qt6::Concurrent)
 target_compile_options(hc_document_p3_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_compile_definitions(hc_document_p3_tests PRIVATE HC_DOCUMENT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/document/fixtures")
 add_dependencies(hc_document_p3_tests hc_hyperviewer_package hc-plugin-host-x64)

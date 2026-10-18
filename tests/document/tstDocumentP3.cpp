@@ -31,6 +31,7 @@
 #include "UniqueLibs/document/documentHostBroker.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
+#include "UniqueLibs/qtViewerHost.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -55,7 +56,6 @@ public:
         const auto Input=QJsonDocument(Request).toJson(QJsonDocument::Compact);QByteArray Output(HostPayloadLimit,Qt::Uninitialized);UINT Size=Output.size();
         if(!Invoke||!viewer_||!Invoke(viewer_,Input.constData(),Input.size(),Output.data(),&Size))return {{"error","not-ready"}};
         Output.resize(Size);return QJsonDocument::fromJson(Output).object();}
-    DWORD Helper(){DWORD Pid=0;GetWindowThreadProcessId(FindWindowExW(viewer_,nullptr,nullptr,nullptr),&Pid);return Pid;}
 };
 class Source final:public IContentSource{
 public:
@@ -155,7 +155,7 @@ void hostedPreferencesWindowLifecycle(){
     QVERIFY(Wait([&]{return Dll.Call({{"action","state"}}).contains("documents");}));
     QVERIFY(!Dll.Call({{"action","open"},{"path",Root.filePath("settings-test.txt")}}).contains("error"));
     QVERIFY(Wait([&]{return Dll.Call({{"action","state"}})["idle"].toBool();}));
-    const auto Pid=Dll.Helper(); QVERIFY(Pid);
+    const auto Pid=GetCurrentProcessId();
     struct Search { DWORD pid_; HWND dialog_=nullptr; };
     auto Find=[&]{Search State{Pid};EnumWindows([](HWND Window,LPARAM Param)->BOOL{
         auto* State=reinterpret_cast<Search*>(Param);DWORD Owner=0;GetWindowThreadProcessId(Window,&Owner);
@@ -168,8 +168,9 @@ void hostedPreferencesWindowLifecycle(){
         RECT Bounds{};QVERIFY(GetWindowRect(Dialog,&Bounds));QVERIFY(Bounds.right>Bounds.left&&Bounds.bottom>Bounds.top);
         QVERIFY(MonitorFromRect(&Bounds,MONITOR_DEFAULTTONULL));QVERIFY(IsWindowEnabled(Dialog));QVERIFY(IsWindowEnabled(Dll.viewer_));
         QVERIFY(Dll.Call({{"action","preferences"}})["accepted"].toBool());QCOMPARE(Find(),Dialog);
-        SetForegroundWindow(Dialog); QVERIFY(Wait([&]{return GetForegroundWindow()==Dialog;}));
-        QVERIFY(!Dll.Call({{"action","focus"}})["accepted"].toBool()); QCOMPARE(GetForegroundWindow(),Dialog);
+        const auto Foreground=GetForegroundWindow();
+        QVERIFY(!Dll.Call({{"action","focus"}})["accepted"].toBool());
+        QCOMPARE(GetForegroundWindow(),Foreground);
         QVERIFY(PostMessageW(Dialog,WM_CLOSE,0,0));QVERIFY(Wait([&]{return !IsWindow(Dialog);}));
         QVERIFY(Dll.Call({{"action","state"}})["idle"].toBool());
     }
@@ -243,6 +244,29 @@ void mixedExeAndDllEquivalence(){
     }
     QCOMPARE(Read(Root.filePath("0-alpha.png")),Read(Root.filePath("1-alpha.png")));
 }
+void externalEditorOpensMultipleWindows(){
+    QTemporaryDir Root;
+    const auto First=Root.filePath("first.txt"),Second=Root.filePath("second.txt");
+    QVERIFY(Put(First,"first"));QVERIFY(Put(Second,"second"));
+    QProcess Editor;
+    Editor.start(QCoreApplication::applicationDirPath()+"/HyperEditor.exe",
+        {"--config-dir",Root.path(),"--",First,Second});
+    QVERIFY(Editor.waitForStarted(10000));
+    const auto Pid=DWORD(Editor.processId());QVERIFY(Pid&&Pid!=GetCurrentProcessId());
+    QVERIFY(Wait([&]{
+        struct Finder{DWORD pid_;int count_=0;};Finder State{Pid};
+        EnumWindows([](HWND Window,LPARAM Context)->BOOL{
+            auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Window,&Owner);
+            wchar_t Title[256]{};GetWindowTextW(Window,Title,256);
+            if(Owner==Search->pid_&&IsWindowVisible(Window)&&QString::fromWCharArray(Title)=="HyperEditor")
+                ++Search->count_;
+            return TRUE;
+        },reinterpret_cast<LPARAM>(&State));return State.count_==2;
+    },15000));
+    Editor.terminate();
+    if(!Editor.waitForFinished(5000)){Editor.kill();QVERIFY(Editor.waitForFinished(5000));}
+    QCOMPARE(Read(First),QByteArray("first"));QCOMPARE(Read(Second),QByteArray("second"));
+}
 void busySdkLoadKeepsLatestSlotAndInternalTabs(){
     QTemporaryDir Root;QVERIFY(Put(Root.filePath("one.txt"),QByteArray(1024*1024,'x')));QVERIFY(Put(Root.filePath("two.txt"),"two"));QVERIFY(Put(Root.filePath("three.txt"),"three"));QVERIFY(Put(Root.filePath("internal.txt"),"internal"));
     DocumentWorkspaceWidget Workspace(Root.filePath("recovery"));
@@ -254,40 +278,180 @@ void busySdkLoadKeepsLatestSlotAndInternalTabs(){
     QVERIFY(!Doc(Workspace.Snapshot(),Internal).isEmpty());
     bool Latest=false;for(const auto& Item:Workspace.Snapshot()["documents"].toArray())if(Item.toObject()["hostSlot"].toBool())Latest=Item.toObject()["path"].toString()==Root.filePath("three.txt");QVERIFY(Latest);
 }
-void nestedF3Input(){
+void isolatedF3WindowOwnership(){
     QTemporaryDir Root;const auto Path=Root.filePath("tiny.txt");QVERIFY(Put(Path,QByteArray(369,'x')));
-    QWidget Main;Main.resize(1100,800);Main.show();
-    auto Live=std::make_shared<std::atomic<int>>(0);QtPluginViewerController Controller(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
-    QDialog Window(&Main);Window.resize(1000,700);auto* Layout=new QVBoxLayout(&Window);
-    QtPluginViewerSurface Surface(&Controller,&Window);Layout->addWidget(&Surface);
-    auto Config=Options();QElapsedTimer Timer;Timer.start();Surface.Open(Config,Content(Path));Window.show();Window.activateWindow();SetActiveWindow(reinterpret_cast<HWND>(Window.winId()));
-    QVERIFY(Wait([&]{return Surface.IsReady();},30000));qInfo()<<"F3 ready ms"<<Timer.elapsed();
-    auto Id=Surface.Details().documentState_["activeDocumentId"].toString();
-    // The product intentionally refuses background focus requests. Establish
-    // the same foreground precondition as a user opening F3 before asserting focus.
-    SetForegroundWindow(reinterpret_cast<HWND>(Window.winId()));
-    QVERIFY(Wait([&]{return GetForegroundWindow()==reinterpret_cast<HWND>(Window.winId());}));
-    Surface.clearFocus();Surface.setFocus();QTest::qWait(500);
-    auto Sdk=reinterpret_cast<HWND>(Surface.Details().child_.toULongLong(nullptr,16));auto Helper=GetWindow(Sdk,GW_CHILD);
-    if(qEnvironmentVariableIsSet("HC_F3_NESTED_SHELL_FOCUS")){SetFocus(Helper);QTest::qWait(100);}
-    GUITHREADINFO Gui{sizeof(GUITHREADINFO)};GetGUIThreadInfo(GetWindowThreadProcessId(Helper,nullptr),&Gui);
-    qInfo()<<"foreground"<<quintptr(GetForegroundWindow())<<"dialog"<<Window.winId()<<"root"<<quintptr(GetAncestor(Helper,GA_ROOT))<<"focus"<<quintptr(Gui.hwndFocus)<<"active"<<quintptr(Gui.hwndActive)<<"helper"<<quintptr(Helper)<<"qtFocus"<<Doc(Surface.Details().documentState_,Id)["view"];
-    // Qt may keep native focus on the workspace shell while delivering keys
-    // to its logical Scintilla focus widget. Both must belong to this helper.
-    QVERIFY(Gui.hwndFocus==Helper||IsChild(Helper,Gui.hwndFocus));
-    QCOMPARE(quintptr(Gui.hwndActive),quintptr(Window.winId()));
-    QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["inputFocused"].toBool();}));
-    if(qEnvironmentVariableIsSet("HC_F3_NESTED_INTERACTIVE_TEST")){
-        SetWindowLongPtrW(reinterpret_cast<HWND>(Window.winId()),GWLP_HWNDPARENT,0);
-        QFile Evidence(qEnvironmentVariable("HC_F3_NESTED_INTERACTIVE_TEST"));QVERIFY(Evidence.open(QIODevice::WriteOnly));
-        Evidence.write(QJsonDocument(QJsonObject{{"windowId",qint64(Window.winId())},{"pid",QCoreApplication::applicationPid()},{"nativeFocusIsShell",Gui.hwndFocus==Helper}}).toJson());Evidence.close();
-        QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["dirty"].toBool();},90000));
-        const auto Save=Surface.SendDocument({{"action","save"},{"documentId",Id}});QVERIFY(Save.HasValue());
-        QVERIFY(Wait([&]{return Surface.Details().commandSequence_>=Save.Value()&&!Doc(Surface.Details().documentState_,Id)["dirty"].toBool();}));
-        const auto Saved=Read(Path);QVERIFY(Saved.contains('z')||Saved.contains('Z'));
-        QVERIFY(Evidence.open(QIODevice::WriteOnly));Evidence.write(QJsonDocument(QJsonObject{{"keyboardAndSave",true},{"bytes",Saved.size()},{"nativeFocusIsShell",Gui.hwndFocus==Helper}}).toJson());Evidence.close();
-    }
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
+    QtPluginViewerSurface Surface(&Controller);Surface.Open(Options(),Content(Path));
+    QVERIFY(Wait([&]{return Surface.IsReady()&&Surface.Details().documentState_["idle"].toBool();},30000));
+    const auto Sequence=Surface.SendDocument({{"action","present"}});QVERIFY(Sequence.HasValue());
+    QVERIFY(Wait([&]{return Surface.Details().commandSequence_>=Sequence.Value();}));
+    QVERIFY(!Surface.Details().commandError_);
+    const auto Pid=Surface.Details().host_.processId_;QVERIFY(Pid&&Pid!=GetCurrentProcessId());
+    HWND Viewer=nullptr;
+    QVERIFY(Wait([&]{
+        struct Finder{DWORD pid_;HWND window_=nullptr;};Finder State{Pid};
+        EnumWindows([](HWND Window,LPARAM Context)->BOOL{
+            auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Window,&Owner);
+            wchar_t Title[256]{};GetWindowTextW(Window,Title,256);
+            if(Owner==Search->pid_&&IsWindowVisible(Window)&&QString::fromWCharArray(Title).startsWith("HyperViewer"))
+                {Search->window_=Window;return FALSE;}return TRUE;
+        },reinterpret_cast<LPARAM>(&State));Viewer=State.window_;return Viewer!=nullptr;
+    }));
+    QCOMPARE(GetAncestor(Viewer,GA_ROOT),Viewer);
+    bool Parsed=false;const auto Native=Surface.Details().documentReply_["nativeWindow"].toString().toULongLong(&Parsed,16);
+    QVERIFY(Parsed);QCOMPARE(quintptr(Native),quintptr(Viewer));
+    QVERIFY(!IsChild(reinterpret_cast<HWND>(Surface.winId()),Viewer));
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
+}
+void f3WindowStaysRestoredAfterLoadingDialogHides(){
+    QTemporaryDir Root;const auto Path=Root.filePath("visible.txt");QVERIFY(Put(Path,"visible"));
+    QWidget Main;Main.resize(1100,800);Main.show();
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtViewerHost Host(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);
+    });
+    Host.PreparePlugin(Options());
+    QVERIFY(Wait([&]{
+        auto* Prepared=Main.findChild<QDialog*>("hc.document.prepared");
+        auto* Surface=Prepared?Prepared->findChild<QtPluginViewerSurface*>():nullptr;
+        return Surface&&Surface->IsReady();
+    },30000));
+    bool Finished=false,Success=false;QString Failure;
+    const auto Window=Host.OpenPlugin(Options(),{{Content(Path),{}}},"HyperViewer",
+        [&](bool Ready,const QString& Error){Finished=true;Success=Ready;Failure=Error;});
+    QVERIFY(Window);
+    QVERIFY2(Wait([&]{return Finished;},30000),qPrintable(Failure));
+    QVERIFY2(Success,qPrintable(Failure));
+    QVERIFY(Window->isHidden());
+    const auto Surface=Window->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
+    const auto Pid=Surface->Details().host_.processId_;QVERIFY(Pid);
+    HWND Viewer=nullptr;
+    QVERIFY(Wait([&]{
+        struct Finder{DWORD pid_;HWND window_=nullptr;};Finder State{Pid};
+        EnumWindows([](HWND Candidate,LPARAM Context)->BOOL{
+            auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Candidate,&Owner);
+            wchar_t Title[256]{};GetWindowTextW(Candidate,Title,256);
+            if(Owner==Search->pid_&&IsWindowVisible(Candidate)&&QString::fromWCharArray(Title).startsWith("HyperViewer"))
+                {Search->window_=Candidate;return FALSE;}return TRUE;
+        },reinterpret_cast<LPARAM>(&State));Viewer=State.window_;return Viewer!=nullptr;
+    }));
+    QTest::qWait(1200);
+    QVERIFY(IsWindow(Viewer));
+    const auto Foreground=GetForegroundWindow();DWORD ForegroundPid=0;
+    GetWindowThreadProcessId(Foreground,&ForegroundPid);wchar_t ForegroundTitle[256]{};
+    GetWindowTextW(Foreground,ForegroundTitle,256);
+    qInfo().noquote()<<QString("F3 viewer=%1 foreground=%2 pid=%3 title=%4 iconic=%5 dialogHidden=%6")
+        .arg(quintptr(Viewer),0,16).arg(quintptr(GetForegroundWindow()),0,16)
+        .arg(ForegroundPid).arg(QString::fromWCharArray(ForegroundTitle))
+        .arg(bool(IsIconic(Viewer))).arg(Window->isHidden());
+    if(Foreground)QVERIFY2(Foreground!=reinterpret_cast<HWND>(Main.winId()),
+        "HyperCommander regained the foreground after presenting the F3 viewer");
+    QVERIFY2(!IsIconic(Viewer),"F3 viewer minimized after the loading dialog was hidden");
+    QVERIFY(IsWindowVisible(Viewer));
+    Host.CloseAll();QVERIFY(Wait([&]{return Host.IsIdle();}));
+}
+void twoF3WindowsSwitchKeyboardInput(){
+    QTemporaryDir Root;
+    const auto FirstPath=Root.filePath("first.txt"), SecondPath=Root.filePath("second.txt");
+    QVERIFY(Put(FirstPath,"first"));QVERIFY(Put(SecondPath,"second"));
+    QWidget Main;Main.resize(1100,800);Main.show();
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtPluginViewerController Controller(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);
+    });
+    QDialog FirstDialog(&Main),SecondDialog(&Main);
+    FirstDialog.resize(950,700);SecondDialog.resize(950,700);
+    auto* FirstSurface=new QtPluginViewerSurface(&Controller,&FirstDialog);
+    auto* SecondSurface=new QtPluginViewerSurface(&Controller,&SecondDialog);
+    (new QVBoxLayout(&FirstDialog))->addWidget(FirstSurface);
+    (new QVBoxLayout(&SecondDialog))->addWidget(SecondSurface);
+    FirstDialog.show();SecondDialog.show();
+    QSignalSpy FirstFailed(FirstSurface,&QtPluginViewerSurface::Failed);
+    QSignalSpy SecondFailed(SecondSurface,&QtPluginViewerSurface::Failed);
+    FirstSurface->Open(Options(),Content(FirstPath));
+    SecondSurface->Open(Options(),Content(SecondPath));
+    const auto Loaded=Wait([&]{return (FirstSurface->IsReady()&&SecondSurface->IsReady()
+        && FirstSurface->Details().documentState_["idle"].toBool()
+        && SecondSurface->Details().documentState_["idle"].toBool())
+        || !FirstFailed.isEmpty() || !SecondFailed.isEmpty();},30000);
+    QVERIFY2(Loaded && FirstFailed.isEmpty() && SecondFailed.isEmpty()
+        && FirstSurface->IsReady() && SecondSurface->IsReady(),
+        qPrintable(QString("F3 open: first=%1 second=%2 snapshot=%3/%4")
+            .arg(FirstFailed.isEmpty()?QString():FirstFailed.first().first().toString(),
+                SecondFailed.isEmpty()?QString():SecondFailed.first().first().toString(),
+                FirstSurface->Snapshot().error_?QString::fromStdString(FirstSurface->Snapshot().error_->code_):QString(),
+                SecondSurface->Snapshot().error_?QString::fromStdString(SecondSurface->Snapshot().error_->code_):QString())));
+    const auto FindViewer=[](DWORD Pid){
+        struct Finder{DWORD pid_;HWND window_=nullptr;};
+        Finder State{Pid};
+        EnumWindows([](HWND Window,LPARAM Context)->BOOL{
+            auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Window,&Owner);
+            if(Owner!=Search->pid_||!IsWindowVisible(Window))return TRUE;
+            wchar_t Title[256]{};GetWindowTextW(Window,Title,256);
+            if(QString::fromWCharArray(Title).startsWith("HyperViewer")){Search->window_=Window;return FALSE;}
+            return TRUE;
+        },reinterpret_cast<LPARAM>(&State));
+        return State.window_;
+    };
+    auto Present=[&](QtPluginViewerSurface* Surface){
+        const auto Sequence=Surface->SendDocument({{"action","present"}});QVERIFY(Sequence.HasValue());
+        QVERIFY(Wait([&]{return Surface->Details().commandSequence_>=Sequence.Value();}));
+        QVERIFY(!Surface->Details().commandError_);
+        const auto Pid=Surface->Details().host_.processId_;QVERIFY(Pid&&Pid!=GetCurrentProcessId());
+        QVERIFY(Wait([&]{return FindViewer(Pid)!=nullptr;}));
+    };
+    Present(FirstSurface);Present(SecondSurface);
+    FirstDialog.hide();SecondDialog.hide();
+    const auto Screen=QGuiApplication::primaryScreen()->availableGeometry();
+    const auto Width=std::max(400,Screen.width()/2-20);
+    const auto Height=std::min(700,Screen.height()-20);
+    QVERIFY(SetWindowPos(FindViewer(FirstSurface->Details().host_.processId_),HWND_TOP,
+        Screen.left()+10,Screen.top()+10,Width,Height,SWP_SHOWWINDOW));
+    QVERIFY(SetWindowPos(FindViewer(SecondSurface->Details().host_.processId_),HWND_TOP,
+        Screen.left()+Screen.width()/2+10,Screen.top()+10,Width,Height,SWP_SHOWWINDOW));
+    POINT Cursor{};
+    if(!GetCursorPos(&Cursor)||!SetCursorPos(Cursor.x,Cursor.y))
+        QSKIP("Interactive input desktop is unavailable to the test runner");
+    auto FocusAndType=[&](QtPluginViewerSurface* Target,QtPluginViewerSurface* Other){
+        const auto Pid=Target->Details().host_.processId_;
+        const auto Viewer=FindViewer(Pid);QVERIFY(Viewer);
+        RECT Bounds{};QVERIFY(GetWindowRect(Viewer,&Bounds));
+        QVERIFY(SetCursorPos(Bounds.left+180,Bounds.top+240));
+        INPUT Mouse[2]{};Mouse[0].type=Mouse[1].type=INPUT_MOUSE;
+        Mouse[0].mi.dwFlags=MOUSEEVENTF_LEFTDOWN;Mouse[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
+        QCOMPARE(SendInput(2,Mouse,sizeof(INPUT)),UINT(2));
+        const auto Focused=Wait([&]{return GetForegroundWindow()==Viewer;});
+        if(!Focused){
+            wchar_t ForegroundTitle[256]{};DWORD ForegroundPid=0;
+            const auto Foreground=GetForegroundWindow();GetWindowTextW(Foreground,ForegroundTitle,256);
+            GetWindowThreadProcessId(Foreground,&ForegroundPid);
+            POINT Click{Bounds.left+180,Bounds.top+240};
+            qWarning().noquote()<<QString("F3 focus target=%1 pid=%2 bounds=%3,%4,%5,%6 hit=%7 foreground=%8 pid=%9 title=%10")
+                .arg(quintptr(Viewer),0,16).arg(Pid).arg(Bounds.left).arg(Bounds.top).arg(Bounds.right).arg(Bounds.bottom)
+                .arg(quintptr(WindowFromPoint(Click)),0,16).arg(quintptr(Foreground),0,16).arg(ForegroundPid)
+                .arg(QString::fromWCharArray(ForegroundTitle));
+        }
+        QVERIFY(Focused);
+        const auto Before=Target->Details().documentState_;
+        const auto Id=Before["activeDocumentId"].toString();QVERIFY(!Id.isEmpty());
+        const auto Revision=Doc(Before,Id)["revision"].toString();
+        const auto OtherBefore=Other->Details().documentState_;
+        const auto OtherId=OtherBefore["activeDocumentId"].toString();QVERIFY(!OtherId.isEmpty());
+        const auto OtherRevision=Doc(OtherBefore,OtherId)["revision"].toString();
+        INPUT Keys[2]{};Keys[0].type=Keys[1].type=INPUT_KEYBOARD;
+        Keys[0].ki.wVk=Keys[1].ki.wVk='Z';Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
+        QVERIFY2(Wait([&]{return Doc(Target->Details().documentState_,Id)["revision"].toString()!=Revision;},1500),
+            "Active F3 window did not accept keyboard input promptly");
+        QCOMPARE(Doc(Other->Details().documentState_,OtherId)["revision"].toString(),OtherRevision);
+    };
+    FocusAndType(FirstSurface,SecondSurface);
+    FocusAndType(SecondSurface,FirstSurface);
+    FocusAndType(FirstSurface,SecondSurface);
+    FirstSurface->Close();SecondSurface->Close();
+    QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
 void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QTemporaryDir Root;const auto Large=Root.filePath("large.txt");QByteArray Bytes(2*1024*1024,'x');Bytes.replace(0,3,"old");QVERIFY(Put(Large,Bytes));
@@ -305,28 +469,9 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     auto Send=[&](QJsonObject Request){auto Result=Surface.SendDocument(Request);if(!Result.HasValue())return false;const auto Sequence=Result.Value();return Wait([&]{return Surface.Details().commandSequence_>=Sequence;})&&!Surface.Details().commandError_;};
     QVERIFY(Send({{"action","text.replaceAll"},{"documentId",Id},{"text","old"},{"replacement","new"}}));QVERIFY(Send({{"action","save"},{"documentId",Id}}));
     Bytes.replace(0,3,"new");QVERIFY2(Wait([&]{const auto State=Doc(Surface.Details().documentState_,Id);return !State["dirty"].toBool()&&!State["saving"].toBool();}),qPrintable(QJsonDocument(Surface.Details().documentState_).toJson(QJsonDocument::Compact)+" viewerError="+QString::fromStdString(Surface.Snapshot().error_?Surface.Snapshot().error_->code_:std::string{}).toUtf8()));QCOMPARE(Read(Large),Bytes);
-    // This path runs beneath the HC isolation job, not just the SDK DLL fixture.
-    Surface.activateWindow();SetForegroundWindow(reinterpret_cast<HWND>(Surface.winId()));
-    QVERIFY(Wait([&]{return GetForegroundWindow()==reinterpret_cast<HWND>(Surface.winId());}));
-    SetActiveWindow(reinterpret_cast<HWND>(Surface.winId()));Surface.clearFocus();Surface.setFocus();
-    QVERIFY(Send({{"action","focus"},{"documentId",Id}}));
-    QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["inputFocused"].toBool();}));
-    bool WindowValid=false;const auto ViewerValue=Surface.Details().child_.toULongLong(&WindowValid,16);QVERIFY(WindowValid);
-    const auto Helper=GetWindow(reinterpret_cast<HWND>(quintptr(ViewerValue)),GW_CHILD);QVERIFY(Helper);
-    RECT ChildBounds{};const auto Sdk=reinterpret_cast<HWND>(quintptr(ViewerValue));
-    QVERIFY(Wait([&]{GetWindowRect(Helper,&ChildBounds);MapWindowPoints(nullptr,Sdk,reinterpret_cast<POINT*>(&ChildBounds),2);return ChildBounds.left==0&&ChildBounds.top==0;}));
-    const auto HelperThread=GetWindowThreadProcessId(Helper,nullptr);
-    GUITHREADINFO Gui{sizeof(GUITHREADINFO)};
-    QVERIFY(Wait([&]{return GetGUIThreadInfo(HelperThread,&Gui)&&(Gui.hwndFocus==Helper||IsChild(Helper,Gui.hwndFocus));},5000));
-    // Qt's Windows key mapper expects the key-down/translated-character path;
-    // injecting only WM_CHAR is not equivalent to native keyboard input.
-    INPUT Keys[2]{}; Keys[0].type=Keys[1].type=INPUT_KEYBOARD;
-    Keys[0].ki.wVk=Keys[1].ki.wVk='Z'; Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;
-    QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
-    QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["dirty"].toBool();}));
-    QVERIFY(Send({{"action","save"},{"documentId",Id}}));
-    QVERIFY(Wait([&]{const auto State=Doc(Surface.Details().documentState_,Id);return !State["dirty"].toBool()&&!State["saving"].toBool();}));
-    QVERIFY(Read(Large).contains('z'));
+    // The SDK anchor stays local to the isolated host; the viewer is a top-level window there.
+    QVERIFY(Send({{"action","present"}}));
+    const auto HostPid=Surface.Details().host_.processId_;QVERIFY(HostPid&&HostPid!=GetCurrentProcessId());
     QVERIFY(Send({{"action","replaceText"},{"documentId",Id},{"text","clipboard text"}}));QVERIFY(Send({{"action","selectAll"},{"documentId",Id}}));
     QVERIFY(Send({{"action","clipboard"},{"documentId",Id},{"mode","copy"}}));QVERIFY(Wait([&]{return QApplication::clipboard()->text()=="clipboard text";}));
     QApplication::clipboard()->setText("pasted text");QVERIFY(Send({{"action","clipboard"},{"documentId",Id},{"mode","paste"}}));
@@ -341,18 +486,28 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QVERIFY(Send({{"action","close"},{"documentId",ImageId},{"discard",true}}));QVERIFY(Wait([&]{return Live->load()==2;}));
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));QCOMPARE(Live->load(),0);
 }
-void helperCrashAndTimeout_data(){QTest::addColumn<bool>("Hang");QTest::newRow("crash")<<false;QTest::newRow("timeout")<<true;}
-void helperCrashAndTimeout(){
-    QFETCH(bool,Hang);Native Dll;QVERIFY(Wait([&]{return Dll.Call({{"action","state"}}).contains("documents");}));const auto Pid=Dll.Helper();QVERIFY(Pid&&Pid!=GetCurrentProcessId());
+void pluginHostCrashAndTimeout_data(){QTest::addColumn<bool>("Hang");QTest::newRow("crash")<<false;QTest::newRow("timeout")<<true;}
+void pluginHostCrashAndTimeout(){
+    QFETCH(bool,Hang);QTemporaryDir Root;const auto Path=Root.filePath("crash.txt");QVERIFY(Put(Path,"crash test"));
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
+    QtPluginViewerSurface Surface(&Controller);QSignalSpy Failed(&Surface,&QtPluginViewerSurface::Failed);
+    Surface.Open(Options(),Content(Path));
+    QVERIFY(Wait([&]{return Surface.IsReady()&&Surface.Details().documentState_["idle"].toBool();},30000));
+    const auto Pid=Surface.Details().host_.processId_;QVERIFY(Pid&&Pid!=GetCurrentProcessId());
     auto Process=OpenProcess(PROCESS_TERMINATE|SYNCHRONIZE|PROCESS_SUSPEND_RESUME,FALSE,Pid);QVERIFY(Process);auto Cleanup=qScopeGuard([&]{CloseHandle(Process);});
     if(Hang){using Fn=LONG(WINAPI*)(HANDLE);auto Suspend=reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtSuspendProcess"));QVERIFY(Suspend);QCOMPARE(Suspend(Process),LONG(0));}
     else QVERIFY(TerminateProcess(Process,0xe0000300));
-    QElapsedTimer Timer;Timer.start();QVERIFY(Wait([&]{return Dll.Call({{"action","state"}}).contains("error");},16000));QVERIFY(Timer.elapsed()<17000);
+    QElapsedTimer Timer;Timer.start();QVERIFY(Wait([&]{return !Failed.isEmpty();},16000));QVERIFY(Timer.elapsed()<17000);
+    if(Hang&&WaitForSingleObject(Process,0)==WAIT_TIMEOUT)
+        QVERIFY(TerminateProcess(Process,0xe0000301));
     QVERIFY(Wait([&]{return WaitForSingleObject(Process,0)==WAIT_OBJECT_0;},6000));
+    Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
 void sdkReplacementAndForcedParentExit(){
     QTemporaryDir Root;const auto Report=Root.filePath("parent.json");QProcess Parent;Parent.start(QCoreApplication::applicationFilePath(),{"--parent-probe",Report});
-    QVERIFY(Wait([&]{return QFile::exists(Report);},20000));auto State=QJsonDocument::fromJson(Read(Report)).object();const auto Pid=State["helperPid"].toInt();QVERIFY(Pid);
+    QVERIFY(Wait([&]{return QFile::exists(Report);},20000));auto State=QJsonDocument::fromJson(Read(Report)).object();const auto Pid=State["hostPid"].toInt();QVERIFY(Pid);
     auto Helper=OpenProcess(SYNCHRONIZE,FALSE,Pid);QVERIFY(Helper);auto Cleanup=qScopeGuard([&]{CloseHandle(Helper);});
     Parent.kill();QVERIFY(Parent.waitForFinished(5000));QVERIFY(Wait([&]{return WaitForSingleObject(Helper,0)==WAIT_OBJECT_0;},5000));
     const auto RecoveryRoot=State["recoveryRoot"].toString(),Id=State["documentId"].toString();
@@ -380,14 +535,22 @@ int main(int Argc,char** Argv){
     QApplication App(Argc,Argv);QTemporaryDir Config;App.setProperty("documentViewsConfigDir",Config.path());
     if(App.arguments().contains("--probe-dpr")){std::cout<<App.primaryScreen()->devicePixelRatio()<<std::endl;return 0;}
     if(App.arguments().contains("--parent-probe")){
-        Native Dll;QTemporaryDir Root;const auto Path=Root.filePath("parent.txt");Put(Path,"parent");
-        if(!Wait([&]{return Dll.Call({{"action","state"}}).contains("documents");}))return 2;
-        auto Id=Dll.Call({{"action","openHost"},{"path",Path}})["documentId"].toString();
-        if(!Wait([&]{return Doc(Dll.Call({{"action","state"}}),Id)["lifecycle"].toString()=="ready";}))return 3;
-        Dll.Call({{"action","replaceText"},{"documentId",Id},{"text","parent crash recovery"}});
-        Dll.Call({{"action","checkpoint"}});auto State=Dll.Call({{"action","state"}});
+        QTemporaryDir Root;const auto Path=Root.filePath("parent.txt");Put(Path,"parent");
+        auto Live=std::make_shared<std::atomic<int>>(0);
+        QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+            auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
+        QtPluginViewerSurface Surface(&Controller);Surface.Open(Options(),Content(Path));
+        if(!Wait([&]{return Surface.IsReady()&&Surface.Details().documentState_["idle"].toBool();},30000))return 2;
+        auto State=Surface.Details().documentState_;
+        const auto Id=State["activeDocumentId"].toString();if(Id.isEmpty())return 3;
+        auto Send=[&](QJsonObject Request){const auto Result=Surface.SendDocument(Request);
+            return Result.HasValue()&&Wait([&]{return Surface.Details().commandSequence_>=Result.Value();})
+                &&!Surface.Details().commandError_;};
+        if(!Send({{"action","replaceText"},{"documentId",Id},{"text","parent crash recovery"}})
+            ||!Send({{"action","checkpoint"}}))return 4;
+        State=Surface.Details().documentState_;
         if(!Wait([&]{return QFile::exists(State["recoveryRoot"].toString()+"/"+Id+".json");}))return 4;
-        State["helperPid"]=int(Dll.Helper());State["documentId"]=Id;
+        State["hostPid"]=int(Surface.Details().host_.processId_);State["documentId"]=Id;
         if(!Put(App.arguments().last(),QJsonDocument(State).toJson(QJsonDocument::Compact)))return 5;
         return App.exec();
     }

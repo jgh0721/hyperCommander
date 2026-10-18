@@ -32,6 +32,7 @@ namespace hc::document
         QJsonObject HandleMessage(const QJsonObject& Envelope);
         QJsonObject Snapshot() const;
         bool RequestClose();
+        bool RequestViewerClose();
         bool IsIdle() const;
         bool SetTabbed(bool Enabled);
         bool ApplyChromeSettings(const QJsonObject& Settings);

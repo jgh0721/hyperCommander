@@ -27,29 +27,23 @@ namespace
         if (Message == WM_CREATE)
         {
             Owner = new Bridge(std::make_shared<hc::document::ViewerHostBridge>(Window));
-            SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Owner)); (*Owner)->Start(); SetTimer(Window, 1, 50, nullptr); return 0;
+            SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Owner)); (*Owner)->Start(); return 0;
         }
         if (Owner)
         {
             const auto Self = *Owner;
             if (Message == DVPLUGINMSG_LOADW && LParam) { return Self->Load(reinterpret_cast<const wchar_t*>(LParam)) ? TRUE : FALSE; }
             if (Message == DVPLUGINMSG_SETABORTEVENT) { Self->SetAbort(reinterpret_cast<HANDLE>(LParam)); return TRUE; }
-            if (Message == WM_TIMER || Message == WM_SIZE || Message == DVPLUGINMSG_RESIZE)
-            {
-                if (auto Child = Self->Child()) { RECT Rect{}; GetClientRect(Window, &Rect); RECT Current{}; GetClientRect(Child, &Current); RECT Bounds{}; GetWindowRect(Child,&Bounds); MapWindowPoints(nullptr,Window,reinterpret_cast<POINT*>(&Bounds),2); if (Bounds.left != 0 || Bounds.top != 0 || Current.right != Rect.right || Current.bottom != Rect.bottom) MoveWindow(Child, 0, 0, Rect.right, Rect.bottom, TRUE); }
-                if (Self->Failed()) { KillTimer(Window, 1); InvalidateRect(Window, nullptr, TRUE); } return 0;
-            }
-            // The helper GUI thread owns the actual editor focus. Setting focus
-            // to its shell here races the queued editor focus command.
+            if (Message == WM_SIZE || Message == DVPLUGINMSG_RESIZE) return 0;
             if (Message == WM_SETFOCUS) { Self->Focus(); return 0; }
             if (Message == WM_PAINT)
             {
                 PAINTSTRUCT Paint{}; auto Dc = BeginPaint(Window, &Paint); RECT Rect{}; GetClientRect(Window, &Rect);
                 FillRect(Dc, &Rect, GetSysColorBrush(COLOR_WINDOW));
-                DrawTextW(Dc, Self->Failed() ? L"HyperViewer helper failed. Recovery snapshots are retained." : L"Opening HyperViewer...", -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawTextW(Dc, Self->Failed() ? L"HyperViewer failed to initialize." : L"HyperViewer is opening...", -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 EndPaint(Window, &Paint); return 0;
             }
-            if (Message == WM_NCDESTROY) { KillTimer(Window, 1); SetWindowLongPtrW(Window, GWLP_USERDATA, 0); Self->Stop(); delete Owner; }
+            if (Message == WM_NCDESTROY) { SetWindowLongPtrW(Window, GWLP_USERDATA, 0); Self->Stop(); delete Owner; }
         }
         return DefWindowProcW(Window, Message, WParam, LParam);
     }

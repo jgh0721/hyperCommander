@@ -16,10 +16,10 @@ endif()
 if(NOT EXISTS "${HC_DOPUS_SDK_DIRECTORY}/headers/viewer plugins.h")
     message(FATAL_ERROR "HC_DOPUS_SDK_DIRECTORY must contain the official SDK headers")
 endif()
-# A native Directory Opus DLL owns no Qt application and is not a Qt plugin.
+# The SDK DLL owns a top-level viewer backed by the shared document widgets.
 qt_add_library(HyperViewer SHARED dopusViewerEntry.cpp viewerHostBridge.cpp viewerHostBridge.hpp HyperViewer.def)
 set_target_properties(HyperViewer PROPERTIES AUTOMOC OFF AUTOUIC OFF)
-target_include_directories(HyperViewer PRIVATE ${PROJECT_SOURCE_DIR} "${HC_DOPUS_SDK_DIRECTORY}/headers")
+target_include_directories(HyperViewer PRIVATE ${PROJECT_SOURCE_DIR} "${CMAKE_BINARY_DIR}/HyperEditor" "${HC_DOPUS_SDK_DIRECTORY}/headers")
 target_compile_definitions(HyperViewer PRIVATE UNICODE _UNICODE)
 # Qualified RHWP deployment needs room for the dedicated WebEngine process Job.
 # Default and diagnostic builds retain the legacy single-process allowance.
@@ -35,7 +35,7 @@ if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
     target_compile_definitions(HyperViewer PRIVATE HC_RHWP_HOST_RUNTIME=1)
 endif()
 target_compile_options(HyperViewer PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(HyperViewer PRIVATE user32 gdi32 advapi32 bcrypt)
+target_link_libraries(HyperViewer PRIVATE hc_document_widgets hc_document_sdi Qt6::Network user32 gdi32 advapi32)
 set(HC_HYPERVIEWER_PACKAGE_COMMAND "${CMAKE_COMMAND}"
     "-DVIEWER=$<TARGET_FILE:HyperViewer>"
     "-DRUNTIME=$<TARGET_FILE_DIR:HyperEditor>"

@@ -254,11 +254,11 @@ namespace hc::plugins
         const auto PipeName = "\\\\.\\pipe\\hyperCommander-" + QUuid::createUuid().toString(QUuid::Id128);
         auto Pipe = ServerPipe(PipeName); if (!Pipe.HasValue()) return Pipe.Failure();
         auto Owner = std::unique_ptr<PluginProcess>(new PluginProcess(std::make_unique<State>())); auto& S = *Owner->state_;
-        S.helpers_ = !Inspected.Value().manifest_.helpers_.empty();
         S.documentViewer_ = Inspected.Value().manifest_.id_ == "builtin.hyperviewer" && Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1"
             && QFileInfo(Inspected.Value().binaryPath_).canonicalFilePath().compare(
                 QFileInfo(QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll").canonicalFilePath(), Qt::CaseInsensitive) == 0;
-        if (S.helpers_) S.helperPath_ = Inspected.Value().helperPaths_.front();
+        S.helpers_ = !Inspected.Value().manifest_.helpers_.empty() || S.documentViewer_;
+        if (!Inspected.Value().helperPaths_.empty()) S.helperPath_ = Inspected.Value().helperPaths_.front();
         // The reviewed built-in viewer lets Qt and the OS decide whether image
         // allocations fit. Third-party plugins retain their fixed Job quota.
         if (Inspected.Value().manifest_.id_ == "builtin.hyperviewer" && Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1")
@@ -272,9 +272,13 @@ namespace hc::plugins
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-        // Opt-in compatibility trusts the reviewed package to spawn its helper.
-        // This bounds concurrency, not executable identity; do not claim an ACL.
-        Job.BasicLimitInformation.ActiveProcessLimit = S.helpers_ ? 3 : 1;
+        // The qualified RHWP renderer uses the same bounded process tree as
+        // the viewer DLL. A default viewer requires only its plugin host.
+#ifdef HC_RHWP_HOST_RUNTIME
+        Job.BasicLimitInformation.ActiveProcessLimit = S.documentViewer_ ? 9 : S.helpers_ ? 3 : 1;
+#else
+        Job.BasicLimitInformation.ActiveProcessLimit = S.documentViewer_ ? 1 : S.helpers_ ? 3 : 1;
+#endif
         if (!S.documentViewer_) {
             Job.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
             Job.ProcessMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_);

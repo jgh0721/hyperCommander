@@ -203,6 +203,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
 {
     if (!pluginViewer_ || Inputs.empty()) return nullptr;
     const bool Recyclable = matchesPrepared(Options);
+    const bool Standalone = Options.approval_.reviewed_.compatibility_ == "hyperviewer-v1";
     const auto Warm = Recyclable && preparedWindow_ && preparedSurface_ ? preparedSurface_->Snapshot().status_ : hc::viewer::ViewerStatus::Closed;
     const bool Prepared = Warm == hc::viewer::ViewerStatus::Ready && preparedSurface_->IsReady();
     // A warm viewer that is still starting is ready sooner than a cold start:
@@ -234,7 +235,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Code)); if (Completion) Completion(false, Code);
         if (reviewPlugin_) hc::plugins::OfferPluginReview(Window, Code, Binary, [Window, Review = reviewPlugin_](const QString& Path) { Window->close(); Review(Path); });
     });
-    connect(Surface, &QtPluginViewerSurface::Ready, Phase, [Surface, Window, Phase, Expected, Completion, Waiting = Pending,
+    connect(Surface, &QtPluginViewerSurface::Ready, Phase, [Surface, Window, Phase, Expected, Completion, Standalone, Waiting = Pending,
         PreparedInputs, Inputs = std::move(Inputs)](const QString&) mutable {
         if (std::exchange(Waiting, false)) {
             // The adopted warm viewer finished starting on its placeholder.
@@ -247,14 +248,62 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         if (!Completion) return;
         if (!Surface->Details().documentChannel_) { Completion(true, {}); return; }
         auto* Timer = new QTimer(Phase); auto Elapsed = std::make_shared<QElapsedTimer>(); Elapsed->start();
-        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Expected, Completion] {
+        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Phase, Expected, Completion, Standalone] {
             const auto Details = Surface->Details(); const auto Documents = Details.documentState_["documents"].toArray();
             QString Error; bool Loading = Documents.size() != Expected;
             if (Details.commandError_) Error = QString::fromStdString(Details.commandError_->code_);
             for (const auto& Item : Documents) { const auto Record = Item.toObject(); Loading |= Record["loading"].toBool(); if (!Record["error"].toString().isEmpty()) Error = Record["error"].toString(); }
             if (Error.isEmpty() && Loading && Elapsed->elapsed() < 30000) return;
             if (Error.isEmpty() && Loading) Error = "document-open-timeout";
-            Timer->stop(); Timer->deleteLater(); if (!Error.isEmpty()) Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Error)); Completion(Error.isEmpty(), Error);
+            Timer->stop(); Timer->deleteLater();
+            if (Error.isEmpty() && Standalone) {
+                // Hide the loading dialog before the separate top-level viewer
+                // is presented. Hiding an active QDialog afterwards can return
+                // the foreground to HyperCommander over the viewer.
+                Window->hide();
+                const auto Presented = Surface->SendDocument({{"action", "present"}});
+                if (!Presented.HasValue()) {
+                    Error = QString::fromStdString(Presented.Failure().code_);
+                    Window->show();
+                }
+                else {
+                    auto* PresentTimer = new QTimer(Phase);
+                    auto PresentElapsed = std::make_shared<QElapsedTimer>(); PresentElapsed->start();
+                    connect(PresentTimer, &QTimer::timeout, Phase,
+                        [PresentTimer, PresentElapsed, Surface, Window, Completion, Sequence = Presented.Value()] {
+                            const auto Details = Surface->Details();
+                            if (Details.commandSequence_ < Sequence && PresentElapsed->elapsed() < 10000) return;
+                            PresentTimer->stop(); PresentTimer->deleteLater();
+                            const auto Failure = Details.commandError_ ? QString::fromStdString(Details.commandError_->code_)
+                                : Details.commandSequence_ < Sequence ? QString("viewer-present-timeout") : QString{};
+                            if (Failure.isEmpty()) {
+                                // The viewer belongs to the isolated host. Its own
+                                // activation request can be denied while HC is in
+                                // front, so the foreground owner hands it focus.
+                                bool Parsed = false;
+                                const auto Value = Details.documentReply_["nativeWindow"].toString().toULongLong(&Parsed, 16);
+                                const auto Viewer = reinterpret_cast<HWND>(quintptr(Value));
+                                DWORD Process = 0;
+                                const auto Main = Window->parentWidget()
+                                    ? reinterpret_cast<HWND>(Window->parentWidget()->winId()) : nullptr;
+                                if (Parsed && Viewer && Details.host_.processId_
+                                    && GetWindowThreadProcessId(Viewer, &Process) && Process == Details.host_.processId_
+                                    && GetAncestor(Viewer, GA_ROOT) == Viewer && IsWindowVisible(Viewer)
+                                    && GetForegroundWindow() == Main) {
+                                    if (IsIconic(Viewer)) ShowWindow(Viewer, SW_RESTORE);
+                                    SetForegroundWindow(Viewer);
+                                }
+                            } else {
+                                Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Failure));
+                                Window->show();
+                            }
+                            Completion(Failure.isEmpty(), Failure);
+                        });
+                    PresentTimer->start(25); return;
+                }
+            }
+            if (!Error.isEmpty()) Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Error));
+            Completion(Error.isEmpty(), Error);
         }); Timer->start(50);
     });
     if (Prepared) {

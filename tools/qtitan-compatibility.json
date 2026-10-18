@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 2,
+  "componentVersion": "9.3.0",
+  "solutionVersion": "2026.2.0",
+  "integration": [
+    "HyperCommander/UIs/Components/cmpView.cpp",
+    "UniqueLibs/qtitanColumnAdapter.cpp"
+  ],
+  "vendorPatches": [
+    {
+      "id": "HC-QTN-006",
+      "purpose": "File manager navigation, full-row cursor, independent marks, palette inversion, persistent cut state, legacy decoration opacity and natural filename sorting, active-panel cursor visibility without changing focus or marks"
+    },
+    {
+      "id": "HC-QTN-007",
+      "purpose": "Bounded cell/role cache, configured sort-role prefetch, unchanged-key skip, incremental/group refresh and configurable bulk fallback"
+    },
+    {
+      "id": "HC-QTN-008",
+      "purpose": "Declare Windows SDK RtlGetVersion types explicitly"
+    },
+    {
+      "id": "HC-QTN-009",
+      "purpose": "Per-row key change relocation, persistent key snapshots, incremental group interval split/merge, expansion ancestry and visible subtree preservation"
+    }
+  ],
+  "integrated": {
+    "submodule": "externalLibs/waterColorStyle/third_party/QtitanDataGrid",
+    "sourceManifest": "integration.json",
+    "upstreamVersion": "9.3.0",
+    "baseVersion": "3.3.0",
+    "requiredApis": {
+      "src/grid/QtnGridBase.h": [
+        "GridRecordPainter",
+        "setRecordPainter",
+        "GridFileManagerOptions",
+        "setFileManagerMode",
+        "setCutRows",
+        "isRowCut",
+        "setSortOrder(Qtitan::SortOrder order, bool Numeric)",
+        "setCaptionIndent"
+      ],
+      "src/grid/QtnGridModelController.h": [
+        "setIncrementalSortThreshold",
+        "clearRoleCache"
+      ],
+      "src/grid/QtnGridCardView.h": [
+        "setColumnCaptionsVisible",
+        "setItemTitleHeight"
+      ]
+    }
+  }
+}

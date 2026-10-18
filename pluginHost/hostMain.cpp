@@ -8,7 +8,7 @@
 #include "dopusVfsHostService.hpp"
 #include "hostSession.hpp"
 #include <QUuid>
-#include <QCoreApplication>
+#include <QApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -96,9 +96,8 @@ namespace
             // Never search the writable package directory during loader lookup.
             // Repeated passes permit an unordered acyclic dependency declaration.
             auto Pending = Inspected.Value().dependencyPaths_;
-            // HyperViewer dependencies belong to the pinned Qt helper, not this
-            // QCoreApplication/native DLL process. All inputs remain locked.
-            if (Expected.Value().compatibility_ == "hyperviewer-v1") Pending.clear();
+            // HyperViewer now owns its Qt workspace in this process. Load the
+            // reviewed dependencies before loading the SDK DLL.
             while (!Pending.isEmpty())
             {
                 const auto Before = Pending.size();
@@ -221,9 +220,10 @@ int main(int Argc, char** Argv)
     static_assert(sizeof(void*) == 8, "hc-plugin-host-x64 requires an x64 build");
     using namespace hc::plugins;
     using namespace hc::storage;
-    QCoreApplication App(Argc, Argv);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR)) return 2;
+    QApplication App(Argc, Argv);
+    App.setQuitOnLastWindowClosed(false);
     if ((App.arguments().size() != 3 && App.arguments().size() != 4) || !App.arguments()[1].startsWith("\\\\.\\pipe\\hyperCommander-")) return 2;
     bool Parsed = false; const auto ParentId = App.arguments()[2].toUInt(&Parsed); if (!Parsed || !ParentId) return 2;
     WinHandle Parent;
