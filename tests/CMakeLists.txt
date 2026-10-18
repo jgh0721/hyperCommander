@@ -27,7 +27,7 @@ target_compile_options(hc_batch_rename_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX
 add_test(NAME hc.batch_rename COMMAND hc_batch_rename_tests)
 set_tests_properties(hc.batch_rename PROPERTIES TIMEOUT 180)
 hc_enable_qt_deployment(hc_batch_rename_tests TEST)
-qt_add_executable(hc_paged_storage_tests tstPagedStorage.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp)
+qt_add_executable(hc_paged_storage_tests tstPagedStorage.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp ../UniqueLibs/qtWorkspaceState.cpp)
 target_include_directories(hc_paged_storage_tests PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc_paged_storage_tests PRIVATE Qt6::Test psapi)
 target_compile_options(hc_paged_storage_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -84,6 +84,7 @@ qt_add_executable(hc_workspace_tests
     ../UniqueLibs/qtDirectoryTracker.hpp
 )
 target_link_libraries(hc_workspace_tests PRIVATE Qt6::Test)
+target_include_directories(hc_workspace_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_compile_options(hc_workspace_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_test(NAME hc.workspace COMMAND hc_workspace_tests)
 set_tests_properties(hc.workspace PROPERTIES TIMEOUT 30)

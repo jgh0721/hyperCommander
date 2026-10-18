@@ -113,6 +113,25 @@ private slots:
         Reload.BeginEdit(); Invalid = Options; Invalid["deleteToRecycle"] = "true"; QVERIFY(Reload.Put(Section::Options, Invalid)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
     }
 
+    void directoryRefreshSettings()
+    {
+        QTemporaryDir Directory; Repository Settings(Directory.path());
+        auto General = Settings.Read(Section::General).toObject();
+        auto Refresh = General["refresh"].toObject();
+        QVERIFY(!Refresh["fallbackEnabled"].toBool(true)); QCOMPARE(Refresh["fallbackSeconds"].toInt(), 15);
+        Refresh["fallbackEnabled"] = true; Refresh["fallbackSeconds"] = 42; Refresh["excludedDrives"] = "D:;E:";
+        General["refresh"] = Refresh;
+        Settings.BeginEdit(); QVERIFY(Settings.Put(Section::General, General)); Settings.DiscardEdit();
+        QVERIFY(!Settings.Read(Section::General).toObject()["refresh"].toObject()["fallbackEnabled"].toBool(true));
+        QVERIFY(Settings.Put(Section::General, General)); Repository Reload(Directory.path());
+        QCOMPARE(Reload.Read(Section::General).toObject()["refresh"].toObject(), Refresh);
+        for (double Invalid : {0.0, 86401.0, 1.5}) {
+            auto Bad = General; auto Value = Refresh; Value["fallbackSeconds"] = Invalid; Bad["refresh"] = Value;
+            Reload.BeginEdit(); QVERIFY(Reload.Put(Section::General, Bad)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
+        }
+        auto Bad = General; Refresh["fallbackEnabled"] = "true"; Bad["refresh"] = Refresh;
+        Reload.BeginEdit(); QVERIFY(Reload.Put(Section::General, Bad)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
+    }
     void paths()
     {
         const auto Executable = QDir::currentPath() + "/bin";

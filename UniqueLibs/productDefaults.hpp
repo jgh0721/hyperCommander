@@ -6,6 +6,7 @@
 // 새 명령은 이 목록 외에 실행 핸들러도 구현해야 한다.
 
 #include <QtCore>
+#include "directoryRefreshSettings.hpp"
 #include "commonLibs/commands/commandBus.hpp"
 
 struct TyHC_COMMAND
@@ -600,6 +601,7 @@ namespace hc::defaults
                  { "sortNumericAware",        true },
                  { "directoryStyle",          "plain" },
                  { "focusPreviousDirectory",  true },
+                 { "refresh",                 hc::refresh::Settings{}.ToJson() },
                  { "darkTitleBar",            true },
                  { "showCommandLine",         true },
                  { "showFunctionBar",         true },

@@ -189,6 +189,7 @@ void CmpPanel::AddTab(bool Navigate)
     connect(Model, &CFSModel::sigRefreshCompleted, this, [this, Model] {
         for (const auto& Tab : vecTabStates) {
             if (Tab->Model != Model) continue;
+            Tab->automaticSnapshot_ = Model->IsAutomaticRefresh();
             if (Tab->restoreSelection_ && !Model->LastNavigationError()) {
                 static_cast<CGridView*>(Tab->View)->RestoreSelection(Tab->workspace_.selection_, Tab->workspace_.focus_);
                 Tab->restoreSelection_ = false;
@@ -1233,6 +1234,10 @@ QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
 
 void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
 {
+    const auto Current = retrieveFocusState();
+    const auto* CurrentModel = Current ? static_cast<CFSModel*>(Current->Model) : nullptr;
+    if (CurrentModel && CurrentModel->IsAutomaticRefresh()
+        && !hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject()).updateHeader) return;
     const auto Generation = ++capacityGeneration_;
     ui.lblVolumeStatus->setToolTip({});
     if (!SpFileSystem) { ui.lblVolumeStatus->clear(); return; }
@@ -1288,20 +1293,28 @@ void CmpPanel::processPanelStatusText()
 {
     if (ui.tabWidget->currentIndex() < 0 || ui.tabWidget->currentIndex() >= vecTabStates.size()) return;
     const auto& State = retrieveFocusState();
+    const bool Automatic = State->automaticSnapshot_ || static_cast<CFSModel*>(State->Model)->IsAutomaticRefresh();
+    const auto Refresh = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
+    if (!State->footerValid_ || !Automatic || Refresh.updateFooter) {
+        State->footerTotalSize_ = State->Model->GetTotalSize();
+        State->footerFileCount_ = State->Model->GetFileCount();
+        State->footerDirectoryCount_ = State->Model->GetDirectoryCount();
+        State->footerValid_ = true;
+    }
     const auto SizeStyle = static_cast< TyEnSizeStyle >( hc::settings::AppSettings().SizeStyle(false) );
 
     ui.lblStatus->setText( QString( "크기: %1 / %2\t파일: %3 / %4\t폴더: %5 / %6" )
-                           .arg( GetFormattedSizeText( State->SelectedSize, SizeStyle ) ).arg( GetFormattedSizeText( State->Model->GetTotalSize(), SizeStyle ) )
-                           .arg( State->SelectedFileCount ).arg( State->Model->GetFileCount() )
-                           .arg( State->SelectedDirectoryCount ).arg( State->Model->GetDirectoryCount() ) );
+                           .arg( GetFormattedSizeText( State->SelectedSize, SizeStyle ) ).arg( GetFormattedSizeText( State->footerTotalSize_, SizeStyle ) )
+                           .arg( State->SelectedFileCount ).arg( State->footerFileCount_ )
+                           .arg( State->SelectedDirectoryCount ).arg( State->footerDirectoryCount_ ) );
     if (status_) {
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto First = Model->rowCount() ? Model->GetFileInfo(Model->index(0, 0)) : nullptr;
         const int ParentCount = First && First->Name_ == ".." ? 1 : 0;
-        const int FolderCount = std::max(0, Model->GetDirectoryCount() - ParentCount);
+        const int FolderCount = std::max(0, State->footerDirectoryCount_ - ParentCount);
         status_->setLeftText(Model->IsLoading() ? tr("목록 조회 중…") : Model->LastNavigationError() ? tr("목록 조회 실패 · 다시 시도하십시오") :
-            tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(Model->GetFileCount())
-            .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(Model->GetTotalSize(), SizeStyle)));
+            tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
+            .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));
         status_->setRightText(Search().isEmpty() ? tr("폴더 %1개").arg(FolderCount) : tr("검색 결과 %1개").arg(std::max(0, State->ProxyModel->rowCount() - ParentCount)));
         status_->setToolTip(ui.lblStatus->text());
     }

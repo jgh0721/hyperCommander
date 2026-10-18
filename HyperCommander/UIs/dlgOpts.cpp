@@ -189,6 +189,13 @@ void QMainOpts::LoadSettings()
     ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(true));
     ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(true));
     focusPreviousDirectory_->setChecked(General["focusPreviousDirectory"].toBool(true));
+    const auto Refresh = hc::refresh::Settings::FromJson(General["refresh"].toObject()).ToJson();
+    for (auto It = Refresh.begin(); It != Refresh.end(); ++It) {
+        const auto Name = "hc.navigation.refresh." + It.key();
+        if (auto* Check = findChild<QCheckBox*>(Name)) Check->setChecked(It.value().toBool());
+        else if (auto* Seconds = findChild<QSpinBox*>(Name)) Seconds->setValue(It.value().toInt());
+        else if (auto* Text = findChild<QLineEdit*>(Name)) Text->setText(It.value().toString());
+    }
     if (auto* Preset = findChild<QComboBox*>("hc.settings.shortcutPreset")) {
         const QSignalBlocker Block(Preset); Preset->setCurrentIndex(General["shortcutPreset"].toString("legacy") == "prototype" ? 1 : 0);
     }
@@ -333,6 +340,15 @@ bool QMainOpts::SaveSettings()
     General["sortLocaleAware"] = ui.chkSortLocaleAware->isChecked();
     General["sortNumericAware"] = ui.chkSortNumericAware->isChecked();
     General["focusPreviousDirectory"] = focusPreviousDirectory_->isChecked();
+    auto Refresh = General["refresh"].toObject();
+    const auto RefreshDefaults = hc::refresh::Settings{}.ToJson();
+    for (auto It = RefreshDefaults.begin(); It != RefreshDefaults.end(); ++It) {
+        const auto Name = "hc.navigation.refresh." + It.key();
+        if (auto* Check = findChild<QCheckBox*>(Name)) Refresh[It.key()] = Check->isChecked();
+        else if (auto* Seconds = findChild<QSpinBox*>(Name)) Refresh[It.key()] = Seconds->value();
+        else if (auto* Text = findChild<QLineEdit*>(Name)) Refresh[It.key()] = Text->text().trimmed();
+    }
+    General["refresh"] = Refresh;
     if (filePanelSupported_) {
         auto Panel = General.value("filePanel").toObject();
         Panel["version"] = 1; Panel["defaultMode"] = QStringList{"one-line", "two-line", "auto", "thumbnails"}.value(listDefault_->currentIndex(), "one-line");
@@ -396,7 +412,9 @@ bool QMainOpts::SaveSettings()
     emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
     emit NotifyColorSchemeChanged(Scheme);
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) Bridge->FileJobs()->ApplyDefaults();
-    if (auto* Owner = parentWidget()) for (auto* Model : Owner->findChildren<CFSModel*>()) Model->ApplyDirectorySizeSettings();
+    if (auto* Owner = parentWidget()) for (auto* Model : Owner->findChildren<CFSModel*>()) {
+        Model->ApplyDirectorySizeSettings(); Model->ApplyRefreshSettings();
+    }
     committedSettings_ = hc::settings::AppSettings().Object();
     if (auto* Status = findChild<QLabel*>("hc.settings.saveStatus")) Status->setText(tr("적용 완료 · 이후 변경은 다시 적용하거나 취소하세요."));
     return true;
@@ -639,11 +657,50 @@ void QMainOpts::initialize()
     auto* NavigationPage = new QWidget(ui.stkOpts); NavigationPage->setObjectName("hc.settings.navigation");
     ui.stkOpts->addWidget(NavigationPage); ui.lstOptCate->addItem(tr("탐색"));
     auto* NavigationLayout = new QVBoxLayout(NavigationPage);
-    focusPreviousDirectory_ = new QCheckBox(tr("상위 폴더(..)로 이동할 때 방금 나온 폴더에 커서 놓기"), NavigationPage);
+    auto* NavigationHeader = new fm::ui::DialogHeader(NavigationPage);
+    NavigationHeader->setTitle(tr("탐색")); NavigationHeader->setSubtitle(tr("폴더 이동과 자동 새로고침 동작을 설정합니다."));
+    NavigationLayout->addWidget(NavigationHeader);
+    auto* NavigationTabs = new QTabWidget(NavigationPage); NavigationTabs->setObjectName("hc.navigation.tabs");
+    NavigationTabs->setAccessibleName(tr("탐색 설정 범주")); NavigationLayout->addWidget(NavigationTabs, 1);
+    auto* NavigationGeneral = new QWidget(NavigationTabs); auto* NavigationGeneralLayout = new QVBoxLayout(NavigationGeneral);
+    NavigationTabs->addTab(NavigationGeneral, tr("폴더 이동"));
+    focusPreviousDirectory_ = new QCheckBox(tr("상위 폴더(..)로 이동할 때 방금 나온 폴더에 커서 놓기"), NavigationGeneral);
     focusPreviousDirectory_->setObjectName("hc.navigation.focusPreviousDirectory");
-    NavigationLayout->addWidget(focusPreviousDirectory_);
+    NavigationGeneralLayout->addWidget(focusPreviousDirectory_);
     auto* NavigationNote = new QLabel(tr("좌우 패널에 모두 적용합니다. 끄면 상위 폴더 목록의 첫 항목에 커서를 놓습니다."), NavigationPage);
-    NavigationNote->setWordWrap(true); NavigationLayout->addWidget(NavigationNote); NavigationLayout->addStretch();
+    NavigationNote->setWordWrap(true); NavigationGeneralLayout->addWidget(NavigationNote); NavigationGeneralLayout->addStretch();
+    auto* RefreshScroll = new QScrollArea(NavigationTabs); RefreshScroll->setWidgetResizable(true); RefreshScroll->setFrameShape(QFrame::NoFrame);
+    NavigationTabs->addTab(RefreshScroll, tr("새로고침"));
+    auto* RefreshBody = new QWidget; RefreshScroll->setWidget(RefreshBody); auto* RefreshLayout = new QVBoxLayout(RefreshBody);
+    auto* Notifications = new QGroupBox(tr("파일시스템 변경 통지로 자동 새로고침"), RefreshBody);
+    auto* NotificationLayout = new QVBoxLayout(Notifications); RefreshLayout->addWidget(Notifications);
+    const auto RefreshCheck = [](QVBoxLayout* Layout, const char* Key, const QString& Caption) {
+        auto* Check = new QCheckBox(Caption, Layout->parentWidget()); Check->setObjectName("hc.navigation.refresh." + QString::fromLatin1(Key));
+        Layout->addWidget(Check); return Check;
+    };
+    RefreshCheck(NotificationLayout, "names", tr("파일 생성·삭제·이름 변경 시 새로고침(&C)"));
+    RefreshCheck(NotificationLayout, "metadata", tr("파일 크기·날짜·속성 변경 시 새로고침(&S)"));
+    RefreshCheck(NotificationLayout, "appendNewEntries", tr("추가된 파일을 목록 맨 뒤에 표시(&P)"));
+    auto* OrderNote = new QLabel(tr("기본값은 현재 정렬 순서 적용입니다. 맨 뒤에 표시한 항목은 수동 새로고침이나 정렬 변경 시 다시 정렬합니다."), Notifications);
+    OrderNote->setWordWrap(true); NotificationLayout->addWidget(OrderNote);
+    RefreshCheck(NotificationLayout, "pauseInBackground", tr("백그라운드일 때 새로고침 보류(&R)"));
+    RefreshCheck(NotificationLayout, "updateFooter", tr("하단 정보 새로고침 · 파일 개수와 크기(&F)"));
+    RefreshCheck(NotificationLayout, "updateHeader", tr("상단 정보 새로고침 · 디스크 여유 공간(&H)"));
+    auto* Exclusions = new QFormLayout; NotificationLayout->addLayout(Exclusions);
+    auto* Excluded = new QLineEdit(Notifications); Excluded->setObjectName("hc.navigation.refresh.excludedDrives");
+    Excluded->setPlaceholderText(tr("예: C:;D:;\\\\server\\share")); Excluded->setAccessibleName(tr("자동 새로고침 제외 드라이브"));
+    Exclusions->addRow(tr("자동 새로고침 제외(&I):"), Excluded);
+    auto* ExcludedNote = new QLabel(tr("세미콜론으로 구분합니다. 제외 위치에는 통지와 주기 새로고침을 모두 적용하지 않습니다. 수동 새로고침은 사용할 수 있습니다."), Notifications);
+    ExcludedNote->setWordWrap(true); NotificationLayout->addWidget(ExcludedNote);
+    auto* Fallback = new QGroupBox(tr("파일시스템 변경 통지를 사용할 수 없는 위치"), RefreshBody);
+    auto* FallbackLayout = new QVBoxLayout(Fallback); RefreshLayout->addWidget(Fallback);
+    auto* Poll = RefreshCheck(FallbackLayout, "fallbackEnabled", tr("변경 통지 미지원 시 일정 주기로 자동 새로고침(&A)"));
+    auto* IntervalForm = new QFormLayout; FallbackLayout->addLayout(IntervalForm);
+    auto* Interval = new QSpinBox(Fallback); Interval->setObjectName("hc.navigation.refresh.fallbackSeconds");
+    Interval->setRange(1, 86400); Interval->setSuffix(tr(" 초")); IntervalForm->addRow(tr("새로고침 주기(&T):"), Interval);
+    connect(Poll, &QCheckBox::toggled, Interval, &QWidget::setEnabled); Interval->setEnabled(false);
+    auto* FallbackNote = new QLabel(tr("기본값: 꺼짐 · 주기 15초. 네트워크·플러그인 등 변경 통지를 사용할 수 없는 활성 탭에 적용합니다. 통지를 사용할 수 있는 위치는 주기적으로 다시 읽지 않습니다."), Fallback);
+    FallbackNote->setWordWrap(true); FallbackLayout->addWidget(FallbackNote); RefreshLayout->addStretch();
     ui.lstOptCate->setResizeMode( QListView::Adjust );
     ui.lstOptCate->setSpacing( 6 );
     ui.lstOptCate->setUniformItemSizes( true );

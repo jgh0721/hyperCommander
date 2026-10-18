@@ -58,6 +58,9 @@ class CmpPanel : public QWidget
         quint64                     SelectedSize = 0;
         int                         SelectedFileCount = 0;
         int                         SelectedDirectoryCount = 0;
+        quint64                     footerTotalSize_ = 0;
+        int                         footerFileCount_ = 0, footerDirectoryCount_ = 0;
+        bool                        footerValid_ = false, automaticSnapshot_ = false;
         hc::workspace::TabState     workspace_;
         bool                       pending_ = false, restoreSelection_ = false;
 

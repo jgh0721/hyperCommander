@@ -6,6 +6,7 @@
 #include <Windows.h>
 #include <psapi.h>
 #include "UniqueLibs/qtPagedStorage.hpp"
+#include "UniqueLibs/directoryRefreshOrder.hpp"
 #include "UniqueLibs/qtItemOutcomeStore.hpp"
 #include "commonLibs/columns/columnSort.hpp"
 
@@ -76,6 +77,35 @@ private slots:
             QVERIFY(!Store.Value()->Replace(2, "bad").HasValue());
         }
         QVERIFY(!QDir(Directory).exists());
+    }
+    void appendNewEntriesAcrossPages()
+    {
+        OperationContext Context; Context.maxPageItems_ = 127;
+        GeneratedCursor OldCursor(4200), NewCursor(4300);
+        auto Old = PagedEntryIndex::Build(OldCursor, Context); QVERIFY(Old.HasValue());
+        const auto All = [](const EntrySnapshot&) { return true; };
+        auto Sorted = Old.Value()->Project([](const auto& A, const auto& B) { return A.name_ < B.name_; }, All, Context, {});
+        QVERIFY(Sorted.HasValue());
+        auto New = PagedEntryIndex::Build(NewCursor, Context); QVERIFY(New.HasValue());
+        auto Ordered = hc::refresh::AppendNewEntries(New.Value(), Sorted.Value(), {}, Context); QVERIFY(Ordered.HasValue());
+        QCOMPARE(Ordered.Value()->Count(), 4300ULL);
+        for (std::uint64_t Offset = 0; Offset < 4200; Offset += 127) {
+            const auto Count = std::min<std::uint64_t>(127, 4200 - Offset);
+            auto Expected = Sorted.Value()->Read(Offset, Count, Context), Actual = Ordered.Value()->Read(Offset, Count, Context);
+            QVERIFY(Expected.HasValue()); QVERIFY(Actual.HasValue());
+            for (std::size_t I = 0; I < Count; ++I) QCOMPARE(Actual.Value().entries_[I].name_, Expected.Value().entries_[I].name_);
+        }
+        auto Tail = Ordered.Value()->Read(4200, 100, Context); QVERIFY(Tail.HasValue());
+        for (const auto& Entry : Tail.Value().entries_) QVERIFY(QString::fromStdString(Entry.name_).mid(4).toInt() > 4200);
+        // A second refresh preserves arrival order and removes deleted entries.
+        GeneratedCursor ThirdCursor(4250); auto Third = PagedEntryIndex::Build(ThirdCursor, Context); QVERIFY(Third.HasValue());
+        auto Again = hc::refresh::AppendNewEntries(Third.Value(), Ordered.Value(), {}, Context); QVERIFY(Again.HasValue());
+        QCOMPARE(Again.Value()->Count(), 4250ULL);
+        auto First = Again.Value()->Read(0, 20, Context); QVERIFY(First.HasValue());
+        auto Expected = Sorted.Value()->Read(0, 20, Context); QVERIFY(Expected.HasValue());
+        for (int I = 0; I < 20; ++I) QCOMPARE(First.Value().entries_[I].name_, Expected.Value().entries_[I].name_);
+        std::stop_source Stop; Stop.request_stop(); Context.stopToken_ = Stop.get_token();
+        QVERIFY(!hc::refresh::AppendNewEntries(New.Value(), Old.Value(), {}, Context).HasValue());
     }
     void stableMergeFilterSelectionAndCancellation()
     {

@@ -224,7 +224,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug"), "Local UI mode cannot execute an SMB scenario");
         }
@@ -1896,6 +1896,85 @@ private slots:
                 QCOMPARE(TargetModel->GetName(Index), Enabled ? QString("zzPrevious") : QString(".."));
             }
         }
+    }
+    void navigationRefreshSettingsUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace);
+            for (auto* Model : main_->findChildren<CFSModel*>()) Model->ApplyRefreshSettings();
+        });
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
+            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
+            const auto Navigation = Categories->findItems(QStringLiteral("탐색"), Qt::MatchExactly); QCOMPARE(Navigation.size(), 1);
+            Categories->setCurrentItem(Navigation.front());
+            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.navigation.tabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
+            QCOMPARE(Tabs->tabText(1), QStringLiteral("새로고침")); Tabs->setCurrentIndex(1);
+            auto* Poll = Dialog.findChild<QCheckBox*>("hc.navigation.refresh.fallbackEnabled"); QVERIFY(Poll);
+            auto* Seconds = Dialog.findChild<QSpinBox*>("hc.navigation.refresh.fallbackSeconds"); QVERIFY(Seconds);
+            QVERIFY(!Poll->isChecked()); QVERIFY(!Seconds->isEnabled()); QCOMPARE(Seconds->value(), 15);
+            Poll->setChecked(true); QVERIFY(Seconds->isEnabled()); Seconds->setValue(37);
+            QVERIFY(Dialog.SaveSettings());
+            QCOMPARE(Settings.CommittedObject()["general"].toObject()["refresh"].toObject()["fallbackSeconds"].toInt(), 37);
+            Poll->setChecked(false); Seconds->setValue(99); Dialog.reject();
+        }
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
+            QVERIFY(Dialog.findChild<QCheckBox*>("hc.navigation.refresh.fallbackEnabled")->isChecked());
+            QCOMPARE(Dialog.findChild<QSpinBox*>("hc.navigation.refresh.fallbackSeconds")->value(), 37);
+            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+            Categories->setCurrentItem(Categories->findItems(QStringLiteral("탐색"), Qt::MatchExactly).front());
+            Dialog.findChild<QTabWidget*>("hc.navigation.tabs")->setCurrentIndex(1); QTest::qWait(80);
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/navigation-refresh-settings.png"));
+            Dialog.reject();
+        }
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Create = [&](const QString& Name) {
+            QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write("refresh") == 7;
+        };
+        QVERIFY(Create("b.txt")); QVERIFY(Create("z.txt"));
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        hc::refresh::Settings Policy; Policy.pauseInBackground = false; Policy.appendNewEntries = true;
+        Policy.updateHeader = Policy.updateFooter = false; General["refresh"] = Policy.ToJson();
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        Model->ApplyRefreshSettings(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("z.txt"));
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        const auto VisibleNames = [&] {
+            QStringList Result;
+            for (int Row = 0; Row < View->BaseView()->getRowCount(); ++Row) {
+                auto Index = View->BaseView()->getRow(Row).modelIndex(0);
+                if (auto* Proxy = qobject_cast<QAbstractProxyModel*>(View->BaseView()->model())) Index = Proxy->mapToSource(Index);
+                const auto Name = Model->GetName(Index); if (Name != "..") Result.append(Name);
+            }
+            return Result;
+        };
+        QTRY_COMPARE(VisibleNames(), QStringList({"b.txt", "z.txt"}));
+        const auto Footer = Panel->findChild<QLabel*>("lblStatus")->text();
+        const auto Header = Panel->findChild<QLabel*>("lblVolumeStatus")->text();
+        QVERIFY(Create("a.txt")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("a.txt"), 5000);
+        QTRY_COMPARE(VisibleNames(), QStringList({"b.txt", "z.txt", "a.txt"}));
+        QCOMPARE(Panel->findChild<QLabel*>("lblStatus")->text(), Footer);
+        QCOMPARE(Panel->findChild<QLabel*>("lblVolumeStatus")->text(), Header);
+        Panel->RefreshSource(Panel->CurrentTabIndex()); QTRY_VERIFY(!Model->IsLoading());
+        QTRY_COMPARE(VisibleNames(), QStringList({"a.txt", "b.txt", "z.txt"}));
+        QVERIFY(Panel->findChild<QLabel*>("lblStatus")->text() != Footer);
+        const auto FileSize = [&] {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+                if (Item && Item->Name_ == "b.txt") return Item->Size_;
+            }
+            return qint64(-1);
+        };
+        { QFile File(Directory.filePath("b.txt")); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("size"), 4); }
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && FileSize() == 11, 5000);
+        Policy.excludedDrives = QDir::fromNativeSeparators(Directory.path()).left(2); General["refresh"] = Policy.ToJson();
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyRefreshSettings();
+        QVERIFY(Create("excluded.txt")); QTest::qWait(600); QVERIFY(!names(Model).contains("excluded.txt"));
+        Panel->RefreshSource(Panel->CurrentTabIndex()); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("excluded.txt"));
     }
     void directoryHotListPlacementUi()
     {

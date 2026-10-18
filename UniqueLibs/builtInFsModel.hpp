@@ -63,6 +63,8 @@ public:
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;
     void SetWatchEnabled(bool Enabled);
+    void ApplyRefreshSettings();
+    bool IsAutomaticRefresh() const { return automaticRefresh_; }
     void NotifyNetworkChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending = false);
     hc::storage::Locator WorkspaceLocation() const;
@@ -171,6 +173,8 @@ private:
     bool                            providerEnabled_ = true;
     QtDirectoryTracker              tracker_;
     bool                            watchEnabled_ = false;
+    bool                            autoRefreshRequested_ = false, automaticRefresh_ = false;
+    bool                            appendOrder_ = false;
     std::optional<hc::storage::Locator> placeholder_;
     hc::workspace::DirectoryIndex   index_;
     bool                            loading_ = false;

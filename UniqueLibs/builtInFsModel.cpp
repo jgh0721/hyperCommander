@@ -1,9 +1,11 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "directoryRefreshOrder.hpp"
 #include "columnNativeFields.hpp"
 #include "folderSize.hpp"
 #include "nativeFileElevation.hpp"
 #include <QPromise>
+#include <QScopeGuard>
 #include "columnPluginFields.hpp"
 #include "commonLibs/columns/luaColumns.hpp"
 #include "commonLibs/columns/columnSort.hpp"
@@ -528,8 +530,24 @@ CFSModel::CFSModel()
     });
     displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
-        if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) { carryDirectorySizes_ = true; Refresh(); }
+        if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) {
+            carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
+        }
     });
+    connect(this, &CFSModel::sigRefreshCompleted, this, [this] { tracker_.SetBusy(loading_); });
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
+        const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
+        tracker_.SetSuspended(Settings.pauseInBackground && State != Qt::ApplicationActive);
+    });
+    ApplyRefreshSettings();
+}
+
+void CFSModel::ApplyRefreshSettings()
+{
+    const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
+    tracker_.Configure(Settings);
+    tracker_.SetSuspended(Settings.pauseInBackground && QGuiApplication::applicationState() != Qt::ApplicationActive);
+    SetWatchEnabled(watchEnabled_);
 }
 
 hc::storage::Locator CFSModel::WorkspaceLocation() const
@@ -555,11 +573,13 @@ void CFSModel::SetWatchEnabled(bool Enabled)
     // Registering a native watcher on an unreachable server can block the GUI.
     const auto Native = Root && !Root->IsRemote() && Location.kind_ == hc::storage::LocatorKind::Local
         && Location.nesting_.empty() ? QString::fromStdString(Location.root_) : QString{};
-    tracker_.SetLocation(Enabled && Root && providerEnabled_ ? hc::workspace::LocationKey(Location) : QString{}, Native);
+    tracker_.SetLocation(Enabled && Root && providerEnabled_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
+        QString::fromStdString(Location.root_));
 }
 
 void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending)
 {
+    automaticRefresh_ = autoRefreshRequested_ = false;
     elevatedDirectorySession_.reset();
     CancelNavigation(); tracker_.SetLocation({});
     columnQueries_->Reset();
@@ -597,6 +617,7 @@ CFSModel::~CFSModel()
 
 void CFSModel::CancelNavigation()
 {
+    automaticRefresh_ = autoRefreshRequested_ = false;
     failedNavigationRetry_ = {};
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
     setProperty("hc.restoreTicket", QString{}); setProperty("hc.restorePending", false);
@@ -651,6 +672,7 @@ void CFSModel::DismissNavigationError()
 
 void CFSModel::refreshProvider()
 {
+    automaticRefresh_ = std::exchange(autoRefreshRequested_, false);
     const bool Elevated = std::exchange(elevatedDirectoryRequest_, false);
     failedNavigationRetry_ = {};
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
@@ -676,6 +698,7 @@ void CFSModel::refreshProvider()
     }
     navigationError_.reset();
     loading_ = true;
+    tracker_.SetBusy(true);
     OperationContext Context;
     Context.requestId_ = std::to_string(Generation);
     Context.stopToken_ = navigationStop_.get_token();
@@ -686,12 +709,26 @@ void CFSModel::refreshProvider()
     auto Compare = pageComparison(TargetFullPath); const bool Fallback = !Compare.HasValue();
     if (Fallback) Compare = pageComparison(TargetFullPath, true);
     const auto Sorts = columnSorts_; const auto Display = displaySettings_;
+    const auto RefreshSettings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
+    const bool Append = automaticRefresh_ && RefreshSettings.appendNewEntries && pageSource_
+        && property("hc.snapshotLocation").toString() == hc::workspace::LocationKey(Location);
+    auto Previous = Append && IsPaged() ? pageSource_ : std::shared_ptr<PagedEntryIndex>{};
+    const bool SortPrevious = Previous && !appendOrder_;
+    std::vector<EntrySnapshot> PreviousRows;
+    if (Append && !Previous) {
+        QVector<int> Order;
+        for (int Row = 0; Row < vecNode_.size(); ++Row) if (vecNode_[Row]->storageEntry_) Order.append(Row);
+        const auto& Ranks = columnSortRanks_.size() == vecNode_.size() ? columnSortRanks_ : nameSortRanks_;
+        if (Ranks.size() == vecNode_.size()) std::stable_sort(Order.begin(), Order.end(), [&](int A, int B) { return Ranks[A] < Ranks[B]; });
+        for (const auto Row : Order) PreviousRows.push_back(*vecNode_[Row]->storageEntry_);
+    }
     const auto Query = pageQuery_; const auto ShowHidden = pageShowHidden_;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, ShowHidden, Sorts, Fallback, Display] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, ShowHidden, Sorts, Fallback, Display, Append] {
         const auto Result = Watcher->result();
         Watcher->deleteLater();
         if (Generation != generation_) return;
+        const auto EndAutomatic = qScopeGuard([this] { automaticRefresh_ = false; });
         loading_ = false;
         if (!Result.HasValue())
         {
@@ -717,6 +754,7 @@ void CFSModel::refreshProvider()
         elevatedDirectorySession_ = Result.Value().session_;
         pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_; pageOffset_ = 0;
         completedSorts_ = Sorts;
+        appendOrder_ = Append;
         if (IsPaged() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); emit ColumnSortCancelled(); }
         publishProvider(Result.Value().page_.entries_);
         setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
@@ -729,7 +767,7 @@ void CFSModel::refreshProvider()
         if (IsPaged() && (Query != pageQuery_ || ShowHidden != pageShowHidden_ || (!Fallback && Sorts != columnSorts_) || Display != displaySettings_)) requestPage(0, true);
         else if (IsPaged() && Fallback) emit ColumnQueryStatus(tr("이 컬럼의 전체 목록 정렬은 아직 지원하지 않아 이름순으로 표시합니다."));
     });
-    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, ShowHidden, Elevated, Session]() -> ReadResult {
+    Watcher->setFuture(QtConcurrent::run([Provider, Location, Context, Compare, Query, ShowHidden, Elevated, Session, Append, Previous, SortPrevious, PreviousRows = std::move(PreviousRows)]() mutable -> ReadResult {
         // Only provider ownership and immutable values enter this worker.
         try
         {
@@ -746,10 +784,20 @@ void CFSModel::refreshProvider()
             if (!Cursor.HasValue()) return Cursor.Failure();
             auto Source = PagedEntryIndex::Build(*Cursor.Value(), Context);
             if (!Source.HasValue()) return Source.Failure();
+            if (Append) {
+                if (SortPrevious) {
+                    if (!Compare.HasValue()) return Compare.Failure();
+                    auto Sorted = Previous->Project(Compare.Value(), [](const EntrySnapshot&) { return true; }, Context, {});
+                    if (!Sorted.HasValue()) return Sorted.Failure();
+                    Previous = Sorted.Value();
+                }
+                Source = hc::refresh::AppendNewEntries(Source.Value(), Previous, std::move(PreviousRows), Context);
+                if (!Source.HasValue()) return Source.Failure();
+            }
             auto View = Source;
             if (Source.Value()->Count() > PageSize) {
                 if (!Compare.HasValue()) return Compare.Failure();
-                View = Source.Value()->Project(Compare.Value(), [Query, ShowHidden](const EntrySnapshot& Entry) {
+                View = Source.Value()->Project(Append ? hc::refresh::ArrivalOrder() : Compare.Value(), [Query, ShowHidden](const EntrySnapshot& Entry) {
                     return (ShowHidden || !(Entry.attributes_ & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) &&
                         hc::workspace::DirectoryIndex{}.Matches(Entry, Query);
                 }, Context, {});
@@ -765,6 +813,7 @@ void CFSModel::refreshProvider()
 
 hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison(const QString& ParentPath, bool NameOnly) const
 {
+    if (appendOrder_ && ParentPath.isEmpty() && !NameOnly) return hc::refresh::ArrivalOrder();
     using namespace hc::columns;
     QVector<Column> Bindings; QVector<Qt::SortOrder> Orders;
     for (const auto& Sort : columnSorts_) {
@@ -1652,6 +1701,7 @@ void CFSModel::ResumeColumnQueries()
 void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
 {
     if (Sorts == columnSorts_ && columnSortRanks_.size() == vecNode_.size()) return;
+    if (Sorts != columnSorts_) appendOrder_ = false;
     if (IsPaged()) { if (Sorts != columnSorts_) { columnSorts_ = Sorts; if (!loading_) requestPage(0, true); } return; }
     columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
 }
@@ -1660,7 +1710,7 @@ void CFSModel::refreshColumnSortRanks()
 {
     using namespace hc::columns;
     if (loading_) return;
-    if (IsPaged()) {
+    if (IsPaged() || appendOrder_) {
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
         return;
     }

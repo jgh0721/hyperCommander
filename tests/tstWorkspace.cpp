@@ -140,6 +140,7 @@ private slots:
         QTRY_COMPARE(Refresh.size(), 1);
         Tracker.SetLocation("other"); Tracker.Invalidate(); Tracker.SetLocation({});
         QTest::qWait(50); QCOMPARE(Refresh.size(), 1);
+        hc::refresh::Settings Settings; Settings.fallbackEnabled = true; Tracker.Configure(Settings);
         Tracker.SetIntervals(10, 40); Tracker.SetLocation("unwatchable-provider");
         QTRY_VERIFY(Refresh.size() > 1);
         Tracker.SetLocation({});
@@ -149,6 +150,47 @@ private slots:
         QSignalSpy Refresh(&Tracker, &QtDirectoryTracker::RefreshRequired); Tracker.SetLocation("local", Directory.path());
         QFile File(Directory.filePath("new.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("new"); File.close();
         QTRY_VERIFY_WITH_TIMEOUT(!Refresh.isEmpty(), 3000);
+    }
+    void refreshFallbackAndSuspension() {
+        QtDirectoryTracker Tracker; Tracker.SetIntervals(5, 30);
+        QSignalSpy Refresh(&Tracker, &QtDirectoryTracker::RefreshRequired);
+        Tracker.SetLocation("unsupported");
+        QVERIFY(!Tracker.PollingActive()); QTest::qWait(100); QVERIFY(Refresh.isEmpty());
+        hc::refresh::Settings Settings; Settings.fallbackEnabled = true; Tracker.Configure(Settings);
+        Tracker.SetIntervals(5, 30); QVERIFY(Tracker.PollingActive());
+        QTRY_VERIFY(Refresh.size() >= 2);
+        Tracker.SetSuspended(true); const auto Count = Refresh.size();
+        for (int I = 0; I < 10; ++I) Tracker.Invalidate();
+        QTest::qWait(100); QCOMPARE(Refresh.size(), Count); QVERIFY(!Tracker.PollingActive());
+        Tracker.SetBusy(true); Tracker.SetSuspended(false);
+        QTest::qWait(80); QCOMPARE(Refresh.size(), Count);
+        Tracker.SetBusy(false); QTRY_VERIFY(Refresh.size() > Count);
+        Settings.fallbackEnabled = false; Tracker.Configure(Settings);
+        Tracker.SetLocation({}); const auto Stopped = Refresh.size();
+        QTest::qWait(80); QCOMPARE(Refresh.size(), Stopped);
+    }
+    void notificationFiltersAndExclusions() {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("existing.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("a"); File.close();
+        QtDirectoryTracker Tracker; hc::refresh::Settings Settings;
+        Settings.metadata = false; Settings.fallbackEnabled = true; Tracker.Configure(Settings);
+        Tracker.SetIntervals(5, 30); Tracker.SetLocation("local", Directory.path());
+        QVERIFY(Tracker.NotificationsAvailable()); QVERIFY(!Tracker.PollingActive());
+        QSignalSpy Refresh(&Tracker, &QtDirectoryTracker::RefreshRequired);
+        QVERIFY(File.open(QIODevice::Append)); File.write("more"); File.close();
+        QTest::qWait(120); QVERIFY(Refresh.isEmpty());
+        QVERIFY(QFile::rename(File.fileName(), Directory.filePath("renamed.txt")));
+        QTRY_VERIFY(!Refresh.isEmpty()); Refresh.clear();
+        Settings.names = false; Settings.metadata = true; Tracker.Configure(Settings);
+        QFile Renamed(Directory.filePath("renamed.txt")); QVERIFY(Renamed.open(QIODevice::Append)); Renamed.write("metadata"); Renamed.close();
+        QTRY_VERIFY(!Refresh.isEmpty());
+        Tracker.SetLocation({}); Refresh.clear();
+        Settings.excludedDrives = "X:;Y:"; Tracker.Configure(Settings);
+        Tracker.SetLocation("excluded", {}, "X:/folder");
+        QVERIFY(!Tracker.PollingActive()); Tracker.Invalidate(); QTest::qWait(60); QVERIFY(Refresh.isEmpty());
+        QVERIFY(Settings.Excludes("x:/folder")); QVERIFY(!Settings.Excludes("Z:/folder"));
+        Settings.excludedDrives = "\\\\server\\share";
+        QVERIFY(Settings.Excludes("\\\\SERVER\\share\\child")); QVERIFY(!Settings.Excludes("\\\\server\\share-other"));
     }
 };
 QTEST_GUILESS_MAIN(WorkspaceTests)

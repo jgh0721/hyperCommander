@@ -313,6 +313,14 @@ protected:
         if (!QStringList{"plain", "brackets", "suffix"}.contains(General["directoryStyle"].toString())) { General["directoryStyle"] = "plain"; Report("general.directoryStyle"); }
         if (General.contains("singleInstance") && !General["singleInstance"].isBool()) { General["singleInstance"] = false; Report("general.singleInstance"); }
         if (General.contains("newTabPosition") && !QStringList{"last", "right", "left", "first"}.contains(General["newTabPosition"].toString())) { General["newTabPosition"] = "last"; Report("general.newTabPosition"); }
+        if (General.contains("refresh")) {
+            auto Refresh = General["refresh"].toObject();
+            const auto Seconds = Refresh["fallbackSeconds"].toDouble(-1);
+            if (!Refresh["fallbackSeconds"].isDouble() || Seconds < 1 || Seconds > 86400 || Seconds != double(qint64(Seconds))) {
+                Refresh["fallbackSeconds"] = 15; Report("general.refresh.fallbackSeconds");
+            }
+            General["refresh"] = Refresh;
+        }
         Document["general"] = General;
         auto Copy = Document["options"].toObject();
         for (const auto* Key : {"folderSizeOnSpace", "folderSizeBeforeOperations", "folderSizeUseEverything"})
