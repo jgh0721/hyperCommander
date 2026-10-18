@@ -18,6 +18,7 @@
 #include "Modules/mdlFileModel.hpp"
 
 #include <QtitanGrid.h>
+#include <QtnGridViewGraphics.h>
 #include <QtnGridEditors.h>
 #include <QScopeGuard>
 #include <fmfilelist/ListPresentation.h>
@@ -392,6 +393,13 @@ CGridView::~CGridView()
     view_->setRecordPainter(nullptr); delete recordPainter_;
 }
 bool CGridView::IsThumbnailMode() const { return presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
+QPoint CGridView::ListContentTopLeft() const
+{
+    if (IsThumbnailMode()) return thumbnails_->listView()->viewport()->mapToGlobal(QPoint());
+    // The rows panel starts immediately below the column headers, even when scrolled or empty.
+    const auto* Rows = BaseView()->layout()->rowsPanel();
+    return Rows->mapToGlobal(Rows->boundedRect().topLeft());
+}
 void CGridView::SyncThumbnailCursor()
 {
     if (syncingThumbnailCursor_ || !IsThumbnailMode()) return;

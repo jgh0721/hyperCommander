@@ -1903,7 +1903,8 @@ private slots:
         const auto Restore = qScopeGuard([&] { QCursor::setPos(OldCursor); });
         for (auto* Panel : panels_)
         {
-            auto* View = Panel->GetFocusView(Panel->CurrentTabIndex()); QVERIFY(View);
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+            auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
             Panel->sig_NotifyPanelActivated();
             QPoint Previous;
             for (int Attempt = 0; Attempt < 2; ++Attempt)
@@ -1919,14 +1920,20 @@ private slots:
                     if (!Menu) return;
                     const auto Close = qScopeGuard([&] { Menu->close(); });
                     QCOMPARE(Menu->objectName(), QString("hc.directoryHotList"));
-                    const auto Bounds = QRect(View->mapToGlobal(QPoint()), View->size());
-                    QVERIFY(qAbs(Menu->geometry().center().x() - Bounds.center().x()) <= 2);
-                    QVERIFY(qAbs(Menu->pos().y() - Bounds.top() - 8) <= 2);
+                    QRect Header;
+                    for (const auto& Hit : Grid->hitInfoAll())
+                        if (Hit.info() == Qtitan::GridHitInfo::Column) Header = Header.united(Hit.rect());
+                    QVERIFY(!Header.isEmpty());
+                    const auto Expected = Grid->viewport()->mapToGlobal(QPoint(0, Header.bottom() + 1));
+                    QVERIFY(qAbs(Menu->pos().x() - Expected.x()) <= 2);
+                    QVERIFY(qAbs(Menu->pos().y() - Expected.y()) <= 2);
                     QVERIFY(View->screen()->availableGeometry().contains(Menu->geometry()));
                     QVERIFY(Menu->activeAction() && !Menu->activeAction()->isSeparator());
                     if (Attempt) QCOMPARE(Menu->pos(), Previous);
                     Previous = Menu->pos();
                     Seen = true;
+                    QVERIFY(Menu->grab().save(QCoreApplication::applicationDirPath()
+                        + (Panel == panels_.front() ? "/favorites-left-menu.png" : "/favorites-right-menu.png")));
                     QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath()
                         + (Panel == panels_.front() ? "/favorites-left.png" : "/favorites-right.png")));
                 });

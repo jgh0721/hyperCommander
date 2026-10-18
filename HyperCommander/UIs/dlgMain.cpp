@@ -397,8 +397,8 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
     StFavoriteDirMgr->ConstructDirMenu(&Menu);
     Menu.ensurePolished();
     const auto Size = Menu.sizeHint();
-    // Keyboard navigation should not depend on where the mouse was left.
-    auto Position = Anchor->mapToGlobal(QPoint((Anchor->width() - Size.width()) / 2, 8));
+    const auto* Grid = qobject_cast<CGridView*>(Anchor);
+    auto Position = Grid ? Grid->ListContentTopLeft() : Anchor->mapToGlobal(QPoint());
     const auto Available = Anchor->screen()->availableGeometry();
     Position.setX(std::clamp(Position.x(), Available.left(), std::max(Available.left(), Available.right() - Size.width() + 1)));
     Position.setY(std::clamp(Position.y(), Available.top(), std::max(Available.top(), Available.bottom() - Size.height() + 1)));

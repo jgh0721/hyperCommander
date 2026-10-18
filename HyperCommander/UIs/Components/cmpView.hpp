@@ -74,6 +74,7 @@ public:
     bool IsPanelActive() const { return panelActive_; }
     bool IsTwoLine() const;
     bool IsThumbnailMode() const;
+    QPoint ListContentTopLeft() const;
     using RenameCompletion = std::function<void(bool)>;
     using RenameHandler = std::function<void(const QModelIndex&, const QString&, RenameCompletion)>;
     bool BeginRename(const QModelIndex& Index, bool SelectExtension, RenameHandler Handler);
