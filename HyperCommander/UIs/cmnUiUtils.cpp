@@ -9,7 +9,10 @@ namespace nsHC
 {
     QBaseUI::QBaseUI( QWidget* Parent, Qt::WindowFlags Flags )
         : QDialog( Parent, Flags )
-    {}
+    {
+        connect(TyStColorSchemeMgr::GetInstance(), &CColorSchemeMgr::sigColorSchemeChanged,
+            this, [this](const TyColorScheme& Scheme) { setFont(Scheme.Dialog_Font); });
+    }
 
     void QBaseUI::SetMovableUI( bool isMovable )
     {

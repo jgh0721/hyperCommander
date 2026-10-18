@@ -65,7 +65,12 @@ public:
 
     int                                 GetCount() const;
 
+protected:
+    void                                changeEvent(QEvent* Event) override;
+    void                                showPopup() override;
+
 private:
+    void                                refreshItems();
 
     QListWidget*                        lstView = nullptr;
 };

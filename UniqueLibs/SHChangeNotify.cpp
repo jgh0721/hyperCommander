@@ -9,6 +9,8 @@ QSHChangeNotify::QSHChangeNotify( QWidget* parent, Qt::WindowFlags f )
     hWnd = winId();
 }
 
+QSHChangeNotify::~QSHChangeNotify() { StopWatching(); }
+
 HRESULT QSHChangeNotify::StartWatching()
 {
     HRESULT Ret = S_OK;
@@ -29,6 +31,16 @@ HRESULT QSHChangeNotify::StartWatching()
 
     } while( false );
 
+    if (pidl) CoTaskMemFree(pidl);
+    PIDLIST_ABSOLUTE Network = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_NetworkFolder, 0, nullptr, &Network))) {
+        const SHChangeNotifyEntry Entry{Network, TRUE};
+        networkRegister_ = SHChangeNotifyRegister(reinterpret_cast<HWND>(hWnd),
+            SHCNRF_ShellLevel | SHCNRF_NewDelivery,
+            SHCNE_CREATE | SHCNE_MKDIR | SHCNE_DELETE | SHCNE_RMDIR | SHCNE_UPDATEDIR | SHCNE_RENAMEFOLDER | SHCNE_UPDATEITEM,
+            SHELL_NOTIFY_MESSAGE + 1, 1, &Entry);
+        CoTaskMemFree(Network);
+    }
     return Ret;
 }
 
@@ -37,6 +49,8 @@ void QSHChangeNotify::StopWatching()
     if( ulRegister > 0 )
         SHChangeNotifyDeregister( ulRegister );
     ulRegister = 0;
+    if (networkRegister_) SHChangeNotifyDeregister(networkRegister_);
+    networkRegister_ = 0;
 }
 
 bool QSHChangeNotify::nativeEvent( const QByteArray& eventType, void* message, qintptr* result )
@@ -47,6 +61,14 @@ bool QSHChangeNotify::nativeEvent( const QByteArray& eventType, void* message, q
             break;
 
         const auto msg = static_cast< MSG* >( message );
+        if (msg->message == SHELL_NOTIFY_MESSAGE + 1) {
+            long Event = 0; PIDLIST_ABSOLUTE* Items = nullptr;
+            const auto Lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(msg->wParam),
+                static_cast<DWORD>(msg->lParam), &Items, &Event);
+            if (Lock) { SHChangeNotification_Unlock(Lock); emit NetworkChanged(); }
+            if (result) *result = 0;
+            return true;
+        }
         if( msg->message != SHELL_NOTIFY_MESSAGE )
             break;
 

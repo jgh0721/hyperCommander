@@ -4,23 +4,15 @@
     {
       "name": "Debug-x64",
       "displayName": "Debug (x64)",
-      "binaryDir": "${sourceDir}/out/build",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      },
       "inherits": [
-        "Qt-Default"
+        "vc2026-qt612"
       ]
     },
     {
       "name": "Release-x64",
       "displayName": "Release (x64)",
-      "binaryDir": "${sourceDir}/out/build",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      },
       "inherits": [
-        "Qt-Default"
+        "vc2026-qt612"
       ]
     },
     {
@@ -44,7 +36,7 @@
     {
       "hidden": true,
       "name": "Qt-Default",
-      "inherits": "Qt-5.15.13-VC2022-X64-D-MD-OCI",
+      "inherits": "vc2026-qt612",
       "vendor": {
         "qt-project.org/Default": {
           "checksum": "7hbKHg2COn8mnzquMgF44xp4g+M="

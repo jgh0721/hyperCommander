@@ -1,0 +1,36 @@
+#include <winres.h>
+
+@RC_ICON_BLOCK@
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @RC_VER_MAJOR@,@RC_VER_MINOR@,@RC_VER_PATCH@,@RC_VER_TWEAK@
+ PRODUCTVERSION @RC_VER_MAJOR@,@RC_VER_MINOR@,@RC_VER_PATCH@,@RC_VER_TWEAK@
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204b0"
+        BEGIN
+            VALUE "CompanyName", "@RC_COMPANY_NAME@"
+            VALUE "FileDescription", "@RC_FILE_DESCRIPTION@"
+            VALUE "FileVersion", "@RC_VERSION_TEXT@"
+            VALUE "InternalName", "@RC_INTERNAL_NAME@"
+            VALUE "LegalCopyright", "@RC_COPYRIGHT@"
+            VALUE "OriginalFilename", "@RC_ORIGINAL_FILENAME@"
+            VALUE "ProductName", "@RC_PRODUCT_NAME@"
+            VALUE "ProductVersion", "@RC_VERSION_TEXT@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0412, 1200
+    END
+END

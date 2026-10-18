@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/HyperCommander">
         <file alias="Logo">Resources/HyperCommander.ico</file>
+        <file alias="menu-bar.json">Resources/menu-bar.json</file>
     </qresource>
 </RCC>

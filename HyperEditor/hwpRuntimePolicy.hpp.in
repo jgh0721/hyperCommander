@@ -1,0 +1,3 @@
+﻿#pragma once
+// Native build policy; empty means no package is approved.
+#define HC_RHWP_APPROVED_MANIFEST_SHA256 "@HC_RHWP_APPROVED_MANIFEST_SHA256@"

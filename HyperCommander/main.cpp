@@ -22,7 +22,7 @@ int main( int argc, char* argv[] )
 
     do
     {
-        Ret = app.exec();
+        Ret = app.ShouldRun() ? app.exec() : app.StartupExitCode();
 
     } while( false );
 

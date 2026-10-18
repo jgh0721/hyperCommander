@@ -30,8 +30,9 @@ set( COMMONLIBS_SRC
     ../commonLibs/concurrent/cmnMutex.cpp
     ../commonLibs/concurrent/cmnMutex.hpp
     ../commonLibs/concurrent/cmnSingleton.hpp
-    ../commonLibs/ipc/ipc.cpp
+    # The unfinished LPC implementation is not used by the application or its VS project.
     ../commonLibs/ipc/ipc.hpp
+    ../commonLibs/logging/cmnLogger_Defs.hpp
     ../commonLibs/win/winLIBMgr.hpp
     ../commonLibs/win/winUtils.cpp
     ../commonLibs/win/winUtils.hpp

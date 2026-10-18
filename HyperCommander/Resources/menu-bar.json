@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "menus": [
+    {
+      "id": "file",
+      "label": "파일(&F)",
+      "items": [
+        {
+          "id": "view",
+          "command": "hc.viewer.open",
+          "label": "보기"
+        },
+        {
+          "id": "edit",
+          "command": "hc.file.edit",
+          "label": "편집"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "id": "copy",
+          "command": "hc.file.copy",
+          "label": "복사"
+        },
+        {
+          "id": "move",
+          "command": "hc.file.move",
+          "label": "이동"
+        },
+        {
+          "id": "rename",
+          "command": "hc.file.rename",
+          "label": "이름 변경"
+        },
+        {
+          "id": "mkdir",
+          "command": "hc.file.mkdir",
+          "label": "새 폴더"
+        },
+        {
+          "id": "newfile",
+          "command": "hc.file.new",
+          "label": "새 파일"
+        },
+        {
+          "id": "delete",
+          "command": "hc.file.delete",
+          "label": "삭제"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "id": "batch",
+          "command": "hc.file.batchRename",
+          "label": "다중 이름 변경"
+        },
+        {
+          "id": "permissions",
+          "command": "hc.file.permissions",
+          "label": "권한 확인"
+        },
+        {
+          "id": "archives",
+          "label": "압축 · 이미지",
+          "items": [
+            {
+              "id": "zip",
+              "command": "hc.archive.create",
+              "label": "파일 압축…"
+            },
+            {
+              "id": "archive-extract",
+              "command": "hc.archive.extract",
+              "label": "파일 압축 해제…"
+            },
+            {
+              "id": "iso",
+              "command": "hc.iso.create",
+              "label": "ISO 생성"
+            },
+            {
+              "id": "inspectiso",
+              "command": "hc.iso.inspect",
+              "label": "ISO 구조 확인"
+            }
+          ]
+        },
+        {
+          "id": "jobs",
+          "command": "hc.jobs.show",
+          "label": "작업관리자"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "id": "exit",
+          "command": "hc.app.exit",
+          "label": "종료"
+        }
+      ]
+    },
+    {
+      "id": "edit-menu",
+      "label": "편집(&E)",
+      "items": [
+        {
+          "id": "editfile",
+          "command": "hc.file.edit",
+          "label": "편집"
+        },
+        {
+          "id": "renameedit",
+          "command": "hc.file.rename",
+          "label": "이름 변경"
+        }
+      ]
+    },
+    {
+      "id": "select",
+      "label": "선택(&S)",
+      "items": [
+        {
+          "id": "invert",
+          "command": "hc.selection.invert",
+          "label": "선택 반전 · 다음 항목"
+        }
+      ]
+    },
+    {
+      "id": "show",
+      "label": "보기(&V)",
+      "items": [
+        {
+          "id": "quick",
+          "command": "hc.viewer.quick",
+          "label": "반대 패널 미리 보기"
+        },
+        {
+          "id": "closequick",
+          "command": "hc.viewer.close",
+          "label": "미리 보기 닫기"
+        },
+        {
+          "id": "hidden",
+          "command": "hc.view.hidden",
+          "label": "숨김·시스템 파일 표시 전환"
+        }
+      ]
+    },
+    {
+      "id": "navigate",
+      "label": "명령(&C)",
+      "items": [
+        {
+          "id": "back",
+          "command": "hc.navigate.back",
+          "label": "뒤로"
+        },
+        {
+          "id": "forward",
+          "command": "hc.navigate.forward",
+          "label": "앞으로"
+        },
+        {
+          "id": "find",
+          "command": "hc.search.focus",
+          "label": "현재 폴더에서 찾기"
+        },
+        {
+          "id": "path",
+          "command": "hc.navigate.path",
+          "label": "경로 이동"
+        },
+        {
+          "id": "parent",
+          "command": "hc.navigate.parent",
+          "label": "상위 폴더"
+        },
+        {
+          "id": "refresh",
+          "command": "hc.navigate.refresh",
+          "label": "새로 고침"
+        },
+        {
+          "id": "cancel",
+          "command": "hc.navigate.cancel",
+          "label": "중지"
+        },
+        {
+          "id": "favorites",
+          "command": "hc.navigate.favorites",
+          "label": "즐겨찾기"
+        },
+        {
+          "id": "search",
+          "command": "hc.search.show",
+          "label": "범위 검색"
+        },
+        {
+          "id": "compatibility",
+          "command": "hc.navigate.compatibility",
+          "label": "호환 탐색"
+        },
+        {
+          "id": "enter-file",
+          "command": "hc.navigate.enterFile",
+          "label": "파일 내부로 들어가기"
+        }
+      ]
+    },
+    {
+      "id": "tabs",
+      "label": "탭(&T)",
+      "items": [
+        {
+          "id": "newtab",
+          "command": "hc.tab.new",
+          "label": "새 탭"
+        },
+        {
+          "id": "closetab",
+          "command": "hc.tab.close",
+          "label": "탭 닫기"
+        },
+        {
+          "id": "prevtab",
+          "command": "hc.tab.previous",
+          "label": "이전 탭"
+        },
+        {
+          "id": "nexttab",
+          "command": "hc.tab.next",
+          "label": "다음 탭"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "label": "도구(&U)",
+      "items": [
+        {
+          "id": "plugins",
+          "section": "plugins"
+        },
+        {
+          "id": "automation",
+          "section": "automation"
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "label": "설정(&O)",
+      "items": [
+        {
+          "id": "options",
+          "command": "hc.settings.show",
+          "label": "환경 설정"
+        },
+        {
+          "id": "editmenu",
+          "command": "hc.menu.edit",
+          "label": "메뉴 파일 열기"
+        },
+        {
+          "id": "reloadmenu",
+          "command": "hc.menu.reload",
+          "label": "메뉴 파일 다시 읽기"
+        }
+      ]
+    },
+    {
+      "id": "help",
+      "label": "도움말(&H)",
+      "items": [
+        {
+          "id": "about",
+          "command": "hc.app.about",
+          "label": "HyperCommander 정보"
+        }
+      ]
+    }
+  ]
+}

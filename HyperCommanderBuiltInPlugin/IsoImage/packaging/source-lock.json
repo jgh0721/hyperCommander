@@ -1,0 +1,11 @@
+{
+  "project": "PyCdlib",
+  "version": "1.20.0",
+  "tag": "v1.20.0",
+  "commit": "83cf57871fb26237ff80d1076494868f93f3c2cd",
+  "source": "https://files.pythonhosted.org/packages/f4/01/7fdd73e832b95a1b32e137be2fbeed05abef3aec527bcfebca4c313969a6/pycdlib-1.20.0.tar.gz",
+  "sha256": "1d768eb491d761a3bace188270f152ef40f33fb0d3daf6cf39bc38a81272072c",
+  "license": "LGPL-2.1-only",
+  "portStarted": "2026-09-13",
+  "runtime": "C++ shared library; no Python runtime"
+}

@@ -4,6 +4,7 @@
 
 #include "cmnTypeDefs.hpp"
 #include "externalLibs/TotalCommander/wcxhead.h"
+#include "pluginHost/approvedWcxBackend.hpp"
 
 class CPackFSModel
 {
@@ -125,6 +126,7 @@ struct TyPlugInWCXFuncs
 struct TyTCPlugIn
 {
     int                 Index = 0;
+    QJsonValue applicationRule_;
     QString             FileFullPath;
     bool                IsContain64Bit = false;
 
@@ -140,6 +142,9 @@ struct TyPlugInWLX : TyTCPlugIn
     QVector< QString >  Exts;
 
     TyPlugInWLXFuncs    Funcs;
+    bool hostEnabled_ = false;
+    QString hostManifest_;
+    QByteArray hostReviewed_;
 };
 
 Q_DECLARE_METATYPE( TyPlugInWLX );
@@ -170,6 +175,9 @@ struct TyPlugInWCX : TyTCPlugIn
     QVector< QString >  Exts;
     int                 PackerCaps = 0;     // TyEnWCX_CAPS BitWise OR
     TyPlugInWCXFuncs    Funcs;
+    bool hostEnabled_ = false;
+    QString hostManifest_;
+    hc::plugins::PluginApproval hostApproval_;
 };
 
 Q_DECLARE_METATYPE( TyPlugInWCX );
@@ -205,10 +213,13 @@ public:
     ~CTCPlugInWCX();
 
     TyOsError                           LoadWCX( const TyPlugInWCX& WCX );
+    hc::storage::Result<hc::storage::Unit> WritePolicy() const;
+    QString                             PluginPath() const { return wcx_.FileFullPath; }
+    std::shared_ptr<hc::plugins::IArchiveBackend> Backend() const { return backend_; }
 
     TyOsValue<bool>                     OpenArchive( const QString& FileFullPath, int Mode = PK_OM_LIST );
-    TyOsValue<CPackFSModel*>            CreatePackModel() const;
-    // Src = 압축 파일 내에서의 경로 디렉토리 구분자는 /, \ 
+    TyOsValue<CPackFSModel*>            CreatePackModel();
+    // Src is an archive-relative path; both slash directions are accepted.
     void                                ExtractFile( const QString& Src, const QString& Dst );
     void                                CloseArchive();
 
@@ -227,6 +238,7 @@ private:
     QString                             ArchiveFile;
 
     TyPlugInWCX                         wcx_;
+    std::shared_ptr<hc::plugins::IArchiveBackend> backend_;
 };
 
 Q_DECLARE_METATYPE( CTCPlugInWCX );
@@ -256,7 +268,8 @@ public:
      */
     quint32                             ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath );
 
-    QVector< TyPlugInWCX >              RetrieveWCXByExts( const QString& Ext ) const;
+    QVector<TyPlugInWCX> RetrieveWCX() const { return vecWCX; }
+    QVector< TyPlugInWCX >              RetrieveWCXByExts( const QString& Ext, const QString& FileName = {} ) const;
 
 private:
 
@@ -267,3 +280,7 @@ private:
 };
 
 using TyStPlugInMgr = nsCmn::nsConcurrent::TSingleton<CTCPlugInMgr>;
+
+namespace hc::plugins {
+hc::storage::Result<hc::storage::Password> AskArchivePassword(const std::string& Archive, unsigned Attempt, const hc::storage::OperationContext& Context);
+}

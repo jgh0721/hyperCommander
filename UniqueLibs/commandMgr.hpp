@@ -2,8 +2,8 @@
 
 #include "cmnConcurrent.hpp"
 
-
 #include "commandMgr_Defs.hpp"
+#include "commandUiBridge.hpp"
 
 #include <memory>
 
@@ -15,66 +15,78 @@ namespace Qtitan
 class CCommandMgr : public QObject
 {
     Q_OBJECT
-public:
+  public:
     CCommandMgr( QObject* parent = nullptr );
 
-    void                                Refresh();
-    void                                SaveSettings();
-    TyMapShortcutToCMDStr               Retrieve() const;
-    TyHC_COMMAND                        GetDefaultCMD( const QString& Command );
+    void                  Refresh();
+    void                  SaveSettings();
+    TyMapShortcutToCMDStr Retrieve() const;
+    TyHC_COMMAND          GetDefaultCMD( const QString& Command );
 
-    void                                SetShortcutWithCMD( QKeyCombination Key, const QString& CMD );
-    void                                DelShortcut( QKeyCombination Key );
+    void SetShortcutWithCMD( QKeyCombination Key, const QString& CMD );
+    void DelShortcut( QKeyCombination Key );
 
-    QWidget*                            GetMainUI() const;
-    void                                SetMainUI( QWidget* MainUI );
+    QWidget*         GetMainUI() const;
+    void             SetMainUI( QWidget* MainUI );
+    CommandUiBridge* Bridge() const
+    {
+        return bridge_;
+    }
 
-    bool                                ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex );
-    void                                ProcessFavoriteDir( const QString& Command, const QString& Path );
+    bool ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex );
+    bool InvokeCommand( const QString& Id, const QModelIndex& CursorIndex );
+    void ProcessFavoriteDir( const QString& Command, const QString& Path );
 
-public slots:
+  signals:
+    void ShortcutsChanged();
+
+  public slots:
     ////////////////////////////////////////////////////////////////////////////
     /// 명령 핸들러
 
-    DECLARE_HC_COMMAND( cm_NewTab );
-    DECLARE_HC_COMMAND( cm_PrevTab );
-    DECLARE_HC_COMMAND( cm_NextTab );
-    DECLARE_HC_COMMAND( cm_CloseTab );
+    DECLARE_HC_COMMAND( TabNew );
+    DECLARE_HC_COMMAND( TabPrevious );
+    DECLARE_HC_COMMAND( TabNext );
+    DECLARE_HC_COMMAND( TabClose );
 
-    DECLARE_HC_COMMAND( cm_SrcQuickView );
+    DECLARE_HC_COMMAND( ViewerQuick );
 
-    DECLARE_HC_COMMAND( cm_CopyOtherPanel );
-    DECLARE_HC_COMMAND( cm_RenameSingleFile );
-    DECLARE_HC_COMMAND( cm_List );
-    DECLARE_HC_COMMAND( cm_Return );
-    DECLARE_HC_COMMAND( cm_MkDir );
-    DECLARE_HC_COMMAND( cm_Delete );
-    DECLARE_HC_COMMAND( cm_NameNormalization );
-    DECLARE_HC_COMMAND( cm_SetAttrib );
+    DECLARE_HC_COMMAND( FileCopy );
+    DECLARE_HC_COMMAND( FileRename );
+    DECLARE_HC_COMMAND( ViewerOpen );
+    DECLARE_HC_COMMAND( NavigateOpen );
+    DECLARE_HC_COMMAND( FileMkdir );
+    DECLARE_HC_COMMAND( FileDelete );
+    DECLARE_HC_COMMAND( FileNormalize );
+    DECLARE_HC_COMMAND( FileAttributes );
 
-    DECLARE_HC_COMMAND( cm_SelInverse );
+    DECLARE_HC_COMMAND( SelectionInvert );
 
-    DECLARE_HC_COMMAND( cm_MultiRenameFiles );
+    DECLARE_HC_COMMAND( FileBatchRename );
+    DECLARE_HC_COMMAND( FileNew );
+    DECLARE_HC_COMMAND( ArchiveCreate );
+    DECLARE_HC_COMMAND( ArchiveExtract );
 
-    DECLARE_HC_COMMAND( cm_SwitchHidSys );
-    DECLARE_HC_COMMAND( cm_RereadSource );
+    DECLARE_HC_COMMAND( ViewHidden );
+    DECLARE_HC_COMMAND( NavigateRefresh );
 
-    DECLARE_HC_COMMAND( cm_DirectoryHotList );
-    DECLARE_HC_COMMAND_EX( cm_GotoDrive );
-    DECLARE_HC_COMMAND_EX( cm_ChangePath );
+    DECLARE_HC_COMMAND( NavigateFavorites );
+    DECLARE_HC_COMMAND_EX( NavigateDrive );
+    DECLARE_HC_COMMAND_EX( NavigatePath );
 
-    DECLARE_HC_COMMAND( cm_SwitchPanel );
-    DECLARE_HC_COMMAND( cm_ContextMenu );
-    DECLARE_HC_COMMAND( cm_ExternalEditorMenu );
+    DECLARE_HC_COMMAND( PanelSwitch );
+    DECLARE_HC_COMMAND( FileContext );
+    DECLARE_HC_COMMAND( FileEdit );
 
-private:
-    using TySpMapKeyToCMDStr = std::shared_ptr< TyMapShortcutToCMDStr >;
+  private:
+    using TySpMapKeyToCMDStr = std::shared_ptr<TyMapShortcutToCMDStr>;
 
-    TySpMapKeyToCMDStr                  retrieve() const;
+    TySpMapKeyToCMDStr retrieve() const;
 
-    TySpMapKeyToCMDStr                  SpMapKeyToCMDText_;
+    TySpMapKeyToCMDStr SpMapKeyToCMDText_;
 
-    QWidget*                            MainUI_ = nullptr;
+    QWidget*                  MainUI_ = nullptr;
+    QPointer<CommandUiBridge> bridge_;
 };
 
-using TyStCommandMgr = nsCmn::nsConcurrent::TSingleton< CCommandMgr >;
+using TyStCommandMgr = nsCmn::nsConcurrent::TSingleton<CCommandMgr>;

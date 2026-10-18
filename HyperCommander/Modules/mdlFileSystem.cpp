@@ -1,8 +1,14 @@
 ﻿#include "stdafx.h"
+#include "wcxStorage.hpp"
+#include "wcxBackend.hpp"
 #include "mdlFileSystem.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "cmnTypeDefs_Name.hpp"
+#include "storageProviders.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/isoProvider.hpp"
+#include <QFileInfo>
 
 #include <lm.h>
 
@@ -108,6 +114,16 @@ namespace nsHC
                 RootPath += "\\";
 
             // 반드시 \\ 로 끝나야 한다. 
+
+            // Volume metadata can reconnect an unavailable mapped drive and
+            // block for the redirector's timeout. Both panels call this factory
+            // on the GUI thread at startup. Classify first, without probing the
+            // server; actual access belongs to the asynchronous read provider.
+            // GetDriveType can report NO_ROOT_DIR for \\?\X:\ mappings even
+            // when X:\ is DRIVE_REMOTE. Classify the ordinary drive root.
+            const auto DriveRoot = s.mid(Base, 2);
+            if (GetDriveTypeW((DriveRoot + '\\').toStdWString().c_str()) == DRIVE_REMOTE)
+                return new CFSNetworkDrive(DriveRoot);
 
             WCHAR FsName[ MAX_PATH ] = { 0, };
             if( GetVolumeInformationW( RootPath.toStdWString().c_str(), nullptr, 0, nullptr, nullptr, nullptr, FsName, MAX_PATH ) == FALSE )
@@ -221,11 +237,21 @@ namespace nsHC
     ////////////////////////////////////////////////////////////////////////////////
     ///
 
+    CFSNetworkDrive::CFSNetworkDrive(const QString& Root)
+        : CFileSystemT(Root)
+    {
+        // These are operation capabilities, not a claim about share permissions
+        // or filesystem-specific ACL/stream support. Access is checked by I/O.
+        features_ = TyEnFSFeatures(FS_FEA_LIST) | FS_FEA_READABLE | FS_FEA_WRITABLE
+            | FS_FEA_MOVABLE | FS_FEA_DELETABLE | FS_FEA_RENAMABLE;
+    }
+
     CFSShell::CFSShell( const LPITEMIDLIST Root )
         : CFileSystemT( "" )
     {
         cate_ = FS_CATE_VIRTUAL;
         features_ = FS_FEA_LIST;
+        this->Root = ILCloneFull(Root);
     }
 
     CFSShell::CFSShell( const KNOWNFOLDERID& FolderId )
@@ -456,8 +482,79 @@ namespace nsHC
         if( FsModel_ != nullptr )
             return FsModel_;
 
-        FsModel_ = GetWCX()->CreatePackModel().Value.value();
+        const auto Result = GetWCX()->CreatePackModel();
+        if (!Result.Value.has_value()) return nullptr;
+        FsModel_ = Result.Value.value();
         return FsModel_;
     }
 
+    void CFSPack::RefreshReadProvider()
+    {
+        readProvider_.reset();
+        delete FsModel_;
+        FsModel_ = nullptr;
+    }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFileSystemT::ReadProvider()
+    {
+        if (!readProvider_)
+            readProvider_ = hc::storage::MakeNativeReadProvider(cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local);
+        return readProvider_;
+    }
+
+    hc::storage::Locator CFileSystemT::ReadLocation(const QString& Path) const
+    {
+        // The SMB root is stored as one slash and its root path may add a
+        // second. Both spellings identify discovery, never an empty server.
+        if (cate_ == FS_CATE_REMOTE && (Path == "\\" || Path == "\\\\"))
+            return {hc::storage::LocatorKind::Smb, "\\"};
+        return {cate_ == FS_CATE_REMOTE ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local, Path.toStdString()};
+    }
+
+    hc::storage::Locator CFSShell::ReadLocation(const QString&) const
+    {
+        PWSTR Parsing = nullptr;
+        std::string Name;
+        if (Root && SUCCEEDED(SHGetNameFromIDList(Root, SIGDN_DESKTOPABSOLUTEPARSING, &Parsing)))
+        {
+            Name = QString::fromWCharArray(Parsing).toStdString();
+            CoTaskMemFree(Parsing);
+        }
+        return {hc::storage::LocatorKind::Shell, std::move(Name)};
+    }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFSShell::ReadProvider()
+    {
+        if (!readProvider_) readProvider_ = hc::storage::MakeShellReadProvider(ReadLocation({}).root_);
+        return readProvider_;
+    }
+
+    hc::storage::Locator CFSPack::ReadLocation(const QString& Path) const
+    {
+        auto Entry = QDir::fromNativeSeparators(Path);
+        if (!Entry.startsWith('/')) Entry.prepend('/');
+        auto Location = archiveLocation_.nesting_.empty() ? hc::storage::Locator{hc::storage::LocatorKind::Archive, root_.toStdString(), {{"wcx", "/"}}} : archiveLocation_;
+        Location.nesting_.back().entry_ = Entry.toStdString(); return Location;
+    }
+
+    void CFSPack::SetArchiveChain(hc::storage::Locator Location, std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> Ancestors)
+    { archiveLocation_ = std::move(Location); ancestors_ = std::move(Ancestors); RefreshReadProvider(); }
+
+    std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> CFSPack::ArchiveBackends() const
+    { auto Backends = ancestors_; Backends.push_back(WCX_->Backend() ? WCX_->Backend() : hc::plugins::MakeInProcessWcxBackend(WCX_->PluginPath().toStdString())); return Backends; }
+
+    std::shared_ptr<hc::storage::IStorageProvider> CFSPack::ReadProvider()
+    {
+        if (!readProvider_ && WCX_)
+        {
+            const auto Root = ReadLocation("/");
+            const auto Builtin = hc::plugins::BuiltinIsoOptions().binaryPath_;
+            if (Root.nesting_.size() == 1 && QFileInfo(WCX_->PluginPath()).absoluteFilePath().compare(
+                QFileInfo(Builtin).absoluteFilePath(), Qt::CaseInsensitive) == 0)
+                readProvider_ = hc::iso::MakeReadProvider(Root);
+            else
+                readProvider_ = hc::storage::MakeWcxReadProvider(WCX_->PluginPath().toStdString(), Root, {}, WCX_->Backend(), ancestors_);
+        }
+        return readProvider_;
+    }
 } // nsHC

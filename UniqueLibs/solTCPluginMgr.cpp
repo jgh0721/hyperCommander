@@ -1,7 +1,44 @@
 ﻿#include "stdafx.h"
+#include "pluginHost/pluginApplicationRule.hpp"
+#include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
+#include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "HyperCommanderBuiltInPlugin/AlzEgg/builtinUnEgg.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
+#include <QInputDialog>
+#include <QTimer>
+
+namespace hc::plugins
+{
+    hc::storage::Result<hc::storage::Password> AskArchivePassword(const std::string& Archive, unsigned Attempt, const hc::storage::OperationContext& Context)
+    {
+        using namespace hc::storage;
+        if (!qApp || QCoreApplication::closingDown()) return Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}};
+        auto Promise = std::make_shared<std::promise<Result<Password>>>(); auto Future = Promise->get_future();
+        auto Abandoned = std::make_shared<std::atomic_bool>(false);
+        const auto Show = [Promise, Abandoned, Archive, Attempt, Context] {
+            if (Abandoned->load() || Context.Check({"wcx"})) { Promise->set_value(Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}}); return; }
+            QInputDialog Dialog(QApplication::activeWindow()); Dialog.setObjectName("hc.archive.password");
+            Dialog.setWindowTitle(QObject::tr("압축 파일 암호")); Dialog.setTextEchoMode(QLineEdit::Password);
+            Dialog.setLabelText((Attempt > 1 ? QObject::tr("암호를 다시 입력하세요.\n") : QObject::tr("압축 파일의 암호를 입력하세요.\n")) + QString::fromStdString(Archive));
+            if (auto* Label = Dialog.findChild<QLabel*>()) Label->setTextFormat(Qt::PlainText);
+            if (auto* Edit = Dialog.findChild<QLineEdit*>()) Edit->setMaxLength(4096);
+            QTimer Timer; QObject::connect(&Timer, &QTimer::timeout, &Dialog, [&] { if (Abandoned->load() || Context.Check({"wcx"})) Dialog.reject(); }); Timer.start(50);
+            const bool Accepted = Dialog.exec() == QDialog::Accepted;
+            auto Text = Dialog.textValue(); Dialog.setTextValue({});
+            if (Accepted && !Abandoned->load() && !Context.Check({"wcx"})) Promise->set_value(Password(Text.toStdString()));
+            else Promise->set_value(Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}});
+            Text.fill(QChar::Null);
+        };
+        if (QThread::currentThread() == qApp->thread()) Show();
+        else if (!QMetaObject::invokeMethod(qApp, Show, Qt::QueuedConnection)) return Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}};
+        while (Future.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready)
+            if (const auto Stop = Context.Check({"wcx"})) { Abandoned->store(true); return *Stop; }
+        return Future.get();
+    }
+}
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -316,11 +353,24 @@ TyPlugInWLXFuncs CTCPlugInWLX::Funcs() const
 
 CTCPlugInWCX::~CTCPlugInWCX()
 {
-    CloseArchive();
+    CloseWCX();
+}
+
+hc::storage::Result<hc::storage::Unit> CTCPlugInWCX::WritePolicy() const
+{
+    if (!wcx_.hostEnabled_) return hc::storage::Unit{};
+    if (!wcx_.hostApproval_.approved_) return hc::storage::Error{hc::storage::ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
+    if (wcx_.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip
+        && !ArchiveFile.endsWith(".7z", Qt::CaseInsensitive) && !ArchiveFile.endsWith(".zip", Qt::CaseInsensitive))
+        return hc::storage::Error{hc::storage::ErrorCategory::Unsupported, "7zip-format-read-only", {"7zip"}};
+    return hc::plugins::ArchiveWritePolicy(wcx_.hostApproval_.reviewed_);
 }
 
 TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 {
+    CloseWCX();
+    std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
+    if (!WCX.hostEnabled_) Lock.lock();
     TyOsError Err;
 
     do
@@ -328,6 +378,20 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
         wcx_ = WCX;
         wcx_.FileFullPath = wcx_.FileFullPath.replace( "%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive );
         wcx_.FileName = QFileInfo( wcx_.FileFullPath ).baseName();
+
+        // Only capture approval on the UI path. File inspection and process
+        // creation run later in the provider's asynchronous worker operation.
+        if (wcx_.hostEnabled_) {
+            if (wcx_.FileFullPath.endsWith(".wcx", Qt::CaseInsensitive)) wcx_.FileFullPath += "64";
+            if (QDir::isRelativePath(wcx_.FileFullPath)) wcx_.FileFullPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(wcx_.FileFullPath);
+            hc::plugins::ApprovedWcxOptions Options;
+            Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
+            Options.manifestPath_ = wcx_.hostManifest_; Options.binaryPath_ = wcx_.FileFullPath; Options.approval_ = wcx_.hostApproval_;
+            Options.limits_.requestMs_ = 30000;
+            Options.passwordPrompt_ = hc::plugins::AskArchivePassword;
+            backend_ = hc::plugins::MakeApprovedWcxBackend(std::move(Options));
+            break;
+        }
 
 #if defined( _M_IX86 )
         bool IsExist = QFile::exists( wcx_.FileFullPath );
@@ -360,6 +424,12 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
 
 TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode )
 {
+    if (backend_) {
+        // A hosted mount is tentative until asynchronous enumeration succeeds.
+        ArchiveFile = FileFullPath; return {true, {TyOsError::OS_WIN32_ERROR, ERROR_SUCCESS}};
+    }
+    std::lock_guard Lock(WcxCallMutex());
+    CloseArchive();
     TyOsValue<bool> Ret = { false, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
 
     do
@@ -373,21 +443,31 @@ TyOsValue<bool> CTCPlugInWCX::OpenArchive( const QString& FileFullPath, int Mode
         }
 
         ArchiveFile = FileFullPath;
-        Arc = Result.Value.value();
-        Ret.Value = true;
+        // Navigation retains the archive path, not an idle file handle that
+        // would prevent a later staged archive replacement.
+        const auto Closed = close(Result.Value.value());
+        Ret.Value = Closed == 0;
+        Ret.ErrorCode.Type = TyOsError::OS_ETC_ERROR; Ret.ErrorCode.ErrorCode = Closed;
 
     } while( false );
 
     return Ret;
 }
 
-TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
+TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel()
 {
     TyOsValue<CPackFSModel*> Ret;
+    // Hosted plugins use the asynchronous provider, never the legacy UI scan.
+    if (backend_) { Ret.ErrorCode = {TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED}; return Ret; }
+    std::lock_guard Lock(WcxCallMutex());
+    const auto Opened = open(ArchiveFile, PK_OM_LIST);
+    if (!Opened.Value.has_value() || !Opened.Value.value()) { Ret.ErrorCode = Opened.ErrorCode; return Ret; }
+    const auto ArchiveHandle = Opened.Value.value();
+    const auto Close = qScopeGuard([&] { close(ArchiveHandle); });
 
     do
     {
-        if( Arc == nullptr )
+        if( ArchiveHandle == nullptr )
         {
             Ret.ErrorCode.Type = TyOsError::OS_WIN32_ERROR;
             Ret.ErrorCode.ErrorCode = ERROR_INVALID_HANDLE;
@@ -401,12 +481,12 @@ TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
         do
         {
             tHeaderDataExW HDR = { 0, };
-            Err = wcx_.Funcs.ReadHeaderExW( Arc, &HDR );
+            Err = wcx_.Funcs.ReadHeaderExW( ArchiveHandle, &HDR );
             if( Err != 0 )
                 break;
 
             if( Err == 0 )
-                Err = wcx_.Funcs.ProcessFileW( Arc, PK_SKIP, nullptr, nullptr );
+                Err = wcx_.Funcs.ProcessFileW( ArchiveHandle, PK_SKIP, nullptr, nullptr );
 
             const auto Item = new CPackFSModel::Node;
             Item->FileName = "/" + QString::fromWCharArray( HDR.FileName );
@@ -441,6 +521,7 @@ TyOsValue<CPackFSModel*> CTCPlugInWCX::CreatePackModel() const
 
 void CTCPlugInWCX::ExtractFile( const QString& Src, const QString& Dst )
 {
+    std::lock_guard Lock(WcxCallMutex());
     // NOTE: WCX 는 압축을 풀려면 전체에 대한 ReadHeader 를 다시 호출해야 한다. 
     const auto Ret = open( ArchiveFile, PK_OM_EXTRACT );
     if( Ret.Value.has_value() == false || Ret.Value.value() == nullptr )
@@ -494,6 +575,8 @@ void CTCPlugInWCX::ExtractFile( const QString& Src, const QString& Dst )
 
 void CTCPlugInWCX::CloseArchive()
 {
+    if (!Arc) return;
+    std::lock_guard Lock(WcxCallMutex());
     close( Arc );
 
     Arc = nullptr;
@@ -501,7 +584,10 @@ void CTCPlugInWCX::CloseArchive()
 
 void CTCPlugInWCX::CloseWCX()
 {
+    if (!Arc && !wcx_.Funcs.hModule) { backend_.reset(); return; }
+    std::lock_guard Lock(WcxCallMutex());
     CloseArchive();
+    backend_.reset();
 
     if( wcx_.Funcs.hModule != nullptr )
     {
@@ -512,6 +598,7 @@ void CTCPlugInWCX::CloseWCX()
 
 void CTCPlugInWCX::RetrieveWCXFuncs( const QString& PlugIn, TyPlugInWCXFuncs* TC )
 {
+    std::lock_guard Lock(WcxCallMutex());
     Q_ASSERT( TC != nullptr );
     if( TC == nullptr )
         return;
@@ -566,6 +653,7 @@ void CTCPlugInWCX::RetrieveWCXFuncs( const QString& PlugIn, TyPlugInWCXFuncs* TC
 
 TyOsValue<HANDLE> CTCPlugInWCX::open( const QString& FileFullPath, int Mode )
 {
+    std::lock_guard Lock(WcxCallMutex());
     TyOsValue<HANDLE> Ret = { nullptr, { TyOsError::OS_WIN32_ERROR, ERROR_NOT_SUPPORTED } };
 
     if( wcx_.Funcs.hModule == nullptr )
@@ -626,6 +714,7 @@ TyOsValue<HANDLE> CTCPlugInWCX::open( const QString& FileFullPath, int Mode )
 
 int CTCPlugInWCX::close( HANDLE Archive )
 {
+    std::lock_guard Lock(WcxCallMutex());
     if( Archive == nullptr )
         return 0;
 
@@ -691,33 +780,73 @@ void CTCPlugInMgr::Refresh()
     QVector< TyPlugInWLX > VecWLX;
     QVector< TyPlugInWCX > VecWCX;
 
-    StSettings->beginGroup( "ListerPlugins" );
-    const auto WLXCount = StSettings->value( "Count" ).toUInt();
+    const auto WlxItems = hc::settings::AppSettings().Plugins("wlx");
+    const auto WLXCount = WlxItems.size();
     for( uint32_t Idx = 0; Idx < WLXCount; ++Idx )
     {
+        const auto Record = WlxItems[Idx].toObject();
         TyPlugInWLX Plugin;
         Plugin.Index            = Idx;
-        Plugin.FileFullPath     = StSettings->value( QString( "%1_Path" ).arg( Idx ) ).toString();
+        Plugin.FileFullPath     = Record["path"].toString();
         Plugin.FileName         = QFileInfo( Plugin.FileFullPath ).baseName();
-        Plugin.Detect           = StSettings->value( QString( "%1_Detect" ).arg( Idx ) ).toString();
-        Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
+        Plugin.Detect           = Record["detect"].toString();
+        Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
+        Plugin.applicationRule_ = Record.value("application");
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostManifest_ = Record["hostManifest"].toString();
+        Plugin.hostReviewed_ = hc::settings::JsonBytes(Record["hostReviewed"]);
         VecWLX.push_back( Plugin );
     }
-    StSettings->endGroup();
 
-    StSettings->beginGroup( "PackerPlugins" );
-    const auto WCXCount = StSettings->value( "Count" ).toUInt();
+    const auto WcxItems = hc::settings::AppSettings().Plugins("wcx");
+    const auto WCXCount = WcxItems.size();
     for( uint32_t Idx = 0; Idx < WCXCount; ++Idx )
     {
+        const auto Record = WcxItems[Idx].toObject();
         TyPlugInWCX Plugin;
-        Plugin.FileFullPath     = StSettings->value( QString( "%1_Path" ).arg( Idx ) ).toString();
-        Plugin.PackerCaps       = StSettings->value( QString( "%1_Caps" ).arg( Idx ) ).toInt();
-        Plugin.Exts             = StSettings->value( QString( "%1_Exts" ).arg( Idx ) ).toString().split( '|' );
-        Plugin.IsContain64Bit   = StSettings->value( QString( "%1_Support64Bit" ).arg( Idx ) ).toBool();
+        Plugin.FileFullPath     = Record["path"].toString();
+        Plugin.PackerCaps       = Record["caps"].toInt();
+        Plugin.Exts             = hc::settings::Strings(Record["extensions"]);
+        Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
+        Plugin.applicationRule_ = Record.value("application");
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostManifest_ = Record["hostManifest"].toString();
+        auto Reviewed = hc::plugins::ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
+        if (Reviewed.HasValue()) {
+            Plugin.hostApproval_.reviewed_ = std::move(Reviewed.Value()); Plugin.hostApproval_.approved_ = true;
+            Plugin.hostApproval_.granted_ = Plugin.hostApproval_.reviewed_.permissions_;
+        }
         VecWCX.push_back( Plugin );
     }
-    StSettings->endGroup();
 
+    // User handlers keep their configured priority. The bundled ISO handler is
+    // appended without writing synthetic entries into the user's settings.
+    const auto BuiltinIso = hc::plugins::BuiltinIsoOptions();
+    if (BuiltinIso.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = BuiltinIso.binaryPath_;
+        Plugin.PackerCaps = PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_MULTIPLE | PK_CAPS_DELETE | PK_CAPS_BY_CONTENT;
+        Plugin.Exts = {QStringLiteral("iso")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = BuiltinIso.manifestPath_; Plugin.hostApproval_ = BuiltinIso.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
+
+    const auto SevenZip = hc::plugins::BuiltinSevenZipOptions();
+    if (SevenZip.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT | PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE;
+        Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
+    const auto UnEgg = hc::plugins::BuiltinUnEggOptions();
+    if (UnEgg.approval_.approved_) {
+        TyPlugInWCX Plugin;
+        Plugin.FileFullPath = UnEgg.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
+        Plugin.Exts = {QStringLiteral("alz"), QStringLiteral("egg")}; Plugin.IsContain64Bit = true;
+        Plugin.hostEnabled_ = true; Plugin.hostManifest_ = UnEgg.manifestPath_; Plugin.hostApproval_ = UnEgg.approval_;
+        VecWCX.push_back(std::move(Plugin));
+    }
     qSwap( VecWLX, vecWLX );
     qSwap( VecWCX, vecWCX );
 }
@@ -753,12 +882,6 @@ void CTCPlugInMgr::SetWLXOpts( quint32 Idx, const TyPlugInWLX& WLX )
     if( Idx >= vecWLX.size() && Idx != UINT_MAX )
         return;
 
-    if( vecWLX.isEmpty() == true && Idx == 0 )
-    {
-        vecWLX.push_back( WLX );
-        return;
-    }
-
     if( Idx == UINT_MAX )
         vecWLX.push_back( WLX );
     else
@@ -789,6 +912,11 @@ quint32 CTCPlugInMgr::ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath
 
     for( auto& Item : vecWLX )
     {
+        // Host opt-in (including revoked approval) excludes legacy execution.
+        if (Item.hostEnabled_) continue;
+        const auto Rule = hc::plugins::PluginApplicationRule::Parse(Item.applicationRule_);
+        if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
+        auto Match = Rule.Value().Matches(FileFullPath); if (!Match.HasValue() || !Match.Value()) continue;
         const auto File = QString( Item.FileFullPath ).replace( "%COMMANDER_PATH%", QString::fromWCharArray( Buffer ) );
 
         if( File.endsWith( "64" ) == false )
@@ -824,7 +952,7 @@ quint32 CTCPlugInMgr::ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath
     return Menu->actions().count();
 }
 
-QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext ) const
+QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext, const QString& FileName ) const
 {
     if( Ext.isEmpty() == true )
         return {};
@@ -833,9 +961,14 @@ QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext ) const
 
     for( const auto& WCX : vecWCX )
     {
-        if( WCX.Exts.contains( Ext, Qt::CaseInsensitive ) == false )
-            continue;
+        bool Supported = WCX.Exts.contains(Ext, Qt::CaseInsensitive);
+        if (!FileName.isEmpty()) for (const auto& Registered : WCX.Exts) if (FileName.endsWith('.' + Registered, Qt::CaseInsensitive)) Supported = true;
+        if (!Supported) continue;
 
+        const auto Rule = hc::plugins::PluginApplicationRule::Parse(WCX.applicationRule_);
+        if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
+        auto Match = Rule.Value().Matches(FileName.isEmpty() ? "file." + Ext : FileName);
+        if (!Match.HasValue() || !Match.Value()) continue;
         Ret.push_back( WCX );
     }
 
@@ -844,16 +977,13 @@ QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext ) const
 
 void CTCPlugInMgr::Save_WLX()
 {
-    StSettings->beginGroup( "ListerPlugins" );
-    StSettings->setValue( "Count", vecWLX.size() );
-    for( uint32_t Idx = 0; Idx < vecWLX.size(); ++Idx )
-    {
-        const auto& WLX = vecWLX[ Idx ];
-        StSettings->setValue( QString( "%1_Path" ).arg( Idx ), WLX.FileFullPath );
-        StSettings->setValue( QString( "%1_Detect" ).arg( Idx ), WLX.Detect );
-        StSettings->setValue( QString( "%1_Support64Bit" ).arg( Idx ), WLX.IsContain64Bit );
+    QJsonArray Items;
+    for (auto& Item : vecWLX) {
+        Item.Index = Items.size();
+        Items.append(QJsonObject{{"application", Item.applicationRule_}, {"path",Item.FileFullPath},{"detect",Item.Detect},{"support64Bit",Item.IsContain64Bit},
+            {"hostEnabled",Item.hostEnabled_},{"hostManifest",Item.hostManifest_},{"hostReviewed",hc::settings::JsonObject(Item.hostReviewed_)}});
     }
-    StSettings->endGroup();
+    hc::settings::AppSettings().SetPlugins("wlx", Items);
 }
 
 #undef LOAD_FUNC

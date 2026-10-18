@@ -1,0 +1,155 @@
+{
+  "actions": [
+    { "key": "main.new", "iconName": "new-file", "toolTip": "새 파일", "checkable": false },
+    { "key": "main.open", "iconName": "open", "toolTip": "파일 열기", "checkable": false },
+    { "key": "main.save", "iconName": "save", "toolTip": "저장", "checkable": false },
+    { "key": "main.saveAs", "iconName": "save-as", "toolTip": "다른 이름으로 저장", "checkable": false },
+    { "key": "main.print", "iconName": "print", "toolTip": "인쇄", "checkable": false },
+    { "key": "main.printPreview", "iconName": "print-preview", "toolTip": "인쇄 미리보기", "checkable": false },
+    { "key": "main.capture", "iconName": "screen-capture", "toolTip": "화면 캡쳐 (Alt+Shift+S)", "checkable": false },
+    { "key": "main.watermark", "iconName": "watermark", "toolTip": "워터마크 설정", "checkable": false },
+    { "key": "main.themeToggle", "iconName": "theme-toggle", "toolTip": "라이트/다크 테마 전환", "checkable": false },
+
+    { "key": "image.previous", "iconName": "chevron-left", "toolTip": "이전 이미지", "checkable": false },
+    { "key": "image.next", "iconName": "chevron-right", "toolTip": "다음 이미지", "checkable": false },
+    { "key": "image.rotateCw", "iconName": "rotate-cw", "toolTip": "시계 방향 회전", "checkable": false },
+    { "key": "image.rotateCcw", "iconName": "rotate-ccw", "toolTip": "반시계 방향 회전", "checkable": false },
+    { "key": "image.flipHorizontal", "iconName": "flip-horizontal", "toolTip": "좌우 반전", "checkable": false },
+    { "key": "image.flipVertical", "iconName": "flip-vertical", "toolTip": "상하 반전", "checkable": false },
+    { "key": "image.tool.freeDraw", "iconName": "draw-freehand", "toolTip": "자유 그리기", "checkable": true },
+    { "key": "image.tool.rectangle", "iconName": "shape-rect", "toolTip": "사각형 그리기", "checkable": true },
+    { "key": "image.tool.ellipse", "iconName": "shape-ellipse", "toolTip": "타원 그리기", "checkable": true },
+    { "key": "image.tool.arrow", "iconName": "draw-arrow", "toolTip": "화살표 그리기", "checkable": true },
+    { "key": "image.tool.text", "iconName": "draw-text", "toolTip": "텍스트 추가", "checkable": true },
+    { "key": "image.tool.crop", "iconName": "crop", "toolTip": "자르기 영역 선택", "checkable": true },
+    { "key": "image.cropApply", "iconName": "crop-apply", "toolTip": "자르기 적용", "checkable": false },
+    { "key": "image.undo", "iconName": "undo", "toolTip": "실행 취소", "checkable": false },
+    { "key": "image.redo", "iconName": "redo", "toolTip": "다시 실행", "checkable": false },
+    { "key": "image.slideshowStart", "iconName": "play", "toolTip": "슬라이드쇼 시작", "checkable": false },
+    { "key": "image.slideshowStop", "iconName": "stop", "toolTip": "슬라이드쇼 정지", "checkable": false },
+    { "key": "image.saveAs", "iconName": "save-as", "toolTip": "다른 형식으로 저장", "checkable": false },
+
+    { "key": "pdf.previousPage", "iconName": "chevron-left", "toolTip": "이전 페이지", "checkable": false },
+    { "key": "pdf.nextPage", "iconName": "chevron-right", "toolTip": "다음 페이지", "checkable": false },
+    { "key": "pdf.fitWidth", "iconName": "fit-width", "toolTip": "폭 맞춤", "checkable": true },
+    { "key": "pdf.fitPage", "iconName": "fit-page", "toolTip": "페이지 맞춤", "checkable": true },
+    { "key": "pdf.searchNext", "iconName": "search-next", "toolTip": "다음 검색 결과", "checkable": false },
+    { "key": "pdf.searchPrev", "iconName": "search-prev", "toolTip": "이전 검색 결과", "checkable": false },
+    { "key": "pdf.toggleToc", "iconName": "toc-toggle", "toolTip": "목차/사이드바 표시 전환", "checkable": true },
+    { "key": "pdf.toggleAnnotations", "iconName": "annotation-toggle", "toolTip": "어노테이션 도구모음 표시 전환", "checkable": true },
+    { "key": "pdf.annot.select", "iconName": "annotation-select", "toolTip": "어노테이션 도구 해제", "checkable": true },
+    { "key": "pdf.annot.highlight", "iconName": "annotation-highlight", "toolTip": "선택/드래그 영역 하이라이트", "checkable": true },
+    { "key": "pdf.annot.ink", "iconName": "annotation-ink", "toolTip": "형광펜/잉크 그리기", "checkable": true },
+    { "key": "pdf.annot.freeText", "iconName": "annotation-freetext", "toolTip": "자유 텍스트 상자", "checkable": true },
+    { "key": "pdf.annot.underline", "iconName": "annotation-underline", "toolTip": "밑줄", "checkable": true },
+    { "key": "pdf.annot.strikeOut", "iconName": "annotation-strikeout", "toolTip": "취소선", "checkable": true },
+    { "key": "pdf.annot.note", "iconName": "annotation-note", "toolTip": "팝업 노트", "checkable": true },
+
+    { "key": "text.font", "iconName": "font", "toolTip": "편집기 글꼴 선택", "checkable": false },
+    { "key": "text.wordWrap", "iconName": "word-wrap", "toolTip": "자동 줄 바꿈", "checkable": true },
+    { "key": "text.codeFolding", "iconName": "code-folding", "toolTip": "코드 폴딩 전환", "checkable": true },
+    { "key": "text.replace", "iconName": "replace", "toolTip": "현재 항목 치환", "checkable": false },
+    { "key": "text.replaceAll", "iconName": "replace-all", "toolTip": "모든 항목 치환", "checkable": false },
+    { "key": "text.readOnly", "iconName": "read-only", "toolTip": "읽기 전용 전환", "checkable": true },
+
+    { "key": "markdown.preview", "iconName": "view-preview", "toolTip": "미리보기 모드", "checkable": true },
+    { "key": "markdown.source", "iconName": "view-source", "toolTip": "소스 모드", "checkable": true },
+    { "key": "markdown.split", "iconName": "view-split", "toolTip": "분할 보기 모드", "checkable": true },
+    { "key": "markdown.toggleToc", "iconName": "toc-toggle", "toolTip": "목차 표시 전환", "checkable": true },
+    { "key": "markdown.refresh", "iconName": "refresh", "toolTip": "미리보기 새로고침", "checkable": false },
+
+    { "key": "widget.colorButton", "iconName": "color-picker", "toolTip": "선/도형/텍스트 색상", "checkable": false },
+    { "key": "widget.captureAllow", "iconName": "capture-allow", "toolTip": "캡처 허용", "checkable": true },
+    { "key": "widget.captureMonitor", "iconName": "capture-monitor", "toolTip": "화면 표시만 (WDA_MONITOR)", "checkable": true },
+    { "key": "widget.captureExclude", "iconName": "capture-exclude", "toolTip": "캡처 제외 (WDA_EXCLUDEFROMCAPTURE)", "checkable": true }
+  ],
+  "sections": [
+    {
+      "id": "main-toolbar",
+      "title": "Main Toolbar",
+      "description": "메인 윈도우 공통 액션",
+      "groups": [
+        {
+          "title": "File / Global",
+          "cards": ["main.new", "main.open", "main.save", "main.saveAs", "main.print", "main.printPreview", "main.capture", "main.watermark", "main.themeToggle"]
+        }
+      ]
+    },
+    {
+      "id": "image-toolbar",
+      "title": "Image Toolbar",
+      "description": "이미지 뷰어 액션 버튼과 보조 버튼",
+      "groups": [
+        {
+          "title": "Navigation / Transform",
+          "cards": ["image.previous", "image.next", "image.rotateCw", "image.rotateCcw", "image.flipHorizontal", "image.flipVertical"]
+        },
+        {
+          "title": "Drawing Tools",
+          "cards": ["image.tool.freeDraw", "image.tool.rectangle", "image.tool.ellipse", "image.tool.arrow", "image.tool.text", "image.tool.crop", "image.cropApply"]
+        },
+        {
+          "title": "History / Playback / Save",
+          "cards": ["image.undo", "image.redo", "image.slideshowStart", "image.slideshowStop", "image.saveAs"]
+        },
+        {
+          "title": "Auxiliary Button",
+          "cards": ["widget.colorButton"]
+        },
+        {
+          "title": "Capture Protection Modes",
+          "cards": ["widget.captureAllow", "widget.captureMonitor", "widget.captureExclude"]
+        }
+      ]
+    },
+    {
+      "id": "pdf-toolbar",
+      "title": "PDF Toolbar",
+      "description": "PDF 뷰어 액션 버튼",
+      "groups": [
+        {
+          "title": "Page / Fit / Search / Sidebar",
+          "cards": ["pdf.previousPage", "pdf.nextPage", "pdf.fitWidth", "pdf.fitPage", "pdf.searchNext", "pdf.searchPrev", "pdf.toggleToc", "pdf.toggleAnnotations"]
+        },
+        {
+          "title": "Annotations",
+          "cards": ["pdf.annot.select", "pdf.annot.highlight", "pdf.annot.ink", "pdf.annot.freeText", "pdf.annot.underline", "pdf.annot.strikeOut", "pdf.annot.note", "widget.colorButton"]
+        }
+      ]
+    },
+    {
+      "id": "text-toolbar",
+      "title": "Text Toolbar",
+      "description": "텍스트 뷰어 액션 버튼",
+      "groups": [
+        {
+          "title": "Edit",
+          "cards": ["text.font", "text.wordWrap", "text.codeFolding", "text.replace", "text.replaceAll", "text.readOnly"]
+        }
+      ]
+    },
+    {
+      "id": "markdown-toolbar",
+      "title": "Markdown Toolbar",
+      "description": "마크다운 뷰어 액션 버튼",
+      "groups": [
+        {
+          "title": "View / Outline",
+          "cards": ["markdown.preview", "markdown.source", "markdown.split", "markdown.toggleToc", "markdown.refresh"]
+        }
+      ]
+    },
+    {
+      "id": "fallback-icons",
+      "title": "Fallback",
+      "description": "등록/리소스 누락 시 사용하는 공통 대체 아이콘",
+      "groups": [
+        {
+          "title": "Fallback",
+          "cards": ["__missing__"]
+        }
+      ]
+    }
+  ]
+}
+

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <HcQtitanBuild>$(HcNativePluginBuild)\watercolor\third_party\QtitanDataGrid</HcQtitanBuild>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(HcQtitanBuild)\src\include;$(HcQtitanBuild)\src\src\base;$(HcQtitanBuild)\src\src\grid;$(SolutionDir)externalLibs\waterColorStyle\src\fmstyle\include;$(SolutionDir)externalLibs\waterColorStyle\src\fmwidgets\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>QTN_NAMESPACE;QTITAN_LIBRARY_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(HcQtitanBuild)\$(Configuration)\qtitan_grid.lib;$(HcQtitanBuild)\$(Configuration)\qtitan_base.lib;$(HcNativePluginBuild)\watercolor\src\fmstyle\$(Configuration)\fmstyle.lib;$(HcNativePluginBuild)\watercolor\src\fmwidgets\$(Configuration)\fmwidgets.lib;user32.lib;gdi32.lib;shell32.lib;comctl32.lib;msimg32.lib;advapi32.lib;shlwapi.lib;dwmapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

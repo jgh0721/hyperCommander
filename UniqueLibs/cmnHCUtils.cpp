@@ -1,5 +1,12 @@
 ﻿#include "stdafx.h"
 #include "cmnHCUtils.hpp"
+#include <QAbstractNativeEventFilter>
+#include <QScopeGuard>
+#include <QDir>
+#include <QThread>
+#include <memory>
+#include <vector>
+#include <wrl/client.h>
 
 #include "cmnTypeDefs.hpp"
 
@@ -206,74 +213,106 @@ void SetTitleIcon( QLabel* Widget )
     Widget->setScaledContents( true );
 }
 
-bool OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow )
+namespace
 {
-    //assert( parentWindow );
-    ITEMIDLIST* id = nullptr;
-    IShellFolder* ifolder = nullptr;
-    IContextMenu* imenu = nullptr;
-    std::wstring windowsPath = path;
-    bool IsSuccess = false;
+struct ShellPidlDeleter
+{
+    using pointer = PIDLIST_ABSOLUTE;
+    void operator()(pointer Value) const { CoTaskMemFree(Value); }
+};
+using ShellPidl = std::unique_ptr<ITEMIDLIST, ShellPidlDeleter>;
 
-    do
+// Owner-drawn and lazily populated shell extensions send these messages to
+// the menu owner. Forward them only while this particular native menu is open.
+class ShellMenuMessages final : public QAbstractNativeEventFilter
+{
+public:
+    ShellMenuMessages(HWND Owner, IContextMenu* Menu) : owner_(Owner)
     {
-        //std::replace( windowsPath.begin(), windowsPath.end(), '/', '\');
-        HRESULT result = SHParseDisplayName( windowsPath.c_str(), 0, &id, 0, 0 );
-        if( !SUCCEEDED( result ) || !id )
-            break;
-
-        LPCITEMIDLIST idChild = 0;
-        result = SHBindToParent( id, IID_IShellFolder, ( void** )&ifolder, &idChild );
-        if( !SUCCEEDED( result ) || !ifolder )
-            break;
-
-        result = ifolder->GetUIObjectOf( ( HWND )parentWindow, 1, &idChild, IID_IContextMenu, 0, reinterpret_cast< void** >( &imenu ) );
-        if( !SUCCEEDED( result ) || !ifolder )
-            break;
-
-        HMENU hMenu = CreatePopupMenu();
-        if( !hMenu )
-            break;
-
-        if( SUCCEEDED( imenu->QueryContextMenu( hMenu, 0, 1, 0x7FFF, CMF_NORMAL ) ) )
-        {
-            UINT Flags = TPM_RETURNCMD ;
-            if( GetSystemMetrics( SM_MENUDROPALIGNMENT ) != 0 )
-                Flags |= TPM_RIGHTALIGN | TPM_HORNEGANIMATION;
-            else
-                Flags |= TPM_LEFTALIGN | TPM_HORPOSANIMATION;
-
-            int iCmd = TrackPopupMenuEx( hMenu, Flags, xPos, yPos, ( HWND )parentWindow, NULL );
-            if( iCmd > 0 )
-            {
-                CMINVOKECOMMANDINFOEX info = { 0 };
-                info.cbSize = sizeof( info );
-                info.fMask = CMIC_MASK_UNICODE ;
-                info.hwnd = ( HWND )parentWindow;
-                info.lpVerb = MAKEINTRESOURCEA( iCmd - 1 );
-                info.lpVerbW = MAKEINTRESOURCEW( iCmd - 1 );
-                info.nShow = SW_SHOWNORMAL;
-                imenu->InvokeCommand( ( LPCMINVOKECOMMANDINFO )&info );
-            }
+        if (FAILED(Menu->QueryInterface(IID_PPV_ARGS(menu3_.GetAddressOf()))))
+            Menu->QueryInterface(IID_PPV_ARGS(menu2_.GetAddressOf()));
+        qApp->installNativeEventFilter(this);
+    }
+    ~ShellMenuMessages() override { qApp->removeNativeEventFilter(this); }
+    bool nativeEventFilter(const QByteArray&, void* Message, qintptr* Result) override
+    {
+        const auto* Msg = static_cast<MSG*>(Message);
+        if (Msg->hwnd != owner_) return false;
+        if (Msg->message != WM_INITMENUPOPUP && Msg->message != WM_DRAWITEM && Msg->message != WM_MEASUREITEM && Msg->message != WM_MENUCHAR) return false;
+        if ((Msg->message == WM_DRAWITEM || Msg->message == WM_MEASUREITEM) && Msg->wParam != 0) return false;
+        LRESULT Value = 0;
+        if (menu3_ && menu3_->HandleMenuMsg2(Msg->message, Msg->wParam, Msg->lParam, &Value) == S_OK) {
+            *Result = Value; return true;
         }
-
-        DestroyMenu( hMenu );
-
-        IsSuccess = true;
-
-    } while( false );
-
-    if( imenu )
-        imenu->Release();
-
-    if( ifolder )
-        ifolder->Release();
-
-    if( id )
-        CoTaskMemFree( id );
-
-    return IsSuccess;
+        if (menu2_ && Msg->message != WM_MENUCHAR && menu2_->HandleMenuMsg(Msg->message, Msg->wParam, Msg->lParam) == S_OK) {
+            *Result = Msg->message == WM_INITMENUPOPUP ? 0 : TRUE; return true;
+        }
+        return false;
+    }
+private:
+    HWND owner_;
+    Microsoft::WRL::ComPtr<IContextMenu2> menu2_;
+    Microsoft::WRL::ComPtr<IContextMenu3> menu3_;
+};
 }
+
+bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow)
+{
+    const auto Owner = static_cast<HWND>(ParentWindow);
+    if (Paths.isEmpty() || !IsWindow(Owner) || !qApp || QThread::currentThread() != qApp->thread()) return false;
+    const auto Initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(Initialized)) return false;
+    const auto ComCleanup = qScopeGuard([] { CoUninitialize(); });
+    std::vector<ShellPidl> Items;
+    std::vector<PCUITEMID_CHILD> Children;
+    ShellPidl Parent;
+    Microsoft::WRL::ComPtr<IShellFolder> Folder;
+    for (const auto& Path : Paths) {
+        if (Path.isEmpty() || Path.contains(QChar::Null) || !QDir::isAbsolutePath(Path)) return false;
+        PIDLIST_ABSOLUTE Raw = nullptr;
+        const auto Parsed = SHParseDisplayName(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(Path).utf16()), nullptr, &Raw, 0, nullptr);
+        ShellPidl Item(Raw);
+        if (FAILED(Parsed) || !Item) return false;
+        ShellPidl ItemParent(ILCloneFull(Item.get()));
+        if (!ItemParent || !ILRemoveLastID(ItemParent.get())) return false;
+        if (!Parent) {
+            Parent = std::move(ItemParent);
+            PCUITEMID_CHILD Child = nullptr;
+            if (FAILED(SHBindToParent(Item.get(), IID_PPV_ARGS(Folder.GetAddressOf()), &Child)) || !Folder) return false;
+        }
+        else if (!ILIsEqual(Parent.get(), ItemParent.get())) return false;
+        Children.push_back(ILFindLastID(Item.get())); Items.push_back(std::move(Item));
+    }
+    Microsoft::WRL::ComPtr<IContextMenu> Context;
+    if (FAILED(Folder->GetUIObjectOf(Owner, static_cast<UINT>(Children.size()), Children.data(), IID_IContextMenu,
+        nullptr, reinterpret_cast<void**>(Context.GetAddressOf()))) || !Context) return false;
+    const auto Popup = CreatePopupMenu();
+    if (!Popup) return false;
+    const auto MenuCleanup = qScopeGuard([Popup] { DestroyMenu(Popup); });
+    ShellMenuMessages Messages(Owner, Context.Get());
+    const UINT QueryFlags = CMF_NORMAL | ((GetKeyState(VK_SHIFT) & 0x8000) ? CMF_EXTENDEDVERBS : 0);
+    if (FAILED(Context->QueryContextMenu(Popup, 0, 1, 0x7FFF, QueryFlags)) || GetMenuItemCount(Popup) <= 0) return false;
+    // TPM_NONOTIFY also suppresses initialization/owner-draw messages required
+    // by IContextMenu2/3. TPM_RETURNCMD alone avoids WM_COMMAND dispatch.
+    const UINT Flags = TPM_RETURNCMD | TPM_RIGHTBUTTON
+        | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN);
+    const auto Command = TrackPopupMenuEx(Popup, Flags, X, Y, Owner, nullptr);
+    if (!Command) return true; // Closing the menu without invoking a verb is successful.
+    if (!IsWindow(Owner)) return false;
+    CMINVOKECOMMANDINFOEX Info = {};
+    Info.cbSize = sizeof(Info); Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+    if (GetKeyState(VK_SHIFT) & 0x8000) Info.fMask |= CMIC_MASK_SHIFT_DOWN;
+    if (GetKeyState(VK_CONTROL) & 0x8000) Info.fMask |= CMIC_MASK_CONTROL_DOWN;
+    Info.hwnd = Owner; Info.lpVerb = MAKEINTRESOURCEA(Command - 1); Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
+    Info.nShow = SW_SHOWNORMAL; Info.ptInvoke = {X, Y};
+    return SUCCEEDED(Context->InvokeCommand(reinterpret_cast<LPCMINVOKECOMMANDINFO>(&Info)));
+}
+
+bool OpenShellContextMenuForObject(const std::wstring& Path, int X, int Y, void* ParentWindow)
+{
+    return OpenShellContextMenuForObjects({QString::fromStdWString(Path)}, X, Y, ParentWindow);
+}
+
 
 QString ConvertSTRRETTo( STRRET* Str )
 {

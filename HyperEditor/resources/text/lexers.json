@@ -1,0 +1,89 @@
+{
+  "languages": [
+    {
+      "languageId": "none",
+      "displayName": "None",
+      "lexerKey": "none",
+      "extensions": ["txt", "log", "ini", "cfg", "toml", "php", "rb", "go", "rs"]
+    },
+    {
+      "languageId": "cpp",
+      "displayName": "C++",
+      "lexerKey": "cpp",
+      "extensions": ["cpp", "c", "h", "hpp", "cxx"]
+    },
+    {
+      "languageId": "python",
+      "displayName": "Python",
+      "lexerKey": "python",
+      "extensions": ["py"]
+    },
+    {
+      "languageId": "javascript",
+      "displayName": "JavaScript",
+      "lexerKey": "cpp",
+      "extensions": ["js", "ts"]
+    },
+    {
+      "languageId": "html",
+      "displayName": "HTML",
+      "lexerKey": "hypertext",
+      "extensions": ["html", "htm"]
+    },
+    {
+      "languageId": "css",
+      "displayName": "CSS",
+      "lexerKey": "css",
+      "extensions": ["css"]
+    },
+    {
+      "languageId": "java",
+      "displayName": "Java",
+      "lexerKey": "cpp",
+      "extensions": ["java", "cs"]
+    },
+    {
+      "languageId": "xml",
+      "displayName": "XML",
+      "lexerKey": "xml",
+      "extensions": ["xml"]
+    },
+    {
+      "languageId": "json",
+      "displayName": "JSON",
+      "lexerKey": "json",
+      "extensions": ["json"]
+    },
+    {
+      "languageId": "bash",
+      "displayName": "Bash",
+      "lexerKey": "bash",
+      "extensions": ["sh"]
+    },
+    {
+      "languageId": "batch",
+      "displayName": "Batch",
+      "lexerKey": "batch",
+      "extensions": ["bat"]
+    },
+    {
+      "languageId": "yaml",
+      "displayName": "YAML",
+      "lexerKey": "yaml",
+      "extensions": ["yaml", "yml"]
+    },
+    {
+      "languageId": "sql",
+      "displayName": "SQL",
+      "lexerKey": "sql",
+      "extensions": ["sql"]
+    },
+    {
+      "languageId": "markdown",
+      "displayName": "Markdown",
+      "lexerKey": "markdown",
+      "extensions": []
+    }
+  ]
+}
+

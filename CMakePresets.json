@@ -1,22 +1,90 @@
 {
   "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 0
+  },
   "configurePresets": [
+    {
+      "name": "vc2026-validation-noncommercial",
+      "displayName": "VC2026 archive validation (personal/noncommercial UnEGG)",
+      "inherits": "vc2026-qt612",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "HC_BUILD_SMB_TESTS": "ON",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON",
+        "HC_UNEGG_USE": "NONCOMMERCIAL"
+      }
+    },
+    {
+      "name": "vc2026-readiness-p2",
+      "displayName": "JSON settings validation",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/readiness-p2",
+      "cacheVariables": {
+        "HC_BUILD_SMB_TESTS": "ON"
+      }
+    },
     {
       "hidden": true,
       "name": "Qt",
       "cacheVariables": {
         "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      }
+    },
+    {
+      "name": "vc2026-qt612",
+      "displayName": "VC2026 x64 / Qt 6.12.0",
+      "inherits": "Qt",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "toolset": "v145,host=x64",
+      "binaryDir": "${sourceDir}/_build/vc2026-qt612",
+      "environment": {
+        "QTDIR": "D:/Qt/Qt-6.12.0-VC2026-X64-H-MD-2026-10-10"
       },
-      "vendor": {
-        "qt-project.org/Qt": {
-          "checksum": "wVa86FgEkvdCTVp1/nxvrkaemJc="
-        }
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
     }
   ],
-  "vendor": {
-    "qt-project.org/Presets": {
-      "checksum": "67SmY24ZeVbebyKD0fGfIzb/bGI="
+  "buildPresets": [
+    {
+      "name": "vc2026-readiness-p2-debug",
+      "configurePreset": "vc2026-readiness-p2",
+      "configuration": "Debug",
+      "targets": [
+        "HyperCommander",
+        "hc_smb_tests",
+        "hc_settings_tests",
+        "hc_workspace_tests",
+        "hc_column_tests",
+        "hc_automation_tests"
+      ]
+    },
+    {
+      "name": "vc2026-readiness-p2-release",
+      "configurePreset": "vc2026-readiness-p2",
+      "configuration": "Release",
+      "targets": [
+        "HyperCommander",
+        "hc_smb_tests",
+        "hc_settings_tests",
+        "hc_workspace_tests",
+        "hc_column_tests",
+        "hc_automation_tests"
+      ]
+    },
+    {
+      "name": "vc2026-debug",
+      "configurePreset": "vc2026-qt612",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vc2026-release",
+      "configurePreset": "vc2026-qt612",
+      "configuration": "Release"
     }
-  }
+  ]
 }

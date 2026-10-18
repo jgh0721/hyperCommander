@@ -5,6 +5,7 @@
 #include "mdlFileSystem.hpp"
 #include "cmnTypeDefs.hpp"
 #include "column_Defs.hpp"
+#include "UniqueLibs/settings/fileColorRules.hpp"
 
 /*!
     FSModel -> Initialize
@@ -64,6 +65,8 @@ public:
     static constexpr int USR_ROLE_HIDDENOPACITY = Qt::UserRole + 2;
 
     void                            Refresh();
+    virtual bool                    IsLoading() const { return false; }
+    virtual bool                    HandlesRefreshSignals() const { return false; }
 
     void                            SetRoot( nsHC::TySpFileSystem Fs );
     void                            AppendRoot( nsHC::TySpFileSystem Fs );
@@ -97,6 +100,7 @@ signals:
 
     void                            sigRefreshCompleted();
     void                            sigChangedDirectory( const QString& CurrentPath );
+    void                            sigNavigationFailed(const QString& Code);
 
 public:
     //////////////////////////////////////////////////////////////////////////
@@ -120,6 +124,12 @@ protected:
     ColumnView                      columnView_;
     TyColorScheme                   colorScheme_;
     QVector< QPair< TyFileSet, TyPrFGWithBG > > vecFileSetColors_;
+    hc::settings::FileColorRules fileColorRules_;
+    QTimer* fileRuleClock_ = nullptr;
+    void scheduleFileRuleExpiry(qint64 Deadline) const;
+    mutable std::optional<qint64> fileRuleExpiry_;
+    struct CachedFileRule { hc::settings::FileRuleResult style_; int row_ = 0; };
+    mutable QCache<QString, CachedFileRule> fileColorCache_{2048};
 
     mutable nsCmn::nsConcurrent::CCmnMutex  lock;
     QVector< nsHC::TySpFileSystem > vecFs_;         // 어떠한 FS 에서 PACKER 를 호출하면 PACKER FS 가 추가된다.

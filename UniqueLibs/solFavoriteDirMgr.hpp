@@ -28,6 +28,8 @@ public:
     TyEnDrivesOn                    GetDrivesOn() const;
     void                            SetDrivesOn( TyEnDrivesOn DrivesOn );
 
+    bool                            ApplyConfiguration( QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn );
+
     void                            ConstructDirMenu( QMenu* Menu );
 
 public slots:

@@ -3,6 +3,7 @@
 
 #include "fileSetMgr.hpp"
 #include "solTCPluginMgr.hpp"
+#include <QTimer>
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -12,13 +13,43 @@ DECLARE_CMNLIBSV2_NAMESPACE
 CFsModelT::CFsModelT( QObject* Parent )
     : QAbstractItemModel( Parent )
 {
+    fileRuleClock_ = new QTimer(this); fileRuleClock_->setSingleShot(true);
+    connect(fileRuleClock_, &QTimer::timeout, this, [this] {
+        QList<int> Rows; std::optional<qint64> Next;
+        {
+            CCmnMutexLocker Locker(&lock); fileRuleExpiry_.reset(); const auto Now = QDateTime::currentMSecsSinceEpoch();
+            // Only cached rows can be visible stale records. Visiting at most
+            // 2,048 entries avoids a full-list refresh every second.
+            for (const auto& Key : fileColorCache_.keys()) {
+                auto* Cached = fileColorCache_.object(Key); const auto Deadline = Cached->style_.validUntilUtcMs_; if (!Deadline) continue;
+                if (*Deadline <= Now) { Rows.append(Cached->row_); fileColorCache_.remove(Key); }
+                else if (!Next || *Deadline < *Next) Next = Deadline;
+            }
+            if (Next) scheduleFileRuleExpiry(*Next);
+        }
+        std::sort(Rows.begin(), Rows.end()); const int Count = rowCount();
+        for (int I = 0; I < Rows.size();) {
+            const int First = Rows[I]; int Last = First; ++I;
+            while (I < Rows.size() && Rows[I] <= Last + 1) Last = qMax(Last, Rows[I++]);
+            if (First >= 0 && First < Count && columnCount()) emit dataChanged(index(First, 0), index(qMin(Last, Count - 1), columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
+        }
+    });
+}
+
+void CFsModelT::scheduleFileRuleExpiry(qint64 Deadline) const
+{
+    if (QThread::currentThread() != thread()) return;
+    if (fileRuleExpiry_ && Deadline >= *fileRuleExpiry_ && fileRuleClock_->isActive()) return;
+    fileRuleExpiry_ = Deadline; const auto Now = QDateTime::currentMSecsSinceEpoch();
+    const auto Delay = Deadline > Now ? quint64(Deadline) - quint64(Now) : 0;
+    fileRuleClock_->start(int(qBound<quint64>(1000, Delay, std::numeric_limits<int>::max())));
 }
 
 void CFsModelT::Refresh()
 {
     doRefresh();
 
-    emit sigRefreshCompleted();
+    if (!HandlesRefreshSignals()) emit sigRefreshCompleted();
 }
 
 void CFsModelT::SetRoot( nsHC::TySpFileSystem Fs )
@@ -57,6 +88,15 @@ void CFsModelT::ChangeDirectory( const QString& Child )
 {
     QString Notify; bool IsEscape = false;
     const auto Root = GetRoot();
+    QString PreviousDirectory;
+    if (Child == "..") {
+        auto PreviousPath = QDir::fromNativeSeparators(GetCurrentPath());
+        if (IsRoot() && Root && (Root->GetFeatures() & nsHC::FS_FEA_PACK)) PreviousPath = QDir::fromNativeSeparators(Root->GetRoot());
+        while (PreviousPath.endsWith('/') && PreviousPath.size() > 1) PreviousPath.chop(1);
+        PreviousDirectory = PreviousPath.section('/', -1);
+    }
+    setProperty("hc.parentFocusName", PreviousDirectory);
+    setProperty("hc.parentNavigation", Child == "..");
 
     if( Child.startsWith( '/' ) == true || Child.startsWith( '\\' ) == true )
     {
@@ -68,6 +108,14 @@ void CFsModelT::ChangeDirectory( const QString& Child )
         {
             if( Child == ".." )
             {
+                if (Root->GetCate() == nsHC::FS_CATE_VIRTUAL && vecFs_.size() > 1)
+                {
+                    vecFs_.removeLast();
+                    SetCurrentPath("\\");
+                    Refresh();
+                    if (!HandlesRefreshSignals()) emit sigChangedDirectory(GetCurrentPathWithRoot());
+                    return;
+                }
                 // LOCAL FS 의 Root 에서 .. 일 때와 PACK FS 의 Root 에서 .. 일 때 구분,
                 if( !FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
                 {
@@ -106,7 +154,7 @@ void CFsModelT::ChangeDirectory( const QString& Child )
 
     qDebug() << __FUNCTION__ << " : " << Notify;
     Refresh();
-    emit sigChangedDirectory( Notify );
+    if (!HandlesRefreshSignals()) emit sigChangedDirectory( Notify );
 }
 
 void CFsModelT::ChangeDirectory( const QModelIndex& Child )
@@ -115,6 +163,26 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
     if( Node == nullptr || Node->Name_.isEmpty() == true )
     {
         ChangeDirectory( "" );
+        return;
+    }
+
+    if (Node->storageEntry_ && Node->storageEntry_->hints_.contains("filesystemPath") && (Node->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        const auto Path = QString::fromStdString(Node->storageEntry_->hints_.at("filesystemPath"));
+        const auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Path));
+        if (Fs)
+        {
+            SetRoot(Fs);
+            SetCurrentPath(Path.mid(Fs->GetRoot().size()));
+            ChangeDirectory("");
+        }
+        return;
+    }
+    if (Node->storageEntry_ && Node->PIDL && (Node->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSShell(Node->PIDL)));
+        SetCurrentPath("\\");
+        ChangeDirectory("");
         return;
     }
 
@@ -134,8 +202,9 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
         {
             // 압축파일
             const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
-            const auto VecWCXs = StPlugInMgr->RetrieveWCXByExts( Node->Ext_ );
+            const auto VecWCXs = StPlugInMgr->RetrieveWCXByExts( Node->Ext_, Node->Name_ );
 
+            bool Mounted = false;
             for( const auto& WCX : VecWCXs )
             {
                 // 플러그인 로딩 후, OpenArchive 가 성공하면 해당 플러그인을 사용하여 파일 목록을 구성한다.
@@ -143,20 +212,30 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
                 if( SpWCX->LoadWCX( WCX ).ErrorCode != ERROR_SUCCESS )
                     continue;
 
-                const auto Ret = SpWCX->OpenArchive( GetFileFullPath( Child ), PK_OM_LIST );
-                if( Ret.Value.has_value() == false || Ret.Value.value() == false )
-                    continue;
+                const auto ParentPack = dynamic_cast<nsHC::CFSPack*>(GetRoot().get());
+                if (ParentPack) {
+                    // Nested bytes are materialized by the read provider on its
+                    // worker. Never pass an archive-internal path to Win32 I/O.
+                    if (!Node->storageEntry_ || Node->storageEntry_->locator_.nesting_.size() >= 8) continue;
+                } else {
+                    const auto Ret = SpWCX->OpenArchive(GetFileFullPath(Child), PK_OM_LIST);
+                    if (!Ret.Value.has_value() || !Ret.Value.value()) continue;
+                }
 
                 const auto Packer = new nsHC::CFSPack( GetFileFullPath( Child ), SpWCX );
                 Packer->SetParent( GetCurrentPath() );
+                if (ParentPack) {
+                    auto Location = Node->storageEntry_->locator_; Location.nesting_.push_back({"wcx", "/"});
+                    Packer->SetArchiveChain(std::move(Location), ParentPack->ArchiveBackends());
+                }
                 
                 // CFSPack 에 TySpWCX 와 압축파일 이름을 넣고, FS 스택 위에 넣는다.
                 const auto Fs = nsHC::TySpFileSystem( Packer );
-                vecFs_.push_back( Fs );
+                vecFs_.push_back( Fs ); Mounted = true;
                 break;
             }
 
-            ChangeDirectory( "/" );
+            if (Mounted) ChangeDirectory( "/" );
             return;
         }
 
@@ -199,6 +278,9 @@ void CFsModelT::SetColumnView( const ColumnView& CV )
 void CFsModelT::SetColorScheme( const TyColorScheme& ColorScheme )
 {
     colorScheme_ = ColorScheme;
+    fileColorCache_.clear();
+    fileColorRules_.Load(hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileColorRules"].toObject());
+    fileRuleClock_->stop(); fileRuleExpiry_.reset();
 
     decltype( vecFileSetColors_ ) VecFileSetColors;
     if( colorScheme_.Name.isEmpty() == true )
@@ -257,6 +339,8 @@ QString CFsModelT::GetFileFullPath( const QModelIndex& Index ) const
         return "";
 
     const auto& Item = vecNode_.at( Index.row() );
+    if (Item->storageEntry_ && Item->storageEntry_->hints_.contains("filesystemPath"))
+        return QString::fromStdString(Item->storageEntry_->hints_.at("filesystemPath"));
     return QString( "%1%2%3" ).arg( GetCurrentPathWithRoot() ).arg( IsRoot() ? "" : "\\" ).arg( Item->Name_ );
 }
 
@@ -309,7 +393,7 @@ QVariant CFsModelT::headerData( int section, Qt::Orientation orientation, int ro
     if( section < 0 || section >= columnView_.VecColumns.size() )
         return {};
 
-    return columnView_.VecColumns[ section ].Name;
+    return columnView_.VecColumns[ section ].definition_.title_;
 }
 
 Qt::ItemFlags CFsModelT::flags( const QModelIndex& index ) const

@@ -1,12 +1,13 @@
-#ifndef STDAFX_H
-#define STDAFX_H
+﻿#pragma once
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <commctrl.h>
-#include <cstdint>
+#include <Windows.h>
+#include <ShlObj.h>
+#include <QtCore>
 
-#include "cmnIncludeLibrary.hpp"
-
-#endif //STDAFX_H
+#define USE_QT_SUPPORT
+#include "cmnBase.hpp"
+#include "cmnUtils.hpp"

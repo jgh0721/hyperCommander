@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QString>
+#include <QSet>
 
 #include "cmnTypeDefs_Name.hpp"
 
@@ -14,75 +15,11 @@ constexpr long long MEBI_BYTE = KIBI_BYTE * KIBI_BYTE;
 constexpr long long GIBI_BYTE = MEBI_BYTE * KIBI_BYTE;
 constexpr long long TEBI_BYTE = GIBI_BYTE * KIBI_BYTE;
 
-Q_GLOBAL_STATIC_WITH_ARGS( QSettings, StSettings, ( QString( "%1/%2" ).arg( qApp->applicationDirPath() ).arg( MAIN_CONFIG_FILENAME ), QSettings::IniFormat ));
+#include "settings/appSettings.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/*!
-    Index => 0..N
 
-    [Configuration]
-    SizeInHeader=
-    SizeInFooter=
-    UseBuiltInShortcut=True
-
-    [ColorScheme]
-    Count=N
-    Selected=N
-    N_Name=XXXX
-
-    [ColorScheme_XXXX]
-    IsDarkMode=false
-
-    Menu_Font_Family=
-    Menu_Font_Size=Npt or Npx
-    Dialog_Font_Family=
-    Dialog_Font_Size=Npt or Npx
-    Dialog_FGColor=
-    Dialog_BGColor=
-    List_Font_Family=
-    List_Font_Size=Npt or Npx
-    List_FGColor=
-    List_BGColor=
-    List_CursorColor=
-    List_SelectColor=
-    List_Column_FGColor=
-    List_Column_BGColor=
-
-    FileSet_XXX_FGColor=
-    FileSet_XXX_BGColor=
-        Color => #RGB, #RRGGBB, #AARRGGBB, #RRRGGGBBB, #RRRRGGGGBBBB, SVG Color Keyword
-
-    [FileSet]
-    Count=N
-    0_Name=XXXX
-    0_Flags=XXXX
-    0_Filters=X
-    0_Exts=XXX|XXX
-    0_Attributes=Z
-    0_Size=Z
-
-    // 내장 뷰어
-    [Viewer]
-
-    [ListerPlugins]
-    Count=N
-    0_Path=XXX                  wlx or wlx64
-    0_Detect=XXXX
-    0_Support64Bit=True|False
-
-    [PackerPlugins]
-    Count=N
-    0_Path=XXX
-    0_Exts=
-    0_Caps=
-    0_Support64Bit=True|False
-
-    // Num( NumpadModifier ), Ctrl, Alt, Shift 
-    // UseBuiltInShortcut 값이 True 이면 해당 값을 먼저 가져온 후, 이후에 사용자가 설정한 값으로 재정의한다. 
-    [Shortcut]
-
- */
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -164,6 +101,8 @@ struct TyColorScheme
 {
     QString             Name;
     bool                IsDarkMode = false;
+    // Resolved colors remain separate from persisted user intent.
+    QSet<QString>       explicitColors_;
 
     // Main
     QFont               Menu_Font;
@@ -192,6 +131,7 @@ Q_DECLARE_METATYPE( TyColorScheme );
 
 struct TyExternalEditor
 {
+    QString stableId_;
     QString             Name;
     QIcon               Icon;
     QString             IconPath;

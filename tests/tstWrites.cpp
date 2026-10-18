@@ -1,0 +1,1495 @@
+﻿#include "UniqueLibs/nativeWritableStorage.hpp"
+#include "UniqueLibs/fileBatchOperations.hpp"
+#include "UniqueLibs/storageProviders.hpp"
+#include "commonLibs/operations/fileOperation.hpp"
+#include <QtTest>
+#include "UniqueLibs/nativeFileElevation.hpp"
+#include "UniqueLibs/permissionService.hpp"
+#include "UniqueLibs/fileSecurityRecovery.hpp"
+#include <QTemporaryDir>
+#include <QFile>
+#include <Windows.h>
+#include <Aclapi.h>
+#include <sddl.h>
+#include <winioctl.h>
+#include <ShlObj.h>
+#include <wrl/client.h>
+#include <QScopeGuard>
+
+using namespace hc::storage;
+using namespace hc::operations;
+
+namespace
+{
+    enum class WriteFault { Remove, Append, Metadata, Commit, AppendAndCleanup, Directory, Corrupt };
+    class FaultSession final : public IWriteSession
+    {
+    public:
+        FaultSession(std::unique_ptr<IWriteSession> Session, WriteFault Fault) : session_(std::move(Session)), fault_(Fault) {}
+        Result<Unit> Append(std::span<const std::byte> Bytes, OperationContext Context) override
+        {
+            if (fault_ == WriteFault::Append || fault_ == WriteFault::AppendAndCleanup)
+            {
+                const auto Partial = session_->Append(Bytes.first((std::max)(std::size_t{1}, Bytes.size() / 2)), Context);
+                if (!Partial.HasValue()) return Partial.Failure();
+                return Error{ErrorCategory::Unavailable, "injected-disk-full"};
+            }
+            if (fault_ == WriteFault::Corrupt && !Bytes.empty()) {
+                std::vector<std::byte> Changed(Bytes.begin(), Bytes.end()); Changed.front() ^= std::byte{1};
+                return session_->Append(Changed, Context);
+            }
+            return session_->Append(Bytes, Context);
+        }
+        Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) override
+        {
+            if (fault_ == WriteFault::Metadata) return Error{ErrorCategory::AccessDenied, "injected-metadata"};
+            return session_->SetMetadata(std::move(Metadata), Context);
+        }
+        Result<Unit> ConfigureCopy(EntrySnapshot Source, CopyOptions Options, OperationContext Context) override { return session_->ConfigureCopy(std::move(Source), Options, Context); }
+        Result<Unit> RecordSourceBytes(std::span<const std::byte> Bytes, OperationContext Context) override { return session_->RecordSourceBytes(Bytes, Context); }
+        Result<CopyExtraProgress> AdvanceCopyExtras(std::uint64_t Remaining, OperationContext Context) override { return session_->AdvanceCopyExtras(Remaining, Context); }
+        Result<bool> VerifyContent(OperationContext Context) override { return session_->VerifyContent(Context); }
+        Result<WriteReceipt> Commit(OperationContext Context) override
+        {
+            if (fault_ == WriteFault::Commit) return Error{ErrorCategory::Unavailable, "injected-commit"};
+            return session_->Commit(Context);
+        }
+        Result<Unit> Abort() override
+        {
+            const auto Cleaned = session_->Abort();
+            if (!Cleaned.HasValue()) return Cleaned.Failure();
+            if (fault_ == WriteFault::AppendAndCleanup) return Error{ErrorCategory::AccessDenied, "injected-cleanup"};
+            return Unit{};
+        }
+    private:
+        std::unique_ptr<IWriteSession> session_;
+        WriteFault fault_;
+    };
+    class ImmediateExecutor final : public hc::commands::IExecutor
+    {
+    public:
+        bool Post(std::function<void()> Work) override { Work(); return true; }
+    };
+    class FailedRemoveWriter final : public IWritableStorage
+    {
+    public:
+        explicit FailedRemoveWriter(std::shared_ptr<IWritableStorage> Writer, WriteFault Fault = WriteFault::Remove) : writer_(std::move(Writer)), fault_(Fault) {}
+        ProviderId Id() const override { return writer_->Id(); }
+        Result<SupportDecision> Supports(Mutation Operation, Locator At, OperationContext Context) override { return writer_->Supports(Operation, std::move(At), Context); }
+        Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return writer_->Inspect(std::move(At), Context); }
+        Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override
+        {
+            auto Session = writer_->BeginWrite(std::move(At), std::move(Expected), Context);
+            if (!Session.HasValue()) return Session.Failure();
+            return std::unique_ptr<IWriteSession>(new FaultSession(std::move(Session.Value()), fault_));
+        }
+        CopyCapabilities CopySupport() const override { return writer_->CopySupport(); }
+        Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context) override
+        {
+            auto Session = writer_->BeginCopy(std::move(At), std::move(Expected), Options, Context);
+            if (!Session.HasValue()) return Session.Failure();
+            return std::unique_ptr<IWriteSession>(new FaultSession(std::move(Session.Value()), fault_));
+        }
+        Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { if (fault_ == WriteFault::Directory && made_++ == 1) return Error{ErrorCategory::AccessDenied, "injected-parent-create"}; return writer_->MakeDirectory(std::move(At), Context); }
+        Result<Unit> Remove(EntrySnapshot, OperationContext) override { return Error{ErrorCategory::AccessDenied, "injected-source-delete"}; }
+        Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override { return writer_->Rename(std::move(Entry), std::move(To), Context); }
+    private:
+        std::shared_ptr<IWritableStorage> writer_;
+        WriteFault fault_; int made_ = 0;
+    };
+    class DeniedContentWriter final : public IWritableStorage
+    {
+    public:
+        DeniedContentWriter(std::shared_ptr<IWritableStorage> Writer, QString Name = {}) : writer_(std::move(Writer)), name_(std::move(Name)) {}
+        ProviderId Id() const override { return writer_->Id(); }
+        Result<SupportDecision> Supports(Mutation What, Locator At, OperationContext Context) override { return writer_->Supports(What, std::move(At), Context); }
+        Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return writer_->Inspect(std::move(At), Context); }
+        CopyCapabilities CopySupport() const override { return writer_->CopySupport(); }
+        Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override
+        { return writer_->BeginWrite(std::move(At), std::move(Expected), Context); }
+        Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context) override
+        {
+            if (name_.isEmpty() || QString::fromStdString(At.root_).endsWith(name_)) return Error{ErrorCategory::AccessDenied, "fixture-copy-denied"};
+            return writer_->BeginCopy(std::move(At), std::move(Expected), Options, Context);
+        }
+        Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { return writer_->MakeDirectory(std::move(At), Context); }
+        Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override { return writer_->Remove(std::move(Entry), Context); }
+        Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override { return writer_->Rename(std::move(Entry),std::move(To),Context); }
+    private:
+        std::shared_ptr<IWritableStorage> writer_;
+        QString name_;
+    };
+    struct ElevationFixtureState
+    {
+        std::atomic_bool hold_{false}, cancelled_{false}, decline_{false};
+        std::mutex mutex_;
+        std::vector<FileElevationRequest> requests_;
+        std::function<bool()> paused_;
+    };
+    class FixtureElevationSession final : public IFileElevationSession
+    {
+    public:
+        FixtureElevationSession(FileElevationRequest Request, std::shared_ptr<IStorageProvider> Reader,
+            std::shared_ptr<IWritableStorage> Writer, std::shared_ptr<ElevationFixtureState> State)
+            : request_(std::move(Request)), reader_(std::move(Reader)), writer_(std::move(Writer)), state_(std::move(State))
+        {
+            if (request_.action_ == FileElevationAction::Copy) {
+                FileOperationRequest Child; Child.sources_ = {{*request_.source_,reader_,{}}};
+                Child.destination_ = request_.destination_;
+                const auto Path = QString::fromStdString(Child.destination_.root_);
+                Child.destination_.root_ = QDir::toNativeSeparators(QFileInfo(Path).absolutePath()).toStdString();
+                Child.destinationName_ = QFileInfo(Path).fileName().toStdString(); Child.destinationWriter_ = writer_;
+                Child.conflict_ = ConflictPolicy::Replace; Child.approvedDestination_ = request_.expected_;
+                auto Prepared = PrepareFileOperation(std::move(Child));
+                if (Prepared.HasValue()) child_ = std::move(Prepared.Value().task_); else status_.error_ = Prepared.Failure();
+            }
+        }
+        Result<FileElevationStatus> Poll() override
+        {
+            if (state_->decline_) { status_.error_ = Error{ErrorCategory::Cancelled,"elevation-uac-declined"}; status_.finished_ = true; return status_; }
+            if (status_.finished_ || state_->hold_) return status_;
+            if (status_.error_) { status_.finished_=true; return status_; }
+            if (child_) {
+                if (status_.readyToCommit_ && !gate_) return status_;
+                JobStepContext Context; Context.jobId_ = request_.jobId_; Context.committing_ = gate_;
+                auto Step = child_->Advance(Context);
+                if (Step.progress_) status_.bytesDone_ = Step.progress_->bytesDone_;
+                if (Step.next_ == JobState::Committing) status_.readyToCommit_ = true;
+                if (IsTerminal(Step.next_)) {
+                    status_.finished_ = true; status_.error_ = Step.error_; status_.cleanupErrors_ = child_->Finalize(Step.next_); child_.reset();
+                    if (Step.item_) { status_.destinationCommitted_ = Step.item_->destinationCommitted_; status_.sourceRemoved_ = Step.item_->sourceRemoved_; }
+                    auto Output = writer_->Inspect(request_.destination_, {}); if (Output.HasValue() && Output.Value()) status_.destination_ = *Output.Value();
+                }
+            } else if (!gate_) status_.readyToCommit_ = true;
+            else {
+                auto Valid = reader_->Stat(request_.source_->id_, {}).get();
+                if (!Valid.HasValue()) status_.error_ = Valid.Failure();
+                else if (request_.requiresPublishedDestination_ && (!request_.publishedDestination_ || !reader_->Stat(request_.publishedDestination_->id_, {}).get().HasValue()))
+                    status_.error_ = Error{ErrorCategory::StaleRevision,"elevation-published-output-changed"};
+                else {
+                    auto Removed = writer_->Remove(*request_.source_,{});
+                    if (!Removed.HasValue()) status_.error_ = Removed.Failure(); else status_.sourceRemoved_ = true;
+                }
+                status_.finished_ = true;
+            }
+            return status_;
+        }
+        Result<Unit> Commit() override { if (!status_.readyToCommit_) return Error{ErrorCategory::InvalidRequest,"fixture-not-ready"}; gate_=true; return Unit{}; }
+        void Cancel() override { state_->cancelled_ = true; }
+        std::vector<Error> Close() override { if(child_) { auto Errors=child_->Finalize(JobState::Cancelled); child_.reset(); return Errors; } return {}; }
+    private:
+        FileElevationRequest request_;
+        std::shared_ptr<IStorageProvider> reader_;
+        std::shared_ptr<IWritableStorage> writer_;
+        std::shared_ptr<ElevationFixtureState> state_;
+        std::unique_ptr<IJobTask> child_;
+        FileElevationStatus status_;
+        bool gate_ = false;
+    };
+    class FixtureElevationService final : public IFileElevationService
+    {
+    public:
+        FixtureElevationService(std::shared_ptr<IStorageProvider> Reader, std::shared_ptr<IWritableStorage> Writer)
+            : reader_(std::move(Reader)), writer_(std::move(Writer)), state_(std::make_shared<ElevationFixtureState>()) {}
+        bool CanExecute(const FileElevationRequest& Request) const override
+        { return !Request.jobId_.empty() && Request.source_ && Request.source_->locator_.kind_ == LocatorKind::Local
+            && (Request.action_ == FileElevationAction::Copy || Request.action_ == FileElevationAction::Remove); }
+        Result<std::unique_ptr<IFileElevationSession>> Begin(FileElevationRequest Request, OperationContext Context) override
+        {
+            { std::lock_guard Lock(state_->mutex_); state_->requests_.push_back(Request); state_->paused_=Context.pauseRequested_; }
+            return std::unique_ptr<IFileElevationSession>(new FixtureElevationSession(std::move(Request),reader_,writer_,state_));
+        }
+        std::vector<FileElevationRequest> Requests() const { std::lock_guard Lock(state_->mutex_); return state_->requests_; }
+        bool Paused() const { std::function<bool()> Query; {std::lock_guard Lock(state_->mutex_); Query=state_->paused_;} return Query && Query(); }
+        std::shared_ptr<ElevationFixtureState> state_;
+    private:
+        std::shared_ptr<IStorageProvider> reader_;
+        std::shared_ptr<IWritableStorage> writer_;
+    };
+
+}
+
+class RemoteFixtureReader final:public IStorageProvider {
+public:
+    RemoteFixtureReader(std::shared_ptr<IStorageProvider> Inner,LocatorKind Kind):inner_(std::move(Inner)),kind_(Kind){}
+    ProviderId Id()const override{return inner_->Id();}
+    Task<SupportDecision> Supports(Operation R,OperationContext C)override{return inner_->Supports(R,C);}
+    Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator L,OperationContext C)override{return inner_->Enumerate(L,C);}
+    Task<EntrySnapshot> Stat(ResourceId I,OperationContext C)override {
+        auto R=inner_->Stat(I,C).get();if(R.HasValue())R.Value().locator_.kind_=kind_;return Ready<EntrySnapshot>(std::move(R));
+    }
+    Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId I,OperationContext C)override{return inner_->OpenRead(I,C);}
+private:std::shared_ptr<IStorageProvider> inner_;LocatorKind kind_;
+};
+static OperationContext ElevationContext() {
+    OperationContext C;const auto Journal=QDir(hc::settings::Paths().directory_).filePath("write-"+QUuid::createUuid().toString(QUuid::Id128)+".json");
+    C.writeCheckpoint_=[Journal](const WriteRecoveryRecord& R,std::optional<std::uint64_t> Row)->Result<std::uint64_t>{
+        QJsonObject Record{{"phase",int(R.phase_)},{"transaction",QString::fromStdString(R.transaction_)},{"stage",QString::fromStdString(R.stage_.root_)},{"destination",QString::fromStdString(R.destination_.root_)},{"backup",QString::fromStdString(R.backup_.root_)}};
+        const auto Bytes=QJsonDocument(Record).toJson();QSaveFile File(Journal);if(!File.open(QIODevice::WriteOnly)||File.write(Bytes)!=Bytes.size()||!File.commit())return Error{ErrorCategory::Unavailable,"fixture-checkpoint-save"};return Row.value_or(0);
+    };return C;
+}
+static hc::permissions::FileElevationLauncher FixtureLauncher(std::function<void()> Before={},bool ExitEarly=false) {
+    return [Before=std::move(Before),ExitEarly](const QString&,const QString& Arguments)->Result<HANDLE>{
+        if(Before)Before();const auto Exe=QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+        const auto Mode = Arguments.startsWith("--elevated-list ") ? "--directory-fixture " : "--elevation-fixture ";
+        const auto Command='"'+Exe+"\" "+(ExitEarly?QString("--elevation-fixture-exit"):QString(Mode)+Arguments.section(' ',1));
+        std::wstring Writable=Command.toStdWString();STARTUPINFOW Startup{};Startup.cb=sizeof(Startup);PROCESS_INFORMATION Process{};
+        if(!CreateProcessW(reinterpret_cast<LPCWSTR>(Exe.utf16()),Writable.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&Startup,&Process))return Error{ErrorCategory::Unavailable,"fixture-launch:"+std::to_string(GetLastError())};
+        CloseHandle(Process.hThread);return Process.hProcess;
+    };
+}
+class WriteTests : public QObject
+{
+    Q_OBJECT
+private:
+    std::unique_ptr<QTemporaryDir> root_;
+    std::shared_ptr<IStorageProvider> reader_;
+    std::shared_ptr<IWritableStorage> writer_;
+    LocatorKind kind_ = LocatorKind::Local;
+    Locator at(const QString& Name) const { return {kind_, QDir::toNativeSeparators(root_->filePath(Name)).toStdString()}; }
+    bool write(const QString& Name, const QByteArray& Bytes)
+    {
+        QFile File(root_->filePath(Name));
+        return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size();
+    }
+    QByteArray read(const QString& Name)
+    {
+        QFile File(root_->filePath(Name));
+        if (!File.open(QIODevice::ReadOnly)) return {};
+        return File.readAll();
+    }
+    Result<Unit> append(IWriteSession& Session, const QByteArray& Bytes, OperationContext Context = {})
+    { return Session.Append({reinterpret_cast<const std::byte*>(Bytes.constData()), static_cast<std::size_t>(Bytes.size())}, Context); }
+    QStringList artifacts()
+    { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
+private slots:
+    void elevatedDirectoryListing()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int Index = 0; Index < 301; ++Index) {
+            QFile File(Directory.filePath(QString::number(Index) + QStringLiteral("-한글.txt")));
+            QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("abc"), 3);
+        }
+        QVERIFY(QDir(Directory.path()).mkdir("nested"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        int Launches = 0; HANDLE Observed = nullptr;
+        const auto CloseObserved = qScopeGuard([&] { if (Observed) CloseHandle(Observed); });
+        auto Session = hc::permissions::OpenElevatedDirectorySession(Directory.path(), {},
+            [&, Launch = FixtureLauncher()](const QString& Exe, const QString& Args) -> Result<HANDLE> {
+                ++Launches; auto Started = Launch(Exe, Args);
+                if (Started.HasValue()) DuplicateHandle(GetCurrentProcess(), Started.Value(), GetCurrentProcess(), &Observed, SYNCHRONIZE, FALSE, 0);
+                return Started;
+            });
+        QVERIFY2(Session.HasValue(), Session.HasValue() ? "" : Session.Failure().code_.c_str());
+        auto Open = Session.Value()->Enumerate(Directory.path(), {}, Reader);
+        QVERIFY2(Open.HasValue(), Open.HasValue() ? "" : Open.Failure().code_.c_str());
+        int Count = 0; bool End = false;
+        while (!End) {
+            auto Page = Open.Value()->Next(17, {}).get();
+            QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+            QVERIFY(Page.Value().entries_.size() <= 17);
+            for (const auto& Entry : Page.Value().entries_) {
+                auto Stat = Reader->Stat(Entry.id_, {}).get();
+                QVERIFY2(Stat.HasValue(), Stat.HasValue() ? "" : Stat.Failure().code_.c_str());
+                QCOMPARE(Stat.Value().locator_, Entry.locator_);
+                if (!Entry.directory_) QCOMPARE(Entry.size_, 3u);
+                ++Count;
+            }
+            End = Page.Value().end_;
+        }
+        QCOMPARE(Count, 302);
+        QVERIFY(Observed); QCOMPARE(WaitForSingleObject(Observed, 0), DWORD(WAIT_TIMEOUT));
+        auto Refreshed = Session.Value()->Enumerate(Directory.path(), {}, Reader); QVERIFY(Refreshed.HasValue());
+        auto Child = Session.Value()->Enumerate(Directory.filePath("nested"), {}, Reader); QVERIFY(Child.HasValue());
+        auto Empty = Child.Value()->Next(17, {}).get(); QVERIFY(Empty.HasValue()); QVERIFY(Empty.Value().end_); QVERIFY(Empty.Value().entries_.empty());
+        QVERIFY(!Session.Value()->Enumerate(QFileInfo(Directory.path()).absolutePath(), {}, Reader).HasValue());
+        QCOMPARE(Launches, 1);
+        Session.Value().reset(); QCOMPARE(WaitForSingleObject(Observed, 2000), DWORD(WAIT_OBJECT_0));
+        Open = hc::permissions::EnumerateElevatedDirectory(Directory.filePath("missing"), {}, FixtureLauncher());
+        QVERIFY(!Open.HasValue()); QCOMPARE(Open.Failure().category_, ErrorCategory::NotFound);
+        bool Launched = false; std::stop_source Stop; Stop.request_stop(); OperationContext Cancelled; Cancelled.stopToken_ = Stop.get_token();
+        QVERIFY(!hc::permissions::EnumerateElevatedDirectory(Directory.path(), Cancelled, FixtureLauncher([&] { Launched = true; })).HasValue());
+        QVERIFY(!Launched);
+        QVERIFY(!hc::permissions::EnumerateElevatedDirectory("//server/share", {}, FixtureLauncher([&] { Launched = true; })).HasValue());
+        QVERIFY(!Launched);
+        QVERIFY(!hc::permissions::EnumerateElevatedDirectory(Directory.path(), {}, FixtureLauncher({}, true)).HasValue());
+    }
+    void elevatedDirectoryRealUac()
+    {
+        if (!qEnvironmentVariableIsSet("HC_DIRECTORY_REAL_UAC")) QSKIP("Opt-in Windows UAC listing test");
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("read-only.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("listing"); File.close();
+        const auto Native = QDir::toNativeSeparators(Directory.path()).toStdWString();
+        HANDLE Handle = CreateFileW(Native.c_str(), READ_CONTROL | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+        PACL Original = nullptr; PSECURITY_DESCRIPTOR OriginalDescriptor = nullptr;
+        QCOMPARE(GetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &Original, nullptr, &OriginalDescriptor), DWORD(ERROR_SUCCESS));
+        const auto Restore = qScopeGuard([&] {
+            SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, Original, nullptr);
+            LocalFree(OriginalDescriptor);
+        });
+        PSECURITY_DESCRIPTOR Descriptor = nullptr;
+        QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;BA)(A;;FA;;;SY)", SDDL_REVISION_1, &Descriptor, nullptr));
+        const auto Free = qScopeGuard([&] { LocalFree(Descriptor); });
+        BOOL Present = FALSE, Defaulted = FALSE; PACL Acl = nullptr; QVERIFY(GetSecurityDescriptorDacl(Descriptor, &Present, &Acl, &Defaulted));
+        QCOMPARE(SetSecurityInfo(Handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, Acl, nullptr), DWORD(ERROR_SUCCESS));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        if (!hc::permissions::Elevated()) QVERIFY(!Reader->Enumerate({LocatorKind::Local, Directory.path().toStdString()}, {}).get().HasValue());
+        auto Session = hc::permissions::OpenElevatedDirectorySession(Directory.path(), {});
+        QVERIFY2(Session.HasValue(), Session.HasValue() ? "" : Session.Failure().code_.c_str());
+        auto Open = Session.Value()->Enumerate(Directory.path(), {}, Reader);
+        QVERIFY2(Open.HasValue(), Open.HasValue() ? "" : Open.Failure().code_.c_str());
+        auto Page = Open.Value()->Next(16, {}).get();
+        QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+        QCOMPARE(Page.Value().entries_.size(), 1u); QCOMPARE(Page.Value().entries_.front().name_, std::string("read-only.txt"));
+        auto Refreshed = Session.Value()->Enumerate(Directory.path(), {}, Reader); QVERIFY(Refreshed.HasValue());
+    }
+    void initTestCase()
+    {
+        const auto Remote = qEnvironmentVariable("HC_MUTATION_ROOT");
+        if (!Remote.isEmpty())
+        {
+            QVERIFY(Remote.compare("\\\\DEVTESTER-QTS\\Public", Qt::CaseInsensitive) == 0
+                || Remote.compare("\\\\DEVTESTER-QTB4\\Pubs", Qt::CaseInsensitive) == 0);
+            kind_ = LocatorKind::Smb;
+            root_ = std::make_unique<QTemporaryDir>(QDir(Remote).filePath("hc-write-test-XXXXXX"));
+        }
+        else root_ = std::make_unique<QTemporaryDir>();
+        QVERIFY(root_->isValid());
+        reader_ = MakeNativeReadProvider(kind_);
+        writer_ = MakeNativeWritableStorage(kind_, reader_);
+        qInfo().noquote() << "Owned mutation fixture:" << root_->path();
+    }
+    void smbReadSourceCopiesToLocal_data()
+    {
+        QTest::addColumn<bool>("Verify");
+        QTest::newRow("metadata") << false;
+        QTest::newRow("metadata-sha256") << true;
+    }
+    void smbReadSourceCopiesToLocal()
+    {
+        QFETCH(bool, Verify);
+        const auto SourcePath = qEnvironmentVariable("HC_SMB_READ_SOURCE");
+        if (SourcePath.isEmpty()) QSKIP("Set HC_SMB_READ_SOURCE to opt in to a read-only SMB source copy.");
+        QVERIFY(SourcePath.startsWith("\\\\"));
+        // The remote path is only read. All output and staging artifacts belong
+        // to this local temporary directory; never reuse HC_MUTATION_ROOT here.
+        QTemporaryDir Destination; QVERIFY(Destination.isValid());
+        QVERIFY(!Destination.path().startsWith("//") && !Destination.path().startsWith("\\\\"));
+        auto SourceReader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Source = SourceReader->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(SourcePath).toStdString()}, {}).get();
+        QVERIFY2(Source.HasValue(), Source.HasValue() ? "" : Source.Failure().code_.c_str());
+        QVERIFY(!Source.Value().directory_);
+        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+        auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request;
+        Request.sources_ = {{Source.Value(), SourceReader, {}}};
+        Request.destination_ = {LocatorKind::Local, QDir::toNativeSeparators(Destination.path()).toStdString()};
+        Request.destinationWriter_ = LocalWriter;
+        Request.copyOptions_.verify_ = Verify;
+        auto Submitted = SubmitFileOperation(Scheduler, Request); QVERIFY(Submitted.HasValue());
+        const auto Ready = Submitted.Value().completion_.wait_for(std::chrono::minutes(10));
+        if (Ready != std::future_status::ready) Scheduler.Cancel(Submitted.Value().id_);
+        QVERIFY(Ready == std::future_status::ready);
+        const auto& Outcome = Submitted.Value().completion_.get();
+        QVERIFY2(Outcome.snapshot_.state_ == JobState::Completed,
+            Outcome.snapshot_.error_ ? Outcome.snapshot_.error_->code_.c_str() : "SMB copy did not complete");
+        QCOMPARE(Outcome.snapshot_.completedItems_, 1u);
+        QCOMPARE(Outcome.snapshot_.progress_.bytesDone_, Source.Value().size_);
+        QCOMPARE(std::uint64_t(QFileInfo(Destination.filePath(QString::fromStdString(Source.Value().name_))).size()), Source.Value().size_);
+        QVERIFY(QDir(Destination.path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System).isEmpty());
+        qInfo() << "Read-only SMB source copied to owned local output:" << SourcePath << "bytes:" << Source.Value().size_ << "SHA-256:" << Verify;
+    }
+    void r10CopyElevationPreservesCompletedItems()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Elevation is intentionally local-only.");
+        QVERIFY(writer_->MakeDirectory(at("r10-copy-src"),{}).HasValue()); QVERIFY(writer_->MakeDirectory(at("r10-copy-dst"),{}).HasValue());
+        QVERIFY(write("r10-copy-src/a.txt","alpha")); QVERIFY(write("r10-copy-src/b.txt","beta"));
+        auto Service = std::make_shared<FixtureElevationService>(reader_,writer_);
+        FileOperationRequest Request; Request.destination_ = at("r10-copy-dst");
+        Request.destinationWriter_ = std::make_shared<DeniedContentWriter>(writer_,"b.txt"); Request.elevation_ = Service;
+        for (const auto& Name : {"a.txt","b.txt"}) { auto Source=writer_->Inspect(at(QString("r10-copy-src/")+Name),{}); QVERIFY(Source.HasValue()&&Source.Value()); Request.sources_.push_back({*Source.Value(),reader_,{}}); }
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Started=SubmitFileOperation(Scheduler,Request); QVERIFY(Started.HasValue()); const auto Id=Started.Value().id_;
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_,JobState::WaitingForUser);
+        QCOMPARE(read("r10-copy-dst/a.txt"),QByteArray("alpha")); QVERIFY(!QFileInfo::exists(root_->filePath("r10-copy-dst/b.txt")));
+        // A completed item may change independently; it must never be copied again.
+        QVERIFY(write("r10-copy-src/a.txt","changed after completion"));
+        auto Question=Scheduler.Snapshot(Id).Value().interaction_; QVERIFY(Question); QCOMPARE(Question->kind_,InteractionKind::Elevation);
+        QVERIFY(Scheduler.Reply(Id,{Question->id_,InteractionChoice::Elevate,{}}).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);
+        const auto& Result=Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"copy not completed");
+        QCOMPARE(Result.snapshot_.completedItems_,2u); QCOMPARE(Result.snapshot_.progress_.bytesDone_,9u);
+        QCOMPARE(read("r10-copy-dst/a.txt"),QByteArray("alpha")); QCOMPARE(read("r10-copy-dst/b.txt"),QByteArray("beta"));
+        const auto Requests=Service->Requests(); QCOMPARE(Requests.size(),1u); QCOMPARE(Requests.front().jobId_,Id); QCOMPARE(Requests.front().source_->name_,std::string("b.txt"));
+        QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void r10MoveElevatesRemovalAndReplacesPartialOutcomes()
+    {
+        if(kind_!=LocatorKind::Local)QSKIP("Elevation is intentionally local-only.");
+        QVERIFY(writer_->MakeDirectory(at("r10-move-src"),{}).HasValue()); QVERIFY(writer_->MakeDirectory(at("r10-move-dst"),{}).HasValue());
+        QVERIFY(write("r10-move-src/a.txt","alpha")); QVERIFY(write("r10-move-src/b.txt","beta"));
+        auto Service=std::make_shared<FixtureElevationService>(reader_,writer_);
+        FileOperationRequest Request; Request.operation_=hc::operations::FileOperation::Move; Request.destination_=at("r10-move-dst"); Request.destinationWriter_=writer_; Request.elevation_=Service;
+        auto Denied=std::make_shared<FailedRemoveWriter>(writer_);
+        for(const auto& Name:{"a.txt","b.txt"}) {auto Source=writer_->Inspect(at(QString("r10-move-src/")+Name),{});QVERIFY(Source.HasValue()&&Source.Value());Request.sources_.push_back({*Source.Value(),reader_,Denied});}
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started=SubmitFileOperation(Scheduler,Request);QVERIFY(Started.HasValue());const auto Id=Started.Value().id_;
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_,JobState::WaitingForUser);
+        QCOMPARE(Scheduler.Snapshot(Id).Value().failedItems_,1u); QCOMPARE(read("r10-move-dst/a.txt"),QByteArray("alpha")); QCOMPARE(read("r10-move-src/a.txt"),QByteArray("alpha"));
+        auto Question=Scheduler.Snapshot(Id).Value().interaction_;QVERIFY(Question);QVERIFY(Scheduler.Reply(Id,{Question->id_,InteractionChoice::ElevateAll,{}}).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);
+        const auto& Result=Started.Value().completion_.get();QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"move not completed");
+        QCOMPARE(Result.items_.size(),2u);QCOMPARE(Result.snapshot_.failedItems_,0u);QCOMPARE(Result.snapshot_.completedItems_,2u);
+        const auto Requests=Service->Requests();QCOMPARE(Requests.size(),2u);
+        for(const auto& R:Requests){QCOMPARE(R.action_,FileElevationAction::Remove);QVERIFY(R.requiresPublishedDestination_&&R.publishedDestination_);QCOMPARE(R.jobId_,Id);}
+        for(const auto& Item:Result.items_){QVERIFY(Item.destinationCommitted_&&Item.sourceRemoved_);QCOMPARE(Item.status_,ItemOutcome::Status::Completed);}
+        QVERIFY(!QFileInfo::exists(root_->filePath("r10-move-src/a.txt")));QVERIFY(!QFileInfo::exists(root_->filePath("r10-move-src/b.txt")));
+    }
+    void r10PermissionCopyOnlyPreservesSource()
+    {
+        if(kind_!=LocatorKind::Local)QSKIP("Elevation is intentionally local-only.");
+        QVERIFY(write("r10-keep.txt","keep"));QVERIFY(writer_->MakeDirectory(at("r10-keep-dst"),{}).HasValue());
+        auto Source=writer_->Inspect(at("r10-keep.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());
+        auto Service=std::make_shared<FixtureElevationService>(reader_,writer_);FileOperationRequest Request;Request.operation_=hc::operations::FileOperation::Move;
+        Request.sources_={{*Source.Value(),reader_,std::make_shared<FailedRemoveWriter>(writer_)}};Request.destination_=at("r10-keep-dst");Request.destinationWriter_=writer_;Request.elevation_=Service;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Started=SubmitFileOperation(Scheduler,Request);QVERIFY(Started.HasValue());const auto Id=Started.Value().id_;
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_,JobState::WaitingForUser);const auto Q=Scheduler.Snapshot(Id).Value().interaction_;QVERIFY(Q);
+        QVERIFY(Scheduler.Reply(Id,{Q->id_,InteractionChoice::CopyOnly,{}}).HasValue());QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);
+        const auto& Result=Started.Value().completion_.get();QCOMPARE(Result.snapshot_.state_,JobState::Completed);QCOMPARE(Result.snapshot_.failedItems_,0u);
+        QCOMPARE(read("r10-keep.txt"),QByteArray("keep"));QCOMPARE(read("r10-keep-dst/r10-keep.txt"),QByteArray("keep"));
+        QCOMPARE(Result.items_.size(),1u);QVERIFY(Result.items_.front().destinationCommitted_&&!Result.items_.front().sourceRemoved_);QVERIFY(Service->Requests().empty());
+    }
+    void r10ApprovalDoesNotCrossJobsAndCancellationClosesHelper()
+    {
+        if(kind_!=LocatorKind::Local)QSKIP("Elevation is intentionally local-only.");
+        QVERIFY(write("r10-cancel.txt","cancel"));QVERIFY(writer_->MakeDirectory(at("r10-cancel-dst"),{}).HasValue());
+        auto Source=writer_->Inspect(at("r10-cancel.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());
+        auto Service=std::make_shared<FixtureElevationService>(reader_,writer_);Service->state_->hold_=true;
+        FileOperationRequest Request;Request.sources_={{*Source.Value(),reader_,{}}};Request.destination_=at("r10-cancel-dst");Request.destinationWriter_=std::make_shared<DeniedContentWriter>(writer_);Request.elevation_=Service;Request.elevationApproval_=std::make_shared<FileElevationApproval>();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto First=SubmitFileOperation(Scheduler,Request);QVERIFY(First.HasValue());const auto Id=First.Value().id_;
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_,JobState::WaitingForUser);const auto Q=Scheduler.Snapshot(Id).Value().interaction_;QVERIFY(Q);
+        QVERIFY(Scheduler.Reply(Id,{Q->id_,InteractionChoice::ElevateAll,{}}).HasValue());QTRY_COMPARE(Service->Requests().size(),1u);
+        QVERIFY(Scheduler.Pause(Id,true).HasValue());QTRY_VERIFY(Service->Paused());QVERIFY(Scheduler.Pause(Id,false).HasValue());QTRY_VERIFY(!Service->Paused());
+        QVERIFY(Scheduler.Cancel(Id).HasValue());QVERIFY(First.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);QCOMPARE(First.Value().completion_.get().snapshot_.state_,JobState::Cancelled);QVERIFY(Service->state_->cancelled_);
+        QVERIFY(!QFileInfo::exists(root_->filePath("r10-cancel-dst/r10-cancel.txt")));QCOMPARE(read("r10-cancel.txt"),QByteArray("cancel"));
+        auto Second=SubmitFileOperation(Scheduler,Request);QVERIFY(Second.HasValue());QTRY_COMPARE(Scheduler.Snapshot(Second.Value().id_).Value().state_,JobState::WaitingForUser);
+        QCOMPARE(Service->Requests().size(),1u);QVERIFY(Scheduler.Cancel(Second.Value().id_).HasValue());
+    }
+    void r10NativeHelperCopyAndProviderStreams_data() {
+        QTest::addColumn<int>("Kind");QTest::newRow("local")<<int(LocatorKind::Local);QTest::newRow("smb-reader")<<int(LocatorKind::Smb);QTest::newRow("plugin-reader")<<int(LocatorKind::Plugin);
+    }
+    void r10NativeHelperCopyAndProviderStreams() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QFETCH(int,Kind);
+        const auto Suffix=QString::number(Kind);const auto Name="r10-native-"+Suffix+".bin",Folder="r10-native-dst-"+Suffix;
+        QByteArray Data(2*1024*1024+17,'x');Data[8]='\0';QVERIFY(write(Name,Data));QVERIFY(writer_->MakeDirectory(at(Folder),{}).HasValue());
+        auto Source=writer_->Inspect(at(Name),{});QVERIFY(Source.HasValue()&&Source.Value());
+        std::shared_ptr<IStorageProvider> Input=reader_;auto Entry=*Source.Value();
+        if(Kind!=int(LocatorKind::Local)){Entry.locator_.kind_=LocatorKind(Kind);Input=std::make_shared<RemoteFixtureReader>(reader_,LocatorKind(Kind));}
+        const bool RealUac=qEnvironmentVariableIntValue("HC_R10_REAL_UAC")==1;
+        hc::filetools::Handle ProtectedFolder(INVALID_HANDLE_VALUE);
+        QString OriginalFolder;
+        const auto RestoreFolder=qScopeGuard([&]{if(ProtectedFolder.value_!=INVALID_HANDLE_VALUE&&!OriginalFolder.isEmpty())hc::permissions::security::Restore(ProtectedFolder.value_,OriginalFolder);});
+        if(RealUac) {
+            const auto Native=hc::filetools::NativePath(root_->filePath(Folder));
+            ProtectedFolder.value_=CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),READ_CONTROL|WRITE_DAC|WRITE_OWNER,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr);
+            QVERIFY(ProtectedFolder.value_!=INVALID_HANDLE_VALUE);DWORD Code=0;OriginalFolder=hc::permissions::security::Descriptor(ProtectedFolder.value_,Code);QCOMPARE(Code,DWORD(ERROR_SUCCESS));
+            PSECURITY_DESCRIPTOR OriginalSd=nullptr;PSID Owner=nullptr;BOOL Default=FALSE;LPWSTR OwnerText=nullptr;
+            QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(reinterpret_cast<LPCWSTR>(OriginalFolder.utf16()),SDDL_REVISION_1,&OriginalSd,nullptr));
+            QVERIFY(GetSecurityDescriptorOwner(OriginalSd,&Owner,&Default));QVERIFY(ConvertSidToStringSidW(Owner,&OwnerText));
+            const auto Sddl="D:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FR;;;"+QString::fromWCharArray(OwnerText)+")";LocalFree(OwnerText);LocalFree(OriginalSd);
+            PSECURITY_DESCRIPTOR Restricted=nullptr;QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(reinterpret_cast<LPCWSTR>(Sddl.utf16()),SDDL_REVISION_1,&Restricted,nullptr));
+            const auto RestrictedCleanup=qScopeGuard([&]{LocalFree(Restricted);});
+            PACL RestrictedDacl=nullptr;BOOL Present=FALSE;QVERIFY(GetSecurityDescriptorDacl(Restricted,&Present,&RestrictedDacl,&Default));
+            QCOMPARE(SetSecurityInfo(ProtectedFolder.value_,SE_FILE_OBJECT,DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,nullptr,nullptr,RestrictedDacl,nullptr),DWORD(ERROR_SUCCESS));
+            const auto Probe=hc::filetools::NativePath(root_->filePath(Folder+"/must-be-denied.tmp"));
+            hc::filetools::Handle Denied(CreateFileW(reinterpret_cast<LPCWSTR>(Probe.utf16()),GENERIC_WRITE,0,nullptr,CREATE_NEW,0,nullptr));
+            QVERIFY(Denied.value_==INVALID_HANDLE_VALUE);QCOMPARE(GetLastError(),DWORD(ERROR_ACCESS_DENIED));
+        }
+        auto Service=hc::permissions::MakeFileElevationService(RealUac?hc::permissions::FileElevationLauncher{}:FixtureLauncher());
+        FileOperationRequest Request;Request.sources_={{Entry,Input,{}}};Request.destination_=at(Folder);Request.destinationWriter_=RealUac?writer_:std::make_shared<DeniedContentWriter>(writer_);Request.copyOptions_.verify_=true;Request.elevation_=Service;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Job=SubmitFileOperation(Scheduler,Request,ElevationContext());QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_,JobState::WaitingForUser);
+        const auto Question=Scheduler.Snapshot(Job.Value().id_).Value().interaction_;QVERIFY(Question);
+        QVERIFY(Scheduler.Reply(Job.Value().id_,{Question->id_,InteractionChoice::Elevate,{}}).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(RealUac?180:15))==std::future_status::ready);
+        const auto& Result=Job.Value().completion_.get();QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"cleanup failure");
+        QCOMPARE(read(Folder+'/'+Name),Data);QCOMPARE(Result.snapshot_.progress_.bytesDone_,std::uint64_t(Data.size()));QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void r10NativeHelperRejectsChangedAndDeadRequests_data() {
+        QTest::addColumn<int>("Change");QTest::newRow("source")<<0;QTest::newRow("destination")<<1;QTest::newRow("helper-exit")<<2;
+    }
+    void r10NativeHelperRejectsChangedAndDeadRequests() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QFETCH(int,Change);
+        const auto Name="r10-revalidate-"+QString::number(Change)+".txt",Folder="r10-revalidate-dst-"+QString::number(Change);
+        QVERIFY(write(Name,"original"));QVERIFY(writer_->MakeDirectory(at(Folder),{}).HasValue());auto Source=writer_->Inspect(at(Name),{});QVERIFY(Source.HasValue()&&Source.Value());
+        const auto Before=[&,Change]{if(Change==0){QFile F(root_->filePath(Name));if(F.open(QIODevice::WriteOnly))F.write("changed while awaiting UAC");}else if(Change==1){QFile F(root_->filePath(Folder+'/'+Name));if(F.open(QIODevice::WriteOnly))F.write("concurrent target");}};
+        auto Service=hc::permissions::MakeFileElevationService(FixtureLauncher(Before,Change==2));
+        FileElevationRequest Request;Request.source_=*Source.Value();Request.destination_=at(Folder+'/'+Name);Request.sourceReader_=reader_;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());JobRequest Options;Options.operation_=ElevationContext();auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,Service));QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(10))==std::future_status::ready);const auto& Result=Job.Value().completion_.get();QCOMPARE(Result.snapshot_.state_,JobState::Failed);
+        QVERIFY(Result.snapshot_.error_);if(Change!=2)QVERIFY2(Result.snapshot_.error_->category_==ErrorCategory::StaleRevision,Result.snapshot_.error_->code_.c_str());
+        if(Change==1)QCOMPARE(read(Folder+'/'+Name),QByteArray("concurrent target"));else QVERIFY(!QFileInfo::exists(root_->filePath(Folder+'/'+Name)));
+    }
+    void r10NativeCancellationDuringLaunchCannotPublish() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QVERIFY(write("r10-late.txt","late approval"));QVERIFY(writer_->MakeDirectory(at("r10-late-dst"),{}).HasValue());
+        auto Source=writer_->Inspect(at("r10-late.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());std::atomic<bool> Started=false,Release=false;
+        auto Service=hc::permissions::MakeFileElevationService(FixtureLauncher([&]{Started=true;while(!Release)std::this_thread::sleep_for(std::chrono::milliseconds(10));}));
+        FileElevationRequest Request;Request.source_=*Source.Value();Request.sourceReader_=reader_;Request.destination_=at("r10-late-dst/r10-late.txt");
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());JobRequest Options;Options.operation_=ElevationContext();auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,Service));QVERIFY(Job.HasValue());QTRY_VERIFY(Started);
+        QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());Release=true;QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(6))==std::future_status::ready);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_,JobState::Cancelled);QTest::qWait(300);QVERIFY(!QFileInfo::exists(root_->filePath("r10-late-dst/r10-late.txt")));
+    }
+    void r10RemoteMoveOffersCopyOnlyWithoutLocalElevation() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QVERIFY(write("r10-remote-move.txt","remote data"));QVERIFY(writer_->MakeDirectory(at("r10-remote-move-dst"),{}).HasValue());
+        auto Source=writer_->Inspect(at("r10-remote-move.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());auto Entry=*Source.Value();Entry.locator_.kind_=LocatorKind::Smb;
+        FileOperationRequest Request;Request.operation_=hc::operations::FileOperation::Move;Request.sources_={{Entry,std::make_shared<RemoteFixtureReader>(reader_,LocatorKind::Smb),std::make_shared<FailedRemoveWriter>(writer_)}};Request.destination_=at("r10-remote-move-dst");Request.destinationWriter_=writer_;Request.elevation_=hc::permissions::MakeFileElevationService(FixtureLauncher());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Job=SubmitFileOperation(Scheduler,Request);QVERIFY(Job.HasValue());QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_,JobState::WaitingForUser);
+        const auto Question=Scheduler.Snapshot(Job.Value().id_).Value().interaction_;QVERIFY(Question);QVERIFY(std::find(Question->choices_.begin(),Question->choices_.end(),InteractionChoice::Elevate)==Question->choices_.end());
+        QVERIFY(Scheduler.Reply(Job.Value().id_,{Question->id_,InteractionChoice::CopyOnly,{}}).HasValue());QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);QCOMPARE(Job.Value().completion_.get().snapshot_.state_,JobState::Completed);
+        QCOMPARE(read("r10-remote-move.txt"),QByteArray("remote data"));QCOMPARE(read("r10-remote-move-dst/r10-remote-move.txt"),QByteArray("remote data"));
+    }
+    void r10LiveSmbToLocalElevationTransport() {
+        const auto Remote=qEnvironmentVariable("HC_SMB_READ_SOURCE");if(Remote.isEmpty())QSKIP("Explicit read-only live SMB source required; UAC itself is not part of this fixture.");
+        if(kind_!=LocatorKind::Local)QSKIP("Local destination required.");auto Reader=MakeNativeReadProvider(LocatorKind::Smb);
+        auto Resolved=Reader->Resolve({LocatorKind::Smb,Remote.toStdString()},{}).get();QVERIFY(Resolved.HasValue());auto Source=Reader->Stat(Resolved.Value().id_,{}).get();QVERIFY(Source.HasValue());
+        FileElevationRequest Request;Request.source_=Source.Value();Request.sourceReader_=Reader;Request.destination_=at("r10-live-smb-copy.mp4");Request.copyOptions_.verify_=true;
+        JobRequest Options;Options.operation_=ElevationContext();JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,hc::permissions::MakeFileElevationService(FixtureLauncher())));QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::minutes(10))==std::future_status::ready);const auto& Result=Job.Value().completion_.get();QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"cleanup failure");
+        QCOMPARE(std::uint64_t(QFileInfo(root_->filePath("r10-live-smb-copy.mp4")).size()),Source.Value().size_);QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void r10NativeJournalFailureLeavesExistingDestination() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QVERIFY(write("r10-journal-src.txt","new bytes"));QVERIFY(write("r10-journal-dst.txt","existing target"));
+        auto Source=writer_->Inspect(at("r10-journal-src.txt"),{}),Destination=writer_->Inspect(at("r10-journal-dst.txt"),{});QVERIFY(Source.HasValue()&&Source.Value()&&Destination.HasValue()&&Destination.Value());
+        FileElevationRequest Request;Request.source_=*Source.Value();Request.destination_=at("r10-journal-dst.txt");Request.expected_={true,Destination.Value()->id_.revision_};
+        JobRequest Options;Options.operation_=ElevationContext();const auto Save=Options.operation_.writeCheckpoint_;
+        Options.operation_.writeCheckpoint_=[Save](const WriteRecoveryRecord& Record,std::optional<std::uint64_t> Row)->Result<std::uint64_t>{if(Record.phase_==WritePhase::Prepared)return Error{ErrorCategory::Unavailable,"fixture-journal-denied"};return Save(Record,Row);};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,hc::permissions::MakeFileElevationService(FixtureLauncher())));QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(8))==std::future_status::ready);QCOMPARE(Job.Value().completion_.get().snapshot_.state_,JobState::Failed);
+        QCOMPARE(read("r10-journal-dst.txt"),QByteArray("existing target"));QCOMPARE(read("r10-journal-src.txt"),QByteArray("new bytes"));QVERIFY(artifacts().isEmpty());
+    }
+    void r10NativeOtherActions_data() {
+        QTest::addColumn<int>("Action");for(auto A:{FileElevationAction::MakeDirectory,FileElevationAction::CreateContent,FileElevationAction::Rename,FileElevationAction::Remove})QTest::newRow(std::to_string(int(A)).c_str())<<int(A);
+    }
+    void r10NativeOtherActions() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QFETCH(int,Action);const auto Name="r10-action-"+QString::number(Action);
+        FileElevationRequest Request;Request.action_=FileElevationAction(Action);Request.destination_=at(Name);
+        if(Request.action_==FileElevationAction::CreateContent)Request.content_={std::byte{'a'},std::byte{'b'}};
+        if(Request.action_==FileElevationAction::Rename||Request.action_==FileElevationAction::Remove){QVERIFY(write(Name+"-src","original"));auto Source=writer_->Inspect(at(Name+"-src"),{});QVERIFY(Source.HasValue()&&Source.Value());Request.source_=*Source.Value();if(Request.action_==FileElevationAction::Remove)Request.destination_=Request.source_->locator_;}
+        JobRequest Options;Options.operation_=ElevationContext();JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,hc::permissions::MakeFileElevationService(FixtureLauncher())));QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(8))==std::future_status::ready);const auto& Result=Job.Value().completion_.get();QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"cleanup failure");
+        if(Request.action_==FileElevationAction::MakeDirectory)QVERIFY(QFileInfo(root_->filePath(Name)).isDir());
+        else if(Request.action_==FileElevationAction::CreateContent)QCOMPARE(read(Name),QByteArray("ab"));
+        else if(Request.action_==FileElevationAction::Rename){QCOMPARE(read(Name),QByteArray("original"));QVERIFY(!QFileInfo::exists(root_->filePath(Name+"-src")));}
+        else QVERIFY(!QFileInfo::exists(root_->filePath(Name+"-src")));
+    }
+    void r10SecurityBackupAndRestore() {
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QVERIFY(write("r10-security.txt","security fixture"));const auto Path=root_->filePath("r10-security.txt");
+        const auto Native=hc::filetools::NativePath(Path);hc::filetools::Handle File(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr));
+        DWORD Code=0;const auto Original=hc::permissions::security::Descriptor(File.value_,Code);QCOMPARE(Code,DWORD(ERROR_SUCCESS));
+        const bool RealUac=qEnvironmentVariableIntValue("HC_R10_REAL_UAC")==1;
+        const auto Execute=[&](FileElevationRequest Request) {JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());JobRequest Options;Options.operation_=ElevationContext();auto Job=Scheduler.Submit(Options,std::make_unique<FileElevationJob>(Request,hc::permissions::MakeFileElevationService(RealUac?hc::permissions::FileElevationLauncher{}:FixtureLauncher())));if(!Job.HasValue())return JobResult{};if(Job.Value().completion_.wait_for(std::chrono::seconds(RealUac?180:10))!=std::future_status::ready)return JobResult{};return Job.Value().completion_.get();};
+        auto Source=writer_->Inspect(at("r10-security.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());FileElevationRequest Request;Request.source_=*Source.Value();Request.destination_=at("r10-security.txt");Request.action_=FileElevationAction::SecurityChange;Request.grantAccess_=true;
+        const auto Changed=Execute(Request);
+        if(Changed.snapshot_.error_&&Changed.snapshot_.error_->code_=="security-change:1314")QSKIP("Actual security changes require SeRestorePrivilege; UAC account approval remains manual acceptance.");
+        QVERIFY2(Changed.snapshot_.state_==JobState::Completed,Changed.snapshot_.error_?Changed.snapshot_.error_->code_.c_str():"no result");QVERIFY(!Changed.items_.empty());
+        QVERIFY(Changed.items_.front().source_);const auto Backup=QJsonDocument::fromJson(QByteArray::fromStdString(Changed.items_.front().source_->hints_.at("securityBackup"))).object();QCOMPARE(Backup["state"].toString(),QString("applied"));
+        QVERIFY(QFileInfo::exists(Backup["backupPath"].toString()));
+        QFile OriginalBackup(Backup["backupPath"].toString());QVERIFY(OriginalBackup.open(QIODevice::ReadOnly));const auto BackupBytes=OriginalBackup.readAll();OriginalBackup.close();
+        QCOMPARE(QJsonDocument::fromJson(BackupBytes).object()["state"].toString(),QString("prepared"));QVERIFY(QFileInfo::exists(Backup["statusPath"].toString()));
+        Request.action_=FileElevationAction::SecurityRestore;Request.grantAccess_=false;Request.backupPath_=Backup["backupPath"].toString().toStdString();Request.backupIdentity_=Backup["backupIdentity"].toString().toStdString();Request.securityDigest_=Backup["appliedDigest"].toString().toStdString();
+        const auto Restored=Execute(Request);QVERIFY2(Restored.snapshot_.state_==JobState::Completed,Restored.snapshot_.error_?Restored.snapshot_.error_->code_.c_str():"no result");
+        QVERIFY(OriginalBackup.open(QIODevice::ReadOnly));QCOMPARE(OriginalBackup.readAll(),BackupBytes);OriginalBackup.close();
+        // The documented file API converts legacy inheritance to AI. Compare
+        // every owner/group/ACE/protection bit, allowing only that marker.
+        const auto Normalize=[](QString Descriptor){return Descriptor.replace("D:PAI","D:P").replace("D:AI","D:");};
+        QCOMPARE(Normalize(hc::permissions::security::Descriptor(File.value_,Code)),Normalize(Original));QCOMPARE(Code,DWORD(ERROR_SUCCESS));
+    }
+    void r10ApprovalExpiresAndBindsScope()
+    {
+        auto Now=std::chrono::steady_clock::now(); FileElevationApproval Approval([&Now] { return Now; });
+        Approval.Choose("job-one","selected-root",InteractionChoice::Elevate);
+        QVERIFY(Approval.Decision("job-one","selected-root"));
+        QVERIFY(!Approval.Decision("job-two","selected-root")); QVERIFY(!Approval.Decision("job-one","other-root"));
+        Now+=std::chrono::minutes(2); QVERIFY(!Approval.Decision("job-one","selected-root"));
+    }
+    void r10ApprovalRevalidatesSourceAndDestination_data()
+    {
+        QTest::addColumn<bool>("DestinationChanged");QTest::newRow("source-changed")<<false;QTest::newRow("destination-appeared")<<true;
+    }
+    void r10ApprovalRevalidatesSourceAndDestination()
+    {
+        if(kind_!=LocatorKind::Local)QSKIP("Elevation is intentionally local-only.");QFETCH(bool,DestinationChanged);
+        QVERIFY(write("r10-change.txt","original"));if (!QFileInfo::exists(root_->filePath("r10-change-dst"))) QVERIFY(writer_->MakeDirectory(at("r10-change-dst"),{}).HasValue());
+        auto Source=writer_->Inspect(at("r10-change.txt"),{});QVERIFY(Source.HasValue()&&Source.Value());
+        auto Service=std::make_shared<FixtureElevationService>(reader_,writer_);FileOperationRequest Request;Request.sources_={{*Source.Value(),reader_,{}}};Request.destination_=at("r10-change-dst");Request.destinationWriter_=std::make_shared<DeniedContentWriter>(writer_);Request.elevation_=Service;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Started=SubmitFileOperation(Scheduler,Request);QVERIFY(Started.HasValue());const auto Id=Started.Value().id_;
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_,JobState::WaitingForUser);
+        if(DestinationChanged)QVERIFY(write("r10-change-dst/r10-change.txt","concurrent destination"));else QVERIFY(write("r10-change.txt","changed before approval"));
+        const auto Q=Scheduler.Snapshot(Id).Value().interaction_;QVERIFY(Q);QVERIFY(Scheduler.Reply(Id,{Q->id_,InteractionChoice::Elevate,{}}).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);const auto& Result=Started.Value().completion_.get();QCOMPARE(Result.snapshot_.state_,JobState::Failed);QVERIFY(Result.snapshot_.error_);QCOMPARE(Result.snapshot_.error_->category_,ErrorCategory::StaleRevision);
+        if(DestinationChanged)QCOMPARE(read("r10-change-dst/r10-change.txt"),QByteArray("concurrent destination"));else QVERIFY(!QFileInfo::exists(root_->filePath("r10-change-dst/r10-change.txt")));
+        QFile::remove(root_->filePath("r10-change-dst/r10-change.txt"));
+    }
+    void r9CreateTemplatesThroughScheduler()
+    {
+        using namespace hc::filetools;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        const Locator Parent{kind_,root_->path().toStdString()};
+        QCOMPARE(FileOperationLane({LocatorKind::Local,"C:/folder"}),std::string("volume:c:"));
+        QCOMPARE(FileOperationLane({LocatorKind::Smb,"//SERVER/SHARE/folder"}),std::string("share:\\\\server\\share"));
+        for (int Type = 0; Type < 8; ++Type) {
+            const auto Name = "r9_" + QString::number(Type) + ".txt";
+            auto Prepared = PrepareCreate(writer_, Parent, Name, Type, true); QVERIFY(Prepared.HasValue());
+            auto Started = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Started.HasValue());
+            QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4)) == std::future_status::ready);
+            const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "missing error"); QCOMPARE(Result.snapshot_.state_,JobState::Completed); QCOMPARE(Result.items_.size(),std::size_t(1)); QVERIFY(Result.items_[0].destinationCommitted_);
+            const auto Expected = (Type ? QByteArray::fromHex("efbbbf") : QByteArray()) + Templates()[Type].text_.toUtf8(); QCOMPARE(read(Name), Expected);
+            Prepared = PrepareCreate(writer_, Parent, Name, Type, false); QVERIFY(Prepared.HasValue());
+            Started = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Started.HasValue());
+            QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4)) == std::future_status::ready); QCOMPARE(Started.Value().completion_.get().snapshot_.state_,JobState::Failed); QCOMPARE(read(Name), Expected);
+        }
+        QVERIFY(!PrepareCreate(writer_, Parent, "../escape",0,false).HasValue()); QVERIFY(!PrepareCreate(writer_, Parent,"bad.txt",8,false).HasValue()); QVERIFY(!PrepareCreate({},Parent,"bad.txt",0,false).HasValue());
+    }
+    void r9CreateCancellationAndWriteFailure()
+    {
+        using namespace hc::filetools;
+        const Locator Parent{kind_,root_->path().toStdString()};
+        auto Prepared = PrepareCreate(writer_,Parent,"r9-cancel.txt",6,true); QVERIFY(Prepared.HasValue());
+        JobStepContext Context;
+        for (int I = 0; I < 3; ++I) QCOMPARE(Prepared.Value().task_->Advance(Context).next_,JobState::Running);
+        QVERIFY(!QFileInfo::exists(root_->filePath("r9-cancel.txt"))); QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty()); QVERIFY(artifacts().isEmpty());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        for (const auto Fault : {WriteFault::Append,WriteFault::Commit}) {
+            Prepared = PrepareCreate(std::make_shared<FailedRemoveWriter>(writer_,Fault),Parent,"r9-failure.txt",6,true); QVERIFY(Prepared.HasValue());
+            auto Started = Scheduler.Submit(std::move(Prepared.Value().request_),std::move(Prepared.Value().task_)); QVERIFY(Started.HasValue());
+            QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4)) == std::future_status::ready); QCOMPARE(Started.Value().completion_.get().snapshot_.state_,JobState::Failed);
+            QVERIFY(!QFileInfo::exists(root_->filePath("r9-failure.txt"))); QVERIFY(artifacts().isEmpty());
+        }
+        Prepared = PrepareCreate(writer_,Parent,"r9-deferred.txt",0,false); QVERIFY(Prepared.HasValue()); Prepared.Value().request_.deferred_ = true;
+        auto Started = Scheduler.Submit(std::move(Prepared.Value().request_),std::move(Prepared.Value().task_)); QVERIFY(Started.HasValue()); QVERIFY(Scheduler.Cancel(Started.Value().id_).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4)) == std::future_status::ready); QCOMPARE(Started.Value().completion_.get().snapshot_.state_,JobState::Cancelled); QVERIFY(!QFileInfo::exists(root_->filePath("r9-deferred.txt")));
+    }
+    void r8RecursiveFilterAndMove()
+    {
+        QVERIFY(QDir().mkpath(root_->filePath("r8-tree/empty"))); QVERIFY(QDir().mkpath(root_->filePath("r8-target")));
+        QVERIFY(write("r8-tree/한글.TXT", "included")); QVERIFY(write("r8-tree/keep.bin", "excluded"));
+        auto Entry = reader_->Resolve(at("r8-tree"), {}).get(); QVERIFY(Entry.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        FileOperationRequest Request; Request.sources_ = {{Entry.Value(), reader_, writer_}}; Request.destination_ = at("r8-target"); Request.destinationWriter_ = writer_;
+        Request.includePattern_ = "??.txt"; Request.copyOptions_.verify_ = true;
+        auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        auto Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Completed); QCOMPARE(Result.snapshot_.skippedItems_, uint64_t(1));
+        QCOMPARE(read("r8-target/r8-tree/한글.TXT"), QByteArray("included")); QVERIFY(QDir(root_->filePath("r8-target/r8-tree/empty")).exists());
+        QVERIFY(!QFile::exists(root_->filePath("r8-target/r8-tree/keep.bin")));
+        QVERIFY(QDir().mkpath(root_->filePath("r8-moved"))); Request.operation_ = hc::operations::FileOperation::Move; Request.destination_ = at("r8-moved"); Request.includePattern_ = "*.TXT;*.log";
+        Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+        QVERIFY(!QFile::exists(root_->filePath("r8-tree/한글.TXT"))); QCOMPARE(read("r8-tree/keep.bin"), QByteArray("excluded"));
+        QVERIFY(QDir(root_->filePath("r8-tree")).exists()); QCOMPARE(read("r8-moved/r8-tree/한글.TXT"), QByteArray("included"));
+    }
+    void r8HashMismatchPreservesMove()
+    {
+        QVERIFY(write("r8-hash.txt", "immutable source")); QVERIFY(QDir().mkpath(root_->filePath("r8-hash-target"))); QVERIFY(write("r8-hash-target/r8-hash.txt", "old target"));
+        auto Entry = reader_->Resolve(at("r8-hash.txt"), {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move; Request.sources_ = {{Entry.Value(), reader_, writer_}};
+        Request.destination_ = at("r8-hash-target"); Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, WriteFault::Corrupt); Request.conflict_ = ConflictPolicy::Replace; Request.copyOptions_.verify_ = true;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Result.snapshot_.error_->code_, std::string("copy-hash-mismatch"));
+        QVERIFY(!Result.items_.front().destinationCommitted_ && !Result.items_.front().sourceRemoved_);
+        QCOMPARE(read("r8-hash.txt"), QByteArray("immutable source")); QCOMPARE(read("r8-hash-target/r8-hash.txt"), QByteArray("old target"));
+        QVERIFY(QDir(root_->filePath("r8-hash-target")).entryList({".hc-*"}, QDir::Files | QDir::Hidden).isEmpty());
+    }
+    void r8NativeStreamsAndDacl()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local NTFS fixture required");
+        QVERIFY(write("r8-extras.txt", "main content")); QVERIFY(write("r8-extras.txt:notes", QByteArray(8193, 'a'))); QVERIFY(write("r8-extras.txt:한글", "unicode stream"));
+        const auto Path = QDir::toNativeSeparators(root_->filePath("r8-extras.txt")).toStdWString();
+        PACL Dacl = nullptr; PSECURITY_DESCRIPTOR Descriptor = nullptr;
+        QCOMPARE(GetNamedSecurityInfoW(Path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &Dacl, nullptr, &Descriptor), DWORD(ERROR_SUCCESS));
+        const auto Free = qScopeGuard([&] { LocalFree(Descriptor); });
+        QCOMPARE(SetNamedSecurityInfoW(const_cast<wchar_t*>(Path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, Dacl, nullptr), DWORD(ERROR_SUCCESS));
+        const auto DaclText = [](const std::wstring& At) { PSECURITY_DESCRIPTOR Sd = nullptr; LPWSTR Text = nullptr; QString Value;
+            if (GetNamedSecurityInfoW(At.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &Sd) == ERROR_SUCCESS) {
+                if (ConvertSecurityDescriptorToStringSecurityDescriptorW(Sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &Text, nullptr)) { Value = QString::fromWCharArray(Text); LocalFree(Text); } LocalFree(Sd); } return Value; };
+        const auto ExpectedDacl = DaclText(Path); QVERIFY(!ExpectedDacl.isEmpty());
+        QVERIFY(QDir().mkpath(root_->filePath("r8-extras-target"))); auto Entry = reader_->Resolve(at("r8-extras.txt"), {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{Entry.Value(), reader_, writer_}}; Request.destination_ = at("r8-extras-target"); Request.destinationWriter_ = writer_; Request.copyOptions_ = {true, true, true, true};
+        OperationContext Context; Context.maxReadBytes_ = 1024;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "copy incomplete");
+        QCOMPARE(read("r8-extras-target/r8-extras.txt"), QByteArray("main content")); QCOMPARE(read("r8-extras-target/r8-extras.txt:notes"), QByteArray(8193, 'a')); QCOMPARE(read("r8-extras-target/r8-extras.txt:한글"), QByteArray("unicode stream"));
+        QCOMPARE(DaclText(QDir::toNativeSeparators(root_->filePath("r8-extras-target/r8-extras.txt")).toStdWString()), ExpectedDacl);
+        QCOMPARE(Result.snapshot_.progress_.bytesDone_, uint64_t(12 + 8193 + 14)); QVERIFY(!Result.snapshot_.progress_.bytesTotal_);
+    }
+    void r8CopyPolicyValidationAndMetadata()
+    {
+        QVERIFY(!IsValidCopyPattern("*.txt;")); QVERIFY(!IsValidCopyPattern("../*")); QVERIFY(!IsValidCopyPattern(std::string("*\0*", 3))); QVERIFY(IsValidCopyPattern("*.txt; *.bin"));
+        QVERIFY(write("r8-policy.txt", "policy")); auto Source = reader_->Resolve(at("r8-policy.txt"), {}).get(); QVERIFY(Source.HasValue());
+        const auto Path = QDir::toNativeSeparators(root_->filePath("r8-policy.txt")).toStdWString();
+        HANDLE File = CreateFileW(Path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr); QVERIFY(File != INVALID_HANDLE_VALUE);
+        const uint64_t Value = (1700000000000LL + 11644473600000LL) * 10000; FILETIME Time{DWORD(Value), DWORD(Value >> 32)};
+        QVERIFY(SetFileTime(File, nullptr, nullptr, &Time)); CloseHandle(File); Source = reader_->Resolve(at("r8-policy.txt"), {}).get(); QVERIFY(Source.HasValue());
+        QVERIFY(QDir().mkpath(root_->filePath("r8-policy-target"))); FileOperationRequest Request; Request.sources_ = {{Source.Value(), reader_, writer_}}; Request.destination_ = at("r8-policy-target"); Request.destinationWriter_ = writer_; Request.copyOptions_.metadata_ = false;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Completed); auto Target = writer_->Inspect(at("r8-policy-target/r8-policy.txt"), {}); QVERIFY(Target.HasValue() && Target.Value()); QVERIFY(Target.Value()->modifiedUtcMs_ != Source.Value().modifiedUtcMs_);
+        class Unsupported final : public IWritableStorage { public: ProviderId Id() const override { return {"unsupported"}; }
+            Result<SupportDecision> Supports(Mutation, Locator, OperationContext) override { return SupportDecision{}; }
+            Result<std::optional<EntrySnapshot>> Inspect(Locator, OperationContext) override { return std::optional<EntrySnapshot>{}; }
+            Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator, DestinationExpectation, OperationContext) override { return Error{ErrorCategory::Unsupported, "unavailable"}; }
+            Result<Unit> MakeDirectory(Locator, OperationContext) override { return Error{ErrorCategory::Unsupported, "unavailable"}; }
+            Result<Unit> Remove(EntrySnapshot, OperationContext) override { return Error{ErrorCategory::Unsupported, "unavailable"}; }
+            Result<Unit> Rename(EntrySnapshot, Locator, OperationContext) override { return Error{ErrorCategory::Unsupported, "unavailable"}; } };
+        Request.destinationWriter_ = std::make_shared<Unsupported>(); Request.copyOptions_.verify_ = true;
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(!Prepared.HasValue()); QCOMPARE(Prepared.Failure().code_, std::string("copy-options-unavailable"));
+        Request.destinationWriter_ = writer_; Request.includePattern_ = "*.txt;"; Prepared = PrepareFileOperation(Request); QVERIFY(!Prepared.HasValue()); QCOMPARE(Prepared.Failure().code_, std::string("invalid-copy-options"));
+        Request.includePattern_ = "*"; Request.bytesPerSecondLimit_ = (1ull << 40) + 1; QVERIFY(!PrepareFileOperation(Request).HasValue());
+    }
+    void r8AdsBudgetFailurePreservesSource()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local NTFS fixture required");
+        QVERIFY(write("r8-ads-budget.txt", "main")); QVERIFY(write("r8-ads-budget.txt:large", QByteArray(2048, 'b'))); QVERIFY(QDir().mkpath(root_->filePath("r8-ads-budget-target")));
+        auto Source = reader_->Resolve(at("r8-ads-budget.txt"), {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move; Request.sources_ = {{Source.Value(), reader_, writer_}}; Request.destination_ = at("r8-ads-budget-target"); Request.destinationWriter_ = writer_; Request.copyOptions_.streams_ = true; Request.maxBytes_ = 1024;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Result.snapshot_.error_->code_, std::string("copy-ads-byte-budget"));
+        QCOMPARE(read("r8-ads-budget.txt:large"), QByteArray(2048, 'b')); QVERIFY(!QFile::exists(root_->filePath("r8-ads-budget-target/r8-ads-budget.txt"))); QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void r8AdsHashDetectsStageCorruption()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local NTFS fixture required");
+        QVERIFY(write("r8-ads-corrupt.txt", "main")); QVERIFY(write("r8-ads-corrupt.txt:notes", "original stream"));
+        auto Source = reader_->Resolve(at("r8-ads-corrupt.txt"), {}).get(); QVERIFY(Source.HasValue());
+        OperationContext Context; Context.maxReadBytes_ = 1024; Locator Stage;
+        Context.writeCheckpoint_ = [&](const WriteRecoveryRecord& Record, std::optional<std::size_t>) -> Result<std::size_t> { Stage = Record.stage_; return std::size_t{0}; };
+        auto Session = writer_->BeginCopy(at("r8-ads-corrupt-output.txt"), {}, {true, true, false, true}, Context); QVERIFY(Session.HasValue());
+        QVERIFY(Session.Value()->ConfigureCopy(Source.Value(), {true, true, false, true}, Context).HasValue());
+        const QByteArray Main("main"); QVERIFY(Session.Value()->RecordSourceBytes({reinterpret_cast<const std::byte*>(Main.constData()), std::size_t(Main.size())}, Context).HasValue()); QVERIFY(append(*Session.Value(), Main, Context).HasValue());
+        bool Done = false; for (int I = 0; I < 32 && !Done; ++I) { auto Step = Session.Value()->AdvanceCopyExtras(1024, Context); QVERIFY(Step.HasValue()); Done = Step.Value().done_; } QVERIFY(Done);
+        const auto Stream = QString::fromStdString(Stage.root_).toStdWString() + L":notes";
+        HANDLE File = CreateFileW(Stream.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr); QVERIFY(File != INVALID_HANDLE_VALUE);
+        DWORD Written = 0; const bool Corrupted = WriteFile(File, "X", 1, &Written, nullptr); CloseHandle(File); QVERIFY(Corrupted && Written == 1);
+        std::optional<Error> Failure; for (int I = 0; I < 32 && !Failure; ++I) { auto Step = Session.Value()->VerifyContent(Context); if (!Step.HasValue()) Failure = Step.Failure(); else QVERIFY(!Step.Value()); }
+        QVERIFY(Failure); QCOMPARE(Failure->code_, std::string("copy-ads-hash-mismatch")); QVERIFY(Session.Value()->Abort().HasValue());
+        QCOMPARE(read("r8-ads-corrupt.txt:notes"), QByteArray("original stream")); QVERIFY(!QFile::exists(root_->filePath("r8-ads-corrupt-output.txt"))); QVERIFY(artifacts().isEmpty());
+    }
+    void r8HardLinksCopyAsIndependentFiles()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local NTFS fixture required");
+        QVERIFY(write("r8-hard-original.txt", "hardlink content"));
+        const auto Original = QDir::toNativeSeparators(root_->filePath("r8-hard-original.txt")).toStdWString(), Link = QDir::toNativeSeparators(root_->filePath("r8-hard-link.txt")).toStdWString();
+        QVERIFY(CreateHardLinkW(Link.c_str(), Original.c_str(), nullptr)); QVERIFY(QDir().mkdir(root_->filePath("r8-hard-target")));
+        auto A = reader_->Resolve(at("r8-hard-original.txt"), {}).get(), B = reader_->Resolve(at("r8-hard-link.txt"), {}).get(); QVERIFY(A.HasValue() && B.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{A.Value(), reader_, writer_}, {B.Value(), reader_, writer_}}; Request.destination_ = at("r8-hard-target"); Request.destinationWriter_ = writer_; Request.copyOptions_.verify_ = true;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready); QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(read("r8-hard-target/r8-hard-link.txt"), QByteArray("hardlink content")); QVERIFY(write("r8-hard-target/r8-hard-original.txt", "changed target")); QCOMPARE(read("r8-hard-target/r8-hard-link.txt"), QByteArray("hardlink content")); QCOMPARE(read("r8-hard-original.txt"), QByteArray("hardlink content"));
+    }
+    void r8SymbolicLinkFailsBeforeCopy()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local symbolic link fixture required");
+        QVERIFY(write("r8-symlink-original.txt", "symlink content"));
+        const auto Original = QDir::toNativeSeparators(root_->filePath("r8-symlink-original.txt")).toStdWString(), Link = QDir::toNativeSeparators(root_->filePath("r8-symlink.txt")).toStdWString();
+        if (!CreateSymbolicLinkW(Link.c_str(), Original.c_str(), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) { QVERIFY(GetLastError() == ERROR_PRIVILEGE_NOT_HELD); QSKIP("Windows developer mode or symbolic-link privilege unavailable"); }
+        QVERIFY(QDir().mkdir(root_->filePath("r8-symlink-target"))); auto Source = reader_->Resolve(at("r8-symlink.txt"), {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{Source.Value(), reader_, writer_}}; Request.destination_ = at("r8-symlink-target"); Request.destinationWriter_ = writer_;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Result.snapshot_.error_->code_, std::string("reparse-entry-denied"));
+        QCOMPARE(read("r8-symlink-original.txt"), QByteArray("symlink content")); QVERIFY(!QFile::exists(root_->filePath("r8-symlink-target/r8-symlink.txt"))); QVERIFY(artifacts().isEmpty());
+    }
+    void r8PacingReleasesWorkerAndCancels()
+    {
+        QVERIFY(write("r8-paced.txt", QByteArray(32768, 'p'))); QVERIFY(QDir().mkpath(root_->filePath("r8-paced-target")));
+        auto Entry = reader_->Resolve(at("r8-paced.txt"), {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{Entry.Value(), reader_, writer_}}; Request.destination_ = at("r8-paced-target"); Request.destinationWriter_ = writer_; Request.bytesPerSecondLimit_ = 16384;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1); QElapsedTimer Clock; Clock.start();
+        auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(6)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Completed); QVERIFY(Clock.elapsed() >= 1900);
+        QVERIFY(write("r8-paced-cancel.txt", QByteArray(65536, 'q'))); Entry = reader_->Resolve(at("r8-paced-cancel.txt"), {}).get(); QVERIFY(Entry.HasValue()); Request.sources_ = {{Entry.Value(), reader_, writer_}};
+        Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QTRY_VERIFY(Scheduler.Snapshot(Started.Value().id_).Value().progress_.bytesDone_ > 0);
+        class Probe final : public IJobTask { public: JobStep Advance(JobStepContext) override { return JobStep{JobState::Completed}; } std::vector<Error> Finalize(JobState) override { return {}; } };
+        auto Other = Scheduler.Submit({}, std::make_unique<Probe>()); QVERIFY(Other.HasValue());
+        // A paced job retains its global admission slot. Pause releases admission;
+        // the same worker must then execute another task without a blocking sleep.
+        QVERIFY(Scheduler.Pause(Started.Value().id_, true).HasValue());
+        QVERIFY(Other.Value().completion_.wait_for(std::chrono::seconds(1)) == std::future_status::ready); QCOMPARE(Other.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QVERIFY(Scheduler.Cancel(Started.Value().id_).HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Cancelled); QVERIFY(!QFile::exists(root_->filePath("r8-paced-target/r8-paced-cancel.txt"))); QCOMPARE(read("r8-paced-cancel.txt"), QByteArray(65536, 'q'));
+    }
+    void stagedCommitAndMetadata()
+    {
+        auto Session = writer_->BeginWrite(at("한글 staged.txt"), {}, {});
+        QVERIFY2(Session.HasValue(), Session.HasValue() ? "" : Session.Failure().code_.c_str());
+        QVERIFY(append(*Session.Value(), "first ").HasValue());
+        QVERIFY(append(*Session.Value(), "second").HasValue());
+        QVERIFY(!QFileInfo::exists(root_->filePath("한글 staged.txt")));
+        QVERIFY(Session.Value()->SetMetadata({1700000000123LL, FILE_ATTRIBUTE_ARCHIVE}, {}).HasValue());
+        auto Result = Session.Value()->Commit({});
+        QVERIFY2(Result.HasValue(), Result.HasValue() ? "" : Result.Failure().code_.c_str());
+        QVERIFY(Result.Value().cleanupErrors_.empty());
+        QCOMPARE(read("한글 staged.txt"), QByteArray("first second"));
+        auto Entry = writer_->Inspect(at("한글 staged.txt"), {});
+        QVERIFY(Entry.HasValue() && Entry.Value());
+        QCOMPARE(Entry.Value()->modifiedUtcMs_, 1700000000123LL);
+        auto Stream = reader_->OpenRead(Entry.Value()->id_, {}).get();
+        QVERIFY(Stream.HasValue());
+        auto Bytes = Stream.Value()->Read(64, {}).get();
+        QVERIFY(Bytes.HasValue());
+        QCOMPARE(Bytes.Value().bytes_.size(), std::size_t{12});
+        QVERIFY(Session.Value()->Abort().HasValue());
+        QCOMPARE(read("한글 staged.txt"), QByteArray("first second"));
+        QVERIFY(artifacts().isEmpty());
+    }
+    void destinationAttributesAreVerified()
+    {
+        constexpr DWORD Mask = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY;
+        for (const auto& Name : {QString("ordinary-attributes.txt"), QString(".dot-attributes.txt")})
+        {
+            for (const DWORD Attributes : {DWORD(FILE_ATTRIBUTE_ARCHIVE), DWORD(FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN),
+                DWORD(FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)})
+            {
+                const auto Path = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
+                const auto Remove = qScopeGuard([&] { SetFileAttributesW(Path.c_str(), FILE_ATTRIBUTE_NORMAL); QFile::remove(QString::fromStdWString(Path)); });
+                auto Session = writer_->BeginWrite(at(Name), {}, {});
+                QVERIFY2(Session.HasValue(), Session.HasValue() ? "" : Session.Failure().code_.c_str());
+                QVERIFY(append(*Session.Value(), "attribute fixture").HasValue());
+                QVERIFY(Session.Value()->SetMetadata({1700000000123LL, Attributes}, {}).HasValue());
+                auto Receipt = Session.Value()->Commit({});
+                QVERIFY2(Receipt.HasValue(), Receipt.HasValue() ? "" : Receipt.Failure().code_.c_str());
+                QCOMPARE(read(Name), QByteArray("attribute fixture"));
+                const auto Actual = GetFileAttributesW(Path.c_str());
+                QVERIFY(Actual != INVALID_FILE_ATTRIBUTES);
+                const auto Difference = (Actual ^ Attributes) & Mask;
+                qInfo() << Name << "requested" << Attributes << "actual" << Actual;
+                if (kind_ == LocatorKind::Local) QCOMPARE(Difference, DWORD(0));
+                if (!Difference) QVERIFY(Receipt.Value().cleanupErrors_.empty());
+                else
+                {
+                    QCOMPARE(Receipt.Value().cleanupErrors_.size(), std::size_t(1));
+                    QCOMPARE(Receipt.Value().cleanupErrors_.front().code_, Difference == FILE_ATTRIBUTE_HIDDEN && (Actual & FILE_ATTRIBUTE_HIDDEN)
+                        ? std::string("destination-added-hidden-attribute") : std::string("destination-attributes-mismatch"));
+                }
+                QVERIFY(Session.Value()->Abort().HasValue());
+                QCOMPARE(read(Name), QByteArray("attribute fixture"));
+                QVERIFY(artifacts().isEmpty());
+            }
+        }
+    }
+    void coordinatorDotFileMetadata()
+    {
+        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+        auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
+        for (const auto Operation : {hc::operations::FileOperation::Copy, hc::operations::FileOperation::Move})
+        {
+            QTemporaryDir SourceRoot; QVERIFY(SourceRoot.isValid());
+            const auto Name = Operation == hc::operations::FileOperation::Copy ? ".copy-attributes.txt" : ".move-attributes.txt";
+            const auto SourcePath = QDir::toNativeSeparators(SourceRoot.filePath(Name));
+            { QFile File(SourcePath); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("dot file fixture"), 16); }
+            QVERIFY(SetFileAttributesW(SourcePath.toStdWString().c_str(), FILE_ATTRIBUTE_ARCHIVE));
+            auto Source = LocalWriter->Inspect({LocatorKind::Local, SourcePath.toStdString()}, {});
+            QVERIFY(Source.HasValue() && Source.Value());
+            QCOMPARE(Source.Value()->attributes_, std::uint32_t(FILE_ATTRIBUTE_ARCHIVE));
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+            FileOperationRequest Request;
+            Request.operation_ = Operation;
+            Request.sources_ = {{*Source.Value(), LocalReader, LocalWriter}};
+            Request.destination_ = at(""); Request.destinationWriter_ = writer_;
+            auto Submitted = SubmitFileOperation(Scheduler, Request); QVERIFY(Submitted.HasValue());
+            QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(15)) == std::future_status::ready);
+            const auto& Result = Submitted.Value().completion_.get();
+            QCOMPARE(read(Name), QByteArray("dot file fixture"));
+            const auto Actual = GetFileAttributesW(QDir::toNativeSeparators(root_->filePath(Name)).toStdWString().c_str());
+            QVERIFY(Actual != INVALID_FILE_ATTRIBUTES);
+            QCOMPARE(Result.items_.size(), std::size_t(1));
+            QVERIFY(Result.items_.front().destinationCommitted_);
+            if (Actual & FILE_ATTRIBUTE_HIDDEN)
+            {
+                QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+                QVERIFY(Result.snapshot_.error_);
+                QVERIFY(Result.items_.front().error_);
+                QCOMPARE(Result.items_.front().error_->code_, std::string("destination-added-hidden-attribute"));
+                QVERIFY(QFileInfo::exists(SourcePath));
+                QVERIFY(!Result.items_.front().sourceRemoved_);
+            }
+            else
+            {
+                QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+                QCOMPARE(QFileInfo::exists(SourcePath), Operation == hc::operations::FileOperation::Copy);
+            }
+        }
+    }
+    void overwriteRevalidatesDestination()
+    {
+        QVERIFY(write("replace.txt", "original"));
+        const auto Old = writer_->Inspect(at("replace.txt"), {});
+        QVERIFY(Old.HasValue() && Old.Value());
+        auto Session = writer_->BeginWrite(at("replace.txt"), {true, Old.Value()->id_.revision_}, {});
+        QVERIFY(Session.HasValue());
+        QVERIFY(append(*Session.Value(), "replacement").HasValue());
+        QCOMPARE(read("replace.txt"), QByteArray("original"));
+        auto Committed = Session.Value()->Commit({});
+        QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+        QVERIFY(Committed.Value().cleanupErrors_.empty());
+        QCOMPARE(read("replace.txt"), QByteArray("replacement"));
+        QVERIFY(artifacts().isEmpty());
+
+        auto Stale = writer_->BeginWrite(at("replace.txt"), {true, Old.Value()->id_.revision_}, {});
+        QVERIFY(Stale.HasValue());
+        QVERIFY(append(*Stale.Value(), "must not win").HasValue());
+        auto Rejected = Stale.Value()->Commit({});
+        QVERIFY(!Rejected.HasValue());
+        QCOMPARE(Rejected.Failure().category_, ErrorCategory::StaleRevision);
+        QVERIFY(Stale.Value()->Abort().HasValue());
+        QCOMPARE(read("replace.txt"), QByteArray("replacement"));
+        QVERIFY(artifacts().isEmpty());
+    }
+    void newDestinationCannotReplaceConcurrentFile()
+    {
+        auto Session = writer_->BeginWrite(at("race.txt"), {}, {});
+        QVERIFY(Session.HasValue());
+        QVERIFY(append(*Session.Value(), "stage").HasValue());
+        QVERIFY(write("race.txt", "concurrent"));
+        QVERIFY(!Session.Value()->Commit({}).HasValue());
+        QVERIFY(Session.Value()->Abort().HasValue());
+        QCOMPARE(read("race.txt"), QByteArray("concurrent"));
+        QVERIFY(artifacts().isEmpty());
+    }
+    void cancelAndAbortLeaveNoStage()
+    {
+        auto Session = writer_->BeginWrite(at("cancel.txt"), {}, {});
+        QVERIFY(Session.HasValue());
+        QVERIFY(append(*Session.Value(), "partial").HasValue());
+        std::stop_source Stop;
+        Stop.request_stop();
+        OperationContext Context;
+        Context.stopToken_ = Stop.get_token();
+        QCOMPARE(append(*Session.Value(), "more", Context).Failure().category_, ErrorCategory::Cancelled);
+        QCOMPARE(Session.Value()->Commit(Context).Failure().category_, ErrorCategory::Cancelled);
+        QVERIFY(Session.Value()->Abort().HasValue());
+        QVERIFY(Session.Value()->Abort().HasValue());
+        QVERIFY(!QFileInfo::exists(root_->filePath("cancel.txt")));
+        QVERIFY(artifacts().isEmpty());
+        auto Empty = writer_->BeginWrite(at("empty.txt"), {}, {});
+        QVERIFY(Empty.HasValue());
+        QVERIFY(Empty.Value()->Commit({}).HasValue());
+        QVERIFY(QFileInfo::exists(root_->filePath("empty.txt")));
+        QCOMPARE(QFileInfo(root_->filePath("empty.txt")).size(), 0);
+    }
+    void mkdirRenameRemoveAndStaleSource()
+    {
+        QVERIFY(writer_->MakeDirectory(at("directory"), {}).HasValue());
+        QVERIFY(!writer_->MakeDirectory(at("directory"), {}).HasValue());
+        QVERIFY(write("directory/source.txt", "source"));
+        auto Source = writer_->Inspect(at("directory/source.txt"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        QVERIFY(writer_->Rename(*Source.Value(), at("directory/renamed.txt"), {}).HasValue());
+        QVERIFY(!QFileInfo::exists(root_->filePath("directory/source.txt")));
+        QCOMPARE(read("directory/renamed.txt"), QByteArray("source"));
+        auto Renamed = writer_->Inspect(at("directory/renamed.txt"), {});
+        QVERIFY(Renamed.HasValue() && Renamed.Value());
+        QVERIFY(write("directory/renamed.txt", "changed source"));
+        QCOMPARE(writer_->Remove(*Renamed.Value(), {}).Failure().category_, ErrorCategory::StaleRevision);
+        auto Directory = writer_->Inspect(at("directory"), {});
+        QVERIFY(Directory.HasValue() && Directory.Value());
+        QVERIFY(!writer_->Remove(*Directory.Value(), {}).HasValue());
+        Renamed = writer_->Inspect(at("directory/renamed.txt"), {});
+        QVERIFY(writer_->Remove(*Renamed.Value(), {}).HasValue());
+        Directory = writer_->Inspect(at("directory"), {});
+        QVERIFY(writer_->Remove(*Directory.Value(), {}).HasValue());
+        QVERIFY(!QFileInfo::exists(root_->filePath("directory")));
+    }
+    void replacedDirectoryAndConcurrentSourceWritesAreRejected()
+    {
+        QVERIFY(writer_->MakeDirectory(at("identity"), {}).HasValue());
+        auto Original = writer_->Inspect(at("identity"), {});
+        QVERIFY(Original.HasValue() && Original.Value());
+        QVERIFY(writer_->Rename(*Original.Value(), at("identity-old"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("identity"), {}).HasValue());
+        QCOMPARE(writer_->Remove(*Original.Value(), {}).Failure().category_, ErrorCategory::StaleRevision);
+        QVERIFY(QFileInfo::exists(root_->filePath("identity")));
+        QVERIFY(write("locked.txt", "stable bytes"));
+        auto File = writer_->Inspect(at("locked.txt"), {});
+        QVERIFY(File.HasValue() && File.Value());
+        OperationContext Context; Context.denyConcurrentMutation_ = true;
+        auto Stream = reader_->OpenRead(File.Value()->id_, Context).get();
+        QVERIFY(Stream.HasValue());
+        QVERIFY(!write("locked.txt", "torn bytes"));
+        Stream.Value().reset();
+        QCOMPARE(read("locked.txt"), QByteArray("stable bytes"));
+        QVERIFY(write("locked.txt", "after close"));
+    }
+    void invalidNamesAndRootMutations()
+    {
+        for (const auto& Name : {"../escape", "CON.txt", "bad:stream", "trailing.", "trailing ", "a/../b", "a//b", "bad*name"})
+            QVERIFY2(!writer_->BeginWrite(at(Name), {}, {}).HasValue(), Name);
+        Locator Invalid{kind_, "relative.txt"};
+        QVERIFY(!writer_->BeginWrite(Invalid, {}, {}).HasValue());
+        auto Missing = writer_->Inspect(at("missing.txt"), {});
+        QVERIFY(Missing.HasValue() && !Missing.Value());
+        QVERIFY(artifacts().isEmpty());
+    }
+    void pinnedParentCannotBeRenamed()
+    {
+        QVERIFY(writer_->MakeDirectory(at("pinned"), {}).HasValue());
+        auto Session = writer_->BeginWrite(at("pinned/file.txt"), {}, {});
+        QVERIFY(Session.HasValue());
+        const auto From = QDir::toNativeSeparators(root_->filePath("pinned")).toStdWString();
+        const auto To = QDir::toNativeSeparators(root_->filePath("pinned-moved")).toStdWString();
+        QVERIFY(!MoveFileExW(From.c_str(), To.c_str(), 0));
+        QVERIFY(Session.Value()->Abort().HasValue());
+        QVERIFY(MoveFileExW(From.c_str(), To.c_str(), 0));
+    }
+    void junctionTraversalIsRejected()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local NTFS junction fixture; SMB reparse support depends on server");
+        QVERIFY(writer_->MakeDirectory(at("junction-target"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("junction"), {}).HasValue());
+        QVERIFY(write("junction-target/sentinel.txt", "preserve"));
+        const auto Link = QDir::toNativeSeparators(root_->filePath("junction")).toStdWString();
+        const auto Target = QDir::toNativeSeparators(root_->filePath("junction-target")).toStdWString();
+        const auto Substitute = std::wstring(L"\\??\\") + Target;
+        struct JunctionData
+        {
+            DWORD tag_;
+            WORD size_, reserved_, substituteOffset_, substituteLength_, printOffset_, printLength_;
+            wchar_t paths_[1];
+        };
+        const auto PathBytes = (Substitute.size() + Target.size() + 2) * sizeof(wchar_t);
+        std::vector<std::byte> Buffer(16 + PathBytes);
+        auto* Data = reinterpret_cast<JunctionData*>(Buffer.data());
+        Data->tag_ = IO_REPARSE_TAG_MOUNT_POINT;
+        Data->size_ = static_cast<WORD>(8 + PathBytes);
+        Data->substituteLength_ = static_cast<WORD>(Substitute.size() * sizeof(wchar_t));
+        Data->printOffset_ = Data->substituteLength_ + sizeof(wchar_t);
+        Data->printLength_ = static_cast<WORD>(Target.size() * sizeof(wchar_t));
+        memcpy(Data->paths_, Substitute.c_str(), Data->substituteLength_ + sizeof(wchar_t));
+        memcpy(reinterpret_cast<std::byte*>(Data->paths_) + Data->printOffset_, Target.c_str(), Data->printLength_ + sizeof(wchar_t));
+        const auto Handle = CreateFileW(Link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE);
+        DWORD Returned = 0;
+        const bool Set = DeviceIoControl(Handle, FSCTL_SET_REPARSE_POINT, Buffer.data(), static_cast<DWORD>(Buffer.size()), nullptr, 0, &Returned, nullptr);
+        CloseHandle(Handle);
+        QVERIFY(Set);
+        const auto Cleanup = qScopeGuard([&] { RemoveDirectoryW(Link.c_str()); });
+        auto Blocked = writer_->BeginWrite(at("junction/escaped.txt"), {}, {});
+        QVERIFY(!Blocked.HasValue());
+        QCOMPARE(Blocked.Failure().code_, std::string("reparse-parent-denied"));
+        QVERIFY(!writer_->Inspect(at("junction"), {}).HasValue());
+        QCOMPARE(read("junction-target/sentinel.txt"), QByteArray("preserve"));
+        QVERIFY(!QFileInfo::exists(root_->filePath("junction-target/escaped.txt")));
+    }
+    void longPaths()
+    {
+        QString Path;
+        for (int Index = 0; Index < 5; ++Index)
+        {
+            Path += (Path.isEmpty() ? "" : "/") + QString(55, QChar('a' + Index));
+            QVERIFY(writer_->MakeDirectory(at(Path), {}).HasValue());
+        }
+        auto Session = writer_->BeginWrite(at(Path + "/long.txt"), {}, {});
+        QVERIFY(Session.HasValue());
+        QVERIFY(append(*Session.Value(), "long-path-data").HasValue());
+        QVERIFY(Session.Value()->Commit({}).HasValue());
+        auto Entry = writer_->Inspect(at(Path + "/long.txt"), {});
+        QVERIFY(Entry.HasValue() && Entry.Value());
+        QVERIFY(writer_->Remove(*Entry.Value(), {}).HasValue());
+        for (int Index = 0; Index < 5; ++Index)
+        {
+            Entry = writer_->Inspect(at(Path), {});
+            QVERIFY(Entry.HasValue() && Entry.Value());
+            QVERIFY(writer_->Remove(*Entry.Value(), {}).HasValue());
+            Path = Path.left(Path.lastIndexOf('/'));
+        }
+    }
+    void nestedDirectoryPlanAndNamedMove()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::MakeDirectory; Request.createParents_ = true;
+        Request.destination_ = at("r6-parent/inner/final"); Request.destinationWriter_ = writer_;
+        auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "nested mkdir failed");
+        QVERIFY(QFileInfo(root_->filePath("r6-parent/inner/final")).isDir()); QCOMPARE(Result.snapshot_.completedItems_, 3ULL); QCOMPARE(Result.snapshot_.progress_.plannedItems_.value_or(0), 3ULL);
+        Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QVERIFY(write("r6-parent/block", "keep")); Request.destination_ = at("r6-parent/block/child"); Started = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Failed); QCOMPARE(read("r6-parent/block"), QByteArray("keep"));
+        QVERIFY(write("r6-move.txt", "move payload")); const auto Entry = writer_->Inspect(at("r6-move.txt"), {}); QVERIFY(Entry.HasValue() && Entry.Value());
+        Request.operation_ = hc::operations::FileOperation::Move; Request.sources_ = {{*Entry.Value(), reader_, writer_}}; Request.destination_ = at("r6-destination/new"); Request.destinationName_ = "renamed.txt";
+        Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Moved = Started.Value().completion_.get(); QVERIFY2(Moved.snapshot_.state_ == JobState::Completed, Moved.snapshot_.error_ ? Moved.snapshot_.error_->code_.c_str() : "named move failed");
+        QVERIFY(!QFileInfo::exists(root_->filePath("r6-move.txt"))); QCOMPARE(read("r6-destination/new/renamed.txt"), QByteArray("move payload"));
+        Request.destinationName_ = "../escape"; QVERIFY(!PrepareFileOperation(Request).HasValue());
+    }
+    void partialDirectoryFailureAndCancel()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); FileOperationRequest Request;
+        Request.operation_ = hc::operations::FileOperation::MakeDirectory; Request.createParents_ = true;
+        Request.destination_ = at("r6-partial/inner/final"); Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, WriteFault::Directory);
+        auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed); QCOMPARE(Result.snapshot_.completedItems_, 1ULL);
+        QVERIFY(QFileInfo(root_->filePath("r6-partial")).isDir()); QVERIFY(!QFileInfo::exists(root_->filePath("r6-partial/inner")));
+        Request.destination_ = at("r6-cancel/inner/final"); Request.destinationWriter_ = writer_; const auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        auto& Task = *Prepared.Value().task_; std::stop_source Stop; JobStepContext Context; Context.operation_.stopToken_ = Stop.get_token();
+        bool Created = false;
+        for (int I = 0; I < 20; ++I) { const auto Step = Task.Advance(Context); Context.committing_ = Step.next_ == JobState::Committing;
+            if (Step.item_) { Created = true; Stop.request_stop(); break; } }
+        QVERIFY(Created); const auto Cancel = Task.Advance(Context); QVERIFY(Cancel.error_); QCOMPARE(Cancel.error_->category_, ErrorCategory::Cancelled);
+        QVERIFY(Task.Finalize(JobState::Cancelled).empty()); QVERIFY(QFileInfo(root_->filePath("r6-cancel")).isDir()); QVERIFY(!QFileInfo::exists(root_->filePath("r6-cancel/inner")));
+    }
+    void readonlyDeletePoliciesAndCancellation()
+    {
+        QVERIFY(write("r6-readonly-a.txt", "a")); QVERIFY(write("r6-readonly-b.txt", "b"));
+        const auto A = root_->filePath("r6-readonly-a.txt"), B = root_->filePath("r6-readonly-b.txt");
+        QVERIFY(SetFileAttributesW(A.toStdWString().c_str(), FILE_ATTRIBUTE_READONLY)); QVERIFY(SetFileAttributesW(B.toStdWString().c_str(), FILE_ATTRIBUTE_READONLY));
+        const auto Clean = qScopeGuard([&] { SetFileAttributesW(A.toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL); SetFileAttributesW(B.toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL); });
+        const auto EA = writer_->Inspect(at("r6-readonly-a.txt"), {}), EB = writer_->Inspect(at("r6-readonly-b.txt"), {}); QVERIFY(EA.HasValue() && EA.Value() && EB.HasValue() && EB.Value());
+        QVERIFY(!writer_->Remove(*EA.Value(), {}).HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.sources_ = {{*EA.Value(), reader_, writer_}, {*EB.Value(), reader_, writer_}}; Request.readOnly_ = ReadOnlyPolicy::Skip;
+        auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.skippedItems_, 2ULL); QVERIFY(QFileInfo::exists(A) && QFileInfo::exists(B));
+        Request.readOnly_ = ReadOnlyPolicy::Ask; Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Started.Value().id_).Value().state_, JobState::WaitingForUser); QVERIFY(Scheduler.Cancel(Started.Value().id_).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready); QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Cancelled); QVERIFY(QFileInfo::exists(A) && QFileInfo::exists(B));
+        Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Started.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Question = *Scheduler.Snapshot(Started.Value().id_).Value().interaction_; QCOMPARE(Question.kind_, InteractionKind::ReadOnlyRemoval);
+        QVERIFY(Scheduler.Reply(Started.Value().id_, {Question.id_, InteractionChoice::ConfirmAll}).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready); const auto Removed = Started.Value().completion_.get();
+        QVERIFY2(Removed.snapshot_.state_ == JobState::Completed, Removed.snapshot_.error_ ? Removed.snapshot_.error_->code_.c_str() : "readonly deletion failed"); QVERIFY(!QFileInfo::exists(A) && !QFileInfo::exists(B));
+    }
+    void recycleAndShellRestore()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Recycle is local fixed volume only");
+        using Microsoft::WRL::ComPtr;
+        const auto Com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); QVERIFY(SUCCEEDED(Com)); const auto Apartment = qScopeGuard([] { CoUninitialize(); });
+        const auto Name = "r6-recycle-" + QUuid::createUuid().toString(QUuid::Id128) + ".txt"; QVERIFY(write(Name, "recycle payload"));
+        const auto Entry = writer_->Inspect(at(Name), {}); QVERIFY(Entry.HasValue() && Entry.Value());
+        std::stop_source Stop; Stop.request_stop(); OperationContext Cancelled; Cancelled.stopToken_ = Stop.get_token(); QVERIFY(!writer_->Recycle(*Entry.Value(), Cancelled).HasValue()); QVERIFY(QFileInfo::exists(root_->filePath(Name)));
+        const auto Recycled = writer_->Recycle(*Entry.Value(), {}); QVERIFY2(Recycled.HasValue(), Recycled.HasValue() ? "" : Recycled.Failure().code_.c_str());
+        QVERIFY(!QFileInfo::exists(root_->filePath(Name))); QVERIFY(QFileInfo::exists(QString::fromStdString(Recycled.Value().destination_.root_)));
+        ComPtr<IShellItem> Item, Parent, Destination, Restored; ComPtr<ITransferSource> Transfer;
+        auto Hr = SHCreateItemFromParsingName(QString::fromStdString(Recycled.Value().destination_.root_).toStdWString().c_str(), nullptr, IID_PPV_ARGS(&Item));
+        if (SUCCEEDED(Hr)) Hr = Item->GetParent(&Parent); if (SUCCEEDED(Hr)) Hr = Parent->BindToHandler(nullptr, BHID_Transfer, IID_PPV_ARGS(&Transfer));
+        if (SUCCEEDED(Hr)) Hr = SHCreateItemFromParsingName(QDir::toNativeSeparators(root_->path()).toStdWString().c_str(), nullptr, IID_PPV_ARGS(&Destination));
+        if (SUCCEEDED(Hr)) Hr = Transfer->MoveItem(Item.Get(), Destination.Get(), Name.toStdWString().c_str(), TSF_NORMAL, &Restored);
+        QVERIFY2(SUCCEEDED(Hr), qPrintable(QString("Shell restore HRESULT %1").arg(quint32(Hr), 8, 16, QLatin1Char('0')))); QCOMPARE(read(Name), QByteArray("recycle payload"));
+    }
+    void streamingBeginsBeforeWholeTreeScan()
+    {
+        class CountingProvider final : public IStorageProvider {
+        public:
+            explicit CountingProvider(std::shared_ptr<IStorageProvider> Reader) : reader_(std::move(Reader)) {}
+            ProviderId Id() const override { return reader_->Id(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext Context) override { return reader_->Supports(Op, Context); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override { ++enumerations_; return reader_->Enumerate(At, Context); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Context) override { return reader_->Stat(Id, Context); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Context) override { return reader_->OpenRead(Id, Context); }
+            int enumerations_ = 0;
+        private:
+            std::shared_ptr<IStorageProvider> reader_;
+        };
+        QVERIFY(writer_->MakeDirectory(at("scan-source"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("scan-source/nested"), {}).HasValue());
+        QVERIFY(write("scan-source/nested/payload", "payload"));
+        const auto Source = writer_->Inspect(at("scan-source"), {}); QVERIFY(Source.HasValue() && Source.Value());
+        for (const bool Prescan : {true, false}) {
+            const auto Destination = Prescan ? QString("scan-eager") : QString("scan-stream");
+            QVERIFY(writer_->MakeDirectory(at(Destination), {}).HasValue());
+            auto Reader = std::make_shared<CountingProvider>(reader_);
+            FileOperationRequest Request; Request.calculateSizeBefore_ = Prescan;
+            Request.sources_ = {{*Source.Value(), Reader, {}}}; Request.destination_ = at(Destination); Request.destinationWriter_ = writer_;
+            auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+            bool Created = false; JobStepContext Context; Context.jobId_ = "scan-test"; Context.committing_ = true;
+            for (int StepIndex = 0; StepIndex < 100 && !Created; ++StepIndex) {
+                const auto Step = Prepared.Value().task_->Advance(Context);
+                QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "unexpected failure");
+                Created = QFileInfo::exists(root_->filePath(Destination + "/scan-source"));
+            }
+            QVERIFY(Created); QCOMPARE(Reader->enumerations_, Prescan ? 2 : 1);
+            QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty());
+        }
+    }
+    void coordinatorCopyMoveAndConfirmedDeleteTree_data()
+    {
+        QTest::addColumn<bool>("Prescan"); QTest::newRow("prescan") << true; QTest::newRow("streaming") << false;
+    }
+    void coordinatorCopyMoveAndConfirmedDeleteTree()
+    {
+        QFETCH(bool, Prescan);
+        auto OriginalRoot = std::move(root_);
+        const auto Restore = qScopeGuard([&] { root_ = std::move(OriginalRoot); });
+        root_ = std::make_unique<QTemporaryDir>(OriginalRoot->filePath("plan-XXXXXX")); QVERIFY(root_->isValid());
+        QVERIFY(writer_->MakeDirectory(at("tree-source"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("tree-source/inner"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("tree-copy"), {}).HasValue());
+        QVERIFY(writer_->MakeDirectory(at("tree-move"), {}).HasValue());
+        QVERIFY(write("tree-source/a.txt", "alpha"));
+        QVERIFY(write("tree-source/inner/b.txt", "beta"));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request;
+        auto Source = writer_->Inspect(at("tree-source"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = at("tree-copy");
+        Request.calculateSizeBefore_ = Prescan;
+        Request.destinationWriter_ = writer_;
+        auto Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto& Copied = Submitted.Value().completion_.get();
+        if (Copied.snapshot_.error_ && Copied.snapshot_.error_->resource_)
+        {
+            auto Resource = *Copied.snapshot_.error_->resource_;
+            const auto ExpectedRevision = Resource.revision_;
+            Resource.revision_.reset();
+            const auto Fresh = reader_->Stat(Resource, {}).get();
+            qInfo().noquote() << "Copy failure resource:" << QString::fromStdString(Resource.key_)
+                << "expected:" << (ExpectedRevision ? QString::fromStdString(ExpectedRevision->token_) : QString())
+                << "fresh:" << (Fresh.HasValue() && Fresh.Value().id_.revision_ ? QString::fromStdString(Fresh.Value().id_.revision_->token_) : QString())
+                << "items:" << Copied.items_.size() << "current:" << QString::fromStdString(Copied.snapshot_.progress_.currentItem_);
+        }
+        QVERIFY2(Copied.snapshot_.state_ == JobState::Completed, Copied.snapshot_.error_ ? Copied.snapshot_.error_->code_.c_str() : "copy did not complete");
+        QCOMPARE(read("tree-copy/tree-source/a.txt"), QByteArray("alpha"));
+        QCOMPARE(read("tree-copy/tree-source/inner/b.txt"), QByteArray("beta"));
+        QCOMPARE(Copied.snapshot_.progress_.bytesDone_, 9u);
+        if (Prescan) QCOMPARE(Copied.snapshot_.progress_.plannedItems_.value_or(0), Copied.snapshot_.completedItems_);
+        else QVERIFY(!Copied.snapshot_.progress_.bytesTotal_);
+        Request.operation_ = hc::operations::FileOperation::Move;
+        Source = writer_->Inspect(at("tree-copy/tree-source"), {});
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = at("tree-move");
+        Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto& Moved = Submitted.Value().completion_.get();
+        if (Moved.snapshot_.error_ && Moved.snapshot_.error_->resource_)
+        {
+            auto Resource = *Moved.snapshot_.error_->resource_;
+            const auto ExpectedRevision = Resource.revision_;
+            Resource.revision_.reset();
+            const auto Fresh = reader_->Stat(Resource, {}).get();
+            qInfo().noquote() << "Move failure resource:" << QString::fromStdString(Resource.key_)
+                << "expected:" << (ExpectedRevision ? QString::fromStdString(ExpectedRevision->token_) : QString())
+                << "fresh:" << (Fresh.HasValue() && Fresh.Value().id_.revision_ ? QString::fromStdString(Fresh.Value().id_.revision_->token_) : QString())
+                << "items:" << Moved.items_.size() << "committed:" << (!Moved.items_.empty() && Moved.items_.back().destinationCommitted_);
+        }
+        QVERIFY2(Moved.snapshot_.state_ == JobState::Completed, Moved.snapshot_.error_ ? Moved.snapshot_.error_->code_.c_str() : "move did not complete");
+        if (Prescan) QCOMPARE(Moved.snapshot_.progress_.plannedItems_.value_or(0), Moved.snapshot_.completedItems_);
+        QVERIFY(!QFileInfo::exists(root_->filePath("tree-copy/tree-source")));
+        QCOMPARE(read("tree-move/tree-source/inner/b.txt"), QByteArray("beta"));
+        Request.operation_ = hc::operations::FileOperation::Delete;
+        Source = writer_->Inspect(at("tree-move/tree-source"), {});
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.confirmDelete_ = Prescan;
+        Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        if (Prescan) {
+            QTRY_COMPARE(Scheduler.Snapshot(Submitted.Value().id_).Value().state_, JobState::WaitingForUser);
+            QVERIFY(QFileInfo::exists(root_->filePath("tree-move/tree-source/a.txt")));
+            auto Prompt = *Scheduler.Snapshot(Submitted.Value().id_).Value().interaction_;
+            QCOMPARE(Prompt.kind_, InteractionKind::DeleteConfirmation);
+            QVERIFY(Scheduler.Reply(Submitted.Value().id_, {Prompt.id_, InteractionChoice::Confirm}).HasValue());
+        }
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto& Deleted = Submitted.Value().completion_.get();
+        QVERIFY2(Deleted.snapshot_.state_ == JobState::Completed, Deleted.snapshot_.error_ ? Deleted.snapshot_.error_->code_.c_str() : "delete did not complete");
+        QVERIFY(!QFileInfo::exists(root_->filePath("tree-move/tree-source")));
+        QVERIFY(artifacts().isEmpty());
+    }
+    void coordinatorMkdirRenameAndPreflightBudget()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request;
+        Request.operation_ = hc::operations::FileOperation::MakeDirectory;
+        Request.destination_ = at("coordinator-directory"); Request.destinationWriter_ = writer_;
+        auto Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QVERIFY(write("coordinator-directory/from.txt", "rename payload"));
+        auto Source = writer_->Inspect(at("coordinator-directory/from.txt"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        Request.operation_ = hc::operations::FileOperation::Rename;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = at("coordinator-directory/to.txt");
+        Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(read("coordinator-directory/to.txt"), QByteArray("rename payload"));
+        QVERIFY(!QFileInfo::exists(root_->filePath("coordinator-directory/from.txt")));
+        Source = writer_->Inspect(at("coordinator-directory/to.txt"), {});
+        Request.operation_ = hc::operations::FileOperation::Copy;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = at(""); Request.maxBytes_ = 2;
+        Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.error_->category_, ErrorCategory::BudgetExceeded);
+        QVERIFY(!QFileInfo::exists(root_->filePath("to.txt")));
+    }
+    void coordinatorConflictRenameAndCancel()
+    {
+        QVERIFY(writer_->MakeDirectory(at("conflict-target"), {}).HasValue());
+        QVERIFY(write("conflict-source.txt", "new contents"));
+        QVERIFY(write("conflict-target/conflict-source.txt", "old contents"));
+        auto Hub = std::make_shared<hc::commands::EventHub>();
+        JobScheduler Scheduler(Hub, 1);
+        FileOperationRequest Request;
+        auto Source = writer_->Inspect(at("conflict-source.txt"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = at("conflict-target");
+        Request.destinationWriter_ = writer_;
+        auto Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Submitted.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Prompt = *Scheduler.Snapshot(Submitted.Value().id_).Value().interaction_;
+        QVERIFY(Scheduler.Reply(Submitted.Value().id_, {Prompt.id_, InteractionChoice::Rename, "chosen.txt"}).HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(read("conflict-target/chosen.txt"), QByteArray("new contents"));
+        QCOMPARE(read("conflict-target/conflict-source.txt"), QByteArray("old contents"));
+
+        std::atomic<bool> Cancelled{false};
+        auto Subscription = Hub->Subscribe("job.progress", std::make_shared<ImmediateExecutor>(), [&](const auto& Event) {
+            if (std::get<std::int64_t>(Event.payload_.at("bytes")) > 0 && !Cancelled.exchange(true)) Scheduler.Cancel(Event.causationId_);
+        });
+        Request.conflict_ = ConflictPolicy::Replace;
+        OperationContext Context;
+        Context.maxReadBytes_ = 2;
+        Submitted = SubmitFileOperation(Scheduler, Request, Context);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+        QVERIFY(Cancelled.load());
+        QCOMPARE(read("conflict-target/conflict-source.txt"), QByteArray("old contents"));
+        QCOMPARE(read("conflict-source.txt"), QByteArray("new contents"));
+        QVERIFY(QDir(root_->filePath("conflict-target")).entryList({".hc-*"}, QDir::Files | QDir::Hidden).isEmpty());
+    }
+    void coordinatorPreservesCommittedCopyWhenSourceDeleteFails()
+    {
+        QVERIFY(writer_->MakeDirectory(at("partial-target"), {}).HasValue());
+        QVERIFY(write("partial-source.txt", "preserve both"));
+        auto Source = writer_->Inspect(at("partial-source.txt"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request;
+        Request.operation_ = hc::operations::FileOperation::Move;
+        Request.sources_ = {{*Source.Value(), reader_, std::make_shared<FailedRemoveWriter>(writer_)}};
+        Request.destination_ = at("partial-target"); Request.destinationWriter_ = writer_;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto& Result = Submitted.Value().completion_.get();
+        QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+        QCOMPARE(Result.snapshot_.error_->code_, std::string("injected-source-delete"));
+        QVERIFY(Result.items_.at(0).destinationCommitted_);
+        QVERIFY(!Result.items_.at(0).sourceRemoved_);
+        QCOMPARE(read("partial-source.txt"), QByteArray("preserve both"));
+        QCOMPARE(read("partial-target/partial-source.txt"), QByteArray("preserve both"));
+        Request.destination_ = at("");
+        QVERIFY(!SubmitFileOperation(Scheduler, Request).HasValue());
+    }
+    void coordinatorFaultMatrixPreservesExistingDestination()
+    {
+        QVERIFY(writer_->MakeDirectory(at("fault-target"), {}).HasValue());
+        QVERIFY(write("fault-source.txt", "immutable original source"));
+        auto Source = writer_->Inspect(at("fault-source.txt"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        for (const auto Fault : {WriteFault::Append, WriteFault::Metadata, WriteFault::Commit, WriteFault::AppendAndCleanup})
+        {
+            QVERIFY(write("fault-target/fault-source.txt", "existing destination"));
+            FileOperationRequest Request;
+            Request.sources_ = {{*Source.Value(), reader_, writer_}};
+            Request.destination_ = at("fault-target");
+            Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, Fault);
+            Request.conflict_ = ConflictPolicy::Replace;
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+            auto Submitted = SubmitFileOperation(Scheduler, Request);
+            QVERIFY(Submitted.HasValue());
+            QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+            const auto& Result = Submitted.Value().completion_.get();
+            QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+            QCOMPARE(Result.cleanupErrors_.empty(), Fault != WriteFault::AppendAndCleanup);
+            QCOMPARE(read("fault-source.txt"), QByteArray("immutable original source"));
+            QCOMPARE(read("fault-target/fault-source.txt"), QByteArray("existing destination"));
+            QVERIFY(QDir(root_->filePath("fault-target")).entryList({".hc-*"}, QDir::Files | QDir::Hidden).isEmpty());
+        }
+    }
+    void crossProviderLocalToSmbAndBack()
+    {
+        if (kind_ != LocatorKind::Smb) QSKIP("Run explicitly against DEVTESTER-QTS for cross-provider validation");
+        QTemporaryDir Local;
+        QVERIFY(Local.isValid());
+        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+        auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
+        const auto LocalAt = [&](const QString& Name) { return Locator{LocatorKind::Local, QDir::toNativeSeparators(Local.filePath(Name)).toStdString()}; };
+        QByteArray Payload(65536, '\0');
+        for (qsizetype Index = 0; Index < Payload.size(); ++Index) Payload[Index] = static_cast<char>(Index % 251);
+        QFile SourceFile(Local.filePath("cross.bin"));
+        QVERIFY(SourceFile.open(QIODevice::WriteOnly));
+        QCOMPARE(SourceFile.write(Payload), Payload.size());
+        SourceFile.close();
+        auto Source = LocalWriter->Inspect(LocalAt("cross.bin"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request;
+        Request.sources_ = {{*Source.Value(), LocalReader, LocalWriter}};
+        Request.destination_ = at(""); Request.destinationWriter_ = writer_;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(read("cross.bin"), Payload);
+        QVERIFY(LocalWriter->MakeDirectory(LocalAt("returned"), {}).HasValue());
+        Source = writer_->Inspect(at("cross.bin"), {});
+        QVERIFY(Source.HasValue() && Source.Value());
+        Request.operation_ = hc::operations::FileOperation::Move;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.destination_ = LocalAt("returned"); Request.destinationWriter_ = LocalWriter;
+        Submitted = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Submitted.HasValue());
+        QVERIFY(Submitted.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Submitted.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QVERIFY(!QFileInfo::exists(root_->filePath("cross.bin")));
+        QFile Returned(Local.filePath("returned/cross.bin"));
+        QVERIFY(Returned.open(QIODevice::ReadOnly));
+        QCOMPARE(Returned.readAll(), Payload);
+    }
+    void cleanupTestCase()
+    {
+        QVERIFY(artifacts().isEmpty());
+        writer_.reset();
+        reader_.reset();
+        QVERIFY(root_->remove());
+    }
+};
+int main(int Argc,char** Argv) {
+    QTemporaryDir Config(QDir(QFileInfo(QString::fromLocal8Bit(Argv[0])).absolutePath()).filePath("r10-test-settings-XXXXXX"));
+    if(!Config.isValid())return 2;
+    std::vector<QByteArray> Args;for(int I=0;I<Argc;++I)Args.emplace_back(Argv[I]);Args.emplace_back("--config-dir="+Config.path().toUtf8());
+    std::vector<char*> Raw;for(auto& A:Args)Raw.push_back(A.data());int AppArgc=int(Raw.size());Raw.push_back(nullptr);
+    QCoreApplication App(AppArgc,Raw.data());QStandardPaths::setTestModeEnabled(true);
+    if(Argc==2&&QString::fromLocal8Bit(Argv[1])=="--elevation-fixture-exit")return 0;
+    if(Argc==3&&QString::fromLocal8Bit(Argv[1])=="--directory-fixture") {
+        const auto Bytes = QByteArray::fromBase64(QByteArray(Argv[2]), QByteArray::Base64UrlEncoding);
+        return int(hc::permissions::ExecuteDirectoryElevation(QJsonDocument::fromJson(Bytes).object()));
+    }
+    if(Argc==3&&QString::fromLocal8Bit(Argv[1])=="--elevation-fixture") {
+        // Test executable only: the production administrator main always checks
+        // TokenElevation and has no fixture mode. All targets here are test owned.
+        const auto Bytes=QByteArray::fromBase64(QByteArray(Argv[2]),QByteArray::Base64UrlEncoding);
+        return int(hc::permissions::ExecuteFileElevation(QJsonDocument::fromJson(Bytes).object()));
+    }
+    WriteTests Tests;return QTest::qExec(&Tests,Argc,Argv);
+}
+#include "tstWrites.moc"

@@ -1,0 +1,9 @@
+﻿#pragma once
+
+// Generated from the version in the root CMakeLists.txt. Edit that value instead.
+#define SOL_CLIENT_VER "@HC_PRODUCT_VERSION@"
+
+namespace nsHC
+{
+    inline constexpr const char* CLIENT_VERSION = SOL_CLIENT_VER;
+}

@@ -24,10 +24,10 @@ const std::string logger = "UIs/cmpRecipientWithFiles";
 QComboBoxItemWidget::QComboBoxItemWidget( QWidget* Parent, Qt::WindowFlags f )
     : QWidget( Parent, f )
 {
-    setFixedHeight( 48 );
+    setMinimumHeight(32);
 
     const auto Horizontal = new QHBoxLayout;
-    Horizontal->setContentsMargins( 0, 0, 0, 0 );
+    Horizontal->setContentsMargins( 0, 4, 0, 4 );
     setLayout( Horizontal );
 
     btnLeft = new QPushButton;
@@ -177,7 +177,7 @@ void QComboBoxForWidget::AddItem( QListWidgetItem* Item, QComboBoxItemWidget* Wi
     lstView->insertItem( 0, Item );
     adjustSize();
     Widget->updateGeometry();
-    Item->setSizeHint( Widget->size() );
+    Item->setSizeHint( Widget->sizeHint() );
     lstView->setItemWidget( Item, Widget );
 }
 
@@ -186,7 +186,7 @@ void QComboBoxForWidget::AppendItem( QListWidgetItem* Item, QComboBoxItemWidget*
     lstView->insertItem( lstView->count(), Item );
     adjustSize();
     Widget->updateGeometry();
-    Item->setSizeHint( Widget->size() );
+    Item->setSizeHint( Widget->sizeHint() );
     lstView->setItemWidget( Item, Widget );
 }
 
@@ -215,4 +215,31 @@ void QComboBoxForWidget::RemoveItem( QListWidgetItem* Item )
 int QComboBoxForWidget::GetCount() const
 {
     return lstView->count();
+}
+
+void QComboBoxForWidget::refreshItems()
+{
+    int Width = width();
+    for (int Index = 0; Index < GetCount(); ++Index) {
+        auto* Item = GetItem(Index); if (!Item) continue;
+        Item->setFont(font());
+        const auto Size = Item->sizeHint().expandedTo(QSize(0, fontMetrics().height() + 8));
+        Item->GetItem()->setSizeHint(Size);
+        Width = qMax(Width, Size.width() + 24);
+    }
+    lstView->setMinimumWidth(Width);
+    updateGeometry();
+}
+
+void QComboBoxForWidget::changeEvent(QEvent* Event)
+{
+    QComboBox::changeEvent(Event);
+    if (lstView && (Event->type() == QEvent::FontChange || Event->type() == QEvent::ApplicationFontChange
+        || Event->type() == QEvent::StyleChange)) refreshItems();
+}
+
+void QComboBoxForWidget::showPopup()
+{
+    refreshItems();
+    QComboBox::showPopup();
 }

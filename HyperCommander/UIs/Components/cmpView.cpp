@@ -1,14 +1,151 @@
 ﻿#include "stdafx.h"
+#include "UniqueLibs/columnAutoSelection.hpp"
+#include "commonLibs/view/listIconSize.hpp"
+#include <QtConcurrent/QtConcurrentRun>
+#include <QFutureWatcher>
 #include "cmpView.hpp"
+#include "UIs/dlgOpts.hpp"
+#include "UniqueLibs/qtWorkspaceState.hpp"
+#include "UniqueLibs/renameSelection.hpp"
+#include "UniqueLibs/commandUiConfig.hpp"
 
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
 #include "commandMgr.hpp"
+#include "commandUiBridge.hpp"
+#include "qtitanColumnAdapter.hpp"
+#include "qtViewerHost.hpp"
 #include "Modules/mdlFileModel.hpp"
 
 #include <QtitanGrid.h>
+#include <QtnGridEditors.h>
+#include <QScopeGuard>
+#include <fmfilelist/ListPresentation.h>
+#include <fmfilelist/ThumbnailView.h>
+#include <fmfilelist/FileRoles.h>
+#include "thumbnailModel.hpp"
+#include <fmstyle/StylePaint.h>
+#include <fmstyle/ThemeManager.h>
 
 #include "QtitanMSVSDebug.h"
+
+namespace {
+using namespace fm::filelist;
+using namespace fm::filelist::detail;
+QIcon ProductIcon(const QVariant& Value)
+{
+    return Value.metaType() == QMetaType::fromType<QPixmap>() ? QIcon(Value.value<QPixmap>()) : Value.value<QIcon>();
+}
+// QIcon::paint never enlarges a smaller pixmap, so pixmaps are drawn to fill the icon slot.
+void PaintListIcon(QPainter* Painter, const QVariant& Value, const QRect& Rect)
+{
+    if (Value.metaType() != QMetaType::fromType<QPixmap>()) { Value.value<QIcon>().paint(Painter, Rect); return; }
+    Painter->save(); Painter->setRenderHint(QPainter::SmoothPixmapTransform);
+    Painter->drawPixmap(Rect, Value.value<QPixmap>()); Painter->restore();
+}
+RecordState ProductRecordState(CGridView* Owner, int Row)
+{
+    RecordState State;
+    State.active = Owner->IsPanelActive();
+    State.cursor = Owner->BaseView()->focusedRowIndex() == Row;
+    State.marked = Owner->BaseView()->modelController()->isRowSelected(Owner->BaseView()->getRow(Row));
+    const auto Index = Owner->BaseView()->getRow(Row).modelIndex(0);
+    const auto Opacity = Index.data(CFsModelT::USR_ROLE_HIDDENOPACITY);
+    State.hidden = Opacity.isValid() && Opacity.toDouble() < 1.0;
+    return State;
+}
+class ProductRecordPainter final : public Qtitan::GridRecordPainter {
+public:
+    explicit ProductRecordPainter(CGridView* Owner) : owner_(Owner) {}
+    void paintBackground(QPainter& Painter, const Record& Value, QWidget*) override
+    {
+        const auto State = ProductRecordState(owner_, Value.rowIndex);
+        const auto Group = Value.index.data(CFSModel::FileColorOverrideRole).toBool()
+            ? Value.index.data(Qt::BackgroundRole).value<QColor>() : QColor{};
+        paintRecordBackground(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(),
+            State, Value.rowIndex % 2 != 0, owner_->RecordColors(), Group);
+    }
+    void paintOverlay(QPainter& Painter, const Record& Value, QWidget*) override
+    {
+        const auto State = ProductRecordState(owner_, Value.rowIndex);
+        if (owner_->IsTwoLine()) {
+            // The icon spans both lines: centered on the record block and aligned with the cell padding.
+            const auto Icon = Value.index.data(Qt::DecorationRole);
+            const auto& Geometry = owner_->RecordGeometry();
+            const int Size = owner_->ListIconSize();
+            const auto Block = Geometry.block(Value.rect);
+            Painter.save(); Painter.setOpacity(State.hidden ? 0.6 : 1.0);
+            PaintListIcon(&Painter, Icon, QRect(Value.rect.left() + Geometry.sideMargin + 8, qRound(Block.center().y() - Size / 2.0), Size, Size));
+            Painter.restore();
+        }
+        paintRecordCursor(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(), State, owner_->RecordColors());
+    }
+private:
+    CGridView* owner_;
+};
+class ProductCellDelegate final : public QStyledItemDelegate {
+public:
+    explicit ProductCellDelegate(CGridView* Owner, QObject* Parent) : QStyledItemDelegate(Parent), owner_(Owner) {}
+    QWidget* createEditor(QWidget* Parent, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+    {
+        auto* Editor = QStyledItemDelegate::createEditor(Parent, Option, Index);
+        if (auto* Input = qobject_cast<QLineEdit*>(Editor)) {
+            // Qtitan's adapter has a temporary model: update its editing value
+            // on each user edit so drafts survive theme changes and cancel.
+            connect(Input, &QLineEdit::textEdited, Input, [this, Input] {
+                emit const_cast<ProductCellDelegate*>(this)->commitData(Input);
+            });
+        }
+        return Editor;
+    }
+    void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+    {
+        const auto Source = Index.data(Qtitan::QueryIndexRole).value<QModelIndex>();
+        const auto Cell = Source.isValid() ? Source : Index;
+        const auto Row = owner_->BaseView()->getRow(Cell);
+        if (!Row.isValid()) return;
+        const auto State = ProductRecordState(owner_, Row.rowIndex());
+        const auto& Appearance = owner_->ListAppearance();
+        const auto& Geometry = owner_->RecordGeometry();
+        const auto& Colors = owner_->RecordColors();
+        auto Text = textColors(Colors, Appearance, State, Geometry.twoLine, Geometry.separator);
+        QFont Font = Cell.data(Qt::FontRole).value<QFont>();
+        if (Font.family().isEmpty()) Font = Option.font;
+        const bool Name = Cell.column() == 0;
+        if (!Name) Font = fm::style::pixelFont(Font, std::max(8, Appearance.fontPx - 1));
+        if (Text.bold && Name) Font.setBold(true);
+        QColor Foreground = Name ? Text.name : Text.meta;
+        if (Cell.siblingAtColumn(0).data(CFSModel::FileColorOverrideRole).toBool() &&
+            !State.marked && !invertedCursor(Appearance, State) && Name)
+            Foreground = Cell.data(Qt::ForegroundRole).value<QColor>();
+        auto Rect = Option.rect.adjusted(8 + Geometry.sideMargin, 0, -8 - Geometry.sideMargin, 0);
+        Painter->save(); Painter->setFont(Font); Painter->setPen(Foreground);
+        const QFontMetrics Metrics(Font);
+        if (Name) {
+            const auto Icon = ProductIcon(Cell.data(Qt::DecorationRole));
+            if (Geometry.twoLine) Rect.setLeft(Rect.left() + owner_->TwoLineTextIndent());
+            else if (!Icon.isNull()) {
+                const int Size = owner_->ListIconSize();
+                const auto Block = Geometry.block(Option.rect);
+                Painter->setOpacity(State.hidden ? 0.6 : 1.0);
+                PaintListIcon(Painter, Cell.data(Qt::DecorationRole), QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
+                Painter->setOpacity(1.0); Rect.setLeft(Rect.left() + Size + hc::view::ListIconTextGap(false));
+            }
+            const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            const auto Shown = ElideFileName(Cell.data().toString(), Metrics, Rect.width(), Appearance.nameElide, Directory);
+            Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Shown);
+        } else {
+            const auto* Column = owner_->BaseView()->getColumnByModelColumn(Cell.column());
+            const auto Alignment = static_cast<const Qtitan::GridTableColumn*>(Column)->textAlignment();
+            if (Geometry.twoLine && Column->visualIndex() == 1) Rect.setLeft(Rect.left() + owner_->TwoLineTextIndent());
+            Painter->drawText(Rect, Alignment | Qt::AlignVCenter, Metrics.elidedText(Cell.data().toString(), Qt::ElideRight, Rect.width()));
+        }
+        Painter->restore();
+    }
+private:
+    CGridView* owner_;
+};
+}
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -53,6 +190,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
     vbox_ = new QVBoxLayout;
     grid_ = new Qtitan::Grid;
+    grid_->setProperty("hc.fileGrid", true);
 
     grid_->setViewType( Qtitan::Grid::BandedTableView );
     grid_->setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
@@ -63,6 +201,11 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     grid_->viewport()->setFocusPolicy( Qt::StrongFocus );
 
     grid_->installEventFilter( this );
+    renameTimer_.setInterval(30);
+    connect(&renameTimer_, &QTimer::timeout, this, [this] {
+        if (renameAwaitingRefresh_) continueRename();
+        else if (renameEditor_) positionRenameEditor();
+    });
 
     grid_->setContextMenuPolicy( Qt::CustomContextMenu );
 
@@ -103,7 +246,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     BaseOpts.setFocusFrameEnabled( false );
     BaseOpts.setShowFocusDecoration( true );
     BaseOpts.setKeepFocusedRow( true );
-    BaseOpts.setRowFocusMode( true );
+    view_->setFileManagerMode(true);
     BaseOpts.setRowFocusColor( QColor( 51, 79, 102 ) );
     
     BaseOpts.setDragEnabled( true );
@@ -139,24 +282,368 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     view_->endUpdate();
 
     vbox_->setContentsMargins( 0, 9, 0, 0 );
-    vbox_->addWidget( grid_ );
+    auto* QueryBar = new QHBoxLayout;
+    columnStatus_ = new QLabel(this); columnStatus_->setObjectName("hc.columns.queryStatus"); columnStatus_->setWordWrap(true);
+    auto* Stop = new QPushButton(tr("컬럼 조회 중지"), this); Stop->setObjectName("hc.columns.stop");
+    auto* Resume = new QPushButton(tr("다시 조회"), this); Resume->setObjectName("hc.columns.resume");
+    QueryBar->addWidget(columnStatus_, 1); QueryBar->addWidget(Stop); QueryBar->addWidget(Resume);
+    auto* QueryWidget = new QWidget(this); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
+    presentationStack_ = new QStackedWidget(this);
+    thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
+    thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
+    thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
+    thumbnails_->listView()->installEventFilter(this);
+    presentationStack_->addWidget(grid_); presentationStack_->addWidget(thumbnails_);
+    vbox_->addWidget(QueryWidget); vbox_->addWidget(presentationStack_, 1);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::paneActivated, this, &CViewT::sig_NotifyViewActivated);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::cursorRowChanged, this, [this](int Row) {
+        if (syncingThumbnailCursor_ || Row < 0 || !IsThumbnailMode()) return;
+        const auto NativeRow = view_->getRow(thumbnailModel_->SourceIndex(Row));
+        if (NativeRow.isValid()) view_->setFocusedRowIndex(NativeRow.rowIndex());
+    });
+    connect(view_, &Qtitan::GridViewBase::focusRowChanged, this, [this] { SyncThumbnailCursor(); });
+    connect(view_, &Qtitan::GridViewBase::selectionChanged, thumbnailModel_, &ThumbnailModel::Repaint);
+    connect(view_, &Qtitan::GridViewBase::sortingChanged, thumbnailModel_, &ThumbnailModel::Schedule);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::activated, this, [this](const QModelIndex& Index) {
+        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, thumbnailModel_->SourceIndex(Index.row()));
+    });
+    connect(thumbnails_, &fm::filelist::ThumbnailView::upRequested, this, [this] {
+        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
+        auto* Commands = TyStCommandMgr::GetInstance();
+        if (!Commands->ProcessKeyPressEvent(&Event, retrieveCursorIndex()) && Commands->Bridge())
+            Commands->Bridge()->ExecuteCommand("hc.navigate.parent", retrieveCursorIndex());
+    });
+    connect(thumbnails_, &fm::filelist::ThumbnailView::sizeChanged, this, [this](int Size) {
+        thumbnailSizeOverride_ = Size; emit sigViewSettingsChanged(); requestPresentation();
+    });
+    connect(thumbnails_->listView()->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (!IsThumbnailMode()) return;
+        // Reprioritize a new viewport: cached images survive; obsolete queued
+        // extraction and running results are discarded before new tiles paint.
+        thumbnailModel_->Provider()->CancelRequests();
+        thumbnails_->listView()->viewport()->update();
+    });
+    thumbnails_->listView()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(thumbnails_->listView(), &QWidget::customContextMenuRequested, this, [this](const QPoint& Point) {
+        const auto Tile = thumbnails_->listView()->indexAt(Point);
+        if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
+        ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
+    });
+    pageBar_ = new QWidget(this); pageBar_->setObjectName("hc.entries.pageBar");
+    auto* PageLayout = new QHBoxLayout(pageBar_);
+    auto* PreviousPage = new QPushButton(tr("이전 페이지"), pageBar_); PreviousPage->setObjectName("hc.entries.previous");
+    auto* NextPage = new QPushButton(tr("다음 페이지"), pageBar_); NextPage->setObjectName("hc.entries.next");
+    auto* PageLabel = new QLabel(pageBar_); PageLabel->setObjectName("hc.entries.pageStatus");
+    PageLayout->addWidget(PreviousPage); PageLayout->addWidget(PageLabel, 1); PageLayout->addWidget(NextPage);
+    pageBar_->hide(); vbox_->addWidget(pageBar_);
+    connect(PreviousPage, &QPushButton::clicked, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() >= CFSModel::PageSize ? Model->PageOffset() - CFSModel::PageSize : 0);
+    });
+    connect(NextPage, &QPushButton::clicked, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() + CFSModel::PageSize);
+    });
+    connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
+    connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
+    columnSortTimer_.setSingleShot(true);
+    connect(view_, &Qtitan::GridViewBase::sortingChanged, this, [this] { columnSortTimer_.start(0); });
+    connect(&columnSortTimer_, &QTimer::timeout, this, [this] {
+        if (auto* Model = qobject_cast<CFSModel*>(model_)) {
+            const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
+            Model->SetColumnSorts(ColumnProfile().sorts_); RestoreSelection(Selected, Focus);
+        }
+    });
     setLayout( vbox_ );
     setSizePolicy( QSizePolicy( QSizePolicy::Policy::Expanding, QSizePolicy::Policy::Expanding ) );
 
-    view_->bestFit( FitToHeaderPercent );
+    // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
+    view_->bestFit( FitToHeader );
+    columnAdapter_ = new QtitanColumnAdapter(this, grid_, view_);
+    recordPainter_ = new ProductRecordPainter(this); view_->setRecordPainter(recordPainter_);
+    selectionSummaryTimer_.setSingleShot(true);
+    connect(&selectionSummaryTimer_, &QTimer::timeout, this, &CGridView::sigThumbnailSelectionChanged);
+    presentationTimer_.setSingleShot(true); presentationTimer_.setInterval(80);
+    connect(&presentationTimer_, &QTimer::timeout, this, &CGridView::applyPresentation);
+    columnAdapter_->SetLayoutObserver([this](const QString& Mode) {
+        if (!applyingPresentation_ && !restoringPresentation_) {
+            listModeOverride_ = Mode == "details" ? "one-line" : "two-line";
+            nameBelowOverride_ = Mode == "name-last";
+            autoInitialized_ = false; requestPresentation();
+        }
+    });
+}
+
+CGridView::~CGridView()
+{
+    presentationTimer_.stop();
+    automaticColumnsStop_.request_stop();
+    thumbnailModel_->SetEnabled(false);
+    view_->setRecordPainter(nullptr); delete recordPainter_;
+}
+bool CGridView::IsThumbnailMode() const { return presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
+void CGridView::SyncThumbnailCursor()
+{
+    if (syncingThumbnailCursor_ || !IsThumbnailMode()) return;
+    const auto Focus = view_->focusedRow().modelIndex(0);
+    for (int Row = 0; Row < thumbnailModel_->rowCount(); ++Row)
+        if (thumbnailModel_->SourceIndex(Row) == Focus) {
+            if (thumbnails_->cursorRow() != Row) {
+                QScopedValueRollback Guard(syncingThumbnailCursor_, true); thumbnails_->setCursorRow(Row);
+            }
+            break;
+        }
+}
+void CGridView::ClearThumbnailCache() { thumbnailModel_->ClearCache(); }
+void CGridView::hideEvent(QHideEvent* Event)
+{
+    CancelRename();
+    thumbnailModel_->SetEnabled(false); CViewT::hideEvent(Event);
+}
+void CGridView::showEvent(QShowEvent* Event)
+{
+    CViewT::showEvent(Event); requestPresentation();
+}
+void CGridView::applyThumbnailPresentation()
+{
+    const auto Settings = hc::ui::ReadThumbnailSettings(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["thumbnails"].toObject());
+    thumbnailModel_->Apply(Settings);
+    const bool Automatic = ListMode() == "auto" && Settings.autoSwitch_;
+    if (ListMode() == "thumbnails" || Automatic) thumbnailModel_->Rebuild();
+    const auto Percent = thumbnailModel_->TargetPercent();
+    const bool Show = ListMode() == "thumbnails" || (Automatic && Percent >= Settings.autoPercent_);
+    const bool Changed = Show != IsThumbnailMode();
+    const bool HadFocus = grid_->hasFocus() || grid_->viewport()->hasFocus() || thumbnails_->listView()->hasFocus();
+    auto Appearance = Settings.appearance_;
+    if (thumbnailSizeOverride_) Appearance.size = *thumbnailSizeOverride_;
+    if (Appearance.nameLines == 0) Appearance.nameLines = thumbnailModel_->FullNameLines(Appearance.tileWidth() - 20, fm::style::pixelFont(font(), 12.5));
+    Appearance.invertCursor = listAppearance_.invertCursor; Appearance.invertSelection = listAppearance_.invertSelection;
+    thumbnails_->setAppearance(Appearance); thumbnails_->setPaneActive(panelActive_);
+    const auto Profile = ColumnProfile(); QStringList Sorts;
+    for (const auto& Sort : Profile.sorts_) for (const auto& Column : Profile.columns_)
+        if (Column.id_ == Sort.columnId_) Sorts.append(Column.title_ + (Sort.order_ == Qt::AscendingOrder ? " ↑" : " ↓"));
+    thumbnails_->setSortText(Sorts.isEmpty() ? tr("모델 순서") : Sorts.join(" · "));
+    presentationStack_->setCurrentWidget(Show ? static_cast<QWidget*>(thumbnails_) : grid_);
+    thumbnailModel_->SetEnabled(Show && isVisible());
+    setProperty("hc.thumbnailTargetPercent", Percent); SyncThumbnailCursor();
+    if (Changed) {
+        if (HadFocus) EnsureKeyboardFocusOnView();
+        emit sigListPresentationChanged();
+    }
+}
+bool CGridView::IsTwoLine() const { return columnAdapter_ && columnAdapter_->LayoutMode() != "details"; }
+int CGridView::ListIconSize() const
+{
+    return hc::view::ListIconSize(recordGeometry_.pitch - recordGeometry_.gap, recordGeometry_.twoLine);
+}
+int CGridView::TwoLineTextIndent() const { return ListIconSize() + hc::view::ListIconTextGap(true); }
+QString CGridView::ListMode() const
+{
+    return listModeOverride_.isEmpty() ? hc::ui::ReadFilePanelSettings(
+        hc::settings::AppSettings().Read(hc::settings::Section::General).toObject().value("filePanel").toObject()).mode_ : listModeOverride_;
+}
+bool CGridView::SetListMode(const QString& Mode)
+{
+    if (!hc::ui::ListModes.contains(Mode) || !columnAdapter_->Writable() || !unsupportedPresentation_.isEmpty()) return false;
+    listModeOverride_ = Mode == "inherit" ? QString{} : Mode;
+    nameBelowOverride_.reset(); autoInitialized_ = false;
+    applyPresentation(); emit sigListPresentationChanged(); emit sigViewSettingsChanged();
+    return true;
+}
+QJsonObject CGridView::capturePresentation() const
+{
+    if (!unsupportedPresentation_.isEmpty()) return unsupportedPresentation_;
+    QJsonObject Result{{"version", 1}, {"mode", ListModeOverride()}};
+    if (nameBelowOverride_) Result["nameBelow"] = *nameBelowOverride_;
+    if (thumbnailSizeOverride_) Result["thumbnailSize"] = *thumbnailSizeOverride_;
+    return Result;
+}
+void CGridView::restorePresentation(const QJsonObject& View)
+{
+    unsupportedPresentation_ = {}; thumbnailSizeOverride_.reset(); listModeOverride_.clear(); nameBelowOverride_.reset(); autoInitialized_ = false;
+    const auto Value = View.value("listPresentation").toObject();
+    if (!Value.isEmpty()) {
+        if (Value.value("version") != QJsonValue(1) || !hc::ui::ListModes.contains(Value.value("mode").toString()) ||
+            (Value.contains("nameBelow") && !Value.value("nameBelow").isBool())) unsupportedPresentation_ = Value;
+        else {
+            listModeOverride_ = Value.value("mode").toString() == "inherit" ? QString{} : Value.value("mode").toString();
+            if (Value.contains("nameBelow")) nameBelowOverride_ = Value.value("nameBelow").toBool();
+            const int Size = Value.value("thumbnailSize").toInt();
+            if (Size == 64 || Size == 96 || Size == 160 || Size == 256) thumbnailSizeOverride_ = Size;
+        }
+    } else if (View.contains(hc::columns::WorkspaceKey)) {
+        // Older workspaces persisted a resolved layout. Keep that manual choice.
+        const auto Mode = columnAdapter_->LayoutMode();
+        listModeOverride_ = Mode == "details" ? "one-line" : "two-line";
+        nameBelowOverride_ = Mode == "name-last";
+    }
+    requestPresentation();
+}
+void CGridView::requestPresentation()
+{
+    if (!presentationTimer_.isActive()) presentationTimer_.start();
+}
+void CGridView::applyPresentation()
+{
+    requestAutomaticColumns();
+    if (!columnAdapter_ || !model_ || !isVisible()) return;
+    if (IsEditing()) { presentationTimer_.start(150); return; }
+    applyThumbnailPresentation();
+    const auto Settings = hc::ui::ReadFilePanelSettings(
+        hc::settings::AppSettings().Read(hc::settings::Section::General).toObject().value("filePanel").toObject());
+    auto Appearance = Settings.appearance_;
+    Appearance.invertCursor = listAppearance_.invertCursor; Appearance.invertSelection = listAppearance_.invertSelection;
+    if (nameBelowOverride_) Appearance.nameBelow = *nameBelowOverride_;
+    Appearance.fontPx = QFontMetrics(grid_->font()).height() > 0
+        ? (grid_->font().pixelSize() > 0 ? grid_->font().pixelSize() : qRound(grid_->font().pointSizeF() * logicalDpiY() / 72.0)) : 13;
+    const auto Location = model_->property("hc.snapshotLocation").toString();
+    if (autoLocation_ != Location) { autoLocation_ = Location; autoInitialized_ = false; }
+    bool Two = ListMode() == "two-line";
+    const int Available = columnAdapter_->AvailableWidth();
+    if (!Available) return;
+    if (ListMode() == "auto") {
+        const auto* Source = proxy_ ? static_cast<QAbstractItemModel*>(proxy_) : static_cast<QAbstractItemModel*>(model_);
+        const QFontMetrics Metrics(grid_->font());
+        const int Count = std::min(Source->rowCount(), 2048);
+        int Clipped = 0, Measured = 0;
+        const int NameWidth = std::max(0, columnAdapter_->OneLineNameWidth(Available) - 38);
+        for (int Sample = 0; Sample < Count; ++Sample) {
+            const int Row = int(qint64(Sample) * Source->rowCount() / std::max(1, Count));
+            const auto Text = Source->index(Row, 0).data().toString();
+            if (Text == "..") continue;
+            ++Measured; if (Metrics.horizontalAdvance(Text) > NameWidth) ++Clipped;
+        }
+        const double Percent = Measured ? 100.0 * Clipped / Measured : 0;
+        Two = fm::filelist::ResolveAutoTwoLine(Available, Percent, Appearance.autoWidth, Appearance.autoPercent, autoTwoLine_, autoInitialized_);
+        autoInitialized_ = true; autoTwoLine_ = Two;
+        setProperty("hc.autoClippedPercent", Percent);
+    }
+    if (!unsupportedPresentation_.isEmpty() || !columnAdapter_->Writable()) {
+        Two = IsTwoLine(); Appearance.nameBelow = columnAdapter_->LayoutMode() == "name-last";
+    }
+    const auto NewMode = Two ? (Appearance.nameBelow ? "name-last" : "name-first") : "details";
+    const auto NewGeometry = fm::filelist::detail::RecordGeometry::make(recordColors_.isWatercolor(), Two, Appearance);
+    const bool Changed = columnAdapter_->LayoutMode() != NewMode || recordGeometry_.pitch != NewGeometry.pitch ||
+        recordGeometry_.nameBelow != NewGeometry.nameBelow;
+    const auto Anchor = Changed ? columnAdapter_->CaptureViewport() : QtitanColumnAdapter::ViewportAnchor{};
+    QScopedValueRollback Guard(applyingPresentation_, true);
+    if (unsupportedPresentation_.isEmpty() && columnAdapter_->Writable() && columnAdapter_->LayoutMode() != NewMode)
+        columnAdapter_->SetLayoutMode(NewMode);
+    if (auto* Native = qobject_cast<CFSModel*>(model_))
+        Native->SetColumnLayoutMode(columnAdapter_->Profile().mode_);
+    listAppearance_ = Appearance; recordGeometry_ = NewGeometry;
+    // Load icons at the drawn size so 48–128 px icons are not upscaled from 16 px.
+    if (auto* Native = qobject_cast<CFSModel*>(model_))
+        Native->SetIconPixels(qCeil(ListIconSize() * grid_->devicePixelRatioF()));
+    view_->beginUpdate();
+    view_->options().setRowAutoHeight(false);
+    view_->options().setCellHeight(recordGeometry_.cellHeight());
+    view_->options().setColumnHeight(std::max(QFontMetrics(grid_->font()).height() + 4,
+        recordGeometry_.twoLine ? recordGeometry_.headerHeight / 2 : recordGeometry_.headerHeight));
+    for (int Index = 0; Index < model_->columnCount(); ++Index)
+        if (auto* Column = view_->getColumnByModelColumn(Index))
+            static_cast<Qtitan::GridTableColumn*>(Column)->setCaptionIndent(Two && (Index == 0 || Column->visualIndex() == 1) ? TwoLineTextIndent() : 0);
+    view_->endUpdate();
+    columnAdapter_->Apply();
+    if (Changed) columnAdapter_->RestoreViewport(Anchor);
+    grid_->viewport()->update();
+    if (Changed) emit sigListPresentationChanged();
 }
 
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
 {
+    CancelRename();
+    if (Source && !Source->QObject::parent()) Source->setParent(this);
+    if (Proxy && !Proxy->QObject::parent()) Proxy->setParent(this);
     if( view_ == nullptr )
         return;
 
     if( Source == nullptr || Columns == nullptr )
         return;
 
+    // Qtitan's progress estimate evaluates log(0) when sorting an empty model.
+    // Cancel only that vacuous sort through its public hook; retain the sort rule
+    // so later asynchronous rows are sorted normally, including empty directories.
+    const auto Controller = view_->modelController();
+    if (!Controller->property("hc.emptySortGuard").toBool())
+    {
+        connect(Controller, &Qtitan::GridModelController::aboutToBeSorted, this, [Controller](bool& Cancel) {
+            if (Controller->getRecordCount() == 0) Cancel = true;
+        }, Qt::DirectConnection);
+        Controller->setProperty("hc.emptySortGuard", true);
+    }
+
+    appliedDisplaySettings_ = {};
     model_ = Source;
     proxy_ = Proxy;
+    thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
+    // HC-QTN-005: 8.2.0 can retain selection ranges across a model reset.
+    // Clear them before rows disappear: selectedRowIndexes otherwise dereferences
+    // an invalid GridRow, and old row positions must not target different files.
+    disconnect(selectionReset_);
+    selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
+        this, [this] {
+            resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
+            resetPath_ = model_->property("hc.snapshotLocation").toString();
+            model_->setProperty("hc.selectAllEntries", false);
+            view_->deselectAll();
+        }, Qt::DirectConnection);
+    disconnect(selectionRestore_);
+    selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
+        if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString())
+            RestoreSelection(resetSelection_, resetFocus_);
+        resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear();
+        const auto Previous = model_->property("hc.parentFocusName").toString();
+        const bool ParentNavigation = model_->property("hc.parentNavigation").toBool();
+        model_->setProperty("hc.parentFocusName", QVariant{}); model_->setProperty("hc.parentNavigation", false);
+        const auto Native = qobject_cast<CFSModel*>(model_);
+        if (!ParentNavigation || (Native && Native->LastNavigationError())) return;
+        if (view_->getRowCount()) view_->setFocusedRowIndex(0);
+        if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(true)) return;
+        for (int Index = 0; !Previous.isEmpty() && Index < model_->rowCount(); ++Index) {
+            const auto Source = model_->index(Index, 0);
+            if (model_->GetName(Source) != Previous) continue;
+            const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+            if (!Visible.isValid()) break;
+            const auto Row = view_->getRow(Visible);
+            if (Row.isValid()) view_->setFocusedRowIndex(Row.rowIndex());
+            break;
+        }
+    });
+    if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
+        Native->setProperty("hc.columnSignals", true);
+        connect(Native, &CFSModel::PageChanged, this, [this, Native] {
+            pageBar_->setVisible(Native->IsPaged());
+            pageBar_->findChild<QLabel*>("hc.entries.pageStatus")->setText(tr("%1–%2 / %3개 · 선택은 현재 페이지에 적용")
+                .arg(Native->EntryCount() ? Native->PageOffset() + 1 : 0)
+                .arg(std::min(Native->PageOffset() + CFSModel::PageSize, Native->EntryCount())).arg(Native->EntryCount()));
+            pageBar_->findChild<QPushButton*>("hc.entries.previous")->setEnabled(Native->PageOffset() != 0);
+            pageBar_->findChild<QPushButton*>("hc.entries.next")->setEnabled(Native->PageOffset() + CFSModel::PageSize < Native->EntryCount());
+        });
+        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); });
+        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); });
+        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
+        connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
+            view_->beginUpdate();
+            for (int Index = 0; Index < model_->columnCount(); ++Index) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Qtitan::SortNone);
+            for (const auto& Sort : Native->ColumnSorts()) for (int Index = 0; Index < model_->columnCount(); ++Index)
+                if (QUuid(columnAdapter_->ColumnId(Index)) == Sort.columnId_) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+            view_->endUpdate();
+            columnSortTimer_.stop();
+        });
+    }
     model_->SetColumnView( *Columns );
+    if (!Source->property("hc.presentationSignals").toBool()) {
+        Source->setProperty("hc.presentationSignals", true);
+        const auto Schedule = [this] { requestPresentation(); };
+        connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
+        connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
+        connect(Source, &QAbstractItemModel::dataChanged, this, Schedule);
+        if (Proxy) {
+            connect(Proxy, &QAbstractItemModel::modelReset, this, Schedule);
+            connect(Proxy, &QAbstractItemModel::layoutChanged, this, Schedule);
+            connect(Proxy, &QAbstractItemModel::rowsInserted, this, Schedule);
+        }
+    }
 
     if( Proxy != nullptr )
     {
@@ -168,38 +655,76 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         view_->setModel( model_ );
     }
 
-    model_->SetColumnView( *Columns );
-
     view_->beginUpdate();
     Qtitan::GridBandedTableColumn* GridColumn = nullptr;
     
     for( const auto& Column : Columns->VecColumns )
     {
-        GridColumn = view_->addColumn( Column.Index, Column.Name );
+        GridColumn = view_->addColumn( Column.Index, Column.definition_.title_ );
         if( GridColumn != nullptr )
         {
             GridColumn->setBandIndex( 0 );
             GridColumn->setAutoWidth( true );
-            GridColumn->setRowIndex( Column.Row );
+            GridColumn->setRowIndex( 0 );
             GridColumn->setMinWidth( 30 );
             // GridColumn->setWidth( 100 );
-            GridColumn->setTextAlignment( Column.Align );
-            GridColumn->setTextColor( "silver" );
-            GridColumn->setDecorationColor( "blue" );   // 컬럼 배경 색
+            GridColumn->setTextAlignment( Column.definition_.alignment_ );
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
-            if( Column.Content.contains( "HC.Fs.name", Qt::CaseInsensitive ) == true )
+            GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
+            if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
             {
                 GridColumn->setSortLocaleAware( true );
-                GridColumn->setSortOrder( Qtitan::SortAscending, true );
-                GridColumn->dataBinding()->setSortRole( Qt::UserRole );
                 
             }
             GridColumn->setFilterButtonVisible( false );
+            GridColumn->setEditorType(Qtitan::GridEditor::DelegateAdapter);
+            static_cast<Qtitan::GridDelegateAdapterEditorRepository*>(GridColumn->editorRepository())
+                ->setDelegate(new ProductCellDelegate(this, GridColumn->editorRepository()));
         }
     }
 
-    view_->bestFit( FitToHeaderPercent );
+    // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
+    view_->bestFit( FitToHeader );
     view_->endUpdate();
+    for (int Position = 0; Position < Columns->profile_.columns_.size(); ++Position)
+        for (const auto& Column : Columns->VecColumns)
+            if (Column.definition_.id_ == Columns->profile_.columns_[Position].id_)
+                view_->getColumnByModelColumn(Column.Index)->setVisualIndex(Position);
+    for (const auto& Sort : Columns->profile_.sorts_) {
+        for (const auto& Column : Columns->VecColumns)
+            if (Column.definition_.id_ == Sort.columnId_)
+                static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Column.Index))->setSortOrder(
+                    Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
+    }
+    columnAdapter_->Bind(*Columns);
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetColumnSorts(Columns->profile_.sorts_);
+    ApplyDisplaySettings();
+    requestPresentation();
+}
+
+void CGridView::ApplyDisplaySettings()
+{
+    if (!model_ || !view_) return;
+    const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    // A theme-only notification must not refresh/sort the entire controller:
+    // doing so can close an editor and move the viewport.
+    requestPresentation();
+    auto Display = General; Display.remove("filePanel");
+    if (Display == appliedDisplaySettings_) return;
+    appliedDisplaySettings_ = Display;
+    const auto Selection = CaptureSelection(); const auto Focus = CaptureFocus();
+    view_->beginUpdate();
+    if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ApplyDisplaySettings();
+    for (int Index = 0; Index < model_->columnCount(); ++Index) {
+        auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index)); if (!Column) continue;
+        Column->setSortCaseSensitivity(General["sortCaseSensitive"].toBool());
+        Column->setSortLocaleAware(General["sortLocaleAware"].toBool(true));
+        const auto Order = Column->sortOrder();
+        Column->setSortOrder(Order, General["sortNumericAware"].toBool(true));
+    }
+    view_->modelController()->refresh();
+    view_->endUpdate();
+    RestoreSelection(Selection, Focus);
 }
 
 void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
@@ -210,15 +735,68 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     if( view_ == nullptr )
         return;
 
+    // Qtitan reloads the active editor even for appearance-only dataChanged.
+    // Only the file-name column is editable here; retain its draft and caret.
+    QPointer<Qtitan::GridEditor> Editor = view_->activeEditor();
+    QPointer<QLineEdit> Input = Editor ? qobject_cast<QLineEdit*>(Editor->getCellWidget()) : nullptr;
+    const auto Draft = Input ? Input->text() : QString{};
+    const int Cursor = Input ? Input->cursorPosition() : 0;
+    const int SelectionStart = Input ? Input->selectionStart() : -1;
+    const int SelectionLength = Input ? Input->selectedText().size() : 0;
+    const bool Modified = Editor && Editor->isContextModified();
+    const auto RestoreEditor = qScopeGuard([&] {
+        if (!Input || !Editor || view_->activeEditor() != Editor) return;
+        Input->setText(Draft);
+        if (Modified) emit Input->textEdited(Draft);
+        Input->setCursorPosition(Cursor);
+        if (SelectionStart >= 0) {
+            const bool Backward = Cursor == SelectionStart;
+            Input->setSelection(Backward ? SelectionStart + SelectionLength : SelectionStart,
+                Backward ? -SelectionLength : SelectionLength);
+        }
+    });
+
     if( model_ != nullptr )
         model_->SetColorScheme( ColorScheme );
 
+    ApplyDisplaySettings();
     // RowFocus 색상 등 적용
     view_->beginUpdate();
     auto& BaseOpts = view_->options();
+    grid_->setFont(ColorScheme.FileList_Font);
+    thumbnails_->setFont(ColorScheme.FileList_Font);
+    thumbnails_->listView()->setPalette(QApplication::palette());
+    recordColors_ = fm::style::themeColorsFor(this);
+    recordColors_.setColor(fm::style::Token::Surface, ColorScheme.FileList_BGColor);
+    recordColors_.setColor(fm::style::Token::Fg, ColorScheme.FileList_FGColor);
+    // Legacy defaults used a neutral mark color. The record painter uses
+    // white-on-accent selection; only explicit user colors override its tokens.
+    if (ColorScheme.explicitColors_.contains("listSelection")) {
+        recordColors_.setColor(fm::style::Token::Sel, ColorScheme.FileList_Selected);
+        recordColors_.setColor(fm::style::Token::InvSel, ColorScheme.FileList_Selected);
+    }
+    if (ColorScheme.explicitColors_.contains("listCursor")) recordColors_.setColor(fm::style::Token::InvCur, ColorScheme.FileList_Cursor);
+    listAppearance_.invertCursor = ColorScheme.IsInverseCursor;
+    listAppearance_.invertSelection = ColorScheme.IsInverseSelect;
+    BaseOpts.setTransparentBackground(false);
+    view_->fileManagerOptions().setInvertedCursor(ColorScheme.IsInverseCursor);
+    BaseOpts.setSelectedInverseColor(ColorScheme.IsInverseSelect);
+    // Qtitan pins the viewport palette and caches header primitives. A theme
+    // change must refresh both even when the QApplication style is unchanged.
+    grid_->setPalette(QApplication::palette());
+    grid_->viewport()->setPalette(QApplication::palette());
+    QEvent StyleChange(QEvent::StyleChange);
+    QApplication::sendEvent(grid_, &StyleChange);
+    for (int Index = 0; model_ && Index < model_->columnCount(); ++Index)
+        if (auto* Column = view_->getColumnByModelColumn(Index)) {
+            Column->setTextColor(ColorScheme.FileList_FGColor);
+            Column->setBackgroundColor(Qt::transparent);
+        }
 
     if( ColorScheme.FileList_BGColor.isValid() == true )
         BaseOpts.setBackgroundColor( ColorScheme.FileList_BGColor );
+
+    syncViewportBackground();
 
     if( ColorScheme.FileList_Selected.isValid() == true )
         BaseOpts.setSelectedBackgroundColor( ColorScheme.FileList_Selected );
@@ -227,22 +805,322 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
         BaseOpts.setRowFocusColor( ColorScheme.FileList_Cursor );
 
     view_->endUpdate();
+    requestPresentation();
+}
+
+void CGridView::SetPanelActive(bool Active)
+{
+    panelActive_ = Active;
+    thumbnails_->setPaneActive(Active);
+    grid_->viewport()->update();
+    // Keep the logical cursor and marks intact; only suppress cursor painting.
+    if (view_ && view_->options().showFocusDecoration() != Active)
+        view_->options().setShowFocusDecoration(Active);
 }
 
 bool CGridView::IsEditing() const
 {
+    if (renameEditor_ || renameAwaitingRefresh_) return true;
     if( view_ == nullptr )
         return false;
 
     return view_->activeEditor() != nullptr;
 }
 
+bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, RenameHandler Handler)
+{
+    if (renameEditor_) {
+        if (!renameSubmitting_ && !renameAwaitingRefresh_)
+            selectRenameText(renameEditor_->selectedText() != renameEditor_->text());
+        return true;
+    }
+    auto* Native = qobject_cast<CFSModel*>(model_);
+    if (!Native || Native->IsLoading() || !Native->ProviderEnabled() || IsThumbnailMode()) return false;
+    auto Source = Index.isValid() ? Index : retrieveCursorIndex();
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (!Source.isValid() || Source.model() != model_) return false;
+    const auto Item = model_->GetFileInfo(Source);
+    if (!Item || Item->Name_ == "..") return false;
+    if (view_->activeEditor()) view_->hideEditor();
+    renameIndex_ = Source.siblingAtColumn(0);
+    renameOriginal_ = Item->Name_; renameLocation_ = model_->GetCurrentPathWithRoot();
+    renameHandler_ = std::move(Handler); renameSelectExtension_ = SelectExtension;
+    renameSubmitting_ = renameAwaitingRefresh_ = renameRetry_ = false; renameDirection_ = 0;
+    ++renameGeneration_;
+    const auto Visible = proxy_ ? proxy_->mapFromSource(renameIndex_) : QModelIndex(renameIndex_);
+    const auto Row = view_->getRow(Visible);
+    if (!Row.isValid()) { CancelRename(); return false; }
+    view_->setFocusedRowIndex(Row.rowIndex());
+    view_->scrollToIndex(Visible, false);
+    renameEditor_ = new QLineEdit(renameOriginal_, grid_->viewport());
+    renameEditor_->setObjectName("hc.file.renameEditor");
+    renameEditor_->setAccessibleName(tr("파일 이름 변경"));
+    renameEditor_->setToolTip(tr("이름 변경 단축키: 선택 전환 · 위/아래: 완료 후 이전/다음 항목 · Esc: 취소"));
+    renameEditor_->setFont(grid_->font());
+    renameEditor_->installEventFilter(this);
+    positionRenameEditor();
+    if (!renameEditor_) return false;
+    renameEditor_->show(); renameEditor_->raise(); renameEditor_->setFocus(Qt::ShortcutFocusReason);
+    selectRenameText(SelectExtension); renameTimer_.start();
+    return true;
+}
+
+void CGridView::CancelRename()
+{
+    ++renameGeneration_;
+    renameTimer_.stop();
+    if (renameEditor_) {
+        renameEditor_->removeEventFilter(this); renameEditor_->hide(); renameEditor_->deleteLater(); renameEditor_ = nullptr;
+    }
+    renameIndex_ = QPersistentModelIndex{}; renameHandler_ = {};
+    renameSubmitting_ = renameAwaitingRefresh_ = renameRetry_ = false;
+}
+
+void CGridView::selectRenameText(bool IncludeExtension)
+{
+    if (renameEditor_) hc::ui::SelectRenameText(renameEditor_, IncludeExtension);
+}
+
+void CGridView::positionRenameEditor()
+{
+    if (!renameEditor_ || renameSubmitting_ || renameAwaitingRefresh_) return;
+    if (!renameIndex_.isValid() || model_->GetCurrentPathWithRoot() != renameLocation_) { CancelRename(); return; }
+    const auto Visible = proxy_ ? proxy_->mapFromSource(renameIndex_) : QModelIndex(renameIndex_);
+    const auto Row = view_->getRow(Visible);
+    for (const auto& Hit : grid_->hitInfoAll()) {
+        if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.row().rowIndex() != Row.rowIndex() || Hit.modelIndex().column() != 0) continue;
+        auto Rect = Hit.rect().adjusted(2, 1, -2, -1);
+        if (IsTwoLine()) Rect.setHeight(qMin(Rect.height(), renameEditor_->sizeHint().height()));
+        Rect.setWidth(qMin(qMax(Rect.width(), 120), grid_->viewport()->width() - Rect.left()));
+        renameEditor_->setGeometry(Rect); return;
+    }
+    // A scrolled-away editor must not remain over a different file.
+    CancelRename();
+}
+
+void CGridView::commitRename(int Direction)
+{
+    if (!renameEditor_ || renameSubmitting_ || renameAwaitingRefresh_ || !renameIndex_.isValid()) return;
+    const auto Name = renameEditor_->text();
+    renameDirection_ = Direction; renameNext_ = Name;
+    if (Direction) {
+        renameNext_.clear();
+        const auto Visible = proxy_ ? proxy_->mapFromSource(renameIndex_) : QModelIndex(renameIndex_);
+        const auto Current = view_->getRow(Visible);
+        for (int Row = Current.rowIndex() + Direction; Row >= 0 && Row < view_->getRowCount(); Row += Direction) {
+            auto At = view_->getRow(Row).modelIndex(0);
+            if (proxy_) At = proxy_->mapToSource(At);
+            const auto Entry = model_->GetFileInfo(At);
+            if (Entry && Entry->Name_ != "..") { renameNext_ = Entry->Name_; break; }
+        }
+    }
+    renameSubmitting_ = true; renameEditor_->setReadOnly(true);
+    const auto Generation = renameGeneration_;
+    if (Name == renameOriginal_) { finishRename(true, Generation); return; }
+    // Freeze the source index before dispatch; never use whichever row gains focus later.
+    const auto Handler = renameHandler_;
+    Handler(renameIndex_, Name, [Guard = QPointer<CGridView>(this), Generation](bool Success) {
+        if (Guard) Guard->finishRename(Success, Generation);
+    });
+}
+
+void CGridView::finishRename(bool Success, quint64 Generation)
+{
+    if (Generation != renameGeneration_ || !renameEditor_) return;
+    renameSubmitting_ = false; renameAwaitingRefresh_ = true; renameRetry_ = !Success;
+    if (!Success) renameNext_ = renameOriginal_;
+    renameEditor_->hide();
+    renameTimer_.start();
+}
+
+void CGridView::continueRename()
+{
+    auto* Native = qobject_cast<CFSModel*>(model_);
+    if (!Native || model_->GetCurrentPathWithRoot() != renameLocation_ || !isVisible()) { CancelRename(); return; }
+    if (Native->IsLoading()) return;
+    QModelIndex Target;
+    for (int Row = 0; Row < model_->rowCount(); ++Row)
+        if (model_->GetName(model_->index(Row, 0)) == renameNext_) { Target = model_->index(Row, 0); break; }
+    const auto Handler = renameHandler_;
+    const auto SelectExtension = renameSelectExtension_;
+    const bool Continue = renameDirection_ != 0 && !renameRetry_;
+    const bool Retry = renameRetry_;
+    const auto Draft = renameEditor_ ? renameEditor_->text() : QString{};
+    CancelRename();
+    if (Target.isValid()) {
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Target) : Target;
+        const auto Row = view_->getRow(Visible);
+        if (Row.isValid()) { view_->setFocusedRowIndex(Row.rowIndex()); view_->scrollToIndex(Visible, false); }
+        if ((Continue || Retry) && BeginRename(Target, SelectExtension, Handler) && Retry) {
+            renameEditor_->setText(Draft); selectRenameText(SelectExtension);
+        }
+    }
+    if (!renameEditor_) EnsureKeyboardFocusOnView();
+}
+
 void CGridView::AdjustSizeToContents() const
 {
-    if( view_ != nullptr )
-        view_->bestFit( FitToHeaderPercent );
+    if (columnAdapter_) columnAdapter_->Request();
 
     CViewT::AdjustSizeToContents();
+}
+
+void CGridView::ConfigureColumns()
+{
+    QMainOpts Dialog(window()); Dialog.SetListView(this); Dialog.ShowListSettingsPage(); Dialog.exec();
+}
+
+hc::columns::ColumnProfile CGridView::ColumnProfile() const
+{
+    auto Profile = columnAdapter_->Profile();
+    QMap<QUuid, int> Positions;
+    for (int Index = 0; Index < model_->columnCount(); ++Index)
+        if (const auto* Column = view_->getColumnByModelColumn(Index)) Positions[QUuid(columnAdapter_->ColumnId(Index))] = Column->visualIndex();
+    std::stable_sort(Profile.columns_.begin(), Profile.columns_.end(), [&](const auto& Left, const auto& Right) {
+        return Positions.value(Left.id_, -1) < Positions.value(Right.id_, -1);
+    });
+    Profile.sorts_.clear();
+    const auto Rules = view_->modelController()->sortRules();
+    for (int Rule = 0; Rule < Rules->sortRulesCount(); ++Rule)
+        for (int Index = 0; Index < model_->columnCount(); ++Index) {
+            auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+            if (Column && Rules->sortRule(Rule)->dataBinding == Column->dataBinding())
+                Profile.sorts_.append({QUuid(columnAdapter_->ColumnId(Index)), Column->sortOrder() == Qtitan::SortDescending ? Qt::DescendingOrder : Qt::AscendingOrder});
+        }
+    return Profile;
+}
+
+bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
+{
+    if (!model_ || !hc::columns::IsSupportedProfile(Profile)) return false;
+    const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
+    if (!restoringPresentation_ && !applyingAutoColumns_) {
+        manualColumns_ = true; automaticColumnsBase_.reset(); automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
+    }
+    if (!restoringPresentation_) {
+        listModeOverride_ = Profile.mode_ == hc::columns::LayoutMode::Details ? "one-line" : "two-line";
+        nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
+    }
+    view_->beginUpdate();
+    view_->deselectAll(); view_->setModel(nullptr); view_->removeColumns();
+    auto Binding = BindColumnProfile(Profile);
+    SetModel(model_, proxy_, &Binding);
+    columnAdapter_->UseProfileWidths();
+    columnAdapter_->Apply();
+    view_->endUpdate();
+    RestoreSelection(Selected, Focus);
+    return true;
+}
+
+QJsonObject CGridView::CaptureWorkspaceView() const
+{
+    QJsonArray Columns;
+    for (int Index = 0; Index < model_->columnCount(); ++Index)
+        if (auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index)))
+        {
+            int Priority = -1;
+            const auto Rules = view_->modelController()->sortRules();
+            for (int Rule = 0; Rule < Rules->sortRulesCount(); ++Rule)
+                if (Rules->sortRule(Rule)->dataBinding == Column->dataBinding()) { Priority = Rule; break; }
+            Columns.append(QJsonObject{{"id", columnAdapter_->ColumnId(Index)}, {"position", Column->visualIndex()},
+                {"sort", int(Column->sortOrder())}, {"priority", Priority}});
+        }
+    const auto Proxy = qobject_cast<CFSProxyModel*>(proxy_);
+    auto Layout = columnAdapter_->WorkspaceLayout();
+    Layout["manualSelection"] = manualColumns_;
+    if (automaticColumnsBase_) Layout["automaticBase"] = hc::columns::EncodeProfile(*automaticColumnsBase_);
+    if (columnAdapter_->Writable()) Layout["definition"] = hc::columns::EncodeProfile(ColumnProfile());
+    return {{"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
+        {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
+}
+
+void CGridView::RestoreWorkspaceView(const QJsonObject& View)
+{
+    QScopedValueRollback RestoreGuard(restoringPresentation_, true);
+    const auto Layout = View.value(hc::columns::WorkspaceKey).toObject();
+    manualColumns_ = Layout["manualSelection"].toBool(Layout.contains("definition"));
+    automaticColumnsBase_ = hc::columns::DecodeProfile(Layout["automaticBase"].toObject());
+    automaticColumnsSignature_.clear(); automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
+    auto Definition = hc::columns::DecodeProfile(Layout.value("definition").toObject());
+    if (Layout.isEmpty()) {
+        const auto Defaults = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()
+            ["ColumnsV2/Defaults/" + columnAdapter_->PaneKey()].toObject();
+        Definition = hc::columns::DecodeProfile(Defaults);
+    }
+    if (Definition && hc::columns::IsSupportedProfile(*Definition)) {
+        ApplyColumnProfile(*Definition);
+        if (!Layout.isEmpty()) columnAdapter_->RestoreWorkspaceLayout(View);
+    } else columnAdapter_->RestoreWorkspaceLayout(View);
+    QList<QJsonObject> Sorted;
+    for (const auto& Value : View.value("columnOrderV2").toArray()) Sorted.append(Value.toObject());
+    std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {
+        return A.value("priority").toInt(-1) < B.value("priority").toInt(-1);
+    });
+    view_->beginUpdate();
+    if (!Sorted.isEmpty())
+        for (int Index = 0; Index < model_->columnCount(); ++Index)
+            if (auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))) Column->setSortOrder(Qtitan::SortNone);
+    for (const auto& Value : Sorted)
+        for (int Index = 0; Index < model_->columnCount(); ++Index)
+        {
+            if (columnAdapter_->ColumnId(Index) != Value.value("id").toString()) continue;
+            auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index));
+            if (!Column) continue;
+            const auto Position = Value.value("position").toInt(-1);
+            if (Position >= 0 && Position < model_->columnCount()) Column->setVisualIndex(Position);
+            const auto Sort = Value.value("sort").toInt(-1);
+            if (Sort == Qtitan::SortAscending || Sort == Qtitan::SortDescending)
+                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["sortNumericAware"].toBool(true));
+        }
+    view_->endUpdate();
+    restorePresentation(View);
+    if (auto* Proxy = qobject_cast<CFSProxyModel*>(proxy_))
+    { Proxy->SetHiddenSystem(View.value("hiddenSystem").toBool()); Proxy->SetSearch(View.value("search").toString()); }
+}
+
+QStringList CGridView::CaptureSelection() const
+{
+    QStringList Result;
+    if (!model_ || !view_) return Result;
+    for (const auto Row : view_->selection()->selectedRowIndexes())
+    {
+        auto Index = view_->getRow(Row).modelIndex(0);
+        if (!Index.isValid()) continue;
+        if (proxy_) Index = proxy_->mapToSource(Index);
+        const auto Item = model_->GetFileInfo(Index);
+        if (Item && Item->storageEntry_) Result.append(hc::workspace::SelectionKey(*Item->storageEntry_));
+    }
+    return Result;
+}
+
+QString CGridView::CaptureFocus() const
+{
+    if (!model_ || !view_) return {};
+    auto Index = view_->focusedRow().modelIndex(0);
+    if (!Index.isValid()) return {};
+    if (proxy_) Index = proxy_->mapToSource(Index);
+    const auto Item = model_->GetFileInfo(Index);
+    return Item && Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : QString{};
+}
+
+void CGridView::RestoreSelection(const QStringList& Selection, const QString& Focus)
+{
+    const QSet<QString> Keys(Selection.begin(), Selection.end());
+    view_->deselectAll();
+    for (int Index = 0; Index < model_->rowCount(); ++Index)
+    {
+        const auto Source = model_->index(Index, 0);
+        const auto Item = model_->GetFileInfo(Source);
+        if (!Item || !Item->storageEntry_) continue;
+        const auto Key = hc::workspace::SelectionKey(*Item->storageEntry_);
+        if (!Keys.contains(Key) && Key != Focus) continue;
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+        if (!Visible.isValid()) continue;
+        const auto Row = view_->getRow(Visible);
+        if (!Row.isValid()) continue;
+        if (Keys.contains(Key)) view_->selectRow(Row.rowIndex(), Qtitan::Select);
+        if (Key == Focus) view_->setFocusedRowIndex(Row.rowIndex());
+    }
 }
 
 void CGridView::EnsureKeyboardFocusOnView() const
@@ -250,6 +1128,7 @@ void CGridView::EnsureKeyboardFocusOnView() const
     if( view_ == nullptr )
         return;
 
+    if (IsThumbnailMode()) { thumbnails_->listView()->setFocus(Qt::MouseFocusReason); return; }
     grid_->setFocus( Qt::MouseFocusReason );
     grid_->viewport()->setFocus( Qt::MouseFocusReason );
     grid_->viewport()->raise();
@@ -277,7 +1156,6 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
 {
     // TODO: 각 패널의 하단에 선택된 항목 수 및 크기 등에 대해 갱신해야 한다.
     // State 에 저장된 항목들 갱신
-    // TODO: 선택된 항목이 디렉토리이고, EverythingSDK 를 쓰지 않고, 디렉토리 계산 기능이 사용 중이라면 디렉토리 크기를 계산한다. 
 
     if( view_ == nullptr )
         return {};
@@ -288,6 +1166,9 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
 
     view_->selectRow( Row.rowIndex(), Qtitan::Invert );
     IsSelected = view_->modelController()->isRowSelected( Row );
+    if (IsSelected && Info && Info->Name_ != ".." && (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+        && hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeOnSpace"].toBool(true))
+        if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->RequestDirectorySizes({ModelIndex});
     
     if( IsMoveDown == true )
         view_->navigateDown( Qt::NoModifier );
@@ -297,25 +1178,75 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
 
 void CGridView::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
 {
-    QRect Rect;
-    PopupMenu menu( grid_ );
-    const auto Row = view_->getRow( SrcIndex );
+    ShowShellMenu(SrcIndex);
+}
 
-    for( const auto Info : grid_->hitInfoAll() )
-    {
-        if( Info.info() != GridHitInfo::Cell )
-            continue;
+QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelection) const
+{
+    const auto* Native = qobject_cast<CFSModel*>(model_);
+    if (!Native || Native->IsLoading() || !view_) return {};
+    const auto Kind = Native->WorkspaceLocation().kind_;
+    if (Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
+    // A paged select-all represents entries that are not loaded in this view.
+    // Do not silently send only the visible subset to an Explorer verb.
+    if (UseSelection && Native->IsPaged() && model_->property("hc.selectAllEntries").toBool()) return {};
+    const auto SourceIndex = [](QModelIndex At) {
+        while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
+        return At;
+    };
+    QStringList Paths;
+    const auto Append = [&](const QModelIndex& At) {
+        const auto Source = SourceIndex(At);
+        if (!Source.isValid() || Source.model() != model_) return;
+        const auto Item = model_->GetFileInfo(Source);
+        if (Item && Item->Name_ != "..") Paths.append(Native->GetFileFullPath(Source));
+    };
+    if (UseSelection)
+        for (const auto Row : view_->selection()->selectedRowIndexes()) Append(view_->getRow(Row).modelIndex(0));
+    if (Paths.isEmpty()) Append(Index.isValid() ? Index : retrieveCursorIndex());
+    if (Paths.isEmpty()) Paths.append(model_->GetCurrentPathWithRoot());
+    for (auto& Path : Paths) Path = QDir::fromNativeSeparators(Path);
+    Paths.removeDuplicates();
+    return Paths;
+}
 
-        if( Info.row().rowIndex() == Row.rowIndex() )
-        {
-            Rect = Info.rect();
-            break;
+bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
+{
+    if (IsEditing()) return false;
+    auto Source = Index.isValid() ? Index : retrieveCursorIndex();
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (Source.isValid() && Source.model() != model_) return false;
+    const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+    const auto Row = view_->getRow(Visible);
+    const bool UseSelection = !AtCursor || (Index.isValid() && Row.isValid() && view_->modelController()->isRowSelected(Row));
+    auto Paths = ShellMenuPaths(Source, UseSelection);
+    if (Paths.isEmpty()) return false;
+    if (AtCursor && !Index.isValid()) Paths = {model_->GetCurrentPathWithRoot()};
+    POINT Position{};
+    if (AtCursor) {
+        if (!GetCursorPos(&Position)) return false;
+    } else {
+        auto* Viewport = grid_->viewport();
+        QPoint Anchor(8, 8);
+        if (IsThumbnailMode()) {
+            Viewport = thumbnails_->listView()->viewport();
+            const auto Rect = thumbnails_->listView()->visualRect(thumbnails_->listView()->currentIndex());
+            if (Rect.isValid()) Anchor = Rect.bottomLeft();
+        } else if (Row.isValid()) {
+            view_->scrollToIndex(Visible, false);
+            for (const auto& Hit : grid_->hitInfoAll())
+                if (Hit.info() == GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0) {
+                    Anchor = Hit.rect().bottomLeft(); break;
+                }
         }
+        Anchor.setX(qBound(0, Anchor.x(), qMax(0, Viewport->width() - 1)));
+        Anchor.setY(qBound(0, Anchor.y(), qMax(0, Viewport->height() - 1)));
+        const auto Scale = Viewport->devicePixelRatioF();
+        Position = {qRound(Anchor.x() * Scale), qRound(Anchor.y() * Scale)};
+        if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
     }
-    
-    GridHitInfo HitInfo( GridHitInfo::Cell, view_, Rect, Row.rowIndex(), Row.cell( 0 ).columnIndex() );
-    ContextMenuEventArgs Args( view_, &menu, HitInfo );
-    oo_grid_contextMenu( &Args );
+    viewClickTimer_.stop();
+    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()));
 }
 
 Qtitan::GridViewBase* CGridView::BaseView() const
@@ -335,33 +1266,8 @@ void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 {
     const auto Info = Args->hitInfo();
     const auto Type = Info.info();
-    const auto ModelIndex = proxy_ != nullptr ? proxy_->mapToSource( Info.modelIndex() ) : Info.modelIndex();
-
-    viewClickTimer_.stop();
-
-    switch( Type )
-    {
-        case GridHitInfo::Cell:
-        {
-
-            // NOTE: Qt 5 에서 서로 다른 해상도를 가진 다중 모니터 환경에서 정확한 커서 위치를 얻어올 수 없음.
-            // 따라서, Win32 API 인 GetCursorPos 로 대체한다. 
-            POINT Pos = {};
-            GetCursorPos( &Pos );
-
-            OpenShellContextMenuForObject( ( ( CFSModel* )model_ )->GetFileFullPath( ModelIndex ).toStdWString(), Pos.x, Pos.y,
-                                           reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
-        } break;
-        case GridHitInfo::Rows:
-        {
-            POINT Pos = {};
-            GetCursorPos( &Pos );
-
-            OpenShellContextMenuForObject( model_->GetCurrentPathWithRoot().toStdWString(), Pos.x, Pos.y,
-                                           reinterpret_cast< HWND >( Args->view()->grid()->winId() ) );
-        } break;
-    }
-
+    if (Type != GridHitInfo::Cell && Type != GridHitInfo::Rows) return;
+    ShowShellMenu(Type == GridHitInfo::Cell ? Info.modelIndex() : QModelIndex{}, true);
     Args->setHandled( true );
 }
 
@@ -443,6 +1349,8 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 {
+    if (renameEditor_ && !renameSubmitting_ && !renameAwaitingRefresh_ && OldRowIndex != NewRowIndex)
+        CancelRename();
     UNREFERENCED_PARAMETER( OldRowIndex );
     UNREFERENCED_PARAMETER( NewRowIndex );
 
@@ -507,6 +1415,12 @@ void CGridView::oo_grid_editorPosting( Qtitan::EditorEventArgs* Args )
 
 void CGridView::oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )
 {
+    if (model_) {
+        model_->setProperty("hc.selectAllEntries", false);
+        // Publish after legacy panel toggle bookkeeping and reset restoration.
+        // One queued summary also covers select-all and command-driven marks.
+        selectionSummaryTimer_.start(0);
+    }
     UNREFERENCED_PARAMETER( NewSelection );
     UNREFERENCED_PARAMETER( OldSelection );
 
@@ -516,8 +1430,44 @@ void CGridView::oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Q
     //    State->LastFocusedRowIndex = -1;
 }
 
+void CGridView::syncViewportBackground()
+{
+    auto Palette = grid_->palette();
+    Palette.setColor(QPalette::All, grid_->backgroundRole(), recordColors_[fm::style::Token::Surface]);
+    grid_->setPalette(Palette);
+    grid_->viewport()->setPalette(Palette);
+    grid_->viewport()->setAutoFillBackground(true);
+    grid_->viewport()->update();
+}
+
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (renameEditor_ && Watched == renameEditor_) {
+        if (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride) {
+            auto* Key = static_cast<QKeyEvent*>(Event);
+            const bool RenameKey = hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(Key->keyCombination())) == "hc.file.rename";
+            const bool MoveKey = !RenameKey && (Key->key() == Qt::Key_Up || Key->key() == Qt::Key_Down);
+            const bool Special = RenameKey || Key->key() == Qt::Key_Escape || MoveKey
+                || Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter;
+            if (Special && Event->type() == QEvent::ShortcutOverride) { Event->accept(); return true; }
+            if (Special) {
+                // Each new editor must accept the held arrow key's repeat events.
+                // Keep selection toggles and completion/cancellation single-shot.
+                if (!Key->isAutoRepeat() || MoveKey) {
+                    if (Key->key() == Qt::Key_Escape) { CancelRename(); EnsureKeyboardFocusOnView(); }
+                    else if (RenameKey) { if (!renameSubmitting_ && !renameAwaitingRefresh_) selectRenameText(renameEditor_->selectedText() != renameEditor_->text()); }
+                    else commitRename(Key->key() == Qt::Key_Up ? -1 : Key->key() == Qt::Key_Down ? 1 : 0);
+                }
+                return true;
+            }
+        }
+    }
+    // Changing the main window frame stylesheet on maximize repolishes children,
+    // which resets viewport auto-fill. Restore it after stylesheet processing.
+    if (Watched == grid_ && Event->type() == QEvent::StyleChange)
+        QTimer::singleShot(0, this, &CGridView::syncViewportBackground);
+    // A DPI change reloads icons at the new physical size.
+    if (Event->type() == QEvent::FontChange || Event->type() == QEvent::Show || Event->type() == QEvent::DevicePixelRatioChange) requestPresentation();
     if( Event->type() == QEvent::KeyPress )
     {
         if( IsEditing() == true )
@@ -530,6 +1480,12 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 
         if( StCommandMgr->ProcessKeyPressEvent( KeyEvent, retrieveCursorIndex() ) == true )
             return true;
+        // Configured commands take priority over the legacy Ctrl+A fallback.
+        if (KeyEvent->matches(QKeySequence::SelectAll) && qobject_cast<CFSModel*>(model_)) {
+            view_->selectAll(); model_->setProperty("hc.selectAllEntries", true);
+            if (IsThumbnailMode()) emit sigThumbnailSelectionChanged();
+            return true;
+        }
     }
 
     if( Event->type() == QEvent::FocusOut )
@@ -547,8 +1503,8 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 
 void CGridView::resizeEvent( QResizeEvent* event )
 {
-    if( view_ != nullptr )
-        view_->bestFit( FitToHeaderPercent );
+    if (columnAdapter_) columnAdapter_->Request();
+    requestPresentation();
 
     CViewT::resizeEvent( event );
 }
@@ -776,6 +1732,7 @@ void CQuickView::SetFilePath( const QString& FilePath )
 
 void CQuickView::showEvent( QShowEvent* event )
 {
+    if (surface_ || filePath_.isEmpty()) { CViewT::showEvent(event); return; }
     do
     {
         if( event->spontaneous() == false && isInitOnce_ == false )
@@ -823,6 +1780,22 @@ void CQuickView::showEvent( QShowEvent* event )
     CViewT::showEvent( event );
 }
 
+void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source)
+{
+    if (!surface_)
+    {
+        surface_ = Host.CreateSurface(this); vbox_->addWidget(surface_); setFocusProxy(surface_);
+        connect(surface_, &QtViewerSurface::CloseRequested, this, &CQuickView::CloseRequested);
+        auto* Close = new QAction(tr("미리 보기 닫기"), this);
+        Close->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q)); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
+        connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
+    }
+    surface_->Open(std::move(Source), hc::viewer::ViewerPurpose::QuickPreview);
+}
+
+void CQuickView::CloseView() { if (surface_) surface_->Close(); }
+void CQuickView::EnsureKeyboardFocusOnView() const { if (surface_) surface_->setFocus(); }
+
 ////int CmpPanel::InitializeGrid()
 ////{
 ////    Model->SetRoot( "C:" );
@@ -844,3 +1817,50 @@ void CQuickView::showEvent( QShowEvent* event )
 ////    DlgViewer->show();
 ////}
 ////
+
+void CGridView::SetAutomaticColumns(bool Automatic)
+{
+    manualColumns_ = !Automatic; automaticColumnsSignature_.clear();
+    automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
+    requestPresentation(); emit sigViewSettingsChanged();
+}
+void CGridView::requestAutomaticColumns()
+{
+    auto* Model = qobject_cast<CFSModel*>(model_);
+    if (!Model || Model->IsLoading() || Model->HasPlaceholder() || !columnAdapter_ || !columnAdapter_->Writable()
+        || manualColumns_ || applyingAutoColumns_ || IsEditing()) return;
+    const auto Committed = hc::settings::AppSettings().CommittedObject();
+    const auto Columns = Committed["columns"].toObject();
+    const auto Policy = Columns[hc::columns::AutoSelectionKey].toObject();
+    const auto Library = Columns["ColumnsV2/Profiles"].toObject();
+    const auto Colors = Committed["options"].toObject()["fileColorRules"].toObject();
+    const auto Path = QString::fromStdString(Model->WorkspaceLocation().root_);
+    const auto Signature = QByteArray::number(Model->DirectoryGeneration()) + Path.toUtf8() + QJsonDocument(Policy).toJson(QJsonDocument::Compact) + QJsonDocument(Library).toJson(QJsonDocument::Compact) + QJsonDocument(Colors).toJson(QJsonDocument::Compact);
+    if (Signature == automaticColumnsSignature_) return;
+    automaticColumnsSignature_ = Signature; automaticColumnsStop_.request_stop(); automaticColumnsStop_ = std::stop_source{};
+    const auto Generation = ++automaticColumnsGeneration_;
+    using AutoResult = hc::storage::Result<std::optional<hc::columns::ColumnProfile>>;
+    auto* Watcher = new QFutureWatcher<AutoResult>(this);
+    const auto DirectoryGeneration = Model->DirectoryGeneration();
+    connect(Watcher, &QFutureWatcher<AutoResult>::finished, this, [this, Watcher, Generation, DirectoryGeneration] {
+        const auto Result = Watcher->result(); Watcher->deleteLater();
+        auto* Current = qobject_cast<CFSModel*>(model_);
+        if (Generation != automaticColumnsGeneration_ || manualColumns_ || !Current || Current->IsLoading() || Current->DirectoryGeneration() != DirectoryGeneration) return;
+        if (IsEditing()) { automaticColumnsSignature_.clear(); requestPresentation(); return; }
+        if (!Result.HasValue()) { setProperty("hc.columns.autoError", QString::fromStdString(Result.Failure().code_)); return; }
+        setProperty("hc.columns.autoError", QVariant{});
+        auto Next = Result.Value();
+        if (Next && !automaticColumnsBase_) automaticColumnsBase_ = ColumnProfile();
+        if (!Next && automaticColumnsBase_) Next = automaticColumnsBase_;
+        if (Next && hc::columns::EncodeProfile(*Next) != hc::columns::EncodeProfile(ColumnProfile())) {
+            const QScopedValueRollback Guard(applyingAutoColumns_, true);
+            ApplyColumnProfile(*Next); emit sigViewSettingsChanged();
+        }
+        if (!Result.Value()) automaticColumnsBase_.reset();
+    });
+    const auto Index = Model->DirectoryEntries();
+    hc::storage::OperationContext Context; Context.stopToken_ = automaticColumnsStop_.get_token();
+    Watcher->setFuture(QtConcurrent::run([Policy, Library, Colors, Path, Index, Context] {
+        return hc::columns::SelectAutomaticColumns(Policy, Library, Colors, Path, Index, Context);
+    }));
+}

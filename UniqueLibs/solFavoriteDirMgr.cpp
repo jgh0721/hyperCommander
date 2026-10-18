@@ -88,6 +88,22 @@ void CFavoriteDirMgr::SetDrivesOn( TyEnDrivesOn DrivesOn )
     SaveSettings();
 }
 
+bool CFavoriteDirMgr::ApplyConfiguration( QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn )
+{
+    const auto PreviousSettings = hc::settings::AppSettings().Read( hc::settings::Section::Favorites );
+    const auto PreviousItems = vecItems_;
+    const auto PreviousDrives = drivesOn_;
+    vecItems_ = std::move( Items );
+    drivesOn_ = DrivesOn;
+    if( SaveSettings() ) return true;
+    // Put updates the in-memory settings before attempting its atomic write.
+    // Restore that draft too, so a later unrelated save cannot persist a failed edit.
+    hc::settings::AppSettings().Put( hc::settings::Section::Favorites, PreviousSettings );
+    vecItems_ = PreviousItems;
+    drivesOn_ = PreviousDrives;
+    return false;
+}
+
 void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
 {
     Q_ASSERT( Menu != nullptr );
@@ -127,42 +143,25 @@ void CFavoriteDirMgr::OnConfigure( bool checked )
 
 bool CFavoriteDirMgr::doRefresh()
 {
-    QVector< TyFavoriteDir > VecItems;
-
-    StSettings->beginGroup( "Favorites" );
-    const auto Count = StSettings->value( "Count" ).toInt();
-    auto DrivesOn = static_cast< TyEnDrivesOn >( StSettings->value( "DrivesOn" ).toInt() );
-    for( int Idx = 0; Idx < Count; ++Idx )
-    {
-        TyFavoriteDir Item;
-        Item.Name       = StSettings->value( QString( "Menu%1" ).arg( Idx ) ).toString();
-        Item.Command    = StSettings->value( QString( "Cmd%1" ).arg( Idx ) ).toString();
-        Item.Path       = StSettings->value( QString( "Path%1" ).arg( Idx ) ).toString();
-        VecItems.push_back( Item );
+    const auto Favorites = hc::settings::AppSettings().Read(hc::settings::Section::Favorites).toObject();
+    const auto Position = Favorites["drivesOn"].toString();
+    drivesOn_ = Position == "top" ? DRIVES_ON_TOP : Position == "bottom" ? DRIVES_ON_BOTTOM : static_cast<TyEnDrivesOn>(0);
+    vecItems_.clear();
+    for (const auto& Value : Favorites["items"].toArray()) {
+        const auto Record = Value.toObject();
+        if (!Record["name"].isString() || !Record["command"].isString()) continue;
+        TyFavoriteDir Item; Item.Name = Record["name"].toString(); Item.Command = Record["command"].toString(); Item.Path = Record["path"].toString();
+        vecItems_.append(Item);
     }
-    StSettings->endGroup();
-
-    qSwap( VecItems, vecItems_ );
-    qSwap( DrivesOn, drivesOn_ );
-
     return true;
 }
 
 bool CFavoriteDirMgr::doSaveSettings()
 {
-    StSettings->beginGroup( "Favorites" );
-    StSettings->setValue( "Count", vecItems_.count() );
-    for( qsizetype Idx = 0; Idx < vecItems_.size(); ++Idx )
-    {
-        const auto& Item = vecItems_[ Idx ];
-        StSettings->setValue( QString( "Menu%1" ).arg( Idx ), Item.Name );
-        StSettings->setValue( QString( "Cmd%1" ).arg( Idx ), Item.Command );
-        StSettings->setValue( QString( "Path%1" ).arg( Idx ), Item.Path );
-    }
-    StSettings->setValue( "DrivesOn", ( int )drivesOn_ );
-    StSettings->endGroup();
-
-    return true;
+    QJsonArray Items;
+    for (const auto& Item : vecItems_) Items.append(QJsonObject{{"name",Item.Name},{"command",Item.Command},{"path",Item.Path}});
+    return hc::settings::AppSettings().Put(hc::settings::Section::Favorites, QJsonObject{{"items",Items},
+        {"drivesOn",drivesOn_ == DRIVES_ON_TOP ? "top" : drivesOn_ == DRIVES_ON_BOTTOM ? "bottom" : "none"}});
 }
 
 void CFavoriteDirMgr::createDrives( QMenu* Menu )
@@ -182,7 +181,7 @@ void CFavoriteDirMgr::createDrives( QMenu* Menu )
 
             const auto Ac = Parent->addAction( QString( "[%1]" ).arg( QString::fromWCharArray( wszDrive ) ) );
             connect( Ac, &QAction::triggered, [wszDrive]() {
-                TyStCommandMgr::GetInstance()->cm_GotoDrive( QModelIndex(), QString::fromWCharArray( wszDrive ) );
+                TyStCommandMgr::GetInstance()->NavigateDrive( QModelIndex(), QString::fromWCharArray( wszDrive ) );
             } );
 
             while( *wszC++ );

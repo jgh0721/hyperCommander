@@ -1,0 +1,6 @@
+EXPORTS
+    ListSetDefaultParams
+    ListGetDetectString
+    ListLoadW
+    ListCloseWindow
+    ListSearchTextW

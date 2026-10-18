@@ -9,6 +9,7 @@
 #include "Components/cmpView.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
+namespace fm::ui { class PanelTabStrip; class BreadcrumbBar; class DriveButton; class SegmentedControl; class PanelStatusBar; }
 class CFsModelT;
 class QMainUI;
 class CFSProxyModel;
@@ -57,6 +58,8 @@ class CmpPanel : public QWidget
         quint64                     SelectedSize = 0;
         int                         SelectedFileCount = 0;
         int                         SelectedDirectoryCount = 0;
+        hc::workspace::TabState     workspace_;
+        bool                       pending_ = false, restoreSelection_ = false;
 
         CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }
         QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
@@ -71,8 +74,16 @@ public:
     CmpPanel( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     Q_INVOKABLE void                RefreshVolumeList() const;
+    void                            NotifyDriveRemoved(const QString& Root);
 
-    void                            AddTab();
+    void                            AddTab(bool Navigate = true);
+    hc::workspace::PaneState        CaptureWorkspace() const;
+    void                            RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults = {});
+    QString                         CurrentPath() const;
+    QString                         Search() const;
+    void                            SetSearch(const QString& Query);
+    void                            NavigateHistory(int Offset);
+    bool                            CanNavigateHistory(int Offset) const;
     void                            PrevTab();
     void                            NextTab();
     void                            CloseTab();
@@ -97,20 +108,29 @@ public slots:
     void                            OnColorSchemeChanged( const TyColorScheme& ColorScheme );
     void                            OnChangedDirectory( const QString& CurrentPath );
 
-    void                            on_cbxVolume_currentIndexChanged( int index, const QString& Path = "" );
+    void                            changeVolumeIndex( int index, const QString& Path = "" );
     void                            on_tabWidget_currentChanged( int Index );
 
 signals:
     void                            sig_NotifyPanelActivated();
+    void                            sigViewSettingsChanged();
+    void                            sigNavigationStateChanged();
     void                            sig_NotifyCurrentDirectory( const QString& CurrentPath );
 
 private:
     friend class QMainUI;
+    void                            setActivePanel(bool Active);
+    void                            updateActiveAppearance();
 
     bool                            eventFilter( QObject* Object, QEvent* Event ) override;
     void                            resizeEvent( QResizeEvent* event ) override;
 
     void                            initializeUIs();
+    void                            syncPanelChrome();
+    void                            closeTabAt(int Index);
+    void                            navigateHistoryIndex(int Index);
+    void                            restoreTab(int Index);
+    void                            updateWorkspaceStatus();
 
     CViewT*                         createGridView();
     int                             retrieveCurrentIndex() const;
@@ -122,13 +142,28 @@ private:
     QPoint                          retrieveMenuPoint( const QPoint& GlobalCursor, QModelIndex SrcIndex );
     QVector< QModelIndex >          makeSrcModel( const TySpTabState& SrcState );
 
-    Q_INVOKABLE void                processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem ) const;
+    Q_INVOKABLE void                processVolumeStatusText( const nsHC::TySpFileSystem& SpFileSystem );
     Q_INVOKABLE void                processPanelStatusText();
 
     Ui::cmpPanel                    ui;
 
     // 벡터의 색인은 tabWidget 의 색인과 동기화 되어야 한다. 
     QVector< TySpTabState >         vecTabStates;
+    bool                            workspaceRestored_ = false;
+    fm::ui::PanelTabStrip*           tabs_ = nullptr;
+    fm::ui::BreadcrumbBar*           path_ = nullptr;
+    fm::ui::DriveButton*             drive_ = nullptr;
+    fm::ui::SegmentedControl*        viewMode_ = nullptr;
+    fm::ui::PanelStatusBar*          status_ = nullptr;
+    QToolButton*                    historyButton_ = nullptr;
+    quint64                         capacityGeneration_ = 0;
+    QLineEdit*                      search_ = nullptr;
+    QLabel*                         workspaceStatus_ = nullptr;
+    QPushButton*                    retry_ = nullptr;
+    QComboBox*                      history_ = nullptr;
+    QLabel*                        activeIndicator_ = nullptr;
+    bool                           activePanel_ = false;
+    bool                           darkTheme_ = false;
 };
 
 //class CmpPanel : public QWidget

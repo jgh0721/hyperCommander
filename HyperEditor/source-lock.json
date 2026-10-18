@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 1,
+  "origin": "user-owned local MultiViewer sources",
+  "commit": "56f1016eba79008c142e892e80fbd52453a506da",
+  "adoptedFiles": [
+    {
+      "path": "src/core/QBaseView.h",
+      "sha256": "3b2bc562f57a08bc0d6d351291316246bb3a2b686dcc8cffc0f283842cb582ee"
+    },
+    {
+      "path": "src/core/QBaseView.cpp",
+      "sha256": "fe246142f0b9190cf1a414643d4565bbee85cb34942b8841c8d1e2bbcf8f1cb7"
+    },
+    {
+      "path": "src/core/ToolbarIcons.h",
+      "sha256": "5fbb4c2831c5619a45a14ea6e9f1656954e203a39d8cc5aca77b31b210116120"
+    },
+    {
+      "path": "src/core/ToolbarIcons.cpp",
+      "sha256": "1cfc2cd593be84f92310e2876a4c7b5fb337ce880d22b78e4e04d0e4680812a0"
+    },
+    {
+      "path": "src/core/Watermark.h",
+      "sha256": "bad58576ed0064c141589741ae212e30f5b8d4719fa15e3813c29374a252aeb6"
+    },
+    {
+      "path": "src/core/Watermark.cpp",
+      "sha256": "b41b4726705cc5bf2e80ce4fadd48bbfc0211154de861029e2a8f81033d948a0"
+    },
+    {
+      "path": "src/core/PrintManager.h",
+      "sha256": "2a9e0556b8cf59fb2ed0c1a5856a56658ba7a335f730e41694be0f81027115dc"
+    },
+    {
+      "path": "src/core/PrintManager.cpp",
+      "sha256": "267ae76462d19cf445ea228514b28616557f6fd83b6594628363a6e7299e774b"
+    },
+    {
+      "path": "src/core/ThemeManager.h",
+      "sha256": "75839503fa850cf96359c292bf7af7bd76f1d19df7ec9cb4cd907c36a48a0b5a"
+    },
+    {
+      "path": "src/core/ThemeManager.cpp",
+      "sha256": "c6f8367b5486afb3cd178f00f66d786947c37665317b8e56bf57485f3d7c0d71"
+    },
+    {
+      "path": "src/core/WatermarkDialog.h",
+      "sha256": "e21b48fe3e1971f4379047249c0f91a84956bda5e8ee653e90416d64796d73d8"
+    },
+    {
+      "path": "src/core/WatermarkDialog.cpp",
+      "sha256": "7466ed997f9c6d4c744da7895fa976ad1d2aeeb86a82e4dfce6fad9e82a2b642"
+    },
+    {
+      "path": "src/text/ITextEditorBackend.h",
+      "sha256": "891d0273f5530719b8cfd439b0c46dae09aed9a5544188e06deac0550f62e039"
+    },
+    {
+      "path": "src/text/ScintillaDocument.h",
+      "sha256": "395ce19b52f54027b8c1e453d5bc9619950a1fe1c037cb1a6465c69304815f8e"
+    },
+    {
+      "path": "src/text/ScintillaEditorSettings.h",
+      "sha256": "2b55f64b6676f80a318d8abaed7cb415452a3be8c037f7352f6fcfc4150b66d4"
+    },
+    {
+      "path": "src/text/ScintillaEditorSettings.cpp",
+      "sha256": "7c183eccc267b72dad46a2a8a721781eb7c0e167f30911deab0f9b7b1e1cddcc"
+    },
+    {
+      "path": "src/text/ScintillaQtDirectBackend.h",
+      "sha256": "c1b0cc4c511005724811bf24a3406eb436aa6582c9aaa5be9434693f1a164461"
+    },
+    {
+      "path": "src/text/ScintillaQtDirectBackend.cpp",
+      "sha256": "e6f19c829caa2ee2b8938090b4b203d51a98ec039454ebcacd49f1c7d82a1d9a"
+    },
+    {
+      "path": "src/text/TextFileSession.h",
+      "sha256": "92ec857e29f0e483c9bd69cc12b06c94d698cff11bbe3e931d9e8eafc52f1b3c"
+    },
+    {
+      "path": "src/text/TextFileSession.cpp",
+      "sha256": "f1b46804ff0741eb18a60f2e1e72a1e91a7346247e5fcec9ab66f0e8ee94f54f"
+    },
+    {
+      "path": "src/text/TextShadowBackupStore.h",
+      "sha256": "f2d26b91c8dee52b58a08e4f545c9ef390a97655e28a7643df3bb4d682a19889"
+    },
+    {
+      "path": "src/text/TextShadowBackupStore.cpp",
+      "sha256": "cd0d14b7149840d2785ab505d360f55c3b10d5fc0a67a8581e297e17ac6c8e7f"
+    },
+    {
+      "path": "src/text/TextSaveDialog.h",
+      "sha256": "2b2453998dd7efe2586cb508c69fca2ff68ec735a9b11f1b35800c1aed8de0c2"
+    },
+    {
+      "path": "src/text/TextSaveDialog.cpp",
+      "sha256": "f40d68965f12006149bd46f73fa9a27928755b3c0949041e26f3839597f06463"
+    },
+    {
+      "path": "src/text/TextLexerRegistry.h",
+      "sha256": "f228dc2da2961ace2c8357b3fa57a7d6a17f3d35b4e7c66ca8089bea41fedbed"
+    },
+    {
+      "path": "src/text/TextLexerRegistry.cpp",
+      "sha256": "2ee34d2a22311cd73791fb6ab75c4d9a4df683dd0d7e400e52f3915dc19ec065"
+    },
+    {
+      "path": "src/text/TextEditorBackendFactory.h",
+      "sha256": "634b9d21cb088e7386e57cca3f677cc3e87bbf952613dab95a104ca5ee64fb81"
+    },
+    {
+      "path": "src/text/TextEditorBackendFactory.cpp",
+      "sha256": "8bb6b10edab4792fb4e741ce0da6da907750c5c3d3fecab888d17b1f031d1728"
+    },
+    {
+      "path": "src/text/QTextView.h",
+      "sha256": "1fefc09d53368739de47d63282341403f2a764e257bc3d3fa9e534f6210bf606"
+    },
+    {
+      "path": "src/text/QTextView.cpp",
+      "sha256": "c725e4e7d069f7f4867d149ea9af54883f88893806fd1098fa324c310d59f61b"
+    },
+    {
+      "path": "src/text/FindReplaceWidget.h",
+      "sha256": "5c833768f6c7a32556731b981afbf08ac6c3055d46545539e52125a3c7fdf4cb"
+    },
+    {
+      "path": "src/text/FindReplaceWidget.cpp",
+      "sha256": "385e6b17c3a0f2ed05b6142a11ab5bc89a3a3a303fde64ff5519463bdf8b85aa"
+    },
+    {
+      "path": "src/text/ColumnRulerWidget.h",
+      "sha256": "ace8ad52987349bb9060bc92f38ffff028d76be5e61a04131de43a742884b90e"
+    },
+    {
+      "path": "src/pdf/QPDFView.h",
+      "sha256": "29f6f561403fbd4c97df621daaf0b4e6a1c056549ac1d55f44e38ce7b4243601"
+    },
+    {
+      "path": "src/pdf/QPDFView.cpp",
+      "sha256": "836658c5b7ca69b99e1ac056e23ecb0e95e01bd92fcfcb0f0dcd71c5912d0659"
+    },
+    {
+      "path": "src/pdf/PDFAnnotationManager.h",
+      "sha256": "c720c03677a2d092a09e46c3dfcd060aec8297b55c55417112aeb22891b34043"
+    },
+    {
+      "path": "src/pdf/PDFAnnotationManager.cpp",
+      "sha256": "9c2143c28207af5421a8ad1851be79c04575dd685407af6db3d6bda327da8906"
+    },
+    {
+      "path": "src/pdf/PDFFormManager.h",
+      "sha256": "65425b8f121e2681c35dcdff7334dcb537cf148c07f4d91313a6c1d707ba8aef"
+    },
+    {
+      "path": "src/pdf/PDFFormManager.cpp",
+      "sha256": "a643b80448be870ba867fa22eb9556072b0bb44341606a887d89ed1a59f4144f"
+    },
+    {
+      "path": "src/image/QImageView.h",
+      "sha256": "060e15361a6d1ab345f55b4e36da2ede16f50c2c55fcaaef26e97753ed93dbf6"
+    },
+    {
+      "path": "src/image/QImageView.cpp",
+      "sha256": "fbc5ff45a959ccabd2b7ca297ea2ff5725f73d63c072b47965790bef084929c5"
+    },
+    {
+      "path": "src/utils/EncodingDetector.h",
+      "sha256": "b761e2f86fdb2c2103388ae1f367926e5b633e7aa345ff1dac5271de71243098"
+    },
+    {
+      "path": "src/utils/EncodingDetector.cpp",
+      "sha256": "d497a6edfabbd62ab143f7c5b7868e7b2251020ca5eb45869944b48b7aa1fc35"
+    },
+    {
+      "path": "src/utils/FileLoadHelper.h",
+      "sha256": "f83c55bb804065f0addf9ed92936166ef8800b0a75379c5a3ca096c0e397ca72"
+    },
+    {
+      "path": "src/utils/FileLoadHelper.cpp",
+      "sha256": "8241246439872be027733e8876a1f91319efc2f85c57486ab914f6a8b2a62ef0"
+    },
+    {
+      "path": "src/utils/ScreenProtect.h",
+      "sha256": "88a7dc8ad73eb1f762845a640aa0ca5849bdc32a15df899fef912063cc328614"
+    },
+    {
+      "path": "src/utils/ScreenProtect.cpp",
+      "sha256": "2ad48c41c305100901574b8a711d9cb8b7654af7d71755ebb720334ad230f88f"
+    },
+    {
+      "path": "src/capture/CaptureMarkupDialog.cpp",
+      "sha256": "dde5c4d985fcf185e323b5e7b78d1e27d63302da173acff59e2b600c873311b8"
+    },
+    {
+      "path": "src/capture/CaptureMarkupDialog.h",
+      "sha256": "33b26ebc24e67a56b94bcaa20bd55211350723a78b024f4c63d4201b0876ffb0"
+    },
+    {
+      "path": "src/capture/CaptureOverlay.cpp",
+      "sha256": "32b332c771f66e9f4b38b13e10f413fd85da5b2e0d00487bb00f27a02ab6d60f"
+    },
+    {
+      "path": "src/capture/CaptureOverlay.h",
+      "sha256": "a98887db56ad75c7195180cbb7b735b879317c3ef502185b04b9104df1d2c204"
+    },
+    {
+      "path": "src/capture/CaptureTypes.h",
+      "sha256": "52ec8f7fc6fe0db090b723fc20af667a04f7015ed25b87a457142157dfb0bdcf"
+    },
+    {
+      "path": "src/capture/WindowsGraphicsCapture.cpp",
+      "sha256": "08ba649b97ba8ba44550ec648ccde06de67f6f3e25a779f40c27287dd5354349"
+    },
+    {
+      "path": "src/capture/WindowsGraphicsCapture.h",
+      "sha256": "0302f21d17de5b28ac100bd796500ff15fa020fb8f5183564b693077ce1552bd"
+    }
+  ],
+  "scintilla": {
+    "url": "https://github.com/missdeer/scintilla",
+    "commit": "c439d2d450c3af517b1a6832711e1de9e0bbb5e4",
+    "version": "5.6.7",
+    "tag": "rel-5-6-7",
+    "normalizedTreeSha256": "6d41b2a8493299b739b789bb3160e9e32bb31b4b697b67359d63b65c4fa08583",
+    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file"
+  },
+  "lexilla": {
+    "url": "https://github.com/ScintillaOrg/lexilla",
+    "commit": "8fe5438b65cffc34340ecd60357ce5a6f72eecbe",
+    "version": "5.5.4",
+    "tag": "rel-5-5-4",
+    "normalizedTreeSha256": "030646e60f4bdfa7f4ef5cadba84a18b19cbdb1756e5ecc2613e47c422d299db",
+    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file"
+  },
+  "pdfium": {
+    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7834/pdfium-win-x64.tgz",
+    "sha256": "0abfacf8aacc919f98eff2c3efa2927c3dc9faf07e31f22558a1f1cf93809612",
+    "version": "150.0.7834.0"
+  },
+  "policy": "MainWindow, application settings, direct writes and shadow backup are replaced by HC services; original vendor naming retained inside this isolated port.",
+  "features": [
+    {
+      "id": "P2-T01",
+      "status": "ported",
+      "implementation": "Scintilla/Lexilla source targets and QTextView buffer adapter"
+    },
+    {
+      "id": "P2-T02",
+      "status": "ported",
+      "implementation": "encoding/BOM/EOL, search/regex/ranges/exclusions, undo, folds/ruler/history and workspace recovery; bounded cancellation"
+    },
+    {
+      "id": "P2-P01",
+      "status": "ported",
+      "implementation": "pinned PDFium, bounded input, owner-thread coalesced render queue, byte-cost page cache"
+    },
+    {
+      "id": "P2-P02",
+      "status": "ported",
+      "implementation": "search/selection/printing, six annotation types, Unicode vector appearances, per-page rotations and transactional persistence"
+    },
+    {
+      "id": "P2-I01",
+      "status": "ported",
+      "implementation": "bounded image decoding, metadata, local directory traversal and slideshow; provider copies do not traverse siblings"
+    },
+    {
+      "id": "P2-I02",
+      "status": "ported",
+      "implementation": "pixel edit history, crop/draw/text/composition and quality/format exports"
+    },
+    {
+      "id": "P2-I03",
+      "status": "ported",
+      "implementation": "kernel registry, bilinear/Catmull-Rom/Mitchell/Lanczos3"
+    },
+    {
+      "id": "P2-I04",
+      "status": "ported",
+      "implementation": "Jacobian EWA Robidoux, widened shrink support, global-coordinate tile halo, linear premultiplied alpha, revision/transform/DPR/profile/tile cache keys and cancellation"
+    },
+    {
+      "id": "P2-U01",
+      "status": "ported",
+      "implementation": "per-pane toolbars, print/ranges/preview, watermark/capture/protection and shared waterColor chrome"
+    },
+    {
+      "id": "pdf.forms",
+      "status": "unfinished-in-origin",
+      "implementation": "form handles deliberately unavailable; no claim of interactive form editing"
+    },
+    {
+      "id": "markdown.webPreview",
+      "status": "not-selected-optional",
+      "implementation": "Markdown source uses text view; no new WebEngine runtime"
+    }
+  ],
+  "textEditorPlatformPatch": {
+    "origin": "MultiRoot-reST-CPP",
+    "commit": "826250af8743d9cd3c220d60c020693dc5e9ddfa",
+    "files": [
+      {
+        "path": "src/thirdparty/scintilla-qt/PlatQt.cpp",
+        "sha256": "fa915a05743969428b7612c64e7a37ba42b17330e9a15941d968fd2b17a8573f"
+      },
+      {
+        "path": "src/thirdparty/scintilla-qt/PlatQtMetrics.hpp",
+        "sha256": "0cc1f91902dbe3c608f72381fe253d90c429d0a6cb1d6ee087ec36ff29259a6a"
+      },
+      {
+        "path": "src/thirdparty/scintilla-qt/PlatQtTextRendering.hpp",
+        "sha256": "1684a649f91abf3b68881da4e75b4986f4755e6e02132439a2cd90de1b362114"
+      },
+      {
+        "path": "cmake/ScintillaWrapEnd.cmake",
+        "sha256": "7860bfb7686a49721393fac60284e1dc8177aa5b98ee17e0b5047923df397154"
+      }
+    ],
+    "hashFormat": "SHA256 of source bytes before repository BOM/CRLF normalization",
+    "regressionSource": {
+      "path": "tests/ui/tst_ScintillaTextMetrics.cpp",
+      "sha256": "459f3411cf41d18826612aaa9d81bc56ae9a5d055ef93d3593ce347927901715",
+      "adaptation": "Standalone QTest entry point; test body retained"
+    }
+  },
+  "textEditorPorting": {
+    "origin": "MultiRoot-reST-CPP",
+    "commit": "826250af8743d9cd3c220d60c020693dc5e9ddfa",
+    "completed": [
+      "P0 engines",
+      "P1 settings",
+      "P1a shortcuts",
+      "P2 editing",
+      "P3 file policies",
+      "P4 rendering",
+      "P6 integration"
+    ],
+    "deferred": [
+      "P5 document language extensions"
+    ],
+    "excluded": [
+      "Qt ADS",
+      "Qlementine",
+      "docking",
+      "left folder tree",
+      "outline",
+      "LSP",
+      "project search",
+      "web preview"
+    ],
+    "settings": {
+      "file": "HyperEditor.json",
+      "defaultDirectory": "running executable directory",
+      "override": "--config-dir",
+      "scope": "HyperEditor and HyperViewer document workspaces only; HyperCommander retains its own profile"
+    },
+    "externalChangeWatcher": {
+      "sourceFiles": [
+        {
+          "path": "src/core/solExternalChangeWatcher.hpp",
+          "sha256": "57c2afc3cef486222f761a035c783baa3c0228ced8c7c2caa44536e7a6a7626e"
+        },
+        {
+          "path": "src/core/solExternalChangeWatcher.cpp",
+          "sha256": "21f887f226491ff45ae782c7d482e7ac9d9e64e204cee2eb0735196efcaeb5f6"
+        }
+      ],
+      "adaptations": [
+        "Unified JSON AppSettings adapter",
+        "steady-clock self-write deadline",
+        "preserve external-change detection after failed self-write",
+        "nonblocking dirty-document confirmation with generation/revision fence"
+      ],
+      "scope": "Authority-bearing local document paths; broker materializations are not treated as original paths",
+      "fingerprint": "existence, size and modification time; not a content hash"
+    },
+    "filePolicies": {
+      "encoding": "New documents only; existing encoding/BOM retained",
+      "lineEnding": "Default for documents without a line ending; existing bytes retained",
+      "largeFile": "Nonblocking status notice, 1..16 MiB; hard input limits unchanged",
+      "recovery": "Periodic checkpoint switch; dirty host-slot replacement always preserves a recovery copy"
+    },
+    "rendering": {
+      "maskKeys": [
+        "textView/mask/enabled",
+        "textView/mask/gamma",
+        "textView/mask/strength"
+      ],
+      "patchCompiledOnce": true,
+      "previewSettingsExcluded": true
+    },
+    "license": "src/thirdparty/scintilla-qt/LICENSE.txt (MultiRoot-reST-CPP MIT)",
+    "adaptedFiles": [
+      {
+        "path": "src/core/ExternalChangeWatcher.h",
+        "sha256": "a060e4e3375f481276ec2cee7fd77ee98e13f109137488ea5783bd2149ff149e"
+      },
+      {
+        "path": "src/core/ExternalChangeWatcher.cpp",
+        "sha256": "bfdb9752074e87970001c3c3340171480545ed7367bffd12fe4e755b4a5a3ecb"
+      },
+      {
+        "path": "src/text/QTextView.cpp",
+        "sha256": "37e204ad9e3160928e2c9372318d4f1d39ecf4778d81e604f874ca468287470f"
+      },
+      {
+        "path": "src/text/ScintillaQtDirectBackend.cpp",
+        "sha256": "fd6ca339df5269567b35a3746eecb1d5ad5df6281055179cd17a0307a4826c4f"
+      },
+      {
+        "path": "src/text/ScintillaEditorSettings.h",
+        "sha256": "511906c2aceaa22b053dbe3592a1e3eafceefd73161f82adce431bdc3b9c0459"
+      },
+      {
+        "path": "src/text/ColumnRulerWidget.h",
+        "sha256": "c639e96a1e93beb58d3cfb4a9fed2ad1d7b619ce0d4af94405727d12b3945dfb"
+      },
+      {
+        "path": "src/text/FindReplaceWidget.cpp",
+        "sha256": "1eb1e24a3a66e0a0dea35b0f9dee1740a705c8e33159256e0631ddb91ae2914b"
+      }
+    ],
+    "hashFormat": "SHA256 of checked-out UTF-8 BOM/CRLF bytes for adaptedFiles; sourceFiles use original source bytes"
+  }
+}

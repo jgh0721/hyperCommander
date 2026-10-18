@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "cmnUiUtils.hpp"
+#include "solFavoriteDirMgr.hpp"
 
 #include "ui_dlgFavoriteDir.h"
 
@@ -30,8 +31,11 @@ protected slots:
     void                            on_rdoDrivesOnBottom_toggled( bool checked = false );
 
 private:
+    QString                         promptName( const QString& Initial, int ExcludedRow = -1 );
     void                            refresh();
     void                            refreshItem( const QString& Name );
 
+    QVector<CFavoriteDirMgr::TyFavoriteDir> items_;
+    CFavoriteDirMgr::TyEnDrivesOn     drivesOn_ = CFavoriteDirMgr::DRIVES_ON_NONE;
     Ui::dlgFavoriteDir              ui;
 };

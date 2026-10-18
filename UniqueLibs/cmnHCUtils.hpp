@@ -23,6 +23,7 @@ QVariant                                ShowMSGBoxWithDetail( QWidget* parent, Q
 
 void                                    SetTitleIcon( QLabel* Widget );
 bool                                    OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow );
+bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow);
 
 QString                                 ConvertSTRRETTo( STRRET* Str );
 

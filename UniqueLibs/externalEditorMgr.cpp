@@ -10,60 +10,17 @@
 
 void CExternalEditorMgr::Refresh()
 {
-    StSettings->beginGroup( OPT_SEC_EDITOR );
-    const auto Count = StSettings->value( "Count" ).toUInt();
-
-    QVector< TyExternalEditor > VecItems;
-
-    for( uint idx = 1; idx <= Count; ++idx )
-    {
-        const auto Name     = QString( "Name%1" ).arg( idx );
-        const auto Icon     = QString( "Icon%1" ).arg( idx );
-        const auto Program  = QString( "Program%1" ).arg( idx );
-        const auto CMDLine  = QString( "CMDLine%1" ).arg( idx );
-        const auto Detect   = QString( "Detect%1" ).arg( idx );
-        const auto Exts     = QString( "Exts%1" ).arg( idx );
-
-        if( StSettings->contains( Name ) == false )
-            continue;
-
-        if( StSettings->contains( Program ) == false )
-            continue;
-
-        if( StSettings->contains( Detect ) == false && StSettings->contains( Exts ) == false )
-            continue;
-
-        TyExternalEditor Item;
-
-        Item.Name       = StSettings->value( QString( "Name%1" ).arg( idx ) ).toString();
-        Item.FilePath   = StSettings->value( QString( "Program%1" ).arg( idx ) ).toString();
-        Item.IconPath   = StSettings->value( QString( "Icon%1" ).arg( idx ) ).toString();
-        Item.Icon       = QIcon( Item.IconPath );
-
-        if( Item.Icon.isNull() == true )
-        {
-            if( QFile::exists( Item.IconPath ) == true )
-            {
-                QFileIconProvider IconProvider;
-                Item.Icon = IconProvider.icon( QFileInfo( Item.IconPath ) );
-            }
-        }
-
-        Item.CMDLine    = StSettings->value( QString( "CMDLine%1" ).arg( idx ) ).toString();
-        Item.Detect     = StSettings->value( QString( "Detect%1" ).arg( idx ) ).toString();
-        for( const auto& Ext : StSettings->value( QString( "Exts%1" ).arg( idx ) ).toString().split( "|", Qt::SkipEmptyParts ).toList() )
-            Item.VecExtensions.push_back( Ext );
-
-        if( ( Item.Name.isEmpty() == true || Item.FilePath.isEmpty() == true ) || 
-            ( Item.Detect.isEmpty() == true && Item.VecExtensions.isEmpty() == true ) )
-            continue;
-
-        VecItems.push_back( Item );
+    vecExternalItems.clear();
+    for (const auto& Value : hc::document::EditorItems(hc::settings::AppSettings().Read(hc::settings::Section::Editors))) {
+        const auto Record = Value.toObject(); TyExternalEditor Item;
+        Item.stableId_ = Record["stableId"].toString(); Item.Name = Record["name"].toString(); Item.FilePath = Record["program"].toString(); Item.IconPath = Record["icon"].toString();
+        Item.Icon = QIcon(Item.IconPath);
+        if (Item.Icon.isNull() && QFile::exists(Item.IconPath)) { QFileIconProvider Icons; Item.Icon = Icons.icon(QFileInfo(Item.IconPath)); }
+        Item.CMDLine = Record["arguments"].toString(); Item.Detect = Record["detect"].toString();
+        Item.VecExtensions = hc::settings::Strings(Record["extensions"]);
+        if (Item.Name.isEmpty() || Item.FilePath.isEmpty() || (Item.Detect.isEmpty() && Item.VecExtensions.isEmpty())) continue;
+        vecExternalItems.append(Item);
     }
-
-    StSettings->endGroup();
-
-    qSwap( vecExternalItems, VecItems );
 }
 
 QVector<TyExternalEditor> CExternalEditorMgr::RetrieveSettings() const
@@ -150,7 +107,8 @@ void CExternalEditorMgr::ModifyItem( int Index, const TyExternalEditor & Item )
     if( Index < 0 || Index >= vecExternalItems.size() )
         return;
 
-    vecExternalItems[ Index ] = Item;
+    auto Updated = Item; Updated.stableId_ = vecExternalItems[Index].stableId_;
+    vecExternalItems[ Index ] = Updated;
 
     saveSettings();
     Refresh();
@@ -167,31 +125,14 @@ void CExternalEditorMgr::ac_configure()
 
 void CExternalEditorMgr::saveSettings()
 {
-    const auto VecItems = RetrieveSettings();
-    const auto Count = VecItems.size();
-
-    StSettings->beginGroup( OPT_SEC_EDITOR );
-
-    StSettings->setValue( "Count", Count );
-
-    for( uint idx = 1; idx <= Count; ++idx )
-    {
-        const auto Name     = QString( "Name%1" ).arg( idx );
-        const auto Icon     = QString( "Icon%1" ).arg( idx );
-        const auto Program  = QString( "Program%1" ).arg( idx );
-        const auto CMDLine  = QString( "CMDLine%1" ).arg( idx );
-        const auto Detect   = QString( "Detect%1" ).arg( idx );
-        const auto Exts     = QString( "Exts%1" ).arg( idx );
-
-        const auto Item = VecItems.at( idx - 1 );
-
-        StSettings->setValue( Name,     Item.Name );
-        StSettings->setValue( Icon,     Item.IconPath );
-        StSettings->setValue( Program,  Item.FilePath );
-        StSettings->setValue( CMDLine,  Item.CMDLine );
-        StSettings->setValue( Detect,   Item.Detect );
-        StSettings->setValue( Exts,     Item.VecExtensions.toList().join( '|' ) );
+    QJsonArray Items;
+    const auto Existing = hc::document::EditorItems(hc::settings::AppSettings().Read(hc::settings::Section::Editors));
+    for (const auto& Item : vecExternalItems) {
+        QJsonObject Record;
+        for (const auto& Value : Existing) if (Value.toObject()["stableId"].toString() == Item.stableId_) { Record = Value.toObject(); break; }
+        Record["stableId"] = Item.stableId_; Record["name"] = Item.Name; Record["program"] = Item.FilePath; Record["icon"] = Item.IconPath;
+        Record["arguments"] = Item.CMDLine; Record["detect"] = Item.Detect; Record["extensions"] = QJsonArray::fromStringList(Item.VecExtensions);
+        Items.append(Record);
     }
-
-    StSettings->endGroup();
+    hc::settings::AppSettings().Put(hc::settings::Section::Editors, Items);
 }

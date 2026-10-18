@@ -1,0 +1,65 @@
+#pragma once
+#include <QByteArray>
+#include <QByteArrayView>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QString>
+#include <QtCore/qstringconverter.h>
+class QTextCodec
+{
+public:
+    explicit QTextCodec(QByteArray name)
+        : m_name(std::move(name))
+    {
+    }
+    QString toUnicode(const char *chars, int len) const
+    {
+        if (!chars || len <= 0)
+            return {};
+        QStringDecoder decoder(m_name);
+        if (!decoder.isValid())
+            decoder = QStringDecoder(QStringConverter::Latin1);
+        return decoder(QByteArrayView(chars, len));
+    }
+    QString toUnicode(const char *chars) const
+    {
+        return chars ? toUnicode(chars, static_cast<int>(qstrlen(chars))) : QString();
+    }
+    QByteArray fromUnicode(const QString &text) const
+    {
+        QStringEncoder encoder(m_name);
+        if (!encoder.isValid())
+            encoder = QStringEncoder(QStringConverter::Latin1);
+        return encoder(text);
+    }
+    bool canEncode(const QString &text) const
+    {
+        QStringEncoder encoder(m_name);
+        if (!encoder.isValid())
+            encoder = QStringEncoder(QStringConverter::Latin1);
+        const QByteArray encoded = encoder(text);
+        Q_UNUSED(encoded);
+        return !encoder.hasError();
+    }
+    static QTextCodec *codecForName(const char *name)
+    {
+        const QByteArray key = name ? QByteArray(name).trimmed() : QByteArray();
+        return codecForName(key);
+    }
+    static QTextCodec *codecForName(const QByteArray &name)
+    {
+        static QMutex mutex;
+        static QHash<QByteArray, QTextCodec *> codecs;
+        QMutexLocker locker(&mutex);
+        const QByteArray trimmed = name.trimmed();
+        const QByteArray key = trimmed.isEmpty() ? QByteArrayLiteral("ISO-8859-1") : trimmed;
+        if (QTextCodec *codec = codecs.value(key, nullptr))
+            return codec;
+        QTextCodec *codec = new QTextCodec(key);
+        codecs.insert(key, codec);
+        return codec;
+    }
+private:
+    QByteArray m_name;
+};

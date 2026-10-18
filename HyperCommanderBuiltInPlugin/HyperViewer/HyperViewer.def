@@ -1,0 +1,8 @@
+LIBRARY HyperViewer
+EXPORTS
+    DVP_InitEx
+    DVP_Uninit
+    DVP_IdentifyW
+    DVP_IdentifyFileW
+    DVP_CreateViewer
+    HC_DocumentCommand

@@ -1,184 +1,64 @@
 ﻿#include "stdafx.h"
 #include "columnMgr.hpp"
-
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
 
-CColumnMgr::CColumnMgr()
-{
-    Initialize();
-}
+CColumnMgr::CColumnMgr() { Initialize(); }
 
 void CColumnMgr::Initialize()
 {
-    VecColumnViews.push_back( BUILTIN_COLVIEW_DETAILS );
+    columnViews_.clear();
+    columnViews_.append(BindColumnProfile(hc::columns::DefaultProfile()));
 }
 
-qsizetype CColumnMgr::GetCount() const
+qsizetype CColumnMgr::GetCount() const { return columnViews_.size(); }
+
+ColumnView CColumnMgr::GetColumnView(int Index)
 {
-    return VecColumnViews.count();
+    return Index >= 0 && Index < columnViews_.size() ? columnViews_[Index] : ColumnView{};
 }
 
-ColumnView CColumnMgr::GetColumnView( int Index )
+hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition& Column, const nsHC::CFileSourceT* Info, const QString& ParentPath)
 {
-    if( Index < 0 || Index >= VecColumnViews.size() )
-        return {};
-
-    return VecColumnViews[ Index ];
+    return GetFieldValue(Column.fieldId_, Info, ParentPath);
 }
 
-bool CColumnMgr::Parse( wchar_t*& Fmt, ColumnParseResult& Result, QString& Content )
+hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsHC::CFileSourceT* Info, const QString& ParentPath)
 {
-    bool IsContinue = false;
-    wchar_t* Pos = nullptr;
-
-    while( IsContinue == false && Fmt && *Fmt != L'\0' )
-    {
-        while( *Fmt && ( *Fmt != '[' && *Fmt != ']' ) )
-            Content.push_back( *Fmt++ );
-
-        do
-        {
-            if( *Fmt == L'\0' )
-                break;
-
-            if( ( Fmt[ 0 ] == '[' && Fmt[ 1 ] == '[' ) ||
-                ( Fmt[ 0 ] == ']' && Fmt[ 1 ] == ']' ) )
-            {
-                Content.push_back( Fmt[ 0 ] );
-                Fmt = Fmt + 2;
-                break;
-            }
-
-            ++Fmt;
-            // = 으로 시작하지 않으면 해당 [] 는 무시한다. 
-            if( Fmt[ 0 ] != L'=' )
-            {
-                while( *Fmt && *Fmt != L']' )
-                    ++Fmt;
-
-                break;
-            }
-            
-            ++Fmt;
-            // . 구분자를 찾지 못하면 역시 무시
-            Pos = wcschr( Fmt, L'.' );
-            if( Pos == nullptr )
-            {
-                while( *Fmt && *Fmt != L']' )
-                    ++Fmt;
-
-                break;
-            }
-
-            Result.Module = QStringView( Fmt, Pos - Fmt );
-            Fmt = Pos;
-            ++Fmt;
-
-            Pos = wcschr( Fmt, L'.' );
-            if( Pos == nullptr )
-            {
-                while( *Fmt && *Fmt != L']' )
-                    ++Fmt;
-
-                break;
-            }
-
-            Result.Cate = QStringView( Fmt, Pos - Fmt );
-            Fmt = Pos;
-            ++Fmt;
-
-            Pos = wcspbrk( Fmt, L".]");
-            if( Pos == nullptr )
-            {
-                // Type 은 기본값을 사용한다. 
-                Pos = wcschr( Fmt, L']' );
-                if( Pos != nullptr )
-                {
-                    Result.Name = QStringView( Fmt, Pos - Fmt );
-                    Fmt = Pos;
-                    ++Fmt;
-                    IsContinue = true;
-                    break;
-                }
-
-                // ] 가 보이지 않는다. 올바르지 않은 문장임. 
-                break;
-            }
-            
-            
-            Result.Name = QStringView( Fmt, Pos - Fmt );
-            Fmt = Pos;
-            ++Fmt;
-
-            if( *Pos == L']' )
-            {
-                IsContinue = true;
-                break;
-            }
-
-            // Type 을 찾아보자... 
-            int a = 0;
-
-        } while( false );
-    }
-
-    return IsContinue;
-}
-
-void CColumnMgr::CreateColumnContent( const ColumnParseResult& Result, nsHC::CFileSourceT* Info, QString& Content )
-{
-    if( Result.Module.compare( QLatin1StringView( "HC" ), Qt::CaseInsensitive ) == 0 )
-    {
-        if( Result.Cate.compare( QLatin1StringView( "Fs" ), Qt::CaseInsensitive ) == 0 )
-        {
-            builtInFsColumn( Result.Name, Result.Convert, Info, Content );
-            return;
+    using namespace hc::columns;
+    if (!Info) return CellValue::Missing(ValueState::Empty);
+    FileSnapshot File;
+    File.name_ = FlagOn(Info->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE) ? Info->Name_.left(2) : Info->Name_;
+    File.directory_ = (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    // Filesystem directory metadata may report allocation bytes, not content size.
+    // Only an explicit recursive-size result is ready, including a measured zero.
+    if (File.directory_) File.size_ = Info->directorySize_;
+    else if (Info->storageEntry_) File.size_ = Info->storageEntry_->size_;
+    else if (Info->Size_ >= 0) File.size_ = quint64(Info->Size_);
+    File.attributes_ = Info->Attributes_;
+    File.created_ = Info->Created_; File.modified_ = Info->Modified_;
+    File.parentPath_ = ParentPath;
+    if (Info->storageEntry_) {
+        const auto& Hints = Info->storageEntry_->hints_;
+        if (const auto It = Hints.find("accessedUtcMs"); It != Hints.end()) {
+            bool Ok = false; const auto Time = QString::fromStdString(It->second).toLongLong(&Ok);
+            if (Ok) File.accessed_ = QDateTime::fromMSecsSinceEpoch(Time);
         }
+        if (const auto It = Hints.find("typeDescription"); It != Hints.end()) File.typeDescription_ = QString::fromStdString(It->second);
     }
+    return Resolve(Field, File);
 }
 
-void CColumnMgr::builtInFsColumn( QStringView Name, QStringView Type, nsHC::CFileSourceT* Info, QString& Content )
+QString CColumnMgr::FormatValue(const hc::columns::ColumnDefinition& Column, const hc::columns::CellValue& Value, const nsHC::CFileSourceT* Info)
 {
-    if( Info == nullptr )
-        return;
-
-    // TODO: Type 을 고려해야 한다. 
-
-    if( Name.compare( QLatin1String( "name" ), Qt::CaseInsensitive ) == 0 )
-    {
-        if( !FlagOn( Info->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE ) )
-            Content.push_back( Info->Name_ );
-        else
-            Content.push_back( Info->Name_.left(2) );
-    }
-    else if( Name.compare( QLatin1String( "size" ), Qt::CaseInsensitive ) == 0 )
-    {
-        if( FlagOn( Info->Attributes_, FILE_ATTRIBUTE_DIRECTORY ) )
-        {
-            if( Info->Size_ > 0 )
-                Content.push_back( QString::number( Info->Size_ ) );
-            else
-            {
-                if( FlagOn( Info->Attributes_, FILE_ATTRIBUTE_REPARSE_POINT ) )
-                {
-                    Content.push_back( QObject::tr( "<링크>" ) );
-                }
-                else
-                {
-                    Content.push_back( QObject::tr( "<폴더>" ) );
-                }
-            }
-        }
-        else
-            Content.push_back( QString::number( Info->Size_ ) );
-    }
-    else if( Name.compare( QLatin1String( "created" ), Qt::CaseInsensitive ) == 0 )
-    {
-        Content.push_back( Info->Created_.toString( "yyyy-MM-dd hh:mm:ss" ) );
-    }
-    else if( Name.compare( QLatin1String( "attribText" ), Qt::CaseInsensitive ) == 0 )
-    {
-        Content.push_back( GetFormattedAttrText( Info->Attributes_, false ) );
-    }
+    if (Column.format_.providerDisplay_ && !Value.Display().isEmpty()) return Value.Display();
+    if (Value.State() == hc::columns::ValueState::Pending) return QObject::tr("조회 중…");
+    if (Value.State() == hc::columns::ValueState::Error) return QObject::tr("조회 오류");
+    if (Value.State() == hc::columns::ValueState::Unsupported) return QObject::tr("지원 안 함");
+    if (Value.State() == hc::columns::ValueState::OnDemand && Column.fieldId_ != "file.size") return QObject::tr("조회 대기");
+    if (Info && Column.template_.isEmpty() && Column.fieldId_ == "file.attributes" && Value.State() == hc::columns::ValueState::Ready)
+        return GetFormattedAttrText(static_cast<DWORD>(Value.Raw().toULongLong()), false);
+    if (Info && Column.fieldId_ == "file.size" && Value.State() == hc::columns::ValueState::OnDemand)
+        return Info->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT ? QObject::tr("<링크>") : QObject::tr("<폴더>");
+    return hc::columns::Format(Value, Column.format_);
 }

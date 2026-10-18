@@ -12,8 +12,11 @@ QDefaultCMDUI::QDefaultCMDUI( QWidget* Parent, Qt::WindowFlags Flags )
     ui.tblShortCut->clearContents();
     ui.tblShortCut->setRowCount( 0 );
 
-    for( const auto& Default : GlobalBuiltInCMDs )
+    QSet<QString> Seen;
+    for( const auto& Default : hc::defaults::Commands() )
     {
+        if (Seen.contains(Default.Name)) continue;
+        Seen.insert(Default.Name);
         const auto Row = ui.tblShortCut->rowCount();
 
         ui.tblShortCut->setRowCount( Row + 1 );
@@ -32,7 +35,7 @@ TyHC_COMMAND QDefaultCMDUI::GetSelectedCMD() const
     const auto SelectedRow = *SelectedRows.begin();
     const auto SelectedCMD = ui.tblShortCut->item( SelectedRow, 0 )->text();
 
-    for( const auto& Default : GlobalBuiltInCMDs )
+    for( const auto& Default : hc::defaults::Commands() )
     {
         if( Default.Name.compare( SelectedCMD, Qt::CaseInsensitive ) != 0 )
             continue;

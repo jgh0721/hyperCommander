@@ -9,10 +9,12 @@ public:
     QSHChangeNotify( QWidget* parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
 
+    ~QSHChangeNotify() override;
     HRESULT                                 StartWatching();
     void                                    StopWatching();
 
 signals:
+    void                                    NetworkChanged();
     /* form X:\\ */
     void                                    OnDriveAdd( const QString& Root );
     /* form X:\\ */
@@ -28,6 +30,7 @@ private:
 
     WId                                     hWnd = NULL;
     unsigned int                            ulRegister = 0;
+    unsigned int                            networkRegister_ = 0;
 
     // WM_USER ( 0x0400 : 1024 )
     static const int                        SHELL_NOTIFY_MESSAGE = 0x0400 + 199;

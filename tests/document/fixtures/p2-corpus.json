@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "seed": 261012,
+  "text": {
+    "encodings": [
+      "UTF-8",
+      "UTF-16LE",
+      "UTF-16BE",
+      "CP949"
+    ],
+    "eol": [
+      "CRLF",
+      "LF",
+      "CR",
+      "MIXED"
+    ],
+    "unicode": [
+      "NBSP",
+      "U+2028",
+      "U+2029",
+      "Korean",
+      "non-BMP"
+    ],
+    "largeBytes": 2097152
+  },
+  "pdf": {
+    "pages": [
+      {
+        "width": 300,
+        "height": 400,
+        "rotation": 0
+      },
+      {
+        "width": 300,
+        "height": 400,
+        "rotation": 2
+      }
+    ],
+    "text": "P2 search",
+    "annotations": [
+      "ink",
+      "highlight",
+      "underline",
+      "strikeOut",
+      "freeText",
+      "note"
+    ],
+    "forms": "unfinished-in-origin"
+  },
+  "image": {
+    "width": 24,
+    "height": 18,
+    "format": "RGBA8888",
+    "pixel": "R=x*10,G=y*14,B=(x+y)*6,A=((x+y)%5)?255:0",
+    "filters": [
+      "bilinear",
+      "bicubicCatmullRom",
+      "mitchellNetravali",
+      "lanczos3",
+      "ewaRobidoux"
+    ],
+    "golden": {
+      "linearBlackWhiteAverage": 188,
+      "transparentRedBlueAverageRed": 0
+    },
+    "tiles": [
+      [
+        0,
+        0,
+        8,
+        13
+      ],
+      [
+        8,
+        0,
+        9,
+        13
+      ]
+    ],
+    "cancelledOutput": [
+      4096,
+      2048
+    ],
+    "dpr": [
+      1,
+      1.5,
+      2
+    ]
+  },
+  "scope": "Deterministic generated fixtures; malformed inputs and atomic-write failure corpus also covered by P0/P1.",
+  "files": [
+    {
+      "path": "basic.pdf",
+      "sha256": "573e83d85332b334d647524362c34fa2108ed3a9817f53a7f54e870c6b7fbc84",
+      "bytes": 1545
+    },
+    {
+      "path": "alpha.png",
+      "sha256": "d3995c57ea9818ec18c9292dcf31c58db152f48db8cc74dffdf629d392eb5384",
+      "bytes": 153
+    },
+    {
+      "path": "photo.jpg",
+      "sha256": "94d6401e234c4c5657bfdedaf478c50c36778a9aed17549b86c3bf84058a6ce0",
+      "bytes": 719
+    },
+    {
+      "path": "sample.cpp",
+      "sha256": "96504b71afdf8a78e6a5ffa249d084541d422cf9d9cddabb1c7f092c48f51faf",
+      "bytes": 52
+    }
+  ]
+}

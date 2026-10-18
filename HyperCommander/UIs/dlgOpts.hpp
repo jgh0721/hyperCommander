@@ -7,13 +7,11 @@
 
 struct TyFileSet;
 struct TyColorScheme;
+class QPluginManagementPage;
+class CGridView;
+class QtColumnProfileEditor;
+namespace hc::ui { class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; }
 
-const QPair< int, QString > PAGE_DISPLAY                    = { 0, QObject::tr("화면") };
-const QPair< int, QString > PAGE_DISPLAY_FONTCOLOR          = { 1, QObject::tr("  글꼴 및 색상") };
-const QPair< int, QString > PAGE_FILESET                    = { 2, QObject::tr("파일집합 정의") };
-const QPair< int, QString > PAGE_SHORTCUT                   = { 3, QObject::tr("단축키") };
-const QPair< int, QString > PAGE_CUSTOM_COLUMNS             = { 4, QObject::tr("사용자정의 컬럼") };
-const QPair< int, QString > PAGE_PLUGIN_MGR                 = { 5, QObject::tr("플러그인 관리") };
 
 class QMainOpts : public nsHC::QBaseUI
 {
@@ -21,12 +19,16 @@ class QMainOpts : public nsHC::QBaseUI
 public:
     QMainOpts( QWidget* parent = Q_NULLPTR, Qt::WindowFlags flags = Qt::FramelessWindowHint );
 
+    ~QMainOpts() override;
+    void SetListView(CGridView* View);
+    void ShowListSettingsPage();
+    void ShowPluginSettingsPage(const QString& Binary = {}, bool Review = false);
+
     Q_INVOKABLE void                    LoadSettings();
-    Q_INVOKABLE void                    SaveSettings();
+    Q_INVOKABLE bool                    SaveSettings();
     Q_INVOKABLE void                    SaveSettings_ColorScheme();
     Q_INVOKABLE void                    SaveSettings_PluginList();
     Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
-    Q_INVOKABLE void                    RefreshFileSet( const QString& FileSetName );
     Q_INVOKABLE void                    RefreshPluginList();
     Q_INVOKABLE void                    RefreshShortcuts();
 
@@ -49,30 +51,6 @@ protected slots:
     /// Content
 
     
-    /// Page = pgDisplay_ColorScheme
-    void                                on_cbxColorScheme_currentIndexChanged( int index );
-    void                                on_btnAddColorScheme_clicked( bool checked = false );
-
-    void                                on_btnDlgFGColor_clicked( bool checked = false );
-    void                                on_btnDlgBGColor_clicked( bool checked = false );
-
-    void                                on_btnLstFGColor_clicked( bool checked = false );
-    void                                on_btnLstBGColor_clicked( bool checked = false );
-    void                                on_btnLstCursorColor_clicked( bool checked = false );
-    void                                on_btnLstSelectColor_clicked( bool checked = false );
-
-    void                                oo_refreshFileSetColor();
-    void                                oo_insertFileSetColorRow( const TyFileSet* FileSet, const QPair< QColor, QColor >& FGWithBG );
-    int                                 oo_insertEmptyFileSetColorRow();
-    void                                oo_removeFileSetColorRow();
-
-    /// Page = pgFileSet
-    void                                on_lstFileSet_currentItemChanged( QListWidgetItem* Current, QListWidgetItem* Previous );
-
-    void                                on_btnResetFileSet_clicked( bool checked = false );
-    void                                on_btnAddFileSet_clicked( bool checked = false );
-    void                                on_btnRemoveFileSet_clicked( bool checked = false );
-
     /// Page = pgShortcut
     void                                on_btnAddShortcutCMD_clicked( bool checked = false );
     void                                on_btnDelShortcutCMD_clicked( bool checked = false );
@@ -91,10 +69,47 @@ protected slots:
 
 private:
     void                                initialize();
+    void initializeDesignPages();
+    QJsonObject committedSettings_;
+    hc::ui::ThemeSettingsPage* themeSettings_ = nullptr;
+    hc::ui::KeyboardSettingsPage* keyboardSettings_ = nullptr;
 
-    void                                setButtonColor( QPushButton* Button, const QColor& Color );
-    void                                resetColorScheme( const QString& Name );
-    Q_INVOKABLE void                    pickButtonColor( bool checked = false );
+    hc::ui::MenuBarSettingsPage* menuSettings_ = nullptr;
+    hc::ui::ThumbnailSettingsPage* thumbnailSettings_ = nullptr;
+    hc::ui::FileColorRulesPage* fileColors_ = nullptr;
+    QComboBox* defaultConflict_ = nullptr;
+    QCheckBox* defaultDetailed_ = nullptr;
+    QCheckBox* defaultClose_ = nullptr;
+    QCheckBox* defaultMetadata_ = nullptr;
+    QCheckBox* defaultVerify_ = nullptr;
+    QCheckBox* defaultAcl_ = nullptr;
+    QCheckBox* defaultStreams_ = nullptr;
+    QLineEdit* defaultPattern_ = nullptr;
+    QSpinBox* defaultSpeed_ = nullptr;
+    QLabel* defaultCopyError_ = nullptr;
+
+    QString selectedScheme_;
+    QCheckBox* inverseCursor_ = nullptr;
+    QCheckBox* inverseSelection_ = nullptr;
 
     Ui::dlgOpts                         ui;
+    QPointer<CGridView> listView_;
+    QComboBox* listDefault_ = nullptr;
+    QComboBox* oneLineSeparator_ = nullptr;
+    QComboBox* twoLineSeparator_ = nullptr;
+    QComboBox* listDensity_ = nullptr;
+    QComboBox* listElide_ = nullptr;
+    QCheckBox* listNameBelow_ = nullptr;
+    QSpinBox* listAutoWidth_ = nullptr;
+    QSpinBox* listAutoPercent_ = nullptr;
+    QLabel* listScope_ = nullptr;
+    QWidget* listCard_ = nullptr;
+    QPushButton* useListDefault_ = nullptr;
+    bool resetListModeDraft_ = false;
+    bool filePanelSupported_ = true;
+    QtColumnProfileEditor* columnEditor_ = nullptr;
+    QCheckBox* focusPreviousDirectory_ = nullptr;
+    QButtonGroup* iconModes_ = nullptr;
+    QButtonGroup* directoryStyles_ = nullptr;
+    QPluginManagementPage* pluginManagement_ = nullptr;
 };

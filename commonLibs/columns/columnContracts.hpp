@@ -1,0 +1,284 @@
+﻿#pragma once
+
+#include <QDateTime>
+#include <QLocale>
+#include <QObject>
+#include <QSet>
+#include <QMap>
+#include <QUuid>
+#include <QVariant>
+#include <QVector>
+#include <array>
+#include "columnTemplate.hpp"
+#include <variant>
+#include "commonLibs/view/columnWidthPolicy.hpp"
+
+namespace hc::columns
+{
+    enum class FieldType { Text, Integer, UnsignedInteger, Real, Boolean, Date, Time, Timestamp };
+    enum class ValueState { Ready, Empty, Pending, OnDemand, Unsupported, Error };
+    enum class ProviderKind { BuiltIn, Wdx, DOpus, Lua };
+    enum class EvaluationCost { Snapshot, Background, OnDemand };
+    enum class LayoutMode { Details, NameFirst, NameLast };
+    enum class SizeFormat { Bytes, Adaptive, KiB, MiB, GiB };
+    using Payload = std::variant<QString, qint64, quint64, double, bool, QDate, QTime, QDateTime>;
+
+    // Missing values never masquerade as zero, false, an empty string or an error label.
+    // Raw integers remain exact; display formatting is a separate operation.
+    class CellValue
+    {
+    public:
+        static CellValue Ready(Payload Value)
+        {
+            if (const auto Real = std::get_if<double>(&Value); Real && !std::isfinite(*Real))
+                return Missing(ValueState::Error, "non-finite number");
+            CellValue Result;
+            Result.state_ = ValueState::Ready;
+            Result.value_ = std::move(Value);
+            return Result;
+        }
+        static CellValue Missing(ValueState State, QString Error = {})
+        {
+            CellValue Result;
+            Result.state_ = State == ValueState::Ready ? ValueState::Error : State;
+            Result.error_ = std::move(Error);
+            return Result;
+        }
+        CellValue WithDisplay(QString Text) const { auto Copy = *this; Copy.display_ = std::move(Text); return Copy; }
+        const QString& Display() const { return display_; }
+        ValueState State() const { return state_; }
+        std::optional<FieldType> Type() const { return value_ ? std::optional(static_cast<FieldType>(value_->index())) : std::nullopt; }
+        const std::optional<Payload>& Value() const { return value_; }
+        const QString& Error() const { return error_; }
+        QVariant Raw() const
+        {
+            return value_ ? std::visit([](const auto& Value) { return QVariant::fromValue(Value); }, *value_) : QVariant{};
+        }
+    private:
+        ValueState state_ = ValueState::Empty;
+        std::optional<Payload> value_;
+        QString error_;
+        QString display_;
+    };
+
+    struct FieldDefinition
+    {
+        QString id_; // Provider-qualified, case-sensitive: file.name, wdx.<plugin>.<field>, lua.<script>.<field>.
+        QString title_;
+        FieldType type_ = FieldType::Text;
+        ProviderKind provider_ = ProviderKind::BuiltIn;
+        EvaluationCost cost_ = EvaluationCost::Snapshot;
+        bool sortable_ = true;
+        Qt::Alignment defaultAlignment_ = {};
+    };
+    struct FormatOptions
+    {
+        SizeFormat size_ = SizeFormat::Bytes;
+        int precision_ = 2;
+        QString datePattern_ = "yyyy-MM-dd HH:mm:ss";
+        bool grouping_ = false, plusSign_ = false, utc_ = false, providerDisplay_ = true;
+        bool operator==(const FormatOptions&) const = default;
+    };
+    struct ColumnDefinition
+    {
+        QUuid id_ = QUuid::createUuid(); // Instance identity, independent of title, field or visual/model position.
+        QString fieldId_;
+        QString template_; // Empty for a single field; compiled once when the profile changes.
+        QString sortField_; // Empty uses the typed field, or the composed text for a template.
+        QString title_;
+        Qt::Alignment alignment_ = Qt::AlignLeft;
+        FormatOptions format_;
+        std::array<hc::view::ColumnWidthPolicy, 3> widths_;
+        bool operator==(const ColumnDefinition&) const = default;
+    };
+    struct SortDefinition
+    {
+        QUuid columnId_;
+        Qt::SortOrder order_ = Qt::AscendingOrder;
+        bool operator==(const SortDefinition&) const = default;
+    };
+    struct ScriptOutput {
+        QString name_, title_;
+        FieldType type_ = FieldType::Text;
+        bool operator==(const ScriptOutput&) const = default;
+    };
+    struct ScriptDefinition {
+        QUuid id_ = QUuid::createUuid();
+        QString title_, source_;
+        QStringList dependencies_;
+        QVector<ScriptOutput> outputs_;
+        bool enabled_ = true;
+        bool operator==(const ScriptDefinition&) const = default;
+    };
+    inline QString ScriptPrefix(const ScriptDefinition& Script) { return "lua." + Script.id_.toString(QUuid::Id128) + "."; }
+    struct ColumnProfile
+    {
+        QUuid id_ = QUuid::createUuid();
+        QString title_;
+        QUuid primaryNameId_;
+        LayoutMode mode_ = LayoutMode::Details;
+        // Opt-in presentation only: identity, editing and sort still use file.name.
+        bool splitNameExtension_ = false;
+        QVector<ColumnDefinition> columns_;
+        QVector<SortDefinition> sorts_;
+        QVector<ScriptDefinition> scripts_;
+        bool operator==(const ColumnProfile&) const = default;
+    };
+    inline QString DisplayField(const ColumnProfile& Profile, const ColumnDefinition& Column)
+    {
+        return Profile.splitNameExtension_ && Profile.mode_ == LayoutMode::Details &&
+            Column.id_ == Profile.primaryNameId_ && Column.fieldId_ == "file.name"
+            ? QStringLiteral("file.stem") : Column.fieldId_;
+    }
+    inline QString IdText(const QUuid& Id) { return Id.toString(QUuid::WithoutBraces); }
+    inline QString ModeName(LayoutMode Mode)
+    {
+        switch (Mode) {
+        case LayoutMode::Details: return "details";
+        case LayoutMode::NameFirst: return "name-first";
+        case LayoutMode::NameLast: return "name-last";
+        }
+        return {};
+    }
+    inline std::optional<LayoutMode> ParseMode(const QString& Name)
+    {
+        for (auto Mode : {LayoutMode::Details, LayoutMode::NameFirst, LayoutMode::NameLast})
+            if (ModeName(Mode) == Name) return Mode;
+        return {};
+    }
+    inline bool IsFieldId(const QString& Id)
+    {
+        const auto Parts = Id.split('.');
+        if (Parts.size() < 2) return false;
+        if (Parts.front() != "file" && Parts.front() != "wdx" && Parts.front() != "dopus" && Parts.front() != "dopusviewer" && Parts.front() != "dopusvfs" && Parts.front() != "lua") return false;
+        if (Parts.front() != "file" && Parts.size() < 3) return false;
+        for (const auto& Part : Parts) {
+            if (Part.isEmpty()) return false;
+            for (const auto Character : Part)
+                if (!Character.isLetterOrNumber() && Character != '_' && Character != '-') return false;
+        }
+        return true;
+    }
+    inline const ScriptDefinition* FindScript(const ColumnProfile& Profile, const QString& Field) {
+        for (const auto& Script : Profile.scripts_) for (const auto& Output : Script.outputs_)
+            if (ScriptPrefix(Script) + Output.name_ == Field) return &Script;
+        return nullptr;
+    }
+    inline QVector<FieldDefinition> ScriptFields(const ColumnProfile& Profile) {
+        QVector<FieldDefinition> Result;
+        for (const auto& Script : Profile.scripts_) for (const auto& Output : Script.outputs_)
+            Result.append({ScriptPrefix(Script) + Output.name_, Script.title_ + " / " + Output.title_, Output.type_, ProviderKind::Lua, EvaluationCost::Background});
+        return Result;
+    }
+    inline QString ValidateScripts(const ColumnProfile& Profile) {
+        if (Profile.scripts_.size() > 32) return "script-count";
+        QSet<QUuid> Ids; QMap<QUuid, int> Marks;
+        for (const auto& Script : Profile.scripts_) {
+            if (Script.id_.isNull() || Ids.contains(Script.id_) || Script.source_.toUtf8().size() > 65536 || Script.source_.contains(QChar(0)) ||
+                Script.outputs_.isEmpty() || Script.outputs_.size() > 32 || Script.dependencies_.size() > 32) return "script-definition";
+            Ids.insert(Script.id_); QSet<QString> Names;
+            for (const auto& Output : Script.outputs_) {
+                if (Output.name_.isEmpty() || Output.name_.size() > 64 || Names.contains(Output.name_) || int(Output.type_) < 0 || int(Output.type_) > int(FieldType::Timestamp)) return "script-output";
+                for (const auto Ch : Output.name_) if (!Ch.isLetterOrNumber() && Ch != '_') return "script-output";
+                Names.insert(Output.name_);
+            }
+            for (const auto& Dependency : Script.dependencies_) if (!IsFieldId(Dependency)) return "script-dependency";
+        }
+        std::function<bool(const ScriptDefinition&)> Visit = [&](const ScriptDefinition& Script) {
+            if (Marks.value(Script.id_) == 1) return false;
+            if (Marks.value(Script.id_) == 2) return true;
+            Marks[Script.id_] = 1;
+            for (const auto& Dependency : Script.dependencies_) if (Dependency.startsWith("lua.")) {
+                const auto* Other = FindScript(Profile, Dependency); if (!Other || !Visit(*Other)) return false;
+            }
+            Marks[Script.id_] = 2; return true;
+        };
+        for (const auto& Script : Profile.scripts_) if (!Visit(Script)) return "script-cycle-or-missing-dependency";
+        return {};
+    }
+    inline QString Validate(const ColumnProfile& Profile)
+    {
+        if (Profile.id_.isNull() || Profile.columns_.isEmpty() || ModeName(Profile.mode_).isEmpty()) return "profile";
+        if (const auto Error = ValidateScripts(Profile); !Error.isEmpty()) return Error;
+        QSet<QUuid> Ids;
+        bool PrimaryFound = false;
+        for (const auto& Column : Profile.columns_) {
+            if (Column.id_.isNull() || Ids.contains(Column.id_)) return "column-id";
+            Ids.insert(Column.id_);
+            if (Column.template_.isEmpty() && !IsFieldId(Column.fieldId_)) return "field-id";
+            if (!CompileTemplate(Column.template_).Valid()) return "template";
+            if (!Column.sortField_.isEmpty() && !IsFieldId(Column.sortField_)) return "sort-field";
+            if (Column.alignment_ != Qt::AlignLeft && Column.alignment_ != Qt::AlignRight && Column.alignment_ != Qt::AlignCenter) return "alignment";
+            if (Column.format_.precision_ < 0 || Column.format_.precision_ > 6 || Column.format_.datePattern_.isEmpty() ||
+                int(Column.format_.size_) < 0 || int(Column.format_.size_) > int(SizeFormat::GiB)) return "format";
+            for (const auto& Width : Column.widths_) if (!hc::view::Validate(Width).empty()) return "width";
+            if (Column.id_ == Profile.primaryNameId_) {
+                if (!Column.template_.isEmpty()) return "primary-field";
+                if (Column.fieldId_ != "file.name" && Column.fieldId_ != "file.stem") return "primary-field";
+                if (Column.widths_[1].hidden_ || Column.widths_[2].hidden_) return "primary-hidden";
+                PrimaryFound = true;
+            }
+        }
+        if (!PrimaryFound) return "primary-id";
+        for (int Mode = 0; Mode < 3; ++Mode) {
+            bool Visible = false;
+            for (const auto& Column : Profile.columns_) Visible |= !Column.widths_[Mode].hidden_;
+            if (!Visible) return "no-visible-column";
+        }
+        QSet<QUuid> Sorted;
+        for (const auto& Sort : Profile.sorts_) {
+            if (!Ids.contains(Sort.columnId_) || Sorted.contains(Sort.columnId_) ||
+                (Sort.order_ != Qt::AscendingOrder && Sort.order_ != Qt::DescendingOrder)) return "sort";
+            Sorted.insert(Sort.columnId_);
+        }
+        return {};
+    }
+
+    inline QString Format(const CellValue& Value, const FormatOptions& Options = {})
+    {
+        if (Value.State() != ValueState::Ready) return {};
+        if (Options.providerDisplay_ && !Value.Display().isEmpty()) return Value.Display();
+        const auto Raw = Value.Raw();
+        if (Raw.metaType() == QMetaType::fromType<QDateTime>()) return (Options.utc_ ? Raw.toDateTime().toUTC() : Raw.toDateTime().toLocalTime()).toString(Options.datePattern_);
+        if (Raw.metaType() == QMetaType::fromType<QDate>()) return Raw.toDate().toString(Options.datePattern_ == "yyyy-MM-dd HH:mm:ss" ? "yyyy-MM-dd" : Options.datePattern_);
+        if (Raw.metaType() == QMetaType::fromType<QTime>()) return Raw.toTime().toString(Options.datePattern_ == "yyyy-MM-dd HH:mm:ss" ? "HH:mm:ss" : Options.datePattern_);
+        QLocale Locale; if (!Options.grouping_) Locale.setNumberOptions(Locale.numberOptions() | QLocale::OmitGroupSeparator);
+        if (Raw.metaType() == QMetaType::fromType<quint64>() && Options.size_ != SizeFormat::Bytes) {
+            auto Number = static_cast<double>(Raw.toULongLong());
+            int Unit = Options.size_ == SizeFormat::Adaptive ? 0 : int(Options.size_) - 1;
+            if (Options.size_ == SizeFormat::Adaptive) {
+                while (Number >= 1024 && Unit < 6) { Number /= 1024; ++Unit; }
+            } else for (int Index = 0; Index < Unit; ++Index) Number /= 1024;
+            const QStringList Units{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
+            return (Options.plusSign_ ? Locale.positiveSign() : QString{}) + Locale.toString(Number, 'f', Options.precision_) + ' ' + Units[Unit];
+        }
+        QString Number;
+        if (*Value.Type() == FieldType::Integer) Number = Locale.toString(Raw.toLongLong());
+        else if (*Value.Type() == FieldType::UnsignedInteger) Number = Locale.toString(Raw.toULongLong());
+        else if (*Value.Type() == FieldType::Real) Number = Locale.toString(Raw.toDouble(), 'f', Options.precision_);
+        if (!Number.isEmpty()) {
+            if (Options.plusSign_ && !Number.startsWith(Locale.negativeSign())) Number.prepend(Locale.positiveSign());
+            return Number;
+        }
+        return Raw.toString();
+    }
+    inline CellValue RenderTemplate(const CompiledTemplate& Template, const FormatOptions& Options, const std::function<CellValue(const QString&)>& Read)
+    {
+        if (!Template.Valid()) return CellValue::Missing(ValueState::Error, Template.error_);
+        QString Text; std::optional<CellValue> Failure;
+        for (const auto& Part : Template.parts_) {
+            if (!Part.field_) Text += Part.text_;
+            else {
+                const auto Value = Read(Part.text_);
+                if (Value.State() != ValueState::Ready && Value.State() != ValueState::Empty) {
+                    // A later missing dependency must not hide an unfinished query.
+                    if (!Failure || Value.State() == ValueState::Pending || Failure->State() != ValueState::Pending) Failure = Value;
+                }
+                else Text += Format(Value, Options);
+            }
+            if (Text.size() > 65536) return CellValue::Missing(ValueState::Error, "template-result-budget");
+        }
+        return Failure.value_or(CellValue::Ready(Text));
+    }
+
+}

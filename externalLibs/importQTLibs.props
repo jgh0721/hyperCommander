@@ -3,7 +3,7 @@
   <Import Project="$(MsbuildThisFileDirectory)\configureQtLibVersion.props" />
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
-    <QMake_QT_VERSION_>6.8.0</QMake_QT_VERSION_>
+    <QMake_QT_VERSION_>$(QT_LIB_VER)</QMake_QT_VERSION_>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup>

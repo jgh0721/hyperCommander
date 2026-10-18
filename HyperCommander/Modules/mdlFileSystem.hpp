@@ -1,10 +1,13 @@
 ﻿#pragma once
 
 #include <QtCore>
+#include "commonLibs/columns/columnContracts.hpp"
 
 #include "cmnBase.hpp"
 #include "mdlFileSystem.hpp"
 #include "solTCPluginMgr.hpp"
+#include "commonLibs/storage/storage.hpp"
+#include "commonLibs/storage/writableStorage.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -82,6 +85,7 @@ namespace nsHC
         DWORD                   Attributes_ = 0;
         DWORD                   Reserved0_ = 0;
         qint64                  Size_ = 0;
+        std::optional<quint64> directorySize_; // A measured zero differs from an unqueried folder.
         // TyUpItemIDList          UpItemIDList;                   // FS_FLAG_VIRTUAL, FS_FLAG_PIDL
 
         QDateTime               Created_;
@@ -92,7 +96,9 @@ namespace nsHC
 
         QPixmap                 Icon;
         QVector< QVariant >     VecContent;
+        QVector<hc::columns::CellValue> columnValues_;
         LPITEMIDLIST            PIDL = nullptr;
+        std::optional<hc::storage::EntrySnapshot> storageEntry_;
     };
 
     Q_DECLARE_METATYPE( CFileSourceT );
@@ -112,6 +118,7 @@ namespace nsHC
         //virtual TyOsError       SetRoot( const QString& Root );
 
         TyEnFSCate              GetCate() const;
+        virtual bool            IsRemote() const { return cate_ == FS_CATE_REMOTE; }
         TyEnFSFeatures          GetFeatures() const;
         virtual bool            IsRemovable() { return false; }
 
@@ -120,6 +127,10 @@ namespace nsHC
 
         virtual quint64         GetTotalSize() { return 0; }
         virtual quint64         GetFreeSize() { return 0; }
+        virtual std::shared_ptr<hc::storage::IStorageProvider> ReadProvider();
+        virtual std::shared_ptr<hc::storage::IWritableStorage> WriteProvider() { return {}; }
+        virtual void RefreshReadProvider() {}
+        virtual hc::storage::Locator ReadLocation(const QString& Path) const;
 
     protected:
         virtual void            readFsInformation();
@@ -128,6 +139,7 @@ namespace nsHC
         QString                 root_;
         TyEnFSCate              cate_ = FS_CATE_LOCAL;
         TyEnFSFeatures          features_ = FS_FEA_NONE;
+        std::shared_ptr<hc::storage::IStorageProvider> readProvider_;
     };
 
     Q_DECLARE_METATYPE( CFileSystemT );
@@ -160,6 +172,17 @@ namespace nsHC
         QString                 GetVolumeName() override;
     };
 
+    // A mapped drive keeps drive-letter navigation (FS_CATE_LOCAL), while its
+    // metadata policy is remote. Native read/write locators keep the existing
+    // Local kind for X: paths; FS_CATE_REMOTE selects UNC/server navigation.
+    class CFSNetworkDrive : public CFileSystemT
+    {
+    public:
+        explicit CFSNetworkDrive(const QString& Root);
+        bool IsRemote() const override { return true; }
+        QString GetVolumeName() override { return tr("네트워크 드라이브"); }
+    };
+
     class CFSShell : public CFileSystemT
     {
     public:
@@ -169,6 +192,8 @@ namespace nsHC
 
         LPITEMIDLIST            GetRoot() const { return Root; }
         QVector< nsHC::TySpFileSource > GetChildItems( LPITEMIDLIST Child, bool IncludeDotDot = false );
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
+        hc::storage::Locator ReadLocation(const QString& Path) const override;
 
     private:
 
@@ -199,11 +224,43 @@ namespace nsHC
         void                    SetParent( const QString& Parent );
 
         CPackFSModel*           Model();
+        void RefreshReadProvider() override;
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override;
+        hc::storage::Locator ReadLocation(const QString& Path) const override;
     private:
 
         TySpWCX                 WCX_;
         QString                 Parent_;
         CPackFSModel*           FsModel_ = nullptr;
+        hc::storage::Locator archiveLocation_;
+        std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> ancestors_;
+    public:
+        void SetArchiveChain(hc::storage::Locator Location, std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> Ancestors);
+        std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> ArchiveBackends() const;
+    };
+
+    class CFSPlugin final : public CFileSystemT
+    {
+    public:
+        CFSPlugin(hc::storage::Locator Root, std::shared_ptr<hc::storage::IStorageProvider> Reader,
+            std::shared_ptr<hc::storage::IWritableStorage> Writer)
+            : CFileSystemT(QString::fromStdString(Root.root_).chopped(1)), writer_(std::move(Writer))
+        {
+            cate_ = FS_CATE_VFS; features_ = TyEnFSFeatures(FS_FEA_LIST) | FS_FEA_READABLE;
+            if (writer_) features_ |= TyEnFSFeatures(FS_FEA_WRITABLE) | FS_FEA_MOVABLE | FS_FEA_DELETABLE | FS_FEA_RENAMABLE;
+            readProvider_ = std::move(Reader);
+        }
+        bool IsRemote() const override { return true; }
+        std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override { return readProvider_; }
+        std::shared_ptr<hc::storage::IWritableStorage> WriteProvider() override { return writer_; }
+        hc::storage::Locator ReadLocation(const QString& Path) const override
+        {
+            auto Remote = QDir::toNativeSeparators(Path);
+            if (!Remote.startsWith(root_)) Remote = root_ + (Remote.startsWith('\\') ? Remote : "\\" + Remote);
+            return {hc::storage::LocatorKind::Plugin, Remote.toStdString()};
+        }
+    private:
+        std::shared_ptr<hc::storage::IWritableStorage> writer_;
     };
 
     class CFSVFS : public CFileSystemT
