@@ -2625,6 +2625,10 @@ private slots:
 
     void watercolorGridStateUi()
     {
+        // Anchor captures to the source tree so test working directories stay clean.
+        const QDir Artifacts(QDir(QString::fromUtf8(QT_TESTCASE_SOURCEDIR))
+            .absoluteFilePath("../_build/ui-validation/watercolor"));
+        QVERIFY(QDir().mkpath(Artifacts.absolutePath()));
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         const auto Original = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
         const auto Workspace = main_->CaptureWorkspace();
@@ -2680,7 +2684,7 @@ private slots:
             QCOMPARE(View->CaptureSelection(), Selection);
             QCOMPARE(Base->verticalScrollBar()->value(), Scroll);
             QCOMPARE(View->CaptureWorkspaceView(), Layout);
-            Grid->grab().save(Index % 2 ? "watercolor-light.png" : "watercolor-dark.png");
+            QVERIFY(Grid->grab().save(Artifacts.filePath(Index % 2 ? "watercolor-light.png" : "watercolor-dark.png")));
         }
         Base->hideEditor(); // Cancel the pending rename.
         QVERIFY(QFileInfo::exists(Directory.filePath("theme-079.txt")));
