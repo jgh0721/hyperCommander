@@ -114,6 +114,13 @@ namespace hc::operations
                 if (phase_ == Phase::ElevationPrompt) return permission(Context);
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
                 if (phase_ == Phase::Preparing) return prepare(Context.operation_);
+                if (phase_ == Phase::RetryRemove)
+                {
+                    // A failed deletion has no side effects. Re-enter its commit
+                    // boundary only after the cancellable, cooperative delay.
+                    phase_ = Phase::Remove;
+                    auto Step = progress(); Step.next_ = JobState::Committing; return Step;
+                }
                 if (phase_ == Phase::Confirm)
                 {
                     if (!Context.answer_)
@@ -128,7 +135,7 @@ namespace hc::operations
                 }
                 if (phase_ == Phase::ReadOnly) {
                     if (!Context.answer_) return readOnlyQuestion();
-                    if (Context.answer_->choice_ == InteractionChoice::Skip) return done(ItemOutcome::Status::Skipped);
+                    if (Context.answer_->choice_ == InteractionChoice::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                     if (Context.answer_->choice_ != InteractionChoice::Confirm && Context.answer_->choice_ != InteractionChoice::ConfirmAll) return failed({ErrorCategory::InvalidRequest, "readonly-answer-required"});
                     if (Context.answer_->choice_ == InteractionChoice::ConfirmAll) allowAllReadOnly_ = true;
                     readOnlyAnswered_ = true; phase_ = Phase::Begin; return progress();
@@ -232,7 +239,7 @@ namespace hc::operations
                 return cleanup_;
             }
         private:
-            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, Rename, ElevationPrompt, ElevationRun };
+            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -298,7 +305,7 @@ namespace hc::operations
                 if (Step.item_) { if (partialOutcome_) Step.replaceItem_ = partialOutcome_; else ++outcomeIndex_; }
                 partialOutcome_.reset(); publishedDestination_.reset();
                 session_.reset(); stream_.reset(); chunk_ = {}; itemBytes_ = 0; destinationCommitted_ = false;
-                ++index_; readOnlyAnswered_ = false;
+                ++index_; readOnlyAnswered_ = false; sourceRemoveRetries_ = 0;
                 phase_ = Phase::Begin;
                 if (index_ == items_.size()) {
                     if (streaming_ && !planningFinished_) { phase_ = Phase::Preparing; Step.next_ = JobState::Preparing; }
@@ -314,7 +321,7 @@ namespace hc::operations
                 Request.destination_ = Item.destination_; Request.expected_ = expected_; Request.copyOptions_ = request_.copyOptions_;
                 Request.maxBytes_ = request_.maxBytes_ - (bytesDone_ - itemBytes_); Request.bytesPerSecondLimit_ = request_.bytesPerSecondLimit_;
                 Request.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
-                if (destinationCommitted_ && request_.operation_ == FileOperation::Move) {
+                if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !Item.removeDirectory_) {
                     Request.action_ = FileElevationAction::Remove; Request.requiresPublishedDestination_ = true; Request.publishedDestination_ = publishedDestination_;
                 }
                 else if (request_.operation_ == FileOperation::Delete || Item.removeDirectory_)
@@ -501,14 +508,20 @@ namespace hc::operations
             {
                 if (index_ == items_.size()) return JobStep{JobState::Completed};
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
-                expected_ = {}; destinationCommitted_ = false;
+                expected_ = {};
+                destinationCommitted_ = request_.operation_ == FileOperation::Move && current().removeDirectory_;
                 const bool Removing = request_.operation_ == FileOperation::Delete || current().removeDirectory_;
                 const bool Renaming = request_.operation_ == FileOperation::Rename;
                 auto Writer = Removing || Renaming ? current().source_.writer_ : request_.destinationWriter_;
                 if (Removing && request_.operation_ == FileOperation::Delete) {
                     for (const auto& At : skippedSources_) if (SameOrWithin(At, current().source_.entry_.locator_)) return done(ItemOutcome::Status::Skipped);
+                }
+                if (current().removeDirectory_ && request_.operation_ == FileOperation::Move)
+                    for (const auto& Skipped : skippedSources_)
+                        if (SameOrWithin(Skipped, current().source_.entry_.locator_)) return done(ItemOutcome::Status::Skipped, true);
+                if (Removing || (request_.operation_ == FileOperation::Move && !current().source_.entry_.directory_)) {
                     if (current().readOnly_ && request_.readOnly_ != ReadOnlyPolicy::Allow && !allowAllReadOnly_ && !readOnlyAnswered_) {
-                        if (request_.readOnly_ == ReadOnlyPolicy::Skip) return done(ItemOutcome::Status::Skipped);
+                        if (request_.readOnly_ == ReadOnlyPolicy::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                         phase_ = Phase::ReadOnly; return readOnlyQuestion();
                     }
                 }
@@ -518,9 +531,6 @@ namespace hc::operations
                 if (!Supported.HasValue()) return failed(Supported.Failure());
                 if (Supported.Value().availability_ == Availability::Unsupported)
                     return failed({ErrorCategory::Unsupported, Supported.Value().reason_, Writer->Id()});
-                if (current().removeDirectory_ && request_.operation_ == FileOperation::Move)
-                    for (const auto& Skipped : skippedSources_)
-                        if (SameOrWithin(Skipped, current().source_.entry_.locator_)) return done(ItemOutcome::Status::Skipped, true);
                 if (request_.operation_ == FileOperation::MakeDirectory) {
                     const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
                     if (Existing.Value()) { if (!Existing.Value()->directory_) return failed({ErrorCategory::InvalidRequest, "destination-is-not-directory", Writer->Id()}); return done(ItemOutcome::Status::Completed, true); }
@@ -601,24 +611,7 @@ namespace hc::operations
                     if (!Renamed.HasValue()) return failed(Renamed.Failure());
                     return done(ItemOutcome::Status::Completed, true, true);
                 }
-                if (phase_ == Phase::Remove)
-                {
-                    Context.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
-                    if (request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle) {
-                        const auto Recycled = current().source_.writer_->Recycle(current().source_.entry_, Context);
-                        if (!Recycled.HasValue()) return failed(Recycled.Failure());
-                        auto Step = done(ItemOutcome::Status::Completed, true, true);
-                        // Preserve the returned recycle location in the human-readable
-                        // item record. Native Shell restoration remains available.
-                        Step.item_->item_ += "\nrecycle: " + Serialize(Recycled.Value().destination_); return Step;
-                    }
-                    // Directory revisions identify the selected object; child
-                    // mutations do not invalidate that identity. Remove itself
-                    // must still refuse a directory that is no longer empty.
-                    const auto Removed = current().source_.writer_->Remove(current().source_.entry_, Context);
-                    if (!Removed.HasValue()) return failed(Removed.Failure());
-                    return done(ItemOutcome::Status::Completed, request_.operation_ == FileOperation::Move, true);
-                }
+                if (phase_ == Phase::Remove) return removeSource(Context);
                 auto Receipt = session_->Commit(Context);
                 if (!Receipt.HasValue()) return failed(Receipt.Failure());
                 destinationCommitted_ = true;
@@ -630,10 +623,44 @@ namespace hc::operations
                 if (!Receipt.Value().cleanupErrors_.empty()) return failed(Receipt.Value().cleanupErrors_.front());
                 if (request_.operation_ == FileOperation::Move)
                 {
-                    const auto Removed = current().source_.writer_->Remove(current().source_.entry_, Context);
-                    if (!Removed.HasValue()) return failed(Removed.Failure());
+                    // Destroy every copy-session handle before deleting its source.
+                    // A cleanup retry must never repeat a committed copy.
+                    session_.reset(); phase_ = Phase::Remove;
+                    return removeSource(Context);
                 }
                 return done(ItemOutcome::Status::Completed, true, request_.operation_ == FileOperation::Move);
+            }
+            JobStep removeSource(OperationContext Context)
+            {
+                Context.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
+                if (request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle) {
+                    const auto Recycled = current().source_.writer_->Recycle(current().source_.entry_, Context);
+                    if (!Recycled.HasValue()) return failed(Recycled.Failure());
+                    auto Step = done(ItemOutcome::Status::Completed, true, true);
+                    Step.item_->item_ += "\nrecycle: " + Serialize(Recycled.Value().destination_); return Step;
+                }
+                // Reuse the planned identity on every attempt. Native Remove
+                // verifies it and refuses directories that acquired new children.
+                const auto Removed = current().source_.writer_->Remove(current().source_.entry_, Context);
+                if (!Removed.HasValue()) {
+                    const auto& Error = Removed.Failure();
+                    const auto Kind = current().source_.entry_.locator_.kind_;
+                    if (request_.operation_ == FileOperation::Move && (Kind == LocatorKind::Local || Kind == LocatorKind::Smb)
+                        && Error.retryable_ && (Error.code_ == "win32:32" || Error.code_ == "win32:33") && sourceRemoveRetries_ < 5) {
+                        phase_ = Phase::RetryRemove;
+                        auto Step = progress();
+                        Step.deferFor_ = std::chrono::milliseconds(50u << sourceRemoveRetries_++);
+                        // Retain the committed destination even if cancellation
+                        // ends the job before its next task continuation.
+                        if (!partialOutcome_) {
+                            Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Failed, Error, destinationCommitted_, false, current().source_.entry_};
+                            partialOutcome_ = outcomeIndex_++;
+                        }
+                        return Step;
+                    }
+                    return failed(Error);
+                }
+                return done(ItemOutcome::Status::Completed, request_.operation_ == FileOperation::Move, true);
             }
             FileOperationRequest request_;
             Phase phase_ = Phase::Preparing;
@@ -652,6 +679,7 @@ namespace hc::operations
             bool allowAllReadOnly_ = false, readOnlyAnswered_ = false;
             bool streaming_ = false, planningFinished_ = false;
             std::size_t index_ = 0;
+            std::uint32_t sourceRemoveRetries_ = 0;
             std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0;
             bool replaceAllowed_ = false, destinationCommitted_ = false;
             std::string jobId_;
