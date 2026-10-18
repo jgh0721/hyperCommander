@@ -33,3 +33,16 @@ documentation/source/images/watercolor_ui_plan
 tools/**/*.ps1
 tools/**/__pycache__/
 UniqueLibs/solTypeDefs_Ver.hpp
+
+# ── 코드 서명 도구 ────────────────────────────────────────
+# 원격 서명 서버 주소와 API 키를 담고 있다. 이 저장소는 공개이므로 한 번이라도
+# 커밋되면 키를 폐기하고 재발급해야 한다. SignotaurTool.exe 는 22MB 라 리포
+# 크기까지 망친다. 위쪽 iMonFTS 잔재 목록에도 같은 규칙이 있었지만, 그 블록을
+# 정리할 때 함께 지워질 수 있어 전용 섹션으로 옮겨 둔다.
+tools/CertWithEV.cmd
+tools/SignotaurTool.exe
+
+# Public release signing and update scripts
+!tools/update/*.ps1
+!tools/Install-HyperCommander.ps1
+!tools/New-PortableZip.ps1

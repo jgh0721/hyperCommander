@@ -1,6 +1,8 @@
 ﻿#include "UniqueLibs/permissionService.hpp"
 #include "UniqueLibs/nativeFileElevation.hpp"
+#include "HyperCommanderUpdater/updateTransaction.hpp"
 int main(int Argc, char** Argv) {
+    if (!hc::update::StartupAllowed(hc::update::ExecutableRoot())) return ERROR_BUSY;
     QCoreApplication App(Argc, Argv);
     const auto Args = App.arguments();
     if (Args.size() != 3 || (Args[1] != "--request" && Args[1] != "--elevated-job" && Args[1] != "--elevated-list") || Args[2].size() > 24000) return ERROR_INVALID_PARAMETER;

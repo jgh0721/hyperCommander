@@ -14,6 +14,8 @@
 #include <vector>
 #include "UniqueLibs/document/documentThemeAdapter.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "HyperCommanderUpdater/updateTransaction.hpp"
+#include <Windows.h>
 
 namespace
 {
@@ -27,6 +29,9 @@ namespace
 }
 int main(int Argc, char** Argv)
 {
+    if (!hc::update::StartupAllowed(hc::update::ExecutableRoot())) {
+        MessageBoxW(nullptr, L"업데이트가 진행 중이거나 복구가 필요합니다. HyperCommanderUpdater.exe --recover <설치 폴더>로 복구하십시오.", L"HyperEditor", MB_OK | MB_ICONWARNING); return ERROR_BUSY;
+    }
     hc::document::startup::Initialize("editor");
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");

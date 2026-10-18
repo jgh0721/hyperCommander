@@ -71,7 +71,7 @@ set(PACKAGE_COMMAND "${CMAKE_COMMAND}"
     "-DOUTPUT=$<TARGET_FILE_DIR:hc_sevenzip_core>/${HC_LAYOUT_SevenZipPackage}"
     "-DLICENSES=$<TARGET_FILE_DIR:hc_sevenzip_core>/${HC_LAYOUT_Licenses}/SevenZip"
     "-DHEADER=${PIN_HEADER}" "-DSOURCE=${HC_7ZIP_SOURCE}" "-DARCHIVE=${HC_7ZIP_ARCHIVE}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
+    ${HC_PACKAGE_SIGN_ARGS} -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
 add_custom_command(OUTPUT "${PIN_HEADER}" COMMAND ${PACKAGE_COMMAND}
     DEPENDS hc_sevenzip_core GeneratePackage.cmake VERBATIM)
 add_custom_target(hc_sevenzip_package COMMAND ${PACKAGE_COMMAND} DEPENDS "${PIN_HEADER}" VERBATIM)

@@ -1,0 +1,5 @@
+﻿@HC_HEADER_BOM@#pragma once
+namespace hc::update::policy {
+inline constexpr const char* ProductPins[] = { @HC_PRODUCT_PINS_CPP@ };
+inline constexpr const char* EverythingPins[] = { @HC_VENDOR_PINS_CPP@ };
+}

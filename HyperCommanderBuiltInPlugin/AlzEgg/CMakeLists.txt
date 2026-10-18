@@ -26,7 +26,7 @@ set(PACKAGE_COMMAND "${CMAKE_COMMAND}" "-DUSE=${HC_UNEGG_USE}"
     "-DOUTPUT=$<TARGET_FILE_DIR:hc-plugin-host-x64>/${HC_LAYOUT_AlzEggPackage}"
     "-DLICENSES=$<TARGET_FILE_DIR:hc-plugin-host-x64>/${HC_LAYOUT_Licenses}/AlzEgg"
     "-DHEADER=${PIN_HEADER}" "-DSOURCE=${HC_UNEGG_SOURCE}" "-DARCHIVE=${HC_UNEGG_ARCHIVE}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
+    ${HC_PACKAGE_SIGN_ARGS} -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
 add_custom_target(hc_unegg_package COMMAND ${PACKAGE_COMMAND} BYPRODUCTS "${PIN_HEADER}" VERBATIM)
 qt_add_library(hc_builtin_unegg STATIC builtinUnEgg.cpp builtinUnEgg.hpp)
 target_include_directories(hc_builtin_unegg PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")

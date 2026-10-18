@@ -13,6 +13,7 @@ namespace fm::ui
 }
 class QSHChangeNotify;
 class QProcess;
+namespace hc::update { class UpdateController; }
 
 class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
 {
@@ -105,4 +106,6 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     Ui::dlgMain           ui;
     hc::workspace::Loaded workspace_;
     bool                  workspaceLoaded_ = false;
+    hc::update::UpdateController* update_ = nullptr;
+    bool canRestartForUpdate() const;
 };

@@ -2,7 +2,30 @@ cmake_minimum_required(VERSION 4.2)
 if(NOT IS_DIRECTORY "${SOURCE}" OR NOT CONFIG MATCHES "^(Debug|Release|RelWithDebInfo)$")
     message(FATAL_ERROR "Product runtime directory/configuration is required")
 endif()
+if(HC_SIGNING_SCRIPT AND CONFIG STREQUAL "Release")
+    get_filename_component(HC_SIGNING_TOOLS "${HC_SIGNING_SCRIPT}" DIRECTORY)
+    execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${HC_SIGNING_TOOLS}/Sign-ProductTree.ps1" -Root "${SOURCE}" -CacheRoot "${HC_SIGNING_CACHE}"
+        RESULT_VARIABLE HC_SIGNING_RESULT)
+    if(NOT HC_SIGNING_RESULT EQUAL 0)
+        message(FATAL_ERROR "Release product signing failed")
+    endif()
+    # Runtime deployment can refresh unsigned Qt inputs. Recompute the viewer's
+    # dependency hashes only after canonical signatures have been restored.
+    execute_process(COMMAND "${CMAKE_COMMAND}" "-DVIEWER=${HC_VIEWER}" "-DRUNTIME=${SOURCE}"
+        "-DENGINE_LOCK=${CMAKE_CURRENT_LIST_DIR}/../HyperEditor/source-lock.json"
+        "-DPACKAGE=Addons/WLX/HyperViewer" "-DOUTPUT=${SOURCE}/Addons/WLX/HyperViewer"
+        "-DCONFIG=${CONFIG}" "-DHC_SIGNING_SCRIPT=${HC_SIGNING_SCRIPT}" "-DHC_SIGNING_CACHE=${HC_SIGNING_CACHE}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/../HyperCommanderBuiltInPlugin/HyperViewer/GeneratePackage.cmake"
+        RESULT_VARIABLE HC_VIEWER_RESULT)
+    if(NOT HC_VIEWER_RESULT EQUAL 0)
+        message(FATAL_ERROR "Signed HyperViewer manifest generation failed")
+    endif()
+endif()
 set(FILES HyperCommander.exe HyperCommanderAdmin.exe HyperEditor.exe hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Everything64.dll)
+if(EXISTS "${SOURCE}/HyperCommanderUpdater.exe")
+    list(APPEND FILES HyperCommanderUpdater.exe)
+endif()
 file(GLOB ROOT_DLLS RELATIVE "${SOURCE}" "${SOURCE}/Qt6*.dll" "${SOURCE}/vcruntime*.dll" "${SOURCE}/msvcp*.dll" "${SOURCE}/concrt*.dll" "${SOURCE}/d3dcompiler_*.dll" "${SOURCE}/opengl32sw.dll" "${SOURCE}/pdfium.dll")
 list(FILTER ROOT_DLLS EXCLUDE REGEX "^Qt6Test")
 list(APPEND FILES ${ROOT_DLLS})
@@ -124,12 +147,20 @@ foreach(NAME IN LISTS FILES)
     set(ENTRY "{}")
     string(JSON ENTRY SET "${ENTRY}" path "\"${NAME}\"")
     string(JSON ENTRY SET "${ENTRY}" sha256 "\"${HASH}\"")
+    file(SIZE "${SOURCE}/${NAME}" BYTES)
+    string(JSON ENTRY SET "${ENTRY}" size ${BYTES})
     string(JSON ENTRIES SET "${ENTRIES}" ${INDEX} "${ENTRY}")
     math(EXPR INDEX "${INDEX}+1")
 endforeach()
 set(INVENTORY "{}")
 string(JSON INVENTORY SET "${INVENTORY}" schemaVersion 1)
 string(JSON INVENTORY SET "${INVENTORY}" configuration "\"${CONFIG}\"")
+if(PRODUCT_VERSION)
+    string(JSON INVENTORY SET "${INVENTORY}" version "\"${PRODUCT_VERSION}\"")
+endif()
+string(JSON INVENTORY SET "${INVENTORY}" product "\"HyperCommander\"")
+string(JSON INVENTORY SET "${INVENTORY}" layoutVersion 1)
+string(JSON INVENTORY SET "${INVENTORY}" updaterProtocol 1)
 string(JSON INVENTORY SET "${INVENTORY}" files "${ENTRIES}")
 if(RHWP_SOURCE)
     string(JSON INVENTORY SET "${INVENTORY}" rhwpInventorySha256 "\"${RHWP_PIN}\"")
@@ -137,3 +168,11 @@ endif()
 file(CONFIGURE OUTPUT "${SOURCE}/product-inventory.json" CONTENT "${INVENTORY}
 " NEWLINE_STYLE CRLF @ONLY)
 message(STATUS "Product inventory: ${INDEX} files (${CONFIG})")
+if(HC_SIGNING_SCRIPT AND CONFIG STREQUAL "Release")
+    execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${HC_SIGNING_TOOLS}/Test-ProductSignatures.ps1" -Root "${SOURCE}"
+        RESULT_VARIABLE HC_TRUST_RESULT)
+    if(NOT HC_TRUST_RESULT EQUAL 0)
+        message(FATAL_ERROR "Release product signature verification failed")
+    endif()
+endif()

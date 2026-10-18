@@ -1,4 +1,16 @@
 option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using untracked local PowerShell tools" ON)
+qt_add_executable(hc_update_tests tstPortableUpdate.cpp)
+target_sources(hc_update_tests PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
+target_link_libraries(hc_update_tests PRIVATE hc_update_qt)
+target_compile_options(hc_update_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_test(NAME hc.update.contract COMMAND hc_update_tests contract)
+set_tests_properties(hc.update.contract PROPERTIES TIMEOUT 30)
+hc_enable_qt_deployment(hc_update_tests TEST)
+qt_add_executable(hc_update_service_tests tstUpdateService.cpp)
+target_sources(hc_update_service_tests PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
+target_link_libraries(hc_update_service_tests PRIVATE hc_update_qt Qt6::Network)
+target_compile_options(hc_update_service_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc_update_service_tests TEST PLUGINS)
 
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
 qt_add_executable(hc_plugin_management_tests tstPluginManagement.cpp

@@ -247,7 +247,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process hc_update_core hc_update_qt)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
@@ -295,7 +295,7 @@ target_link_libraries(HyperCommander
         hc_wcx_backend
         hc_plugin_process
         hc_builtin_iso
-        hc_builtin_sevenzip hc_builtin_unegg
+        hc_builtin_sevenzip hc_builtin_unegg hc_update_qt
 )
 
 # Keep the application executable immediately runnable from its build directory.
@@ -306,7 +306,7 @@ add_custom_command(TARGET HyperCommander POST_BUILD
         "$<TARGET_FILE_DIR:HyperCommander>/Licenses/Lua/ThirdPartyNotices.txt"
     VERBATIM)
 hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
-add_dependencies(HyperCommander hc-plugin-host-x64 hc_hyperviewer_package)
+add_dependencies(HyperCommander hc-plugin-host-x64 hc_hyperviewer_package HyperCommanderUpdater)
 
 # Opt-in live integration tests compile the same UI/model sources with a test entry
 # point. They must never run implicitly on developer or CI machines without a NAS.

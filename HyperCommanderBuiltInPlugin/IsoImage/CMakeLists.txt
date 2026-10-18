@@ -70,6 +70,7 @@ set(HC_ISO_PACKAGE_COMMAND "${CMAKE_COMMAND}"
         "-DLICENSES=$<TARGET_FILE_DIR:hc_iso_core>/${HC_LAYOUT_Licenses}/IsoImage"
         "-DHEADER=${HC_ISO_PIN_HEADER}"
         "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+        ${HC_PACKAGE_SIGN_ARGS}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/GeneratePackage.cmake")
 add_custom_command(OUTPUT "${HC_ISO_PIN_HEADER}"
     COMMAND ${HC_ISO_PACKAGE_COMMAND}

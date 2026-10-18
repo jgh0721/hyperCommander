@@ -26,7 +26,8 @@ jobs:
         run: |
           $Kit = 'D:\Qt\Qt-6.12.0-VC2026-X64-H-MD-2026-10-10\bin\qt-cmake.bat'
           $BuildDir = Join-Path $PWD ('_build/ci-' + [Guid]::NewGuid().ToString('N'))
-          & $Kit --preset vc2026-qt612 -B $BuildDir -DBUILD_TESTING=ON -DHC_ENABLE_LOCAL_TEST_TOOLS=OFF
+          # Test-only builds do not use the private production signing service.
+          & $Kit --preset vc2026-qt612 -B $BuildDir -DBUILD_TESTING=ON -DHC_ENABLE_LOCAL_TEST_TOOLS=OFF -DHC_PRODUCT_SIGNING=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($Config in @('Debug', 'Release')) {
             & $Kit --build $BuildDir --config $Config --target hc_check --parallel 6

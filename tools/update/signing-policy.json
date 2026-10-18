@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "product": "HyperCommander",
+  "productCertificateSha256": [
+    "961ab49dac0cfa99389cc897b60df9269def803ac0935dc7e390a0e336fcf152"
+  ],
+  "vendorCertificates": {
+    "Everything64.dll": [
+      "fc351cc1ed83511f34cdb83efb574764799aa7bd6e025f5a66928213255e8589"
+    ]
+  },
+  "requireTimestamp": true,
+  "manifestAuthentication": "authenticode-catalog-sha256",
+  "manifestName": "update-manifest.json",
+  "manifestCatalogName": "update-manifest.cat"
+}

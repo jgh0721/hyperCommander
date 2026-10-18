@@ -148,6 +148,8 @@ DECLARE_CMD( BuiltInCMD_App_Exit,                 QObject::tr( "기타" ),    "h
              Qt::Key_unknown,                                           QObject::tr( "종료" ) );
 DECLARE_CMD( BuiltInCMD_App_About,                QObject::tr( "기타" ),    "hc.app.about",
              Qt::Key_unknown,                                           QObject::tr( "HyperCommander 정보" ) );
+DECLARE_CMD( BuiltInCMD_App_Update,               QObject::tr( "기타" ),    "hc.app.update",
+             Qt::Key_unknown,                                           QObject::tr( "업데이트 확인" ) );
 
 // 해당 벡터를 순서대로 순회하며 환경설정 대화상자에 표시한다.
 inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
@@ -213,6 +215,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Menu_Edit,
     BuiltInCMD_App_Exit,
     BuiltInCMD_App_About,
+    BuiltInCMD_App_Update,
 };
 
 namespace hc::defaults

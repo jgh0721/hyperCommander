@@ -3,6 +3,8 @@
 
 #include "colorSchemeMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/fileJobUi.hpp"
+#include "HyperCommanderUpdater/updateController.hpp"
 #include <fmwidgets/WindowChrome.h>
 #include <fmwidgets/CommandLine.h>
 #include <fmstyle/ThemeManager.h>
@@ -566,14 +568,31 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 
 void QMainUI::closeEvent( QCloseEvent* Event )
 {
+    const bool Updating = update_ && update_->RestartRequested();
+    if (Updating && !canRestartForUpdate()) { Event->ignore(); return; }
     if (workspaceLoaded_ && workspace_.writable_ && !SaveWorkspace())
+    {
         QMessageBox::warning(this, tr("작업공간 저장"), tr("작업공간을 저장하지 못했습니다. 기존 설정은 유지됩니다.\n%1").arg(workspace_.error_));
+        if (Updating) { Event->ignore(); return; }
+    }
 
     if (commandProcess_ && commandProcess_->state() != QProcess::NotRunning) {
         if (QMessageBox::question(this, tr("명령 실행 중"), tr("실행 중인 명령을 종료하고 창을 닫으시겠습니까?")) != QMessageBox::Yes) { Event->ignore(); return; }
         commandProcess_->kill(); commandProcess_->waitForFinished(1000);
     }
+    if (Updating && !update_->LaunchPending()) { Event->ignore(); return; }
     QMainWindow::closeEvent( Event );
+}
+
+bool QMainUI::canRestartForUpdate() const
+{
+    if (commandProcess_ && commandProcess_->state() != QProcess::NotRunning) return false;
+    if (const auto Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge && Bridge->FileJobs())
+        for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) {
+            using hc::operations::JobState;
+            if (Job.state_ != JobState::Completed && Job.state_ != JobState::Failed && Job.state_ != JobState::Cancelled) return false;
+        }
+    return !hc::settings::AppSettings().Editing();
 }
 
 void QMainUI::initialize()
@@ -593,6 +612,7 @@ void QMainUI::initialize()
     ui.menubar->setCornerWidget( HelpBar, Qt::TopRightCorner );
 
     StCommandMgr->SetMainUI( this );
+    update_ = new hc::update::UpdateController(this, HelpBar_Root, [this] { return canRestartForUpdate(); });
 
     shlChangeNotify = new QSHChangeNotify(this);
     shlChangeNotify->hide();

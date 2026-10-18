@@ -42,7 +42,7 @@ set(HC_HYPERVIEWER_PACKAGE_COMMAND "${CMAKE_COMMAND}"
     "-DENGINE_LOCK=${PROJECT_SOURCE_DIR}/HyperEditor/source-lock.json"
     "-DPACKAGE=${HC_LAYOUT_HyperViewerPackage}"
     "-DOUTPUT=$<TARGET_FILE_DIR:HyperEditor>/${HC_LAYOUT_HyperViewerPackage}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
+    ${HC_PACKAGE_SIGN_ARGS} -P "${CMAKE_CURRENT_SOURCE_DIR}/GeneratePackage.cmake")
 add_custom_target(hc_hyperviewer_package ALL
     COMMAND ${HC_HYPERVIEWER_PACKAGE_COMMAND}
     DEPENDS HyperViewer HyperEditor hc_document_licenses

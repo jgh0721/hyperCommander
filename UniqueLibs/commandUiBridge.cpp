@@ -925,6 +925,7 @@ void CommandUiBridge::createCommandUi()
             Window->statusBar()->showMessage(tr("메뉴 파일을 열 수 없습니다: %1").arg(userMenu_->FileName()));
     });
     Add("hc.app.about", tr("HyperCommander 정보"), [Window] { QMessageBox::about(Window, QObject::tr("HyperCommander"), QObject::tr("HyperCommander\n버전 %1\n두 패널 파일 관리자 · Watercolor UI").arg(QString::fromLatin1(nsHC::CLIENT_VERSION))); });
+    Add("hc.app.update", tr("업데이트 확인"), [Window] { if (auto* Action = Window->findChild<QAction*>("hc.update.check")) Action->trigger(); });
     Add("hc.file.shellMenu", tr("탐색기 메뉴"), [this] { ShowShellMenu(commandIndex()); });
     Add("hc.file.folderSize", tr("하위 폴더 점유 공간 계산"), [this] {
         if (auto* Model = PanelModel(activePanel_)) Model->RequestDirectorySizes();

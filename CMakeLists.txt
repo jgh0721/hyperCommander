@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.2)
-set(HC_PRODUCT_VERSION "2026.10.18.1")
+set(HC_PRODUCT_VERSION "2026.10.18.3")
 project(HyperCommander VERSION ${HC_PRODUCT_VERSION} LANGUAGES CXX RC)
 
 include(cmake/build.version.cmake)
@@ -10,6 +10,10 @@ configure_file("${PROJECT_SOURCE_DIR}/UniqueLibs/solTypeDefs_Ver.hpp.in"
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTORCC ON)
+if(MSVC)
+    # Keep matching Release linker symbols separately from the portable runtime.
+    add_link_options("$<$<CONFIG:Release>:/DEBUG>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
+endif()
 # qt_add_executable applies the selected kit's Hybrid CRT policy.
 
 find_package(Qt6 6.12 REQUIRED COMPONENTS
@@ -41,6 +45,15 @@ endif()
 add_subdirectory(externalLibs/waterColorStyle watercolor EXCLUDE_FROM_ALL)
 include(cmake/QtDeployment.cmake)
 include(cmake/ProductLayout.cmake)
+include(cmake/ProductSigning.cmake)
+option(HC_PRODUCT_SIGNING "Require code signatures on distributed Release products" ON)
+set(HC_SIGNING_CACHE "${PROJECT_SOURCE_DIR}/_build/signing-cache" CACHE PATH "Verified canonical code signing cache")
+set(HC_PACKAGE_SIGN_ARGS "-DCONFIG=$<CONFIG>")
+if(HC_PRODUCT_SIGNING)
+    list(APPEND HC_PACKAGE_SIGN_ARGS
+        "-DHC_SIGNING_SCRIPT=${PROJECT_SOURCE_DIR}/tools/update/Sign-ProductFile.ps1"
+        "-DHC_SIGNING_CACHE=${HC_SIGNING_CACHE}")
+endif()
 set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
 add_subdirectory(commonLibs/scripting)
 
@@ -90,6 +103,8 @@ target_include_directories(hc_document_open PRIVATE
 target_link_libraries(hc_document_open PUBLIC hc_document_core hc_viewer_qt PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_compile_options(hc_document_open PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderBuiltInPlugin)
+add_subdirectory(HyperCommanderUpdater)
+target_link_libraries(HyperEditor PRIVATE hc_update_core)
 # HyperCommanderBuiltInPlugin/HyperViewer validates this pinned package during configure.
 # HWP F3 uses the product SDI entry outside the UI-restricted plugin Job.
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
@@ -110,7 +125,11 @@ add_custom_command(TARGET hc-search-index POST_BUILD
 )
 hc_enable_qt_deployment(hc-search-index)
 add_subdirectory(HyperCommanderAdmin)
+target_link_libraries(HyperCommanderAdmin PRIVATE hc_update_core)
 add_subdirectory(HyperCommander)
+foreach(HC_UPDATE_ENTRY IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor)
+    target_sources(${HC_UPDATE_ENTRY} PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
+endforeach()
 add_dependencies(HyperCommander hc-search-index HyperCommanderAdmin)
 if(TARGET hc_smb_tests)
     add_dependencies(hc_smb_tests hc-search-index)
@@ -153,7 +172,24 @@ add_custom_target(hc_product_inventory ALL
     COMMAND "${CMAKE_COMMAND}" "-DSOURCE=$<TARGET_FILE_DIR:HyperCommander>" "-DCONFIG=$<CONFIG>"
         "-DRHWP_SOURCE=${HC_RHWP_PRODUCT_RUNTIME_DIRECTORY}"
         "-DRHWP_PIN=${HC_RHWP_APPROVED_INVENTORY_SHA256}"
+        "-DHC_VIEWER=$<TARGET_FILE:HyperViewer>"
+        "-DPRODUCT_VERSION=${HC_PRODUCT_VERSION}"
+        ${HC_PACKAGE_SIGN_ARGS}
         -P "${PROJECT_SOURCE_DIR}/cmake/GenerateProductInventory.cmake"
     DEPENDS hc_deploy VERBATIM)
 configure_file(cmake/InstallProductInventory.cmake.in "${CMAKE_BINARY_DIR}/InstallProductInventory.cmake" @ONLY)
 install(SCRIPT "${CMAKE_BINARY_DIR}/InstallProductInventory.cmake" COMPONENT Runtime)
+add_custom_target(hc_portable_package
+    COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${PROJECT_SOURCE_DIR}"
+        "-DROOT=$<TARGET_FILE_DIR:HyperCommander>" "-DOUTPUT=${CMAKE_BINARY_DIR}/packages/$<CONFIG>"
+        "-DVERSION=${HC_PRODUCT_VERSION}" "-DSYMBOLS=${CMAKE_BINARY_DIR}/hc-symbols-$<CONFIG>.txt"
+        -P "${PROJECT_SOURCE_DIR}/cmake/PackagePortable.cmake"
+    DEPENDS hc_product_inventory USES_TERMINAL VERBATIM)
+if(MSVC)
+    set(HC_SYMBOL_FILES "")
+    foreach(HC_SYMBOL_TARGET IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor HyperViewer
+            hc-plugin-host-x64 hc-plugin-inspect hc-search-index HyperCommanderUpdater hc_iso_core hc_isoimage_wcx hc_sevenzip_core)
+        string(APPEND HC_SYMBOL_FILES "$<TARGET_PDB_FILE:${HC_SYMBOL_TARGET}>\n")
+    endforeach()
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/hc-symbols-$<CONFIG>.txt" CONTENT "${HC_SYMBOL_FILES}")
+endif()

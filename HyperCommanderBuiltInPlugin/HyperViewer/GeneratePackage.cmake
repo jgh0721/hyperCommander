@@ -15,7 +15,9 @@ foreach(ENTRY IN LISTS STALE)
     endif()
 endforeach()
 file(COPY_FILE "${VIEWER}" "${OUTPUT}/HyperViewer.dll" ONLY_IF_DIFFERENT)
-file(SHA256 "${VIEWER}" VIEWER_HASH)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/ProductSigning.cmake")
+hc_sign_packaged_file("${OUTPUT}/HyperViewer.dll")
+file(SHA256 "${OUTPUT}/HyperViewer.dll" VIEWER_HASH)
 # Qt plugins loaded by the viewer from the product runtime (Plugins=Libs).
 file(GLOB PLUGINS "${RUNTIME}/Libs/platforms/qwindows*.dll" "${RUNTIME}/Libs/imageformats/*.dll"
     "${RUNTIME}/Libs/iconengines/*.dll" "${RUNTIME}/Libs/styles/*.dll" "${RUNTIME}/Libs/printsupport/*.dll")
