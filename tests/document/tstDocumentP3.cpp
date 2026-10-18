@@ -14,6 +14,8 @@
 #include <QClipboard>
 #include <QScreen>
 #include <QLabel>
+#include <QLineEdit>
+#include <QShortcut>
 #include <QStackedLayout>
 #include <QScrollArea>
 #include <QDialog>
@@ -351,6 +353,66 @@ void f3WindowStaysRestoredAfterLoadingDialogHides(){
     QVERIFY2(!IsIconic(Viewer),"F3 viewer minimized after the loading dialog was hidden");
     QVERIFY(IsWindowVisible(Viewer));
     Host.CloseAll();QVERIFY(Wait([&]{return Host.IsIdle();}));
+}
+void f3TextAcceptsKeyboardWithoutClick_data(){
+    QTest::addColumn<bool>("Prepared");
+    QTest::newRow("cold")<<false; QTest::newRow("prepared")<<true;
+}
+void f3TextAcceptsKeyboardWithoutClick(){
+    QFETCH(bool,Prepared);
+    QTemporaryDir Root; const auto Path=Root.filePath("keyboard.txt"); QVERIFY(Put(Path,"keyboard fixture"));
+    QWidget Main; QVBoxLayout Layout(&Main); QLineEdit Input; Layout.addWidget(&Input);
+    Main.resize(800,600); Main.show(); Main.activateWindow();
+    SetForegroundWindow(reinterpret_cast<HWND>(Main.winId()));
+    QVERIFY(QTest::qWaitForWindowActive(&Main)); Input.setFocus();
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtViewerHost Host(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);
+    });
+    const auto Drain=qScopeGuard([&]{Host.CloseAll();Wait([&]{return Host.IsIdle();});});
+    if(Prepared){
+        Host.PreparePlugin(Options());
+        QVERIFY(Wait([&]{auto* Window=Main.findChild<QDialog*>("hc.document.prepared");
+            auto* Surface=Window?Window->findChild<QtPluginViewerSurface*>():nullptr;return Surface&&Surface->IsReady();},30000));
+        QCOMPARE(GetForegroundWindow(),reinterpret_cast<HWND>(Main.winId()));
+        QVERIFY(Input.hasFocus());
+    }
+    // Real input to HC after prewarming revokes the helper's foreground grant.
+    // A direct OpenPlugin call can leave that grant in place and hide this race.
+    INPUT Keys[2]{}; Keys[0].type=Keys[1].type=INPUT_KEYBOARD;
+    Keys[0].ki.wVk=Keys[1].ki.wVk='X'; Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;
+    QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2)); QVERIFY(Wait([&]{return !Input.text().isEmpty();}));
+    const auto MainText=Input.text();
+    bool Finished=false,Success=false; QString Failure; QDialog* Window=nullptr;
+    QShortcut Open(QKeySequence(Qt::Key_F3),&Main);
+    connect(&Open,&QShortcut::activated,&Main,[&]{Window=Host.OpenPlugin(Options(),{{Content(Path),{}}},"Keyboard F3",
+        [&](bool Ready,const QString& Error){Finished=true;Success=Ready;Failure=Error;});});
+    Keys[0].ki.wVk=Keys[1].ki.wVk=VK_F3;
+    QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2)); QVERIFY(Wait([&]{return Window!=nullptr;}));
+    QVERIFY2(Wait([&]{return Finished;},30000),qPrintable(Failure)); QVERIFY2(Success,qPrintable(Failure));
+    auto* Surface=Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+    HWND Viewer=nullptr; const auto Pid=Surface->Details().host_.processId_; QVERIFY(Pid);
+    QVERIFY(Wait([&]{
+        struct Finder{DWORD pid_;HWND window_=nullptr;};Finder State{Pid};
+        EnumWindows([](HWND Candidate,LPARAM Context)->BOOL{
+            auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Candidate,&Owner);
+            wchar_t Title[256]{};GetWindowTextW(Candidate,Title,256);
+            if(Owner==Search->pid_&&IsWindowVisible(Candidate)&&QString::fromWCharArray(Title).startsWith("HyperViewer"))
+                {Search->window_=Candidate;return FALSE;}return TRUE;
+        },reinterpret_cast<LPARAM>(&State));Viewer=State.window_;return Viewer!=nullptr;
+    }));
+    QVERIFY(Wait([&]{return GetForegroundWindow()==Viewer;}));
+    GUITHREADINFO Thread{sizeof(GUITHREADINFO)};
+    QVERIFY(GetGUIThreadInfo(GetWindowThreadProcessId(Viewer,nullptr),&Thread));
+    qInfo()<<"F3 native foreground/focus"<<Viewer<<Thread.hwndFocus;
+    const auto State=Surface->Details().documentState_; const auto Id=State["activeDocumentId"].toString(); QVERIFY(!Id.isEmpty());
+    const auto Revision=Doc(State,Id)["revision"].toString();
+    // Do not repair focus or click the viewer: input must work on presentation.
+    Keys[0].ki.wVk=Keys[1].ki.wVk='Z'; Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;
+    QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
+    QVERIFY2(Wait([&]{return Doc(Surface->Details().documentState_,Id)["revision"].toString()!=Revision;},1500),
+        "The newly presented F3 text viewer must accept keyboard input without a click");
+    QVERIFY(Doc(Surface->Details().documentState_,Id)["dirty"].toBool()); QCOMPARE(Input.text(),MainText);
 }
 void twoF3WindowsSwitchKeyboardInput(){
     QTemporaryDir Root;

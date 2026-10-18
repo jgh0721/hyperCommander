@@ -288,10 +288,17 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
                                     ? reinterpret_cast<HWND>(Window->parentWidget()->winId()) : nullptr;
                                 if (Parsed && Viewer && Details.host_.processId_
                                     && GetWindowThreadProcessId(Viewer, &Process) && Process == Details.host_.processId_
-                                    && GetAncestor(Viewer, GA_ROOT) == Viewer && IsWindowVisible(Viewer)
-                                    && GetForegroundWindow() == Main) {
-                                    if (IsIconic(Viewer)) ShowWindow(Viewer, SW_RESTORE);
-                                    SetForegroundWindow(Viewer);
+                                    && GetAncestor(Viewer, GA_ROOT) == Viewer && IsWindowVisible(Viewer)) {
+                                    if (GetForegroundWindow() == Main) {
+                                        if (IsIconic(Viewer)) ShowWindow(Viewer, SW_RESTORE);
+                                        SetForegroundWindow(Viewer);
+                                    }
+                                    // A warm helper can reject its initial focus
+                                    // request before HC grants the foreground.
+                                    // Replay it on the helper's GUI thread only
+                                    // after its own top-level window is in front.
+                                    if (GetForegroundWindow() == Viewer)
+                                        Surface->SendDocument({{"action", "focus"}});
                                 }
                             } else {
                                 Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Failure));
