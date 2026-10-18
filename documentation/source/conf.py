@@ -9,7 +9,7 @@
 project = 'HyperCommander'
 copyright = '2024, DevTester'
 author = 'DevTester'
-release = '1.0'
+release = '2026.10.18.4'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
