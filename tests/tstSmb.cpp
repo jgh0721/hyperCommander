@@ -224,7 +224,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug"), "Local UI mode cannot execute an SMB scenario");
         }
@@ -2389,6 +2389,112 @@ private slots:
             QVERIFY(!Dialog.findChild<QCheckBox*>("hc.settings.folderSizeBeforeOperations")->isChecked()); Dialog.reject(); }
     }
 
+    void inlineRenameClicksUi_data()
+    {
+        QTest::addColumn<bool>("TwoLine"); QTest::addColumn<bool>("IncludeExtension");
+        for (const bool TwoLine : {false, true}) for (const bool IncludeExtension : {false, true})
+            QTest::newRow(qPrintable(QString("%1-extension-%2").arg(TwoLine ? "two-line" : "one-line").arg(IncludeExtension))) << TwoLine << IncludeExtension;
+    }
+    void inlineRenameClicksUi()
+    {
+        using namespace hc::settings;
+        QFETCH(bool, TwoLine); QFETCH(bool, IncludeExtension);
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Commands = TyStCommandMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] {
+            for (auto* View : main_->findChildren<CGridView*>()) {
+                View->CancelRename(); if (View->BaseView()->activeEditor()) View->BaseView()->hideEditor();
+            }
+            Settings.DiscardEdit(); Settings.Replace(Original); Commands->Refresh(); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Name : {"A.tar.gz", "B.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("click rename"); }
+        QVERIFY(QDir().mkpath(Directory.filePath("subdir")));
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Left && Right);
+        hc::workspace::TabState Tab; Tab.id_ = "rename-click-left"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Left->RestoreWorkspace(Pane); Pane.tabs_[0].id_ = "rename-click-right"; Right->RestoreWorkspace(Pane);
+        QTRY_VERIFY(!model(Left)->IsLoading() && !model(Right)->IsLoading());
+        QTRY_COMPARE(model(Left)->rowCount(), 4); QTRY_COMPARE(model(Right)->rowCount(), 4);
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); auto* Other = static_cast<CGridView*>(Right->GetFocusView(0));
+        auto* Grid = View->findChild<Qtitan::Grid*>(); auto* OtherGrid = Other->findChild<Qtitan::Grid*>(); QVERIFY(Grid && OtherGrid);
+        QVERIFY(View->SetListMode(TwoLine ? "two-line" : "one-line")); QVERIFY(Other->SetListMode("one-line"));
+        auto Options = Settings.Read(Section::Options).toObject();
+        // The dialog option describes the rename key; a mouse rename stays in its cell.
+        Options["renameInDialog"] = IncludeExtension; Options["renameSelectExtension"] = IncludeExtension;
+        Options["renameOnSlowClick"] = true;
+        QVERIFY(Settings.Put(Section::Options, Options)); Commands->Refresh();
+        main_->showNormal(); main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
+        QVERIFY(QTest::qWaitForWindowActive(main_)); QCoreApplication::processEvents();
+        const auto CellPoint = [](Qtitan::Grid* Target, const QString& Name) {
+            for (const auto& Hit : Target->hitInfoAll()) {
+                if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.modelIndex().column() != 0) continue;
+                auto Index = Hit.modelIndex();
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                const auto* Model = qobject_cast<const CFSModel*>(Index.model());
+                if (Model && Model->GetName(Index) == Name) return Hit.rect().center();
+            }
+            return QPoint(-1, -1);
+        };
+        const auto A = CellPoint(Grid, "A.tar.gz"), LocalB = CellPoint(Grid, "B.txt"), B = CellPoint(OtherGrid, "B.txt");
+        QVERIFY(A.x() >= 0 && LocalB.x() >= 0 && B.x() >= 0);
+        const int Settle = QApplication::doubleClickInterval() + 100;
+        // A row focused by the keyboard has not received a rename click yet.
+        for (const auto& Hit : Grid->hitInfoAll())
+            if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.rect().contains(A)) View->BaseView()->setFocusedRowIndex(Hit.row().rowIndex());
+        Left->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY2(!View->IsEditing(), "The first click after keyboard selection must not start editing");
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, LocalB);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY2(!View->IsEditing(), "A to B to A within one panel must only change the focused file");
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::mouseClick(OtherGrid->viewport(), Qt::LeftButton, Qt::NoModifier, B);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY(View->IsPanelActive()); QVERIFY(!Other->IsPanelActive());
+        QVERIFY2(!View->IsEditing(), "Returning to the previously focused file must only activate its panel");
+        QVERIFY(!Other->IsEditing());
+        QTest::qWait(3 * QApplication::doubleClickInterval() + 100);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY2(!View->IsEditing(), "A stale selected name needs a fresh first click");
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QLineEdit* Input = nullptr;
+        QTRY_VERIFY((Input = View->findChild<QLineEdit*>("hc.file.renameEditor")) && Input->isVisible());
+        QCOMPARE(Input->text(), QString("A.tar.gz")); QCOMPARE(Input->selectedText(), IncludeExtension ? QString("A.tar.gz") : QString("A.tar"));
+        QVERIFY(!View->BaseView()->activeEditor());
+        QTest::keyClick(Input, Qt::Key_F2);
+        QCOMPARE(Input->selectedText(), IncludeExtension ? QString("A.tar") : QString("A.tar.gz"));
+        QTest::keyClick(Input, Qt::Key_Escape); QVERIFY(!View->IsEditing());
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::ControlModifier, A);
+        QTest::qWait(Settle); QVERIFY(!View->IsEditing());
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::keyClick(Grid, Qt::Key_Shift);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY2(!View->IsEditing(), "Keyboard input must reset the name click sequence");
+        // A second click can request a delayed rename, then activation of the
+        // other panel must cancel that request before its editor appears.
+        QTest::keyClick(Grid, Qt::Key_Escape);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::mouseClick(OtherGrid->viewport(), Qt::LeftButton, Qt::NoModifier, B);
+        QTest::qWait(Settle); QVERIFY(!View->IsEditing()); QVERIFY(!Other->IsEditing());
+        Options["renameOnSlowClick"] = false; QVERIFY(Settings.Put(Section::Options, Options)); Commands->Refresh();
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, A);
+        QTest::qWait(Settle); QVERIFY2(!View->IsEditing(), "The disabled click rename option must prevent editing");
+        Options["renameOnSlowClick"] = true; QVERIFY(Settings.Put(Section::Options, Options)); Commands->Refresh();
+        QVERIFY(QFileInfo::exists(Directory.filePath("A.tar.gz")));
+        const auto Folder = CellPoint(Grid, "subdir"); QVERIFY(Folder.x() >= 0);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Folder);
+        QTest::qWait(Settle);
+        QTest::mouseClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Folder);
+        QTest::mouseDClick(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Folder);
+        QTest::mouseRelease(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Folder);
+        QTRY_COMPARE(QDir::cleanPath(QDir::fromNativeSeparators(model(Left)->GetCurrentPathWithRoot())), QDir::cleanPath(Directory.filePath("subdir")));
+        QTest::qWait(Settle); QVERIFY(!View->IsEditing());
+    }
     void inlineRenameUi()
     {
         using namespace hc::settings;
@@ -2425,7 +2531,7 @@ private slots:
             return nullptr;
         };
         auto Options = Settings.Read(Section::Options).toObject();
-        Options["renameInDialog"] = false; Options["renameSelectExtension"] = false;
+        Options["renameInDialog"] = false; Options["renameSelectExtension"] = false; Options["renameOnSlowClick"] = true;
         QVERIFY(Settings.Put(Section::Options, Options)); Commands->Refresh();
         main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
         Focus("a.tar.gz"); QTest::keyClick(Grid, Qt::Key_F2);
@@ -2498,10 +2604,13 @@ private slots:
             Tabs->setCurrentWidget(Page);
             auto* Separate = Dialog.findChild<QCheckBox*>("hc.settings.renameInDialog");
             auto* Extension = Dialog.findChild<QCheckBox*>("hc.settings.renameSelectExtension");
-            QVERIFY(Separate && Extension); QVERIFY(Separate->isChecked()); QVERIFY(Extension->isChecked());
-            Separate->setChecked(false); Extension->setChecked(false); QVERIFY(Dialog.SaveSettings());
+            auto* Click = Dialog.findChild<QCheckBox*>("hc.settings.renameOnSlowClick");
+            QVERIFY(Separate && Extension && Click); QVERIFY(Separate->isChecked()); QVERIFY(Extension->isChecked()); QVERIFY(Click->isChecked());
+            Separate->setChecked(false); Extension->setChecked(false); Click->setChecked(false); QVERIFY(Dialog.SaveSettings());
             QCOMPARE(Settings.Read(Section::Options).toObject()["renameInDialog"].toBool(), false);
             QCOMPARE(Settings.Read(Section::Options).toObject()["renameSelectExtension"].toBool(), false);
+            QCOMPARE(Settings.Read(Section::Options).toObject()["renameOnSlowClick"].toBool(), false);
+            Dialog.LoadSettings(); QVERIFY(!Click->isChecked());
             QVERIFY(SaveR9Dialog(Dialog, "inline-rename-settings")); Dialog.reject(); }
         Focus("0.txt"); QTest::keyClick(Grid, Qt::Key_F2); QTRY_VERIFY(Input());
         QTest::keyClick(Input(), Qt::Key_Up); QTRY_VERIFY(!View->IsEditing());

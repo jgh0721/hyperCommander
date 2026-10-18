@@ -621,6 +621,7 @@ namespace hc::defaults
                  { "fileConflict",            "ask" },
                  { "renameInDialog",          true },
                  { "renameSelectExtension",   false },
+                 { "renameOnSlowClick",       true },
                  { "folderSizeOnSpace",       true },
                  { "folderSizeBeforeOperations", true },
                  { "folderSizeUseEverything", true },

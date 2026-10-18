@@ -1,9 +1,9 @@
 ﻿#include "stdafx.h"
+#include "cmpView.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
 #include "commonLibs/view/listIconSize.hpp"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
-#include "cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
 #include "UniqueLibs/qtWorkspaceState.hpp"
 #include "UniqueLibs/renameSelection.hpp"
@@ -201,6 +201,16 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     grid_->viewport()->setFocusPolicy( Qt::StrongFocus );
 
     grid_->installEventFilter( this );
+    grid_->viewport()->installEventFilter(this);
+    viewClickTimer_.setSingleShot(true);
+    connect(&viewClickTimer_, &QTimer::timeout, this, [this] {
+        const QModelIndex Index = mouseRenameIndex_; mouseRenameIndex_ = QPersistentModelIndex{};
+        const auto Focus = QApplication::focusWidget();
+        if (!panelActive_ || !Index.isValid() || IsEditing() || !Focus
+            || (Focus != grid_ && !grid_->isAncestorOf(Focus)) || view_->focusedRow().modelIndex(0) != Index) return;
+        if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge())
+            Bridge->PromptFileOperation("hc.file.rename", "cell-click", Index);
+    });
     renameTimer_.setInterval(30);
     connect(&renameTimer_, &QTimer::timeout, this, [this] {
         if (renameAwaitingRefresh_) continueRename();
@@ -275,6 +285,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     connect( view_, &Qtitan::GridViewBase::cellClicked,         this, &CGridView::oo_grid_cellClicked );
     connect( view_, &Qtitan::GridViewBase::rowDblClicked,       this, &CGridView::oo_grid_rowDblClicked );
     connect( view_, &Qtitan::GridViewBase::focusRowChanged,     this, &CGridView::oo_grid_rowFocusChanged );
+    connect( view_, &Qtitan::GridViewBase::editorStarting,      this, &CGridView::oo_grid_editorStarting );
     connect( view_, &Qtitan::GridViewBase::editorStarted,       this, &CGridView::oo_grid_editorStarted );
     connect( view_, &Qtitan::GridViewBase::editorPosting,       this, &CGridView::oo_grid_editorPosting );
     connect( view_, &Qtitan::GridViewBase::selectionChanged,    this, &CGridView::oo_grid_selectionChanged );
@@ -582,6 +593,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     disconnect(selectionReset_);
     selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
         this, [this] {
+            resetRenameClicks();
             resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
             resetPath_ = model_->property("hc.snapshotLocation").toString();
             model_->setProperty("hc.selectAllEntries", false);
@@ -810,6 +822,7 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 
 void CGridView::SetPanelActive(bool Active)
 {
+    if (!Active) { resetRenameClicks(); }
     panelActive_ = Active;
     thumbnails_->setPaneActive(Active);
     grid_->viewport()->update();
@@ -829,6 +842,7 @@ bool CGridView::IsEditing() const
 
 bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, RenameHandler Handler)
 {
+    resetRenameClicks();
     if (renameEditor_) {
         if (!renameSubmitting_ && !renameAwaitingRefresh_)
             selectRenameText(renameEditor_->selectedText() != renameEditor_->text());
@@ -867,6 +881,7 @@ bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, Rena
 
 void CGridView::CancelRename()
 {
+    resetRenameClicks();
     ++renameGeneration_;
     renameTimer_.stop();
     if (renameEditor_) {
@@ -1271,64 +1286,31 @@ void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     Args->setHandled( true );
 }
 
+void CGridView::resetRenameClicks()
+{
+    viewClickTimer_.stop();
+    mouseRenameIndex_ = QPersistentModelIndex{};
+    lastNameClickIndex_ = QPersistentModelIndex{};
+    lastNameClickTime_.invalidate();
+}
+
 void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
 {
     const auto& Cell = Args->cell();
-
-    //// 자신을 포함한 여러 행을 선택하고, 그 중에 하나를 다시 선택하면 해당 행만 남기고 나머지는 선택 해제한다.
-    //// 선택 행이 하나이고, 해당 행을 다시 클릭했을 때는 이름 변경 시도를 고려해야 한다. 
-    //if( spLocalView_->modelController()->isRowSelected( cell.row() ) == true )
-    //{
-    //    if( spLocalView_->modelController()->selection()->selectedRowIndexes().count() > 1 )
-    //    {
-    //        if( QGuiApplication::queryKeyboardModifiers() == Qt::NoModifier )
-    //        {
-    //            spLocalView_->deselectAll();
-    //            spLocalView_->selectRow( cell.row().rowIndex() );
-    //            return;
-    //        }
-    //    }
-    //}
-
-    ////if( cell.columnIndex() != TBL_LOCAL_HDX_FILENAME.index )
-    ////{
-    ////    lastFocusRowIndex_ = spLocalView_->focusedRowIndex();
-    ////    viewClickTimer_.stop();
-    ////    return;
-    ////}
-
-    //if( retrieveCurrentIndex() >= 0 )
-    //{
-    //    if( Cell.columnIndex() != 0 )
-    //    {
-    //        viewClickTimer.stop();
-    //    }
-
-    //    const auto Modifiers = QGuiApplication::queryKeyboardModifiers();
-    //    if( Modifiers.testFlag( Qt::ControlModifier ) )
-    //    {
-    //        SelectRowOnCurrentTab( Args->cell().modelIndex(), false );
-    //        Args->setHandled( true );
-    //    }
-
-    //    if( Cell.columnIndex() == 0 && 
-    //        Modifiers == Qt::NoModifier )
-    //    {
-    //        const auto State = retrieveFocusState();
-    //        const auto View = State->View;
-
-    //        if( State->LastFocusedRowIndex != View->focusedRowIndex() )
-    //        {
-    //            State->LastFocusedRowIndex = View->focusedRowIndex();
-    //            viewClickTimer.stop();
-    //            return;
-    //        }
-
-    //        static const auto doubleClickInterval = qApp->styleHints()->mouseDoubleClickInterval();
-    //        viewClickTimer.setSingleShot( true );
-    //        viewClickTimer.start( doubleClickInterval );
-    //    }
-    //}
+    if (!panelActive_ || !plainLeftClick_ || Cell.modelIndex().column() != 0 || IsEditing()
+        || !hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameOnSlowClick"].toBool(true)) {
+        lastNameClickIndex_ = QPersistentModelIndex{}; lastNameClickTime_.invalidate(); return;
+    }
+    const auto Index = Cell.modelIndex();
+    const int Interval = QApplication::doubleClickInterval();
+    const auto Elapsed = lastNameClickTime_.isValid() ? lastNameClickTime_.elapsed() : -1;
+    // Selection alone never requests editing. Require two fresh name clicks,
+    // slower than a double-click but within three double-click intervals.
+    if (lastNameClickIndex_ == Index && Elapsed >= Interval && Elapsed <= 3 * Interval) {
+        mouseRenameIndex_ = Index;
+        viewClickTimer_.start(Interval);
+    }
+    lastNameClickIndex_ = Index; lastNameClickTime_.start();
 }
 
 void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
@@ -1340,7 +1322,7 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
     if( view_->activeEditor() != nullptr )
         view_->closeEditor();
 
-    viewClickTimer_.stop();
+    resetRenameClicks();
 
     QKeyEvent Event( QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier );
 
@@ -1349,6 +1331,7 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 {
+    if (OldRowIndex != NewRowIndex) resetRenameClicks();
     if (renameEditor_ && !renameSubmitting_ && !renameAwaitingRefresh_ && OldRowIndex != NewRowIndex)
         CancelRename();
     UNREFERENCED_PARAMETER( OldRowIndex );
@@ -1362,6 +1345,17 @@ void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
     //    State->LastFocusedRowIndex = -1;
     //
     //retrieveFocusState()->LastFocusedRowIndex = OldRowIndex;
+}
+
+void CGridView::oo_grid_editorStarting( Qtitan::EditorEventArgs* Args )
+{
+    const auto Policy = Args->activationPolicy();
+    const auto MousePolicies = GridEditor::ActivateByMousePress | GridEditor::ActivateByClick | GridEditor::ActivateByDblClick;
+    if (!(Policy & MousePolicies)) return;
+    viewClickTimer_.stop(); mouseRenameIndex_ = QPersistentModelIndex{};
+    if (Args->dataBinding()->column() != 0) return;
+    // Mouse edits must use the product editor and its rename policies.
+    Args->setHandled(true);
 }
 
 void CGridView::oo_grid_editorStarted( Qtitan::EditorEventArgs* Args )
@@ -1442,6 +1436,24 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (Watched == grid_->viewport()
+        && (Event->type() == QEvent::MouseButtonPress || Event->type() == QEvent::MouseButtonDblClick)) {
+        const auto* Mouse = static_cast<QMouseEvent*>(Event);
+        viewClickTimer_.stop(); mouseRenameIndex_ = QPersistentModelIndex{};
+        renamePressPosition_ = Mouse->position().toPoint();
+        plainLeftClick_ = Event->type() == QEvent::MouseButtonPress
+            && Mouse->button() == Qt::LeftButton && Mouse->modifiers() == Qt::NoModifier;
+        const auto Hit = grid_->hitInfo(renamePressPosition_);
+        if (!plainLeftClick_ || Hit.info() != Qtitan::GridHitInfo::Cell
+            || Hit.modelIndex() != lastNameClickIndex_) resetRenameClicks();
+    }
+    if (Watched == grid_->viewport() && Event->type() == QEvent::MouseMove && plainLeftClick_) {
+        const auto* Mouse = static_cast<QMouseEvent*>(Event);
+        if (Mouse->buttons().testFlag(Qt::LeftButton)
+            && (Mouse->position().toPoint() - renamePressPosition_).manhattanLength() >= QApplication::startDragDistance()) {
+            plainLeftClick_ = false; resetRenameClicks();
+        }
+    }
     if (renameEditor_ && Watched == renameEditor_) {
         if (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride) {
             auto* Key = static_cast<QKeyEvent*>(Event);
@@ -1468,8 +1480,10 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
         QTimer::singleShot(0, this, &CGridView::syncViewportBackground);
     // A DPI change reloads icons at the new physical size.
     if (Event->type() == QEvent::FontChange || Event->type() == QEvent::Show || Event->type() == QEvent::DevicePixelRatioChange) requestPresentation();
-    if( Event->type() == QEvent::KeyPress )
+    if (Watched == grid_->viewport() && Event->type() == QEvent::KeyPress) resetRenameClicks();
+    if( Event->type() == QEvent::KeyPress && Watched != grid_->viewport() )
     {
+        resetRenameClicks();
         if( IsEditing() == true )
             return false;
 
@@ -1490,11 +1504,9 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 
     if( Event->type() == QEvent::FocusOut )
     {
-        const auto Grid = qobject_cast< Qtitan::Grid* >( Watched );
-        if( Grid != nullptr )
+        if( Watched == grid_ || Watched == grid_->viewport() )
         {
-            viewClickTimer_.stop();
-            lastFocusedRowIndex_ = -1;
+            resetRenameClicks();
         }
     }
 

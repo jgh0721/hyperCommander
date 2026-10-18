@@ -136,6 +136,7 @@ void QMainOpts::LoadSettings()
         defaultConflict_->setCurrentIndex(qMax(0, QStringList{"ask", "replace", "skip"}.indexOf(Options["fileConflict"].toString("ask"))));
         findChild<QCheckBox*>("hc.settings.renameInDialog")->setChecked(Options["renameInDialog"].toBool(true));
         findChild<QCheckBox*>("hc.settings.renameSelectExtension")->setChecked(Options["renameSelectExtension"].toBool(false));
+        findChild<QCheckBox*>("hc.settings.renameOnSlowClick")->setChecked(Options["renameOnSlowClick"].toBool(true));
         findChild<QCheckBox*>("hc.settings.folderSizeOnSpace")->setChecked(Options["folderSizeOnSpace"].toBool(true));
         findChild<QCheckBox*>("hc.settings.folderSizeBeforeOperations")->setChecked(Options["folderSizeBeforeOperations"].toBool(true));
         findChild<QCheckBox*>("hc.settings.folderSizeUseEverything")->setChecked(Options["folderSizeUseEverything"].toBool(true));
@@ -284,6 +285,7 @@ bool QMainOpts::SaveSettings()
     Options["fileConflict"] = QStringList{"ask", "replace", "skip"}.value(defaultConflict_->currentIndex(), "ask");
     Options["renameInDialog"] = findChild<QCheckBox*>("hc.settings.renameInDialog")->isChecked();
     Options["renameSelectExtension"] = findChild<QCheckBox*>("hc.settings.renameSelectExtension")->isChecked();
+    Options["renameOnSlowClick"] = findChild<QCheckBox*>("hc.settings.renameOnSlowClick")->isChecked();
     for (const auto* Key : {"folderSizeOnSpace", "folderSizeBeforeOperations", "folderSizeUseEverything"})
         Options[Key] = findChild<QCheckBox*>(QString("hc.settings.") + Key)->isChecked();
     Options["folderSizeMode"] = QStringList{"manual", "local", "all", "everything"}.value(findChild<QComboBox*>("hc.settings.folderSizeMode")->currentIndex(), "everything");
@@ -862,6 +864,9 @@ void QMainOpts::initializeDesignPages()
     RenameDialog->setObjectName("hc.settings.renameInDialog"); RenameForm->addRow(RenameDialog);
     auto* RenameExtension = new QCheckBox(tr("이름 변경을 시작할 때 확장자까지 기본 선택"), Rename);
     RenameExtension->setObjectName("hc.settings.renameSelectExtension"); RenameForm->addRow(RenameExtension);
+    auto* RenameClick = new QCheckBox(tr("같은 파일 이름을 천천히 두 번 클릭하여 이름 변경"), Rename);
+    RenameClick->setObjectName("hc.settings.renameOnSlowClick"); RenameForm->addRow(RenameClick);
+    RenameClick->setToolTip(tr("더블클릭은 파일·폴더를 엽니다. 끄면 이름 변경 키와 명령으로만 이름 변경을 시작합니다."));
     auto* RenameNote = new QLabel(tr("대화상자 표시를 끄면 목록 안에서 이름을 변경합니다. 마지막 점(.) 뒤를 확장자로 구분합니다.\n목록 편집 중 이름 변경 단축키를 다시 누르면 전체 이름과 확장자를 제외한 이름 선택이 전환됩니다. 위·아래 화살표는 변경을 완료한 뒤 이전·다음 항목을 편집하며, Esc는 편집을 취소합니다."), Rename);
     RenameNote->setWordWrap(true); RenameForm->addRow(RenameNote); RenameRows->addStretch();
 

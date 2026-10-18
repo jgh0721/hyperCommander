@@ -120,6 +120,7 @@ protected slots:
     void                            oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args );
     void                            oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args );
     void                            oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex );
+    void                            oo_grid_editorStarting( Qtitan::EditorEventArgs* Args );
     void                            oo_grid_editorStarted( Qtitan::EditorEventArgs* Args );
     void                            oo_grid_editorPosting( Qtitan::EditorEventArgs* Args );
     void                            oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection );
@@ -132,6 +133,7 @@ protected:
     bool                            nativeEvent( const QByteArray& eventType, void* message, qintptr* result ) override;
 
 private:
+    void resetRenameClicks();
     void selectRenameText(bool IncludeExtension);
     void positionRenameEditor();
     void commitRename(int Direction);
@@ -192,12 +194,16 @@ private:
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;
+    QPersistentModelIndex           mouseRenameIndex_;
+    QPersistentModelIndex           lastNameClickIndex_;
+    QElapsedTimer                   lastNameClickTime_;
+    QPoint                          renamePressPosition_;
+    bool                            plainLeftClick_ = false;
     QTimer                          columnSortTimer_;
     QLabel*                         columnStatus_ = nullptr;
     QWidget*                        pageBar_ = nullptr;
     QStringList                     querySelection_;
     QString                         queryFocus_;
-    int                             lastFocusedRowIndex_ = -1;
     int                             fileNameColumnIndex = -1;       // 추후 사용.
 };
 

@@ -1578,9 +1578,10 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     if (!Model || !Model->GetRoot()) return;
     if (Id == "hc.file.rename") {
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
+        if (Source == "cell-click" && !Options["renameOnSlowClick"].toBool(true)) return;
         const auto Panel = PanelOf(Model);
         const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
-        if (!Options["renameInDialog"].toBool(true) && View && !View->IsThumbnailMode()) {
+        if ((Source == "cell-click" || !Options["renameInDialog"].toBool(true)) && View && !View->IsThumbnailMode()) {
             View->BeginRename(Index, Options["renameSelectExtension"].toBool(false),
                 [Guard = QPointer<CommandUiBridge>(this)](const QModelIndex& At, const QString& Name, CGridView::RenameCompletion Completion) {
                     if (Guard) Guard->submitInlineRename(At, Name, std::move(Completion));

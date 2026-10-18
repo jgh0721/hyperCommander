@@ -62,6 +62,21 @@ private slots:
         Reload.BeginEdit(); Options["enableJobRecovery"]="true"; QVERIFY(Reload.Put(Section::Options,Options)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
         Options["enableJobRecovery"]=false; QVERIFY(Reload.Put(Section::Options,Options)); Repository Off(Directory.path()); QVERIFY(!Off.Read(Section::Options).toObject()["enableJobRecovery"].toBool(true));
     }
+    void slowClickRenameSetting()
+    {
+        QTemporaryDir Directory; Repository Settings(Directory.path());
+        QVERIFY(Settings.Read(Section::Options).toObject()["renameOnSlowClick"].toBool());
+        auto Options = Settings.Read(Section::Options).toObject(); Options["renameOnSlowClick"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); Repository Reload(Directory.path());
+        QVERIFY(!Reload.Read(Section::Options).toObject()["renameOnSlowClick"].toBool(true));
+        Reload.BeginEdit(); Options["renameOnSlowClick"] = "false"; QVERIFY(Reload.Put(Section::Options, Options));
+        QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
+        auto Document = Reload.Object(); Document["options"] = Options;
+        const auto Broken = QJsonDocument(Document).toJson(); QVERIFY(Write(Reload.FileName(), Broken));
+        QVERIFY(Reload.Reload()); QVERIFY(!Reload.Issues().isEmpty());
+        QVERIFY(Reload.Read(Section::Options).toObject()["renameOnSlowClick"].toBool());
+        QCOMPARE(Bytes(Reload.FileName()), Broken);
+    }
     void delayedFileWritesSetting()
     {
         QTemporaryDir Directory; Repository Settings(Directory.path());

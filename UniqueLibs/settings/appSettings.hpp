@@ -320,8 +320,8 @@ protected:
         if (Copy.contains("folderSizeMode") && !QStringList{"manual", "local", "all", "everything"}.contains(Copy["folderSizeMode"].toString())) {
             Copy["folderSizeMode"] = "everything"; Report("options.folderSizeMode");
         }
-        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
-            Copy[Key] = QString(Key) == "copyMetadata" || QString(Key) == "jobCloseOnSuccess" || QString(Key) == "delayedFileWrites" || QString(Key) == "renameInDialog"; Report(QString("options.") + Key);
+        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
+            Copy[Key] = QString(Key) == "copyMetadata" || QString(Key) == "jobCloseOnSuccess" || QString(Key) == "delayedFileWrites" || QString(Key) == "renameInDialog" || QString(Key) == "renameOnSlowClick"; Report(QString("options.") + Key);
         }
         if (Copy.contains("copyPattern")) {
             const auto Pattern = Copy["copyPattern"].toString(); bool Valid = Copy["copyPattern"].isString() && !Pattern.trimmed().isEmpty() && Pattern.toUtf8().size() <= 4096;
