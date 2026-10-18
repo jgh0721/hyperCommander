@@ -10,6 +10,7 @@ namespace hc::document
     public:
         static void Install(QApplication& App);
         static void InstallLocal(QWidget& Widget);
+        static void ReleaseLocal(QWidget& Widget);
         static bool SetMode(const QString& Mode);
         static void Attach(QPlainTextEdit* Editor);
     };

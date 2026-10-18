@@ -527,6 +527,7 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QCOMPARE(Stack->currentWidget(),Anchor);QVERIFY(Loading->isHidden());QVERIFY(Anchor->isVisible());
     auto Initial=Surface.Details().documentState_;auto Id=Initial["documents"].toArray()[0].toObject()["documentId"].toString();
     QCOMPARE(Initial["documents"].toArray().size(),1);QVERIFY(!Doc(Initial,Id)["sourceToken"].toString().isEmpty());
+    QCOMPARE(Doc(Initial,Id)["displayName"].toString(),QFileInfo(Large).fileName());
     QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["lifecycle"].toString()=="ready";}));
     auto Send=[&](QJsonObject Request){auto Result=Surface.SendDocument(Request);if(!Result.HasValue())return false;const auto Sequence=Result.Value();return Wait([&]{return Surface.Details().commandSequence_>=Sequence;})&&!Surface.Details().commandError_;};
     QVERIFY(Send({{"action","text.replaceAll"},{"documentId",Id},{"text","old"},{"replacement","new"}}));QVERIFY(Send({{"action","save"},{"documentId",Id}}));
@@ -543,6 +544,11 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     auto Added=Surface.OpenDocuments({{Content(Pdf),{}},{Content(Image),{}}});QVERIFY(Added.HasValue());
     QVERIFY(Wait([&]{return Surface.Details().documentState_["documents"].toArray().size()==3&&Surface.Details().documentState_["idle"].toBool();}));
     QCOMPARE(Live->load(),3);
+    for(const auto& Item:Surface.Details().documentState_["documents"].toArray()) {
+        const auto Record=Item.toObject();const auto View=Record["view"].toObject()["viewId"].toString();
+        if(View=="pdf")QCOMPARE(Record["displayName"].toString(),QString("doc.pdf"));
+        if(View=="image")QCOMPARE(Record["displayName"].toString(),QString("image.png"));
+    }
     auto State=Surface.Details().documentState_;QString ImageId;for(const auto& Item:State["documents"].toArray())if(Item.toObject()["view"].toObject()["viewId"].toString()=="image")ImageId=Item.toObject()["documentId"].toString();
     QVERIFY(Send({{"action","clipboard"},{"documentId",ImageId},{"mode","copy"}}));QVERIFY(Wait([&]{return !QApplication::clipboard()->image().isNull();}));
     QVERIFY(Send({{"action","close"},{"documentId",ImageId},{"discard",true}}));QVERIFY(Wait([&]{return Live->load()==2;}));

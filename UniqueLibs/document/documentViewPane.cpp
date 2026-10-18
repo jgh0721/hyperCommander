@@ -179,7 +179,7 @@ namespace hc::document
     void DocumentViewPane::applyTheme()
     {
         if(!view_)return;const auto& Theme=fm::style::ThemeManager::instance();
-        const auto Dark=QApplication::palette().color(QPalette::Window).lightness()<128;
+        const auto Dark=palette().color(QPalette::Window).lightness()<128;
         ThemeManager::instance().setTheme(Dark?ThemeManager::Dark:ThemeManager::Light);view_->setTheme(Dark?QBaseView::Dark:QBaseView::Light);
         // Actions are created before the workspace applies its palette. Refresh
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.

@@ -9,6 +9,11 @@
 #include <QDoubleSpinBox>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QToolBar>
+#include <QMenu>
+#include <QStyleOptionSlider>
+#include <fmstyle/ThemeManager.h>
+#include <fmstyle/WatercolorStyle.h>
 #include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
 #include "core/ExternalChangeWatcher.h"
 #include "core/AppSettings.h"
@@ -39,6 +44,55 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void workspaceScrollbarsAndIcons_data()
+    {
+        QTest::addColumn<bool>("hosted"); QTest::addColumn<QString>("mode");
+        for (bool Hosted : {true, false}) for (const auto& Mode : {QString("light"), QString("dark")})
+            QTest::newRow(qPrintable(QString("%1-%2").arg(Hosted ? "viewer" : "editor", Mode))) << Hosted << Mode;
+    }
+    void workspaceScrollbarsAndIcons()
+    {
+        QFETCH(bool, hosted); QFETCH(QString, mode);
+        QTemporaryDir Temp; qApp->setProperty("documentViewsConfigDir", Temp.path());
+        auto& Theme = fm::style::ThemeManager::instance(); const auto OldScheme = Theme.scheme();
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(OldScheme); qApp->setProperty("documentViewsConfigDir", QVariant()); });
+        const auto* ApplicationStyle = qApp->style(); const auto ApplicationSheet = qApp->styleSheet();
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"), hosted);
+        QVERIFY(Window.ApplyChromeSettings({{"schemaVersion", 1}, {"themeMode", mode}}));
+        if (hosted && !Theme.isInstalled()) { QCOMPARE(qApp->style(), ApplicationStyle); QCOMPARE(qApp->styleSheet(), ApplicationSheet); }
+        auto* Toolbar = Window.findChild<QToolBar*>("mainToolbar"); QVERIFY(Toolbar);
+        for (auto* Action : Toolbar->actions()) {
+            QVERIFY2(!Action->icon().isNull(), qPrintable(Action->objectName()));
+            QVERIFY(Action->isIconVisibleInMenu()); QVERIFY(!Action->text().isEmpty());
+        }
+        const QByteArray Content = (QByteArray(600, 'W') + "\r\n").repeated(120);
+        const auto Path = Temp.filePath("scroll.txt"); Write(Path, Content);
+        QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error")); QTRY_VERIFY(Window.IsIdle());
+        auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text); Text->SetWordWrapMode(0);
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+        Backend->Send(SCI_SETCARETSTYLE, CARETSTYLE_INVISIBLE); Backend->Send(SCI_SETCARETPERIOD, 0);
+        auto* Area = Backend->scrollArea(); QVERIFY(Area);
+        Window.resize(800, 550); Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        for (auto* Bar : {Area->horizontalScrollBar(), Area->verticalScrollBar()}) {
+            QTRY_VERIFY(Bar->isVisible()); QVERIFY(Bar->maximum() > 0);
+            QVERIFY(qobject_cast<fm::style::WatercolorStyle*>(Bar->style()));
+            QCOMPARE(Bar->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, Bar), 17);
+            QCOMPARE(Bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, Bar), 0);
+            Bar->setValue(Bar->maximum() / 2); QVERIFY(Bar->value() > 0);
+            QStyleOptionSlider Option; Option.initFrom(Bar); Option.rect = Bar->rect(); Option.orientation = Bar->orientation();
+            Option.minimum = Bar->minimum(); Option.maximum = Bar->maximum(); Option.pageStep = Bar->pageStep(); Option.sliderPosition = Bar->value();
+            const auto Slider = Bar->style()->subControlRect(QStyle::CC_ScrollBar, &Option, QStyle::SC_ScrollBarSlider, Bar);
+            QVERIFY(Bar->rect().contains(Slider)); QVERIFY(Slider.width() > 5 && Slider.height() > 5);
+        }
+        QVERIFY(!Area->testAttribute(Qt::WA_OpaquePaintEvent));
+        QVERIFY(!Area->testAttribute(Qt::WA_NoSystemBackground));
+        QVERIFY(Area->viewport()->testAttribute(Qt::WA_OpaquePaintEvent));
+        QCOMPARE(Text->Content().toUtf8(), Content);
+        QTest::qWait(100); const auto Scrolled = Area->grab().toImage();
+        Area->viewport()->repaint(); QCOMPARE(Area->grab().toImage(), Scrolled);
+        const auto Capture = qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");
+        if (!Capture.isEmpty()) { QDir().mkpath(Capture); QVERIFY(Window.grab().save(Capture + "/scroll-" + (hosted ? "viewer-" : "editor-") + mode + ".png")); }
+    }
     void renderingSettingsApplyWithoutContentChanges()
     {
         QTemporaryDir Temp; qApp->setProperty("documentViewsConfigDir", Temp.path());

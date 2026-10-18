@@ -358,7 +358,7 @@ namespace hc::plugins
                     const auto Token = Document->Bind(*Entry, Writer, Lease, Hash);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
                     auto Bound = Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -426,7 +426,8 @@ namespace hc::plugins
                                 Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
                             const auto Token = Document->Bind(Entry, Writer, Materialized.Value());
                             if (Token.isEmpty()) { Result = Invalid("document-source-binding"); break; }
-                            Inputs.append(QJsonObject{{"path", QString::fromStdString(Materialized.Value()->LocalPath())}, {"sourceToken", Token}, {"broker", bool(Writer)}});
+                            Inputs.append(QJsonObject{{"path", QString::fromStdString(Materialized.Value()->LocalPath())},
+                                {"displayName", QString::fromUtf8(Entry.name_)}, {"sourceToken", Token}, {"broker", bool(Writer)}});
                         }
                         if (Result.HasValue() && Command->parameter_ == 1) {
                             const auto Current = Document->Call("DocumentState", {}, {}, {}, Calls);

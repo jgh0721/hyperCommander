@@ -918,9 +918,6 @@ void QTextView::setTheme(Theme theme)
     QBaseView::setTheme(theme);
     if (m_editor) {
         m_editor->applyThemeColors(theme == Dark);
-        // ScintillaEditBase는 자체 렌더링을 사용하므로 Qt stylesheet 제외
-        if (m_editor->widget())
-            m_editor->widget()->setStyleSheet(QStringLiteral("/* no-inherit */"));
     }
 }
 
@@ -1124,8 +1121,6 @@ bool QTextView::ensureEditorBackend()
 
     applyEditorSettings();
     m_editor->applyThemeColors(currentTheme() == Dark);
-    if (m_editor->widget())
-        m_editor->widget()->setStyleSheet(QStringLiteral("/* no-inherit */"));
     updateMetrics();
     updateCopyAvailability();
     return true;

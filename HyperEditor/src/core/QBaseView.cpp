@@ -421,7 +421,7 @@ QBaseView::Theme QBaseView::currentTheme() const { return m_theme; }
 
 void QBaseView::applyThemeStyleSheet(Theme theme)
 {
-    Q_UNUSED(theme);setStyleSheet({});setPalette(QApplication::palette());
+    Q_UNUSED(theme);setStyleSheet({});setPalette(parentWidget() ? parentWidget()->palette() : QApplication::palette());
 }
 
 void QBaseView::resizeEvent(QResizeEvent* event)

@@ -396,6 +396,10 @@
     "license": "src/thirdparty/scintilla-qt/LICENSE.txt (MultiRoot-reST-CPP MIT)",
     "adaptedFiles": [
       {
+        "path": "src/core/QBaseView.cpp",
+        "sha256": "597d3e0589820264a901ad06589c96a0f2e456fc1663f3b25c85733a38e28728"
+      },
+      {
         "path": "src/core/ExternalChangeWatcher.h",
         "sha256": "a060e4e3375f481276ec2cee7fd77ee98e13f109137488ea5783bd2149ff149e"
       },
@@ -405,11 +409,11 @@
       },
       {
         "path": "src/text/QTextView.cpp",
-        "sha256": "37e204ad9e3160928e2c9372318d4f1d39ecf4778d81e604f874ca468287470f"
+        "sha256": "ab48e1afd7720da2f220af7536ca672115a70fbb4ec0579bda2a3b6643459136"
       },
       {
         "path": "src/text/ScintillaQtDirectBackend.cpp",
-        "sha256": "fd6ca339df5269567b35a3746eecb1d5ad5df6281055179cd17a0307a4826c4f"
+        "sha256": "a9ee5a943b22e326706172ad238d38a4ac59a6bbc4214830429839c2d3d29f3c"
       },
       {
         "path": "src/text/ScintillaEditorSettings.h",

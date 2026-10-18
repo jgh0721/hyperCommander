@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <QToolBar>
+#include <QTabWidget>
 #include <QMessageBox>
 #include <QLabel>
 #include <QLockFile>
@@ -360,18 +361,32 @@ private slots:
             Workspace=Result["workspaceId"].toString(); return Result;
         };
         QCOMPARE(Send("Hello",{})["messageType"].toString(),QString("Ready"));
-        QJsonObject Binding{{"path",Path},{"hostSlot",true},{"broker",true},{"sourceToken",QString(32,'a')},{"bindExistingHost",true},
+        const auto DisplayName = QString::fromUtf8("원본 문서.md");
+        QJsonObject Binding{{"path",Path},{"displayName",DisplayName},{"hostSlot",true},{"broker",true},{"sourceToken",QString(32,'a')},{"bindExistingHost",true},
             {"sha256",QString::fromLatin1(QCryptographicHash::hash(Original,QCryptographicHash::Sha256).toHex())}};
         const auto Result=Send("OpenDocuments",{{"documents",QJsonArray{Binding}}})["payload"].toObject()["documents"].toArray()[0].toObject();
         QVERIFY(Result["boundExistingHost"].toBool()); QCOMPARE(Result["documentId"].toString(),Id);
         QCOMPARE(Pane->InputWidget(),Input.data()); QCOMPARE(Widget.Snapshot()["documents"].toArray().size(),1);
         QVERIFY(Document(Widget,Id)["canSave"].toBool());
+        auto* Tabs=Widget.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
+        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        QCOMPARE(Document(Widget,Id)["path"].toString(),Path);
+        Widget.Handle({{"action","reload"},{"documentId",Id}}); QTRY_VERIFY(Widget.IsIdle());
+        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        auto Invalid=Binding; Invalid["displayName"]="../wrong.txt";
+        QCOMPARE(Send("OpenDocuments",{{"documents",QJsonArray{Invalid}}})["messageType"].toString(),QString("Error"));
+        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
         // The SDK can reload this slot; a mismatched snapshot must take the full open path.
         Widget.Handle({{"action","openHost"},{"path",Path}}); QTRY_VERIFY(Widget.IsIdle());
         Binding["sha256"]=QString(64,'0'); Binding["sourceToken"]=QString(32,'b');
         const auto Reopened=Send("OpenDocuments",{{"documents",QJsonArray{Binding}}})["payload"].toObject()["documents"].toArray()[0].toObject();
         QVERIFY(!Reopened["boundExistingHost"].toBool()); QVERIFY(Reopened["documentId"].toString()!=Id);
         QTRY_VERIFY(Widget.IsIdle());
+        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        const auto NewId=Reopened["documentId"].toString();
+        const auto Copy=Root.filePath("renamed.txt");
+        QVERIFY(!Widget.Handle({{"action","saveAs"},{"documentId",NewId},{"path",Copy}}).contains("error")); QTRY_VERIFY(Widget.IsIdle());
+        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("renamed.txt")); QCOMPARE(Bytes(Copy),Original);
     }
     void helperUsesP1SessionAndConflictFlow()
     {
@@ -387,19 +402,23 @@ private slots:
         QVERIFY(qAbs(State["dpr"].toDouble() - Parent.devicePixelRatioF()) < 0.01);
         auto Id = State["documents"].toArray()[0].toObject()["documentId"].toString();
         QTRY_COMPARE(Native(Viewer, Module, {{"action", "state"}})["documents"].toArray()[0].toObject()["lifecycle"].toString(), QString("ready"));
-        // Exercise the native SDK focus route and WM_CHAR delivery in this
-        // owned fixture, rather than editing through the command protocol.
-        SetFocus(Viewer);
+        // The SDK anchor owns a separate top-level viewer. Present it before
+        // exercising the SDK focus route and real keyboard delivery.
+        const auto Presented=Native(Viewer,Module,{{"action","present"}});
+        QVERIFY(Presented["accepted"].toBool());
+        auto Helper=reinterpret_cast<HWND>(Presented["nativeWindow"].toString().toULongLong(nullptr,16));
+        QVERIFY(Helper); QVERIFY(IsWindowVisible(Helper)); QVERIFY(!GetWindow(Viewer,GW_CHILD));
+        SetForegroundWindow(Helper); QTRY_COMPARE(GetForegroundWindow(),Helper);
+        SendMessageW(Viewer,WM_SETFOCUS,0,0);
         QTRY_VERIFY(Native(Viewer,Module,{{"action","state"}})["documents"].toArray()[0].toObject()["view"].toObject()["inputFocused"].toBool());
-        auto Helper=GetWindow(Viewer,GW_CHILD); QVERIFY(Helper);
-        QVERIFY(PostMessageW(Helper,WM_KEYDOWN,'Z',1));
-        QVERIFY(PostMessageW(Helper,WM_CHAR,L'z',1));
-        QVERIFY(PostMessageW(Helper,WM_KEYUP,'Z',1));
+        INPUT Keys[2]{}; Keys[0].type=Keys[1].type=INPUT_KEYBOARD;
+        Keys[0].ki.wVk=Keys[1].ki.wVk='Z'; Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
         QTest::qWait(100);
         const auto KeyboardCopy=Root.filePath("native-keyboard.txt");
         Native(Viewer,Module,{{"action","saveAs"},{"documentId",Id},{"path",KeyboardCopy}});
         QTRY_VERIFY(!Native(Viewer,Module,{{"action","state"}})["documents"].toArray()[0].toObject()["saving"].toBool());
-        QTRY_VERIFY(QFile::exists(KeyboardCopy)); QVERIFY2(Bytes(KeyboardCopy).contains('z'),"native character did not reach the editor");
+        QTRY_VERIFY(QFile::exists(KeyboardCopy)); QVERIFY2(Bytes(KeyboardCopy).toLower().contains('z'),"native character did not reach the editor");
         Native(Viewer, Module, {{"action", "replaceText"}, {"documentId", Id}, {"text", "helper revision one\n"}});
         auto Copy = Root.filePath("copy.txt"); Native(Viewer, Module, {{"action", "saveAs"}, {"documentId", Id}, {"path", Copy}});
         QTRY_VERIFY(QFile::exists(Copy)); QCOMPARE(Bytes(Copy), QByteArray("helper revision one\n"));

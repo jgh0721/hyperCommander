@@ -47,8 +47,12 @@
 #include "capture/CaptureOverlay.h"
 #include "core/PrintManager.h"
 #include "core/AppSettings.h"
+#include "core/ToolbarIcons.h"
+#include "core/ThemeManager.h"
+#include <fmstyle/ThemeManager.h>
 #include "core/ExternalChangeWatcher.h"
 #include "core/WatermarkDialog.h"
+void InitializePortedViewResources();
 
 namespace hc::document
 {
@@ -101,11 +105,34 @@ namespace hc::document
             QSaveFile File(Path); File.setDirectWriteFallback(false);
             return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size() && File.commit();
         }
+        void RefreshWorkspaceIcons(QWidget& Workspace)
+        {
+            ThemeManager::instance().setTheme(Workspace.palette().color(QPalette::Window).lightness() < 128
+                ? ThemeManager::Dark : ThemeManager::Light);
+            static const QMap<QString, QString> Icons{
+                {"newDocument", "new-file"}, {"openDocument", "open"}, {"saveDocument", "save"},
+                {"saveDocumentAs", "save-as"}, {"reloadDocument", "refresh"},
+                {"resolveDocumentConflict", "replace"}, {"closeDocument", "stop"}, {"cancelDocument", "stop"},
+                {"printDocument", "print"}, {"previewDocument", "print-preview"}, {"captureScreen", "screen-capture"},
+                {"undoDocument", "undo"}, {"redoDocument", "redo"}, {"documentPreferences", "toc-toggle"},
+                {"workspaceDisplayOptions", "view-preview"}, {"documentWatermark", "watermark"},
+                {"documentCaptureProtection", "capture-exclude"}, {"documentRecovery", "refresh"},
+                {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"},
+                {"text.find", "search-next"}, {"text.findNext", "search-next"}, {"text.findPrev", "search-prev"},
+                {"text.replace", "replace"}, {"text.goToLine", "toc-toggle"}, {"text.wordWrap", "word-wrap"},
+                {"text.foldAll", "code-folding"}, {"text.unfoldAll", "code-folding"}};
+            for (auto* Action : Workspace.findChildren<QAction*>()) {
+                const auto Icon = Icons.constFind(Action->objectName());
+                if (Icon == Icons.cend()) continue;
+                Action->setIcon(ToolbarIcons::iconByName(*Icon));
+                Action->setIconVisibleInMenu(true);
+            }
+        }
     }
     struct DocumentWorkspaceWidget::Tab
     {
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
-        QString sourceToken_, pendingToken_, recoveredName_, temporarySource_;
+        QString sourceToken_, pendingToken_, recoveredName_, temporarySource_, displayName_;
         QByteArray pendingHash_;
         std::uint64_t checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
         std::shared_ptr<DocumentSession> session_ = std::make_shared<DocumentSession>(id_.toStdString());
@@ -127,11 +154,13 @@ namespace hc::document
     {
         if (Hosted) DocumentThemeAdapter::InstallLocal(*this);
         else DocumentThemeAdapter::Install(*qApp);
+        InitializePortedViewResources();
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
         setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(1000, 700);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
         menu_ = new QMenuBar(this); toolbar_ = new QToolBar(tr("공통 도구모음"), this);
         menu_->setObjectName("mainMenu"); toolbar_->setObjectName("mainToolbar");
+        toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
         status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setContentsMargins(8, 4, 8, 4);
@@ -228,7 +257,7 @@ namespace hc::document
                 });
             }
         }
-        auto* Watermark=ViewMenu->addAction(tr("워터마크"));connect(Watermark,&QAction::triggered,this,[this]{if(auto Tab=active()){if(!Tab->pane_->View())return;WatermarkDialog Dialog(Tab->pane_->View()->watermark(),this);if(Dialog.exec()==QDialog::Accepted)Tab->pane_->View()->setWatermark(Dialog.result());}});
+        auto* Watermark=ViewMenu->addAction(tr("워터마크"));Watermark->setObjectName("documentWatermark");connect(Watermark,&QAction::triggered,this,[this]{if(auto Tab=active()){if(!Tab->pane_->View())return;WatermarkDialog Dialog(Tab->pane_->View()->watermark(),this);if(Dialog.exec()==QDialog::Accepted)Tab->pane_->View()->setWatermark(Dialog.result());}});
         auto* Protection=ViewMenu->addAction(tr("화면 캡처 보호"));Protection->setCheckable(true);connect(Protection,&QAction::toggled,this,[this](bool Enabled){if(auto Tab=active()){auto Reply=Tab->pane_->Execute({{"action","captureProtection"},{"enabled",Enabled}});if(Reply.contains("error"))ShowShellError(tr("이 호스트에서는 화면 캡처 보호를 적용할 수 없습니다."));}});
         auto* Themes = ViewMenu->addMenu(tr("테마"));
         for (const auto& Mode : {QString("system"), QString("light"), QString("dark")}) {
@@ -239,6 +268,7 @@ namespace hc::document
             });
         }
         auto* Restore = FileMenu->addAction(tr("복구 목록"));
+        Restore->setObjectName("documentRecovery"); Protection->setObjectName("documentCaptureProtection");
         connect(Restore, &QAction::triggered, this, [this] {
             auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(this); ++recoveryWorkers_;
             connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
@@ -328,7 +358,10 @@ namespace hc::document
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileChanged, this, [this](const QString& Path) { externalChange(Path, false); });
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileVanished, this, [this](const QString& Path) { externalChange(Path, true); });
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive) externalWatcher_->recheckAll(); });
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed,
+            this, [this] { RefreshWorkspaceIcons(*this); });
         refreshPreferences();
+        RefreshWorkspaceIcons(*this);
     }
     DocumentWorkspaceWidget::~DocumentWorkspaceWidget()
     {
@@ -337,6 +370,7 @@ namespace hc::document
         // resources are closed. Disconnect before members start destruction.
         for(const auto& Tab:documents_){Tab->closed_=true;Tab->cancellation_->request_stop();}
         for(auto* Child:findChildren<QObject*>())QObject::disconnect(Child,nullptr,this,nullptr);
+        DocumentThemeAdapter::ReleaseLocal(*this);
     }
     void DocumentWorkspaceWidget::showPreferences()
     {
@@ -449,18 +483,19 @@ namespace hc::document
             return Tab->loading_ || Tab->saving_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
-    QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker, const QString& RecoveryPath)
+    QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
+        const QString& RecoveryPath, const QString& DisplayName)
     {
         if (!QFileInfo(Path).isAbsolute() || Path.contains(QChar::Null)) return Error("document-open-path");
         for (const auto& Tab : documents_) if (Tab->hostSlot_ && HostSlot) {
             if (Tab->loading_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy()) {
-                pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}};
+                pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             if (Tab->Dirty()) {
                 if (Tab->session_->Text().size() > DocumentByteLimit) return Error("p0-text-byte-limit");
                 // SDK owns one slot; a newer pending Load supersedes its predecessor.
-                pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}};
+                pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 Tab->editor_->setReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             retire(Tab, true); break;
@@ -471,6 +506,7 @@ namespace hc::document
         }
         if (documents_.size() >= 16 || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
         auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path;
+        Tab->displayName_ = DisplayName;
         Tab->hostSlot_ = HostSlot; Tab->sourceToken_ = SourceToken; Tab->broker_ = Broker; Tab->recovered_ = !RecoveryPath.isEmpty();
         // Authority follows the source: SDK slots have no original-provider link,
         // while explicitly opened local files are writable in either product.
@@ -637,7 +673,7 @@ namespace hc::document
             if (!Result.HasValue()) { Tab->error_ = QString::fromStdString(Result.Failure().code_); Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
             else {
                 if(!Tab->Dirty())Tab->pane_->Commit(Destination, Bytes);
-                Tab->path_ = Destination; Tab->input_.source_ = Result.Value().source_; Tab->input_.hash_ = Result.Value().hash_;
+                Tab->path_ = Destination; Tab->displayName_.clear(); Tab->input_.source_ = Result.Value().source_; Tab->input_.hash_ = Result.Value().hash_;
                 Tab->originalAuthority_ = true;
                 Tab->originalSave_ = Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u); Tab->recovered_ = false; Tab->recoveredName_.clear();
                 Tab->checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
@@ -677,7 +713,7 @@ namespace hc::document
             if (Tab->loading_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_ || Tab->pane_->IsBusy()) break;
             if (!Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) {
                 const auto Next = std::exchange(pendingHostOpen_, {});
-                retire(Tab, true, true); open(Next["path"].toString(), true, Next["sourceToken"].toString(), Next["broker"].toBool()); return;
+                retire(Tab, true, true); open(Next["path"].toString(), true, Next["sourceToken"].toString(), Next["broker"].toBool(), {}, Next["displayName"].toString()); return;
             }
         }
         // A host-slot replacement must preserve dirty content even when periodic recovery is disabled.
@@ -713,7 +749,9 @@ namespace hc::document
             const auto State = Tab->session_->Snapshot(); const auto Capability = Tab->session_->Capabilities();
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : !State.cleanupErrors_.empty() ? QString("document-saved-cleanup-warning") : QString{};
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
-            Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_}, {"dirty", State.dirty_}, {"loading", Tab->loading_},
+            Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
+                {"displayName", Tab->displayName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->displayName_},
+                {"dirty", State.dirty_}, {"loading", Tab->loading_},
                 {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
@@ -757,6 +795,13 @@ namespace hc::document
         if (Type == "OpenDocuments") {
             const auto Inputs = Payload["documents"].toArray();
             if (Inputs.isEmpty() || Inputs.size() > 16) return Reply(Error("document-open-count"));
+            for (const auto& Input : Inputs) {
+                const auto Name = Input.toObject()["displayName"];
+                if (!Name.isUndefined() && (!Name.isString() || Name.toString().size() > 1024
+                    || Name.toString().contains(QChar::Null) || Name.toString().contains('/')
+                    || Name.toString().contains('\\') || Name.toString().contains('\r') || Name.toString().contains('\n')))
+                    return Reply(Error("document-display-name"));
+            }
             // Commander recycles a closed viewer as its next warm viewer.
             viewerCloseRequested_ = false;
             QJsonArray Results; for (const auto& Input : Inputs) {
@@ -772,13 +817,14 @@ namespace hc::document
                         const auto Begun=Tab->session_->BeginOpen(true);
                         if(!Begun.HasValue())break;
                         Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool();
+                        Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
                         Results.append(QJsonObject{{"documentId",Tab->id_},{"boundExistingHost",true}});
                         update();Bound=true;break;
                     }
                 }
-                if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool()));
+                if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool(),{},Item["displayName"].toString()));
             }
             return Reply({{"documents", Results}});
         }
@@ -932,7 +978,9 @@ namespace hc::document
         }
         for (const auto& Tab : documents_) if (tabbed_) {
             const auto Index = tabs_->indexOf(Tab->pane_); if (Index < 0) continue;
-            tabs_->setTabText(Index, (Tab->recoveredName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->recoveredName_) + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
+            const auto Name = !Tab->recoveredName_.isEmpty() ? Tab->recoveredName_
+                : !Tab->displayName_.isEmpty() ? Tab->displayName_ : QFileInfo(Tab->path_).fileName();
+            tabs_->setTabText(Index, Name + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
         }
         auto Tab = active();

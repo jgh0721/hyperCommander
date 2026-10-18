@@ -131,8 +131,11 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 	m_editorFont = m_editor->font();
 
 	// 리사이즈 시 깜빡임 방지: 시스템 배경 지움 비활성화
-	m_editor->setAttribute(Qt::WA_OpaquePaintEvent);
-	m_editor->setAttribute(Qt::WA_NoSystemBackground);
+	// Scintilla paints the viewport only. The scroll area must still erase
+	// exposed edges and the corner between its two scroll bars.
+	m_editor->viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
+	m_editor->viewport()->setAttribute(Qt::WA_NoSystemBackground);
+	m_editor->setAutoFillBackground(true);
 
 	// Windows DirectWrite 렌더링: 안티앨리어싱 격자 아티팩트 방지
 	m_editor->send(sciMessage(SCI_SETTECHNOLOGY), 4 );
