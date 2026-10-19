@@ -11,7 +11,8 @@ $Lock = @(
     @('libde265','1.1.3','https://codeload.github.com/strukturag/libde265/tar.gz/refs/tags/v1.1.3','189baa08fd6d2dd34db099de411bd6b2e6bd5eb88e81236a3d0fa3826b9715c4'),
     @('libheif','1.23.6','https://codeload.github.com/strukturag/libheif/tar.gz/refs/tags/v1.23.6','c9a00b0452f5c16d72ef71e5e40c0e90fbe2ad37148d27a1b2f9bb21546f5f03'),
     @('dav1d','1.5.3','https://downloads.videolan.org/pub/videolan/dav1d/1.5.3/dav1d-1.5.3.tar.xz','732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011'),
-    @('libavif','1.4.2','https://codeload.github.com/AOMediaCodec/libavif/tar.gz/refs/tags/v1.4.2','2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d')
+    @('libavif','1.4.2','https://codeload.github.com/AOMediaCodec/libavif/tar.gz/refs/tags/v1.4.2','2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d'),
+    @('libyuv','644251f25','https://chromium.googlesource.com/libyuv/libyuv/+archive/644251f25.tar.gz','4c730925a94e826b2add3d74ab35cdb71d78bd62d64945196ba3b5bae668ea88','file-tree-sha256-v1')
 )
 $Recipe = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash + '|' + $QtKit
 $Stamp = Join-Path $BuildRoot 'complete.txt'
@@ -35,12 +36,22 @@ $env:PATH = "$QtKit/bin;D:/Qt/Tools/Ninja;$env:PATH"
 $env:CC = 'cl'
 $env:CXX = 'cl'
 if (-not (Get-Command cl -ErrorAction SilentlyContinue)) { throw 'MSVC environment initialization did not expose cl.exe.' }
+$Python = (& uv python find 3.12 --offline).Trim()
+if ($LASTEXITCODE) { throw 'Python 3.12 is required for source verification and Meson.' }
 foreach ($Item in $Lock) {
     $Ext = if ($Item[0] -eq 'dav1d') { '.tar.xz' } else { '.tar.gz' }
     $Archive = Join-Path $Sources ($Item[0] + '-' + $Item[1] + $Ext)
     if (-not (Test-Path $Archive)) { Invoke-WebRequest -UseBasicParsing $Item[2] -OutFile $Archive }
-    if ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Item[3]) { throw "Codec source hash mismatch: $Archive" }
-    if (-not (Test-Path (Join-Path $Sources ($Item[0] + '-' + $Item[1])))) { Run 'tar' @('-xf',$Archive,'-C',$Sources) }
+    if ($Item[0] -eq 'libyuv') {
+        Run $Python @((Join-Path $PSScriptRoot 'Verify-ImageCodecSource.py'),$Archive,$Item[3])
+    } elseif ((Get-FileHash $Archive -Algorithm SHA256).Hash -ne $Item[3]) { throw "Codec source hash mismatch: $Archive" }
+    $Source = Join-Path $Sources ($Item[0] + '-' + $Item[1])
+    if (-not (Test-Path $Source)) {
+        if ($Item[0] -eq 'libyuv') {
+            New-Item -ItemType Directory -Force $Source | Out-Null
+            Run 'tar' @('-xf',$Archive,'-C',$Source)
+        } else { Run 'tar' @('-xf',$Archive,'-C',$Sources) }
+    }
     $Notices = Join-Path $Prefix ('Licenses/' + $Item[0])
     New-Item -ItemType Directory -Force $Notices | Out-Null
     Copy-Item -LiteralPath $Archive -Destination $Notices
@@ -49,7 +60,7 @@ foreach ($Item in $Lock) {
 }
 $QtCmake = Join-Path $QtKit 'bin/qt-cmake.bat'
 $Common = @('-G','Visual Studio 18 2026','-A','x64','-T','v145,host=x64',
-    "-DCMAKE_INSTALL_PREFIX=$Prefix",'-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+    "-DCMAKE_INSTALL_PREFIX=$Prefix",'-DCMAKE_POLICY_DEFAULT_CMP0091=NEW','-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
     '-DCMAKE_SHARED_LINKER_FLAGS=/NODEFAULTLIB:libucrt.lib /DEFAULTLIB:ucrt.lib',
     '-DBUILD_SHARED_LIBS=ON','-DBUILD_TESTING=OFF')
 function CmakeBuild([string]$Name,[string]$Version,[string[]]$Options) {
@@ -92,7 +103,16 @@ if (-not (Test-Path "$DavBuild/build.ninja")) {
 Run $Python @('-m','mesonbuild.mesonmain','compile','-C',$DavBuild,'-j','6')
 Run $Python @('-m','mesonbuild.mesonmain','install','-C',$DavBuild)
 $ImportDav1d = Join-Path (Split-Path $PSScriptRoot -Parent) 'cmake/ImageCodecDav1d.cmake'
-CmakeBuild 'libavif' '1.4.2' @('-DAVIF_CODEC_DAV1D=SYSTEM','-DAVIF_LIBYUV=OFF','-DAVIF_BUILD_APPS=OFF',
+$YuvSource = Join-Path $Sources 'libyuv-644251f25'
+$YuvBuild = Join-Path $BuildRoot 'libyuv-build'
+# Build only the static library. libavif carries the conversion code, so no new
+# runtime DLL or upstream command-line programs are deployed.
+Run $QtCmake (@('-S',$YuvSource,'-B',$YuvBuild) + $Common + @('-DUNIT_TEST=OFF'))
+Run $QtCmake @('--build',$YuvBuild,'--config','Release','--target','yuv','--parallel','6')
+Copy-Item -LiteralPath "$YuvBuild/Release/yuv.lib" -Destination "$Prefix/lib/yuv.lib" -Force
+Copy-Item -Path "$YuvSource/include/*" -Destination "$Prefix/include" -Recurse -Force
+CmakeBuild 'libavif' '1.4.2' @('-DAVIF_CODEC_DAV1D=SYSTEM','-DAVIF_LIBYUV=SYSTEM','-DAVIF_BUILD_APPS=OFF',
+    "-DLIBYUV_INCLUDE_DIR=$Prefix/include","-DLIBYUV_LIBRARY=$Prefix/lib/yuv.lib",
     '-DAVIF_BUILD_TESTS=OFF',"-DHC_IMAGE_CODEC_PREFIX=$Prefix","-DCMAKE_PROJECT_INCLUDE=$ImportDav1d")
 [IO.File]::WriteAllText((Join-Path $Prefix 'Licenses/image-codecs-source-lock.json'),($Lock | ConvertTo-Json -Depth 4))
 [IO.File]::WriteAllText($Stamp,$Recipe)

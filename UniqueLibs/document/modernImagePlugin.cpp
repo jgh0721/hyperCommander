@@ -3,8 +3,10 @@
 #include <QImage>
 #include <QColorSpace>
 #include <QIODevice>
+#include <QBuffer>
 #include <QTransform>
 #include <QDebug>
+#include <QThread>
 #include <QtEndian>
 #include <libheif/heif.h>
 #include <avif/avif.h>
@@ -98,6 +100,10 @@ class ModernHandler final : public QImageIOHandler
             return false;
         if (avif_)
         {
+            // Four threads saturated the large-image comparison; retain spare
+            // cores for navigation and filters, and avoid overhead on small files.
+            const int Threads=qMin(qMax(1,QThread::idealThreadCount()/4),size_.width()*qint64(size_.height())>=1000000?4:2);
+            avif_->maxThreads=Threads;
             const auto DecodeResult = avifDecoderNextImage(avif_);
             if (DecodeResult != AVIF_RESULT_OK)
             {
@@ -115,7 +121,11 @@ class ModernHandler final : public QImageIOHandler
             RGB.depth = depth_ > 8 ? 16 : 8;
             RGB.pixels = Result.bits();
             RGB.rowBytes = uint32_t(Result.bytesPerLine());
-            RGB.maxThreads = 2;
+            RGB.maxThreads = Threads;
+            RGB.chromaUpsampling = AVIF_CHROMA_UPSAMPLING_BEST_QUALITY;
+            // Preserve the exact high-bit conversion path. The measured 8-bit
+            // SIMD conversion differs by at most two channel levels in the corpus.
+            RGB.avoidLibYUV = depth_ > 8 ? AVIF_TRUE : AVIF_FALSE;
             const auto ConvertResult = avifImageYUVToRGB(Image, &RGB);
             if (ConvertResult != AVIF_RESULT_OK)
             {
@@ -218,7 +228,10 @@ class ModernHandler final : public QImageIOHandler
         if (!device())
             return false;
         const bool IsAvif = Avif(device());
-        bytes_ = device()->readAll();
+        // The document loader already owns immutable compressed bytes. Reuse
+        // QBuffer storage instead of copying the whole HEIC/AVIF payload again.
+        if(auto* Buffer=qobject_cast<QBuffer*>(device());Buffer&&Buffer->pos()==0){bytes_=Buffer->data();Buffer->seek(Buffer->size());}
+        else bytes_ = device()->readAll();
         if (bytes_.isEmpty())
             return false;
         if (IsAvif)

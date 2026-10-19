@@ -18,6 +18,9 @@
 #include <QScopeGuard>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QFutureWatcher>
+#include <QtConcurrent>
+#include <algorithm>
 #include "pluginHost/imageArchiveBroker.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "image/QImageView.h"
@@ -28,6 +31,9 @@
 #include "UniqueLibs/document/imageFramePlayer.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/imageResampler.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
+#include "UniqueLibs/document/imageDecodeCache.hpp"
+#include "UniqueLibs/document/documentStorageAdapter.hpp"
 using namespace hc::document;
 namespace
 {
@@ -824,6 +830,152 @@ class ImageReadingTests : public QObject
         QVERIFY(!W.isFullScreen());
         QVERIFY(W.cursor().shape() != Qt::BlankCursor);
         QCOMPARE(W.size(), QSize(600, 400));
+    }
+    void imageJobsAreReclaimedByTheHostedEventPump()
+    {
+        QImageView View;View.resize(800,600);View.show();
+        const auto Source=Picture(Qt::blue,QSize(1200,800));View.LoadContent(Source,"pump.png",false);
+        for(int I=0;I<8;++I)View.setZoomLevel(50+I*5);
+        QElapsedTimer Deadline;Deadline.start();
+        while(Deadline.elapsed()<10000&&(View.IsRendering()||!View.findChildren<QFutureWatcherBase*>().isEmpty()))
+            QCoreApplication::processEvents(QEventLoop::AllEvents,5);
+        QVERIFY(!View.IsRendering());QVERIFY(View.findChildren<QFutureWatcherBase*>().isEmpty());QCOMPARE(View.Content(),Source);
+    }
+    void imagePoolHasViewLifetimeInsteadOfDllStaticLifetime()
+    {
+        std::weak_ptr<QThreadPool> Weak;
+        {
+            QImageView First,Second;First.resize(800,600);First.show();
+            {const auto Pool=ImageWorkerPool();Weak=Pool;QVERIFY(Pool->maxThreadCount()<=4);}
+            First.LoadContent(Picture(Qt::blue,QSize(1200,800)),"pool.png",false);
+            QTRY_VERIFY_WITH_TIMEOUT(!First.IsRendering(),10000);
+            QVERIFY(!Weak.expired());
+        }
+        QVERIFY(Weak.expired());
+    }
+    void autoFilterUsesUniformScalingDespitePixelRounding()
+    {
+        const auto Rounded=QTransform::fromScale(1000./1920,667./1280);
+        QCOMPARE(ImageFilterRegistry::Resolve("auto",Rounded,QSize(1920,1280)).id_,QString("lanczos3"));
+        QCOMPARE(ImageFilterRegistry::Resolve("auto",QTransform::fromScale(.4,.7),QSize(1920,1280)).id_,QString("ewaRobidoux"));
+        QTransform Rotated;Rotated.rotate(15);Rotated.scale(.5,.5);
+        QCOMPARE(ImageFilterRegistry::Resolve("auto",Rotated,QSize(1920,1280)).id_,QString("ewaRobidoux"));
+        QCOMPARE(ImageFilterRegistry::Resolve("ewaRobidouxSharp",Rounded,QSize(1920,1280)).id_,QString("ewaRobidouxSharp"));
+    }
+    void navigationInputWaitsForAsynchronousCatalog()
+    {
+        QTemporaryDir Root;Fixture(Root.path(),3);QImageView View;View.resize(800,600);View.LoadContent(Picture(),Root.filePath("2.png"),false);View.show();
+        QSignalSpy Open(&View,&QBaseView::OpenRequested);View.SetNavigationSource(Root.filePath("2.png"));
+        View.nextImage();QTRY_COMPARE_WITH_TIMEOUT(Open.size(),1,15000);QCOMPARE(Open.first().at(0).toString(),Root.filePath("3.png"));
+    }
+    void decodedCacheRejectsChangedAndReplacedFiles()
+    {
+        QTemporaryDir Root;const auto Path=Root.filePath("cache.bmp");
+        ImageDecodeCache::Clear();QVERIFY(Picture(Qt::red).save(Path));
+        const auto A=ReadDocumentFile(Path);QVERIFY(A.HasValue());QVERIFY(ImageDecodeCache::Find(Path).has_value());
+        ImageDecodeCache::Remember(Path,{A.Value().bytes_,A.Value().hash_,{},A.Value().image_});
+        QVERIFY(!ImageDecodeCache::Find(Path).has_value());
+        QCOMPARE(ReadDocumentFile(Path).Value().hash_,A.Value().hash_);QVERIFY(ImageDecodeCache::Find(Path).has_value());
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));const auto Time=File.fileTime(QFileDevice::FileModificationTime);const auto Size=File.size();File.close();
+        QVERIFY(Picture(Qt::blue).save(Path));QVERIFY(File.open(QIODevice::ReadWrite));QCOMPARE(File.size(),Size);
+        QVERIFY(File.setFileTime(Time,QFileDevice::FileModificationTime));File.close();
+        QVERIFY(!ImageDecodeCache::Find(Path).has_value());
+        const auto B=ReadDocumentFile(Path);QVERIFY(B.HasValue());QCOMPARE(B.Value().image_.pixelColor(1,1),QColor(Qt::blue));QVERIFY(A.Value().hash_!=B.Value().hash_);
+        QVERIFY(QFile::remove(Path));QVERIFY(Picture(Qt::green).save(Path));
+        QVERIFY(!ImageDecodeCache::Find(Path).has_value());
+        QCOMPARE(ReadDocumentFile(Path).Value().image_.pixelColor(1,1),QColor(Qt::green));
+        QVERIFY(ImageDecodeCache::CostKiB()<=256*1024);ImageDecodeCache::Clear();
+    }
+    void redirectedMetadataRevisionRetainsSizeAndModificationChecks()
+    {
+        BY_HANDLE_FILE_INFORMATION First{};First.dwFileAttributes=FILE_ATTRIBUTE_NORMAL;First.dwVolumeSerialNumber=7;
+        First.nFileIndexLow=1;First.nFileSizeLow=100;First.ftLastWriteTime.dwLowDateTime=12345;
+        auto Second=First;Second.nFileIndexLow=2;
+        const auto Strong=hc::storage::native::HandleRevision(First);
+        QVERIFY(Strong!=hc::storage::native::HandleRevision(Second));
+        const auto Metadata=hc::storage::native::MetadataRevision(Strong);
+        QVERIFY(hc::storage::native::MatchesRevision(Metadata,Second));
+        ++Second.nFileSizeLow;QVERIFY(!hc::storage::native::MatchesRevision(Metadata,Second));
+        Second=First;++Second.ftLastWriteTime.dwLowDateTime;QVERIFY(!hc::storage::native::MatchesRevision(Metadata,Second));
+    }
+    void asynchronousPreviewPreservesOriginalAndPaints()
+    {
+        QImageView View;View.resize(960,720);View.show();
+        QImage Source(2400,1600,QImage::Format_RGBA8888);Source.fill(QColor(30,100,170,127));Source.setColorSpace(QColorSpace::DisplayP3);
+        QSignalSpy Paints(&View,&QImageView::imagePresented);int Ticks=0;QTimer Timer;connect(&Timer,&QTimer::timeout,this,[&]{++Ticks;});Timer.start(1);
+        View.LoadContent(Source,"test-large.png",false);View.SetDisplayFilter("spline36");
+        QTRY_VERIFY_WITH_TIMEOUT(!Paints.isEmpty(),15000);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);
+        QVERIFY(Ticks>0);QCOMPARE(View.Content(),Source);QVERIFY(View.RenderError().isEmpty());
+        View.setZoomLevel(160);View.setZoomLevel(50);View.SetDisplayFilter("lanczos3");
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);QCOMPARE(View.Content(),Source);
+    }
+    void cmykAndGrayImagesUseRgbDisplayWithoutChangingOriginal()
+    {
+        const auto Cmyk=Picture(QColor(35,100,180),QSize(240,160)).convertToFormat(QImage::Format_CMYK8888);
+        const auto Rgb=Cmyk.convertToFormat(QImage::Format_RGBA8888);
+        for(const auto& Filter:QStringList{"lanczos3","ewaRobidouxSharp"}){
+            ImageRenderRequest Request{Cmyk,QSize(120,80),QTransform::fromScale(.5,.5),Filter};
+            const auto Actual=ResampleImage(Request);Request.source_=Rgb;const auto Expected=ResampleImage(Request);
+            QVERIFY2(Actual.error_.isEmpty(),qPrintable(Actual.error_));QCOMPARE(Actual.image_,Expected.image_);
+        }
+        QImage Gray(240,160,QImage::Format_Grayscale16);Gray.fill(QColor(100,100,100));
+        Gray.setColorSpace(QColorSpace(QPointF(.3127,.3290),QColorSpace::TransferFunction::Gamma,2.2f));
+        QVERIFY(Gray.colorSpace().isValid());QCOMPARE(Gray.colorSpace().colorModel(),QColorSpace::ColorModel::Gray);
+        ImageRenderRequest Request{Gray,QSize(120,80),QTransform::fromScale(.5,.5),"spline36"};Request.targetColor_=QColorSpace::SRgb;
+        const auto Rendered=ResampleImage(Request);QVERIFY2(Rendered.error_.isEmpty(),qPrintable(Rendered.error_));
+        const auto Pixel=Rendered.image_.pixelColor(10,10);QVERIFY(std::abs(Pixel.red()-Pixel.green())<=1);QVERIFY(std::abs(Pixel.red()-Pixel.blue())<=1);
+        const auto ExpectedGray=Gray.convertedToColorSpace(QColorSpace::SRgb,QImage::Format_RGBA8888).pixelColor(10,10);
+        QVERIFY(std::abs(Pixel.red()-ExpectedGray.red())<=1);
+        QImageView View;View.resize(800,600);View.show();QSignalSpy Paints(&View,&QImageView::imagePresented);
+        View.LoadContent(Cmyk,"cmyk.jpg",false);View.SetDisplayFilter("spline36");
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),10000);QVERIFY2(View.RenderError().isEmpty(),qPrintable(View.RenderError()));
+        QTRY_VERIFY_WITH_TIMEOUT(std::any_of(Paints.begin(),Paints.end(),[](const auto& Row){return Row[0].toBool();}),10000);
+        QCOMPARE(View.Content(),Cmyk);
+    }
+    void optionalStorageAndFirstPaintBenchmark()
+    {
+        const auto Root=qEnvironmentVariable("HC_IMAGE_BENCH_ROOT");if(Root.isEmpty())QSKIP("Set HC_IMAGE_BENCH_ROOT for isolated latency measurements");
+        QJsonArray Rows;
+        for(const auto& Name:QStringList{"decode.jpg","decode.png","decode.webp","gray16.png","example.heic","example.avif",
+            "webtoon.png","natural.png","48mp.png","rgb16.tiff","large-avif.avif","24mp-avif.avif","progressive.jpg","cmyk.jpg"}){
+            const auto Path=Root+"/corpus/"+Name;if(!QFileInfo::exists(Path))continue;
+            for(int Run=0;Run<5;++Run){ImageDecodeCache::Clear();QElapsedTimer Clock;Clock.start();
+                QImageView View;View.resize(1200,800);View.show();double First=-1,Final=-1,Loaded=-1,LastTick=0,MaxGap=0;int Heartbeats=0;QString Error;
+                connect(&View,&QImageView::imagePresented,this,[&](bool Complete){if(First<0)First=Clock.nsecsElapsed()/1e6;if(Complete&&Final<0)Final=Clock.nsecsElapsed()/1e6;});
+                QTimer Timer;connect(&Timer,&QTimer::timeout,this,[&]{const double Now=Clock.nsecsElapsed()/1e6;MaxGap=std::max(MaxGap,Now-LastTick);LastTick=Now;++Heartbeats;});Timer.start(1);
+                QFutureWatcher<hc::storage::Result<TextInput>> Watcher;
+                connect(&Watcher,&QFutureWatcherBase::finished,this,[&]{auto Input=Watcher.result();Loaded=Clock.nsecsElapsed()/1e6;if(!Input.HasValue())Error=QString::fromStdString(Input.Failure().code_);else View.LoadContent(Input.Value().image_,Path,false);});
+                Watcher.setFuture(QtConcurrent::run([Path]{return ReadDocumentFile(Path);}));
+                QTRY_VERIFY_WITH_TIMEOUT(Final>=0||!Error.isEmpty()||!View.RenderError().isEmpty(),30000);QVERIFY2(Error.isEmpty(),qPrintable(Name+": "+Error));
+                QVERIFY2(View.RenderError().isEmpty(),qPrintable(Name+": "+View.RenderError()));
+                Rows.append(QJsonObject{{"file",Name},{"run",Run},{"read_decode_ms",Loaded},{"first_paint_ms",First},{"final_paint_ms",Final},{"heartbeats",Heartbeats},{"max_heartbeat_gap_ms",MaxGap},{"boundary","async-storage-plus-widget; OS cache not flushed"}});
+                QFile Partial(Root+"/viewer-latency.json");QVERIFY(Partial.open(QIODevice::WriteOnly));Partial.write(QJsonDocument(Rows).toJson());
+            }
+        }
+        QFile Report(Root+"/viewer-latency.json");QVERIFY(Report.open(QIODevice::WriteOnly));Report.write(QJsonDocument(Rows).toJson());
+    }
+    void optionalDecodedCacheBenchmark()
+    {
+        const auto Root=qEnvironmentVariable("HC_IMAGE_BENCH_ROOT");if(Root.isEmpty())QSKIP("Set HC_IMAGE_BENCH_ROOT for isolated cache measurements");
+        QJsonArray Rows;
+        for(const auto& Name:QStringList{"decode.jpg","example.heic","example.avif","24mp-avif.avif","48mp.png"}){
+            const auto Path=Root+"/corpus/"+Name;if(!QFileInfo::exists(Path))continue;
+            ImageDecodeCache::Clear();QElapsedTimer Clock;Clock.start();const auto Cold=ReadDocumentFile(Path);const double ColdMs=Clock.nsecsElapsed()/1e6;
+            QVERIFY(Cold.HasValue());QVERIFY(!Cold.Value().image_.isNull());QJsonArray Warm;
+            const bool Metadata=ImageDecodeCache::Find(Cold.Value().path_).has_value();
+            for(int I=0;I<7;++I){Clock.restart();const auto Cached=ReadDocumentFile(Path);Warm.append(Clock.nsecsElapsed()/1e6);QVERIFY(Cached.HasValue());QCOMPARE(Cached.Value().hash_,Cold.Value().hash_);QCOMPARE(Cached.Value().image_,Cold.Value().image_);}
+            Rows.append(QJsonObject{{"file",Name},{"uncached_ms",ColdMs},{"cached_samples_ms",Warm},{"metadata_reuse",Metadata},{"boundary","ReadDocumentFile component; OS cache not flushed"}});
+        }
+        QFile Report(Root+"/viewer-cache.json");QVERIFY(Report.open(QIODevice::WriteOnly));Report.write(QJsonDocument(Rows).toJson());ImageDecodeCache::Clear();
+        QTemporaryDir Scratch(Root+"/cache-consistency-XXXXXX");QVERIFY(Scratch.isValid());const auto Path=Scratch.filePath("source.bmp");
+        QVERIFY(Picture(Qt::red).save(Path));const auto Before=ReadDocumentFile(Path);QVERIFY(Before.HasValue());
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));const auto Time=File.fileTime(QFileDevice::FileModificationTime);const auto Size=File.size();File.close();
+        QVERIFY(Picture(Qt::blue).save(Path));QVERIFY(File.open(QIODevice::ReadWrite));QCOMPARE(File.size(),Size);QVERIFY(File.setFileTime(Time,QFileDevice::FileModificationTime));File.close();
+        const auto After=ReadDocumentFile(Path);QVERIFY(After.HasValue());QCOMPARE(After.Value().image_.pixelColor(1,1),QColor(Qt::blue));
+        hc::storage::DestinationExpectation Expected;Expected.exists_=true;
+        const auto Saved=SaveTextFile(Path,Before.Value().bytes_,Expected,Before.Value().hash_,{},true);
+        QVERIFY(!Saved.HasValue());QCOMPARE(QString::fromStdString(Saved.Failure().code_),QString("document-external-content-change"));ImageDecodeCache::Clear();
     }
     void workspaceModeCommandsPreserveOriginal()
     {

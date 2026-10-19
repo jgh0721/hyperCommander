@@ -29,6 +29,17 @@ namespace hc::storage::native
         // even when its size and modification time were deliberately preserved.
         return {ListingRevision(Data).token_ + ":identity:" + Identity};
     }
+    inline ResourceRevision MetadataRevision(ResourceRevision Revision)
+    {
+        // RDP redirected files can report a synthetic file ID per opened handle.
+        // Callers which bind document bytes by hash may retain the exact mtime
+        // and size token without treating that synthetic ID as persistent.
+        if(Revision.token_.starts_with("file:")){
+            const auto At=Revision.token_.find(":identity:");
+            if(At!=std::string::npos)Revision.token_.resize(At);
+        }
+        return Revision;
+    }
     inline bool MatchesRevision(const ResourceRevision& Expected, const BY_HANDLE_FILE_INFORMATION& Info)
     {
         if (Expected == HandleRevision(Info)) return true;

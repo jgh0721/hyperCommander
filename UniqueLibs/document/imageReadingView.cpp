@@ -1,4 +1,5 @@
 ﻿#include "imageReadingView.hpp"
+#include "imageAsync.hpp"
 #include "imageResampler.hpp"
 #include "imageDisplayColor.hpp"
 #include "imageFramePlayer.hpp"
@@ -148,7 +149,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
             [this, Watcher, Generation, RequestedMode]
             {
                 auto Result = Watcher->result();
-                Watcher->deleteLater();
+                DeleteCompletedImageWork(Watcher);
                 --workers_;
                 if (Generation != bookGeneration_)
                     return;
@@ -162,7 +163,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
                 if (RequestedMode >= 0)
                     SetMode(Mode(RequestedMode));
             });
-    Watcher->setFuture(QtConcurrent::run(
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
         [Path, Entry, Stop]() -> OpenResult
         {
             storage::OperationContext Context;
@@ -193,6 +194,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     book_ = std::move(Book);
     tiles_.clear();
     sources_.clear();
+    pendingSourcePages_.clear();
     pending_.clear();
     pageErrors_.clear();
     error_.clear();
@@ -450,14 +452,17 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
     if (suspended_ || pending_.contains(CacheKey) || pageErrors_.contains(P.page_) || tiles_.contains(CacheKey) ||
         workers_ >= 2)
         return;
+    const auto Source = P.page_ == index_ && !currentImage_.isNull() ? currentImage_
+                        : sources_.object(P.page_)                   ? *sources_.object(P.page_)
+                                                                     : QImage{};
+    if(Source.isNull()&&pendingSourcePages_.contains(P.page_))return;
+    if(Source.isNull())pendingSourcePages_.insert(P.page_);
     pending_.insert(CacheKey);
     ++workers_;
     const auto Book = book_;
     const auto Generation = generation_;
+    const auto SourceGeneration = bookGeneration_;
     const auto Stop = stop_;
-    const auto Source = P.page_ == index_ && !currentImage_.isNull() ? currentImage_
-                        : sources_.object(P.page_)                   ? *sources_.object(P.page_)
-                                                                     : QImage{};
     const auto DisplayColor = ImageDisplayColorSpace(screen());
     const auto Filter = filter_;
     const auto Dpr = devicePixelRatioF();
@@ -467,11 +472,12 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
     const auto Gray = grayscale_, Invert = invert_;
     auto *Watcher = new QFutureWatcher<Rendered>(this);
     connect(Watcher, &QFutureWatcherBase::finished, this,
-            [this, Watcher, CacheKey, Generation, Page = P.page_]
+            [this, Watcher, CacheKey, Generation, SourceGeneration, Page = P.page_]
             {
                 auto Result = Watcher->result();
-                Watcher->deleteLater();
+                DeleteCompletedImageWork(Watcher);
                 --workers_;
+                if(SourceGeneration==bookGeneration_)pendingSourcePages_.remove(Page);
                 if (Generation != generation_)
                 {
                     viewport()->update();
@@ -503,7 +509,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
                 viewport()->update();
                 emit Changed();
             });
-    Watcher->setFuture(QtConcurrent::run(
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
         [=]
         {
             QImage Original = Source;
@@ -521,6 +527,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
             QImage Input = P.crop_.size() == Original.size() ? Original : Original.copy(P.crop_);
             ImageRenderRequest Request;
             Request.source_ = Input;
+            Request.traceSource_ = Book->path_+"#"+QString::number(P.page_);
             Request.targetColor_ = DisplayColor;
             Request.outputSize_ = Output;
             Request.tile_ = Sharp > 0 ? Tile.adjusted(-1, -1, 1, 1).intersected(QRect(QPoint(), Output)) : Tile;
@@ -714,7 +721,7 @@ void ImageReadingView::OpenVolume(int Direction)
             [this, Watcher, Generation]
             {
                 auto Candidates = Watcher->result();
-                Watcher->deleteLater();
+                DeleteCompletedImageWork(Watcher);
                 if (Generation != bookGeneration_)
                     return;
                 volumePending_ = false;
@@ -736,7 +743,7 @@ void ImageReadingView::OpenVolume(int Direction)
                 openVolumePath(Path);
             });
     Watcher->setFuture(
-        QtConcurrent::run([Path, Direction, Stop] { return NextImageBooks(Path, Direction, Stop->get_token()); }));
+        QtConcurrent::run(imagePool_.get(),[Path, Direction, Stop] { return NextImageBooks(Path, Direction, Stop->get_token()); }));
 }
 void ImageReadingView::openVolumePath(const QString &Path)
 {
@@ -748,7 +755,7 @@ void ImageReadingView::openVolumePath(const QString &Path)
             [this, Watcher, Generation, Path]
             {
                 auto Result = Watcher->result();
-                Watcher->deleteLater();
+                DeleteCompletedImageWork(Watcher);
                 if (Generation != bookGeneration_)
                     return;
                 volumePending_ = false;
@@ -762,7 +769,7 @@ void ImageReadingView::openVolumePath(const QString &Path)
                 GoTo(0);
                 emit VolumeChanged(Path);
             });
-    Watcher->setFuture(QtConcurrent::run(
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
         [Path, Stop]
         {
             storage::OperationContext Context;
@@ -859,7 +866,7 @@ void ImageReadingView::ToggleAnimation()
             [this, Watcher, Index, Generation]
             {
                 auto Result = Watcher->result();
-                Watcher->deleteLater();
+                DeleteCompletedImageWork(Watcher);
                 if (Generation != bookGeneration_)
                     return;
                 animationPending_ = false;
@@ -876,7 +883,7 @@ void ImageReadingView::ToggleAnimation()
                 animation_->Load(Result.Value().bytes_);
                 animation_->Play(true);
             });
-    Watcher->setFuture(QtConcurrent::run(
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
         [Book, Index, Stop]
         {
             storage::OperationContext C;

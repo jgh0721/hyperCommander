@@ -17,6 +17,7 @@
 class QImageView : public QBaseView
 {
     Q_OBJECT
+    std::shared_ptr<QThreadPool> imagePool_ = hc::document::ImageWorkerPool();
 
 public:
     void LoadContent(const QImage& Image, const QString& Path, bool Traverse);
@@ -26,8 +27,8 @@ public:
     QByteArray SerializeContent(const QByteArray& Format = "PNG", int Quality = -1) const;
     void CommitContent();
     bool IsEditing() const { return pendingEdit_; }
-    bool IsRendering() const { return rendering_ || pendingEdit_; }
-    void CancelWork() { renderStop_->request_stop();editStop_->request_stop(); }
+    bool IsRendering() const { return rendering_ || previewing_ || pendingEdit_; }
+    void CancelWork() { renderStop_->request_stop();previewStop_->request_stop();editStop_->request_stop(); }
     QString RenderError() const { return renderError_; }
     void SetDisplayFilter(const QString& Filter);
     QString DisplayFilter() const { return filter_; }
@@ -109,6 +110,7 @@ public:
 signals:
     void ContentChanged();
     void imageChanged();
+    void imagePresented(bool Final);
     void slideshowStateChanged(bool running);
     void viewStateChanged();
 
@@ -124,14 +126,20 @@ protected:
 private:
     hc::document::ImageRenderRequest renderRequest() const;
     bool startImageEdit(hc::document::ImageRenderRequest Request,const QString& Label);
-    bool rendering_ = false, pendingEdit_ = false;
+    bool rendering_ = false, previewing_ = false, pendingEdit_ = false, displayFinal_ = false;
+    QString previewKey_, previewRunningKey_, renderRunningKey_;
+    QImage previewImage_;
+    std::shared_ptr<std::stop_source> previewStop_ = std::make_shared<std::stop_source>();
     std::shared_ptr<std::stop_source> editStop_ = std::make_shared<std::stop_source>();
     QString renderError_;
     std::shared_ptr<std::stop_source> renderStop_ = std::make_shared<std::stop_source>();
     QString filter_ = "auto";
     mutable QString renderedKey_;
     mutable QImage renderedImage_;
-    std::uint64_t contentRevision_ = 0;
+    std::uint64_t contentRevision_ = 0, navigationGeneration_ = 0;
+    bool directoryLoading_ = false;
+    int pendingDirectorySteps_ = 0;
+    std::shared_ptr<std::stop_source> directoryStop_ = std::make_shared<std::stop_source>();
     void pushUndoImage();       // 현재 상태를 Undo 스택에 저장
     void setModifiedState(bool modified);
     void updateDisplay();

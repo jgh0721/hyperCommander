@@ -1,4 +1,5 @@
 ﻿#include "documentWorkspaceWidget.hpp"
+#include "imageAsync.hpp"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -632,7 +633,7 @@ namespace hc::document
         Tab->cancellation_=std::make_shared<std::stop_source>();const auto Cancellation=Tab->cancellation_;
         auto* Watcher=new QFutureWatcher<storage::Result<TextInput>>(this);
         connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Revision]{
-            auto Result=Watcher->result();Watcher->deleteLater();
+            auto Result=Watcher->result();DeleteCompletedImageWork(Watcher);
             if(Tab->closed_)return;
             Tab->navigating_=false;Tab->pane_->setEnabled(true);
             if(!Result.HasValue()||Result.Value().viewId_!="image"||Result.Value().image_.isNull()||Result.Value().book_){
@@ -681,7 +682,8 @@ namespace hc::document
         const auto Generation = Started.Value(); auto Cancellation = Tab->cancellation_; const auto Path = Tab->path_;
         auto* Watcher = new QFutureWatcher<storage::Result<TextInput>>(this);
         connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Generation] {
-            auto Result = Watcher->result(); Watcher->deleteLater();
+            auto Result = Watcher->result();
+            if(Result.HasValue()&&Result.Value().viewId_=="image")DeleteCompletedImageWork(Watcher);else Watcher->deleteLater();
             if (Tab->closed_ || Generation != Tab->session_->Snapshot().generation_) return;
             Tab->loading_ = false;
             if (!Result.HasValue()) {

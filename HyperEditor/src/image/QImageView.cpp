@@ -3,6 +3,10 @@
 #include "core/ThemeManager.h"
 #include "UniqueLibs/document/imageBook.hpp"
 #include "UniqueLibs/document/imageDisplayColor.hpp"
+#include "UniqueLibs/document/imagePerformance.hpp"
+#include "UniqueLibs/document/imageAsync.hpp"
+#include "UniqueLibs/document/imageDecodeCache.hpp"
+#include "UniqueLibs/document/imageColor.hpp"
 #include "core/ToolbarIcons.h"
 #include "utils/FileLoadHelper.h"
 
@@ -37,6 +41,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <cmath>
+#include <algorithm>
 #include <utility>
 #include <QVariant>
 #include <QPainterPath>
@@ -47,6 +52,21 @@
 #endif
 
 namespace {
+
+class ImageCanvasLabel final : public QLabel
+{
+public:
+    using QLabel::QLabel;
+    std::function<void()> presented_;
+protected:
+    void paintEvent(QPaintEvent* Event) override
+    {
+        if(pixmap().isNull()){QLabel::paintEvent(Event);return;}
+        hc::document::ImageTraceSpan Trace("view.paint",property("imageSource").toString());
+        QLabel::paintEvent(Event);
+        if(presented_)presented_();
+    }
+};
 
 struct ImageOpenResult {
     bool success = false;
@@ -111,6 +131,7 @@ QImageView::QImageView(QWidget* parent)
     , m_activeCompositeHandle(CompHandleNone)
     , m_compositeDragStartRotation(0.0)
 {
+    setFocusPolicy(Qt::StrongFocus);
     m_undoStack = new QUndoStack(this);
     m_undoStack->setUndoLimit(2);
     m_slideshowTimer = new QTimer(this);
@@ -118,7 +139,9 @@ QImageView::QImageView(QWidget* parent)
 
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setObjectName(QStringLiteral("canvasScrollArea"));
-    m_imageLabel = new QLabel(this);
+    auto* Canvas=new ImageCanvasLabel(this);
+    Canvas->presented_=[this]{emit imagePresented(displayFinal_);};
+    m_imageLabel = Canvas;
     m_imageLabel->setAlignment(Qt::AlignCenter);
     m_imageLabel->setMouseTracking(true);
     m_imageLabel->installEventFilter(this);  // 마우스 이벤트를 여기서 처리
@@ -148,7 +171,7 @@ QImageView::QImageView(QWidget* parent)
     }
 }
 
-QImageView::~QImageView() { renderStop_->request_stop();editStop_->request_stop();stopSlideshow(); }
+QImageView::~QImageView() { renderStop_->request_stop();previewStop_->request_stop();directoryStop_->request_stop();editStop_->request_stop();stopSlideshow(); }
 
 // ═══════════════════════════════════════════════════════════
 bool QImageView::openImage(const QImage& image, const QString& title)
@@ -157,6 +180,7 @@ bool QImageView::openImage(const QImage& image, const QString& title)
         return false;
 
     stopSlideshow();
+    directoryStop_->request_stop();++navigationGeneration_;directoryLoading_=false;pendingDirectorySteps_=0;
 
     m_originalImage = image;
     m_displayImage  = image;
@@ -216,6 +240,7 @@ bool QImageView::saveFileAs()
 
 void QImageView::closeFile()
 {
+    directoryStop_->request_stop();++navigationGeneration_;directoryLoading_=false;pendingDirectorySteps_=0;
     m_openRequestId.fetch_add(1);
     endLoading();
     m_originalImage = {}; m_displayImage = {};
@@ -520,18 +545,46 @@ void QImageView::openDirectory(const QString& dirPath)
 }
 void QImageView::SetNavigationSource(const QString& Path)
 {
-    m_dirFiles.clear();
-    m_dirIndex = 0;
-    const QFileInfo Source(Path);
-    if (!Source.isFile() || !supportedExtensions().contains(Source.suffix(), Qt::CaseInsensitive)) return;
-    openDirectory(Source.absolutePath());
-    for (int Index = 0; Index < m_dirFiles.size(); ++Index)
-        if (m_dirFiles[Index].compare(Source.absoluteFilePath(), Qt::CaseInsensitive) == 0) {
-            m_dirIndex = Index;
-            break;
+    struct Catalog { QStringList files_;std::chrono::steady_clock::time_point time_; };
+    struct Catalogs { QMutex mutex_;QCache<QString,Catalog> values_{16}; };
+    static const auto Shared=std::make_shared<Catalogs>();
+    m_dirFiles.clear();m_dirIndex=0;directoryLoading_=false;pendingDirectorySteps_=0;directoryStop_->request_stop();directoryStop_=std::make_shared<std::stop_source>();
+    const auto Generation=++navigationGeneration_;const QFileInfo Source(Path);
+    if(!supportedExtensions().contains(Source.suffix(),Qt::CaseInsensitive))return;
+    const auto Directory=Source.absolutePath(),Current=Source.absoluteFilePath();
+    const auto Stop=directoryStop_;const auto Cache=Shared;
+    auto Apply=[this,Current,Stop](QStringList Files){
+        directoryLoading_=false;
+        m_dirFiles=std::move(Files);int At=-1;for(int I=0;I<m_dirFiles.size();++I)if(m_dirFiles[I].compare(Current,Qt::CaseInsensitive)==0){At=I;break;}m_dirIndex=std::max(0,At);
+        if(At>=0&&m_dirFiles.size()>1){
+            QStringList Neighbours{m_dirFiles[(At+1)%m_dirFiles.size()]};
+            if(!Current.startsWith("\\\\")&&!Current.startsWith("//")&&m_dirFiles.size()>2)Neighbours.append(m_dirFiles[(At+m_dirFiles.size()-1)%m_dirFiles.size()]);
+            hc::document::ImageDecodeCache::Prefetch(Neighbours,Stop->get_token(),imagePool_.get());
         }
+        const auto Steps=std::exchange(pendingDirectorySteps_,0);
+        if(Steps&&At>=0&&!m_dirFiles.isEmpty()){const int Count=m_dirFiles.size();const int Next=((At+Steps)%Count+Count)%Count;emit OpenRequested(m_dirFiles[Next]);}
+        emit viewStateChanged();
+    };
+    std::optional<QStringList> Existing;
+    {QMutexLocker Guard(&Cache->mutex_);if(const auto* Item=Cache->values_.object(Directory))
+        if(std::chrono::steady_clock::now()-Item->time_<std::chrono::seconds(2))Existing=Item->files_;}
+    if(Existing){Apply(std::move(*Existing));return;}
+    directoryLoading_=true;
+    auto* Watcher=new QFutureWatcher<QStringList>(this);
+    connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Generation,Apply]{
+        const auto Files=Watcher->result();hc::document::DeleteCompletedImageWork(Watcher);if(Generation==navigationGeneration_)Apply(Files);
+    });
+    const auto Extensions=supportedExtensions();
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Directory,Extensions,Cache,Stop]{
+        hc::document::ImageTraceSpan Trace("image.catalog",Directory);QStringList Files,Patterns;
+        if(Stop->stop_requested())return Files;
+        for(const auto& Ext:Extensions)Patterns.append("*."+Ext);
+        QDir Dir(Directory);Dir.setNameFilters(Patterns);Dir.setSorting(QDir::Name);
+        for(const auto& Entry:Dir.entryInfoList(QDir::Files)){if(Stop->stop_requested())return QStringList{};Files.append(Entry.absoluteFilePath());}
+        {QMutexLocker Guard(&Cache->mutex_);Cache->values_.insert(Directory,new Catalog{Files,std::chrono::steady_clock::now()});}
+        return Files;
+    }));
 }
-
 void QImageView::startSlideshow(int ms)
 {
     if (m_dirFiles.isEmpty())
@@ -543,11 +596,13 @@ void QImageView::startSlideshow(int ms)
 void QImageView::stopSlideshow()         { m_slideshowTimer->stop(); emit slideshowStateChanged(false); }
 void QImageView::nextImage()
 {
+    if(m_dirFiles.isEmpty()&&directoryLoading_){pendingDirectorySteps_=std::clamp(pendingDirectorySteps_+1,-1000000,1000000);return;}
     if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex+1)%m_dirFiles.size()]);
 }
 
 void QImageView::previousImage()
 {
+    if(m_dirFiles.isEmpty()&&directoryLoading_){pendingDirectorySteps_=std::clamp(pendingDirectorySteps_-1,-1000000,1000000);return;}
     if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex-1+m_dirFiles.size())%m_dirFiles.size()]);
 }
 QSize QImageView::originalImageSize() const { return m_originalImage.size(); }
@@ -613,10 +668,10 @@ QImage QImageView::scaledImage() const
 {
     if(m_displayImage.isNull()||!m_scrollArea)return {};
     auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
-    if(Key==renderedKey_)return renderedImage_;
-    auto Preview=m_displayImage.scaled(Request.outputSize_,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
-    if(!Preview.colorSpace().isValid())Preview.setColorSpace(QColorSpace::SRgb);Preview=Preview.convertedToColorSpace(hc::document::ImageDisplayColorSpace(screen()));
-    Preview.setDevicePixelRatio(devicePixelRatioF());return Preview;
+    if(Key==renderedKey_&&!renderedImage_.isNull())return renderedImage_;
+    Request.filter_="preview";
+    if(hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF())==previewKey_)return previewImage_;
+    return m_displayImage;
 }
 
 void QImageView::updateDisplay()
@@ -624,20 +679,49 @@ void QImageView::updateDisplay()
     if (m_updatingDisplay || m_displayImage.isNull() || !m_scrollArea || !m_imageLabel) return;
     QScopedValueRollback<bool> guard(m_updatingDisplay, true);
 
+    hc::document::ImageTraceSpan DisplayTrace("view.publish");
     auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
-    if(!rendering_&&Key!=renderedKey_&&renderError_.isEmpty()) {
+    Request.traceSource_=m_filePath;
+    auto PreviewRequest=Request;PreviewRequest.filter_="preview";
+    const auto PreviewKey=hc::document::ImageCacheKey(contentRevision_,PreviewRequest,devicePixelRatioF());
+    if(previewing_&&PreviewKey!=previewRunningKey_)previewStop_->request_stop();
+    if(rendering_&&Key!=renderRunningKey_)renderStop_->request_stop();
+    if(PreviewKey!=previewKey_&&!previewing_){
+        previewing_=true;previewRunningKey_=PreviewKey;previewStop_=std::make_shared<std::stop_source>();
+        const auto Stop=previewStop_;auto* Watcher=new QFutureWatcher<QImage>(this);
+        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,PreviewKey]{
+            const auto Image=Watcher->result();hc::document::DeleteCompletedImageWork(Watcher);previewing_=false;
+            auto Current=renderRequest();Current.targetColor_=hc::document::ImageDisplayColorSpace(screen());Current.filter_="preview";
+            if(!m_displayImage.isNull()&&PreviewKey==hc::document::ImageCacheKey(contentRevision_,Current,devicePixelRatioF())){
+                if(Image.isNull())renderError_="image-preview-cancelled-or-unavailable";
+                previewKey_=PreviewKey;previewImage_=Image;previewImage_.setDevicePixelRatio(devicePixelRatioF());
+            }
+            updateDisplay();emit viewStateChanged();
+        });
+        Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[PreviewRequest,Stop]{
+            hc::document::ImageTraceSpan Trace("image.preview",PreviewRequest.traceSource_);
+            if(Stop->stop_requested())return QImage{};
+            auto Image=hc::document::ImageColorSource(PreviewRequest.source_.scaled(PreviewRequest.outputSize_,Qt::IgnoreAspectRatio,Qt::SmoothTransformation));
+            Image=Image.convertedToColorSpace(PreviewRequest.targetColor_,QImage::Format_RGBA8888);
+            return Stop->stop_requested()?QImage{}:Image;
+        }));
+    }
+    if(!rendering_&&PreviewKey==previewKey_&&Key!=renderedKey_&&renderError_.isEmpty()) {
+        renderRunningKey_=Key;
         rendering_=true;renderStop_=std::make_shared<std::stop_source>();auto Work=Request;Work.targetColor_=hc::document::ImageDisplayColorSpace(screen());Work.stop_=renderStop_->get_token();
         auto* Watcher=new QFutureWatcher<hc::document::ImageRenderResult>(this);
         connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Key] {
-            const auto Result=Watcher->result();Watcher->deleteLater();rendering_=false;
+            const auto Result=Watcher->result();hc::document::DeleteCompletedImageWork(Watcher);rendering_=false;
             if(!m_displayImage.isNull()&&Key==[this]{auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());return hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());}()) {
                 renderError_=Result.error_;renderedKey_=Key;renderedImage_=Result.image_;renderedImage_.setDevicePixelRatio(devicePixelRatioF());
             }
             updateDisplay();
             emit viewStateChanged();
         });
-        Watcher->setFuture(QtConcurrent::run([Work]{return hc::document::ResampleImage(Work);}));
-    } else if(rendering_&&Key!=renderedKey_) { /* One worker per pane; latest request replaces stale output. */ }
+        Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Work]{return hc::document::ResampleImage(Work);}));
+    }
+    if((Key!=renderedKey_||renderedImage_.isNull())&&(PreviewKey!=previewKey_||previewImage_.isNull()))return;
+    displayFinal_=Key==renderedKey_&&!renderedImage_.isNull();
     QImage img = scaledImage();
     if (img.isNull()) img = m_displayImage;
 
@@ -647,6 +731,7 @@ void QImageView::updateDisplay()
         painter.end();
     }
 
+    m_imageLabel->setProperty("imageSource",m_filePath);
     const QPixmap pixmap = QPixmap::fromImage(img);
     if (pixmap.isNull()) {
         m_imageLabel->clear();
@@ -1451,11 +1536,11 @@ bool QImageView::startImageEdit(hc::document::ImageRenderRequest Request,const Q
     pendingEdit_=true;renderError_.clear();setEnabled(false);editStop_=std::make_shared<std::stop_source>();Request.stop_=editStop_->get_token();
     const auto Revision=contentRevision_;const auto Before=m_displayImage;auto* Watcher=new QFutureWatcher<hc::document::ImageRenderResult>(this);
     connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Revision,Before,Label]{
-        const auto Result=Watcher->result();Watcher->deleteLater();pendingEdit_=false;setEnabled(true);
+        const auto Result=Watcher->result();hc::document::DeleteCompletedImageWork(Watcher);pendingEdit_=false;setEnabled(true);
         if(Revision!=contentRevision_){emit viewStateChanged();return;}
         if(!Result.error_.isEmpty()){renderError_=Result.error_;emit viewStateChanged();return;}
         m_displayImage=Label=="Composite"?Before:Result.image_;
         if(Label=="Composite"){QPainter Painter(&m_displayImage);Painter.drawImage(0,0,Result.image_);}
         m_undoStack->push(new ImageEditCommand(&m_displayImage,Before,m_displayImage,Label));setModifiedState(true);updateDisplay();
-    });Watcher->setFuture(QtConcurrent::run([Request]{return hc::document::ResampleImage(Request);}));return true;
+    });Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Request]{return hc::document::ResampleImage(Request);}));return true;
 }

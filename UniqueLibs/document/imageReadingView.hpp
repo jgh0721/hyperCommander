@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "imageBook.hpp"
+#include "imageResampler.hpp"
 #include <QAbstractScrollArea>
 #include <QCache>
 #include <QJsonObject>
@@ -13,6 +14,7 @@ class ImageFramePlayer;
 class ImageReadingView final : public QAbstractScrollArea
 {
     Q_OBJECT
+    std::shared_ptr<QThreadPool> imagePool_ = ImageWorkerPool();
   public:
     enum Mode : int
     {
@@ -90,6 +92,7 @@ class ImageReadingView final : public QAbstractScrollArea
     QCache<QString, QImage> previousTiles_{32 * 1024};
     bool animationUpdate_ = false;
     QSet<QString> pending_;
+    QSet<int> pendingSourcePages_;
     QHash<int, QString> pageErrors_;
     std::shared_ptr<std::stop_source> stop_ = std::make_shared<std::stop_source>();
     std::uint64_t generation_ = 0;
