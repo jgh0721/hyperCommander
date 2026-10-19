@@ -821,6 +821,26 @@ private slots:
         const auto S = fm::style::ColorScheme::fromJson(Settings.Read(hc::settings::Section::Appearance).toObject()["watercolorTheme"].toObject()); QVERIFY(S); QCOMPARE(S->seeds.accent.value(), QColor("#008577")); QVERIFY(main_->findChild<QWidget*>("hc.commandLine")->isHidden());
     }
 
+    void todoBugHeaderButtonHeights()
+    {
+        auto* Jobs = main_->findChild<QPushButton*>("hc.jobs.indicator"); QVERIFY(Jobs);
+        auto* Settings = main_->findChild<QToolButton*>("hc.menuRecovery"); QVERIFY(Settings);
+        auto* Update = main_->findChild<QToolButton*>("hc.update.menuButton"); QVERIFY(Update);
+        const auto Original = main_->font();
+        const auto Restore = qScopeGuard([&] { main_->setFont(Original); });
+        for (const int Points : {10, 14, 20}) {
+            auto Font = Original; Font.setPointSize(Points); main_->setFont(Font); QTest::qWait(100);
+            QCOMPARE(Jobs->geometry().top(), Settings->geometry().top());
+            QCOMPARE(Settings->geometry().top(), Update->geometry().top());
+            QCOMPARE(Jobs->height(), Settings->height());
+            QCOMPARE(Settings->height(), Update->height());
+            for (auto* Button : {static_cast<QWidget*>(Jobs), static_cast<QWidget*>(Settings), static_cast<QWidget*>(Update)}) {
+                QVERIFY(Button->isVisible());
+                QVERIFY(Button->height() >= Button->fontMetrics().height() + 8);
+            }
+        }
+    }
+
     void todoBugHelpMenuPlacement()
     {
         auto* Bar = main_->findChild<QMenuBar*>("menubar"); QVERIFY(Bar);
@@ -6702,6 +6722,39 @@ private slots:
         QCOMPARE(Colors->GetColorScheme("user-custom").FileList_Font.pointSize(), 15);
     }
 
+    void todoBugFocusFrameFontDpi()
+    {
+        const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Original = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { emit Colors->sigColorSchemeChanged(Original); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("focus.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("frame"); File.close();
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading() && model(Panel)->rowCount() == 2);
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(View->SetListMode("one-line")); View->RestoreSelection({}, {}); View->SetPanelActive(true); View->BaseView()->setFocusedRowIndex(1);
+        for (const int Points : {10, 13, 16, 17, 20}) {
+            auto Scheme = Original; Scheme.FileList_Font = QFont("D2Coding ligature", Points); Scheme.IsInverseCursor = false; Scheme.IsInverseSelect = false;
+            emit Colors->sigColorSchemeChanged(Scheme); QTest::qWait(120);
+            const int Height = View->RecordGeometry().pitch;
+            for (const qreal Dpr : {1.0, 1.25, 1.5, 1.75, 2.0}) for (int Position = 0; Position < 4; ++Position) {
+                QImage Image(qCeil(430 * Dpr), qCeil((Height * 5 + 12) * Dpr), QImage::Format_ARGB32_Premultiplied); Image.setDevicePixelRatio(Dpr); Image.fill(Qt::transparent);
+                QPainter Painter(&Image); Painter.translate(3, 3 + Position * Height);
+                Qtitan::GridRecordPainter::Record Record; Record.rect = QRect(0, 0, 420, Height); Record.rowIndex = 1; Record.index = View->BaseView()->getRow(1).modelIndex(0);
+                const auto Bounds = Painter.deviceTransform().mapRect(QRectF(Record.rect)).toAlignedRect();
+                Painter.setClipRect(Record.rect);
+                View->BaseView()->recordPainter()->paintOverlay(Painter, Record, View); Painter.end();
+                const auto Ink = [&](QRect Rect) { int Count = 0; Rect = Rect.intersected(Image.rect());
+                    for (int Y = Rect.top(); Y <= Rect.bottom(); ++Y) for (int X = Rect.left(); X <= Rect.right(); ++X) if (Image.pixelColor(X, Y).alpha() > 100) ++Count; return Count; };
+                const QString Context = QString("font=%1pt DPR=%2 row=%3 height=%4").arg(Points).arg(Dpr).arg(Position).arg(Height);
+                QVERIFY2(Ink(QRect(Bounds.left(), Bounds.top() + 4, 2, Bounds.height() - 8)) > 0, qPrintable("Left edge missing: " + Context));
+                QVERIFY2(Ink(QRect(Bounds.right() - 1, Bounds.top() + 4, 2, Bounds.height() - 8)) > 0, qPrintable("Right edge missing: " + Context));
+                QVERIFY2(Ink(QRect(Bounds.left() + 4, Bounds.top(), Bounds.width() - 8, 2)) > 0, qPrintable("Top edge missing: " + Context));
+                QVERIFY2(Ink(QRect(Bounds.left() + 4, Bounds.bottom() - 1, Bounds.width() - 8, 2)) > 0, qPrintable("Bottom edge missing: " + Context));
+            }
+        }
+    }
+
     void todoBugFileStylesAllColumns()
     {
         using namespace hc::settings;
@@ -6731,7 +6784,7 @@ private slots:
             return false;
         };
         for (const bool Dark : {false, true}) for (const auto* Mode : {"one-line", "two-line"}) {
-            const auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+            auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
             const QColor Foreground(Dark ? "#48ed73" : "#9434b0");
             QVERIFY(View->SetListMode(Mode)); View->RestoreSelection({}, {}); View->BaseView()->setFocusedRowIndex(0);
             QVector<QImage> Plain;
@@ -6749,6 +6802,13 @@ private slots:
                     const auto Image = Paint(Index); QVERIFY2(HasColor(Image, Foreground), qPrintable(QString("Rule color missing in column %1 (%2)").arg(Column).arg(Index.data().toString())));
                     if (Bold) { if (Column > 0) QVERIFY2(Image != Plain[Column], qPrintable(QString("Bold has no visual effect in column %1").arg(Column))); } else Plain.append(Image);
                 }
+                Scheme.IsInverseCursor = true; emit Colors->sigColorSchemeChanged(Scheme); QTest::qWait(100);
+                View->SetPanelActive(true); View->BaseView()->setFocusedRowIndex(Row);
+                QVERIFY(View->ListAppearance().invertCursor);
+                for (int Column = 0; Column < Model->columnCount(); ++Column)
+                    QVERIFY2(HasColor(Paint(Model->index(Row, Column)), Foreground), qPrintable(QString("Rule color missing at inverted cursor in column %1").arg(Column)));
+                Scheme.IsInverseCursor = false; emit Colors->sigColorSchemeChanged(Scheme); QTest::qWait(100);
+                View->BaseView()->setFocusedRowIndex(0);
                 if (Bold) {
                     const auto Key = hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_);
                     View->RestoreSelection({Key}, Key);

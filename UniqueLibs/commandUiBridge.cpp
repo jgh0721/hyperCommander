@@ -1003,15 +1003,15 @@ void CommandUiBridge::createCommandUi()
     AdminIndicator->setVisible(hc::permissions::Elevated());
     if (auto* Indicator = Window->findChild<QPushButton*>("hc.jobs.indicator")) {
         Window->statusBar()->removeWidget(Indicator);
-        Indicator->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-        HeaderLayout->addWidget(Indicator, 0, Qt::AlignVCenter);
+        Indicator->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+        HeaderLayout->addWidget(Indicator);
         Indicator->show();
     }
     auto* SettingsButton = new QToolButton(HeaderActions); SettingsButton->setObjectName("hc.menuRecovery");
     SettingsButton->setText(tr("설정")); SettingsButton->setToolTip(tr("환경 설정 · 메뉴 파일 복구"));
     SettingsButton->setMenu(RecoveryMenu); SettingsButton->setPopupMode(QToolButton::InstantPopup);
-    // The job indicator determines the row height, including after font changes.
-    SettingsButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Ignored);
+    // Share the tallest button's size hint, including after font changes.
+    SettingsButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     HeaderLayout->addWidget(SettingsButton);
     MenuBar->setCornerWidget(HeaderActions, Qt::TopRightCorner);
     HeaderActions->show();

@@ -622,6 +622,7 @@ void QMainUI::initialize()
     auto* UpdateButton = new QToolButton(HeaderActions);
     UpdateButton->setObjectName("hc.update.menuButton"); UpdateButton->setText(tr("업데이트"));
     UpdateButton->setPopupMode(QToolButton::InstantPopup);
+    UpdateButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     auto* UpdateMenu = new QMenu(UpdateButton); UpdateButton->setMenu(UpdateMenu);
     HeaderActions->layout()->addWidget(UpdateButton);
     update_ = new hc::update::UpdateController(this, UpdateMenu, [this] { return canRestartForUpdate(); });
