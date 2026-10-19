@@ -20,6 +20,7 @@ class QImageView : public QBaseView
 
 public:
     void LoadContent(const QImage& Image, const QString& Path, bool Traverse);
+    void SetNavigationSource(const QString& Path);
     void DisplayAnimationFrame(const QImage& Image);
     QImage Content() const { return m_displayImage; }
     QByteArray SerializeContent(const QByteArray& Format = "PNG", int Quality = -1) const;

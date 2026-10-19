@@ -16,6 +16,7 @@
 #include <QtEndian>
 #include <QMouseEvent>
 #include <QScopeGuard>
+#include <QLineEdit>
 #include "pluginHost/imageArchiveBroker.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "image/QImageView.h"
@@ -555,6 +556,85 @@ class ImageReadingTests : public QObject
         QVERIFY(Edited.Load(Input.Value(), false));
         QVERIFY(!Edited.Execute({{"action", "image.rotate"}, {"angle", 90}}).contains("error"));
         QVERIFY(Edited.Execute({{"action", "reading.mode"}, {"mode", 2}}).contains("error"));
+    }
+    void imageSpaceAndBackspaceUseOriginalDirectory()
+    {
+        QTemporaryDir Root;
+        Fixture(Root.filePath("original"), 3);
+        Fixture(Root.filePath("private"), 2);
+        const auto Original = Root.filePath("original/2.png");
+        const auto Input = ReadDocumentFile(Root.filePath("private/2.png"));
+        QVERIFY(Input.HasValue());
+        for (const bool BindBeforeLoad : {true, false}) {
+            DocumentViewPane Pane;
+            Pane.resize(700, 500);
+            if (BindBeforeLoad) Pane.SetReadingSource(Original, {});
+            QVERIFY(Pane.Load(Input.Value(), false));
+            if (!BindBeforeLoad) Pane.SetReadingSource(Original, {});
+            Pane.show(); Pane.activateWindow();
+            QVERIFY(QTest::qWaitForWindowActive(&Pane)); Pane.Focus();
+            auto* Image = Pane.findChild<QImageView*>();
+            QVERIFY(Image);
+            QSignalSpy Open(&Pane, &DocumentViewPane::OpenRequested);
+            QTest::keyClick(Image, Qt::Key_Space);
+            QCOMPARE(Open.size(), 1);
+            QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/3.png"));
+            QTest::keyClick(Image, Qt::Key_Backspace);
+            QCOMPARE(Open.size(), 2);
+            QCOMPARE(Open.last().at(0).toString(), Original);
+            QTest::keyClick(Image, Qt::Key_Backspace, Qt::ControlModifier);
+            QCOMPARE(Open.size(), 2);
+            QLineEdit Field(Image); Field.show(); Field.setFocus();
+            QTest::keyClick(&Field, Qt::Key_Space);
+            QCOMPARE(Field.text(), QString(" "));
+            QTest::keyClick(&Field, Qt::Key_Backspace);
+            QVERIFY(Field.text().isEmpty());
+            QCOMPARE(Open.size(), 2);
+            Field.hide(); Pane.Focus();
+            ImageFullscreen Fullscreen(&Pane);
+            Fullscreen.Enter(); Pane.Focus();
+            QTest::keyClick(Image, Qt::Key_Backspace);
+            QCOMPARE(Open.size(), 3);
+            QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/1.png"));
+            Fullscreen.Leave();
+        }
+    }
+    void imageKeysOpenSiblingAndReturnToPrevious()
+    {
+        QTemporaryDir Root;
+        Fixture(Root.filePath("images"), 3);
+        DocumentWorkspaceWidget W(Root.filePath("recovery"));
+        W.resize(800, 600); W.show(); W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));
+        const auto Current = [&] {
+            const auto State = W.Snapshot();
+            for (const auto& Item : State["documents"].toArray()) {
+                const auto Doc = Item.toObject();
+                if (Doc["documentId"] == State["activeDocumentId"]) return Doc;
+            }
+            return QJsonObject{};
+        };
+        W.Handle({{"action", "open"}, {"path", Root.filePath("images/2.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Current()["lifecycle"] == "ready", 20000);
+        auto* Pane = W.findChild<DocumentViewPane*>(); QVERIFY(Pane); Pane->Focus();
+        QTest::keyClick(Pane->InputWidget(), Qt::Key_Space);
+        QTRY_COMPARE_WITH_TIMEOUT(Current()["path"].toString(), Root.filePath("images/3.png"), 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(Current()["lifecycle"] == "ready", 20000);
+        auto* Image = qobject_cast<QImageView*>(QApplication::focusWidget()); QVERIFY(Image);
+        QTest::keyClick(Image, Qt::Key_Backspace);
+        QTRY_COMPARE_WITH_TIMEOUT(Current()["path"].toString(), Root.filePath("images/2.png"), 20000);
+    }
+    void readingBackspaceMovesToPreviousPage()
+    {
+        QTemporaryDir Root; Fixture(Root.path(), 3);
+        const auto Book = OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        ImageReadingView View; View.resize(400, 500); View.Load(Book.Value(), Picture());
+        View.SetMode(ImageReadingView::Single); View.show(); View.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&View)); View.setFocus(); View.GoTo(2);
+        QTest::keyClick(&View, Qt::Key_Backspace);
+        QCOMPARE(View.State()["page"].toInt(), 1);
+        QTest::keyClick(&View, Qt::Key_Space);
+        QCOMPARE(View.State()["page"].toInt(), 2);
     }
     void restoredPageUsesItsOwnPixels()
     {

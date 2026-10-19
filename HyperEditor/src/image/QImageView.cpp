@@ -35,6 +35,7 @@
 #include <QVBoxLayout>
 #include <QUndoCommand>
 #include <QScrollBar>
+#include <QShortcut>
 #include <cmath>
 #include <utility>
 #include <QVariant>
@@ -136,6 +137,15 @@ QImageView::QImageView(QWidget* parent)
     layout()->addWidget(m_scrollArea);
 
     connect(m_slideshowTimer, &QTimer::timeout, this, &QImageView::nextImage);
+    for (const auto Key : {Qt::Key_Space, Qt::Key_Backspace}) {
+        auto* Shortcut = new QShortcut(QKeySequence(Key), this);
+        Shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(Shortcut, &QShortcut::activated, this, [this, Key] {
+            if (m_compositeMode || pendingEdit_) return;
+            if (Key == Qt::Key_Space) nextImage();
+            else previousImage();
+        });
+    }
 }
 
 QImageView::~QImageView() { renderStop_->request_stop();editStop_->request_stop();stopSlideshow(); }
@@ -507,6 +517,19 @@ void QImageView::openDirectory(const QString& dirPath)
     m_dirFiles.clear();
     for (const auto& fi : dir.entryInfoList(QDir::Files))
         m_dirFiles.append(fi.absoluteFilePath());
+}
+void QImageView::SetNavigationSource(const QString& Path)
+{
+    m_dirFiles.clear();
+    m_dirIndex = 0;
+    const QFileInfo Source(Path);
+    if (!Source.isFile() || !supportedExtensions().contains(Source.suffix(), Qt::CaseInsensitive)) return;
+    openDirectory(Source.absolutePath());
+    for (int Index = 0; Index < m_dirFiles.size(); ++Index)
+        if (m_dirFiles[Index].compare(Source.absoluteFilePath(), Qt::CaseInsensitive) == 0) {
+            m_dirIndex = Index;
+            break;
+        }
 }
 
 void QImageView::startSlideshow(int ms)
@@ -1368,7 +1391,7 @@ void QImageView::LoadContent(const QImage& Image,const QString& Path,bool Traver
 {
     if(Image.sizeInBytes()>8*1024*1024)m_undoStack->setUndoLimit(2);
     openImage(Image,QFileInfo(Path).fileName());m_fitMode=FitToWindow;m_zoomLevel=100;m_filePath=Path;m_imageFormat=QFileInfo(Path).suffix().toUpper();
-    if(Traverse) {openDirectory(QFileInfo(Path).absolutePath());m_dirIndex=qMax(0,int(m_dirFiles.indexOf(Path)));}
+    if(Traverse) SetNavigationSource(Path);
     else {m_dirFiles.clear();m_dirIndex=0;}
     m_undoStack->setClean();updateDisplay();
 }

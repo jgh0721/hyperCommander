@@ -336,6 +336,32 @@ void isolatedComicArchiveReading(){
     QVERIFY(!Doc(Surface.Details().documentState_,Id)["dirty"].toBool());
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
+void isolatedImageSiblingKeyboardNavigation(){
+    QTemporaryDir Root;
+    QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
+    for(int I=1;I<=3;++I)QVERIFY(Page.save(Root.filePath(QString::number(I)+".png")));
+    const auto Private=Root.filePath("private");QVERIFY(QDir().mkpath(Private));
+    QWidget Main;Main.resize(900,650);Main.show();Main.activateWindow();QVERIFY(QTest::qWaitForWindowActive(&Main));
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtViewerHost Host(&Main,[Live,Private]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;Item->copyRoot_=Private;return std::shared_ptr<IMaterializer>(Item);});
+    const auto Drain=qScopeGuard([&]{Host.CloseAll();Wait([&]{return Host.IsIdle();});});
+    bool Finished=false,Success=false;QString Failure;
+    auto* Window=Host.OpenPlugin(Options(),{{Content(Root.filePath("2.png")),{}}},"Image keys",
+        [&](bool Ready,const QString& Error){Finished=true;Success=Ready;Failure=Error;});
+    QVERIFY(Window);QVERIFY(Wait([&]{return Finished;},30000));QVERIFY2(Success,qPrintable(Failure));
+    auto* Surface=Window->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
+    const auto Pid=Surface->Details().host_.processId_;
+    QVERIFY(Wait([&]{DWORD ForegroundPid=0;GetWindowThreadProcessId(GetForegroundWindow(),&ForegroundPid);return ForegroundPid==Pid;}));
+    const auto Current=[&]{const auto State=Surface->Details().documentState_;return Doc(State,State["activeDocumentId"].toString());};
+    QCOMPARE(Current()["path"].toString(),Private+"/2.png");
+    const auto Press=[&](WORD Key){INPUT Keys[2]{};Keys[0].type=Keys[1].type=INPUT_KEYBOARD;Keys[0].ki.wVk=Keys[1].ki.wVk=Key;Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;return SendInput(2,Keys,sizeof(INPUT));};
+    QCOMPARE(Press(VK_SPACE),UINT(2));
+    QVERIFY(Wait([&]{return Current()["path"].toString()==Root.filePath("3.png")&&Current()["lifecycle"]=="ready";},20000));
+    QCOMPARE(Press(VK_BACK),UINT(2));
+    QVERIFY(Wait([&]{return Current()["path"].toString()==Root.filePath("2.png")&&Current()["lifecycle"]=="ready";},20000));
+    QVERIFY(!Current()["dirty"].toBool());
+}
 void f3WindowStaysRestoredAfterLoadingDialogHides(){
     QTemporaryDir Root;const auto Path=Root.filePath("visible.txt");QVERIFY(Put(Path,"visible"));
     QWidget Main;Main.resize(1100,800);Main.show();

@@ -65,6 +65,7 @@ namespace hc::document
     }
     void DocumentViewPane::SetReadingSource(const QString& Path,const QString& Entry){
         readingPath_=Path;readingEntry_=Entry;
+        if(image_&&Entry.isEmpty())image_->SetNavigationSource(Path);
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
             reading_->OpenPath(Path,Entry,reading_->State()["mode"].toInt());
     }
@@ -82,7 +83,7 @@ namespace hc::document
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         bool Success=true;
         if(viewId_=="pdf") {pdf_=new QPDFView(this);view_=pdf_;Success=pdf_->LoadContent(Input.bytes_,Input.path_);}
-        else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);}
+        else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);if(readingEntry_.isEmpty()&&!readingPath_.isEmpty())image_->SetNavigationSource(readingPath_);}
         else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_);editor_->setProperty("scalarText",Input.text_);editor_->setPlainText(Input.text_);editor_->setReadOnly(false);}
         if(!Success)return false;
         toolbar_=view_->createToolBar();

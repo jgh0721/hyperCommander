@@ -799,6 +799,8 @@ void ImageReadingView::keyPressEvent(QKeyEvent *E)
         setScrollPosition(scrollPosition() - 40);
     else if (E->key() == Qt::Key_Space)
         Move(E->modifiers() & Qt::ShiftModifier ? -1 : 1);
+    else if (E->key() == Qt::Key_Backspace && E->modifiers() == Qt::NoModifier)
+        Move(-1);
     else if (E->key() == Qt::Key_PageDown)
         Move(1, E->modifiers() & Qt::ShiftModifier);
     else if (E->key() == Qt::Key_PageUp)
