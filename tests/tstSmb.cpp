@@ -820,6 +820,47 @@ private slots:
         const auto S = fm::style::ColorScheme::fromJson(Settings.Read(hc::settings::Section::Appearance).toObject()["watercolorTheme"].toObject()); QVERIFY(S); QCOMPARE(S->seeds.accent.value(), QColor("#008577")); QVERIFY(main_->findChild<QWidget*>("hc.commandLine")->isHidden());
     }
 
+    void todoBugHelpMenuPlacement()
+    {
+        auto* Bar = main_->findChild<QMenuBar*>("menubar"); QVERIFY(Bar);
+        QVERIFY(!Bar->cornerWidget(Qt::TopRightCorner));
+        auto* Corner = main_->findChild<QWidget*>("hc.headerActions"); QVERIFY(Corner);
+        QCOMPARE(Corner->parentWidget(), Bar->parentWidget());
+        auto* Help = main_->findChild<QToolButton*>("hc.update.menuButton"); QVERIFY(Help);
+        QCOMPARE(Help->parentWidget(), Corner);
+        QVERIFY(Corner->layout()->indexOf(Help) >= 0);
+        const auto OriginalSize = main_->size();
+        const auto OriginalFont = Help->font();
+        const auto Restore = qScopeGuard([&] { Help->setFont(OriginalFont); main_->resize(OriginalSize); });
+        for (const int Width : {1360, 800}) {
+            main_->resize(Width, OriginalSize.height());
+            auto Font = OriginalFont; Font.setPointSize(14); Help->setFont(Font);
+            QTest::qWait(100);
+            QVERIFY(Help->isVisible());
+            const QRect HelpRect(Help->mapTo(Bar->parentWidget(), QPoint()), Help->size());
+            qInfo() << "Header geometry:" << Bar->parentWidget()->rect() << Bar->geometry() << Corner->geometry() << HelpRect;
+            QVERIFY(SaveR9Dialog(*main_, "header-layout"));
+            qInfo() << "Header after theme:" << Bar->parentWidget()->rect() << Bar->geometry() << Corner->geometry();
+            QVERIFY(Bar->parentWidget()->rect().contains(HelpRect));
+            QTRY_VERIFY(!Bar->geometry().intersects(Corner->geometry()));
+            for (auto* Action : Bar->actions()) {
+                const auto Rect = Bar->actionGeometry(Action);
+                if (!Action->isVisible() || Rect.isEmpty() || !Bar->rect().contains(Rect)) continue;
+                QCOMPARE(Bar->actionAt(Rect.center()), Action);
+                QTest::mouseClick(Bar, Qt::LeftButton, Qt::NoModifier, Rect.center());
+                QTRY_VERIFY(Action->menu()->isVisible());
+                Action->menu()->hide();
+            }
+            auto* HelpMenu = Help->menu(); QVERIFY(HelpMenu);
+            QVERIFY(HelpMenu->findChild<QAction*>("hc.update.check"));
+            QSignalSpy Opened(HelpMenu, &QMenu::aboutToShow);
+            QTimer::singleShot(100, HelpMenu, [HelpMenu] { HelpMenu->hide(); });
+            QTest::mouseClick(Help, Qt::LeftButton);
+            QCOMPARE(Opened.count(), 1);
+        }
+        QVERIFY(SaveR9Dialog(*main_, "help-menu-placement"));
+    }
+
     void menuBarSettingsUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto OriginalSettings = Settings.Object();

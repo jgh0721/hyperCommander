@@ -87,6 +87,9 @@ void UpdateController::showProgress(const QString& Message) {
 void UpdateController::cancel() { stop_.request_stop(); if (reply_) reply_->abort(); }
 void UpdateController::fail(const QString& Error) {
     busy_ = false; if (progress_) progress_->hide();
+    // Preserve check/download failures as well as native helper failures, so a
+    // dismissed dialog still leaves the reason available for diagnosis.
+    try { DurableWrite(Native(root_) / L".update/last-error.json", "{\"error\":" + QuoteJson(Error.toUtf8().toStdString()) + "}"); } catch (...) {}
     if (!automatic_) QMessageBox::warning(window_, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Error));
 }
 void UpdateController::Check() {

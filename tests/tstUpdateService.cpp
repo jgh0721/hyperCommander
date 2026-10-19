@@ -94,7 +94,11 @@ public:
             ++Heartbeats;
             if (Mode == "cancel" && Network->zip_) Controller.cancel();
             for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Message = qobject_cast<QMessageBox*>(Widget); Message && Message->isVisible()) {
-                if (Message->text().contains("완료하지 못했습니다")) ++Errors;
+                if (Message->text().contains("완료하지 못했습니다")) {
+                    ++Errors;
+                    const auto Failure = ParseJson(ReadBounded(Path(Root.toStdWString()) / L".update/last-error.json", 32768)).At("error", Json::Kind::String).text_;
+                    if (Failure.empty() || !Message->text().contains(QString::fromUtf8(Failure))) throw std::runtime_error("service-error-not-persisted");
+                }
                 else ++Offers;
                 if (Message->text().contains("파일 작업·명령 실행")) Blocked = true;
                 for (auto* Button : Message->buttons()) {

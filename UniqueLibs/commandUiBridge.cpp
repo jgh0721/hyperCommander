@@ -63,29 +63,6 @@ using namespace hc::storage;
 
 namespace
 {
-    class MenuCornerActions final : public QWidget
-    {
-    public:
-        using QWidget::QWidget;
-    protected:
-        bool event(QEvent* Event) override
-        {
-            const bool Handled = QWidget::event(Event);
-            if (Event->type() == QEvent::LayoutRequest) {
-                const auto Hint = sizeHint();
-                if (auto* MenuBar = qobject_cast<QMenuBar*>(parentWidget());
-                    MenuBar && MenuBar->cornerWidget(Qt::TopRightCorner) == this && Hint != lastSizeHint_) {
-                    lastSizeHint_ = Hint;
-                    // QMenuBar does not reposition its corner widget on LayoutRequest.
-                    MenuBar->setCornerWidget(this, Qt::TopRightCorner);
-                }
-            }
-            return Handled;
-        }
-    private:
-        QSize lastSizeHint_;
-    };
-
     bool FolderPathInput(const QString& Input)
     {
         const auto Path = QDir::fromNativeSeparators(Input);
@@ -1013,11 +990,11 @@ void CommandUiBridge::createCommandUi()
     auto* RecoveryMenu = new QMenu(Window);
     RecoveryMenu->addAction(Action("hc.settings.show")); RecoveryMenu->addAction(Action("hc.menu.edit")); RecoveryMenu->addAction(Action("hc.menu.reload"));
     auto* MenuBar = Window->findChild<QMenuBar*>("menubar");
-    auto* HeaderActions = new MenuCornerActions(MenuBar); HeaderActions->setObjectName("hc.headerActions");
+    auto* HeaderActions = new QWidget(MenuBar); HeaderActions->setObjectName("hc.headerActions");
     auto* HeaderLayout = new QHBoxLayout(HeaderActions);
     HeaderLayout->setContentsMargins(0, 0, 0, 0); HeaderLayout->setSpacing(4);
-    // Keep the menu corner wide enough when the job counters change.
-    HeaderLayout->setSizeConstraint(QLayout::SetFixedSize);
+    // Let the surrounding row recalculate both dimensions after font/counter changes.
+    HeaderActions->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     auto* AdminIndicator = new QLabel(tr("관리자 권한으로 실행 중"), HeaderActions);
     AdminIndicator->setObjectName("hc.adminIndicator");
     AdminIndicator->setToolTip(tr("HyperCommander 본체가 관리자 권한으로 실행 중입니다."));

@@ -12,6 +12,7 @@
 #include <fmstyle/WatercolorChrome.h>
 #include <QEvent>
 #include <QProcess>
+#include <QToolButton>
 #include "Components/cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
@@ -36,7 +37,11 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     auto* Header = new QWidget(this); auto* HeaderLayout = new QVBoxLayout(Header);
     HeaderLayout->setContentsMargins(0, 0, 0, 0); HeaderLayout->setSpacing(0);
     HeaderLayout->addWidget(new fm::ui::WindowChrome(this, Header));
-    ui.menubar->setParent(Header); HeaderLayout->addWidget(ui.menubar);
+    auto* MenuRow = new QWidget(Header);
+    auto* MenuLayout = new QHBoxLayout(MenuRow);
+    MenuLayout->setContentsMargins(0, 0, 0, 0); MenuLayout->setSpacing(4);
+    ui.menubar->setParent(MenuRow); MenuLayout->addWidget(ui.menubar, 1);
+    HeaderLayout->addWidget(MenuRow);
     setMenuWidget(Header);
     ui.frame_2->hide();
     commandLine_ = new fm::ui::CommandLine(ui.centralwidget); commandLine_->setObjectName("hc.commandLine");
@@ -605,14 +610,21 @@ void QMainUI::initialize()
 
     ui.menubar->setNativeMenuBar( true );
 
-    auto HelpBar = new QMenuBar( ui.menubar );
-    auto HelpBar_Root = new QMenu( LANG_MNU_HELP, HelpBar );
-    HelpBar->addMenu( HelpBar_Root );
-
-    ui.menubar->setCornerWidget( HelpBar, Qt::TopRightCorner );
-
     StCommandMgr->SetMainUI( this );
-    update_ = new hc::update::UpdateController(this, HelpBar_Root, [this] { return canRestartForUpdate(); });
+
+    // Use the row layout for the status/settings/update controls. QMenuBar's
+    // corner geometry can lag behind their changing size hints.
+    auto* HeaderActions = ui.menubar->cornerWidget(Qt::TopRightCorner);
+    ui.menubar->setCornerWidget(nullptr, Qt::TopRightCorner);
+    HeaderActions->setParent(ui.menubar->parentWidget());
+    ui.menubar->parentWidget()->layout()->addWidget(HeaderActions);
+    HeaderActions->show();
+    auto* UpdateButton = new QToolButton(HeaderActions);
+    UpdateButton->setObjectName("hc.update.menuButton"); UpdateButton->setText(tr("업데이트"));
+    UpdateButton->setPopupMode(QToolButton::InstantPopup);
+    auto* UpdateMenu = new QMenu(UpdateButton); UpdateButton->setMenu(UpdateMenu);
+    HeaderActions->layout()->addWidget(UpdateButton);
+    update_ = new hc::update::UpdateController(this, UpdateMenu, [this] { return canRestartForUpdate(); });
 
     shlChangeNotify = new QSHChangeNotify(this);
     shlChangeNotify->hide();

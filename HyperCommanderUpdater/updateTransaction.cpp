@@ -76,7 +76,11 @@ Journal Load(const Path& Tx) {
 }
 void Move(const Path& From, const Path& To, bool Replace = false) {
     CheckPlainPath(From); CheckPlainPath(To); std::filesystem::create_directories(To.parent_path()); CheckPlainPath(To);
-    Require(MoveFileExW(From.c_str(), To.c_str(), MOVEFILE_WRITE_THROUGH | (Replace ? MOVEFILE_REPLACE_EXISTING : 0)), "update-move-failed");
+    if (!MoveFileExW(From.c_str(), To.c_str(), MOVEFILE_WRITE_THROUGH | (Replace ? MOVEFILE_REPLACE_EXISTING : 0))) {
+        const auto Error = GetLastError();
+        throw std::runtime_error("update-move-failed: " + Utf8(From.wstring()) + " -> " + Utf8(To.wstring())
+            + " (win32=" + std::to_string(Error) + ")");
+    }
 }
 void Rollback(const Path& Root, const Path& Tx, Journal& Journal) {
     Journal.state_ = "rollingBack"; Save(Tx, Journal);
@@ -104,10 +108,18 @@ void WaitParent(const Path& Root, unsigned Pid, std::uint64_t Created) {
     Require(Pid != 0 && Created != 0 && Pid != GetCurrentProcessId(), "update-parent-invalid");
     Handle Parent; Parent.value_ = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
     if (!Parent.value_) { Require(GetLastError() == ERROR_INVALID_PARAMETER, "update-parent-open"); return; }
+    // An exited process object can remain queryable while another handle is
+    // retained, but its image path may already be unavailable.
+    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) return;
     FILETIME Creation{}, Exit{}, Kernel{}, User{}; wchar_t Name[32768]{}; DWORD Length = DWORD(std::size(Name));
-    Require(GetProcessTimes(Parent.value_, &Creation, &Exit, &Kernel, &User)
-        && ((std::uint64_t(Creation.dwHighDateTime) << 32) | Creation.dwLowDateTime) == Created
-        && QueryFullProcessImageNameW(Parent.value_, 0, Name, &Length) && Same(Name, (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
+    Require(GetProcessTimes(Parent.value_, &Creation, &Exit, &Kernel, &User), "update-parent-query");
+    // Verification can outlive the parent. Windows may already have reused
+    // its PID; a different creation time proves that the original exited.
+    // ApplyTransaction still checks every process under Root before writing.
+    if (((std::uint64_t(Creation.dwHighDateTime) << 32) | Creation.dwLowDateTime) != Created) return;
+    const bool Queried = QueryFullProcessImageNameW(Parent.value_, 0, Name, &Length);
+    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) return;
+    Require(Queried && Same(Name, (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
     Require(WaitForSingleObject(Parent.value_, 30000) == WAIT_OBJECT_0, "update-parent-still-running");
 }
 void CleanAcknowledged(const Path& Root, const Path& Tx, bool Retire) {
