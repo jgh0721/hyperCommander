@@ -92,6 +92,59 @@ DECLARE_CMD( BuiltInCMD_Nav_FavoriteDir,          QObject::tr( "탐색" ),    "h
 DECLARE_CMD( BuiltInCMD_Nav_GotoDrive,            QObject::tr( "탐색" ),    "hc.navigate.path",
              Qt::Key_F12,                                               QObject::tr( "드라이브 전환" ) );
 
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveA, QObject::tr( "탐색" ), "hc.navigate.gotoDriveA",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_A, QObject::tr( "A 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveB, QObject::tr( "탐색" ), "hc.navigate.gotoDriveB",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_B, QObject::tr( "B 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveC, QObject::tr( "탐색" ), "hc.navigate.gotoDriveC",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_C, QObject::tr( "C 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveD, QObject::tr( "탐색" ), "hc.navigate.gotoDriveD",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_D, QObject::tr( "D 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveE, QObject::tr( "탐색" ), "hc.navigate.gotoDriveE",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_E, QObject::tr( "E 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveF, QObject::tr( "탐색" ), "hc.navigate.gotoDriveF",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_F, QObject::tr( "F 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveG, QObject::tr( "탐색" ), "hc.navigate.gotoDriveG",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_G, QObject::tr( "G 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveH, QObject::tr( "탐색" ), "hc.navigate.gotoDriveH",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_H, QObject::tr( "H 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveI, QObject::tr( "탐색" ), "hc.navigate.gotoDriveI",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_I, QObject::tr( "I 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveJ, QObject::tr( "탐색" ), "hc.navigate.gotoDriveJ",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_J, QObject::tr( "J 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveK, QObject::tr( "탐색" ), "hc.navigate.gotoDriveK",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_K, QObject::tr( "K 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveL, QObject::tr( "탐색" ), "hc.navigate.gotoDriveL",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_L, QObject::tr( "L 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveM, QObject::tr( "탐색" ), "hc.navigate.gotoDriveM",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_M, QObject::tr( "M 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveN, QObject::tr( "탐색" ), "hc.navigate.gotoDriveN",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_N, QObject::tr( "N 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveO, QObject::tr( "탐색" ), "hc.navigate.gotoDriveO",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_O, QObject::tr( "O 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveP, QObject::tr( "탐색" ), "hc.navigate.gotoDriveP",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_P, QObject::tr( "P 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveQ, QObject::tr( "탐색" ), "hc.navigate.gotoDriveQ",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_Q, QObject::tr( "Q 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveR, QObject::tr( "탐색" ), "hc.navigate.gotoDriveR",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_R, QObject::tr( "R 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveS, QObject::tr( "탐색" ), "hc.navigate.gotoDriveS",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_S, QObject::tr( "S 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveT, QObject::tr( "탐색" ), "hc.navigate.gotoDriveT",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_T, QObject::tr( "T 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveU, QObject::tr( "탐색" ), "hc.navigate.gotoDriveU",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_U, QObject::tr( "U 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveV, QObject::tr( "탐색" ), "hc.navigate.gotoDriveV",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_V, QObject::tr( "V 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveW, QObject::tr( "탐색" ), "hc.navigate.gotoDriveW",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_W, QObject::tr( "W 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveX, QObject::tr( "탐색" ), "hc.navigate.gotoDriveX",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_X, QObject::tr( "X 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveY, QObject::tr( "탐색" ), "hc.navigate.gotoDriveY",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_Y, QObject::tr( "Y 드라이브 루트로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_GotoDriveZ, QObject::tr( "탐색" ), "hc.navigate.gotoDriveZ",
+             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_Z, QObject::tr( "Z 드라이브 루트로 이동" ) );
+
 DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,          QObject::tr( "기타" ),    "hc.panel.switch",
              Qt::Key_Tab,                                               QObject::tr( "반대편 패널로 전환" ) );
 
@@ -108,7 +161,7 @@ DECLARE_CMD( BuiltInCMD_Etc_ExternalMenu,         QObject::tr( "기타" ),    "h
 DECLARE_CMD( BuiltInCMD_OPs_Move,                 QObject::tr( "동작" ),    "hc.file.move",
              Qt::Key_unknown,                                           QObject::tr( "다른 패널로 이동" ) );
 DECLARE_CMD( BuiltInCMD_Jobs,                     QObject::tr( "기타" ),    "hc.jobs.show",
-             Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_J,       QObject::tr( "작업관리자" ) );
+             Qt::Key_unknown,                                           QObject::tr( "작업관리자" ) );
 DECLARE_CMD( BuiltInCMD_Settings,                 QObject::tr( "기타" ),    "hc.settings.show",
              Qt::ControlModifier | Qt::Key_Comma,                       QObject::tr( "환경 설정" ) );
 DECLARE_CMD( BuiltInCMD_ReloadMenu,               QObject::tr( "기타" ),    "hc.menu.reload",
@@ -189,6 +242,32 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
 
     BuiltInCMD_Nav_FavoriteDir,
     BuiltInCMD_Nav_GotoDrive,
+    BuiltInCMD_Nav_GotoDriveA,
+    BuiltInCMD_Nav_GotoDriveB,
+    BuiltInCMD_Nav_GotoDriveC,
+    BuiltInCMD_Nav_GotoDriveD,
+    BuiltInCMD_Nav_GotoDriveE,
+    BuiltInCMD_Nav_GotoDriveF,
+    BuiltInCMD_Nav_GotoDriveG,
+    BuiltInCMD_Nav_GotoDriveH,
+    BuiltInCMD_Nav_GotoDriveI,
+    BuiltInCMD_Nav_GotoDriveJ,
+    BuiltInCMD_Nav_GotoDriveK,
+    BuiltInCMD_Nav_GotoDriveL,
+    BuiltInCMD_Nav_GotoDriveM,
+    BuiltInCMD_Nav_GotoDriveN,
+    BuiltInCMD_Nav_GotoDriveO,
+    BuiltInCMD_Nav_GotoDriveP,
+    BuiltInCMD_Nav_GotoDriveQ,
+    BuiltInCMD_Nav_GotoDriveR,
+    BuiltInCMD_Nav_GotoDriveS,
+    BuiltInCMD_Nav_GotoDriveT,
+    BuiltInCMD_Nav_GotoDriveU,
+    BuiltInCMD_Nav_GotoDriveV,
+    BuiltInCMD_Nav_GotoDriveW,
+    BuiltInCMD_Nav_GotoDriveX,
+    BuiltInCMD_Nav_GotoDriveY,
+    BuiltInCMD_Nav_GotoDriveZ,
 
     BuiltInCMD_Etc_SwitchPanel,
     BuiltInCMD_Etc_ContextMenu,
@@ -311,7 +390,7 @@ namespace hc::defaults
     inline std::vector<hc::commands::CommandDescriptor> BusCommands()
     {
         using namespace hc::commands;
-        return { { "hc.navigate.path", 1, { { "path", { ParameterType::String } } } },
+        std::vector<CommandDescriptor> Descriptors{ { "hc.navigate.path", 1, { { "path", { ParameterType::String } } } },
                  { "hc.navigate.parent" },
                  { "hc.navigate.refresh" },
                  { "hc.navigate.cancel" },
@@ -391,6 +470,10 @@ namespace hc::defaults
                      { "allowReadOnly",           { ParameterType::Boolean, false } },
                      { "confirmed",               { ParameterType::Boolean, false } } },
                    "file-write" } };
+        for (const auto& Command : Commands())
+            if (QString(Command.Name).startsWith("hc.navigate.gotoDrive"))
+                Descriptors.push_back({QString(Command.Name).toStdString()});
+        return Descriptors;
     }
 
     // 빈 명령 ID는 해당 키 해제. 사용자 지정 단축키는 이 프리셋 위에 적용한다.

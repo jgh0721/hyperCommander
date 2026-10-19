@@ -24,6 +24,37 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void driveRootCommandsAndShortcuts()
+    {
+        const auto Descriptors = hc::defaults::BusCommands();
+        for (const auto& Preset : {"legacy", "prototype"}) {
+            const QJsonObject General{{"shortcutPreset", Preset}};
+            const auto Keys = EffectiveShortcuts(General, {});
+            for (int Offset = 0; Offset < 26; ++Offset) {
+                const auto Letter = QChar::fromLatin1(char('A' + Offset));
+                const auto Id = QString("hc.navigate.gotoDrive%1").arg(Letter);
+                const QKeyCombination Key(Qt::ControlModifier | Qt::ShiftModifier, Qt::Key(Qt::Key_A + Offset));
+                QCOMPARE(QString(FindCommand(Id).Name), Id);
+                QCOMPARE(CommandId(Id.toLower()), Id);
+                QCOMPARE(CommandId(Keys.value(Key)), Id);
+                QCOMPARE(std::count_if(Descriptors.begin(), Descriptors.end(), [&](const auto& Descriptor) {
+                    return Descriptor.id_ == Id.toStdString() && Descriptor.parameters_.empty();
+                }), 1);
+                int Bindings = 0;
+                for (const auto& Command : hc::defaults::Commands())
+                    if (Command.Default == Key) ++Bindings;
+                QCOMPARE(Bindings, 1);
+                QString Invoked;
+                const QKeyEvent Event(QEvent::KeyPress, Key.key(), Key.keyboardModifiers());
+                QVERIFY(InvokeShortcut(Event, Keys, [&](const QString& Command) { Invoked = Command; return true; }));
+                QCOMPARE(Invoked, Id);
+                const auto KeyText = QKeySequence(Key).toString(QKeySequence::PortableText);
+                QCOMPARE(CommandId(EffectiveShortcuts(General, {{KeyText, "hc.jobs.show"}}).value(Key)), QString("hc.jobs.show"));
+                QVERIFY(!EffectiveShortcuts(General, {{KeyText, QJsonValue::Null}}).contains(Key));
+            }
+        }
+        QVERIFY(EffectiveShortcuts({{"useBuiltInShortcuts", false}}, {}).isEmpty());
+    }
     void shellMenuDefaults()
     {
         QVERIFY(!FindCommand("hc.file.shellMenu").Name.isEmpty());

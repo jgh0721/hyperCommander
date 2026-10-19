@@ -537,15 +537,18 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     auto* Panel = PanelOf(Model);
     if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
     const auto& Id = Invocation.id_;
+    const bool DriveRoot = Id.starts_with("hc.navigate.gotoDrive");
+    const bool NavigateToPath = Id == "hc.navigate.path" || DriveRoot;
     QString Path;
-    if (Id == "hc.navigate.path")
+    if (DriveRoot) Path = QString(QChar::fromLatin1(Id.back())) + ":\\";
+    else if (Id == "hc.navigate.path")
     {
         Path = QString::fromStdString(std::get<std::string>(Invocation.parameters_.at("path")));
         if (Path.size() == 2 && Path.endsWith(':')) Path += '\\';
         if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-path-required"};
         Path = QDir::toNativeSeparators(QDir::cleanPath(Path));
     }
-    if (Id != "hc.navigate.path" && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
+    if (!NavigateToPath && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
     if (Id == "hc.viewer.open" || Id == "hc.file.edit") return executeDocument(Invocation, Model);
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
@@ -554,7 +557,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         if (Model->IsLoading()) Model->CancelNavigation();
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel")
         Model->setProperty("hc.correlation", QString::fromStdString(Invocation.correlationId_));
-    if (Id == "hc.navigate.path")
+    if (NavigateToPath)
     {
         Panel->ChangeCurrentPath(Path, {});
         if (!Model->IsLoading() && Model->GetCurrentPathWithRoot().compare(Path, Qt::CaseInsensitive) != 0)
@@ -902,6 +905,7 @@ void CommandUiBridge::createCommandUi()
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
+            if (Id.startsWith("hc.navigate.gotoDrive")) { Dispatch(Id, {}, "ui"); return; }
             if (Id.startsWith("hc.tab.")) { Dispatch(Id, {}, "ui"); return; }
             if (Id == "hc.viewer.quick" || Id == "hc.viewer.open") { Dispatch(Id, {}, "ui"); return; }
             // These operations retain their list-local context and are
