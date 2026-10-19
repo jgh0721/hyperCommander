@@ -79,12 +79,12 @@ public:
     void                            SetProviderEnabled(bool Enabled);
     bool                            ProviderEnabled() const { return providerEnabled_; }
     bool                            IsLoading() const override { return loading_; }
-    static constexpr std::uint64_t PageSize = 4096;
-    bool IsPaged() const { return pageSource_ && pageSource_->Count() > PageSize; }
+    // Large directories use a disk-backed sort snapshot, but expose every row.
+    static constexpr std::uint64_t IndexedOrderThreshold = 4096;
+    bool UsesIndexedOrder() const { return pageSource_ && pageSource_->Count() > IndexedOrderThreshold; }
     std::uint64_t EntryCount() const { return pageView_ ? pageView_->Count() : 0; }
-    std::uint64_t PageOffset() const { return pageOffset_; }
-    void SetPage(std::uint64_t Offset);
-    void SetPageFilter(const QString& Query, bool ShowHidden);
+    bool IsPageLoading() const { return pageBusy_; }
+    void SetPageFilter(const QString& Query, bool ShowHidden, const QString& Match = {});
     hc::storage::Result<std::shared_ptr<hc::storage::ISelectionManifest>> SelectAllEntries() const;
     bool                            HandlesRefreshSignals() const override { return providerEnabled_; }
     void                            CancelNavigation();
@@ -188,8 +188,7 @@ private:
     QString                         acceptedPath_;
     std::shared_ptr<hc::storage::IStorageProvider> acceptedProvider_;
     std::shared_ptr<hc::storage::PagedEntryIndex> pageSource_, pageView_;
-    std::uint64_t pageOffset_ = 0;
-    QString pageQuery_;
+    QString pageQuery_, pageMatch_;
     bool pageShowHidden_ = false;
     bool pageBusy_ = false;
     std::stop_source pageStop_;
@@ -214,14 +213,15 @@ public:
 
     Q_INVOKABLE void                    SetHiddenSystem( bool IsShow );
     Q_INVOKABLE bool                    GetHiddenSystem() const;
-    void SetSearch(const QString& Query);
+    void SetSearch(const QString& Query, const QString& Match = {});
     void setSourceModel(QAbstractItemModel* Source) override;
     QString Search() const { return search_; }
+    QString SearchMatch() const { return searchMatch_; }
 
     bool                                filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const override;
 
 private:
 
     bool                                IsShowHiddenSystem_ = false;
-    QString                             search_;
+    QString                             search_, searchMatch_;
 };

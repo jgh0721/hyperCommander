@@ -2,6 +2,7 @@
 #include "thumbnailModel.hpp"
 #include "cmpView.hpp"
 #include "builtInFsModel.hpp"
+#include "UniqueLibs/quickFindHighlight.hpp"
 #include "qtWorkspaceState.hpp"
 #include <QtitanGrid.h>
 #include <QTextLayout>
@@ -83,6 +84,13 @@ QVariant ThumbnailModel::data(const QModelIndex& Index, int Role) const
     const bool Directory = Tile.up_ || Entry.directory_;
     const auto Extension = Directory ? QString{} : QFileInfo(Tile.name_).suffix();
     switch (Role) {
+    case SearchHighlightRole: {
+        QVariantList Ranges; const auto Query = owner_->property("hc.quickFind.text").toString();
+        if (owner_->property("hc.quickFind.highlight").toBool() && !Tile.up_)
+            for (const auto& Range : hc::quickfind::HighlightRanges(Tile.name_, Query, owner_->property("hc.quickFind.match").toString()))
+                Ranges.append(QVariant(QVariantList{Range.first, Range.second}));
+        return Ranges;
+    }
     case Qt::DisplayRole: case FullNameRole: return Tile.name_;
     case Qt::ToolTipRole: return Tile.name_ + (Tile.path_.isEmpty() ? QString{} : "\n" + Tile.path_);
     case IsUpRole: return Tile.up_;

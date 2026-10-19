@@ -84,7 +84,8 @@ public:
     void                            RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults = {});
     QString                         CurrentPath() const;
     QString                         Search() const;
-    void                            SetSearch(const QString& Query);
+    QString                         SearchMatch() const;
+    void                            SetSearch(const QString& Query, const QString& Match = {});
     void                            NavigateHistory(int Offset);
     bool                            CanNavigateHistory(int Offset) const;
     void                            PrevTab();

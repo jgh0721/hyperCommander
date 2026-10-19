@@ -129,7 +129,7 @@ void CmpPanel::AddTab(bool Navigate)
     connect(View, &CGridView::sigThumbnailSelectionChanged, this, UpdateSelectionSizes);
     connect(Model, &CFSModel::DirectorySizesChanged, this, UpdateSelectionSizes);
     connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);
-    connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search()); });
+    connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search(), Proxy->SearchMatch()); });
     connect(Model, &CFSModel::RetryRequested, this, [this, Model] {
         for (int Index = 0; Index < vecTabStates.size(); ++Index)
             if (vecTabStates[Index]->Model == Model) { restoreTab(Index); break; }
@@ -1005,7 +1005,7 @@ void CmpPanel::initializeUIs()
     Layout->addWidget(path_, 1); Layout->addWidget(historyButton_);
     ui.verticalLayout->insertWidget(2, Controls);
     search_ = new QLineEdit(this); search_->setObjectName("hc.workspaceSearch"); search_->hide();
-    connect(search_, &QLineEdit::textChanged, this, &CmpPanel::SetSearch);
+    connect(search_, &QLineEdit::textChanged, this, [this](const QString& Text) { SetSearch(Text); });
     connect(path_, &fm::ui::BreadcrumbBar::pathEntered, this, [this](const QString& Path) {
         emit sig_NotifyPanelActivated(); ChangeCurrentPath(Path, {});
     });
@@ -1045,10 +1045,15 @@ QString CmpPanel::Search() const
     const int Index = ui.tabWidget->currentIndex();
     return Index >= 0 && Index < vecTabStates.size() ? vecTabStates[Index]->ProxyModel->Search() : QString{};
 }
-void CmpPanel::SetSearch(const QString& Query)
+QString CmpPanel::SearchMatch() const
+{
+    const int Index = ui.tabWidget->currentIndex();
+    return Index >= 0 && Index < vecTabStates.size() ? vecTabStates[Index]->ProxyModel->SearchMatch() : QString{};
+}
+void CmpPanel::SetSearch(const QString& Query, const QString& Match)
 {
     const int Index = ui.tabWidget->currentIndex(); if (Index < 0 || Index >= vecTabStates.size()) return;
-    vecTabStates[Index]->ProxyModel->SetSearch(Query);
+    vecTabStates[Index]->ProxyModel->SetSearch(Query, Match);
     { QSignalBlocker Blocker(search_); search_->setText(Query); }
     processPanelStatusText(); emit sigNavigationStateChanged();
 }

@@ -8,6 +8,10 @@
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include <QRadioButton>
+#include <QInputMethodEvent>
+#include <imm.h>
+#include "UniqueLibs/quickFindSettings.hpp"
+#include "UniqueLibs/quickFindHighlight.hpp"
 #include <QAccessible>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -819,6 +823,316 @@ private slots:
         QCOMPARE(fm::style::ThemeManager::instance().scheme(), fm::style::ThemeManager::Scheme::System); QCOMPARE(hc::ui::FunctionCommands(G)[3], QString("hc.navigate.refresh"));
         QCOMPARE(hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(QKeySequence("Ctrl+M")[0])), QString("hc.file.copy"));
         const auto S = fm::style::ColorScheme::fromJson(Settings.Read(hc::settings::Section::Appearance).toObject()["watercolorTheme"].toObject()); QVERIFY(S); QCOMPARE(S->seeds.accent.value(), QColor("#008577")); QVERIFY(main_->findChild<QWidget*>("hc.commandLine")->isHidden());
+    }
+
+    void todoBugQuickFindSettings()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); });
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
+        auto* Page = Dialog.findChild<QWidget*>("hc.settings.navigation"); QVERIFY(Page);
+        auto* Tabs = Page->findChild<QTabWidget*>("hc.navigation.tabs"); QVERIFY(Tabs);
+        int QuickTab = -1; for (int I = 0; I < Tabs->count(); ++I) if (Tabs->tabText(I) == "빠른 찾기") QuickTab = I;
+        QVERIFY(QuickTab >= 0); Tabs->setCurrentIndex(QuickTab);
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
+        for (int I = 0; I < Categories->count(); ++I) if (Categories->item(I)->text() == "탐색") Categories->setCurrentRow(I);
+        auto* Enabled = Page->findChild<QCheckBox*>("hc.navigation.quickFind.enabled"); QVERIFY(Enabled);
+        auto* Activation = Page->findChild<QComboBox*>("hc.navigation.quickFind.activation"); QVERIFY(Activation);
+        auto* Scope = Page->findChild<QComboBox*>("hc.navigation.quickFind.scope"); QVERIFY(Scope);
+        auto* Match = Page->findChild<QComboBox*>("hc.navigation.quickFind.match"); QVERIFY(Match);
+        auto* Result = Page->findChild<QComboBox*>("hc.navigation.quickFind.result"); QVERIFY(Result);
+        auto* Highlight = Page->findChild<QCheckBox*>("hc.navigation.quickFind.highlight"); QVERIFY(Highlight);
+        QVERIFY(hc::quickfind::Settings::FromJson({}).highlight_); QVERIFY(Highlight->isChecked());
+        QCOMPARE(hc::quickfind::Settings::FromJson({}).result_, QString("cursor"));
+        QCOMPARE(Result->currentData().toString(), QString("cursor"));
+        Enabled->setChecked(false); QVERIFY(!Activation->isEnabled() && !Scope->isEnabled() && !Match->isEnabled() && !Result->isEnabled());
+        Enabled->setChecked(true); QVERIFY(Activation->isEnabled());
+        Activation->setCurrentIndex(Activation->findData("typing")); Scope->setCurrentIndex(Scope->findData("everything")); Match->setCurrentIndex(Match->findData("ends"));
+        Result->setCurrentIndex(Result->findData("filter"));
+        Highlight->setChecked(false);
+        QVERIFY(SaveR9Dialog(Dialog, "quick-find-settings"));
+        QVERIFY(Dialog.SaveSettings()); Dialog.reject();
+        const auto Saved = Settings.Read(hc::settings::Section::General).toObject()["quickFind"].toObject();
+        QCOMPARE(Saved["activation"].toString(), QString("typing")); QCOMPARE(Saved["scope"].toString(), QString("everything")); QCOMPARE(Saved["match"].toString(), QString("ends"));
+        QMainOpts Reopened(main_); Reopened.LoadSettings();
+        QVERIFY(!Reopened.findChild<QCheckBox*>("hc.navigation.quickFind.highlight")->isChecked());
+        QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.activation")->currentData().toString(), QString("typing"));
+        QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.scope")->currentData().toString(), QString("everything"));
+        QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.result")->currentData().toString(), QString("filter"));
+        QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.match")->currentData().toString(), QString("ends")); Reopened.reject();
+    }
+
+    void todoBugQuickFindInput()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto Restore = qScopeGuard([&] { Find->clear(); Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {QString("alpha.txt"), QString("alphabet.log"), QString("my-alpha.txt"), QString("space alpha.txt"), QString("한글 파일.txt"), QString("notes 한글.txt")}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("quick find");
+        }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!model(Panel)->IsLoading());
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        const auto Configure = [&](bool Enabled, const QString& Activation, const QString& Match) {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); General["quickFind"] = QJsonObject{{"enabled", Enabled}, {"activation", Activation}, {"scope", "panel"}, {"match", Match}, {"result", "filter"}};
+            return Settings.Put(hc::settings::Section::General, General);
+        };
+        const auto Focus = [&] { TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); Find->clear(); View->EnsureKeyboardFocusOnView(); QTest::qWait(30); return QApplication::focusWidget(); };
+        QVERIFY(Configure(false, "typing", "starts")); auto* Target = Focus(); QVERIFY(Target && Target != Find);
+        QTest::keyClick(Target, Qt::Key_A); QVERIFY(!Find->hasFocus()); QVERIFY(Find->text().isEmpty());
+        QVERIFY(Configure(true, "ctrl-alt", "starts")); Target = Focus();
+        QTest::keyClick(Target, Qt::Key_A); QVERIFY(!Find->hasFocus());
+        QTest::keyClick(Target, Qt::Key_A, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(Find->hasFocus()); QCOMPARE(Find->text(), QString("a"));
+        QTest::keyClicks(Find, "lpha"); QCOMPARE(Find->text(), QString("alpha")); QCOMPARE(Panel->SearchMatch(), QString("starts")); QTRY_COMPARE(View->BaseView()->getRowCount(), 3);
+        QTest::keyClick(Find, Qt::Key_Escape); QVERIFY(Find->text().isEmpty()); QVERIFY(!Find->hasFocus());
+        for (const auto& Match : {QString("starts"), QString("contains"), QString("ends")}) {
+            QVERIFY(Configure(true, "typing", Match)); Target = Focus();
+            QTest::keyClick(Target, Qt::Key_A); QTRY_VERIFY(Find->hasFocus()); QTest::keyClicks(Find, "lpha");
+            QTRY_COMPARE(View->BaseView()->getRowCount(), Match == "starts" ? 3 : Match == "contains" ? 5 : 1);
+            QCOMPARE(Panel->SearchMatch(), Match);
+        }
+        QVERIFY(Configure(true, "typing", "starts")); Target = Focus();
+        QInputMethodEvent Initial(QStringLiteral("ㅎ"), {}); QApplication::sendEvent(Target, &Initial);
+        QTRY_VERIFY(Find->hasFocus()); QCOMPARE(Find->text(), QString{});
+        QInputMethodEvent Syllable(QStringLiteral("한"), {}); QApplication::sendEvent(Find, &Syllable); QCOMPARE(Find->text(), QString{});
+        QInputMethodEvent Next(QStringLiteral("ㄱ"), {}); Next.setCommitString(QStringLiteral("한")); QApplication::sendEvent(Find, &Next);
+        QCOMPARE(Find->text(), QStringLiteral("한"));
+        QInputMethodEvent Finish; Finish.setCommitString(QStringLiteral("글")); QApplication::sendEvent(Find, &Finish);
+        QTRY_COMPARE(Find->text(), QStringLiteral("한글")); QTRY_COMPARE(View->BaseView()->getRowCount(), 2);
+        QVERIFY(!Find->text().contains(QChar(0x314e))); // No detached initial consonant.
+        QInputMethodEvent Replace; Replace.setCommitString(QStringLiteral("국"), -1, 1); QApplication::sendEvent(Find, &Replace);
+        QCOMPARE(Find->text(), QStringLiteral("한국"));
+        QTest::keyClick(Find, Qt::Key_Backspace); QCOMPARE(Find->text(), QStringLiteral("한"));
+        const auto Nfd = QStringLiteral("한글").normalized(QString::NormalizationForm_D);
+        QVERIFY(hc::quickfind::Matches(QStringLiteral("한글 파일.txt"), Nfd, "starts"));
+        QVERIFY(hc::quickfind::Matches(QStringLiteral("notes 한글.txt"), "한글.txt", "ends"));
+        Target = Focus(); QTest::keyClick(Target, Qt::Key_C, Qt::ControlModifier); QVERIFY(!Find->hasFocus());
+        TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); QTest::keyClicks(Find, "ext:log"); QTRY_COMPARE(View->BaseView()->getRowCount(), 2); QVERIFY(Panel->SearchMatch().isEmpty());
+    }
+
+    void todoBugSearchEscapeFocus()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto Restore = qScopeGuard([&] { Find->clear(); Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Name : {"alpha.txt", "beta.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        for (auto* Panel : panels_) {
+            Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!model(Panel)->IsLoading());
+            auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            for (const auto* Mode : {"one-line", "two-line", "thumbnails"}) {
+                QVERIFY(View->SetListMode(Mode)); QTest::qWait(50);
+                for (const bool Enabled : {true, false}) {
+                    auto General = Settings.Read(hc::settings::Section::General).toObject();
+                    General["quickFind"] = QJsonObject{{"enabled", Enabled}, {"activation", "ctrl-alt"}};
+                    QVERIFY(Settings.Put(hc::settings::Section::General, General));
+                    View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+                    QVERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+                    QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier); QTRY_VERIFY(Find->hasFocus());
+                    Find->setText("name:alpha"); QTRY_COMPARE(View->BaseView()->getRowCount(), 2);
+                    QTest::keyClick(Find, Qt::Key_Escape);
+                    QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+                    QVERIFY(Find->text().isEmpty()); QVERIFY(Panel->Search().isEmpty()); QVERIFY(Panel->SearchMatch().isEmpty());
+                    QTRY_COMPARE(View->BaseView()->getRowCount(), 3);
+                    Find->clear(); QTest::mouseClick(Find, Qt::LeftButton); QTRY_VERIFY(Find->hasFocus());
+                    Find->setText(QStringLiteral("ㄹ어ㅏㅣㄹ너ㅏㅣ")); QTRY_COMPARE(View->BaseView()->getRowCount(), 1);
+                    QTest::keyClick(Find, Qt::Key_Escape);
+                    QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+                    QVERIFY(Find->text().isEmpty()); QVERIFY(Panel->Search().isEmpty());
+                    QTRY_COMPARE(View->BaseView()->getRowCount(), 3);
+                }
+            }
+        }
+    }
+
+    void todoBugQuickFindCursor()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto Restore = qScopeGuard([&] { QTest::keyClick(Find, Qt::Key_Escape); Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        // Missing result key must migrate to cursor movement.
+        General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "panel"}, {"match", "starts"}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {QString("AGENTS.md"), QString("AGENTS-extra.md"), QString("alpha.txt"), QString("my-AG.txt"), QString("notes.txt"), QString("한글.txt")}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("cursor find");
+        }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!model(Panel)->IsLoading());
+        auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        const auto FocusName = [&] { auto Index = View->BaseView()->focusedRow().modelIndex(0); while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index); return Index.isValid() ? Model->GetName(Index) : QString{}; };
+        const auto Key = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) { const auto Item = Model->GetFileInfo(Model->index(Row, 0)); if (Item && Item->storageEntry_ && Item->Name_ == Name) return hc::workspace::SelectionKey(*Item->storageEntry_); } return QString{}; };
+        const auto Mark = Key("notes.txt"); QVERIFY(!Mark.isEmpty());
+        for (const auto* Mode : {"one-line", "two-line", "thumbnails"}) {
+            TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); Find->clear();
+            QVERIFY(View->SetListMode(Mode)); QTest::qWait(100); View->RestoreSelection({Mark}, Mark);
+            const int Count = View->BaseView()->getRowCount(); QCOMPARE(Count, 7);
+            QStringList Matches;
+            for (int Row = 0; Row < Count; ++Row) {
+                auto Index = View->BaseView()->getRow(Row).modelIndex(0); while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.isValid() && Model->GetName(Index).startsWith("AG", Qt::CaseInsensitive)) Matches.append(Model->GetName(Index));
+            }
+            QCOMPARE(Matches.size(), 2);
+            View->EnsureKeyboardFocusOnView(); QTest::qWait(30); auto* Target = QApplication::focusWidget(); QVERIFY(Target && Target != Find);
+            QTest::keyClick(Target, Qt::Key_A); QTRY_VERIFY(Find->hasFocus()); QTest::keyClicks(Find, "G");
+            QCOMPARE(Find->text(), QString("aG")); QCOMPARE(FocusName(), Matches[0]); QCOMPARE(View->BaseView()->getRowCount(), Count);
+            QVERIFY(View->property("hc.quickFind.highlight").toBool()); QCOMPARE(View->property("hc.quickFind.text").toString(), Find->text());
+            QVERIFY(SaveR9Dialog(*main_, "quick-find-highlight-" + QString::fromLatin1(Mode)));
+            QVERIFY(Panel->Search().isEmpty()); QCOMPARE(View->CaptureSelection(), QStringList{Mark});
+            QTest::keyClick(Find, Qt::Key_Down); QCOMPARE(FocusName(), Matches[1]); QVERIFY(Find->hasFocus());
+            QTest::keyClick(Find, Qt::Key_Down); QCOMPARE(FocusName(), Matches[0]);
+            QTest::keyClick(Find, Qt::Key_Up); QCOMPARE(FocusName(), Matches[1]);
+            const auto Last = FocusName(); Find->setText("no-such-file"); QCOMPARE(FocusName(), Last); QCOMPARE(View->BaseView()->getRowCount(), Count);
+            Find->setText("AG"); QCOMPARE(FocusName(), Matches[0]);
+            const auto Query = Find->text(); const auto Caret = Find->cursorPosition();
+            QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QCOMPARE(View->BaseView()->getRowCount(), 3);
+            QCOMPARE(Panel->Search(), Query); QCOMPARE(Find->text(), Query); QCOMPARE(Find->cursorPosition(), Caret); QVERIFY(Find->hasFocus());
+            QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QCOMPARE(View->BaseView()->getRowCount(), Count);
+            QCOMPARE(Find->text(), Query); QCOMPARE(FocusName(), Matches[0]); QVERIFY(Find->hasFocus());
+            QTest::keyClick(Find, Qt::Key_Return); QVERIFY(!Find->hasFocus());
+            Target = QApplication::focusWidget(); QVERIFY(Target);
+            QTest::keyClick(Target, Qt::Key_Down); QCOMPARE(FocusName(), Matches[1]);
+            QTest::keyClick(Target, Qt::Key_Escape); QCOMPARE(Find->text(), QString{});
+        }
+        TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); Find->clear();
+        QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); // Standard filter -> cursor mode.
+        QInputMethodEvent Preedit(QStringLiteral("한"), {}); QApplication::sendEvent(Find, &Preedit);
+        QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QCOMPARE(Find->text(), QString{});
+        QInputMethodEvent Commit; Commit.setCommitString(QStringLiteral("한")); QApplication::sendEvent(Find, &Commit);
+        QTRY_COMPARE(Find->text(), QStringLiteral("한")); QTRY_COMPARE(View->BaseView()->getRowCount(), 2);
+        QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QTRY_COMPARE(View->BaseView()->getRowCount(), 7); QCOMPARE(FocusName(), QStringLiteral("한글.txt"));
+        QVERIFY(SaveR9Dialog(*main_, "quick-find-cursor"));
+    }
+
+    void todoBugQuickFindHighlight()
+    {
+        using hc::quickfind::HighlightRanges;
+        QCOMPARE(HighlightRanges("AGENTS.md", "ag"), (QList<QPair<int,int>>{{0, 2}}));
+        QCOMPARE(HighlightRanges("x-ag-ag.txt", "AG"), (QList<QPair<int,int>>{{2, 2}, {5, 2}}));
+        QCOMPARE(HighlightRanges("x-ag.txt", "ag", "starts").size(), 0);
+        QCOMPARE(HighlightRanges("x-ag.txt", "TXT", "ends"), (QList<QPair<int,int>>{{5, 3}}));
+        const auto Nfd = QStringLiteral("한글").normalized(QString::NormalizationForm_D);
+        QCOMPARE(HighlightRanges(Nfd + ".txt", "한"), (QList<QPair<int,int>>{{0, 3}}));
+        QCOMPARE(HighlightRanges(QStringLiteral("Straße.txt"), QStringLiteral("ß")), (QList<QPair<int,int>>{{4, 1}}));
+        QCOMPARE(HighlightRanges(QString::fromUcs4(U"😀한글.txt"), "한"), (QList<QPair<int,int>>{{2, 1}}));
+        QVERIFY(HighlightRanges("AGENTS.md", {}).isEmpty());
+        QTreeWidget Tree; Tree.setColumnCount(2); auto* Item = new QTreeWidgetItem(&Tree, {"AGENTS-AG.md", "C:/test"});
+        hc::quickfind::ResultHighlightDelegate Delegate(&Tree);
+        Tree.setProperty("hc.quickFind.text", "ag");
+        const auto YellowPixels = [&](bool Enabled) {
+            Tree.setProperty("hc.quickFind.highlight", Enabled);
+            QImage Image(360, 48, QImage::Format_ARGB32_Premultiplied); Image.fill(Qt::white);
+            QPainter Painter(&Image); QStyleOptionViewItem Option; Option.rect = Image.rect(); Option.font = main_->font();
+            Option.state = QStyle::State_Enabled | QStyle::State_Selected; Option.widget = &Tree;
+            Delegate.paint(&Painter, Option, Tree.indexFromItem(Item)); Painter.end();
+            int Count = 0; for (int Y = 0; Y < Image.height(); ++Y) for (int X = 0; X < Image.width(); ++X)
+                if (Image.pixelColor(X,Y) == QColor("#ffd86b")) ++Count;
+            return Count;
+        };
+        QVERIFY(YellowPixels(true) > 20); QCOMPARE(YellowPixels(false), 0);
+    }
+
+    void todoBugQuickFindEverything()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto Restore = qScopeGuard([&] { QTest::keyClick(Find, Qt::Key_Escape); Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Stem = "hcqf" + QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-');
+        const auto Path = Directory.filePath(Stem + ".txt"); { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("indexed quick find"); }
+        const auto Query = [&](const QString& Text, const QString& Match) {
+            QProcess Process; Process.start(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", {"--quick-find", Text, Match});
+            if (!Process.waitForFinished(6000) || Process.exitCode() != 0) return false;
+            const auto Paths = QJsonDocument::fromJson(Process.readAllStandardOutput())["paths"].toArray();
+            for (const auto& Value : Paths) if (QDir::cleanPath(QDir::fromNativeSeparators(Value.toString())).compare(Path, Qt::CaseInsensitive) == 0) return true;
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Query(Stem, "starts"), 30000);
+        QVERIFY(Query(Stem.mid(4), "contains")); QVERIFY(Query(Stem.mid(4) + ".txt", "ends"));
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "everything"}, {"match", "starts"}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); View->EnsureKeyboardFocusOnView(); QTest::qWait(30);
+        auto* Target = QApplication::focusWidget(); QVERIFY(Target && Target != Find);
+        QTest::keyClick(Target, Qt::Key_H); QTRY_VERIFY(Find->hasFocus()); QTest::keyClicks(Find, Stem.mid(1));
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QTreeWidget*>("hc.quickFind.matches") && main_->findChild<QTreeWidget*>("hc.quickFind.matches")->topLevelItemCount() == 1, 8000);
+        auto* Results = main_->findChild<QTreeWidget*>("hc.quickFind.matches");
+        QCOMPARE(QDir::fromNativeSeparators(Results->topLevelItem(0)->data(0, Qt::UserRole).toString()), Path);
+        QVERIFY(Panel->Search().isEmpty());
+        QVERIFY(SaveR9Dialog(*main_, "quick-find-everything"));
+        QTest::keyClick(Find, Qt::Key_Return);
+        QTRY_VERIFY(!model(Panel)->IsLoading() && QDir::fromNativeSeparators(Panel->CurrentPath()) == Directory.path());
+        QVERIFY(main_->findChild<QWidget*>("hc.quickFind.results")->isHidden());
+    }
+
+    void todoBugQuickFindNativeIme()
+    {
+        if (!qEnvironmentVariableIsSet("HC_TEST_QUICK_FIND_NATIVE_IME")) QSKIP("Native Korean IME test requires the interactive desktop opt-in.");
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto PreviousLayout = GetKeyboardLayout(0); const auto PreviousForeground = GetForegroundWindow();
+        const auto Restore = qScopeGuard([&] { ActivateKeyboardLayout(PreviousLayout, 0); Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); if (IsWindow(PreviousForeground)) SetForegroundWindow(PreviousForeground); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "panel"}, {"match", "starts"}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); Find->clear();
+        auto* Panel = panels_.front(); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        main_->raise(); main_->activateWindow();
+        const auto Window = reinterpret_cast<HWND>(main_->winId());
+        const auto ForegroundThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+        const bool Attached = ForegroundThread && ForegroundThread != GetCurrentThreadId() && AttachThreadInput(GetCurrentThreadId(), ForegroundThread, TRUE);
+        SetForegroundWindow(Window); if (Attached) AttachThreadInput(GetCurrentThreadId(), ForegroundThread, FALSE);
+        QTRY_VERIFY(GetForegroundWindow() == Window);
+        const auto Korean = LoadKeyboardLayoutW(L"00000412", KLF_NOTELLSHELL); QVERIFY(Korean);
+        QVERIFY(ActivateKeyboardLayout(Korean, 0)); QTest::qWait(100);
+        View->EnsureKeyboardFocusOnView(); QTest::qWait(100);
+        auto* Target = QApplication::focusWidget(); QVERIFY(Target && Target != Find);
+        const auto Imm = LoadLibraryW(L"imm32.dll"); QVERIFY(Imm); const auto ReleaseImm = qScopeGuard([&] { FreeLibrary(Imm); });
+        const auto GetContext = reinterpret_cast<HIMC(WINAPI*)(HWND)>(GetProcAddress(Imm, "ImmGetContext"));
+        const auto ReleaseContext = reinterpret_cast<BOOL(WINAPI*)(HWND,HIMC)>(GetProcAddress(Imm, "ImmReleaseContext"));
+        const auto SetOpen = reinterpret_cast<BOOL(WINAPI*)(HIMC,BOOL)>(GetProcAddress(Imm, "ImmSetOpenStatus"));
+        const auto SetConversion = reinterpret_cast<BOOL(WINAPI*)(HIMC,DWORD,DWORD)>(GetProcAddress(Imm, "ImmSetConversionStatus"));
+        const auto GetOpen = reinterpret_cast<BOOL(WINAPI*)(HIMC)>(GetProcAddress(Imm, "ImmGetOpenStatus"));
+        const auto GetConversion = reinterpret_cast<BOOL(WINAPI*)(HIMC,LPDWORD,LPDWORD)>(GetProcAddress(Imm, "ImmGetConversionStatus"));
+        QVERIFY(GetContext && ReleaseContext && SetOpen && SetConversion && GetOpen && GetConversion);
+        const auto Context = GetContext(Window); QVERIFY(Context);
+        const auto PreviousOpen = GetOpen(Context); DWORD PreviousConversion = 0, PreviousSentence = 0;
+        QVERIFY(GetConversion(Context, &PreviousConversion, &PreviousSentence));
+        const auto RestoreIme = qScopeGuard([&] { const auto Current = GetContext(Window); if (Current) { SetOpen(Current, PreviousOpen); SetConversion(Current, PreviousConversion, PreviousSentence); ReleaseContext(Window, Current); } });
+        QVERIFY(SetOpen(Context, TRUE)); QVERIFY(SetConversion(Context, IME_CMODE_NATIVE, 0)); ReleaseContext(Window, Context);
+        const auto Key = [&](WORD Value) {
+            INPUT Events[2]{}; Events[0].type = Events[1].type = INPUT_KEYBOARD;
+            Events[0].ki.wVk = Events[1].ki.wVk = Value; Events[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            return GetForegroundWindow() == Window && SendInput(2, Events, sizeof(INPUT)) == 2;
+        };
+        // Korean two-set keyboard: g k s r m f -> 한글. These are native key events,
+        // not synthetic commit strings, so the Windows composition/focus path runs.
+        int ComposingKeys = 0;
+        for (const WORD Value : {'G', 'K', 'S', 'R', 'M', 'F'}) {
+            QVERIFY(Key(Value)); QTest::qWait(80);
+            if (++ComposingKeys == 3) {
+                INPUT Toggle[4]{}; const WORD Keys[] = {VK_CONTROL, 'S', 'S', VK_CONTROL};
+                for (int I = 0; I < 4; ++I) { Toggle[I].type = INPUT_KEYBOARD; Toggle[I].ki.wVk = Keys[I]; if (I >= 2) Toggle[I].ki.dwFlags = KEYEVENTF_KEYUP; }
+                QVERIFY(GetForegroundWindow() == Window); QCOMPARE(SendInput(4, Toggle, sizeof(INPUT)), UINT(4)); QTest::qWait(80);
+            }
+        }
+        QVERIFY(Key(VK_SPACE)); QTest::qWait(150);
+        QVERIFY(Find->hasFocus()); QCOMPARE(Find->text().normalized(QString::NormalizationForm_C), QStringLiteral("한글 "));
+        qInfo() << "Native Korean IME typing verified:" << Find->text();
+        QTest::keyClick(Find, Qt::Key_Escape);
+        auto Quick = General["quickFind"].toObject(); Quick["activation"] = "ctrl-alt"; General["quickFind"] = Quick;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); View->EnsureKeyboardFocusOnView(); QTest::qWait(50);
+        INPUT Chord[6]{}; const WORD ChordKeys[] = {VK_CONTROL, VK_MENU, 'A', 'A', VK_MENU, VK_CONTROL};
+        for (int I = 0; I < 6; ++I) { Chord[I].type = INPUT_KEYBOARD; Chord[I].ki.wVk = ChordKeys[I]; if (I >= 3) Chord[I].ki.dwFlags = KEYEVENTF_KEYUP; }
+        QVERIFY(GetForegroundWindow() == Window); QCOMPARE(SendInput(6, Chord, sizeof(INPUT)), UINT(6));
+        QTRY_VERIFY(Find->hasFocus()); const auto ChordText = Find->text(); QCOMPARE(ChordText.toLower(), QString("a"));
+        for (const WORD Value : {'G', 'K', 'S', 'R', 'M', 'F'}) { QVERIFY(Key(Value)); QTest::qWait(80); }
+        QVERIFY(Key(VK_SPACE)); QTest::qWait(150);
+        QCOMPARE(Find->text().normalized(QString::NormalizationForm_C), ChordText + QStringLiteral("한글 "));
+        qInfo() << "Native Ctrl+Alt activation then Korean IME typing verified:" << Find->text();
+        QTest::keyClick(Find, Qt::Key_Escape);
     }
 
     void todoBugHeaderButtonHeights()
@@ -1972,8 +2286,9 @@ private slots:
             auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
             const auto Navigation = Categories->findItems(QStringLiteral("탐색"), Qt::MatchExactly); QCOMPARE(Navigation.size(), 1);
             Categories->setCurrentItem(Navigation.front());
-            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.navigation.tabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
-            QCOMPARE(Tabs->tabText(1), QStringLiteral("새로고침")); Tabs->setCurrentIndex(1);
+            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.navigation.tabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 3);
+            QCOMPARE(Tabs->tabText(1), QStringLiteral("빠른 찾기"));
+            QCOMPARE(Tabs->tabText(2), QStringLiteral("새로고침")); Tabs->setCurrentIndex(2);
             auto* Poll = Dialog.findChild<QCheckBox*>("hc.navigation.refresh.fallbackEnabled"); QVERIFY(Poll);
             auto* Seconds = Dialog.findChild<QSpinBox*>("hc.navigation.refresh.fallbackSeconds"); QVERIFY(Seconds);
             QVERIFY(!Poll->isChecked()); QVERIFY(!Seconds->isEnabled()); QCOMPARE(Seconds->value(), 15);
@@ -1988,7 +2303,7 @@ private slots:
             QCOMPARE(Dialog.findChild<QSpinBox*>("hc.navigation.refresh.fallbackSeconds")->value(), 37);
             auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
             Categories->setCurrentItem(Categories->findItems(QStringLiteral("탐색"), Qt::MatchExactly).front());
-            Dialog.findChild<QTabWidget*>("hc.navigation.tabs")->setCurrentIndex(1); QTest::qWait(80);
+            Dialog.findChild<QTabWidget*>("hc.navigation.tabs")->setCurrentIndex(2); QTest::qWait(80);
             QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/navigation-refresh-settings.png"));
             Dialog.reject();
         }
@@ -3197,13 +3512,12 @@ private slots:
         auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
         QElapsedTimer Clock; Clock.start(); Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\"); Model->Refresh();
-        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->IsPaged() && Model->EntryCount() == 100000, 120000); const auto LoadMs = Clock.elapsed();
-        QCOMPARE(Model->rowCount(), int(CFSModel::PageSize + 1));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->UsesIndexedOrder() && Model->EntryCount() == 100000, 120000); const auto LoadMs = Clock.elapsed();
+        QCOMPARE(Model->rowCount(), 100001);
         QTRY_COMPARE_WITH_TIMEOUT(Model->GetName(Model->index(1, 0)), QString("item1.txt"), 120000);
-        auto* PageBar = View->findChild<QWidget*>("hc.entries.pageBar"); QVERIFY(PageBar); QVERIFY(PageBar->isVisible());
-        View->findChild<QPushButton*>("hc.entries.next")->click();
-        QTRY_COMPARE_WITH_TIMEOUT(Model->PageOffset(), CFSModel::PageSize, 30000);
-        QCOMPARE(Model->GetName(Model->index(1, 0)), QString("item4097.txt"));
+        QCOMPARE(Model->GetName(Model->index(4097, 0)), QString("item4097.txt"));
+        QCOMPARE(Model->GetName(Model->index(100000, 0)), QString("item100000.txt"));
+        QVERIFY(!View->findChild<QWidget*>("hc.entries.pageBar"));
         auto Selection = Model->SelectAllEntries(); QVERIFY(Selection.HasValue()); QCOMPARE(Selection.Value()->Count(), 100000ULL);
         QCOMPARE(Selection.Value()->Provider(), Model->SnapshotProvider());
         QCOMPARE(Selection.Value()->Read(99999, 1).Value().entries_.front().name_, std::string("item100000.txt"));
@@ -3221,7 +3535,6 @@ private slots:
         auto Profile = View->ColumnProfile(); Profile.sorts_ = {{Profile.columns_[0].id_, Qt::DescendingOrder}};
         Clock.restart(); QVERIFY(View->ApplyColumnProfile(Profile));
         QTRY_COMPARE_WITH_TIMEOUT(Model->GetName(Model->index(1, 0)), QString("item100000.txt"), 120000); const auto SortMs = Clock.elapsed();
-        QCOMPARE(Model->PageOffset(), 0ULL);
         // A selection retains the old order and revisions after a new projection.
         QCOMPARE(Selection.Value()->Read(0, 1).Value().entries_.front().name_, std::string("item1.txt"));
         auto* Proxy = qobject_cast<CFSProxyModel*>(View->BaseView()->model()); QVERIFY(Proxy);
@@ -3230,11 +3543,30 @@ private slots:
         QCOMPARE(Model->GetName(Model->index(1, 0)), QString("item99999.txt")); QCOMPARE(Model->rowCount(), 2);
         Proxy->SetSearch("name:no-such-item"); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 0ULL, 120000);
         QCOMPARE(Model->rowCount(), 1);
+        Proxy->SetSearch("item10000", "starts"); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 2ULL, 30000);
+        Proxy->SetSearch("100000.txt", "ends"); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 1ULL, 30000);
+        QCOMPARE(Model->GetName(Model->index(1, 0)), QString("item100000.txt"));
+        Proxy->SetSearch("item100000", "contains"); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 1ULL, 30000);
         Proxy->SetSearch({}); QTRY_COMPARE_WITH_TIMEOUT(Model->EntryCount(), 100000ULL, 120000);
+        const auto FocusName = [&] { auto Index = View->BaseView()->focusedRow().modelIndex(0); while (const auto* Adapter = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Adapter->mapToSource(Index); return Index.isValid() ? Model->GetName(Index) : QString{}; };
+        auto& Store = hc::settings::AppSettings(); const auto PreviousGeneral = Store.Read(hc::settings::Section::General);
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto RestoreQuickFind = qScopeGuard([&] { QTest::keyClick(Find, Qt::Key_Escape); Store.Put(hc::settings::Section::General, PreviousGeneral); });
+        auto General = PreviousGeneral.toObject(); General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "panel"}, {"match", "starts"}, {"result", "cursor"}};
+        QVERIFY(Store.Put(hc::settings::Section::General, General));
+        TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); Find->clear(); View->EnsureKeyboardFocusOnView(); QTest::qWait(30);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_I); QTRY_VERIFY(Find->hasFocus()); QTest::keyClicks(Find, "tem1");
+        QTRY_COMPARE_WITH_TIMEOUT(FocusName(), QString("item100000.txt"), 30000);
+        QTest::keyClick(Find, Qt::Key_Down); QTRY_COMPARE_WITH_TIMEOUT(FocusName(), QString("item19999.txt"), 30000);
+        QCOMPARE(Model->rowCount(), 100001); QCOMPARE(Model->EntryCount(), 100000ULL);
+        QTest::keyClick(Find, Qt::Key_Up); QTRY_COMPARE_WITH_TIMEOUT(FocusName(), QString("item100000.txt"), 30000);
+        QCOMPARE(Model->rowCount(), 100001); QCOMPARE(Model->EntryCount(), 100000ULL);
+        QTest::keyClick(Find, Qt::Key_Down); Find->setText("item90000.txt");
+        QTRY_COMPARE_WITH_TIMEOUT(FocusName(), QString("item90000.txt"), 30000); QCOMPARE(Model->EntryCount(), 100000ULL);
         auto* Scroll = View->BaseView()->verticalScrollBar(); Clock.restart();
         for (int Index = 0; Index < 20; ++Index) { Scroll->setValue(Index % 2 ? Scroll->minimum() : Scroll->maximum()); QCoreApplication::processEvents(); }
         const auto ScrollMs = Clock.elapsed(); Clock.restart(); Model->CancelColumnQueries(); const auto CancelMs = Clock.elapsed();
-        qInfo() << "100k paged listing load/sort/20-scroll/cancel ms" << LoadMs << SortMs << ScrollMs << CancelMs;
+        qInfo() << "100k continuous listing load/sort/20-scroll/cancel ms" << LoadMs << SortMs << ScrollMs << CancelMs;
         QCOMPARE(Model->PendingColumnQueries(), 0); QVERIFY(CancelMs < 500);
     }
     void columnWorkspaceSelectionUi()

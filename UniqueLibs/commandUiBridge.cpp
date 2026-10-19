@@ -32,6 +32,7 @@
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
 #include "qtSearch.hpp"
+#include "quickFindController.hpp"
 #include "qtAutomation.hpp"
 #include "qtWorkspaceRestore.hpp"
 #include "wcxMutation.hpp"
@@ -952,13 +953,19 @@ void CommandUiBridge::createCommandUi()
     auto* Spacer = new QWidget(Toolbar); Spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred); Toolbar->addWidget(Spacer);
     auto* Find = new fm::ui::FindBox(Toolbar); Find->setObjectName("hc.mainFind"); Find->setMinimumWidth(120); Find->setMaximumWidth(300);
     Find->setToolTip(tr("현재 패널 검색 · name:문자 ext:확장자. 탭마다 검색을 유지합니다.")); Toolbar->addWidget(Find);
-    connect(Find, &QLineEdit::textChanged, this, [this](const QString& Text) { if (activePanel_) activePanel_->SetSearch(Text); });
-    const auto SyncFind = [this, Find] { QSignalBlocker Blocker(Find); Find->setText(activePanel_ ? activePanel_->Search() : QString{}); };
+    auto* QuickFind = new hc::ui::QuickFindController(Window, Find, [this] { return activePanel_.data(); }, [this](const QString& Path) {
+        if (!activePanel_) return;
+        const QFileInfo File(Path);
+        activePanel_->SetSearch({});
+        activePanel_->ChangeCurrentPath(File.isDir() ? File.absoluteFilePath() : File.absolutePath(), {});
+    });
+    QuickFind->setParent(this);
+    const auto SyncFind = [QuickFind] { QuickFind->Synchronize(); };
     for (auto* Panel : Window->findChildren<CmpPanel*>()) connect(Panel, &CmpPanel::sigNavigationStateChanged, this, [this, SyncFind] {
         SyncFind(); refreshActionState();
     });
     if (auto* Main = qobject_cast<QMainUI*>(Window)) connect(Main, &QMainUI::sigActivePanelChanged, this, [this, SyncFind](CmpPanel* Panel) { activePanel_ = Panel; SyncFind(); refreshActionState(); });
-    Add("hc.search.focus", tr("현재 폴더에서 찾기"), [Find] { Find->setFocus(); Find->selectAll(); });
+    Add("hc.search.focus", tr("현재 폴더에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
     // Ctrl+F edits the current-tab filter; the existing scope-search command is retained.
     for (const auto* Id : {"hc.search.focus", "hc.navigate.back", "hc.navigate.forward"}) {
         auto* Key = new QShortcut(Window); Key->setContext(Qt::WindowShortcut);
@@ -967,7 +974,7 @@ void CommandUiBridge::createCommandUi()
         connect(Key, &QShortcut::activated, this, [this, Id] { ExecuteCommand(Id); });
     }
     auto* FindButton = new QToolButton(Toolbar); FindButton->setText(tr("찾기")); Toolbar->addWidget(FindButton);
-    connect(FindButton, &QToolButton::clicked, Find, [Find] { Find->setFocus(); Find->selectAll(); });
+    connect(FindButton, &QToolButton::clicked, QuickFind, [QuickFind] { QuickFind->FocusStandard(); });
     RefreshFunctionBar();
     QHash<QString, QPointer<QMenu>> Sections;
     for (auto* Root : Window->findChild<QMenuBar*>("menubar")->actions()) {
@@ -1518,7 +1525,7 @@ CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Sing
     const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
     if (!View || View->BaseModel() != Model) return Context;
     const auto Grid = View->BaseView();
-    if (!Single && Model->IsPaged() && Model->property("hc.selectAllEntries").toBool()) {
+    if (!Single && Model->UsesIndexedOrder() && Model->property("hc.selectAllEntries").toBool()) {
         auto Manifest = Model->SelectAllEntries();
         if (Manifest.HasValue()) { Context.selectionManifest_ = Manifest.Value(); Context.selection_.clear(); return Context; }
     }

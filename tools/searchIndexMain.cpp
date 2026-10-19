@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <windows.h>
 #include "externalLibs/Everything/src/include/Everything.h"
 
@@ -12,6 +13,28 @@ int main(int Argc, char** Argv)
 {
     QCoreApplication App(Argc, Argv);
     const auto Args = App.arguments();
+    if (Args.size() == 4 && Args[1] == "--quick-find") {
+        const auto Term = Args[2].normalized(QString::NormalizationForm_C);
+        const auto Match = Args[3];
+        if (Term.isEmpty() || Term.size() > 4096 || Term.contains(QChar::Null) ||
+            (Match != "starts" && Match != "contains" && Match != "ends")) return 2;
+        if (!Everything_IsDBLoaded()) return 3;
+        const auto Pattern = ((Match == "starts" ? "^" : "") + QRegularExpression::escape(Term) + (Match == "ends" ? "$" : "")).toStdWString();
+        Everything_SetRegex(TRUE); Everything_SetMatchPath(FALSE); Everything_SetMatchCase(FALSE);
+        Everything_SetSearchW(Pattern.c_str()); Everything_SetMax(100);
+        Everything_SetSort(EVERYTHING_SORT_NAME_ASCENDING);
+        if (!Everything_QueryW(TRUE)) return 4;
+        QJsonArray Paths;
+        for (DWORD Row = 0; Row < Everything_GetNumResults(); ++Row) {
+            std::wstring Buffer(32768, L'\0');
+            const auto Size = Everything_GetResultFullPathNameW(Row, Buffer.data(), DWORD(Buffer.size()));
+            if (!Size || Size >= Buffer.size()) return 5;
+            Paths.append(QString::fromWCharArray(Buffer.data(), int(Size)));
+        }
+        QFile Output; if (!Output.open(stdout, QIODevice::WriteOnly)) return 6;
+        Output.write(QJsonDocument(QJsonObject{{"paths", Paths}, {"total", double(Everything_GetTotResults())}}).toJson(QJsonDocument::Compact));
+        return 0;
+    }
     if (Args.size() == 3 && Args[1] == "--folder-sizes") {
         const auto Parent = QDir::toNativeSeparators(QDir::cleanPath(Args[2]));
         if (!QDir::isAbsolutePath(Parent) || Parent.contains('"') || Parent.contains(QChar::Null)) return 2;

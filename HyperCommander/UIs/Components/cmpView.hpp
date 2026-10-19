@@ -2,6 +2,7 @@
 
 #include <QtWidgets>
 #include <functional>
+#include <stop_token>
 #include <fmfilelist/RecordPainting.h>
 #include "filePanelSettings.hpp"
 
@@ -64,6 +65,8 @@ public:
     ~CGridView() override;
     bool SetListMode(const QString& Mode);
     QString ListMode() const;
+    void MoveQuickFindCursor(const QString& Query, const QString& Match, int Direction = 0);
+    void CancelQuickFind();
     QString ListModeOverride() const { return listModeOverride_.isEmpty() ? "inherit" : listModeOverride_; }
     const fm::filelist::ListAppearance& ListAppearance() const { return listAppearance_; }
     const fm::filelist::detail::RecordGeometry& RecordGeometry() const { return recordGeometry_; }
@@ -178,6 +181,8 @@ private:
     bool autoInitialized_ = false, autoTwoLine_ = false;
     QString autoLocation_;
     Qtitan::GridRecordPainter* recordPainter_ = nullptr;
+    quint64 quickFindGeneration_ = 0;
+    QMetaObject::Connection quickFindPageConnection_;
 
 
     QVBoxLayout*                    vbox_ = nullptr;
@@ -202,7 +207,6 @@ private:
     bool                            plainLeftClick_ = false;
     QTimer                          columnSortTimer_;
     QLabel*                         columnStatus_ = nullptr;
-    QWidget*                        pageBar_ = nullptr;
     QStringList                     querySelection_;
     QString                         queryFocus_;
     int                             fileNameColumnIndex = -1;       // 추후 사용.

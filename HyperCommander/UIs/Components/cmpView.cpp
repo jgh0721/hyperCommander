@@ -7,6 +7,7 @@
 #include "UIs/dlgOpts.hpp"
 #include "UniqueLibs/qtWorkspaceState.hpp"
 #include "UniqueLibs/renameSelection.hpp"
+#include "UniqueLibs/quickFindHighlight.hpp"
 #include "UniqueLibs/commandUiConfig.hpp"
 
 #include "builtInFsModel.hpp"
@@ -133,7 +134,11 @@ public:
             }
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
             const auto Shown = ElideFileName(Cell.data().toString(), Metrics, Rect.width(), Appearance.nameElide, Directory);
-            Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Shown);
+            const auto Query = owner_->property("hc.quickFind.text").toString();
+            if (owner_->property("hc.quickFind.highlight").toBool() && !Query.isEmpty() &&
+                hc::quickfind::Matches(Cell.data(Qt::EditRole).toString(), Query, owner_->property("hc.quickFind.match").toString()))
+                hc::quickfind::PaintHighlightedText(Painter, Rect, Shown, Query);
+            else Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Shown);
         } else {
             const auto* Column = owner_->BaseView()->getColumnByModelColumn(Cell.column());
             const auto Alignment = static_cast<const Qtitan::GridTableColumn*>(Column)->textAlignment();
@@ -341,19 +346,6 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
         if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
         ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
     });
-    pageBar_ = new QWidget(this); pageBar_->setObjectName("hc.entries.pageBar");
-    auto* PageLayout = new QHBoxLayout(pageBar_);
-    auto* PreviousPage = new QPushButton(tr("이전 페이지"), pageBar_); PreviousPage->setObjectName("hc.entries.previous");
-    auto* NextPage = new QPushButton(tr("다음 페이지"), pageBar_); NextPage->setObjectName("hc.entries.next");
-    auto* PageLabel = new QLabel(pageBar_); PageLabel->setObjectName("hc.entries.pageStatus");
-    PageLayout->addWidget(PreviousPage); PageLayout->addWidget(PageLabel, 1); PageLayout->addWidget(NextPage);
-    pageBar_->hide(); vbox_->addWidget(pageBar_);
-    connect(PreviousPage, &QPushButton::clicked, this, [this] {
-        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() >= CFSModel::PageSize ? Model->PageOffset() - CFSModel::PageSize : 0);
-    });
-    connect(NextPage, &QPushButton::clicked, this, [this] {
-        if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetPage(Model->PageOffset() + CFSModel::PageSize);
-    });
     connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
     columnSortTimer_.setSingleShot(true);
@@ -386,11 +378,51 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
 CGridView::~CGridView()
 {
+    CancelQuickFind();
     presentationTimer_.stop();
     automaticColumnsStop_.request_stop();
     thumbnailModel_->SetEnabled(false);
     view_->setRecordPainter(nullptr); delete recordPainter_;
 }
+void CGridView::CancelQuickFind()
+{
+    ++quickFindGeneration_;
+    disconnect(quickFindPageConnection_); quickFindPageConnection_ = {};
+}
+
+void CGridView::MoveQuickFindCursor(const QString& Query, const QString& Match, int Direction)
+{
+    CancelQuickFind();
+    QPointer<CFSModel> Native = qobject_cast<CFSModel*>(model_);
+    if (!Native || Query.isEmpty()) return;
+    const auto Request = quickFindGeneration_;
+    if (Native->IsLoading() || Native->IsPageLoading()) {
+        quickFindPageConnection_ = connect(Native, &CFSModel::PageChanged, this, [this, Native, Request, Query, Match, Direction] {
+            // Selection restoration follows the snapshot notification. Move
+            // afterwards so it cannot overwrite the requested search cursor.
+            QTimer::singleShot(0, this, [this, Native, Request, Query, Match, Direction] {
+                if (Request == quickFindGeneration_ && Native && Native == model_ && !Native->IsLoading() && !Native->IsPageLoading())
+                    MoveQuickFindCursor(Query, Match, Direction);
+            });
+        });
+        return;
+    }
+    {
+        const int Count = view_->getRowCount(); if (!Count) return;
+        const int Current = view_->focusedRowIndex();
+        const int Start = !Direction ? 0 : Current < 0 ? (Direction > 0 ? 0 : Count - 1) : (Current + (Direction > 0 ? 1 : Count - 1)) % Count;
+        for (int Step = 0; Step < Count; ++Step) {
+            const int Row = (Start + (Direction < 0 ? Count - Step : Step)) % Count;
+            const auto Visible = view_->getRow(Row).modelIndex(0);
+            const auto Source = proxy_ ? proxy_->mapToSource(Visible) : Visible;
+            const auto Item = Native->GetFileInfo(Source);
+            if (!Item || !Item->storageEntry_ || !hc::quickfind::Matches(QString::fromStdString(Item->storageEntry_->name_), Query, Match)) continue;
+            view_->setFocusedRowIndex(Row); view_->scrollToIndex(Visible, false); return;
+        }
+        return;
+    }
+}
+
 bool CGridView::IsThumbnailMode() const { return presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
 QPoint CGridView::ListContentTopLeft() const
 {
@@ -630,14 +662,6 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
-        connect(Native, &CFSModel::PageChanged, this, [this, Native] {
-            pageBar_->setVisible(Native->IsPaged());
-            pageBar_->findChild<QLabel*>("hc.entries.pageStatus")->setText(tr("%1–%2 / %3개 · 선택은 현재 페이지에 적용")
-                .arg(Native->EntryCount() ? Native->PageOffset() + 1 : 0)
-                .arg(std::min(Native->PageOffset() + CFSModel::PageSize, Native->EntryCount())).arg(Native->EntryCount()));
-            pageBar_->findChild<QPushButton*>("hc.entries.previous")->setEnabled(Native->PageOffset() != 0);
-            pageBar_->findChild<QPushButton*>("hc.entries.next")->setEnabled(Native->PageOffset() + CFSModel::PageSize < Native->EntryCount());
-        });
         connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); });
         connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); });
         connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
@@ -1053,7 +1077,7 @@ QJsonObject CGridView::CaptureWorkspaceView() const
     if (automaticColumnsBase_) Layout["automaticBase"] = hc::columns::EncodeProfile(*automaticColumnsBase_);
     if (columnAdapter_->Writable()) Layout["definition"] = hc::columns::EncodeProfile(ColumnProfile());
     return {{"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
-        {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}};
+        {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}, {"searchMatch", Proxy ? Proxy->SearchMatch() : QString{}}};
 }
 
 void CGridView::RestoreWorkspaceView(const QJsonObject& View)
@@ -1097,7 +1121,7 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
     view_->endUpdate();
     restorePresentation(View);
     if (auto* Proxy = qobject_cast<CFSProxyModel*>(proxy_))
-    { Proxy->SetHiddenSystem(View.value("hiddenSystem").toBool()); Proxy->SetSearch(View.value("search").toString()); }
+    { Proxy->SetHiddenSystem(View.value("hiddenSystem").toBool()); Proxy->SetSearch(View.value("search").toString(), View.value("searchMatch").toString()); }
 }
 
 QStringList CGridView::CaptureSelection() const
@@ -1209,9 +1233,6 @@ QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelectio
     if (!Native || Native->IsLoading() || !view_) return {};
     const auto Kind = Native->WorkspaceLocation().kind_;
     if (Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
-    // A paged select-all represents entries that are not loaded in this view.
-    // Do not silently send only the visible subset to an Explorer verb.
-    if (UseSelection && Native->IsPaged() && model_->property("hc.selectAllEntries").toBool()) return {};
     const auto SourceIndex = [](QModelIndex At) {
         while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
         return At;

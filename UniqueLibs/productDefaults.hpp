@@ -7,6 +7,7 @@
 
 #include <QtCore>
 #include "directoryRefreshSettings.hpp"
+#include "quickFindSettings.hpp"
 #include "commonLibs/commands/commandBus.hpp"
 
 struct TyHC_COMMAND
@@ -601,6 +602,7 @@ namespace hc::defaults
                  { "sortNumericAware",        true },
                  { "directoryStyle",          "plain" },
                  { "focusPreviousDirectory",  true },
+                 { "quickFind",               hc::quickfind::Settings{}.ToJson() },
                  { "refresh",                 hc::refresh::Settings{}.ToJson() },
                  { "darkTitleBar",            true },
                  { "showCommandLine",         true },

@@ -189,6 +189,12 @@ void QMainOpts::LoadSettings()
     ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(true));
     ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(true));
     focusPreviousDirectory_->setChecked(General["focusPreviousDirectory"].toBool(true));
+    const auto QuickFind = hc::quickfind::Settings::FromJson(General["quickFind"].toObject()).ToJson();
+    for (auto It = QuickFind.begin(); It != QuickFind.end(); ++It) {
+        const auto Name = "hc.navigation.quickFind." + It.key();
+        if (auto* Check = findChild<QCheckBox*>(Name)) Check->setChecked(It.value().toBool());
+        else if (auto* Choice = findChild<QComboBox*>(Name)) Choice->setCurrentIndex(Choice->findData(It.value().toString()));
+    }
     const auto Refresh = hc::refresh::Settings::FromJson(General["refresh"].toObject()).ToJson();
     for (auto It = Refresh.begin(); It != Refresh.end(); ++It) {
         const auto Name = "hc.navigation.refresh." + It.key();
@@ -340,6 +346,14 @@ bool QMainOpts::SaveSettings()
     General["sortLocaleAware"] = ui.chkSortLocaleAware->isChecked();
     General["sortNumericAware"] = ui.chkSortNumericAware->isChecked();
     General["focusPreviousDirectory"] = focusPreviousDirectory_->isChecked();
+    auto QuickFind = General["quickFind"].toObject();
+    const auto QuickDefaults = hc::quickfind::Settings{}.ToJson();
+    for (auto It = QuickDefaults.begin(); It != QuickDefaults.end(); ++It) {
+        const auto Name = "hc.navigation.quickFind." + It.key();
+        if (auto* Check = findChild<QCheckBox*>(Name)) QuickFind[It.key()] = Check->isChecked();
+        else if (auto* Choice = findChild<QComboBox*>(Name)) QuickFind[It.key()] = Choice->currentData().toString();
+    }
+    General["quickFind"] = QuickFind;
     auto Refresh = General["refresh"].toObject();
     const auto RefreshDefaults = hc::refresh::Settings{}.ToJson();
     for (auto It = RefreshDefaults.begin(); It != RefreshDefaults.end(); ++It) {
@@ -658,7 +672,7 @@ void QMainOpts::initialize()
     ui.stkOpts->addWidget(NavigationPage); ui.lstOptCate->addItem(tr("탐색"));
     auto* NavigationLayout = new QVBoxLayout(NavigationPage);
     auto* NavigationHeader = new fm::ui::DialogHeader(NavigationPage);
-    NavigationHeader->setTitle(tr("탐색")); NavigationHeader->setSubtitle(tr("폴더 이동과 자동 새로고침 동작을 설정합니다."));
+    NavigationHeader->setTitle(tr("탐색")); NavigationHeader->setSubtitle(tr("폴더 이동, 빠른 찾기와 자동 새로고침 동작을 설정합니다."));
     NavigationLayout->addWidget(NavigationHeader);
     auto* NavigationTabs = new QTabWidget(NavigationPage); NavigationTabs->setObjectName("hc.navigation.tabs");
     NavigationTabs->setAccessibleName(tr("탐색 설정 범주")); NavigationLayout->addWidget(NavigationTabs, 1);
@@ -669,6 +683,26 @@ void QMainOpts::initialize()
     NavigationGeneralLayout->addWidget(focusPreviousDirectory_);
     auto* NavigationNote = new QLabel(tr("좌우 패널에 모두 적용합니다. 끄면 상위 폴더 목록의 첫 항목에 커서를 놓습니다."), NavigationPage);
     NavigationNote->setWordWrap(true); NavigationGeneralLayout->addWidget(NavigationNote); NavigationGeneralLayout->addStretch();
+    auto* QuickPage = new QWidget(NavigationTabs); NavigationTabs->addTab(QuickPage, tr("빠른 찾기"));
+    auto* QuickLayout = new QVBoxLayout(QuickPage);
+    auto* QuickEnabled = new QCheckBox(tr("빠른 찾기 기능 사용(&Q)"), QuickPage);
+    QuickEnabled->setObjectName("hc.navigation.quickFind.enabled"); QuickLayout->addWidget(QuickEnabled);
+    auto* QuickOptions = new QGroupBox(tr("빠른 찾기 동작"), QuickPage); QuickLayout->addWidget(QuickOptions);
+    auto* QuickForm = new QFormLayout(QuickOptions);
+    const auto QuickChoice = [QuickOptions, QuickForm](const char* Key, const QString& Caption, const QList<QPair<QString, QString>>& Items) {
+        auto* Choice = new QComboBox(QuickOptions); Choice->setObjectName("hc.navigation.quickFind." + QString::fromLatin1(Key));
+        for (const auto& Item : Items) Choice->addItem(Item.first, Item.second);
+        QuickForm->addRow(Caption, Choice);
+    };
+    QuickChoice("activation", tr("활성화 방법(&A):"), {{tr("Ctrl+Alt+글자"), "ctrl-alt"}, {tr("글자 입력"), "typing"}});
+    QuickChoice("scope", tr("검색 범위(&S):"), {{tr("현재 패널의 파일 목록"), "panel"}, {tr("Everything 검색"), "everything"}});
+    QuickChoice("match", tr("검색 방법(&M):"), {{tr("검색어로 시작"), "starts"}, {tr("검색어 포함"), "contains"}, {tr("검색어로 끝남"), "ends"}});
+    QuickChoice("result", tr("결과 표시(&R):"), {{tr("필터링"), "filter"}, {tr("커서 이동 (기본값)"), "cursor"}});
+    auto* QuickHighlight = new QCheckBox(tr("일치하는 부분 문자열 강조 표시(&H)"), QuickOptions);
+    QuickHighlight->setObjectName("hc.navigation.quickFind.highlight"); QuickForm->addRow(QuickHighlight);
+    auto* QuickNote = new QLabel(tr("파일 목록에서 입력을 시작하면 상단 검색창으로 이동하여 첫 글자부터 이어서 입력합니다.\n커서 이동은 전체 목록을 유지하며 첫 일치 항목으로 이동합니다. 위·아래 화살표로 이전·다음 일치 항목을 찾습니다.\n검색창에서 Ctrl+S를 누르면 검색어를 유지한 채 필터링과 커서 이동을 전환합니다.\n결과 표시 방식은 현재 패널 목록 검색에 적용합니다. Everything 검색은 별도 결과 목록을 표시합니다.\n한글 등 IME 조합 입력을 지원하며, 이름 변경 중에는 활성화하지 않습니다.\nEverything 검색에는 실행 중인 Everything이 필요합니다. Esc를 누르면 빠른 찾기를 닫고 목록으로 돌아갑니다."), QuickPage);
+    QuickNote->setWordWrap(true); QuickLayout->addWidget(QuickNote); QuickLayout->addStretch();
+    connect(QuickEnabled, &QCheckBox::toggled, QuickOptions, &QWidget::setEnabled);
     auto* RefreshScroll = new QScrollArea(NavigationTabs); RefreshScroll->setWidgetResizable(true); RefreshScroll->setFrameShape(QFrame::NoFrame);
     NavigationTabs->addTab(RefreshScroll, tr("새로고침"));
     auto* RefreshBody = new QWidget; RefreshScroll->setWidget(RefreshBody); auto* RefreshLayout = new QVBoxLayout(RefreshBody);
