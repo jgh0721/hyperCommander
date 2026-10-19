@@ -311,7 +311,10 @@ int main(int Argc, char** Argv)
     });
     for (;;)
     {
-        auto Frame = ReadFrame(Pipe.Get(), Parent.Get(), Deadline(120000), Plugin.viewer_ != nullptr); if (!Frame.HasValue()) return 6;
+        // A viewer can spend arbitrarily long in a modal interaction. The
+        // parent's liveness watchdog and peer handle govern its lifetime;
+        // an idle receive deadline must not expire when that dialog returns.
+        auto Frame = ReadFrame(Pipe.Get(), Parent.Get(), Plugin.viewer_ ? OperationContext{} : Deadline(120000), Plugin.viewer_ != nullptr); if (!Frame.HasValue()) return 6;
         const auto& Header = Frame.Value().header_;
         // Completion can cross an already-sent cancel/prompt reply on the
         // duplex pipe. Retire that control for the completed invocation; it

@@ -91,16 +91,31 @@ namespace hc::document
             case DocumentSaveState::Conflict: return "conflict"; case DocumentSaveState::Failed: return "failed"; case DocumentSaveState::Exporting: return "exporting"; }
             return {};
         }
-        QString ChooseSavePath(QWidget* Parent,const QString& Current,const QString& ViewId)
+        void OpenFileDialog(QFileDialog* Dialog)
+        {
+            Dialog->setAttribute(Qt::WA_DeleteOnClose);
+            QObject::connect(Dialog,&QDialog::finished,Dialog,[Dialog] {
+                // The host uses a manual event pump. Retire this dialog after
+                // its completion callbacks, without flushing unrelated objects.
+                QTimer::singleShot(0,Dialog,[Dialog] { delete Dialog; });
+            });
+            // A blocking dialog would stop the viewer host's pipe pump and
+            // let the parent reap a healthy viewer while the user browses.
+            Dialog->open();
+        }
+        void ChooseSavePath(QWidget* Parent,const QString& Current,const QString& ViewId,std::function<void(QString)> Completion)
         {
             const auto Filters=ViewId=="image"?QStringLiteral("PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WebP (*.webp)")
                 :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):QStringLiteral("Text files (*.*)");
-            QFileDialog Dialog(Parent,QObject::tr("다른 이름 저장"),Current,Filters);Dialog.setAcceptMode(QFileDialog::AcceptSave);
-            Dialog.setDefaultSuffix(ViewId=="image"?"png":ViewId=="pdf"?"pdf":QFileInfo(Current).suffix());
-            QObject::connect(&Dialog,&QFileDialog::filterSelected,&Dialog,[&Dialog](const QString& Filter){
-                const auto Match=QRegularExpression("\\*\\.([a-z0-9]+)").match(Filter);if(Match.hasMatch())Dialog.setDefaultSuffix(Match.captured(1));
+            auto* Dialog=new QFileDialog(Parent,QObject::tr("다른 이름 저장"),Current,Filters);Dialog->setAcceptMode(QFileDialog::AcceptSave);
+            Dialog->setDefaultSuffix(ViewId=="image"?"png":ViewId=="pdf"?"pdf":QFileInfo(Current).suffix());
+            QObject::connect(Dialog,&QFileDialog::filterSelected,Dialog,[Dialog](const QString& Filter){
+                const auto Match=QRegularExpression("\\*\\.([a-z0-9]+)").match(Filter);if(Match.hasMatch())Dialog->setDefaultSuffix(Match.captured(1));
             });
-            return Dialog.exec()==QDialog::Accepted?Dialog.selectedFiles().value(0):QString{};
+            QObject::connect(Dialog,&QDialog::finished,Parent,[Dialog,Completion=std::move(Completion)](int Result){
+                Completion(Result==QDialog::Accepted?Dialog->selectedFiles().value(0):QString{});
+            });
+            OpenFileDialog(Dialog);
         }
         bool StoreCopy(const QString& Path, const QByteArray& Bytes)
         {
@@ -147,7 +162,7 @@ namespace hc::document
         QPointer<QPlainTextEdit> editor_;
         std::shared_ptr<std::stop_source> cancellation_ = std::make_shared<std::stop_source>();
         bool loading_ = true, saving_ = false, hostSlot_ = false, broker_ = false;
-        bool navigating_ = false, closeRequested_ = false;
+        bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
         bool originalAuthority_ = false, originalSave_ = true, closed_ = false, checkpointing_ = false, closeAfterSave_ = false, recovered_ = false;
         QByteArray pendingBytes_;
         bool Dirty() const { return session_->Snapshot().dirty_; }
@@ -178,24 +193,40 @@ namespace hc::document
         };
         Add(tr("새 문서(&N)"), QKeySequence("Ctrl+N"), "newDocument", [this] { newDocument(); });
         Add(tr("열기(&O)"), QKeySequence::Open, "openDocument", [this] {
-            QStringList Rejected;
-            for (const auto& Path : QFileDialog::getOpenFileNames(this, tr("문서 열기")))
-                if (open(Path, false, {}, false).contains("error")) Rejected.append(Path);
-            ShowShellError(Rejected.isEmpty() ? QString{} : tr("문서 한도 때문에 열지 못한 파일: %1").arg(Rejected.join(", ")));
+            auto* Dialog = new QFileDialog(this, tr("문서 열기"));
+            Dialog->setFileMode(QFileDialog::ExistingFiles);
+            connect(Dialog, &QFileDialog::filesSelected, this, [this](const QStringList& Paths) {
+                QStringList Rejected;
+                for (const auto& Path : Paths)
+                    if (open(Path, false, {}, false).contains("error")) Rejected.append(Path);
+                ShowShellError(Rejected.isEmpty() ? QString{} : tr("문서 한도 때문에 열지 못한 파일: %1").arg(Rejected.join(", ")));
+            });
+            OpenFileDialog(Dialog);
         });
         Add(tr("저장(&S)"), QKeySequence::Save, "saveDocument", [this] {
             auto Tab = active(); if (!Tab) return;
+            if (Tab->choosingSavePath_) return;
             if (Tab->broker_) { auto Result = prepareSave(Tab); if (Result.contains("error")) Tab->error_ = Result["error"].toString(); update(); }
             else if (Tab->originalSave_) save(Tab, Tab->path_);
             else {
-                const auto Path = ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId());
-                if (!Path.isEmpty()) save(Tab, Path, true); else { Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
+                Tab->choosingSavePath_ = true;
+                ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
+                    Tab->choosingSavePath_ = false;
+                    if (Tab->closed_) return;
+                    if (!Path.isEmpty()) save(Tab, Path, true);
+                    else { Tab->closeRequested_ = Tab->closeAfterSave_ = false; Tab->navigationAfterSave_.clear(); closingWorkspace_ = false; }
+                });
             }
         });
         Add(tr("다른 이름 저장"), QKeySequence::SaveAs, "saveDocumentAs", [this] {
             auto Tab = active(); if (!Tab) return;
-            const auto Path = ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId());
-            if (!Path.isEmpty()) save(Tab, Path, true);
+            if (Tab->choosingSavePath_) return;
+            Tab->choosingSavePath_ = true;
+            ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
+                Tab->choosingSavePath_ = false;
+                if (!Tab->closed_ && !Path.isEmpty()) save(Tab, Path, true);
+                else if (!Tab->closed_) { Tab->closeRequested_ = Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
+            });
         });
         Add(tr("다시 읽기"), QKeySequence("Ctrl+R"), "reloadDocument", [this] {
             auto Tab = active(); if (!Tab) return;
@@ -245,7 +276,7 @@ namespace hc::document
         connect(Preferences, &QAction::triggered, this, &DocumentWorkspaceWidget::showPreferences);
         auto* Options = new QAction(tr("표시 옵션"), this); Options->setObjectName("workspaceDisplayOptions");
         Options->setShortcut(QKeySequence("Ctrl+Shift+M")); addAction(Options);
-        connect(Options, &QAction::triggered, this, [this, ViewMenu] { ViewMenu->exec(mapToGlobal(QPoint(8, 8))); });
+        connect(Options, &QAction::triggered, this, [this, ViewMenu] { ViewMenu->popup(mapToGlobal(QPoint(8, 8))); });
         setContextMenuPolicy(Qt::ActionsContextMenu); addAction(Options);
         for (const bool Menu : {true, false}) {
             auto* Modes = ViewMenu->addMenu(Menu ? tr("주 메뉴 표시") : tr("공통 도구모음 표시"));
@@ -487,7 +518,7 @@ namespace hc::document
     bool DocumentWorkspaceWidget::IsIdle() const
     {
         return !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
-            return Tab->loading_ || Tab->navigating_ || Tab->saving_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
+            return Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
     QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
@@ -523,13 +554,14 @@ namespace hc::document
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         Editor->installEventFilter(this); Editor->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(Editor, &QWidget::customContextMenuRequested, this, [this, Tab, Editor](const QPoint& Position) {
-            if (!clipboardBroker_) { auto* Menu = Editor->createStandardContextMenu(); Menu->exec(Editor->mapToGlobal(Position)); delete Menu; return; }
-            QMenu Menu;
+            auto* Menu = clipboardBroker_ ? new QMenu(Editor) : Editor->createStandardContextMenu();
+            connect(Menu, &QMenu::aboutToHide, Menu, [Menu] { QTimer::singleShot(0,Menu,[Menu] { delete Menu; }); });
+            if (!clipboardBroker_) { Menu->popup(Editor->mapToGlobal(Position)); return; }
             for (const auto& Mode : {QString("copy"), QString("cut"), QString("paste")}) {
-                auto* Action = Menu.addAction(Mode == "copy" ? tr("복사") : Mode == "cut" ? tr("잘라내기") : tr("붙여넣기"));
+                auto* Action = Menu->addAction(Mode == "copy" ? tr("복사") : Mode == "cut" ? tr("잘라내기") : tr("붙여넣기"));
                 connect(Action, &QAction::triggered, this, [this, Tab, Mode] { clipboard(Tab, Mode); });
             }
-            Menu.exec(Editor->mapToGlobal(Position));
+            Menu->popup(Editor->mapToGlobal(Position));
         });
         connect(Editor, &QPlainTextEdit::textChanged, this, [this, Tab] {
             if (Tab->loading_ || Tab->closed_) return;
@@ -582,14 +614,14 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path)
     {
-        if(Tab->closed_||Tab->loading_||Tab->navigating_||Tab->saving_||Tab->checkpointing_||!Tab->pendingToken_.isEmpty()
+        if(Tab->closed_||Tab->loading_||Tab->navigating_||Tab->choosingSavePath_||Tab->saving_||Tab->checkpointing_||!Tab->pendingToken_.isEmpty()
             ||Tab->pane_->IsEditing()||Tab->pane_->ViewId()!="image"||!QFileInfo(Path).isAbsolute())return;
         if(Tab->Dirty()){
             const auto Choice=closePrompt_?closePrompt_(Tab->id_):int(QMessageBox::question(this,tr("변경 내용 저장"),
                 tr("다음 이미지를 열기 전에 변경 내용을 저장하시겠습니까?"),QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel));
             if(Choice==QMessageBox::Save){
                 Tab->navigationAfterSave_=Path;activate(Tab);findChild<QAction*>("saveDocument")->trigger();
-                if(!Tab->saving_&&Tab->pendingToken_.isEmpty())Tab->navigationAfterSave_.clear();
+                if(!Tab->choosingSavePath_&&!Tab->saving_&&Tab->pendingToken_.isEmpty())Tab->navigationAfterSave_.clear();
                 return;
             }
             if(Choice!=QMessageBox::Discard)return;
@@ -642,7 +674,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::load(const std::shared_ptr<Tab>& Tab, bool Discard, const QString& RecoveryPath)
     {
-        if (Tab->saving_ || Tab->navigating_ || !Tab->pendingToken_.isEmpty()) return;
+        if (Tab->choosingSavePath_ || Tab->saving_ || Tab->navigating_ || !Tab->pendingToken_.isEmpty()) return;
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         Tab->cancellation_->request_stop(); Tab->cancellation_ = std::make_shared<std::stop_source>();
         Tab->loading_ = true; Tab->pane_->SetReadOnly(true); Tab->error_.clear();
@@ -703,7 +735,7 @@ namespace hc::document
     }
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)
     {
-        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
+        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
         if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) return Error("document-source-token-required");
         auto Started = Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
         if (!Started.HasValue()) return Error(QString::fromStdString(Started.Failure().code_));
@@ -725,7 +757,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite)
     {
-        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
+        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
         const auto TargetCanonical = QFileInfo(Destination).canonicalFilePath();
         const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
             || (!TargetCanonical.isEmpty() && TargetCanonical == QFileInfo(Tab->path_).canonicalFilePath());
@@ -1016,7 +1048,7 @@ namespace hc::document
         if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
         if (Action == "close") {
-            if (Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
+            if (Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
             retire(Tab, Request["discard"].toBool()); update(); return {{"accepted", true}};
         }
@@ -1129,7 +1161,7 @@ namespace hc::document
         if (Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
-        if (Target->saving_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
+        if (Target->choosingSavePath_ || Target->saving_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
         if (Target->Dirty()) {

@@ -38,6 +38,7 @@
 #include "UniqueLibs/storageProviders.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "pluginHost/dopusAbi.hpp"
+#include "pluginHost/pipeChannel.hpp"
 using namespace hc::document;
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -335,6 +336,93 @@ void isolatedComicArchiveReading(){
     QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject()["book"].toString()==Root.filePath("comic 02.cbz");}));
     QVERIFY(!Doc(Surface.Details().documentState_,Id)["dirty"].toBool());
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
+}
+void isolatedFileDialogsRemainResponsive_data(){
+    QTest::addColumn<bool>("SaveAs");QTest::addColumn<bool>("Modal");QTest::addColumn<bool>("CancelHost");QTest::addColumn<bool>("Preview");
+    QTest::newRow("open")<<false<<false<<false<<false;QTest::newRow("save-as")<<true<<false<<false<<false;
+    QTest::newRow("dirty-close")<<false<<true<<false<<false;QTest::newRow("cancel-modal")<<false<<true<<true<<false;
+    QTest::newRow("print-preview")<<false<<true<<false<<true;
+}
+void isolatedFileDialogsRemainResponsive(){
+    QFETCH(bool,SaveAs);QFETCH(bool,Modal);QFETCH(bool,CancelHost);QFETCH(bool,Preview);
+    QTemporaryDir Root;const auto Path=Root.filePath(Modal&&!Preview?"dialog.txt":"dialog.png");
+    QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
+    if(Modal&&!Preview)QVERIFY(Put(Path,"original"));else QVERIFY(Page.save(Path));
+    QWidget Main;Main.resize(900,650);Main.show();Main.activateWindow();QVERIFY(QTest::qWaitForWindowActive(&Main));
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtViewerHost Host(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
+    const auto Drain=qScopeGuard([&]{Host.CloseAll();Wait([&]{return Host.IsIdle();});});
+    bool Finished=false,Success=false;QString Failure;
+    auto* Window=Host.OpenPlugin(Options(),{{Content(Path),{}}},"File dialog",
+        [&](bool Ready,const QString& Error){Finished=true;Success=Ready;Failure=Error;});
+    QVERIFY(Window);QVERIFY(Wait([&]{return Finished;},30000));QVERIFY2(Success,qPrintable(Failure));
+    QPointer<QtPluginViewerSurface> Surface=Window->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
+    const auto Connection=connect(Surface,&QtPluginViewerSurface::Failed,this,[&](const QString& Code){Failure=Code;});
+    const auto Disconnect=qScopeGuard([&]{disconnect(Connection);});
+    const auto Pid=Surface->Details().host_.processId_;
+    WinHandle Process(OpenProcess(SYNCHRONIZE,FALSE,Pid));QVERIFY(Process.Valid());
+    QVERIFY(Wait([&]{DWORD ForegroundPid=0;GetWindowThreadProcessId(GetForegroundWindow(),&ForegroundPid);return ForegroundPid==Pid;}));
+    const auto Viewer=GetForegroundWindow();
+    QVERIFY(Wait([&]{const auto State=Surface->Details().documentState_;return !State["activeDocumentId"].toString().isEmpty()
+        &&Doc(State,State["activeDocumentId"].toString())["lifecycle"]=="ready";}));
+    if(Modal&&!Preview){const auto Id=Surface->Details().documentState_["activeDocumentId"].toString();
+        const auto Changed=Surface->SendDocument({{"action","replaceText"},{"documentId",Id},{"text","changed"}});QVERIFY(Changed.HasValue());
+        QVERIFY(Wait([&]{return Surface->Details().commandSequence_>=Changed.Value();}));
+        const auto Details=Surface->Details();QVERIFY2(!Details.commandError_,Details.commandError_?Details.commandError_->code_.c_str():"");
+        QVERIFY2(Wait([&]{return Doc(Surface->Details().documentState_,Id)["dirty"].toBool();}),qPrintable(QJsonDocument(Surface->Details().documentState_).toJson()));}
+    const auto Press=[](WORD Key,WORD Modifier=0,WORD SecondModifier=0){
+        std::vector<INPUT> Keys;const auto Append=[&](WORD Code,DWORD Flags){INPUT Input{};Input.type=INPUT_KEYBOARD;Input.ki.wVk=Code;Input.ki.dwFlags=Flags;Keys.push_back(Input);};
+        if(Modifier)Append(Modifier,0);if(SecondModifier)Append(SecondModifier,0);Append(Key,0);Append(Key,KEYEVENTF_KEYUP);
+        if(SecondModifier)Append(SecondModifier,KEYEVENTF_KEYUP);if(Modifier)Append(Modifier,KEYEVENTF_KEYUP);
+        return SendInput(UINT(Keys.size()),Keys.data(),sizeof(INPUT))==Keys.size();};
+    const auto Type=[](const QString& Text){std::vector<INPUT> Keys;for(const auto Character:Text){INPUT Input{};Input.type=INPUT_KEYBOARD;
+        Input.ki.wScan=Character.unicode();Input.ki.dwFlags=KEYEVENTF_UNICODE;Keys.push_back(Input);
+        Input.ki.dwFlags|=KEYEVENTF_KEYUP;Keys.push_back(Input);}return SendInput(UINT(Keys.size()),Keys.data(),sizeof(INPUT))==Keys.size();};
+    const auto Launch=[&]{if(Preview)return Surface->SendDocument({{"action","printPreview"},{"documentId",Surface->Details().documentState_["activeDocumentId"]}}).HasValue();
+        return Modal?Press('W',VK_CONTROL):SaveAs?Press('S',VK_CONTROL,VK_SHIFT):Press('O',VK_CONTROL);};
+    const auto FindDialog=[&]{struct Search{DWORD pid_;QString title_;HWND found_=nullptr;}State{Pid,Preview?QString{}:Modal?QString::fromUtf8("변경 내용 저장"):SaveAs?QString::fromUtf8("다른 이름 저장"):QString::fromUtf8("문서 열기")};
+        EnumWindows([](HWND Candidate,LPARAM Context)->BOOL{auto* Search=reinterpret_cast<struct Search*>(Context);
+            DWORD Owner=0;GetWindowThreadProcessId(Candidate,&Owner);wchar_t Title[256]{};GetWindowTextW(Candidate,Title,256);
+            const auto Parent=GetWindow(Candidate,GW_OWNER);
+            const bool Match=Search->title_.isEmpty()?Parent&&!IsWindowEnabled(Parent):QString::fromWCharArray(Title)==Search->title_;
+            if(Owner==Search->pid_&&IsWindowVisible(Candidate)&&Match)
+                {Search->found_=Candidate;return FALSE;}return TRUE;},reinterpret_cast<LPARAM>(&State));
+        return State.found_;};
+    QVERIFY(Launch());HWND Dialog=nullptr;QVERIFY(Wait([&]{Dialog=FindDialog();return Dialog!=nullptr;}));
+    const auto Closed=qScopeGuard([&]{if(IsWindow(Dialog))PostMessageW(Dialog,WM_CLOSE,0,0);});
+    // Exercise native directory browsing, including a redirected drive when
+    // explicitly supplied by a connected RDP test session.
+    if(!Modal){const auto Browse=qEnvironmentVariable("HC_FILE_DIALOG_TEST_DIR",Root.path());
+        QVERIFY(Press('D',VK_MENU));QVERIFY(Type(QDir::toNativeSeparators(Browse)));QVERIFY(Press(VK_RETURN));}
+    QTest::qWait(18500);
+    QCOMPARE(WaitForSingleObject(Process.Get(),0),DWORD(WAIT_TIMEOUT));
+    QVERIFY2(Surface,qPrintable(Failure));
+    const auto Details=Surface->Details();
+    QVERIFY2(Details.host_.running_,Details.host_.failure_?Details.host_.failure_->code_.c_str():"Host exited while browsing files");
+    QVERIFY(IsWindow(Dialog));QVERIFY(IsWindowVisible(Dialog));
+    if(CancelHost){Host.CloseAll();QVERIFY(Wait([&]{return Host.IsIdle();},5000));
+        QCOMPARE(WaitForSingleObject(Process.Get(),0),DWORD(WAIT_OBJECT_0));QCOMPARE(Read(Path),QByteArray("original"));return;}
+    if(Modal){QVERIFY(PostMessageW(Dialog,WM_CLOSE,0,0));QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));}
+    const auto Sequence=Surface->SendDocument({{"action","state"}});QVERIFY(Sequence.HasValue());
+    QVERIFY(Wait([&]{return Surface&&Surface->Details().commandSequence_>=Sequence.Value();},3000));
+    QVERIFY(!Surface->Details().commandError_);
+    if(Modal){QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);
+        if(!Preview)QCOMPARE(Read(Path),QByteArray("original"));else QVERIFY(!QImage(Path).isNull());return;}
+    QVERIFY(PostMessageW(Dialog,WM_CLOSE,0,0));
+    QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));
+    QVERIFY(Surface->IsReady());
+    QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);
+    const auto Selected=Root.filePath(SaveAs?"saved.png":"picked.png");
+    if(!SaveAs)QVERIFY(Page.save(Selected));
+    QVERIFY(Wait([&]{return IsWindowEnabled(Viewer);}));
+    SetForegroundWindow(Viewer);QVERIFY(Wait([&]{return GetForegroundWindow()==Viewer;}));QTest::qWait(200);
+    QVERIFY(Launch());QVERIFY(Wait([&]{Dialog=FindDialog();return Dialog!=nullptr;}));
+    QVERIFY(Press('N',VK_MENU));QVERIFY(Press('A',VK_CONTROL));QVERIFY(Type(QDir::toNativeSeparators(Selected)));QVERIFY(Press(VK_RETURN));
+    QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));
+    QVERIFY(Wait([&]{if(!Surface)return false;for(const auto& Item:Surface->Details().documentState_["documents"].toArray()){
+        const auto Document=Item.toObject();if(Document["path"].toString()==Selected&&Document["lifecycle"]=="ready"&&!Document["loading"].toBool())return true;}return false;}));
+    QVERIFY(!QImage(Selected).isNull());
 }
 void isolatedImageSiblingKeyboardNavigation(){
     QTemporaryDir Root;

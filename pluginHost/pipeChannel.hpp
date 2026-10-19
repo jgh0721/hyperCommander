@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include "commonLibs/plugins/pluginWire.hpp"
 #include <QByteArray>
+#include <functional>
 
 namespace hc::plugins
 {
@@ -24,7 +25,9 @@ namespace hc::plugins
     };
     struct WireFrame { WireHeader header_; QByteArray payload_; };
     storage::Error HostError(const char* Code, DWORD NativeError = 0);
-    storage::Result<storage::Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, storage::OperationContext Context, bool PumpMessages = false);
+    storage::Result<storage::Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, storage::OperationContext& Context, bool PumpMessages = false,
+        const std::function<bool()>& AwaitingInteraction = {});
     storage::Result<storage::Unit> WriteFrame(HANDLE Pipe, HANDLE Peer, WireKind Kind, std::uint64_t Sequence, const QByteArray& Payload, storage::OperationContext Context, ProtocolVersion Version = {});
-    storage::Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, storage::OperationContext Context, bool PumpMessages = false);
+    storage::Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, storage::OperationContext Context, bool PumpMessages = false,
+        const std::function<bool()>& AwaitingInteraction = {});
 }

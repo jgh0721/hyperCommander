@@ -7,15 +7,25 @@ namespace hc::plugins
     using namespace storage;
     Error HostError(const char* Code, DWORD NativeError)
     { return {ErrorCategory::Unavailable, NativeError ? std::string(Code) + ":" + std::to_string(NativeError) : Code, {"plugin-host"}}; }
-    Result<Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, OperationContext Context, bool PumpMessages)
+    Result<Unit> WaitPipe(HANDLE Pipe, OVERLAPPED& Pending, HANDLE Peer, OperationContext& Context, bool PumpMessages,
+        const std::function<bool()>& AwaitingInteraction)
     {
         const auto Cancel = [&] {
             CancelIoEx(Pipe, &Pending); DWORD Count = 0;
             // Keep the OVERLAPPED and its buffer alive through cancellation completion.
             GetOverlappedResult(Pipe, &Pending, &Count, TRUE);
         };
+        auto NextInteractionCheck = std::chrono::steady_clock::now();
+        const auto Budget = Context.deadline_ - NextInteractionCheck;
         for (;;)
         {
+            const auto Now = std::chrono::steady_clock::now();
+            if (AwaitingInteraction && !Context.stopToken_.stop_requested() && Now >= NextInteractionCheck
+                && Context.deadline_ != std::chrono::steady_clock::time_point::max() && Budget > Budget.zero())
+            {
+                NextInteractionCheck = Now + std::chrono::milliseconds(200);
+                if (AwaitingInteraction()) Context.deadline_ = std::max(Context.deadline_, std::chrono::steady_clock::now() + Budget);
+            }
             if (const auto Stop = Context.Check({"plugin-host"})) { Cancel(); return *Stop; }
             HANDLE Handles[]{Pending.hEvent, Peer};
             const DWORD HandleCount = Peer ? 2 : 1;
@@ -42,7 +52,8 @@ namespace hc::plugins
     }
     namespace
     {
-        Result<Unit> Transfer(HANDLE Pipe, HANDLE Peer, void* Data, DWORD Length, bool Write, OperationContext Context, bool PumpMessages = false)
+        Result<Unit> Transfer(HANDLE Pipe, HANDLE Peer, void* Data, DWORD Length, bool Write, OperationContext& Context, bool PumpMessages = false,
+            const std::function<bool()>& AwaitingInteraction = {})
         {
             DWORD Offset = 0; WinHandle Event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
             if (!Event.Valid()) return HostError("host-pipe-event", GetLastError());
@@ -55,7 +66,7 @@ namespace hc::plugins
                 if (!Done)
                 {
                     const auto Error = GetLastError(); if (Error != ERROR_IO_PENDING) return HostError("host-pipe-io", Error);
-                    auto Wait = WaitPipe(Pipe, Pending, Peer, Context, PumpMessages); if (!Wait.HasValue()) return Wait.Failure();
+                    auto Wait = WaitPipe(Pipe, Pending, Peer, Context, PumpMessages, AwaitingInteraction); if (!Wait.HasValue()) return Wait.Failure();
                 }
                 if (!GetOverlappedResult(Pipe, &Pending, &Count, FALSE)) return HostError("host-pipe-result", GetLastError());
                 if (!Count || Count > Length - Offset) return HostError("host-pipe-closed");
@@ -73,13 +84,14 @@ namespace hc::plugins
         if (!Sent.HasValue()) return Sent.Failure();
         return Transfer(Pipe, Peer, const_cast<char*>(Payload.constData()), static_cast<DWORD>(Payload.size()), true, Context);
     }
-    Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, OperationContext Context, bool PumpMessages)
+    Result<WireFrame> ReadFrame(HANDLE Pipe, HANDLE Peer, OperationContext Context, bool PumpMessages,
+        const std::function<bool()>& AwaitingInteraction)
     {
         std::vector<std::byte> Bytes(WireHeaderBytes);
-        auto Read = Transfer(Pipe, Peer, Bytes.data(), static_cast<DWORD>(Bytes.size()), false, Context, PumpMessages); if (!Read.HasValue()) return Read.Failure();
+        auto Read = Transfer(Pipe, Peer, Bytes.data(), static_cast<DWORD>(Bytes.size()), false, Context, PumpMessages, AwaitingInteraction); if (!Read.HasValue()) return Read.Failure();
         auto Header = DecodeHeader(Bytes); if (!Header.HasValue()) return Header.Failure();
         QByteArray Payload(Header.Value().length_, Qt::Uninitialized);
-        Read = Transfer(Pipe, Peer, Payload.data(), Header.Value().length_, false, Context, PumpMessages); if (!Read.HasValue()) return Read.Failure();
+        Read = Transfer(Pipe, Peer, Payload.data(), Header.Value().length_, false, Context, PumpMessages, AwaitingInteraction); if (!Read.HasValue()) return Read.Failure();
         return WireFrame{Header.Value(), std::move(Payload)};
     }
 }

@@ -27,6 +27,26 @@ namespace hc::plugins
     {
         OperationContext Bound(OperationContext Context, std::uint32_t Milliseconds)
         { Context.deadline_ = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(Milliseconds)); return Context; }
+        bool ResponsiveViewerModal(DWORD Process)
+        {
+            struct Search { DWORD process_; HWND dialog_ = nullptr, owner_ = nullptr; } State{Process};
+            EnumWindows([](HWND Window, LPARAM Context) -> BOOL {
+                auto& Search = *reinterpret_cast<struct Search*>(Context);
+                DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+                if (Pid != Search.process_ || !IsWindowVisible(Window) || !IsWindowEnabled(Window)) return TRUE;
+                const auto Owner = GetAncestor(GetWindow(Window, GW_OWNER), GA_ROOT);
+                DWORD OwnerPid = 0; if (Owner) GetWindowThreadProcessId(Owner, &OwnerPid);
+                if (OwnerPid != Search.process_ || IsWindowEnabled(Owner)) return TRUE;
+                Search.dialog_ = Window; Search.owner_ = Owner; return FALSE;
+            }, reinterpret_cast<LPARAM>(&State));
+            if (!State.dialog_) return false;
+            DWORD_PTR Reply = 0;
+            // Check both the dialog and viewer UI thread; a responsive helper
+            // dialog alone must not conceal an otherwise hung viewer.
+            const auto Flags = SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT;
+            return SendMessageTimeoutW(State.dialog_, WM_NULL, 0, 0, Flags, 100, &Reply)
+                && SendMessageTimeoutW(State.owner_, WM_NULL, 0, 0, Flags, 100, &Reply);
+        }
         std::wstring Quote(const QString& Value)
         {
             std::wstring Out = L"\""; unsigned Slashes = 0;
@@ -122,7 +142,10 @@ namespace hc::plugins
             {
                 Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
                 if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
-                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
+                // Only the reviewed builtin viewer may pause its response
+                // deadline for a live, responsive modal user interaction.
+                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context, false,
+                    documentViewer_ ? std::function<bool()>{[this] { return ResponsiveViewerModal(pid_); }} : std::function<bool()>{});
             }
             unsigned Prompts = 0;
             while (Reply.HasValue() && Reply.Value().header_.kind_ == WireKind::ArchivePassword)
