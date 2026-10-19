@@ -111,7 +111,7 @@ QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPa
         Fs->Ext_            = nsCmn::nsCmnPath::GetFileExtension( Fs->Name_ );
         // Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
         // NOTE: OS 의 IsNormalizedString 의 정상적인 Latin1 문자열도 TRUE 를 반환한다. 
-        if( Fs->Name_ != Fs->Name_.normalized( QString::NormalizationForm_C ) )
+        if( hc::settings::FileColorRules::HasDecomposedName(Fs->Name_) )
             SetFlag( Fs->Flags_, nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD );
 
         Fs->Attributes_     = Wfd.dwFileAttributes;
@@ -458,7 +458,7 @@ void CFSModel::doRefresh()
 
                     Fs->Name_       = Item->FileName;
                     Fs->Ext_        = nsCmn::nsCmnPath::GetFileExtension( Fs->Name_ );
-                    if( Fs->Name_ != Fs->Name_.normalized( QString::NormalizationForm_C ) )
+                    if( hc::settings::FileColorRules::HasDecomposedName(Fs->Name_) )
                         SetFlag( Fs->Flags_, nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD );
                     Fs->Attributes_ = Item->Attributes;
                     Fs->Size_       = Item->UncompressedSize;
@@ -1015,7 +1015,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
         Item->Size_ = Entry.size_;
         if (Entry.createdUtcMs_) Item->Created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
         if (Entry.modifiedUtcMs_) Item->Modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
-        if (Item->Name_ != Item->Name_.normalized(QString::NormalizationForm_C)) Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
+        if (hc::settings::FileColorRules::HasDecomposedName(Item->Name_)) Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
         if (Entry.hints_.contains("reparseTag")) Item->Reserved0_ = QString::fromStdString(Entry.hints_.at("reparseTag")).toUInt();
         if (Entry.hints_.contains("shellPidl"))
         {

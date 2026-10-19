@@ -445,6 +445,38 @@ private slots:
         const auto Overflow = Document({{"type", "size"}, {"op", "ge"}, {"value", "18446744073709551615"}, {"unit", "GiB"}}); QVERIFY(!FileColorRules::Validate(Overflow).isEmpty());
         QVERIFY(!FileColorRules::Validate(Document({{"type", "modified"}, {"op", "before"}, {"value", "2026-10-13T12:00:00"}})).isEmpty());
     }
+    void fileColorNormalization()
+    {
+        using namespace hc::settings;
+        const auto Document = [](const QString& Value, const QString& Op = "is") {
+            auto D = FileColorRules::Empty(); D["version"] = 2;
+            const QJsonObject Condition{{"type", "normalization"}, {"op", Op}, {"value", Value}};
+            const QJsonObject Group{{"id", "unicode"}, {"name", "정규화"}, {"join", "all"}, {"conditions", QJsonArray{Condition}}};
+            D["groups"] = QJsonArray{Group}; return D;
+        };
+        const auto Nfc = QStringLiteral("한글.txt"); const auto Nfd = Nfc.normalized(QString::NormalizationForm_D);
+        const auto Mixed = QStringLiteral("한글-") + QStringLiteral("이름").normalized(QString::NormalizationForm_D) + ".txt";
+        const QList<QPair<QString, bool>> Cases{{Nfc, false}, {Nfd, true}, {Mixed, true}, {"ASCII-123.txt", false},
+            {QStringLiteral("café.txt"), false}, {QStringLiteral("café.txt").normalized(QString::NormalizationForm_D), true},
+            {QStringLiteral("ㅎㅏㄴ.txt"), false}}; // Compatibility jamo are not canonical decomposition.
+        for (const auto* Mode : {"decomposed", "composed"}) {
+            const auto D = Document(Mode); QVERIFY(FileColorRules::Validate(D).isEmpty()); FileColorRules Rules; Rules.Load(D);
+            for (const auto& Item : Cases) for (const bool Folder : {false, true}) {
+                const auto Original = Item.first;
+                QCOMPARE(FileColorRules::HasDecomposedName(Original), Item.second);
+                QCOMPARE(Rules.Evaluate(Original, Folder ? 0x10 : 0, 0, false).matched_, Item.second == (QString(Mode) == "decomposed"));
+                QCOMPARE(Item.first, Original);
+            }
+            QVERIFY(!Rules.Evaluate("..", 0x10, 0, false).matched_);
+        }
+        QVERIFY(!FileColorRules::Validate(Document("unknown")).isEmpty());
+        QVERIFY(!FileColorRules::Validate(Document("decomposed", "not")).isEmpty());
+        QTemporaryDir Temp; Repository Store(Temp.path()); auto Options = Store.Read(Section::Options).toObject();
+        const auto D = Document("decomposed"); Options["fileColorRules"] = D;
+        QVERIFY(Store.Put(Section::Options, Options)); QVERIFY(Store.Commit()); Repository Reload(Temp.path());
+        QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), D);
+    }
+
     void fileColorMigrationV2()
     {
         using namespace hc::settings;

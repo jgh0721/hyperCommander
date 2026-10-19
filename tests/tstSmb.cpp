@@ -6957,6 +6957,59 @@ private slots:
         Dialog.reject(); QCOMPARE(Settings.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
     }
 
+    void todoBugFileColorNormalization()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Nfc = QStringLiteral("한글-NFC.txt"), Nfd = QStringLiteral("한글-NFD.txt").normalized(QString::NormalizationForm_D);
+        const auto Mixed = QStringLiteral("한글-") + QStringLiteral("이름").normalized(QString::NormalizationForm_D) + ".txt";
+        const auto Folder = QStringLiteral("분리 폴더").normalized(QString::NormalizationForm_D);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const QStringList Names{Nfc, Nfd, Mixed, "ASCII.txt"};
+        for (const auto& Name : Names) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("unicode"); }
+        QVERIFY(QDir(Directory.path()).mkdir(Folder));
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 6);
+        const auto RowOf = [&](const QString& Name) { for (int I = 0; I < Model->rowCount(); ++I) if (Model->GetName(Model->index(I, 0)) == Name) return I; return -1; };
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50);
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
+        for (int I = 0; I < Categories->count(); ++I) if (Categories->item(I)->text() == "파일 그룹 · 색상") Categories->setCurrentRow(I);
+        auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
+        auto Doc = FileColorRules::Empty();
+        Doc["groups"] = QJsonArray{QJsonObject{{"id", "unicode"}, {"name", "자소 분리 이름"}, {"enabled", true}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
+            {"light", QJsonObject{{"foreground", "#d15c00"}}}, {"dark", QJsonObject{{"foreground", "#d15c00"}}}, {"font", QJsonObject{{"bold", true}}}}};
+        Page->Load(Doc); auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table);
+        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); QVERIFY(Field); QVERIFY(Field->findData("normalization") >= 0);
+        Field->setCurrentIndex(Field->findData("normalization"));
+        QVERIFY(Table->columnWidth(0) >= Field->fontMetrics().horizontalAdvance(Field->currentText()) + 24);
+        QCOMPARE(Page->Document()["version"], QJsonValue(2));
+        auto* Choice = Table->cellWidget(0, 2)->findChild<QComboBox*>("hc.condition.value"); QVERIFY(Choice);
+        QCOMPARE(Choice->currentData().toString(), QString("decomposed")); QVERIFY(Page->Validate());
+        QVERIFY(Dialog.SaveSettings());
+        for (const auto& Name : QStringList{Nfc, Nfd, Mixed, "ASCII.txt", Folder}) {
+            const int Row = RowOf(Name); QVERIFY(Row >= 0); const bool Decomposed = Name == Nfd || Name == Mixed || Name == Folder;
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            QCOMPARE(bool(Item->Flags_ & nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD), Decomposed);
+            for (int Col = 0; Col < Model->columnCount(); ++Col) {
+                QCOMPARE(Model->index(Row, Col).data(Qt::ForegroundRole).value<QColor>() == QColor("#d15c00"), Decomposed);
+                if (Decomposed) QVERIFY(Model->index(Row, Col).data(Qt::FontRole).value<QFont>().bold());
+            }
+        }
+        QVERIFY(SaveR9Dialog(Dialog, "file-color-normalization"));
+        Choice->setCurrentIndex(Choice->findData("composed")); QVERIFY(Dialog.SaveSettings());
+        QCOMPARE(Model->index(RowOf(Nfc), 0).data(Qt::ForegroundRole).value<QColor>(), QColor("#d15c00"));
+        QVERIFY(Model->index(RowOf(Nfd), 0).data(Qt::ForegroundRole).value<QColor>() != QColor("#d15c00"));
+        const auto Saved = Page->Document(); Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
+        QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
+        Page->Load(Saved); Choice = Table->cellWidget(0, 2)->findChild<QComboBox*>("hc.condition.value"); QVERIFY(Choice);
+        QCOMPARE(Choice->currentData().toString(), QString("composed"));
+        for (const auto& Name : Names) { QVERIFY(QFileInfo::exists(Directory.filePath(Name))); QCOMPARE(Model->GetName(Model->index(RowOf(Name), 0)), Name); }
+        QVERIFY(QFileInfo(Directory.filePath(Folder)).isDir()); Dialog.reject();
+    }
+
     void fileColorConditionsUi()
     {
         using namespace hc::settings;

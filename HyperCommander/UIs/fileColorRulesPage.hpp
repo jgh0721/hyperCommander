@@ -128,7 +128,7 @@ public:
         conditions_ = new QTableWidget(editor_); conditions_->setObjectName("hc.rules.conditions"); conditions_->setColumnCount(4); conditions_->verticalHeader()->hide();
         conditions_->setHorizontalHeaderLabels({tr("항목"), tr("비교 방법"), tr("값"), tr("삭제")});
         conditions_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch); conditions_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed); conditions_->setColumnWidth(3, 40); conditions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        conditions_->setColumnWidth(0, 105); conditions_->setColumnWidth(1, 110);
+        conditions_->setColumnWidth(0, qMax(105, QFontMetrics(conditions_->font()).horizontalAdvance(tr("파일명 정규화")) + 36)); conditions_->setColumnWidth(1, 110);
         conditions_->setSelectionBehavior(QAbstractItemView::SelectRows); Definition->addWidget(conditions_);
         auto* ConditionButtons = new QHBoxLayout; Definition->addLayout(ConditionButtons);
         auto* AddCondition = Button(tr("조건 추가(&D)"), ConditionButtons, [this] { if (conditionRows_.size() >= 32) return; ensureVersion2(); appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); storeForm(); });
@@ -268,12 +268,13 @@ private:
     }
     void updateGroupItems() {
         const auto Groups = document_["groups"].toArray();
-        const QStringList Types{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크")};
+        const QStringList Types{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크"), tr("파일명 정규화")};
         const bool Dark = fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant());
         for (int Row = 0; Row < list_->count(); ++Row) {
             const auto G = Groups[Row].toObject(); QStringList Conditions;
             for (const auto Value : G["conditions"].toArray()) {
                 const auto C = settings::FileColorRules::NormalizeCondition(Value.toObject(), document_["version"].toInt()); QString Text = C["value"].toString();
+                if (C["type"] == "normalization") Text = C["value"] == "decomposed" ? tr("자소 분리 있음 (NFD·혼합)") : tr("분리 없음 (NFC)");
                 if (C["value"].isArray()) { QStringList Parts; for (const auto P : C["value"].toArray()) Parts.append(P.toString()); Text = Parts.join("; "); }
                 const QMap<QString, QString> Comparisons{{"gt", ">"}, {"ge", "≥"}, {"lt", "<"}, {"le", "≤"}, {"eq", "="}, {"ne", "≠"}, {"any", tr("하나라도")}, {"all", tr("모두")}, {"within", tr("최근")}, {"before", tr("이전")}, {"after", tr("이후")}, {"notMatches", tr("불일치")}, {"notIn", tr("제외")}};
                 QString Label = Types.value(typeKeys_.indexOf(C["type"].toString())); if (Comparisons.contains(C["op"].toString())) Label += " " + Comparisons[C["op"].toString()];
@@ -439,7 +440,7 @@ private:
     QCheckBox* previewModifiedKnown_ = nullptr;
     QCheckBox *previewFolder_ = nullptr, *previewDark_ = nullptr, *previewSelected_ = nullptr;
     QLabel *preview_ = nullptr, *owners_ = nullptr, *error_ = nullptr;
-    const QStringList typeKeys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link"};
+    const QStringList typeKeys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization"};
     const QStringList fontKeys_{"bold", "italic", "underline", "strike"};
 };
 } // namespace hc::ui

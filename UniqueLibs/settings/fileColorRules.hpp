@@ -40,6 +40,11 @@ struct FileRuleResult
 class FileColorRules
 {
 public:
+    // Use the existing FS_FLAG_UNICODE_NFD criterion, including mixed names.
+    // Compare the stored spelling; displaying or matching never renames it.
+    static bool HasDecomposedName(const QString& Name) {
+        return Name != Name.normalized(QString::NormalizationForm_C);
+    }
     static QStringList Extensions(const QString& Input) {
         QStringList Result;
         for (auto Part : Input.toLower().split(QRegularExpression("[,;|\\s]+"), Qt::SkipEmptyParts)) {
@@ -128,6 +133,8 @@ public:
                     for (const auto& Part : Parts) if (Part != "<none>" && !QRegularExpression("^[\\p{L}\\p{N}_+-]+$").match(Part).hasMatch()) return QObject::tr("단순 확장자를 입력하세요. 무확장자는 <none>, 파일명 패턴은 별도 조건을 사용합니다.");
                 } else if (Type == "folder") {
                     if (Op != "is" || (Text != "true" && Text != "false")) return QObject::tr("종류 조건은 폴더 또는 파일입니다.");
+                } else if (Type == "normalization") {
+                    if (Op != "is" || (Text != "decomposed" && Text != "composed")) return QObject::tr("파일명 정규화 조건은 자소 분리 있음 또는 분리 없음입니다.");
                 } else if (Type == "link") {
                     if (Op != "is" || !QStringList{"any", "shortcut", "symbolic", "none"}.contains(Text)) return QObject::tr("링크 종류를 확인하세요.");
                 } else if (Type == "modified" && (Op == "before" || Op == "after")) {
@@ -177,6 +184,7 @@ public:
                 if (C.type_ == "extension") Hit = !Folder && (C.extensions_.contains(Ext) != (C.op_ == "notIn"));
                 else if (C.type_ == "pattern") { for (const auto& Pattern : C.patterns_) Hit |= Pattern.match(Input.name_).hasMatch(); if (C.op_ == "notMatches") Hit = !Hit; }
                 else if (C.type_ == "folder") Hit = Folder == (C.value_ == "true");
+                else if (C.type_ == "normalization") Hit = HasDecomposedName(Input.name_) == (C.value_ == "decomposed");
                 else if (C.type_ == "attributes") Hit = C.op_ == "any" ? (Input.attributes_ & C.number_) != 0 : (Input.attributes_ & C.number_) == C.number_;
                 else if (C.type_ == "size" && !Folder) {
                     if (C.op_ == "gt") Hit = Input.size_ > C.number_; else if (C.op_ == "ge") Hit = Input.size_ >= C.number_;

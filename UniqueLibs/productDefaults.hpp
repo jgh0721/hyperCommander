@@ -442,6 +442,11 @@ namespace hc::defaults
         //   예: C("extension", "in", "cpp,hpp,<none>").
         // Type="folder": Op="is", Value="true"(폴더) 또는 "false"(파일).
         //   예: C("folder", "is", "true").
+        // Type="normalization": Op="is", Value="decomposed"(자소 분리 있음) 또는 "composed"(NFC).
+        //   원래 파일명을 NFC로 조합했을 때 달라지면 decomposed다. NFD 및 NFC/NFD 혼합을
+        //   포함하고 영문·숫자처럼 조합 전후가 같은 이름은 composed다. 파일·폴더 모두 적용한다.
+        //   기존 FS_FLAG_UNICODE_NFD 판별과 같으며 파일명 자체를 변경하지 않는다.
+        //   예: C("normalization", "is", "decomposed").
         // Type="attributes": Op="any"(비트 중 하나 이상), "all"(비트 전부).
         //   Value는 Windows 파일 속성 비트 마스크의 10진 문자열이다.
         //   읽기 전용=1, 숨김=2, 시스템=4, 폴더=16, 보관=32, 재분석 지점=1024,
