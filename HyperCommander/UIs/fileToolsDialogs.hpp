@@ -92,12 +92,14 @@ private:
     void select();
     void submit(int Action);
     bool active(const QString& Id) const;
+    std::optional<operations::JobSnapshot> activeJob(const QString& Id) const;
     filetools::RenameJobController* jobs_;
     QPointer<QObject> jobOwner_;
     QTreeWidget* list_;
     fm::ui::RenameComparisonView* comparison_;
     QPushButton *undo_, *resume_, *restore_, *refresh_;
     QCheckBox* queued_;
+    QLabel* selectionSummary_;
     QList<filetools::RenameRecord> records_;
     quint64 generation_ = 0;
     bool loading_ = false;

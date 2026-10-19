@@ -54,6 +54,8 @@ private:
     bool canRetry(const std::string& Id) const;
     double measuredRate(const hc::operations::JobSnapshot& Snapshot) const;
     bool deletionJob(const hc::operations::JobSnapshot& Snapshot) const;
+    bool acceptsControl(const hc::operations::JobSnapshot& Snapshot, hc::operations::JobControl Control) const;
+    void updateManagerSelection(const hc::operations::JobSnapshot* Snapshot);
     void updateJobs();
     void updateManager();
     void showProgress();
@@ -89,6 +91,10 @@ private:
     QComboBox* filter_ = nullptr;
     QLineEdit* search_ = nullptr;
     QLabel* summary_ = nullptr;
+    QLabel *queueSummary_ = nullptr, *batchSummary_ = nullptr, *selectionSummary_ = nullptr, *historySummary_ = nullptr;
+    QPushButton* clearHistory_ = nullptr;
+    bool clearingHistory_ = false;
+    std::string preparingRetry_;
     QLabel* metrics_ = nullptr;
     fm::ui::DialogHeader* header_ = nullptr;
     fm::ui::TransferGraph* graph_ = nullptr;

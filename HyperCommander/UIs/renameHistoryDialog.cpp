@@ -1,4 +1,5 @@
-﻿#include "fileToolsDialogs.hpp"
+﻿#include "stdafx.h"
+#include "fileToolsDialogs.hpp"
 #include <QtConcurrent>
 #include <fmwidgets/Button.h>
 #include <fmwidgets/RenameComparisonView.h>
@@ -6,11 +7,19 @@
 
 namespace hc::ui {
 namespace {
-QString RenameStateText(filetools::RenameState State, bool Active) {
+QString RenameStateText(filetools::RenameState State, const std::optional<operations::JobSnapshot>& Active = {}) {
     using filetools::RenameState;
-    if (Active) return QObject::tr("대기·진행 중");
+    if (Active) {
+        if (Active->cancelRequested_) return QObject::tr("취소 후 정리 중");
+        if (Active->deferred_) return Active->pauseRequested_ ? QObject::tr("대기열 · 일시 정지 요청됨") : QObject::tr("대기열 · 시작 대기");
+        if (Active->state_ == operations::JobState::Paused) return QObject::tr("일시 정지");
+        if (Active->pauseRequested_) return QObject::tr("일시 정지 요청 중");
+        if (Active->state_ == operations::JobState::WaitingForUser) return QObject::tr("응답 필요");
+        if (Active->state_ == operations::JobState::Committing) return QObject::tr("이름 변경 확정 중");
+        return QObject::tr("이름 변경 실행 중");
+    }
     switch (State) {
-    case RenameState::Completed: return QObject::tr("완료 · 되돌리기 가능");
+    case RenameState::Completed: return QObject::tr("완료");
     case RenameState::Restored: return QObject::tr("원래 이름 복구됨");
     default: return QObject::tr("중단 · 확인 필요");
     }
@@ -27,23 +36,44 @@ RenameHistoryDialog::RenameHistoryDialog(filetools::RenameJobController* Jobs, Q
     comparison_ = new fm::ui::RenameComparisonView(this); comparison_->setObjectName("hc.renameHistory.preview"); comparison_->SetMode(2); BodyLayout()->addWidget(comparison_, 1);
     auto* Note = new QLabel(tr("선택한 계획의 첫 256개를 표시합니다. 실행 전에 파일 ID·크기·수정 시각을 다시 검사하며, 다른 파일은 덮어쓰지 않습니다. 완료된 실행 취소 기록을 다시 되돌리면 다시 실행됩니다."), this);
     Note->setWordWrap(true); BodyLayout()->addWidget(Note);
-    queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), this); queued_->setObjectName("hc.renameHistory.queued"); BodyLayout()->addWidget(queued_);
+    auto* Selected = new QGroupBox(tr("선택한 기록 · 실행 취소 / 중단 복구"), this); Selected->setObjectName("hc.renameHistory.selectedGroup");
+    auto* SelectedRows = new QVBoxLayout(Selected); BodyLayout()->addWidget(Selected);
+    selectionSummary_ = new QLabel(Selected); selectionSummary_->setObjectName("hc.renameHistory.selectedSummary");
+    selectionSummary_->setTextFormat(Qt::PlainText); selectionSummary_->setWordWrap(true); selectionSummary_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); SelectedRows->addWidget(selectionSummary_);
+    queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), Selected); queued_->setObjectName("hc.renameHistory.queued"); SelectedRows->addWidget(queued_);
     auto* Actions = new fm::ui::WrapLayout;
     const auto Button = [this, Actions](const QString& Text, const char* Name) { auto* B = new fm::ui::Button(Text, this); B->setObjectName(Name); B->setAutoDefault(false); Actions->addWidget(B); return B; };
     undo_ = Button(tr("실행 취소(&U)"), "hc.renameHistory.undo"); resume_ = Button(tr("이어 실행(&R)"), "hc.renameHistory.resume");
     restore_ = Button(tr("원래 이름 복구(&O)"), "hc.renameHistory.restore"); refresh_ = Button(tr("새로 고침(&F)"), "hc.renameHistory.refresh");
-    BodyLayout()->addLayout(Actions); AcceptButton()->hide(); CancelButton()->setText(tr("닫기"));
+    SelectedRows->addLayout(Actions); AcceptButton()->hide(); CancelButton()->setText(tr("닫기"));
+    undo_->setToolTip(tr("완료된 이름 변경을 되돌립니다. 이미 되돌린 기록은 최신 실행 취소·다시 실행 기록을 선택하세요."));
+    resume_->setToolTip(tr("중단된 계획에서 아직 끝나지 않은 이름 변경을 이어서 실행합니다. 일시 정지한 작업은 작업 관리자에서 재개하세요."));
+    restore_->setToolTip(tr("중단된 이름 변경의 파일들을 변경 전 이름으로 복구합니다. 실행 중이거나 취소 후 정리 중인 작업에는 사용할 수 없습니다."));
     connect(list_, &QTreeWidget::currentItemChanged, this, [this] { select(); });
     connect(refresh_, &QPushButton::clicked, this, [this] { reload(); });
     connect(undo_, &QPushButton::clicked, this, [this] { submit(0); }); connect(resume_, &QPushButton::clicked, this, [this] { submit(1); }); connect(restore_, &QPushButton::clicked, this, [this] { submit(2); });
     reload();
+    auto* StateTimer = new QTimer(this); StateTimer->setInterval(250);
+    connect(StateTimer, &QTimer::timeout, this, [this, Known = QString{}]() mutable {
+        if (!isVisible() || loading_) return;
+        QString Signature = jobOwner_ ? QStringLiteral("owned") : QStringLiteral("closed");
+        if (jobOwner_) for (const auto& Snapshot : jobs_->RenameScheduler().Snapshots()) {
+            if (!Snapshot.metadata_.options_.starts_with("rename-record=")) continue;
+            Signature += QStringLiteral("|%1:%2:%3:%4:%5").arg(QString::fromStdString(Snapshot.id_)).arg(int(Snapshot.state_))
+                .arg(Snapshot.pauseRequested_).arg(Snapshot.cancelRequested_).arg(Snapshot.deferred_);
+        }
+        if (Signature != Known) { Known = Signature; reload(); }
+    }); StateTimer->start();
 }
 bool RenameHistoryDialog::active(const QString& Id) const {
-    if (!jobOwner_) return false;
+    return activeJob(Id).has_value();
+}
+std::optional<operations::JobSnapshot> RenameHistoryDialog::activeJob(const QString& Id) const {
+    if (!jobOwner_) return {};
     const auto Key = "rename-record=" + Id.toStdString();
     for (const auto& Snapshot : jobs_->RenameScheduler().Snapshots())
-        if (!operations::IsTerminal(Snapshot.state_) && Snapshot.metadata_.options_ == Key) return true;
-    return false;
+        if (!operations::IsTerminal(Snapshot.state_) && Snapshot.metadata_.options_ == Key) return Snapshot;
+    return {};
 }
 void RenameHistoryDialog::reload() {
     if (loading_) return; loading_ = true; refresh_->setEnabled(false); undo_->setEnabled(false); resume_->setEnabled(false); restore_->setEnabled(false);
@@ -56,7 +86,7 @@ void RenameHistoryDialog::reload() {
         records_ = Result.Value(); QSignalBlocker Block(list_); list_->clear(); QTreeWidgetItem* Selection = nullptr;
         for (const auto& Record : records_) {
             auto* Item = new QTreeWidgetItem(list_, {QDateTime::fromMSecsSinceEpoch(Record.createdUtcMs_).toString("yyyy-MM-dd HH:mm:ss"),
-                Record.kind_ == "undo" ? tr("실행 취소") : Record.kind_ == "redo" ? tr("다시 실행") : tr("이름 변경"), RenameStateText(Record.state_, active(Record.id_)),
+                Record.kind_ == "undo" ? tr("실행 취소") : Record.kind_ == "redo" ? tr("다시 실행") : tr("이름 변경"), RenameStateText(Record.state_, activeJob(Record.id_)),
                 QString::number(Record.count_), QDir::toNativeSeparators(Record.folder_)});
             Item->setData(0, Qt::UserRole, Record.id_); if (Record.id_ == Selected) Selection = Item;
         }
@@ -66,13 +96,13 @@ void RenameHistoryDialog::reload() {
 }
 void RenameHistoryDialog::select() {
     undo_->setEnabled(false); resume_->setEnabled(false); restore_->setEnabled(false); comparison_->SetRows({}); const auto Generation = ++generation_;
-    auto* Item = list_->currentItem(); if (!Item || loading_) { if (!loading_) SetMessage(tr("이름 변경 기록이 없습니다.")); return; }
-    const auto Id = Item->data(0, Qt::UserRole).toString(); SetMessage(tr("변경 계획을 읽고 있습니다…"));
+    auto* Item = list_->currentItem(); if (!Item || loading_) { selectionSummary_->setText(tr("선택한 기록 없음")); if (!loading_) SetMessage(tr("이름 변경 기록이 없습니다.")); return; }
+    const auto Id = Item->data(0, Qt::UserRole).toString(); SetMessage(tr("변경 계획을 읽고 있습니다…")); selectionSummary_->setText(tr("선택한 기록을 확인하고 있습니다…"));
     using Result = storage::Result<filetools::RenameRecord>; auto* Watcher = new QFutureWatcher<Result>(this);
     connect(Watcher, &QFutureWatcher<Result>::finished, this, [this, Watcher, Generation] {
         const auto Result = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_ || loading_) return;
         if (!Result.HasValue()) { SetMessage(QString::fromStdString(Result.Failure().code_), true); return; }
-        const auto& Record = Result.Value(); const bool Active = active(Record.id_); QList<fm::ui::RenameComparisonView::Row> Rows;
+        const auto& Record = Result.Value(); const auto Active = activeJob(Record.id_); QList<fm::ui::RenameComparisonView::Row> Rows;
         for (int I = 0; I < qMin(256, Record.count_); ++I) Rows.append({QFileInfo(Record.rows_[I].source_.path_).fileName(), QFileInfo(Record.rows_[I].target_).fileName(), RenameStateText(Record.state_, Active), false});
         comparison_->SetRows(Rows);
         undo_->setText(Record.kind_ == "undo" ? tr("다시 실행(&U)") : tr("실행 취소(&U)"));
@@ -82,10 +112,14 @@ void RenameHistoryDialog::select() {
             ChildActive = ChildActive || active(Later.id_);
         }
         undo_->setEnabled(jobOwner_ && !Active && !ChildActive && !Superseded && Record.state_ == filetools::RenameState::Completed);
-        const bool Recoverable = jobOwner_ && !Active && Record.state_ != filetools::RenameState::Completed && Record.state_ != filetools::RenameState::Restored;
+        const bool Recoverable = jobOwner_ && !Active && !ChildActive && !Superseded && Record.state_ != filetools::RenameState::Completed && Record.state_ != filetools::RenameState::Restored;
         resume_->setEnabled(Recoverable); restore_->setEnabled(Recoverable);
-        SetMessage(Active || ChildActive ? tr("작업 관리자에서 대기 또는 실행 중입니다.") : Superseded ? tr("이미 되돌린 기록입니다. 최신 실행 취소·다시 실행 기록을 선택하세요.")
-            : !Record.error_.isEmpty() ? Record.error_ : tr("%1개 · %2").arg(Record.count_).arg(RenameStateText(Record.state_, false)), !Record.error_.isEmpty());
+        const auto Status = ChildActive ? tr("실행 취소·다시 실행 작업 진행 중") : Superseded ? tr("이미 되돌린 기록") : RenameStateText(Record.state_, Active);
+        selectionSummary_->setText(tr("선택 1개 기록 · 대상 %1개 항목 · %2\n폴더: %3").arg(Record.count_).arg(Status, QDir::toNativeSeparators(Record.folder_)));
+        SetMessage(Active ? Status + tr(" · 작업 관리자에서 제어하세요. 실행 중인 기록은 복구를 중복 접수하지 않습니다.")
+            : ChildActive ? tr("이 기록을 되돌리는 작업이 실행 중입니다. 작업 관리자에서 제어하세요.")
+            : Superseded ? tr("이미 되돌린 기록입니다. 최신 실행 취소·다시 실행 기록을 선택하세요.")
+            : !Record.error_.isEmpty() ? Record.error_ : tr("%1개 · %2").arg(Record.count_).arg(Status), !Active && !Record.error_.isEmpty());
     });
     Watcher->setFuture(QtConcurrent::run([Id] { return filetools::ReadRenameRecord(filetools::RenameJournalDirectory(), Id); }));
 }
