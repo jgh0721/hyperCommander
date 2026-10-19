@@ -16,6 +16,7 @@ namespace hc::plugins
         ~DopusVfsHostService();
         storage::Result<storage::Unit> Initialize();
         storage::Result<QJsonObject> Probe();
+        bool CanConfigure() const;
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request, storage::OperationContext Context = {});
         storage::Result<std::shared_ptr<storage::IReadStream>> OpenStream(const QJsonObject& Request, storage::OperationContext Context);
     private:
@@ -27,6 +28,7 @@ namespace hc::plugins
             storage::Result<Record> Read();
         };
         storage::Error failure(const char* Operation);
+        storage::Result<storage::Unit> selectFormat(const QString& Path);
         storage::Result<std::wstring> path(const QJsonValue& Remote);
         storage::Result<QJsonObject> enumerate(const QJsonObject& Request);
         storage::Result<QJsonObject> transfer(const QJsonObject& Request, bool Write);
@@ -38,7 +40,8 @@ namespace hc::plugins
         WinHandle abort_;
         bool initialized_ = false;
         DWORD capabilities_ = 0;
-        QString root_, extensions_, name_;
+        DWORD flags_ = 0;
+        QString root_, extensions_, name_, selectedExtension_;
         QJsonArray columns_;
         std::map<int, Cursor> cursors_;
         int nextCursor_ = 1;

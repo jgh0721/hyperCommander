@@ -10,7 +10,8 @@ namespace hc::plugins
         // Existing v1 values are permanent. The v2 range is independently gated.
         SessionInvoke = 64, SessionCancel, SessionProgress, InteractionRequest, InteractionReply,
         StreamOpen, StreamRead, StreamSeek, StreamClose, StreamData, ArchiveUpdateBinary,
-        DocumentCommand = 96 };
+        DocumentCommand = 96,
+        PluginConfigure = 128 };
     bool IsArchiveCommand(WireKind Kind);
     bool IsViewerCommand(WireKind Kind);
     bool IsDataCommand(WireKind Kind);

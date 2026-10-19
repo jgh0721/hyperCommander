@@ -1,5 +1,6 @@
 qt_add_library(hc_plugin_contract STATIC
     ../commonLibs/plugins/archiveBackend.hpp
+    ../commonLibs/plugins/archiveCreation.hpp
     ../commonLibs/plugins/pluginManifest.cpp
     ../commonLibs/plugins/pluginManifest.hpp
     ../commonLibs/plugins/pluginWire.cpp

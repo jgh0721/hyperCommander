@@ -43,7 +43,7 @@ fs::path DiskPath(const char* Value);
 uint16_t Crc16(std::span<const uint8_t> Value);
 void Tag(Bytes& Data, uint16_t Id, uint32_t Location, size_t Length);
 void CheckTag(std::span<const uint8_t> Data, uint32_t Location, uint16_t Id = 0);
-void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf);
+void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf, bool Explicit = false);
 void Pulse(const HcIsoOptions& Options, uint64_t Done, uint64_t Total);
 
 struct Extent { uint64_t offset_; uint64_t size_; };
@@ -88,13 +88,18 @@ struct Node {
     std::vector<size_t> children_;
     uint32_t dataBlock_ = 0, isoBlock_ = 0, jolietBlock_ = 0, feBlock_ = 0;
     Bytes isoData_, jolietData_, udfData_;
+    size_t payload_ = SIZE_MAX;
 };
+// Port of the upstream Inode role: paths and namespace records reference one
+// independently allocated data extent. Path metadata remains on each Node.
+struct Payload { size_t sourceNode_; uint32_t dataBlock_ = 0; };
 class Writer {
 public:
-    Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options);
+    Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags = 0);
     void Write(const fs::path& Path);
 private:
     void inventory(const HcIsoSource* Sources, uint64_t Count);
+    void connectPayloads();
     bool hasJoliet() const { return options_.profile_ == HC_ISO_9660_JOLIET || options_.profile_ == HC_ISO_UDF_BRIDGE; }
     bool hasUdf() const { return options_.profile_ == HC_ISO_UDF_BRIDGE || options_.profile_ == HC_ISO_UDF_NO_JOLIET; }
     void layout();
@@ -107,6 +112,8 @@ private:
     HcIsoOptions options_;
     std::string label_;
     std::vector<Node> nodes_;
+    std::vector<Payload> payloads_;
+    bool shareContents_ = false, explicitTimestamp_ = false;
     std::vector<size_t> directories_;
     uint32_t nextBlock_ = 0, totalBlocks_ = 0, partitionEnd_ = 0;
     std::array<uint32_t, 4> tableBlocks_{};

@@ -4,6 +4,8 @@
 
 namespace hc::plugins
 {
+    QJsonObject EncodeSevenZipSettings(const SevenZipCreateSettings& Settings);
+    storage::Result<SevenZipCreateSettings> DecodeSevenZipSettings(const QJsonObject& Object);
     QJsonObject EncodeContextV2(const storage::OperationContext& Context);
     storage::Result<storage::OperationContext> DecodeContextV2(const QJsonObject& Object);
     QJsonObject EncodeArchiveHeader(const ArchiveHeader& Header);

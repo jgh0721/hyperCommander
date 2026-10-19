@@ -103,6 +103,7 @@ target_include_directories(hc_document_open PRIVATE
 target_link_libraries(hc_document_open PUBLIC hc_document_core hc_viewer_qt PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_compile_options(hc_document_open PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderBuiltInPlugin)
+add_subdirectory(UniqueLibs/archive)
 add_subdirectory(HyperCommanderUpdater)
 target_link_libraries(HyperEditor PRIVATE hc_update_core)
 # HyperCommanderBuiltInPlugin/HyperViewer validates this pinned package during configure.

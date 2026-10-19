@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "../storage/storage.hpp"
+#include "archiveCreation.hpp"
 
 namespace hc::plugins
 {
@@ -27,6 +28,7 @@ namespace hc::plugins
     {
         unsigned level_ = 5;
         bool solid_ = true;
+        std::optional<SevenZipCreateSettings> advanced_;
     };
     struct ArchiveUpdate
     {
@@ -45,6 +47,8 @@ namespace hc::plugins
         // Optional flags aligned with add_. True requires an explicit origin
         // and reuses its payload; no filesystem input is opened for that member.
         std::vector<bool> reuseData_;
+        // Dedicated NEW capability path; never relaxes mutation requirements.
+        bool createNew_ = false;
     };
     // Forward-only, bounded memory output. EOF is returned only after the SDK
     // has validated the selected member. Calls follow increasing listing ordinals.

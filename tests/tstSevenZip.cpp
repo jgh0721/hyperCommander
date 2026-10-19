@@ -31,6 +31,47 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void advancedCreation_data()
+    {
+        QTest::addColumn<QString>("Format"); QTest::addColumn<int>("Method"); QTest::addColumn<bool>("V2");
+        for (const auto Format : {QString("7z"), QString("zip")}) for (int Method = 1; Method <= 7; ++Method) {
+            if (Format == "zip" && Method == int(SevenZipMethod::Lzma2)) continue;
+            for (bool V2 : {false, true}) QTest::newRow(qPrintable(Format + '-' + QString::number(Method) + (V2 ? "-v2" : "-v1"))) << Format << Method << V2;
+        }
+    }
+    void advancedCreation()
+    {
+        QFETCH(QString, Format); QFETCH(int, Method); QFETCH(bool, V2);
+        QTemporaryDir Dir; const QByteArray Payload(256 * 1024, 'x'); QVERIFY(Put(Dir.filePath("input"), Payload));
+        SevenZipCreateSettings Settings; Settings.method_ = SevenZipMethod(Method); Settings.solid_ = ArchiveSolidMode::Off;
+        if (Method == int(SevenZipMethod::Lzma) || Method == int(SevenZipMethod::Lzma2)) { Settings.dictionaryBytes_ = 1u << 20; Settings.wordSize_ = 32; }
+        if (Method == int(SevenZipMethod::Ppmd)) { Settings.dictionaryBytes_ = 1u << 20; Settings.wordSize_ = 6; }
+        if (Method == int(SevenZipMethod::Bzip2)) Settings.dictionaryBytes_ = 100 * 1024;
+        if (Method == int(SevenZipMethod::Deflate) || Method == int(SevenZipMethod::Deflate64)) Settings.wordSize_ = 32;
+        Settings.threads_ = SevenZipThreadLimit(Format.toStdString(), Settings.method_) > 1 ? 2 : 1;
+        ArchiveUpdate Update{Dir.filePath("result." + Format).toStdString(), Dir.path().toStdString(), {"input"}};
+        Update.creation_ = ArchiveCreationOptions{5, false, Settings};
+        auto Decoded = DecodeArchiveUpdate(EncodeArchiveUpdate(Update)); QVERIFY(Decoded.HasValue()); QCOMPARE(*Decoded.Value().creation_->advanced_, Settings);
+        auto Options = BuiltinSevenZipOptions(); Options.limits_.enableSessionV2_ = V2;
+        auto Backend = MakeApprovedWcxBackend(Options); auto Written = Backend->Update(Update, {});
+        QVERIFY2(Written.HasValue(), Written.HasValue() ? "" : Written.Failure().code_.c_str());
+        auto List = Backend->Enumerate(Update.archive_, true, {}); QVERIFY(List.HasValue()); auto Page = List.Value()->Next(4, {}); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), 1u);
+        QVERIFY(Backend->Extract(Update.archive_, Page.Value().entries_.front(), Dir.filePath("out").toStdString(), {}).HasValue()); QCOMPARE(Read(Dir.filePath("out")), Payload);
+        QProcess Official; Official.start(QDir(root_).filePath("../sevenzip-tools/official/7z.exe"), {"l", "-slt", QString::fromStdString(Update.archive_)});
+        QVERIFY(Official.waitForFinished(15000)); QCOMPARE(Official.exitCode(), 0);
+        const QByteArray Names[]{"", "Copy", "LZMA", "LZMA2", "PPMd", "BZip2", "Deflate", "Deflate64"};
+        QVERIFY2(Official.readAllStandardOutput().toLower().contains(Names[Method].toLower()), Names[Method].constData());
+    }
+    void advancedWireRejectsUnknownOrLossyOptions()
+    {
+        SevenZipCreateSettings Settings; Settings.dictionaryBytes_ = (15ull << 28); Settings.threads_ = 512;
+        auto Encoded = EncodeSevenZipSettings(Settings); auto Decoded = DecodeSevenZipSettings(Encoded); QVERIFY(Decoded.HasValue()); QCOMPARE(Decoded.Value(), Settings);
+        Encoded["version"] = 2; QVERIFY(!DecodeSevenZipSettings(Encoded).HasValue());
+        Encoded = EncodeSevenZipSettings(Settings); Encoded["dictionary"] = double(1ull << 53); QVERIFY(!DecodeSevenZipSettings(Encoded).HasValue());
+        Settings.method_ = SevenZipMethod::Ppmd; Settings.threads_ = 2; QVERIFY(!ValidateSevenZipSettings("7z", Settings).HasValue());
+        Settings.method_ = SevenZipMethod::Lzma2; Settings.threads_ = 512; QVERIFY(ValidateSevenZipSettings("7z", Settings).HasValue());
+        QVERIFY(!ValidateSevenZipSettings("zip", Settings).HasValue());
+    }
     void streamingPasswordContext() {
         QTemporaryDir Input;QVERIFY(Put(Input.filePath("secret.bin"),"streamed secret"));const auto Archive=Input.filePath("encrypted.7z");
         auto Backend=MakeApprovedWcxBackend(BuiltinSevenZipOptions());ArchiveUpdate Create{Archive.toStdString(),Input.path().toStdString(),{"secret.bin"}};Create.encrypt_=true;

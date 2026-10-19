@@ -15,6 +15,8 @@
 #include <QJsonObject>
 #include <QScopeGuard>
 #include <thread>
+#include <QWidget>
+#include <QEventLoop>
 
 namespace
 {
@@ -39,8 +41,20 @@ namespace
                 { const auto Id = Privileges->Privileges[Index].Luid; if (Id.LowPart != Notify.LowPart || Id.HighPart != Notify.HighPart) PrivilegesRemoved = false; }
             }
         }
-        return {{"inJob", bool(InJob)}, {"adminDenied", !bool(AdminEnabled)}, {"privilegesRemoved", PrivilegesRemoved}, {"processId", qint64(GetCurrentProcessId())}};
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limits{};
+        const bool Known = QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits), nullptr);
+        return {{"inJob", bool(InJob)}, {"adminDenied", !bool(AdminEnabled)}, {"privilegesRemoved", PrivilegesRemoved}, {"processId", qint64(GetCurrentProcessId())},
+            {"jobLimitsKnown", Known}, {"jobLimitFlags", qint64(Limits.BasicLimitInformation.LimitFlags)}};
     }
+    class ConfigureNotify final : public QWidget {
+    public:
+        bool reinitialize_ = false;
+    protected:
+        bool nativeEvent(const QByteArray&, void* Message, qintptr*) override {
+            if (static_cast<MSG*>(Message)->message == WM_APP + 0xfff) reinitialize_ = true;
+            return false;
+        }
+    };
     struct LoadedPlugin
     {
         std::vector<WinHandle> locks_;
@@ -51,6 +65,9 @@ namespace
         std::vector<HMODULE> dependencies_;
         HMODULE module_ = nullptr;
         std::map<QString, std::shared_ptr<IReadStream>> streams_;
+        bool configuration_ = false;
+        DWORD parentProcess_ = 0;
+        PluginManifest manifest_;
         ~LoadedPlugin() { Close(); }
         void Close()
         {
@@ -61,10 +78,13 @@ namespace
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
         {
             const bool HasIni = Hello.contains("defaultIni");
-            if (Hello.size() != (HasIni ? 3 : 2) || !Hello["manifestPath"].isString() || !Hello["manifest"].isObject()
+            const bool Configuration = Hello.contains("configuration");
+            if ((Configuration && Hello["configuration"] != QJsonValue(true)) || Hello.size() != (HasIni ? 3 : 2) + Configuration || !Hello["manifestPath"].isString() || !Hello["manifest"].isObject()
                 || (HasIni && !Hello["defaultIni"].isString())) return HostError("host-hello-fields");
             const auto Path = Hello["manifestPath"].toString();
             auto Expected = ParseManifest(QJsonDocument(Hello["manifest"].toObject()).toJson()); if (!Expected.HasValue()) return Expected.Failure();
+            configuration_ = Configuration; parentProcess_ = ParentProcess; manifest_ = Expected.Value();
+            if (configuration_ && !manifest_.permissions_.contains(Permission::UserInterface)) return HostError("host-configuration-ui-not-approved");
             if (Expected.Value().architecture_ != Architecture::X64
                 || Expected.Value().execution_ != ExecutionMode::Isolated
                 || (Expected.Value().format_ == PluginFormat::Wcx && !Expected.Value().extensions_.contains(Extension::ArchiveRead))
@@ -96,6 +116,16 @@ namespace
             // Never search the writable package directory during loader lookup.
             // Repeated passes permit an unordered acyclic dependency declaration.
             auto Pending = Inspected.Value().dependencyPaths_;
+            if (Expected.Value().compatibility_ == "total7zip") {
+                const auto Companion = QDir(QFileInfo(Binary).absolutePath()).filePath("7z.dll");
+                for (qsizetype I = Pending.size(); I-- > 0;) if (Pending[I].compare(Companion, Qt::CaseInsensitive) == 0) {
+                    QFile File(Pending[I]); if (!File.open(QIODevice::ReadOnly)) return HostError("host-dependency-open"); const auto Header = File.read(1024 * 1024);
+                    const auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), size_t(Header.size())));
+                    // The original dual-architecture package also ships an x86
+                    // codec. Keep its reviewed file lease, but never load it.
+                    if (Arch.HasValue() && Arch.Value() == Architecture::X86) Pending.removeAt(I);
+                }
+            }
             // HyperViewer now owns its Qt workspace in this process. Load the
             // reviewed dependencies before loading the SDK DLL.
             while (!Pending.isEmpty())
@@ -171,7 +201,33 @@ namespace
                 if (!GetProcAddress(module_, Name)) return HostError("host-wcx-unicode-exports");
             const auto Caps = reinterpret_cast<int(__stdcall*)()>(GetProcAddress(module_, "GetPackerCaps"));
             // Deliberately invoke the plugin only in this job-owned process.
-            return QJsonObject{{"format", "wcx"}, {"unicode", true}, {"caps", Caps ? Caps() : 0}, {"processId", qint64(GetCurrentProcessId())}};
+            return QJsonObject{{"format", "wcx"}, {"unicode", true}, {"caps", Caps ? Caps() : 0}, {"configure", bool(GetProcAddress(module_, "ConfigurePacker"))}, {"processId", qint64(GetCurrentProcessId())}};
+        }
+        Result<QJsonObject> Configure(const QJsonObject& Request)
+        {
+            if (!configuration_ || !manifest_.permissions_.contains(Permission::UserInterface)) return HostError("host-configuration-session-required");
+            auto Value = WireUnsigned(Request["owner"]); if (Request.size() != 1 || !Value.HasValue()) return HostError("host-configuration-owner");
+            const auto Owner = reinterpret_cast<HWND>(std::uintptr_t(Value.Value())); DWORD Process = 0;
+            if (!IsWindow(Owner) || !GetWindowThreadProcessId(Owner, &Process) || Process != parentProcess_) return HostError("host-configuration-owner");
+            ConfigureNotify Notify; HWND Window = nullptr;
+            if (manifest_.format_ == PluginFormat::Wcx) {
+                const auto Call = reinterpret_cast<void(__stdcall*)(HWND, HINSTANCE)>(GetProcAddress(module_, "ConfigurePacker"));
+                if (!Call) return HostError("host-configuration-unavailable"); Call(Owner, module_);
+            } else if (manifest_.format_ == PluginFormat::DopusVfs && dopusVfs_ && dopusVfs_->CanConfigure()) {
+                const auto Call = reinterpret_cast<HWND(*)(HWND, HWND, DWORD)>(GetProcAddress(module_, "VFS_Configure"));
+                Window = Call(Owner, reinterpret_cast<HWND>(Notify.winId()), 1);
+            } else return HostError("host-configuration-unavailable");
+            if (Window && IsWindow(Window)) {
+                DWORD Process = 0; if (!GetWindowThreadProcessId(Window, &Process) || Process != GetCurrentProcessId()) return HostError("host-configuration-window");
+                ShowWindow(Window, SW_SHOWNORMAL); SetForegroundWindow(Window);
+                while (IsWindow(Window)) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    if (!IsWindow(Owner)) { PostMessageW(Window, WM_CLOSE, 0, 0); break; }
+                    MsgWaitForMultipleObjects(0, nullptr, FALSE, 20, QS_ALLINPUT);
+                }
+            }
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            return QJsonObject{{"configured", true}, {"reinitialize", Notify.reinitialize_}};
         }
         Result<QByteArray> Dispatch(WireKind Kind, const QJsonObject& Request, const QByteArray& Binary, OperationContext Context)
         {
@@ -281,14 +337,15 @@ int main(int Argc, char** Argv)
             if (!Policy["inJob"].toBool() || !Policy["adminDenied"].toBool() || !Policy["privilegesRemoved"].toBool()) return 9;
             auto Expected = ParseManifest(QJsonDocument(Request.object()["manifest"].toObject()).toJson());
             if (!Expected.HasValue()) return 8;
-            if (Expected.Value().format_ != PluginFormat::Wlx && Expected.Value().format_ != PluginFormat::DopusViewer)
+            if (!Request.object()["configuration"].toBool() && Expected.Value().format_ != PluginFormat::Wlx && Expected.Value().format_ != PluginFormat::DopusViewer)
                 Session = std::make_unique<HostSession>([&](WireKind Kind, const QJsonObject& Request, const QByteArray& Binary, OperationContext Context) { return Plugin.Dispatch(Kind, Request, Binary, Context); });
             auto Opened = Execute([&]() -> hc::storage::Result<QJsonObject> {
                 auto Value = Plugin.Open(Request.object(), ParentId); if (!Value.HasValue()) return Value.Failure(); return QJsonObject{};
             });
             if (Opened.HasValue()) {
                 Ready = true; auto Reply = Policy;
-                if (!Plugin.viewer_) {
+                Reply["archiveOptionsVersion"] = 1;
+                if (!Plugin.viewer_ && Session) {
                     Reply["sessionProtocol"] = 2; Reply["sessionEpoch"] = Session->Epoch();
                 }
                 Result = Reply;
@@ -299,6 +356,10 @@ int main(int Argc, char** Argv)
             if (Header.kind_ == WireKind::Ping) Result = Restrictions();
             else if (Header.kind_ == WireKind::Probe) Result = Execute([&] { return Plugin.Probe(); });
             else if (Header.kind_ == WireKind::Close) Result = QJsonObject{{"closed", true}};
+        }
+        else if (Ready && Header.kind_ == WireKind::PluginConfigure) {
+            auto Request = QJsonDocument::fromJson(Frame.Value().payload_); if (!Request.isObject()) return 8;
+            Result = Plugin.Configure(Request.object());
         }
         else if (Ready && Plugin.archives_ && IsArchiveCommand(Header.kind_))
         {

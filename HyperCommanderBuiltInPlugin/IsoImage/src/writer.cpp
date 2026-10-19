@@ -38,7 +38,8 @@ std::string PrimaryName(const std::string& Name, bool Directory, size_t Suffix)
     return Result;
 }
 }
-Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options) : options_(Options)
+Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& Options, uint32_t Flags) : options_(Options),
+    shareContents_((Flags & HC_ISO_SHARE_DUPLICATE_CONTENTS) != 0), explicitTimestamp_((Flags & HC_ISO_EXPLICIT_TIMESTAMP) != 0)
 {
     Require(Options.structSize_ == sizeof(HcIsoOptions) && Options.profile_ <= HC_ISO_UDF_NO_JOLIET, "Invalid ISO build options");
     label_ = Options.volumeLabel_ ? Options.volumeLabel_ : "HYPERCOMMANDER";
@@ -47,7 +48,8 @@ Writer::Writer(const HcIsoSource* Sources, uint64_t Count, const HcIsoOptions& O
     Require(options_.maxImageBytes_ <= 128ull * 1024 * 1024 * 1024, "Maximum supported image size is 128 GiB", HC_ISO_UNSUPPORTED);
     if (hasJoliet()) Require(label_.size() <= 16, "Joliet volume label exceeds 16 characters");
     if (hasUdf()) Require(label_.size() <= 30, "UDF volume label exceeds 30 characters");
-    inventory(Sources, Count); layout();
+    Bytes Check(12); Timestamp(Check, 0, options_.timestampUtc_, true, explicitTimestamp_);
+    inventory(Sources, Count); connectPayloads(); layout();
 }
 void Writer::inventory(const HcIsoSource* Sources, uint64_t Count)
 {
@@ -77,7 +79,8 @@ void Writer::inventory(const HcIsoSource* Sources, uint64_t Count)
             Item.source_ = DiskPath(Source.diskPath_);
             Require(fs::is_regular_file(fs::symlink_status(Item.source_)), "Source is not a regular file");
             Item.size_ = fs::file_size(Item.source_); Item.modified_ = fs::last_write_time(Item.source_);
-            Require(Item.size_ <= options_.maxImageBytes_ && payloadBytes_ <= options_.maxImageBytes_ - Item.size_, "Input exceeds image budget");
+            Require(Item.size_ <= options_.maxImageBytes_ && payloadBytes_ <= UINT64_MAX - Item.size_, "Input size overflow");
+            if (!shareContents_) Require(payloadBytes_ <= options_.maxImageBytes_ - Item.size_, "Input exceeds image budget");
             payloadBytes_ += Item.size_;
             Index = nodes_.size(); nodes_.push_back(std::move(Item)); nodes_[Parent].children_.push_back(Index); Paths.emplace(Path, Index);
         }
@@ -105,7 +108,7 @@ Bytes Writer::directory(size_t Index, bool Joliet)
 {
     const auto& Parent = nodes_[Index]; Bytes Data;
     auto Append = [&](Bytes Rec) {
-        Timestamp(Rec, 18, options_.timestampUtc_, false);
+        Timestamp(Rec, 18, options_.timestampUtc_, false, explicitTimestamp_);
         if (Data.size() % Block + Rec.size() > Block) Data.resize(size_t(Round(Data.size())));
         Data.insert(Data.end(), Rec.begin(), Rec.end());
     };
@@ -133,6 +136,54 @@ Bytes Writer::pathTable(bool Joliet, bool Big)
     }
     return Data;
 }
+void Writer::connectPayloads()
+{
+    std::map<uint64_t, size_t> Sizes;
+    for (const auto& Item : nodes_) if (!Item.directory_) ++Sizes[Item.size_];
+    std::map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> Candidates;
+    Bytes Buffer(1024 * 1024), Other(Buffer.size());
+    const auto Snapshot = [](const Node& Item) {
+        Require(fs::is_regular_file(fs::symlink_status(Item.source_)) && fs::file_size(Item.source_) == Item.size_
+            && fs::last_write_time(Item.source_) == Item.modified_, "Source changed during duplicate comparison");
+    };
+    uint64_t Compared = 0;
+    for (size_t Index = 0; Index < nodes_.size(); ++Index) {
+        auto& Item = nodes_[Index]; if (Item.directory_) continue;
+        Pulse(options_, Compared, payloadBytes_); Snapshot(Item);
+        uint64_t Fingerprint = 14695981039346656037ull;
+        const bool Compare = shareContents_ && Sizes[Item.size_] > 1;
+        if (Compare) {
+            std::ifstream Input(Item.source_, std::ios::binary); Require(bool(Input), "Cannot open duplicate candidate", HC_ISO_IO);
+            for (uint64_t Offset = 0; Offset < Item.size_;) {
+                const auto Count = size_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
+                Input.read(reinterpret_cast<char*>(Buffer.data()), std::streamsize(Count)); Require(size_t(Input.gcount()) == Count, "Short duplicate candidate read", HC_ISO_IO);
+                // A fingerprint only indexes candidates; sharing requires exact bytes.
+                for (size_t I = 0; I < Count; ++I) { Fingerprint ^= Buffer[I]; Fingerprint *= 1099511628211ull; }
+                Offset += Count; Compared += Count; Pulse(options_, Compared, payloadBytes_);
+            }
+            Snapshot(Item);
+            for (const auto Candidate : Candidates[{Item.size_, Fingerprint}]) {
+                const auto& Canonical = nodes_[payloads_[Candidate].sourceNode_]; Snapshot(Canonical);
+                std::ifstream Left(Item.source_, std::ios::binary), Right(Canonical.source_, std::ios::binary);
+                Require(bool(Left) && bool(Right), "Cannot open payload comparison", HC_ISO_IO);
+                bool Equal = true;
+                for (uint64_t Offset = 0; Offset < Item.size_;) {
+                    const auto Count = size_t(std::min<uint64_t>(Buffer.size(), Item.size_ - Offset));
+                    Left.read(reinterpret_cast<char*>(Buffer.data()), std::streamsize(Count)); Right.read(reinterpret_cast<char*>(Other.data()), std::streamsize(Count));
+                    Require(size_t(Left.gcount()) == Count && size_t(Right.gcount()) == Count, "Short payload comparison", HC_ISO_IO);
+                    Equal = std::equal(Buffer.begin(), Buffer.begin() + Count, Other.begin());
+                    Offset += Count; Pulse(options_, Compared, payloadBytes_); if (!Equal) break;
+                }
+                Snapshot(Item); Snapshot(Canonical);
+                if (Equal) { Item.payload_ = Candidate; break; }
+            }
+        }
+        if (Item.payload_ == SIZE_MAX) {
+            Item.payload_ = payloads_.size(); payloads_.push_back({Index});
+            if (Compare) Candidates[{Item.size_, Fingerprint}].push_back(Item.payload_);
+        }
+    }
+}
 void Writer::layout()
 {
     nextBlock_ = hasUdf() ? 259 + uint32_t(nodes_.size()) : 32;
@@ -145,7 +196,13 @@ void Writer::layout()
         if (hasJoliet()) { Item.jolietData_ = directory(Index, true); Item.jolietBlock_ = nextBlock_; nextBlock_ += uint32_t(Item.jolietData_.size() / Block); }
     }
     if (hasUdf()) udfLayout();
-    for (auto& Item : nodes_) if (!Item.directory_) { Item.dataBlock_ = nextBlock_; nextBlock_ += uint32_t(Round(Item.size_) / Block); }
+    uint64_t Physical = 0;
+    for (auto& Payload : payloads_) {
+        const auto& Item = nodes_[Payload.sourceNode_]; const auto Bytes = Round(Item.size_);
+        Require(Bytes <= options_.maxImageBytes_ && Physical <= options_.maxImageBytes_ - Bytes, "Unique payload exceeds image budget");
+        Physical += Bytes; Payload.dataBlock_ = nextBlock_; nextBlock_ += uint32_t(Bytes / Block);
+    }
+    for (auto& Item : nodes_) if (!Item.directory_) Item.dataBlock_ = payloads_[Item.payload_].dataBlock_;
     partitionEnd_ = nextBlock_ + 1; totalBlocks_ = partitionEnd_ + (hasUdf() ? 257 : 0);
     Require(uint64_t(totalBlocks_) * Block <= options_.maxImageBytes_, "Image exceeds output budget");
     uint64_t Metadata = 0;
@@ -165,7 +222,7 @@ Bytes Writer::volume(bool Joliet)
     Both(Data, 80, totalBlocks_, 4); Both(Data, 120, 1, 2); Both(Data, 124, 1, 2); Both(Data, 128, Block, 2);
     Both(Data, 132, uint32_t(pathTable(Joliet, false).size()), 4);
     Put(Data, 140, tableBlocks_[Joliet ? 2 : 0], 4); Put(Data, 148, tableBlocks_[Joliet ? 3 : 1], 4, true);
-    auto Root = Record(nodes_[0], Bytes{0}, Joliet); Timestamp(Root, 18, options_.timestampUtc_, false);
+    auto Root = Record(nodes_[0], Bytes{0}, Joliet); Timestamp(Root, 18, options_.timestampUtc_, false, explicitTimestamp_);
     std::copy(Root.begin(), Root.end(), Data.begin() + 156);
     Text(Data, 190, "", 128, ' '); Text(Data, 318, "", 128, ' '); Text(Data, 446, "", 128, ' '); Text(Data, 574, "HYPERCOMMANDER ISO C++", 128, ' ');
     Text(Data, 702, "", 111, ' ');
@@ -193,7 +250,8 @@ void Writer::Write(const fs::path& Path)
         for (const auto Index : directories_) { writeAt(Stream, nodes_[Index].isoBlock_, nodes_[Index].isoData_); if (hasJoliet()) writeAt(Stream, nodes_[Index].jolietBlock_, nodes_[Index].jolietData_); }
         if (hasUdf()) udfWrite(Stream);
         Bytes Buffer(1024 * 1024); uint64_t Done = 0;
-        for (const auto& Item : nodes_) if (!Item.directory_) {
+        for (const auto& Payload : payloads_) {
+            const auto& Item = nodes_[Payload.sourceNode_];
             Pulse(options_, Done, payloadBytes_ * 2);
             Require(fs::file_size(Item.source_) == Item.size_ && fs::last_write_time(Item.source_) == Item.modified_, "Source changed before writing");
             std::ifstream Input(Item.source_, std::ios::binary); Require(bool(Input), "Cannot open input file", HC_ISO_IO);

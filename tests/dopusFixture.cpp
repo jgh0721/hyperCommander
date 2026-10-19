@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <vector>
 #include <commctrl.h>
+#include <filesystem>
+#include <fstream>
 
 using namespace hc::plugins::dopus;
 #define API extern "C" __declspec(dllexport)
@@ -11,12 +13,49 @@ namespace
     HMODULE Module;
     bool Initialized = false;
     unsigned Instances = 0;
-    struct Instance { long error_ = 0; unsigned cursors_ = 0, files_ = 0; };
+    struct Instance { long error_ = 0; unsigned cursors_ = 0, files_ = 0; std::filesystem::path cache_; };
     struct File { HANDLE handle_; bool shortWrite_, failWrite_; unsigned writes_ = 0; };
     void Require(bool Value) { if (!Value) RaiseException(0xc0000005, 0, 0, nullptr); }
     bool Fail(const wchar_t* Path) { if (wcsstr(Path, L"hang")) Sleep(INFINITE); if (wcsstr(Path, L"crash")) RaiseException(0xc0000005, 0, 0, nullptr); return false; }
     Instance& State(HANDLE Handle) { Require(Initialized && Handle); return *static_cast<Instance*>(Handle); }
     BOOL Result(HANDLE Handle, BOOL Good) { State(Handle).error_ = Good ? 0 : GetLastError(); return Good; }
+    bool ArchivePath(const std::wstring& Path) { return Path.ends_with(L".hcvfs"); }
+    void StoreArchive(const std::filesystem::path& Target, const std::vector<std::filesystem::path>& Sources)
+    {
+        std::vector<std::pair<std::filesystem::path, std::wstring>> Entries;
+        for (const auto& Source : Sources) {
+            Entries.emplace_back(Source, Source.filename().wstring());
+            if (std::filesystem::is_directory(Source)) for (const auto& Child : std::filesystem::recursive_directory_iterator(Source))
+                Entries.emplace_back(Child.path(), (Source.filename() / std::filesystem::relative(Child.path(), Source)).wstring());
+        }
+        std::ranges::sort(Entries, {}, [](const auto& Item) { return Item.second; });
+        std::ofstream Out(Target, std::ios::binary | std::ios::trunc); const uint32_t Count = uint32_t(Entries.size()); Out.write(reinterpret_cast<const char*>(&Count), 4);
+        for (const auto& [Source, Name] : Entries) {
+            const uint32_t Length = uint32_t(Name.size()), Directory = std::filesystem::is_directory(Source); const uint64_t Size = Directory ? 0 : std::filesystem::file_size(Source);
+            Out.write(reinterpret_cast<const char*>(&Length), 4); Out.write(reinterpret_cast<const char*>(Name.data()), Length * sizeof(wchar_t));
+            Out.write(reinterpret_cast<const char*>(&Directory), 4); Out.write(reinterpret_cast<const char*>(&Size), 8);
+            if (!Directory && Size) { std::ifstream Input(Source, std::ios::binary); Out << Input.rdbuf(); }
+        }
+        Require(Out.good());
+    }
+    std::wstring Mapped(HANDLE Handle, const wchar_t* Path)
+    {
+        const std::wstring Value(Path); const auto End = Value.find(L".hcvfs"); if (End == std::wstring::npos) return Value;
+        const auto Root = Value.substr(0, End + 6); if (!std::filesystem::is_regular_file(Root)) return Value;
+        auto& Cache = State(Handle).cache_;
+        if (Cache.empty()) {
+            wchar_t Base[MAX_PATH]{}; Require(GetTempPathW(MAX_PATH, Base)); Cache = std::filesystem::path(Base) / (L"hc-dopus-fixture-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+            Require(std::filesystem::create_directory(Cache)); std::ifstream Input(Root, std::ios::binary); uint32_t Count = 0; Input.read(reinterpret_cast<char*>(&Count), 4); Require(Count < 1000);
+            for (uint32_t I = 0; I < Count; ++I) {
+                uint32_t Length = 0, Directory = 0; uint64_t Size = 0; Input.read(reinterpret_cast<char*>(&Length), 4); Require(Length && Length < 1024);
+                std::wstring Name(Length, 0); Input.read(reinterpret_cast<char*>(Name.data()), Length * sizeof(wchar_t)); Input.read(reinterpret_cast<char*>(&Directory), 4); Input.read(reinterpret_cast<char*>(&Size), 8); Require(Size < 16 * 1024 * 1024 && Name.find(L"..") == std::wstring::npos && Name.front() != L'\\');
+                const auto To = Cache / Name; std::filesystem::create_directories(Directory ? To : To.parent_path());
+                if (!Directory) { std::string Bytes(size_t(Size), 0); Input.read(Bytes.data(), std::streamsize(Size)); std::ofstream Output(To, std::ios::binary); Output.write(Bytes.data(), std::streamsize(Size)); Require(Output.good()); }
+                Require(Input.good());
+            }
+        }
+        auto Tail = Value.substr(End + 6); while (!Tail.empty() && Tail.front() == L'\\') Tail.erase(Tail.begin()); return (Cache / Tail).wstring();
+    }
 }
 BOOL WINAPI DllMain(HINSTANCE Instance, DWORD Reason, void*) { if (Reason == DLL_PROCESS_ATTACH) Module = Instance; return TRUE; }
 API BOOL VFS_Init(InitData* Init) { Require(Init->size_ == sizeof(*Init) && !Initialized); Initialized = true; return TRUE; }
@@ -99,18 +138,33 @@ API BOOL VFS_IdentifyW(VfsInfo<wchar_t>* Info)
     wcscpy_s(Info->name_, Info->nameCapacity_, L"HC DOpus fixture"); wcscpy_s(Info->extensions_, Info->extensionsCapacity_, L".hcvfs");
     Info->id_ = {0x11223344, 0x5566, 0x7788, {1,2,3,4,5,6,7,8}};
     wchar_t Path[1024]{}; GetModuleFileNameW(Module, Path, 1024);
+    Info->flags_ = wcsstr(Path, L"multi") ? 5 : 1;
     Info->capabilities_ = wcsstr(Path, L"readonly") ? VfsReadOnly : VfsRandomSeek | VfsMoveByRename; return TRUE;
 }
+API HWND VFS_Configure(HWND Owner, HWND Notify, DWORD Data)
+{
+    Require(IsWindow(Owner) && IsWindow(Notify) && Data == 1);
+    WNDCLASSW Class{}; Class.hInstance = Module; Class.lpszClassName = L"HC.Dopus.Configure";
+    Class.lpfnWndProc = [](HWND W, UINT M, WPARAM P, LPARAM L) -> LRESULT { if (M == WM_TIMER) { DestroyWindow(W); return 0; } return DefWindowProcW(W, M, P, L); };
+    RegisterClassW(&Class); const auto Window = CreateWindowExW(0, Class.lpszClassName, L"Fixture configuration", WS_OVERLAPPEDWINDOW, 0, 0, 200, 100, Owner, nullptr, Module, nullptr);
+    Require(Window); SetTimer(Window, 1, 650, nullptr); PostMessageW(Notify, WM_APP + 0xfff, Data, 0); return Window;
+}
 API HANDLE VFS_Create(GUID*, HWND) { Require(Initialized); ++Instances; return new Instance; }
+API BOOL VFS_QueryPathW(wchar_t* Extension, BOOL Prefix, GUID* Id) { if (Prefix || wcscmp(Extension, L".hcvfs")) return FALSE; *Id = {0x12345678, 0, 0, {}}; return TRUE; }
 API BOOL VFS_PropGetW(HANDLE Handle, int Property, void* Out, void*, void*, void*)
 {
     State(Handle); if (Property != VfsBatchProperty) return FALSE;
     wchar_t Path[1024]{}; GetModuleFileNameW(Module, Path, 1024);
-    *static_cast<DWORD*>(Out) = wcsstr(Path, L"batch") ? 2 : 0; return TRUE;
+    *static_cast<DWORD*>(Out) = wcsstr(Path, L"batch") || wcsstr(Path, L"archive") ? 2 : 0; return TRUE;
 }
 API UINT VFS_BatchOperationW(HANDLE Handle, void*, wchar_t* Path, VfsBatchData* Data)
 {
     State(Handle); Require(Data->size_ == sizeof(*Data) && Data->count_ > 0 && Data->abort_);
+    if (Data->operation_ == 1 && ArchivePath(Path)) {
+        std::vector<std::filesystem::path> Sources; const auto* Name = Data->files_;
+        for (int I = 0; I < Data->count_; ++I) { Sources.emplace_back(Name); Data->results_[I] = 0; Name += wcslen(Name) + 1; }
+        StoreArchive(Path, Sources); return 4;
+    }
     const auto* File = Data->files_;
     for (int Index = 0; Index < Data->count_; ++Index)
     {
@@ -120,14 +174,15 @@ API UINT VFS_BatchOperationW(HANDLE Handle, void*, wchar_t* Path, VfsBatchData* 
         if (wcsstr(File, L"batch-skip")) return 1;
         const auto* Slash = wcsrchr(File, L'\\'); const auto* Leaf = Slash ? Slash + 1 : File;
         const auto To = std::wstring(Data->operation_ == 1 ? Path : Data->destination_ ? Data->destination_ : L"") + L"\\" + Leaf;
-        const bool Good = Data->operation_ == 3 ? DeleteFileW(File) : CopyFileW(File, To.c_str(), FALSE);
+        const auto From = Mapped(Handle, File);
+        const bool Good = Data->operation_ == 3 ? DeleteFileW(File) : CopyFileW(From.c_str(), To.c_str(), FALSE);
         Data->results_[Index] = Good ? 0 : GetLastError();
         if (wcsstr(File, L"batch-each")) return 2 | 4096;
         File += wcslen(File) + 1;
     }
     return 4;
 }
-API void VFS_Destroy(HANDLE Handle) { auto& Value = State(Handle); Require(!Value.cursors_ && !Value.files_); delete &Value; --Instances; }
+API void VFS_Destroy(HANDLE Handle) { auto& Value = State(Handle); Require(!Value.cursors_ && !Value.files_); if (!Value.cache_.empty()) std::filesystem::remove_all(Value.cache_); delete &Value; --Instances; }
 API long VFS_GetLastError(HANDLE Handle) { return State(Handle).error_; }
 API VfsCustomColumn<wchar_t>* VFS_GetCustomColumnsW(HANDLE Handle)
 {
@@ -140,7 +195,7 @@ API VfsCustomColumn<wchar_t>* VFS_GetCustomColumnsW(HANDLE Handle)
 API int VFS_ReadDirectoryW(HANDLE Handle, void*, VfsReadDirectoryData* Data)
 {
     State(Handle); Require(Data && Data->size_ == sizeof(*Data) && Data->operation_ == 1 && Data->heap_); Fail(Data->path_);
-    std::wstring Path = Data->path_; if (!Path.ends_with(L'\\')) Path += L'\\'; Path += L'*';
+    std::wstring Path = Mapped(Handle, Data->path_); if (!Path.ends_with(L'\\')) Path += L'\\'; Path += L'*';
     WIN32_FIND_DATAW File{}; const auto Find = FindFirstFileW(Path.c_str(), &File);
     if (Find == INVALID_HANDLE_VALUE) return Result(Handle, FALSE);
     std::vector<WIN32_FIND_DATAW> Entries;
@@ -179,7 +234,7 @@ API BOOL VFS_FindNextFileW(HANDLE Handle, void*, HANDLE Find, WIN32_FIND_DATAW* 
 API void VFS_FindClose(HANDLE Handle, HANDLE Find) { Require(FindClose(Find)); --State(Handle).cursors_; }
 API HANDLE VFS_CreateFileW(HANDLE Handle, void*, wchar_t* Path, DWORD Mode, DWORD Attributes, DWORD Flags, FILETIME*)
 {
-    Fail(Path); const auto Native = CreateFileW(Path, Mode, FILE_SHARE_READ, nullptr, Flags & 0xf, Attributes, nullptr);
+    Fail(Path); const auto Local = Mapped(Handle, Path); const auto Native = CreateFileW(Local.c_str(), Mode, FILE_SHARE_READ, nullptr, Flags & 0xf, Attributes, nullptr);
     Result(Handle, Native != INVALID_HANDLE_VALUE); if (Native == INVALID_HANDLE_VALUE) return nullptr;
     ++State(Handle).files_; return new File{Native, bool(wcsstr(Path, L"short-write")), bool(wcsstr(Path, L"fail-write"))};
 }
@@ -193,7 +248,7 @@ API BOOL VFS_WriteFile(HANDLE Handle, void*, HANDLE FileHandle, void* Data, DWOR
     return Result(Handle, Good && (!Flush || FlushFileBuffers(Value.handle_)));
 }
 API void VFS_CloseFile(HANDLE Handle, void*, HANDLE FileHandle) { auto* Value = static_cast<File*>(FileHandle); Require(CloseHandle(Value->handle_)); delete Value; --State(Handle).files_; }
-API BOOL VFS_CreateDirectoryW(HANDLE Handle, void*, wchar_t* Path, DWORD) { return Result(Handle, CreateDirectoryW(Path, nullptr)); }
+API BOOL VFS_CreateDirectoryW(HANDLE Handle, void*, wchar_t* Path, DWORD) { if (ArchivePath(Path)) { StoreArchive(Path, {}); return TRUE; } return Result(Handle, CreateDirectoryW(Path, nullptr)); }
 API BOOL VFS_RemoveDirectoryW(HANDLE Handle, void*, wchar_t* Path, DWORD) { return Result(Handle, RemoveDirectoryW(Path)); }
 API BOOL VFS_DeleteFileW(HANDLE Handle, void*, wchar_t* Path, DWORD, int) { return Result(Handle, DeleteFileW(Path)); }
 API BOOL VFS_MoveFileW(HANDLE Handle, void*, wchar_t* From, wchar_t* To) { return Result(Handle, MoveFileW(From, To)); }

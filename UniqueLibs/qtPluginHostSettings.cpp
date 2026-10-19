@@ -1,5 +1,6 @@
 ﻿#include "qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
+#include "archive/creationSettings.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
 #include <QtWidgets>
 #include <QtConcurrent>
@@ -93,6 +94,10 @@ QPluginHostSettings::QPluginHostSettings(hc::plugins::PluginFormat Format, QWidg
     review_ = new QPushButton(tr("검사·실행 승인…"), this); review_->setObjectName(Prefix + "HostReview"); Buttons->addWidget(review_);
     auto* Revoke = new QPushButton(tr("승인 해제"), this); Revoke->setObjectName(Prefix + "HostRevoke"); Buttons->addWidget(Revoke); Buttons->addStretch();
     connect(review_, &QPushButton::clicked, this, [this] { review(); }); connect(Revoke, &QPushButton::clicked, this, [this] { revoke(); });
+    if (Format == PluginFormat::Wcx || Format == PluginFormat::DopusVfs) {
+        auto* Verify = new QPushButton(tr("압축 생성 지원 확인…"), this); Verify->setObjectName(Prefix + "HostVerifyCreation"); Buttons->insertWidget(2, Verify);
+        connect(Verify, &QPushButton::clicked, this, &QPluginHostSettings::verifyCreation);
+    }
     connect(table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* Item) { if (Item->column() == 2) updateState(Item->row()); });
     connect(table_, &QTableWidget::currentCellChanged, this, [this](int Current, int, int Previous, int) {
         if (Current != Previous && !loading_ && !review_->isEnabled()) {
@@ -116,6 +121,7 @@ void QPluginHostSettings::LoadPlugins(const QJsonObject& Plugins)
     {
         const auto Record = Items[Index].toObject(); Row Item{static_cast<int>(Index), Record["path"].toString(),
             Record["hostManifest"].toString(), hc::settings::JsonBytes(Record["hostReviewed"])};
+        Item.creation_ = Record["archiveCreation"].toObject();
         const auto At = table_->rowCount(); rows_.push_back(Item); table_->insertRow(At);
         auto* Path = new QTableWidgetItem(QFileInfo(Item.path_).fileName()); Path->setToolTip(Item.path_); table_->setItem(At, 0, Path);
         table_->setItem(At, 1, new QTableWidgetItem(format_ == hc::plugins::PluginFormat::Wlx ? Record["detect"].toString() : hc::settings::Strings(Record["extensions"]).join('|')));
@@ -141,6 +147,7 @@ void QPluginHostSettings::SavePlugins(QJsonObject& Plugins) const
         Record["path"] = Row.path_;
         Record["hostEnabled"] = table_->item(static_cast<int>(Index), 2)->checkState() == Qt::Checked;
         Record["hostManifest"] = Row.manifest_; Record["hostReviewed"] = hc::settings::JsonObject(Row.reviewed_);
+        if (!Row.creation_.isEmpty()) Record["archiveCreation"] = Row.creation_;
         Items.append(Record);
     }
     Plugins[group_] = Items;
@@ -160,6 +167,28 @@ void QPluginHostSettings::revoke()
     ++generation_; review_->setEnabled(true); review_->setText(tr("검사·실행 승인…")); rows_[Row].reviewed_.clear(); rows_[Row].verification_.clear();
     // Revoking trust must not silently switch execution into the application.
     table_->item(Row, 2)->setCheckState(Qt::Checked); updateState(Row);
+}
+void QPluginHostSettings::verifyCreation()
+{
+    const auto At = table_->currentRow(); if (At < 0) return;
+    const auto& Row = rows_[At];
+    if (Row.reviewed_.isEmpty() || table_->item(At, 2)->checkState() != Qt::Checked) {
+        QMessageBox::information(this, tr("압축 생성 지원 확인"), tr("먼저 플러그인을 검사하고 실행을 승인하십시오.")); return;
+    }
+    bool Accepted = false;
+    const auto Text = QInputDialog::getText(this, tr("압축 생성 지원 확인"),
+        tr("확인할 생성 형식의 확장자를 입력하십시오 (예: 7z, zip).\n임시 파일을 생성하고 다시 읽어 내용과 경로가 일치하는 형식만 등록합니다."), QLineEdit::Normal,
+        table_->item(At, 1)->text().replace('|', ", "), &Accepted);
+    if (!Accepted) return;
+    const auto Formats = Text.toLower().split(QRegularExpression("[,;|\\s]+"), Qt::SkipEmptyParts);
+    if (Formats.isEmpty() || Formats.size() > 32) return;
+    QJsonObject Record{{"path", Row.path_}, {"hostManifest", Row.manifest_}, {"hostReviewed", hc::settings::JsonObject(Row.reviewed_)}, {"hostEnabled", true}};
+    auto Creator = hc::archive::ExternalCreator(Record, format_, settingsDirectory_);
+    const auto Result = hc::archive::RunArchiveWorker(this, tr("압축 생성 지원 확인"), [Creator, Formats](hc::storage::OperationContext Context) { return hc::archive::VerifyCreationFormats(Creator, Formats, Context); });
+    if (!Result.HasValue()) { if (Result.Failure().category_ != hc::storage::ErrorCategory::Cancelled) QMessageBox::warning(this, tr("압축 생성 지원 확인"), QString::fromStdString(Result.Failure().code_)); return; }
+    rows_[At].creation_ = Result.Value(); updateState(At);
+    QStringList Verified; for (const auto& Format : Result.Value()["formats"].toArray()) Verified << Format.toString().toUpper();
+    QMessageBox::information(this, tr("압축 생성 지원 확인"), tr("생성 가능한 형식: %1").arg(Verified.join(", ")));
 }
 QString QPluginHostSettings::resolvedBinary(const QString& Path) const
 {
@@ -213,7 +242,7 @@ void QPluginHostSettings::review()
         const auto Checked = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_) return;
         const auto Reset = [this] { review_->setEnabled(true); review_->setText(tr("검사·재승인…")); };
         if (!Checked.HasValue()) { Reset(); QMessageBox::warning(this, tr("플러그인 검사 실패"), tr("플러그인 파일을 검사하지 못했습니다. 파일과 함께 설치한 DLL을 확인하세요.\n%1").arg(QString::fromStdString(Checked.Failure().code_))); return; }
-        const auto Plugin = Checked.Value(); const auto& Manifest = Plugin.manifest_;
+        auto Plugin = Checked.Value(); const auto& Manifest = Plugin.manifest_;
         PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
         HostProfile Profile; Profile.formats_ = {format_}; Profile.supportsIsolation_ = true; Profile.extensions_ = Manifest.extensions_;
         const auto Admitted = Admit(Manifest, Approval, Profile);
@@ -242,7 +271,13 @@ void QPluginHostSettings::review()
         Prompt.button(QMessageBox::Yes)->setText(tr("승인(&A)")); Prompt.button(QMessageBox::No)->setText(tr("취소"));
         Prompt.setObjectName("hc.plugin.reviewApproval"); Prompt.setTextFormat(Qt::PlainText); Prompt.setDefaultButton(QMessageBox::No);
         Prompt.setDetailedText(QString::fromUtf8(EncodeManifest(Manifest)));
+        QCheckBox* AllowSettings = nullptr;
+        if (format_ == PluginFormat::Wcx && !Manifest.permissions_.contains(Permission::UserInterface)) {
+            AllowSettings = new QCheckBox(tr("플러그인 설정 창 표시 권한도 승인"), &Prompt);
+            AllowSettings->setObjectName("hc.plugin.allowSettingsUi"); AllowSettings->setChecked(false); Prompt.setCheckBox(AllowSettings);
+        }
         if (Prompt.exec() != QMessageBox::Yes || Generation != generation_) { Reset(); return; }
+        if (AllowSettings && AllowSettings->isChecked()) Plugin.manifest_.permissions_.insert(Permission::UserInterface);
         auto* Save = new QFutureWatcher<Result<QString>>(this);
         connect(Save, &QFutureWatcher<Result<QString>>::finished, this, [this, Save, Plugin, At, Generation, Reset] {
             const auto Saved = Save->result(); Save->deleteLater(); if (Generation != generation_) return; Reset();

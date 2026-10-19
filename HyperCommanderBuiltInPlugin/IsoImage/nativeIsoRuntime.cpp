@@ -69,6 +69,7 @@ Result<std::shared_ptr<Runtime>> LoadRuntime(const OperationContext& Context)
     HC_ISO_RESOLVE(child_, hcIsoGetChild);
     HC_ISO_RESOLVE(read_, hcIsoRead);
     HC_ISO_RESOLVE(build_, hcIsoBuild);
+    Value->buildEx_ = reinterpret_cast<decltype(Value->buildEx_)>(GetProcAddress(Value->module_, "hcIsoBuildEx"));
 #undef HC_ISO_RESOLVE
     Cached = Value;
     return Value;

@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include "manifestFile.hpp"
+#include "commonLibs/plugins/archiveCreation.hpp"
 
 using namespace hc::plugins;
 using namespace hc::storage;
@@ -31,6 +32,107 @@ class PluginManifestTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void archiveCreationSeparatesReadFormats()
+    {
+        auto Plugin = Manifest(); Plugin.format_ = PluginFormat::SevenZip;
+        Plugin.extensions_.insert(Extension::ArchiveWrite); Plugin.permissions_.insert(Permission::WriteContent);
+        ArchiveCreatorDescriptor Creator{"builtin.7zip", "7-Zip", ArchiveCreatorKind::BuiltinSevenZip,
+            {Plugin.sha256_, Plugin}, ArchiveConfigurationKind::BuiltinDialog,
+            {{"7z", "7z", ArchiveSettingsKind::SevenZip, ArchiveCreationEvidence::BuiltinAdapter},
+             {"zip", "zip", ArchiveSettingsKind::SevenZip, ArchiveCreationEvidence::BuiltinAdapter}}};
+        QVERIFY(ValidateArchiveCreator(Creator).HasValue());
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Creator.identity_, "7z").HasValue());
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Creator.identity_, "zip").HasValue());
+        // A readable format and a declared write extension do not prove creation.
+        QCOMPARE(ValidateArchiveCreateSelection(Creator, Creator.identity_, "rar").Failure().category_, ErrorCategory::Unsupported);
+        Creator.formats_.push_back({"rar", "rar", ArchiveSettingsKind::SevenZip, ArchiveCreationEvidence::BuiltinAdapter});
+        QCOMPARE(ValidateArchiveCreator(Creator).Failure().code_, std::string("archive-create-format-unsupported"));
+    }
+    void archiveCreationRequiresFormatEvidence()
+    {
+        auto Plugin = Manifest(); Plugin.extensions_.insert(Extension::ArchiveWrite);
+        Plugin.permissions_.insert(Permission::WriteContent);
+        ArchiveCreatorDescriptor Creator{"test.wcx", "WCX", ArchiveCreatorKind::Wcx,
+            {Plugin.sha256_, Plugin}, ArchiveConfigurationKind::None, {}};
+        QVERIFY(ValidateArchiveCreator(Creator).HasValue());
+        QVERIFY(!ValidateArchiveCreateSelection(Creator, Creator.identity_, "zip").HasValue());
+        Creator.formats_.push_back({"zip", "zip"});
+        QCOMPARE(ValidateArchiveCreator(Creator).Failure().code_, std::string("archive-create-format-unverified"));
+        Creator.formats_.front().evidence_ = ArchiveCreationEvidence::VerifiedPackage;
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Creator.identity_, "zip").HasValue());
+        Creator.formats_.front().settings_ = ArchiveSettingsKind::SevenZip;
+        QCOMPARE(ValidateArchiveCreator(Creator).Failure().code_, std::string("archive-create-settings-kind-mismatch"));
+        Creator.formats_.front().settings_ = ArchiveSettingsKind::External;
+        Creator.formats_.front().optionsVersion_ = 1;
+        QVERIFY(!ValidateArchiveCreator(Creator).HasValue());
+    }
+    void archiveCreationBindsWholePackageIdentity()
+    {
+        auto Plugin = Manifest(); Plugin.extensions_.insert(Extension::ArchiveWrite);
+        Plugin.permissions_.insert(Permission::WriteContent);
+        Plugin.dependencies_["codec.dll"] = std::string(64, 'b');
+        ArchiveCreatorDescriptor Creator{"test.wcx", "WCX", ArchiveCreatorKind::Wcx,
+            {Plugin.sha256_, Plugin}, ArchiveConfigurationKind::None,
+            {{"zip", "zip", ArchiveSettingsKind::External, ArchiveCreationEvidence::VerifiedPackage}}};
+        const auto Original = Creator.identity_;
+        auto Changed = Original; Changed.plugin_->dependencies_["codec.dll"] = std::string(64, 'c');
+        QCOMPARE(ValidateArchiveCreateSelection(Creator, Changed, "zip").Failure().category_, ErrorCategory::StaleRevision);
+        Changed = Original; Changed.plugin_->permissions_.insert(Permission::UserInterface);
+        QVERIFY(!ValidateArchiveCreateSelection(Creator, Changed, "zip").HasValue());
+        Changed = Original; Changed.plugin_->helpers_["helper.exe"] = std::string(64, 'd');
+        QVERIFY(!ValidateArchiveCreateSelection(Creator, Changed, "zip").HasValue());
+        Changed = Original; Changed.engineSha256_ = std::string(64, 'e');
+        QVERIFY(!ValidateArchiveCreateSelection(Creator, Changed, "zip").HasValue());
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Original, "zip").HasValue());
+    }
+    void archiveCreationDopusUsesStorageDeclaration()
+    {
+        auto Plugin = Manifest(); Plugin.format_ = PluginFormat::DopusVfs;
+        Plugin.extensions_ = {Extension::StorageRead, Extension::StorageWrite};
+        Plugin.permissions_.insert(Permission::WriteContent);
+        ArchiveCreatorDescriptor Creator{"test.dopus", "DOpus", ArchiveCreatorKind::DopusVfs,
+            {Plugin.sha256_, Plugin}, ArchiveConfigurationKind::None, {}};
+        // Generic ADD/storage-write support is insufficient for new archives.
+        QVERIFY(!ValidateArchiveCreateSelection(Creator, Creator.identity_, "zip").HasValue());
+        Creator.formats_.push_back({"zip", "zip", ArchiveSettingsKind::External, ArchiveCreationEvidence::VerifiedPackage});
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Creator.identity_, "zip").HasValue());
+        Creator.configuration_ = ArchiveConfigurationKind::PluginDialog;
+        QCOMPARE(ValidateArchiveCreator(Creator).Failure().code_, std::string("archive-creator-ui-not-declared"));
+        Creator.identity_.plugin_->permissions_.insert(Permission::UserInterface);
+        QVERIFY(ValidateArchiveCreator(Creator).HasValue());
+    }
+    void archiveCreationIsoAndSnapshotContract()
+    {
+        ArchiveCreatorDescriptor Creator{"builtin.iso", "ISO", ArchiveCreatorKind::BuiltinIso,
+            {std::string(64, 'a'), {}}, ArchiveConfigurationKind::BuiltinDialog,
+            {{"iso", "iso", ArchiveSettingsKind::Iso, ArchiveCreationEvidence::BuiltinAdapter}}};
+        QVERIFY(ValidateArchiveCreateSelection(Creator, Creator.identity_, "iso").HasValue());
+        ArchiveCreateRequest Request; Request.creator_ = Creator; Request.format_ = "iso";
+        Request.schedule_ = ArchiveCreateSchedule::Queued;
+        IsoCreateSettings Settings; Settings.shareDuplicateContents_ = true; Request.settings_ = Settings;
+        const auto Accepted = Request;
+        std::get<IsoCreateSettings>(Request.settings_).volumeLabel_ = "CHANGED";
+        Request.creator_.identity_.engineSha256_ = std::string(64, 'b');
+        QCOMPARE(std::get<IsoCreateSettings>(Accepted.settings_).volumeLabel_, std::string("HYPERCOMMANDER"));
+        QVERIFY(std::get<IsoCreateSettings>(Accepted.settings_).shareDuplicateContents_);
+        QCOMPARE(Accepted.creator_.identity_, Creator.identity_);
+        // Invalid dormant root-omission state never affects combined/flat output.
+        ArchiveCompositionOptions Composition; Composition.omitSelectedFolderRoot_ = true;
+        QVERIFY(!Composition.OmitSelectedFolderRoot()); Composition.separateArchives_ = true;
+        QVERIFY(Composition.OmitSelectedFolderRoot()); Composition.preservePaths_ = false;
+        QVERIFY(!Composition.OmitSelectedFolderRoot());
+    }
+    void archiveCreationRejectsMalformedCatalog()
+    {
+        ArchiveCreatorDescriptor Creator{"builtin.iso", "ISO", ArchiveCreatorKind::BuiltinIso,
+            {std::string(64, 'a'), {}}, ArchiveConfigurationKind::BuiltinDialog,
+            {{"iso", "iso", ArchiveSettingsKind::Iso, ArchiveCreationEvidence::BuiltinAdapter}}};
+        Creator.formats_.push_back(Creator.formats_.front()); QVERIFY(!ValidateArchiveCreator(Creator).HasValue());
+        Creator.formats_.pop_back(); Creator.formats_.front().extension_ = "../iso";
+        QVERIFY(!ValidateArchiveCreator(Creator).HasValue());
+        Creator.formats_.front().extension_ = "iso"; Creator.identity_.engineSha256_ = "unbound";
+        QVERIFY(!ValidateArchiveCreator(Creator).HasValue());
+    }
     void total7zipGeneratedPermissions()
     {
         QTemporaryDir Package; const auto Binary = Package.filePath("Total7zip.wcx64"); QVERIFY(Put(Binary, Pe()));
@@ -40,7 +142,8 @@ private slots:
         QVERIFY(!InspectPluginBinary(Binary, PluginFormat::Wcx).HasValue());
         QVERIFY(QDir().mkpath(Package.filePath("64"))); auto Exe = Pe(); Exe[87] = '\0';
         QVERIFY(Put(Package.filePath("64/7z.dll"), Pe())); QVERIFY(Put(Package.filePath("64/7zG.exe"), Exe));
-        const auto Write = InspectPluginBinary(Binary, PluginFormat::Wcx); QVERIFY(Write.HasValue());
+          QVERIFY(Put(Package.filePath("7z.dll"), Pe(0x14c, 0x10b)));
+          const auto Write = InspectPluginBinary(Binary, PluginFormat::Wcx); QVERIFY(Write.HasValue());
         QVERIFY(ArchiveWritePolicy(Write.Value().manifest_).HasValue()); QVERIFY(Write.Value().manifest_.permissions_.contains(Permission::ChildProcess));
     }
     void generatedFormats_data()

@@ -78,10 +78,19 @@ std::uint32_t Crc(const std::string& Bytes)
     return Value ^ 0xffffffff;
 }
 std::wstring Normalize(std::wstring Name) { std::replace(Name.begin(), Name.end(), L'\\', L'/'); if (!Name.empty() && Name.back() == L'/') Name.pop_back(); return Name; }
+bool CommitLargeDictionary()
+{
+    constexpr SIZE_T Size = 600ULL * 1024 * 1024;
+    auto* Bytes = static_cast<volatile unsigned char*>(VirtualAlloc(nullptr, Size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    if (!Bytes) return false;
+    Bytes[0] = 1; Bytes[Size - 1] = 2; const bool Good = Bytes[0] == 1 && Bytes[Size - 1] == 2;
+    VirtualFree(const_cast<unsigned char*>(Bytes), 0, MEM_RELEASE); return Good;
+}
 extern "C" __declspec(dllexport) HANDLE __stdcall OpenArchiveW(tOpenArchiveDataW* Open)
 {
     auto State = new ArchiveState;
     if (!Load(Open->ArcName, *State)) { delete State; Open->OpenResult = E_UNKNOWN_FORMAT; return nullptr; }
+    if (State->mode_ == 'M' && !CommitLargeDictionary()) { delete State; Open->OpenResult = E_NO_MEMORY; return nullptr; }
     if (State->mode_ == 'U') { Open->OpenResult = CheckPassword(Open->ArcName); if (Open->OpenResult) { delete State; return nullptr; } }
     return State;
 }
@@ -142,6 +151,7 @@ extern "C" __declspec(dllexport) int __stdcall PackFilesW(wchar_t* Archive, wcha
 {
     ArchiveState State;
     if (GetFileAttributesW(Archive) != INVALID_FILE_ATTRIBUTES && !Load(Archive, State)) return E_UNKNOWN_FORMAT;
+    if (State.mode_ == 'M' && !CommitLargeDictionary()) return E_NO_MEMORY;
     if (State.mode_ == 'R' || (State.mode_ == 'Q' && !(Flags & PK_PACK_ENCRYPT))) State.mode_ = 0;
     for (auto Name = List; *Name; Name += wcslen(Name) + 1) {
         if (PackingProgress && !PackingProgress(nullptr, 0)) return E_EABORTED;
@@ -183,4 +193,11 @@ extern "C" __declspec(dllexport) int __stdcall DeleteFilesW(wchar_t* Archive, wc
     for (auto Name = List; *Name; Name += wcslen(Name) + 1) { const auto Path = Normalize(Name); std::erase_if(State.entries_, [&](const Entry& Old) { return Old.name_ == Path; }); }
     if (!Save(Archive, State)) return E_EWRITE;
     return State.mode_ == 'X' ? E_EWRITE : 0;
+}
+extern "C" __declspec(dllexport) void __stdcall ConfigurePacker(HWND Owner, HINSTANCE)
+{
+    if (!IsWindow(Owner)) RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+    // A modal configuration can outlive the ordinary RPC timeout.
+    const auto Until = GetTickCount64() + 650;
+    while (GetTickCount64() < Until) { MSG Message; while (PeekMessageW(&Message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&Message); DispatchMessageW(&Message); } Sleep(10); }
 }

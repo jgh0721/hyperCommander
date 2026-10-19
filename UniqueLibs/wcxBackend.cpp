@@ -279,8 +279,12 @@ namespace hc::plugins
                 if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_) return Invalid("invalid-archive-update");
                 auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_); auto Loaded = Plugin->Load(path_, background_); if (!Loaded.HasValue()) return Loaded;
                 if (Plugin->missingEncryptionMetadata_) return Error{ErrorCategory::Unsupported, "wcx-encryption-metadata-upgrade-required", {"wcx"}};
-                if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE)
-                    || (background_ && !(Plugin->background_ & BACKGROUND_PACK))) return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required", {"wcx"}};
+                if (Request.createNew_) {
+                    if (Request.creation_ || QFileInfo::exists(QString::fromStdString(Request.archive_)) || !Request.remove_.empty() || Request.add_.empty()) return Invalid("wcx-invalid-create");
+                    if (!Plugin->pack_ || !(Plugin->caps_ & PK_CAPS_NEW) || (Request.add_.size() > 1 && !(Plugin->caps_ & PK_CAPS_MULTIPLE))) return Error{ErrorCategory::Unsupported, "wcx-new-archive-unsupported", {"wcx"}};
+                } else if (!Plugin->pack_ || !Plugin->remove_ || (Plugin->caps_ & (PK_CAPS_MODIFY | PK_CAPS_DELETE)) != (PK_CAPS_MODIFY | PK_CAPS_DELETE))
+                    return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required", {"wcx"}};
+                if (background_ && !(Plugin->background_ & BACKGROUND_PACK)) return Error{ErrorCategory::Unsupported, "wcx-background-mutation-required", {"wcx"}};
                 if (Request.encrypt_ && !Request.add_.empty() && !(Plugin->caps_ & PK_CAPS_ENCRYPT))
                     return Error{ErrorCategory::Unsupported, "wcx-encrypted-write-unsupported", {"wcx"}};
                 const auto Multi = [](const std::vector<std::string>& Names) -> Result<std::wstring> {

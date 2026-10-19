@@ -151,7 +151,8 @@ namespace hc::plugins
         const auto Header = File.read(1024 * 1024);
         auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), Header.size()), Executable);
         if (!Arch.HasValue()) return Arch.Failure();
-        if (Arch.Value() != Parsed.Value().architecture_) return Invalid("plugin-binary-architecture-mismatch");
+        const bool Companion = Manifest.compatibility_ == "total7zip" && Relative == "7z.dll" && !Executable && Arch.Value() == Architecture::X86;
+        if (Arch.Value() != Parsed.Value().architecture_ && !Companion) return Invalid("plugin-binary-architecture-mismatch");
         if (!File.seek(0)) return Error{ErrorCategory::Unavailable, "plugin-binary-read", {"plugin"}};
         QCryptographicHash Hash(QCryptographicHash::Sha256); qint64 Bytes = 0;
         while (!File.atEnd())
@@ -229,7 +230,7 @@ namespace hc::plugins
             Manifest.format_ = Format; Manifest.permissions_ = {Permission::ReadContent};
             switch (Format) {
             case PluginFormat::Wlx: case PluginFormat::DopusViewer: Manifest.extensions_ = {Extension::Viewer}; Manifest.permissions_.insert(Permission::UserInterface); break;
-            case PluginFormat::Wcx: Manifest.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite}; Manifest.permissions_.insert(Permission::WriteContent); break;
+            case PluginFormat::Wcx: Manifest.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite}; Manifest.permissions_.insert(Permission::WriteContent); Manifest.permissions_.insert(Permission::UserInterface); break;
             case PluginFormat::Wfx: case PluginFormat::DopusVfs: Manifest.extensions_ = {Extension::StorageRead, Extension::StorageWrite}; Manifest.permissions_.insert(Permission::WriteContent); Manifest.permissions_.insert(Permission::UserInterface); break;
             case PluginFormat::Wdx: Manifest.extensions_ = {Extension::Metadata}; break;
             default: return Invalid("plugin-format");
@@ -247,7 +248,7 @@ namespace hc::plugins
         // An update may remove a formerly adjacent dependency. Pin the files
         // that are actually in the new package rather than an obsolete list.
         std::erase_if(Manifest.dependencies_, [&](const auto& Item) { return !QFileInfo::exists(QDir(Root).filePath(QString::fromStdString(Item.first))); });
-        const auto HashFile = [&](const QString& At, bool Executable = false) -> Result<std::string> {
+        const auto HashFile = [&](const QString& At, bool Executable = false, bool Companion = false) -> Result<std::string> {
             if (const auto Stop = Context.Check({"plugin"})) return *Stop;
             const auto Canonical = QFileInfo(At).canonicalFilePath();
             if (!Canonical.startsWith(Root.endsWith('/') ? Root : Root + '/', Qt::CaseInsensitive)) return Invalid("plugin-binary-outside-root");
@@ -256,7 +257,7 @@ namespace hc::plugins
             const auto Header = File.peek(1024 * 1024);
             auto Arch = InspectPe(std::span(reinterpret_cast<const std::byte*>(Header.constData()), Header.size()), Executable);
             if (!Arch.HasValue()) return Arch.Failure();
-            if (Arch.Value() != Architecture::X64) return Invalid("plugin-binary-architecture-mismatch");
+            if (Arch.Value() != Architecture::X64 && !(Companion && Arch.Value() == Architecture::X86)) return Invalid("plugin-binary-architecture-mismatch");
             QCryptographicHash Hash(QCryptographicHash::Sha256);
             while (!File.atEnd()) {
                 if (const auto Stop = Context.Check({"plugin"})) return *Stop;
@@ -278,7 +279,7 @@ namespace hc::plugins
         AddDlls(QFileInfo(Path).absolutePath());
         for (const auto& [Name, Hash] : Manifest.helpers_) AddDlls(QFileInfo(QDir(Root).filePath(QString::fromStdString(Name))).absolutePath());
         if (Manifest.dependencies_.size() > 64) return Invalid("plugin-dependency-budget");
-        for (auto& [Name, Hash] : Manifest.dependencies_) { auto Fresh = HashFile(QDir(Root).filePath(QString::fromStdString(Name))); if (!Fresh.HasValue()) return Fresh.Failure(); Hash = Fresh.Value(); }
+        for (auto& [Name, Hash] : Manifest.dependencies_) { auto Fresh = HashFile(QDir(Root).filePath(QString::fromStdString(Name)), false, Manifest.compatibility_ == "total7zip" && Name == "7z.dll"); if (!Fresh.HasValue()) return Fresh.Failure(); Hash = Fresh.Value(); }
         for (auto& [Name, Hash] : Manifest.helpers_) { auto Fresh = HashFile(QDir(Root).filePath(QString::fromStdString(Name)), true); if (!Fresh.HasValue()) return Fresh.Failure(); Hash = Fresh.Value(); }
         return InspectDeclared(Manifest, Root, Context);
     }

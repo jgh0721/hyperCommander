@@ -127,10 +127,10 @@ void CheckTag(std::span<const uint8_t> Data, uint32_t Location, uint16_t Id)
     Require(Length >= Minimum, "UDF CRC does not cover required descriptor fields");
     Require(Crc16(Data.subspan(16, size_t(Length))) == Get(Data, 8, 2), "Invalid UDF descriptor CRC");
 }
-void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf)
+void Timestamp(Bytes& Data, size_t Offset, int64_t Epoch, bool Udf, bool Explicit)
 {
     using namespace std::chrono;
-    const sys_seconds Time{seconds(Epoch ? Epoch : 946684800)};
+    const sys_seconds Time{seconds(Epoch || Explicit ? Epoch : 946684800)};
     const auto Day = floor<days>(Time); const year_month_day Date{Day}; const hh_mm_ss Clock{Time - Day};
     const int Year = int(Date.year()); Require(Date.ok() && Year >= 1900 && Year <= 2155, "Timestamp out of range");
     if (Udf) { Put(Data, Offset, 0x1000, 2); Put(Data, Offset + 2, Year, 2); Offset += 4; }

@@ -3,6 +3,7 @@
 #include <QTemporaryDir>
 #include "hcIso/isoImage.h"
 #include <memory>
+#include <QtEndian>
 
 namespace {
 struct Close { void operator()(HcIsoImage* Image) const { hcIsoClose(Image); } };
@@ -14,6 +15,69 @@ HcIsoOptions Options(uint32_t Profile = HC_ISO_UDF_BRIDGE) { return {sizeof(HcIs
 class IsoEngineTests : public QObject {
     Q_OBJECT
 private slots:
+    void sharedContents_data()
+    {
+        QTest::addColumn<int>("Profile"); for (int Profile = 0; Profile < 4; ++Profile) QTest::newRow(qPrintable(QString::number(Profile))) << Profile;
+    }
+    void sharedContents()
+    {
+        QFETCH(int, Profile); QTemporaryDir Directory;
+        QByteArray Payload(256 * 1024 + 19, 'a'), Different = Payload; Different.back() = 'b';
+        const auto A = Directory.filePath("a").toUtf8(), B = Directory.filePath("b").toUtf8(), C = Directory.filePath("c").toUtf8(), Zero = Directory.filePath("zero").toUtf8();
+        QVERIFY(Put(QString::fromUtf8(A), Payload)); QVERIFY(Put(QString::fromUtf8(B), Payload)); QVERIFY(Put(QString::fromUtf8(C), Different)); QVERIFY(Put(QString::fromUtf8(Zero), {}));
+        const HcIsoSource Sources[]{{A.constData(), "A.BIN", 0}, {B.constData(), "B.BIN", 0}, {C.constData(), "C.BIN", 0}, {Zero.constData(), "ZERO", 0}, {nullptr, "EMPTY", 1}};
+        auto Base = Options(uint32_t(Profile)); const HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Base, HC_ISO_SHARE_DUPLICATE_CONTENTS};
+        const auto Plain = Directory.filePath("plain.iso").toUtf8(), Shared = Directory.filePath("shared.iso").toUtf8();
+        QCOMPARE(hcIsoBuild(Plain.constData(), Sources, std::size(Sources), &Base), HC_ISO_OK);
+        QCOMPARE(hcIsoBuildEx(Shared.constData(), Sources, std::size(Sources), &Extended), HC_ISO_OK);
+        QVERIFY(QFileInfo(QString::fromUtf8(Shared)).size() < QFileInfo(QString::fromUtf8(Plain)).size());
+        const auto Extents = [](const QByteArray& Data) {
+            std::map<QByteArray, quint32> Values;
+            const auto Root = qFromLittleEndian<quint32>(Data.constData() + 16 * 2048 + 158);
+            const auto Length = qFromLittleEndian<quint32>(Data.constData() + 16 * 2048 + 166);
+            for (qsizetype At = Root * 2048, End = At + Length; At < End;) {
+                const auto Size = quint8(Data[At]); if (!Size) { At = (At / 2048 + 1) * 2048; continue; }
+                const auto Name = Data.mid(At + 33, quint8(Data[At + 32]));
+                Values[Name] = qFromLittleEndian<quint32>(Data.constData() + At + 2); At += Size;
+            }
+            return Values;
+        };
+        const auto Before = Extents(Read(QString::fromUtf8(Plain))), After = Extents(Read(QString::fromUtf8(Shared)));
+        QVERIFY(Before.at("A.BIN;1") != Before.at("B.BIN;1")); QCOMPARE(After.at("A.BIN;1"), After.at("B.BIN;1"));
+        QVERIFY(After.at("A.BIN;1") != After.at("C.BIN;1"));
+        for (uint32_t Namespace = HC_ISO_PRIMARY; Namespace <= HC_ISO_UDF; ++Namespace) {
+            if ((Namespace == HC_ISO_JOLIET && Profile != 1 && Profile != 2) || (Namespace == HC_ISO_UDF && Profile < 2)) continue;
+            HcIsoImage* Raw = nullptr; QCOMPARE(hcIsoOpen(Shared.constData(), Namespace, &Raw), HC_ISO_OK); ImagePtr Image(Raw);
+            HcIsoInfo Info{sizeof(Info)}; QCOMPARE(hcIsoGetInfo(Raw, &Info), HC_ISO_OK); QCOMPARE(Info.entryCount_, 5ull);
+            for (uint64_t I = 0; I < Info.entryCount_; ++I) {
+                HcIsoEntry Entry{sizeof(Entry)}; QCOMPARE(hcIsoGetEntry(Raw, I, &Entry), HC_ISO_OK); if (Entry.directory_ || !Entry.size_) continue;
+                QByteArray Bytes(qsizetype(Entry.size_), Qt::Uninitialized); uint32_t Count = 0;
+                QCOMPARE(hcIsoRead(Raw, I, 0, Bytes.data(), uint32_t(Bytes.size()), &Count), HC_ISO_OK);
+                QCOMPARE(Count, uint32_t(Bytes.size())); QCOMPARE(Bytes, QByteArray(Entry.path_).startsWith('C') ? Different : Payload);
+            }
+        }
+        std::array<HcIsoSource, std::size(Sources)> Reversed; std::reverse_copy(std::begin(Sources), std::end(Sources), Reversed.begin());
+        const auto Repeated = Directory.filePath("repeat.iso").toUtf8(); QCOMPARE(hcIsoBuildEx(Repeated.constData(), Reversed.data(), Reversed.size(), &Extended), HC_ISO_OK);
+        QCOMPARE(Read(QString::fromUtf8(Repeated)), Read(QString::fromUtf8(Shared)));
+    }
+    void sharingBudgetTimestampAndAbi()
+    {
+        QTemporaryDir Directory; const auto Source = Directory.filePath("source").toUtf8(); QVERIFY(Put(QString::fromUtf8(Source), QByteArray(2 * 1024 * 1024, 'x')));
+        const HcIsoSource Sources[]{{Source.constData(), "A", 0}, {Source.constData(), "B", 0}};
+        for (uint32_t Profile = 0; Profile < 4; ++Profile) {
+            auto Base = Options(Profile); Base.maxImageBytes_ = 7 * 1024 * 1024 / 2; Base.timestampUtc_ = 0;
+            HcIsoOptionsEx Extended{sizeof(Extended), 1, Base, HC_ISO_SHARE_DUPLICATE_CONTENTS | HC_ISO_EXPLICIT_TIMESTAMP};
+            const auto Target = Directory.filePath(QString::number(Profile) + ".iso").toUtf8();
+            QCOMPARE(hcIsoBuild(Target.constData(), Sources, 2, &Base), HC_ISO_INVALID);
+            QCOMPARE(hcIsoBuildEx(Target.constData(), Sources, 2, &Extended), HC_ISO_OK);
+            const auto Data = Read(QString::fromUtf8(Target)); QCOMPARE(quint8(Data[16 * 2048 + 156 + 18]), 70u);
+            Extended.version_ = 2; QCOMPARE(hcIsoBuildEx(Target.constData(), Sources, 2, &Extended), HC_ISO_UNSUPPORTED);
+            Extended.version_ = 1; Extended.flags_ = 128; QCOMPARE(hcIsoBuildEx(Target.constData(), Sources, 2, &Extended), HC_ISO_UNSUPPORTED);
+            Extended.flags_ = HC_ISO_SHARE_DUPLICATE_CONTENTS; Extended.base_.progress_ = [](void*, uint64_t Done, uint64_t Total) { return int(!(Total > 1024 && Done > 0)); };
+            const auto Cancelled = Directory.filePath(QString::number(Profile) + "-cancel.iso").toUtf8();
+            QCOMPARE(hcIsoBuildEx(Cancelled.constData(), Sources, 2, &Extended), HC_ISO_CANCELLED); QVERIFY(!QFile::exists(QString::fromUtf8(Cancelled)));
+        }
+    }
     void callbackInputAndChildren()
     {
         QTemporaryDir Directory; const auto Target = Directory.filePath("image.iso").toUtf8(); auto Settings = Options();

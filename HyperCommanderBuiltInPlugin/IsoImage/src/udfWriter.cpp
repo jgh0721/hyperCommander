@@ -53,7 +53,7 @@ void Writer::udfWrite(std::ofstream& Stream)
         Bytes Pvd(Block); Put(Pvd, 16, 0, 4); Dstring(Pvd, 24, 32, label_);
         Put(Pvd, 56, 1, 2); Put(Pvd, 58, 1, 2); Put(Pvd, 60, 2, 2); Put(Pvd, 62, 3, 2);
         Put(Pvd, 64, 1, 4); Put(Pvd, 68, 1, 4); Dstring(Pvd, 72, 128, "0000000000000000" + label_);
-        Charspec(Pvd, 200); Charspec(Pvd, 264); Timestamp(Pvd, 376, options_.timestampUtc_, true); Entity(Pvd, 388, "*HyperCommander");
+        Charspec(Pvd, 200); Charspec(Pvd, 264); Timestamp(Pvd, 376, options_.timestampUtc_, true, explicitTimestamp_); Entity(Pvd, 388, "*HyperCommander");
         Tag(Pvd, 1, Base, 512); writeAt(Stream, Base, Pvd);
         Bytes Iuv(Block); Put(Iuv, 16, 1, 4); Entity(Iuv, 20, "*UDF LV Info"); Put(Iuv, 44, 0x0102, 2);
         Charspec(Iuv, 52); Dstring(Iuv, 116, 128, label_); Entity(Iuv, 352, "*HyperCommander");
@@ -72,14 +72,14 @@ void Writer::udfWrite(std::ofstream& Stream)
         Bytes Anchor(Block); LongAd(Anchor, 16, 16 * Block, 32); LongAd(Anchor, 24, 16 * Block, 48);
         Tag(Anchor, 2, Sector, 512); writeAt(Stream, Sector, Anchor);
     }
-    Bytes Integrity(Block); Timestamp(Integrity, 16, options_.timestampUtc_, true); Put(Integrity, 28, 1, 4);
+    Bytes Integrity(Block); Timestamp(Integrity, 16, options_.timestampUtc_, true, explicitTimestamp_); Put(Integrity, 28, 1, 4);
     Put(Integrity, 40, nodes_.size() + 16, 8); Put(Integrity, 72, 1, 4); Put(Integrity, 76, 46, 4);
     Put(Integrity, 84, partitionEnd_ - PartitionStart, 4); Entity(Integrity, 88, "*HyperCommander");
     Put(Integrity, 120, nodes_.size() - directories_.size(), 4); Put(Integrity, 124, directories_.size(), 4);
     for (const size_t Offset : {128, 130, 132}) Put(Integrity, Offset, 0x0102, 2);
     Tag(Integrity, 9, 64, 134); writeAt(Stream, 64, Integrity);
     Bytes End(Block); Tag(End, 8, 65, 512); writeAt(Stream, 65, End);
-    Bytes Fsd(Block); Timestamp(Fsd, 16, options_.timestampUtc_, true); Put(Fsd, 28, 3, 2); Put(Fsd, 30, 3, 2); Put(Fsd, 32, 1, 4); Put(Fsd, 36, 1, 4);
+    Bytes Fsd(Block); Timestamp(Fsd, 16, options_.timestampUtc_, true, explicitTimestamp_); Put(Fsd, 28, 3, 2); Put(Fsd, 30, 3, 2); Put(Fsd, 32, 1, 4); Put(Fsd, 36, 1, 4);
     Charspec(Fsd, 48); Dstring(Fsd, 112, 128, label_); Charspec(Fsd, 240); Dstring(Fsd, 304, 32, label_);
     LongAd(Fsd, 400, Block, nodes_[0].feBlock_); Entity(Fsd, 416, "*OSTA UDF Compliant", true);
     Tag(Fsd, 256, 0, 512); writeAt(Stream, PartitionStart, Fsd);
@@ -90,7 +90,7 @@ void Writer::udfWrite(std::ofstream& Stream)
         Put(Fe, 36, UINT32_MAX, 4); Put(Fe, 40, UINT32_MAX, 4); Put(Fe, 44, 0x14a5, 4);
         uint32_t Links = 1; if (Item.directory_) for (const auto Child : Item.children_) if (nodes_[Child].directory_) ++Links;
         Put(Fe, 48, Links, 2); Put(Fe, 56, Size, 8); Put(Fe, 64, Round(Size) / Block, 8);
-        for (const size_t Offset : {72, 84, 96}) Timestamp(Fe, Offset, options_.timestampUtc_, true);
+        for (const size_t Offset : {72, 84, 96}) Timestamp(Fe, Offset, options_.timestampUtc_, true, explicitTimestamp_);
         Put(Fe, 108, 1, 4); Entity(Fe, 128, "*HyperCommander"); Put(Fe, 160, I == 0 ? 0 : I + 16, 8);
         size_t AdOffset = 176;
         // A short_ad has 30 size bits. Split large files at a block boundary.

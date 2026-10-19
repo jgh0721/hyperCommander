@@ -81,6 +81,7 @@ namespace hc::plugins
         std::optional<Error> failure_;
         bool closed_ = false;
         bool ready_ = false, forcedTermination_ = false;
+        unsigned archiveOptionsVersion_ = 0;
         std::chrono::steady_clock::time_point lastCall_ = std::chrono::steady_clock::now();
         std::jthread heartbeat_;
         std::mutex sleepMutex_;
@@ -105,7 +106,7 @@ namespace hc::plugins
             // The write budget is independent of permission to spawn helpers.
             const auto RequestBudget = Context.passwordPrompt_ ? std::max(limits_.requestMs_, 180000u) : limits_.requestMs_;
             const bool Session = !epoch_.isEmpty() && (IsArchiveCommand(Kind) || IsDataCommand(Kind) || IsSessionCommand(Kind));
-            if (!Session) Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : RequestBudget));
+            if (!Session && Kind != WireKind::PluginConfigure) Context = Bound(Context, Kind == WireKind::Hello ? limits_.startupMs_ : (Kind == WireKind::ArchiveUpdateApply ? limits_.archiveWriteMs_ : RequestBudget));
             const auto Sequence = ++sequence_;
             Result<Unit> Sent = Unit{};
             Result<WireFrame> Reply = HostError("host-no-response");
@@ -241,13 +242,19 @@ namespace hc::plugins
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
             || Limits.archiveWriteMs_ < 100 || Limits.archiveWriteMs_ > 3600000
             || Limits.cancelGraceMs_ < 100 || Limits.cancelGraceMs_ > 60000
-            || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000 || Limits.memoryBytes_ < 64ULL * 1024 * 1024)
+            || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000)
             return HostError("host-invalid-limits");
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
+        const auto Format = Inspected.Value().manifest_.format_;
+        const bool ArchiveHost = Format == PluginFormat::Wcx || Format == PluginFormat::SevenZip
+            || Format == PluginFormat::UnEgg || Format == PluginFormat::DopusVfs;
+        if (!ArchiveHost && Limits.memoryBytes_ < 64ULL * 1024 * 1024) return HostError("host-invalid-limits");
         HostProfile Profile; Profile.formats_ = {PluginFormat::Wcx, PluginFormat::Wlx, PluginFormat::Wfx, PluginFormat::Wdx, PluginFormat::DopusVfs, PluginFormat::DopusViewer, PluginFormat::SevenZip, PluginFormat::UnEgg};
         Profile.extensions_ = {Extension::ArchiveRead, Extension::ArchiveWrite, Extension::Viewer, Extension::StorageRead, Extension::StorageWrite, Extension::Metadata, Extension::ContentConvert}; Profile.supportsIsolation_ = true;
         auto Admission = Admit(Inspected.Value().manifest_, Approval, Profile); if (!Admission.HasValue()) return Admission.Failure();
+        if (Limits.purpose_ == HostPurpose::Configuration && !Admission.Value().permissions_.contains(Permission::UserInterface))
+            return HostError("host-configuration-ui-not-approved");
         const auto HostPath = QFileInfo(Executable).canonicalFilePath();
         if (HostPath.isEmpty() || !QFileInfo(HostPath).isFile()) return HostError("host-executable-missing");
         auto Token = RestrictedToken(); if (!Token.HasValue()) return Token.Failure();
@@ -279,7 +286,7 @@ namespace hc::plugins
 #else
         Job.BasicLimitInformation.ActiveProcessLimit = S.documentViewer_ ? 1 : S.helpers_ ? 3 : 1;
 #endif
-        if (!S.documentViewer_) {
+        if (!S.documentViewer_ && !ArchiveHost) {
             Job.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
             Job.ProcessMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_);
             if (S.helpers_) { Job.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY; Job.JobMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_); }
@@ -287,6 +294,7 @@ namespace hc::plugins
         if (!SetInformationJobObject(S.job_.Get(), JobObjectExtendedLimitInformation, &Job, sizeof(Job))) return HostError("host-job-limits", GetLastError());
         JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
             | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_EXITWINDOWS};
+        if (Limits.purpose_ == HostPurpose::Configuration) Ui.UIRestrictionsClass &= ~JOB_OBJECT_UILIMIT_HANDLES;
         if (!SetInformationJobObject(S.job_.Get(), JobObjectBasicUIRestrictions, &Ui, sizeof(Ui))) return HostError("host-job-ui", GetLastError());
         // An unprivileged host cannot OpenProcess on an elevated parent. Give
         // it only a lifetime/identity handle, through an explicit inheritance
@@ -306,24 +314,42 @@ namespace hc::plugins
         QString HelperIni;
         if (S.helpers_ && Inspected.Value().manifest_.compatibility_ == "total7zip")
         {
-            S.helperConfig_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-total7zip-XXXXXX");
-            if (!S.helperConfig_->isValid()) return HostError("host-helper-config-directory");
-            HelperIni = S.helperConfig_->filePath("wincmd.ini");
-            QFile Ini(HelperIni); if (!Ini.open(QIODevice::WriteOnly)) return HostError("host-helper-config-write");
-            Ini.write("[Configuration]\r\nUseIniInProgramDir=0\r\n"); Ini.close();
-            QFile Config(S.helperConfig_->filePath("Total7zip.xml"));
-            if (!Config.open(QIODevice::WriteOnly)) return HostError("host-helper-config-write");
+            QString Directory;
+            const bool Persistent = !DefaultIniPath.isEmpty();
+            if (Persistent) {
+                if (!QDir::isAbsolutePath(DefaultIniPath) || DefaultIniPath.contains(QChar::Null)) return HostError("host-helper-config-path");
+                HelperIni = DefaultIniPath; Directory = QFileInfo(HelperIni).absolutePath();
+                if (!QDir().mkpath(Directory)) return HostError("host-helper-config-directory");
+            } else {
+                S.helperConfig_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-total7zip-XXXXXX");
+                if (!S.helperConfig_->isValid()) return HostError("host-helper-config-directory");
+                Directory = S.helperConfig_->path(); HelperIni = S.helperConfig_->filePath("wincmd.ini");
+            }
+            if (!QFileInfo::exists(HelperIni)) {
+                QFile Ini(HelperIni); if (!Ini.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return HostError("host-helper-config-write");
+                if (Ini.write("[Configuration]\r\nUseIniInProgramDir=0\r\n") < 0) return HostError("host-helper-config-write");
+            }
+            const auto ConfigPath = QDir(Directory).filePath("Total7zip.xml");
+            const auto ExistingConfig = QDir(QFileInfo(Inspected.Value().binaryPath_).absolutePath()).filePath("Total7zip.xml");
+            // An existing plugin configuration is opaque. Copy it once without
+            // interpreting it; subsequent configuration dialogs own this file.
+            if (Persistent && !QFileInfo::exists(ConfigPath) && QFileInfo::exists(ExistingConfig)
+                && !QFile::copy(ExistingConfig, ConfigPath)) return HostError("host-helper-config-copy");
+            if (!QFileInfo::exists(ConfigPath)) {
+            QFile Config(ConfigPath);
+            if (!Config.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return HostError("host-helper-config-write");
             QXmlStreamWriter Xml(&Config); Xml.writeStartDocument(); Xml.writeStartElement("settings");
             Xml.writeEmptyElement("path64bit");
             Xml.writeAttribute("path_7zG_exe", QDir::toNativeSeparators(Inspected.Value().helperPaths_.front()));
             Xml.writeAttribute("path_7z_dll", QDir::toNativeSeparators(QDir(QFileInfo(ManifestPath).absolutePath()).filePath("64/7z.dll")));
-            Xml.writeEmptyElement("compression"); Xml.writeAttribute("save", "0"); Xml.writeAttribute("alwaysWait7zip", "1");
+            Xml.writeEmptyElement("compression"); Xml.writeAttribute("save", Persistent ? "1" : "0"); Xml.writeAttribute("alwaysWait7zip", "1");
             Xml.writeAttribute("deleteToRecycleBin", "0"); Xml.writeAttribute("askByContent", "0");
             Xml.writeEmptyElement("passwords"); Xml.writeAttribute("save", "0");
             Xml.writeEndElement(); Xml.writeEndDocument();
             if (Xml.hasError() || !Config.flush()) return HostError("host-helper-config-write");
+            }
             Variables << "COMMANDER_INI=" + QDir::toNativeSeparators(HelperIni)
-                << "COMMANDER_PATH=" + QDir::toNativeSeparators(S.helperConfig_->path());
+                << "COMMANDER_PATH=" + QDir::toNativeSeparators(Directory);
         }
         Variables.sort(Qt::CaseInsensitive); std::wstring Environment;
         for (const auto& Variable : Variables) { Environment += Variable.toStdWString(); Environment += L'\0'; } Environment += L'\0';
@@ -339,7 +365,7 @@ namespace hc::plugins
         // Windows applies STARTF_USESHOWWINDOW to the first native dialog too.
         // An approved interactive WCX must not wait on an invisible password
         // prompt. Keep the console hidden and preserve all Job UI restrictions.
-        if (Inspected.Value().manifest_.format_ == PluginFormat::Wcx
+        if ((Inspected.Value().manifest_.format_ == PluginFormat::Wcx || Limits.purpose_ == HostPurpose::Configuration)
             && Inspected.Value().manifest_.permissions_.contains(Permission::UserInterface)) Startup.StartupInfo.wShowWindow = SW_SHOWNOACTIVATE;
         PROCESS_INFORMATION Process{};
         // An elevated token's default DACL can grant only Administrators and
@@ -382,6 +408,7 @@ namespace hc::plugins
         ULONG Peer = 0; if (!GetNamedPipeClientProcessId(S.pipe_.Get(), &Peer) || Peer != S.pid_) return HostError("host-pipe-peer");
         QJsonObject Declaration{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
             {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}};
+        if (Limits.purpose_ == HostPurpose::Configuration) Declaration["configuration"] = true;
         {
             const auto Ini = !HelperIni.isEmpty() ? HelperIni : DefaultIniPath.isEmpty()
                 ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath(S.viewer_ ? "lsplugin.ini" : Inspected.Value().manifest_.format_ == PluginFormat::Wcx ? "pkplugin.ini" : "tc-data.ini") : DefaultIniPath;
@@ -392,6 +419,7 @@ namespace hc::plugins
         auto Ready = S.call(WireKind::Hello, Hello, Context); if (!Ready.HasValue()) return Ready.Failure();
         if (!Ready.Value()["inJob"].toBool() || !Ready.Value()["adminDenied"].toBool() || !Ready.Value()["privilegesRemoved"].toBool()) return HostError("host-restriction-verification");
         S.ready_ = true;
+        S.archiveOptionsVersion_ = unsigned(Ready.Value()["archiveOptionsVersion"].toInt(0));
         if (Limits.enableSessionV2_ && !S.viewer_ && Ready.Value()["sessionProtocol"].toInt() == 2)
         {
             S.epoch_ = Ready.Value()["sessionEpoch"].toString();
@@ -469,6 +497,13 @@ namespace hc::plugins
         if (const auto Stop = Context.Check({"hosted-data"})) return *Stop;
         std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
+    Result<QJsonObject> PluginProcess::Configure(std::uint64_t Owner, OperationContext Context)
+    {
+        if (state_->limits_.purpose_ != HostPurpose::Configuration) return HostError("host-configuration-session-required");
+        std::lock_guard Lock(state_->mutex_);
+        return state_->call(WireKind::PluginConfigure, QJsonDocument(QJsonObject{{"owner", QString::number(Owner)}}).toJson(QJsonDocument::Compact), Context);
+    }
+    unsigned PluginProcess::ArchiveOptionsVersion() const { return state_->archiveOptionsVersion_; }
     HostSnapshot PluginProcess::Snapshot() const
     {
         std::lock_guard Lock(state_->mutex_); HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;

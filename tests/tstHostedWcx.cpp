@@ -77,6 +77,26 @@ class HostedWcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void archiveHelperHasNoMemoryQuota()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 3000, {}, true);
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Ping = Started.Value()->Ping(); QVERIFY(Ping.HasValue()); QVERIFY(Ping.Value()["jobLimitsKnown"].toBool());
+        const auto Flags = Ping.Value()["jobLimitFlags"].toInteger();
+        QVERIFY(!(Flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)); QVERIFY(!(Flags & JOB_OBJECT_LIMIT_JOB_MEMORY));
+        QVERIFY(Flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS); QVERIFY(Flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+    }
+    void readAndWriteShareUnboundedHost()
+    {
+        QTemporaryDir Directory; auto Started = Start(Directory, true, 10000); QVERIFY(Started.HasValue());
+        const auto Pid = Started.Value()->Snapshot().processId_; auto Backend = MakeHostedArchiveBackend(Started.Value());
+        auto Bytes = Archive(1); Bytes[7] = 'M'; const auto Path = Directory.filePath("dictionary.hct"); QVERIFY(Put(Path, Bytes));
+        auto Listed = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY2(Listed.HasValue(), Listed.HasValue() ? "" : Listed.Failure().code_.c_str()); Listed.Value().reset();
+        QVERIFY(Put(Directory.filePath("added.txt"), "dictionary bytes")); ArchiveUpdate Update; Update.archive_ = Path.toStdString(); Update.inputDirectory_ = Directory.path().toStdString(); Update.add_ = {"added.txt"};
+        auto Changed = Backend->Update(Update, {}); QVERIFY2(Changed.HasValue(), Changed.HasValue() ? "" : Changed.Failure().code_.c_str());
+        Listed = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listed.HasValue());
+        QCOMPARE(Started.Value()->Snapshot().processId_, Pid); QVERIFY(Started.Value()->Snapshot().running_);
+    }
     void listingBeyondLegacyContextClamp_data()
     { QTest::addColumn<bool>("V2"); QTest::newRow("v1") << false; QTest::newRow("v2") << true; }
     void listingBeyondLegacyContextClamp()

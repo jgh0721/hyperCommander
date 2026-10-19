@@ -17,6 +17,7 @@ struct Runtime final {
     decltype(&hcIsoGetChild) child_ = nullptr;
     decltype(&hcIsoRead) read_ = nullptr;
     decltype(&hcIsoBuild) build_ = nullptr;
+    decltype(&hcIsoBuildEx) buildEx_ = nullptr;
     ~Runtime();
     Runtime() = default;
     Runtime(const Runtime&) = delete;

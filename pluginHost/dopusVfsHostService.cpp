@@ -10,6 +10,7 @@
 #include <QSet>
 #include <QScopeGuard>
 #include <QDataStream>
+#include <QRegularExpression>
 
 namespace hc::plugins
 {
@@ -74,22 +75,40 @@ namespace hc::plugins
         if (Info.smallIcon_) DestroyIcon(Info.smallIcon_); if (Info.largeIcon_ && Info.largeIcon_ != Info.smallIcon_) DestroyIcon(Info.largeIcon_);
         if (!Identified) return Unsupported("dopus-vfs-identify");
         for (const auto& Value : Text) if (std::find(Value.begin(), Value.end(), L'\0') == Value.end()) return Invalid("dopus-vfs-info-termination");
-        if (Info.flags_ & (1u << 2)) return Unsupported("dopus-vfs-multiple-formats");
-        name_ = QString::fromWCharArray(Text[2].data()); extensions_ = QString::fromWCharArray(Text[1].data()); capabilities_ = Info.capabilities_;
+        name_ = QString::fromWCharArray(Text[2].data()); extensions_ = QString::fromWCharArray(Text[1].data()); capabilities_ = Info.capabilities_; flags_ = Info.flags_;
+        if (flags_ & (1u << 2)) {
+            if (!GetProcAddress(module_, "VFS_QueryPathW")) return Unsupported("dopus-vfs-query-path-export");
+            return Unit{};
+        }
         instance_ = Export<dopus::VfsCreate>(module_, "VFS_Create")(&Info.id_, nullptr);
         if (!instance_ || instance_ == INVALID_HANDLE_VALUE) { instance_ = nullptr; return Unsupported("dopus-vfs-create"); }
         if (const auto Get = Export<dopus::VfsCapabilities>(module_, "VFS_GetCapabilities")) capabilities_ = Get(instance_);
         return Unit{};
     }
+    bool DopusVfsHostService::CanConfigure() const { return (flags_ & 1u) && GetProcAddress(module_, "VFS_Configure"); }
+    Result<Unit> DopusVfsHostService::selectFormat(const QString& Path)
+    {
+        if (!(flags_ & (1u << 2))) return Unit{};
+        const auto Extension = "." + QFileInfo(Path).suffix().toLower();
+        if (instance_) return Extension == selectedExtension_ ? Result<Unit>(Unit{}) : Result<Unit>(Unsupported("dopus-vfs-format-already-selected"));
+        auto Text = Extension.toStdWString(); GUID Id{};
+        const auto Query = Export<BOOL(*)(wchar_t*, BOOL, GUID*)>(module_, "VFS_QueryPathW");
+        if (!Query || !Query(Text.data(), FALSE, &Id)) return Unsupported("dopus-vfs-format-unhandled");
+        instance_ = Export<dopus::VfsCreate>(module_, "VFS_Create")(&Id, nullptr);
+        if (!instance_ || instance_ == INVALID_HANDLE_VALUE) { instance_ = nullptr; return Unsupported("dopus-vfs-create"); }
+        selectedExtension_ = Extension;
+        if (const auto Get = Export<dopus::VfsCapabilities>(module_, "VFS_GetCapabilities")) capabilities_ = Get(instance_);
+        return Unit{};
+    }
     Result<QJsonObject> DopusVfsHostService::Probe()
     {
-        if (!instance_) return Invalid("dopus-vfs-not-initialized");
+        if (!initialized_) return Invalid("dopus-vfs-not-initialized");
         QJsonArray Exports;
         for (auto Name : {"VFS_CreateFileW", "VFS_ReadFile", "VFS_WriteFile", "VFS_CloseFile", "VFS_CreateDirectoryW", "VFS_DeleteFileW",
             "VFS_RemoveDirectoryW", "VFS_MoveFileW", "VFS_SetFileAttrW", "VFS_SetFileTimeW", "VFS_BatchOperationW"})
             if (GetProcAddress(module_, Name)) Exports.append(Name);
         return QJsonObject{{"format", "dopus-vfs"}, {"sdkVersion", 2}, {"unicode", true}, {"name", name_}, {"extensions", extensions_},
-            {"readOnly", bool(capabilities_ & dopus::VfsReadOnly)}, {"caps", qint64(capabilities_)}, {"exports", Exports}};
+            {"readOnly", bool(capabilities_ & dopus::VfsReadOnly)}, {"configure", CanConfigure()}, {"caps", qint64(capabilities_)}, {"exports", Exports}};
     }
     Result<std::wstring> DopusVfsHostService::path(const QJsonValue& Remote)
     {
@@ -377,6 +396,10 @@ namespace hc::plugins
         context_ = Context;
         auto ClearContext = qScopeGuard([this] { context_ = {}; });
         if (const auto Stop = Context.Check({"dopus-vfs"})) return *Stop;
+        if ((Kind == WireKind::StorageEnumerate && Request["action"] == "mount") || (Kind == WireKind::StorageMutate && Request["action"] == "create-archive")) {
+            auto Selected = selectFormat(Request[Kind == WireKind::StorageEnumerate ? "root" : "archive"].toString());
+            if (!Selected.HasValue()) return Selected.Failure();
+        }
         if (!instance_) return Invalid("dopus-vfs-not-initialized");
         if (!manifest_.extensions_.contains(Extension::StorageRead)) return Unsupported("dopus-vfs-storage-extension");
         if (Kind == WireKind::StorageEnumerate) return enumerate(Request);
@@ -401,6 +424,24 @@ namespace hc::plugins
         if (Kind != WireKind::StorageMutate) return Invalid("dopus-vfs-command");
         if (!manifest_.extensions_.contains(Extension::StorageWrite) || !manifest_.permissions_.contains(Permission::WriteContent)) return Error{ErrorCategory::AccessDenied, "dopus-vfs-write-denied"};
         if (capabilities_ & dopus::VfsReadOnly) return Unsupported("dopus-vfs-read-only");
+        if (Request["action"] == "create-archive") {
+            const auto Archive = Request["archive"].toString(), Input = Request["input"].toString();
+            if (Request.size() != 4 || !Local(Archive) || !Local(Input) || !QFileInfo(Input).isDir()
+                || QFileInfo::exists(Archive) || !Request["names"].isArray() || Request["names"].toArray().isEmpty()) return Invalid("dopus-vfs-create-request");
+            std::vector<std::wstring> Files; QSet<QString> Seen;
+            for (const auto Value : Request["names"].toArray()) {
+                const auto Name = Value.toString();
+                if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains(QRegularExpression("[\\\\/:\\x00]")) || Seen.contains(Name.toCaseFolded())) return Invalid("dopus-vfs-create-name");
+                const auto File = QFileInfo(QDir(Input).filePath(Name)); if (!File.exists() || File.isSymLink()) return Invalid("dopus-vfs-create-input");
+                Seen.insert(Name.toCaseFolded()); Files.push_back(QDir::toNativeSeparators(File.absoluteFilePath()).toStdWString());
+            }
+            auto Path = QDir::toNativeSeparators(Archive).toStdWString();
+            if (const auto Create = Export<dopus::VfsDirectory>(module_, "VFS_CreateDirectoryW")) Create(instance_, nullptr, Path.data(), 0);
+            if (QFileInfo(Archive).isDir()) return Unsupported("dopus-vfs-create-produced-directory");
+            auto Done = batch(Path, Files, 1); if (!Done.HasValue()) return Done.Failure();
+            if (!Done.Value() || !QFileInfo(Archive).isFile()) return Unsupported("dopus-vfs-new-archive-unsupported");
+            return QJsonObject{{"created", true}};
+        }
         auto Name = path(Request["path"]); if (!Name.HasValue()) return Name.Failure();
         if (Request["action"] == "batch-add") {
             if (Request.size() != 3 || !Request["files"].isArray()) return Invalid("dopus-vfs-batch-request");

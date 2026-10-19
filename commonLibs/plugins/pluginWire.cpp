@@ -10,7 +10,7 @@ namespace hc::plugins
         {
             return IsArchiveCommand(Kind) || IsViewerCommand(Kind) || IsDataCommand(Kind) || IsSessionCommand(Kind)
                 || Kind == WireKind::Hello || Kind == WireKind::Ping || Kind == WireKind::Probe || Kind == WireKind::Close
-                || Kind == WireKind::Response || Kind == WireKind::Failure || Kind == WireKind::ArchivePassword;
+                || Kind == WireKind::Response || Kind == WireKind::Failure || Kind == WireKind::ArchivePassword || Kind == WireKind::PluginConfigure;
         }
     }
     bool IsArchiveCommand(WireKind Kind)

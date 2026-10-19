@@ -31,7 +31,9 @@ public:
         hc::storage::OperationContext Context, bool Deferred = false);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
     bool IsUiPending(const std::string& Id) const { return pending_.contains(Id); }
-    hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::PreparedJob Job, const QString& Label);
+    using PreparedRetry = std::function<hc::storage::Result<hc::operations::PreparedJob>(const hc::operations::JobResult&, hc::storage::OperationContext)>;
+    hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::PreparedJob Job, const QString& Label,
+        PreparedRetry Retry = {}, std::function<void(const std::string&)> Resubmitted = {});
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
         hc::storage::OperationContext Context, bool Deferred = false);
     std::shared_ptr<hc::operations::IFileElevationService> ElevationService() const;
@@ -107,6 +109,8 @@ private:
     QPushButton* queueDown_ = nullptr;
     QSpinBox* concurrency_ = nullptr;
     std::map<std::string, hc::operations::FileOperationRequest> retryRequests_;
+    struct PreparedRetryRecord { PreparedRetry build_; std::function<void(const std::string&)> submitted_; };
+    std::map<std::string, PreparedRetryRecord> preparedRetries_;
     std::map<std::string, hc::storage::OperationContext> retryContexts_;
     QPushButton* managerOpen_ = nullptr;
     QPushButton* indicator_ = nullptr;

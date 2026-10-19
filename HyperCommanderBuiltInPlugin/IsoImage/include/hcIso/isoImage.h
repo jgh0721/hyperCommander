@@ -38,6 +38,14 @@ typedef struct HcIsoOptions {
     HcIsoProgress progress_;
     void* context_;
 } HcIsoOptions;
+
+enum HcIsoBuildFlags { HC_ISO_SHARE_DUPLICATE_CONTENTS = 1, HC_ISO_EXPLICIT_TIMESTAMP = 2 };
+typedef struct HcIsoOptionsEx {
+    uint32_t structSize_;
+    uint32_t version_; // 1; unknown versions and flags are rejected.
+    HcIsoOptions base_;
+    uint32_t flags_;
+} HcIsoOptionsEx;
 typedef struct HcIsoInfo {
     uint32_t structSize_;
     uint32_t namespaces_; // bit (1 << HcIsoNamespace)
@@ -81,6 +89,8 @@ HC_ISO_API int hcIsoRead(HcIsoImage* Image, uint64_t Index, uint64_t Offset,
 // Reopens every generated namespace and compares all payload bytes before success.
 HC_ISO_API int hcIsoBuild(const char* StagingPath, const HcIsoSource* Sources,
                         uint64_t Count, const HcIsoOptions* Options);
+HC_ISO_API int hcIsoBuildEx(const char* StagingPath, const HcIsoSource* Sources,
+                          uint64_t Count, const HcIsoOptionsEx* Options);
 
 #ifdef __cplusplus
 }

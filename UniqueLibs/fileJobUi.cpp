@@ -353,7 +353,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
             const auto Result = Watcher->result(); Watcher->deleteLater(); clearingHistory_ = false;
             for (const auto& Id : Result.first)
             {
-                scheduler_.Forget(Id); results_.erase(Id); samples_.erase(Id); endpoints_.erase(Id); sizeFormats_.erase(Id); retryRequests_.erase(Id); retryContexts_.erase(Id);
+                scheduler_.Forget(Id); results_.erase(Id); samples_.erase(Id); endpoints_.erase(Id); sizeFormats_.erase(Id); retryRequests_.erase(Id); preparedRetries_.erase(Id); retryContexts_.erase(Id);
                 const auto Row = jobs_->findData(QString::fromStdString(Id)); if (Row >= 0) jobs_->removeItem(Row);
             }
             updateSelection(); updateManager();
@@ -515,15 +515,17 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
     return Submitted;
 }
 
-Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label)
+Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, PreparedRetry Retry, std::function<void(const std::string&)> Resubmitted)
 {
     Job.request_.operation_.providerInteractions_ = true;
     Job.request_.operation_.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     Job.request_.metadata_.label_ = Label.toStdString();
     const auto Kind = Job.request_.metadata_.options_.starts_with("rename-record=") ? hc::operations::FileOperation::Rename : hc::operations::FileOperation::Copy;
+    const auto Context = Job.request_.operation_;
     auto Submitted = track(scheduler_.Submit(std::move(Job.request_), std::move(Job.task_)), Kind, Label.toStdString());
     if (Submitted.HasValue()) jobs_->setItemText(jobs_->findData(QString::fromStdString(Submitted.Value().id_)), Label);
+    if (Submitted.HasValue() && Retry) { preparedRetries_[Submitted.Value().id_] = {std::move(Retry), std::move(Resubmitted)}; retryContexts_[Submitted.Value().id_] = Context; }
     return Submitted;
 }
 
@@ -625,14 +627,26 @@ bool FileJobUi::canRetry(const std::string& Id) const
     if (!preparingRetry_.empty()) return false;
     const auto Snapshot=scheduler_.Snapshot(Id);if(Snapshot.HasValue()&&Snapshot.Value().error_&&Snapshot.Value().error_->code_.starts_with("elevation-outcome-unknown"))return false;
     const auto Found = results_.find(Id);
-    if (Found == results_.end() || !retryRequests_.contains(Id) || !Found->second.cleanupErrors_.empty()) return false;
+    if (Found == results_.end() || (!retryRequests_.contains(Id) && !preparedRetries_.contains(Id)) || !Found->second.cleanupErrors_.empty()) return false;
     const auto Current = scheduler_.Snapshot(Id);
     if (!Current.HasValue() || Current.Value().state_ != JobState::Failed || !Current.Value().retriedAs_.empty()) return false;
-    return Current.Value().failedItems_ > 0;
+    return preparedRetries_.contains(Id) || Current.Value().failedItems_ > 0;
 }
 void FileJobUi::retrySelected()
 {
     const auto Id = selectedId(); if (!canRetry(Id)) return;
+    if (preparedRetries_.contains(Id)) {
+        auto Record = preparedRetries_.at(Id); auto Context = retryContexts_.at(Id); const auto Original = results_.at(Id);
+        Context.stopToken_ = {}; Context.deadline_ = std::chrono::steady_clock::time_point::max();
+        auto Prepared = Record.build_(Original, Context);
+        if (!Prepared.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); return; }
+        Prepared.Value().request_.metadata_ = Original.snapshot_.metadata_; Prepared.Value().request_.metadata_.retryOf_ = Id;
+        const auto Label = QString::fromStdString(Original.snapshot_.metadata_.label_);
+        auto Submitted = Submit(std::move(Prepared.Value()), Label, Record.build_, Record.submitted_);
+        if (!Submitted.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); return; }
+        if (Record.submitted_) Record.submitted_(Submitted.Value().id_);
+        preparedRetries_.erase(Id); retryContexts_.erase(Id); updateManager(); updateSelection(); return;
+    }
     auto Request = retryRequests_.at(Id); auto Context = retryContexts_.at(Id); const auto Original = results_.at(Id);
     // A new user action gets a fresh cancellation/deadline, with the original
     // immutable source identity. Destination conflicts are asked again.
@@ -758,8 +772,9 @@ void FileJobUi::updateJobs()
         if (It->second.completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { ++It; continue; }
         const auto Stored = results_.insert_or_assign(It->first, It->second.completion_.get()).first;
         It = pending_.erase(It);
-        if (Stored->second.snapshot_.state_ != JobState::Failed || Stored->second.snapshot_.failedItems_ == 0 || !Stored->second.cleanupErrors_.empty()) {
+        if (Stored->second.snapshot_.state_ != JobState::Failed || (Stored->second.snapshot_.failedItems_ == 0 && !preparedRetries_.contains(Stored->first)) || !Stored->second.cleanupErrors_.empty()) {
             retryRequests_.erase(Stored->first); retryContexts_.erase(Stored->first);
+            preparedRetries_.erase(Stored->first);
         }
         if (onFinished_) onFinished_(Stored->second);
         const auto Notification = notifications_[Stored->first]; notifications_.erase(Stored->first);

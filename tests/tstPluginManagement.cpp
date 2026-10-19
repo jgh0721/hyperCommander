@@ -22,6 +22,26 @@ QTreeWidgetItem* external(QPluginManagementPage& Page) {
 class PluginManagementTests : public QObject {
     Q_OBJECT
 private slots:
+    void wcxUiGrantRequiresExplicitSelection_data()
+    {
+        QTest::addColumn<bool>("Allow"); QTest::newRow("preserve-old-grants") << false; QTest::newRow("explicit-ui-grant") << true;
+    }
+    void wcxUiGrantRequiresExplicitSelection()
+    {
+        using namespace hc::plugins; QFETCH(bool, Allow); QTemporaryDir Package, Config;
+        const auto Binary = Package.filePath("fixture.wcx64"); QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_wcx_fixture.wcx64", Binary));
+        auto Inspected = InspectPluginBinary(Binary, PluginFormat::Wcx); QVERIFY(Inspected.HasValue()); Inspected.Value().manifest_.permissions_.erase(Permission::UserInterface);
+        auto Manifest = SavePluginManifest(Inspected.Value(), Config.path()); QVERIFY(Manifest.HasValue());
+        hc::settings::Repository Settings(Config.path());
+        QJsonObject Record{{"path", Binary}, {"hostEnabled", true}, {"hostManifest", Manifest.Value()}, {"hostReviewed", hc::settings::JsonObject(EncodeManifest(Inspected.Value().manifest_))}};
+        QVERIFY(Settings.Put(hc::settings::Section::Plugins, QJsonObject{{"wcx", QJsonArray{Record}}}));
+        QPluginHostSettings Page(PluginFormat::Wcx); Page.Load(Settings); Page.show(); bool Seen = false;
+        QTimer Response; Response.setInterval(10); connect(&Response, &QTimer::timeout, &Page, [&] {
+            auto* Box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()); if (!Box || Box->objectName() != "hc.plugin.reviewApproval") return;
+            auto* Check = Box->findChild<QCheckBox*>("hc.plugin.allowSettingsUi"); QVERIFY(Check); QVERIFY(!Check->isChecked()); Check->setChecked(Allow); Seen = true; Box->done(QMessageBox::Yes); Response.stop();
+        }); Response.start(); Page.ReviewPlugin(0); QTRY_VERIFY_WITH_TIMEOUT(Seen, 10000); QTRY_VERIFY_WITH_TIMEOUT(Page.findChild<QPushButton*>("wcxHostReview")->isEnabled(), 10000); QTRY_VERIFY_WITH_TIMEOUT(Page.VerificationState(0).contains("확인 완료"), 10000);
+        QJsonObject Out; Page.SavePlugins(Out); auto Reviewed = ParseManifest(hc::settings::JsonBytes(Out["wcx"].toArray()[0].toObject()["hostReviewed"])); QVERIFY(Reviewed.HasValue()); QCOMPARE(Reviewed.Value().permissions_.contains(Permission::UserInterface), Allow);
+    }
     void approvalAndChangedPackage()
     {
         using namespace hc::plugins;

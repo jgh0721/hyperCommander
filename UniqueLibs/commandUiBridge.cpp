@@ -3,7 +3,8 @@
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
-#include "HyperCommanderBuiltInPlugin/SevenZip/sevenZipJob.hpp"
+#include "archive/creationDialog.hpp"
+#include "archive/creationJob.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
@@ -52,7 +53,6 @@
 #include "pluginHost/hostedDataProviders.hpp"
 #include <QtConcurrent>
 #include "commonLibs/storage/materializedContent.hpp"
-#include "HyperCommanderBuiltInPlugin/IsoImage/isoJob.hpp"
 #include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
 #include <QFileDialog>
 #include <QFormLayout>
@@ -64,17 +64,6 @@ using namespace hc::storage;
 
 namespace
 {
-    bool FolderPathInput(const QString& Input)
-    {
-        const auto Path = QDir::fromNativeSeparators(Input);
-        const auto Leaf = Path.section('/', -1);
-        return Path.endsWith('/') || Leaf == "." || Leaf == "..";
-    }
-    QString NativeOutputPath(const QString& Input, const QString& BaseDirectory, const QString& DefaultName)
-    {
-        const auto Path = hc::ui::ResolveNativeDestination(Input, BaseDirectory);
-        return !Path.isEmpty() && FolderPathInput(Input) ? QDir(Path).filePath(DefaultName) : Path;
-    }
     template<class T> std::shared_ptr<T> WorkerOwned(std::shared_ptr<T> Value)
     {
         auto* Pointer = Value.get();
@@ -1116,66 +1105,48 @@ void CommandUiBridge::extractArchive() {
     affectedLocations_[Submitted.Value().id_] = {Target, Parent};
 }
 
-void CommandUiBridge::openArchive()
+void CommandUiBridge::openArchive(std::string InitialFormat)
 {
     const auto Context = captureFiles(commandIndex(), false);
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
     auto Reader = Model->SnapshotProvider();
     std::vector<hc::operations::OperationSource> Sources;
-    for (int Row = 0; Row < Model->rowCount(); ++Row) {
+    if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
         const auto Item = Model->GetFileInfo(Model->index(Row, 0));
         if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
             Sources.push_back({*Item->storageEntry_, Reader, {}});
     }
-    auto CurrentDirectory = QString::fromStdString(Context.location_.root_);
-    if (Context.location_.kind_ == LocatorKind::Archive) CurrentDirectory = QFileInfo(CurrentDirectory).absolutePath();
-    if (Sources.empty()) { QMessageBox::information(main_, tr("압축 파일 생성"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
-    hc::ui::DialogShell Dialog(tr("파일 압축"), main_); Dialog.setObjectName("hc.archive.create"); Dialog.resize(680, 480);
-    Dialog.SetSummary(tr("선택한 %1개 항목을 7z 또는 ZIP으로 압축합니다.").arg(Sources.size()));
-    auto* Layout = Dialog.BodyLayout(); auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Layout->addLayout(Form);
-    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("archive.7z"), &Dialog); Output->setObjectName("hc.archive.create.path"); Form->addRow(tr("압축 파일 경로(&P)"), Output);
-    auto* Format = new QComboBox(&Dialog); Format->setObjectName("hc.archive.create.format"); Format->addItems({"7z", "ZIP"}); Form->addRow(tr("형식(&F)"), Format);
-    auto* Level = new QComboBox(&Dialog); Level->setObjectName("hc.archive.create.level");
-    for (const auto& Pair : {std::pair{0, tr("압축 안 함")}, {1, tr("빠르게")}, {5, tr("보통")}, {9, tr("최대 압축")}}) Level->addItem(Pair.second, Pair.first);
-    Level->setCurrentIndex(2); Form->addRow(tr("압축 수준(&L)"), Level);
-    auto* Solid = new QCheckBox(tr("솔리드 압축 (7z)"), &Dialog); Solid->setObjectName("hc.archive.create.solid"); Solid->setChecked(true); Form->addRow(Solid);
-    auto* Queued = new QCheckBox(tr("대기열에 추가(&Q)"), &Dialog); Queued->setObjectName("hc.archive.create.queued"); Form->addRow(Queued);
-    auto* Encrypt = new QCheckBox(tr("암호화 (AES-256)"), &Dialog); Encrypt->setObjectName("hc.archive.create.encrypt"); Form->addRow(Encrypt);
-    auto* Note = new QLabel(tr("암호화하면 작업 시작 시 암호를 입력합니다. 7z는 파일 이름도 암호화하며, ZIP 암호는 영문·숫자·기호를 사용하십시오. 기존 파일은 작성·검증 후 교체합니다."), &Dialog); Note->setWordWrap(true); Layout->addWidget(Note);
-    connect(Format, &QComboBox::currentIndexChanged, &Dialog, [Format, Output, Solid] {
-        Solid->setEnabled(Format->currentIndex() == 0); auto Path = Output->text();
-        if (FolderPathInput(Path)) return;
-        if (Path.endsWith(".7z", Qt::CaseInsensitive)) Path.chop(3); else if (Path.endsWith(".zip", Qt::CaseInsensitive)) Path.chop(4);
-        Output->setText(Path + (Format->currentIndex() == 0 ? ".7z" : ".zip"));
-    });
-    Dialog.AcceptButton()->setText(tr("압축(&S)"));
-    auto* OutputPreview = new QLabel(&Dialog); OutputPreview->setObjectName("hc.archive.create.preview"); OutputPreview->setTextFormat(Qt::PlainText); OutputPreview->setWordWrap(true); Layout->addWidget(OutputPreview);
-    const auto ValidateOutput = [&] {
-        auto Path=NativeOutputPath(Output->text(),CurrentDirectory,"archive"); const auto Suffix=Format->currentIndex()==0?QString(".7z"):QString(".zip");
-        if(!Path.isEmpty()&&!Path.endsWith(Suffix,Qt::CaseInsensitive)) Path+=Suffix;
-        Dialog.SetAcceptEnabled(!Path.isEmpty()); OutputPreview->setText(tr("생성할 압축 파일: %1\n상대경로는 현재 패널 폴더 기준입니다.").arg(QDir::toNativeSeparators(Path)));
-    };
-    connect(Output, &QLineEdit::textChanged, &Dialog, ValidateOutput); connect(Format,&QComboBox::currentIndexChanged,&Dialog,ValidateOutput); ValidateOutput();
-    Output->selectAll(); Dialog.SetInitialInput(Output);
+    const auto Count = Context.selectionManifest_ ? Context.selectionManifest_->Count() : Sources.size();
+    if (!Count) { QMessageBox::information(main_, tr("파일 압축"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
+    auto Directory = QString::fromStdString(Context.location_.root_);
+    if (Context.location_.kind_ == LocatorKind::Archive) Directory = QFileInfo(Directory).absolutePath();
+    else if (Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) Directory = QDir::homePath();
+    hc::archive::CreationDialog Dialog(hc::settings::AppSettings(), Context.location_, Directory, Count, main_, InitialFormat);
     if (Dialog.exec() != QDialog::Accepted) return;
-    hc::sevenzip::CreateRequest Request; Request.sources_ = std::move(Sources); Request.format_ = Format->currentIndex() == 0 ? "7z" : "zip";
-    auto Path = NativeOutputPath(Output->text(), CurrentDirectory, "archive"); const auto Suffix = "." + QString::fromStdString(Request.format_); if (!Path.endsWith(Suffix, Qt::CaseInsensitive)) Path += Suffix;
-    Request.destination_ = {(Path.startsWith("//") && (!Path.startsWith("//?/") || Path.startsWith("//?/UNC/", Qt::CaseInsensitive))) ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
-    Request.options_ = {Level->currentData().toUInt(), Solid->isChecked()}; Request.encrypt_ = Encrypt->isChecked(); Request.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+    hc::archive::CreateJobRequest Request; Request.value_ = Dialog.Request(); Request.creator_ = Dialog.Creator();
+    Request.sources_ = std::move(Sources); Request.selection_ = Context.selectionManifest_;
+    for (const auto& Source : Request.sources_) Request.value_.sources_.push_back(Source.entry_);
+    const auto Saved = Dialog.SavePreferences();
+    if (!Saved.HasValue()) QMessageBox::warning(main_, tr("압축 설정 저장"), QString::fromStdString(Saved.Failure().code_));
     OperationContext Operation; Operation.passwordPrompt_ = hc::plugins::AskArchivePassword;
-    const auto Destination = Request.destination_; auto Prepared = hc::sevenzip::PrepareCreate(std::move(Request), Operation);
-    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("압축 파일 생성"), QString::fromStdString(Prepared.Failure().code_)); return; }
-    Prepared.Value().request_.deferred_ = Queued->isChecked();
-    Prepared.Value().request_.metadata_.destination_ = Path.toStdString();
-    Prepared.Value().request_.metadata_.options_ = "format=" + std::string(Format->currentIndex() == 0 ? "7z" : "zip") + "; level=" + std::to_string(Level->currentData().toUInt());
-    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("압축 파일 생성 · %1").arg(QFileInfo(Path).fileName()));
-    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("압축 파일 생성"), QString::fromStdString(Submitted.Failure().code_)); return; }
-    auto Parent = Destination; Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); affectedLocations_[Submitted.Value().id_] = {Parent};
+    auto Prepared = hc::archive::PrepareCreation(Request, Operation);
+    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("파일 압축"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    auto Affected = Request.value_.output_; const auto Path = QString::fromStdString(Affected.root_);
+    if (!Request.value_.composition_.separateArchives_) Affected.root_ = QFileInfo(Path).absolutePath().toStdString();
+    const auto Label = Request.value_.composition_.separateArchives_ ? tr("압축 파일 개별 생성") : tr("압축 파일 생성 · %1").arg(QFileInfo(Path).fileName());
+    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), Label,
+        [Request](const hc::operations::JobResult& Result, OperationContext RetryContext) mutable {
+            Request = hc::archive::RetryCreation(std::move(Request), Result);
+            return hc::archive::PrepareCreation(Request, std::move(RetryContext));
+        }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; });
+    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("파일 압축"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    affectedLocations_[Submitted.Value().id_] = {Affected};
 }
 
 void CommandUiBridge::openIso(bool Inspect)
 {
+    if (!Inspect) { openArchive("iso"); return; }
     const auto Context = captureFiles({}, false);
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
@@ -1219,36 +1190,6 @@ void CommandUiBridge::openIso(bool Inspect)
         };
         connect(ReadAll, &QPushButton::clicked, Dialog, [Run] { Run(true); }); Dialog->show(); Run(false); return;
     }
-    if (Sources.empty()) { QMessageBox::information(main_, tr("ISO 생성"), tr("이미지에 넣을 파일이나 폴더를 먼저 선택하십시오.")); return; }
-    QDialog Dialog(main_); Dialog.setObjectName("hc.iso.create"); Dialog.setWindowTitle(tr("선택 항목으로 ISO 생성")); Dialog.resize(650, 300);
-    auto* Layout = new QVBoxLayout(&Dialog); auto* Form = new QFormLayout; Layout->addLayout(Form);
-    auto* Selection = new QLabel(tr("선택한 %1개 항목과 하위 파일을 이미지에 넣습니다.").arg(Sources.size()), &Dialog); Selection->setWordWrap(true); Form->addRow(Selection);
-    auto* OutputRow = new QWidget(&Dialog); auto* OutputLayout = new QHBoxLayout(OutputRow); OutputLayout->setContentsMargins(0, 0, 0, 0);
-    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("image.iso"), OutputRow); Output->setObjectName("hc.iso.create.path"); Output->setAccessibleName(tr("저장할 ISO 경로"));
-    auto* Browse = new QPushButton(tr("찾아보기…"), OutputRow); Browse->setAutoDefault(false); OutputLayout->addWidget(Output, 1); OutputLayout->addWidget(Browse); Form->addRow(tr("저장 위치(&P)"), OutputRow);
-    auto* Profile = new QComboBox(&Dialog); Profile->setObjectName("hc.iso.create.profile"); Profile->addItems({tr("ISO 9660"), tr("ISO 9660 + Joliet"), tr("ISO 9660 + Joliet + UDF 1.02"), tr("ISO 9660 + UDF 1.02 (긴 파일 이름)")}); Profile->setCurrentIndex(2); Form->addRow(tr("파일 시스템(&F)"), Profile);
-    auto* Label = new QLineEdit("HYPERCOMMANDER", &Dialog); Label->setObjectName("hc.iso.create.label"); Label->setMaxLength(16); Form->addRow(tr("볼륨 이름(&V)"), Label);
-    auto* Help = new QLabel(&Dialog); Help->setWordWrap(true); Layout->addWidget(Help);
-    const auto UpdateHelp = [Profile, Label, Help] { Label->setMaxLength(Profile->currentIndex() == 0 ? 32 : Profile->currentIndex() == 3 ? 30 : 16); Help->setText(Profile->currentIndex() == 0
-        ? QObject::tr("파일 이름을 ISO용 영문 대문자·숫자·밑줄로 변환합니다. 볼륨 이름은 ASCII 문자로 입력하십시오.")
-        : Profile->currentIndex() == 3 ? QObject::tr("긴 파일 이름을 UDF에 보존합니다. 이름 한 부분은 UDF 인코딩 255바이트까지 지원하며, 볼륨 이름은 ASCII 30자까지 입력할 수 있습니다.")
-        : QObject::tr("한글 파일 이름을 보존합니다. 이름 한 부분은 64 UTF-16 단위까지 지원하며, 볼륨 이름은 ASCII 16자까지 입력할 수 있습니다.")); };
-    connect(Profile, &QComboBox::currentIndexChanged, &Dialog, UpdateHelp); UpdateHelp();
-    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Buttons->button(QDialogButtonBox::Ok)->setText(tr("생성")); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소")); Layout->addWidget(Buttons);
-    connect(Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
-    connect(Browse, &QPushButton::clicked, &Dialog, [this, Output] { const auto Path = QFileDialog::getSaveFileName(main_, tr("ISO 저장 위치"), Output->text(), tr("ISO 이미지 (*.iso)"), nullptr, QFileDialog::DontConfirmOverwrite); if (!Path.isEmpty()) Output->setText(Path); });
-    Buttons->button(QDialogButtonBox::Ok)->setDefault(true);
-    const auto ValidateOutput = [Output, Buttons, CurrentDirectory] { Buttons->button(QDialogButtonBox::Ok)->setEnabled(!hc::ui::ResolveNativeDestination(Output->text(), CurrentDirectory).isEmpty()); };
-    connect(Output, &QLineEdit::textChanged, &Dialog, ValidateOutput); ValidateOutput();
-    Output->setFocus(); Output->selectAll(); if (Dialog.exec() != QDialog::Accepted) return;
-    auto Path = NativeOutputPath(Output->text(), CurrentDirectory, "image.iso"); if (!Path.endsWith(".iso", Qt::CaseInsensitive)) Path += ".iso";
-    hc::iso::CreateRequest Request; Request.sources_ = std::move(Sources); Request.destination_ = {(Path.startsWith("//") && (!Path.startsWith("//?/") || Path.startsWith("//?/UNC/", Qt::CaseInsensitive))) ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
-    Request.profile_ = unsigned(Profile->currentIndex()); Request.volumeLabel_ = Label->text(); Request.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
-    const auto Destination = Request.destination_; auto Prepared = hc::iso::PrepareCreate(std::move(Request));
-    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("ISO 생성"), tr("설정을 확인하십시오: %1").arg(QString::fromStdString(Prepared.Failure().code_))); return; }
-    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("ISO 생성 · %1").arg(QFileInfo(Path).fileName()));
-    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("ISO 생성"), QString::fromStdString(Submitted.Failure().code_)); return; }
-    auto Parent = Destination; Parent.root_ = QFileInfo(Path).absolutePath().toStdString(); affectedLocations_[Submitted.Value().id_] = {Parent};
 }
 
 void CommandUiBridge::openSearch()

@@ -249,9 +249,12 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process hc_update_core hc_update_qt)
+set(HC_PROJECT_INVENTORY "")
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_archive_creation hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process hc_update_core hc_update_qt)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
+    get_target_property(HC_TARGET_BINARY_DIRECTORY ${HC_INVENTORY_TARGET} BINARY_DIR)
+    string(APPEND HC_PROJECT_INVENTORY "${HC_TARGET_BINARY_DIRECTORY}/${HC_INVENTORY_TARGET}.vcxproj\n")
     foreach(HC_SOURCE IN LISTS HC_SOURCE_INPUTS)
         if(NOT HC_SOURCE MATCHES "\\$<")
             cmake_path(ABSOLUTE_PATH HC_SOURCE BASE_DIRECTORY "${HC_SOURCE_DIRECTORY}" NORMALIZE OUTPUT_VARIABLE HC_SOURCE_ABSOLUTE)
@@ -260,6 +263,7 @@ foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_script_runtime hc_builtin
     endforeach()
 endforeach()
 file(WRITE "${CMAKE_BINARY_DIR}/hc-product-sources.txt" "${HC_SOURCE_INVENTORY}")
+file(WRITE "${CMAKE_BINARY_DIR}/hc-product-projects.txt" "${HC_PROJECT_INVENTORY}")
 
 target_include_directories(HyperCommander PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/UniqueLibs
@@ -298,6 +302,7 @@ target_link_libraries(HyperCommander
         hc_wcx_backend
         hc_plugin_process
         hc_builtin_iso
+        hc_archive_creation
         hc_builtin_sevenzip hc_builtin_unegg hc_update_qt
 )
 

@@ -64,4 +64,12 @@ int hcIsoBuild(const char* StagingPath, const HcIsoSource* Sources, uint64_t Cou
 {
     return Boundary([&] { hc::iso::Require(Options != nullptr, "Missing build options"); hc::iso::Writer(Sources, Count, *Options).Write(hc::iso::DiskPath(StagingPath)); });
 }
+int hcIsoBuildEx(const char* StagingPath, const HcIsoSource* Sources, uint64_t Count, const HcIsoOptionsEx* Options)
+{
+    return Boundary([&] {
+        hc::iso::Require(Options && Options->structSize_ == sizeof(*Options) && Options->version_ == 1
+            && !(Options->flags_ & ~(HC_ISO_SHARE_DUPLICATE_CONTENTS | HC_ISO_EXPLICIT_TIMESTAMP)), "Unsupported extended build options", HC_ISO_UNSUPPORTED);
+        hc::iso::Writer(Sources, Count, Options->base_, Options->flags_).Write(hc::iso::DiskPath(StagingPath));
+    });
+}
 }

@@ -54,7 +54,7 @@ private:
     QModelIndex commandIndex() const;
     void openDataPlugin(bool Metadata, bool Dopus = false);
     void openIso(bool Inspect);
-    void openArchive();
+    void openArchive(std::string InitialFormat = {});
     void extractArchive();
     void openSearch();
     CFSModel* findModel(const std::string& TabId) const;

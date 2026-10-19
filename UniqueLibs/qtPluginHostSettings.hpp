@@ -30,7 +30,8 @@ public:
     static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format);
     static QtViewerSurface::PluginViewerSelectionMode ViewerSelection(hc::settings::Repository& Settings);
 private:
-    struct Row { int index_; QString path_, manifest_; QByteArray reviewed_; QString verification_; };
+    struct Row { int index_; QString path_, manifest_; QByteArray reviewed_; QString verification_; QJsonObject creation_; };
+    void verifyCreation();
     void review();
     void revoke();
     void updateState(int Row);

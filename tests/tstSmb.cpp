@@ -4762,9 +4762,11 @@ hc.events.unsubscribe(sub)
         auto Prior = ExistingJobs(); bool Seen = false;
         QTimer::singleShot(0,main_,[&] { auto* Dialog = main_->findChild<QDialog*>("hc.archive.create"); if (!Dialog) return; Seen = true;
             auto* CreatePath=Dialog->findChild<QLineEdit*>("hc.archive.create.path"); QCOMPARE(Dialog->focusWidget(),CreatePath); CreatePath->setText(Format=="zip" ? QString(".") : "./created."+Format); Dialog->findChild<QComboBox*>("hc.archive.create.format")->setCurrentIndex(Format=="7z"?0:1);
-            QVERIFY(Dialog->findChild<QLabel*>("hc.archive.create.preview")->text().contains(QDir::toNativeSeparators(Output)));
-            Dialog->findChild<QCheckBox*>("hc.archive.create.encrypt")->setChecked(Encrypted); Dialog->findChild<QCheckBox*>("hc.archive.create.queued")->setChecked(true);
-            QVERIFY(SaveR9Dialog(*Dialog,"r17-compress-"+Format+(Encrypted?"-encrypted":""))); QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.archive.create.path"),Qt::Key_Return);
+            QVERIFY(!Dialog->findChild<QLabel*>("hc.archive.create.preview"));
+            QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.settings")->isEnabled());
+            QTimer::singleShot(0,Dialog,[&] { auto* Settings=Dialog->findChild<QDialog*>("hc.archive.settings."+Format); QVERIFY(Settings); Settings->findChild<QCheckBox*>("hc.archive.settings.encrypt")->setChecked(Encrypted); Settings->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click(); });
+            Dialog->findChild<QPushButton*>("hc.archive.create.settings")->click();
+            QVERIFY(SaveR9Dialog(*Dialog,"r17-compress-"+Format+(Encrypted?"-encrypted":""))); QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.queue")->isEnabled()); Dialog->findChild<QPushButton*>("hc.archive.create.queue")->click();
         });
         QTest::keyClick(QApplication::focusWidget(),Qt::Key_A,Qt::ControlModifier); QVERIFY(Seen);
         auto Id = LatestJob(Prior); QVERIFY(!Id.empty()); QVERIFY(Scheduler.Snapshot(Id).Value().deferred_); QVERIFY(!QFileInfo::exists(Output)); QVERIFY(Scheduler.Control({Id},JobControl::Start).HasValue()); QVERIFY(Finish(Id));
@@ -4849,12 +4851,12 @@ hc.events.unsubscribe(sub)
         QTimer::singleShot(0, main_, [&] {
             auto* Dialog = main_->findChild<QDialog*>("hc.archive.create"); if (!Dialog) return;
             const auto CloseDialog = qScopeGuard([Dialog] { Dialog->accept(); });
-            DialogSeen = true; Dialog->findChild<QCheckBox*>("hc.archive.create.queued")->setChecked(true);
+            DialogSeen = true;
             auto* Path = Dialog->findChild<QLineEdit*>("hc.archive.create.path"); Path->setText(Output);
             Dialog->findChild<QComboBox*>("hc.archive.create.format")->setCurrentIndex(Format == "7z" ? 0 : 1);
             QVERIFY(Dialog->rect().contains(Path->mapTo(Dialog, QPoint(0, 0))));
             QVERIFY(Dialog->grab().save(QDir::current().filePath(QString("archive-create-%1.png").arg(Format))));
-            Dialog->accept();
+            QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.queue")->isEnabled()); Dialog->findChild<QPushButton*>("hc.archive.create.queue")->click();
         });
         Create->trigger(); QVERIFY(DialogSeen);
         QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshots().size() > size_t(ExistingJobs.size()), 5000);
@@ -4906,16 +4908,16 @@ hc.events.unsubscribe(sub)
         QSet<QString> ExistingJobs; for (const auto& Job : Scheduler.Snapshots()) ExistingJobs.insert(QString::fromStdString(Job.id_));
         bool DialogSeen = false;
         QTimer::singleShot(0, main_, [&] {
-            auto* Dialog = main_->findChild<QDialog*>("hc.iso.create"); if (!Dialog) return;
+            auto* Dialog = main_->findChild<QDialog*>("hc.archive.create"); if (!Dialog) return;
             const auto CloseDialog = qScopeGuard([Dialog] { if(Dialog->isVisible()) Dialog->reject(); });
             DialogSeen = true;
-            auto* Path = Dialog->findChild<QLineEdit*>("hc.iso.create.path"); Path->setText(ProfileIndex==3 ? "./" : "./created.iso");
-            QCOMPARE(Dialog->findChild<QComboBox*>("hc.iso.create.profile")->currentIndex(), 2);
-            Dialog->findChild<QComboBox*>("hc.iso.create.profile")->setCurrentIndex(ProfileIndex);
-            QCOMPARE(Dialog->findChild<QLineEdit*>("hc.iso.create.label")->text(), QString("HYPERCOMMANDER"));
-            QVERIFY(Dialog->rect().contains(Path->mapTo(Dialog, QPoint(0, 0))));
+            auto* Path = Dialog->findChild<QLineEdit*>("hc.archive.create.path"); Path->setText(Output);
+            QCOMPARE(Dialog->findChild<QComboBox*>("hc.archive.create.format")->currentData().toString(), QString("iso"));
+            QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.settings")->isEnabled());
+            QTimer::singleShot(0,Dialog,[&] { auto* Settings=Dialog->findChild<QDialog*>("hc.archive.settings.iso"); QVERIFY(Settings); Settings->findChild<QComboBox*>("hc.archive.settings.profile")->setCurrentIndex(ProfileIndex); Settings->findChild<QCheckBox*>("hc.archive.settings.share")->setChecked(true); Settings->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click(); });
+            Dialog->findChild<QPushButton*>("hc.archive.create.settings")->click();
             QVERIFY(Dialog->grab().save(QDir::current().filePath(QString("iso-create-%1.png").arg(ProfileIndex))));
-            QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.iso.create.path"),Qt::Key_Return);
+            QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.submit")->isEnabled()); Dialog->findChild<QPushButton*>("hc.archive.create.submit")->click();
         });
         Create->trigger(); QVERIFY(DialogSeen);
         QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshots().size() > size_t(ExistingJobs.size()), 5000);
@@ -5854,12 +5856,13 @@ private slots:
         Settings.SetPlugins(Group, QJsonArray{QJsonObject{{"path",Spec.FileFullPath},{"detect",Wlx ? "EXT=\"TXT\"" : ""},{"extensions",QJsonArray{"hcwcx"}}}});
         QPluginHostSettings Widget(Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx);
         Widget.Load(Settings); Widget.resize(650, 180); Widget.show();
+        const auto Expected = hc::plugins::InspectPluginBinary(Spec.FileFullPath, Wlx ? hc::plugins::PluginFormat::Wlx : hc::plugins::PluginFormat::Wcx); QVERIFY(Expected.HasValue());
         auto* Review = Widget.findChild<QPushButton*>(Prefix + "HostReview"); QVERIFY(Review);
         auto* Revoke = Widget.findChild<QPushButton*>(Prefix + "HostRevoke"); QVERIFY(Revoke);
         const bool PreviousNative = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
         const auto Restore = qScopeGuard([&] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, PreviousNative); });
-        bool Chosen = false, Confirmed = false, TimedOut = false, DefaultNo = false, UiPermission = false;
+        bool Confirmed = false, TimedOut = false, DefaultNo = false, UiPermission = false;
         QElapsedTimer Elapsed; Elapsed.start(); QTimer Driver; Driver.setInterval(20);
         connect(&Driver, &QTimer::timeout, &Widget, [&] {
             if (Elapsed.elapsed() > 10000)
@@ -5867,12 +5870,6 @@ private slots:
                 TimedOut = true;
                 for (auto* Dialog : Widget.findChildren<QDialog*>()) if (Dialog->isVisible()) Dialog->reject();
                 return;
-            }
-            for (auto* Dialog : Widget.findChildren<QFileDialog*>()) if (Dialog->isVisible())
-            {
-                if (!Chosen) { Chosen = true; Dialog->setDirectory(QFileInfo(Spec.hostManifest_).absolutePath()); }
-                if (auto* Name = Dialog->findChild<QLineEdit*>("fileNameEdit")) Name->setText(Spec.hostManifest_);
-                QMetaObject::invokeMethod(Dialog, "accept", Qt::QueuedConnection);
             }
             for (auto* Message : Widget.findChildren<QMessageBox*>()) if (Message->isVisible() && !Confirmed)
             {
@@ -5884,14 +5881,14 @@ private slots:
             }
         });
         Driver.start(); QTest::mouseClick(Review, Qt::LeftButton);
-        QTRY_VERIFY_WITH_TIMEOUT(Confirmed || TimedOut, 12000); Driver.stop(); QVERIFY(!TimedOut); QVERIFY(Chosen); QVERIFY(DefaultNo);
+        QTRY_VERIFY_WITH_TIMEOUT(Confirmed || TimedOut, 12000); Driver.stop(); QVERIFY(!TimedOut); QVERIFY(DefaultNo); QTRY_VERIFY(Review->isEnabled());
         Widget.Save(Settings);
         if (Wlx) QVERIFY(UiPermission);
         const auto Reviewed = hc::settings::JsonBytes(Settings.Plugins(Group)[0].toObject()["hostReviewed"]);
         if (Approve && !RevokeDuringConfirmation)
         {
             auto Parsed = hc::plugins::ParseManifest(Reviewed); QVERIFY(Parsed.HasValue());
-            QVERIFY(Parsed.Value() == Spec.hostApproval_.reviewed_);
+            QVERIFY(Parsed.Value() == Expected.Value().manifest_);
             QVERIFY(Settings.Plugins(Group)[0].toObject()["hostEnabled"].toBool());
         }
         else QVERIFY(Settings.Plugins(Group)[0].toObject()["hostReviewed"].toObject().isEmpty());
@@ -6471,7 +6468,7 @@ private slots:
         };
         const auto Finished = [&](const std::string& Id) { const auto State = Scheduler.Snapshot(Id); return State.HasValue() && IsTerminal(State.Value().state_); };
         auto Job = Submit("hc.file.mkdir", {{"destination", "/target"}}, Left, "alpha.txt"); QVERIFY(!Job.empty());
-        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(Finished(Job)); QVERIFY2(Scheduler.Snapshot(Job).Value().state_ == JobState::Completed, Scheduler.Snapshot(Job).Value().error_ ? Scheduler.Snapshot(Job).Value().error_->code_.c_str() : "archive operation failed");
         QTRY_VERIFY(!Left->IsLoading() && names(Left).contains("target"));
         Job = Submit("hc.file.rename", {{"destination", "renamed.txt"}}, Left, "alpha.txt"); QVERIFY(!Job.empty());
         QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
@@ -6491,7 +6488,7 @@ private slots:
         QTRY_COMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser);
         auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Confirm))); QVERIFY(Confirm);
         QTRY_VERIFY(Confirm->isVisible()); QTest::mouseClick(Confirm, Qt::LeftButton);
-        QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
+        QTRY_VERIFY(Finished(Job)); QVERIFY2(Scheduler.Snapshot(Job).Value().state_ == JobState::Completed, Scheduler.Snapshot(Job).Value().error_ ? Scheduler.Snapshot(Job).Value().error_->code_.c_str() : "archive delete failed");
         QTRY_VERIFY(!Left->IsLoading() && !names(Left).contains("target"));
         Target.nesting_[0].entry_ = "/";
         const auto Parameters = [&] { return QVariantMap{{"destination", QString::fromStdString(Serialize(Target))},

@@ -77,10 +77,13 @@ namespace hc::plugins
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
                 if (!process_) return Invalid();
+                if ((Request.createNew_ || (Request.creation_ && Request.creation_->advanced_)) && process_->ArchiveOptionsVersion() < 1)
+                    return Error{ErrorCategory::Unsupported, "archive-create-options-version"};
                 if ((!Request.metadataOrigins_.empty() && Request.metadataOrigins_.size() != Request.add_.size()) || (!Request.reuseData_.empty() && Request.reuseData_.size() != Request.add_.size())) return Invalid();
                 if (!process_->Session().epoch_.empty()) {
                     // Names are streamed below; avoid duplicating large vectors.
                     ArchiveUpdate Header{Request.archive_, Request.inputDirectory_, {}, {}, Request.maxOutputBytes_, Request.encrypt_, Request.creation_};
+                    Header.createNew_ = Request.createNew_;
                     QJsonObject Begin{{"update", EncodeArchiveUpdate(Header)}, {"added", QString::number(Request.add_.size())},
                         {"removed", QString::number(Request.remove_.size())}, {"context", EncodeContext(Context)}};
                     if (!Request.metadataOrigins_.empty()) Begin["origins"] = QString::number(Request.metadataOrigins_.size());

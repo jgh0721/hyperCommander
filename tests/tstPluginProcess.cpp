@@ -77,17 +77,47 @@ private slots:
     void actualHostAndLease()
     {
         QTemporaryDir Directory(QDir::tempPath() + "/호스트 검증 XXXXXX"); PluginApproval Approval; QVERIFY(prepare(Directory, "hc_wcx_fixture.wcx64", Approval));
-        HostLimits Limits; Limits.heartbeatMs_ = 100;
+        HostLimits Limits; Limits.heartbeatMs_ = 100; Limits.memoryBytes_ = 0;
         auto Started = PluginProcess::Start(host_, Directory.filePath("plugin.json"), Approval, Limits);
         QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
         auto Host = std::move(Started.Value()); QVERIFY(Host->Snapshot().running_); QVERIFY(Host->Snapshot().processId_ != GetCurrentProcessId());
         auto Ping = Host->Ping(); QVERIFY(Ping.HasValue()); QVERIFY(Ping.Value()["inJob"].toBool()); QVERIFY(Ping.Value()["adminDenied"].toBool()); QVERIFY(Ping.Value()["privilegesRemoved"].toBool());
+        QVERIFY(Ping.Value()["jobLimitsKnown"].toBool()); const auto Flags = Ping.Value()["jobLimitFlags"].toInteger();
+        QVERIFY(!(Flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)); QVERIFY(!(Flags & JOB_OBJECT_LIMIT_JOB_MEMORY));
+        QVERIFY(Flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE); QVERIFY(Flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS);
         auto Probe = Host->Probe(); QVERIFY(Probe.HasValue()); QCOMPARE(Probe.Value()["format"].toString(), QString("wcx")); QVERIFY(Probe.Value()["unicode"].toBool());
         QCOMPARE(Probe.Value()["processId"].toInteger(), qint64(Host->Snapshot().processId_));
         QFile Mutate(Directory.filePath("test.wcx64")); QVERIFY(!Mutate.open(QIODevice::WriteOnly));
         QTest::qWait(350); QVERIFY(Host->Snapshot().running_); QVERIFY(Host->Ping().HasValue());
         Host->Close(); QVERIFY(!Host->Snapshot().running_); QCOMPARE(Host->Snapshot().exitCode_.value(), 0u); QVERIFY(!Host->Snapshot().forcedTermination_);
         QVERIFY(Mutate.open(QIODevice::WriteOnly)); Mutate.close(); QVERIFY(!Host->Ping().HasValue());
+    }
+    void configurationLifecycle_data()
+    {
+        QTest::addColumn<bool>("Dopus"); QTest::newRow("wcx-modal") << false; QTest::newRow("dopus-modeless") << true;
+    }
+    void configurationLifecycle()
+    {
+        QFETCH(bool, Dopus); QTemporaryDir Directory; PluginApproval Approval;
+        QVERIFY(prepare(Directory, Dopus ? "hc_dopus_fixture.dll" : "hc_wcx_fixture.wcx64", Approval));
+        auto& M = Approval.reviewed_; M.format_ = Dopus ? PluginFormat::DopusVfs : PluginFormat::Wcx;
+        M.extensions_ = Dopus ? std::set<Extension>{Extension::StorageRead} : std::set<Extension>{Extension::ArchiveRead};
+        const auto Save = [&] { QFile F(Directory.filePath("plugin.json")); return F.open(QIODevice::WriteOnly | QIODevice::Truncate) && F.write(EncodeManifest(M)) > 0; };
+        QVERIFY(Save()); HostLimits Limits; Limits.purpose_ = HostPurpose::Configuration; Limits.requestMs_ = 100;
+        auto Denied = PluginProcess::Start(host_, Directory.filePath("plugin.json"), Approval, Limits); QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().code_, std::string("host-configuration-ui-not-approved"));
+        M.permissions_.insert(Permission::UserInterface); Approval.granted_ = M.permissions_; QVERIFY(Save());
+        const auto Owner = CreateWindowExW(0, L"STATIC", L"Archive settings owner", WS_OVERLAPPED, 0, 0, 100, 100, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr); QVERIFY(Owner);
+        const auto Cleanup = qScopeGuard([&] { DestroyWindow(Owner); });
+        QElapsedTimer Timer; Timer.start();
+        auto Future = std::async(std::launch::async, [&]() -> Result<QJsonObject> {
+            OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+            auto Started = PluginProcess::Start(host_, Directory.filePath("plugin.json"), Approval, Limits, Context); if (!Started.HasValue()) return Started.Failure();
+            auto Value = Started.Value()->Configure(uint64_t(Owner), Context); Started.Value()->Close();
+            if (Started.Value()->Snapshot().forcedTermination_) return Error{ErrorCategory::Internal, "configuration-forced-termination"}; return Value;
+        });
+        while (Future.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready) { MSG Message; while (PeekMessageW(&Message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&Message); DispatchMessageW(&Message); } QCoreApplication::processEvents(); }
+        auto Configured = Future.get(); QVERIFY2(Configured.HasValue(), Configured.HasValue() ? "" : Configured.Failure().code_.c_str());
+        QVERIFY(Timer.elapsed() >= 500); QVERIFY(Configured.Value()["configured"].toBool()); QCOMPARE(Configured.Value()["reinitialize"].toBool(), Dopus);
     }
     void noApprovalNoExecution()
     {

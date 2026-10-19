@@ -12,6 +12,9 @@ struct RewriteRequest {
     std::string volumeLabel_ = "HYPERCOMMANDER";
     uint64_t maxImageBytes_ = 0;
     QString temporaryBase_;
+    bool shareDuplicateContents_ = false;
+    int64_t timestampUtc_ = 0;
+    bool explicitTimestamp_ = false;
 };
 // Owns an exclusive, payload-validated staging image. Publication/replacement
 // belongs to the common commit coordinator, not to the ISO engine.

@@ -20,7 +20,7 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
         }
         if (Request.volumeLabel_.find('\0') != std::string::npos)
             return Error{ErrorCategory::InvalidRequest, "iso-label-nul", {"iso"}};
-        const HcIsoOptions Options{sizeof(HcIsoOptions), Request.profile_, Request.volumeLabel_.c_str(), Request.maxImageBytes_, 0,
+        const HcIsoOptions Options{sizeof(HcIsoOptions), Request.profile_, Request.volumeLabel_.c_str(), Request.maxImageBytes_, Request.timestampUtc_,
             [](void* Opaque, uint64_t Completed, uint64_t) -> int {
                 const auto& Context = *static_cast<OperationContext*>(Opaque);
                 if (Context.Check({"iso"})) return 0;
@@ -28,7 +28,12 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
                 return Context.Check({"iso"}) ? 0 : 1;
             }, &Context};
         const auto Path = Prepared->Path().toUtf8();
-        const auto Status = Module.Value()->build_(Path.constData(), Sources.data(), Sources.size(), &Options);
+        const uint32_t Flags = (Request.shareDuplicateContents_ ? HC_ISO_SHARE_DUPLICATE_CONTENTS : 0)
+            | (Request.explicitTimestamp_ ? HC_ISO_EXPLICIT_TIMESTAMP : 0);
+        if (Flags && !Module.Value()->buildEx_) return Error{ErrorCategory::Unsupported, "iso-extended-build-unsupported", {"iso"}};
+        const HcIsoOptionsEx Extended{sizeof(HcIsoOptionsEx), 1, Options, Flags};
+        const auto Status = Flags ? Module.Value()->buildEx_(Path.constData(), Sources.data(), Sources.size(), &Extended)
+            : Module.Value()->build_(Path.constData(), Sources.data(), Sources.size(), &Options);
         if (auto Error = Context.Check({"iso"})) return *Error;
         if (Status != HC_ISO_OK) return EngineError(Status);
         return Prepared;

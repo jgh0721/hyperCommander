@@ -167,6 +167,12 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
     bool ZipAlignment = false;
     bool Solid = Request.creation_.value_or(ArchiveCreationOptions{}).solid_;
     if (Request.creation_ && (Existing || Request.creation_->level_ > 9)) return Failure("7zip-creation-options-on-update", ErrorCategory::InvalidRequest);
+    if (Request.creation_ && Request.creation_->advanced_) {
+        const auto& Advanced = *Request.creation_->advanced_;
+        auto Checked = ValidateSevenZipSettings(Format.toStdString(), Advanced); if (!Checked.HasValue()) return Checked;
+        if (Advanced.level_ != Request.creation_->level_ || Advanced.encrypt_ != Request.encrypt_
+            || (Advanced.solid_ != ArchiveSolidMode::Off) != Solid) return Failure("7zip-creation-options-mismatch", ErrorCategory::InvalidRequest);
+    }
     if (Existing) {
         if (Target.endsWith(".001", Qt::CaseInsensitive)) return Failure("7zip-split-update-unsupported", ErrorCategory::Unsupported);
         auto Opened = Open(Module, Request.archive_, Context); if (!Opened.HasValue()) return Opened.Failure(); Original = std::move(Opened.Value());
@@ -355,10 +361,35 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         else Set(L"0", !Original && Request.creation_ && Request.creation_->level_ == 0 ? "Copy" : "LZMA2");
         if (Request.encrypt_) Set(L"he", EncryptHeaders || !Original ? "on" : "off");
     } else { Set(L"cu", "on"); if (!Method.isEmpty()) Set(L"m", Method); if (WriteEncrypted) Set(L"em", Encryption.isEmpty() ? "AES256" : Encryption); }
+    if (Request.creation_ && Request.creation_->advanced_) {
+        const auto& Advanced = *Request.creation_->advanced_;
+        const auto Codec = EffectiveSevenZipMethod(Format.toStdString(), Advanced);
+        const wchar_t* Names[]{L"", L"Copy", L"LZMA", L"LZMA2", L"PPMd", L"BZip2", L"Deflate", L"Deflate64"};
+        // Replace the default method properties, preserving the update path above.
+        const auto Replace = [&](const wchar_t* Key, QString Value) {
+            const auto Found = std::find(Keys.begin(), Keys.end(), Key);
+            if (Found == Keys.end()) Set(Key, Value); else Values[size_t(Found - Keys.begin())] = Value.toStdWString();
+        };
+        const bool Seven = Format == "7z";
+        Replace(Seven ? L"0" : L"m", QString::fromWCharArray(Names[int(Codec)]));
+        if (Advanced.dictionaryBytes_ && Codec != SevenZipMethod::Deflate && Codec != SevenZipMethod::Deflate64) {
+            const auto Key = Codec == SevenZipMethod::Ppmd ? (Seven ? L"0mem" : L"mem") : (Seven ? L"0d" : L"d");
+            Set(Key, QString::number(*Advanced.dictionaryBytes_) + 'b');
+        }
+        if (Advanced.wordSize_) Set(Codec == SevenZipMethod::Ppmd ? (Seven ? L"0o" : L"o") : (Seven ? L"0fb" : L"fb"), QString::number(*Advanced.wordSize_));
+        if (Advanced.threads_) Set(L"mt", QString::number(*Advanced.threads_));
+        if (Seven) {
+            Replace(L"s", Advanced.solid_ == ArchiveSolidMode::Off ? QString("off") : Advanced.solid_ == ArchiveSolidMode::All ? QString("on") : QString::number(*Advanced.solidBlockBytes_) + 'b');
+            if (Advanced.encrypt_) Replace(L"he", Advanced.encryptHeaders_ ? "on" : "off");
+        }
+    }
     std::vector<const wchar_t*> KeyPointers; std::vector<PROPVARIANT> Variants(Values.size());
     for (size_t I = 0; I < Values.size(); ++I) {
         KeyPointers.push_back(Keys[I].c_str()); PropVariantInit(&Variants[I]);
         if (Keys[I] == L"x") { Variants[I].vt = VT_UI4; Variants[I].ulVal = Request.creation_.value_or(ArchiveCreationOptions{}).level_; }
+        else if (Keys[I] == L"0fb" || Keys[I] == L"fb" || Keys[I] == L"0o" || Keys[I] == L"o" || Keys[I] == L"mt") {
+            Variants[I].vt = VT_UI4; Variants[I].ulVal = QString::fromStdWString(Values[I]).toUInt();
+        }
         else if (Values[I] == L"on" || Values[I] == L"off") { Variants[I].vt = VT_BOOL; Variants[I].boolVal = Values[I] == L"on" ? VARIANT_TRUE : VARIANT_FALSE; }
         else { Variants[I].vt = VT_BSTR; Variants[I].bstrVal = SysAllocString(Values[I].c_str()); }
     }

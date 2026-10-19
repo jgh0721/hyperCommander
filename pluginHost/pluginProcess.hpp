@@ -6,6 +6,7 @@
 
 namespace hc::plugins
 {
+    enum class HostPurpose { General, Configuration };
     struct HostLimits
     {
         std::uint32_t startupMs_ = 5000, requestMs_ = 3000, heartbeatMs_ = 1000;
@@ -13,6 +14,7 @@ namespace hc::plugins
         std::uint64_t memoryBytes_ = 512ULL * 1024 * 1024;
         bool enableSessionV2_ = true;
         std::uint32_t noProgressMs_ = 600000, cancelGraceMs_ = 1000;
+        HostPurpose purpose_ = HostPurpose::General;
         bool operator==(const HostLimits&) const = default;
     };
     struct HostSnapshot
@@ -44,6 +46,8 @@ namespace hc::plugins
         storage::Result<storage::ReadChunk> ReadStream(const QString& Token, std::size_t Count, storage::OperationContext Context = {});
         storage::Result<QJsonObject> ArchiveData(QJsonObject Request, const QByteArray& Bytes, storage::OperationContext Context = {});
         HostSnapshot Snapshot() const;
+        unsigned ArchiveOptionsVersion() const;
+        storage::Result<QJsonObject> Configure(std::uint64_t Owner, storage::OperationContext Context = {});
         void Close();
     private:
         struct State;
