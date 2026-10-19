@@ -1,5 +1,6 @@
 ﻿#include "hostedViewerSession.hpp"
 #include "documentViewerClient.hpp"
+#include "imageArchiveBroker.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -24,6 +25,11 @@ namespace hc::plugins
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"wlx"}}; }
+        QJsonObject ReadingSource(const EntrySnapshot& Entry){
+            if(Entry.locator_.kind_==LocatorKind::Local)return {{"path",QString::fromUtf8(Entry.locator_.root_)}};
+            if(Entry.locator_.kind_==LocatorKind::Archive&&Entry.locator_.nesting_.size()==1)return {{"path",QString::fromUtf8(Entry.locator_.root_)},{"entry",QString::fromUtf8(Entry.locator_.nesting_.front().entry_)}};
+            return {};
+        }
         Result<QByteArray> ExtensionBytes(const EntrySnapshot& Entry)
         {
             QStringDecoder Decoder(QStringDecoder::Utf8); const QString Name = Decoder(Entry.name_);
@@ -207,12 +213,13 @@ namespace hc::plugins
         Context.stopToken_ = State->stop_.get_token();
         std::shared_ptr<IMaterializer> Materializer;
         std::shared_ptr<IMaterializedFileLease> Lease;
+        std::unique_ptr<ImageArchiveBroker> ArchiveBroker;
         std::unique_ptr<PluginProcess> Host;
         std::unique_ptr<DocumentViewerClient> Document;
         bool NoMatch = false;
         const auto CloseHost = [&] {
-            if (!Host) return;
-            Host->Close(); Document.reset(); const auto Final = Host->Snapshot();
+            if (!Host) { ArchiveBroker.reset(); return; }
+            Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
             { std::lock_guard Lock(State->mutex_); State->details_.host_ = Final; }
             Host.reset();
         };
@@ -232,6 +239,7 @@ namespace hc::plugins
                 auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
                 if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
                 if (!Lease) return Invalid("viewer-content-lease-required");
+                if(ArchiveBroker)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                 return Unit{};
             };
             const auto Attempt = [&](PluginViewerOptions& Options, std::size_t Index) -> Result<bool> {
@@ -273,9 +281,13 @@ namespace hc::plugins
                 {
                     auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
                 }
-                auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_);
+                if(Inspected.Value().manifest_.compatibility_=="hyperviewer-v1"&&Inspected.Value().manifest_.id_=="builtin.hyperviewer"){
+                    auto Broker=ImageArchiveBroker::Start();if(!Broker.HasValue())return Broker.Failure();ArchiveBroker=std::move(Broker.Value());
+                    const auto Origin=ReadingSource(*Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());if(Lease)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
+                }
+                auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});
                 if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
-                const auto StartedState = Host->Snapshot();
+                const auto StartedState = Host->Snapshot();if(ArchiveBroker)ArchiveBroker->BindClient(StartedState.processId_);
                 { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
                 auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
                 if (Policy && !Dopus)
@@ -358,7 +370,7 @@ namespace hc::plugins
                     const auto Token = Document->Bind(*Entry, Writer, Lease, Hash);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
                     auto Bound = Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"displayName", QString::fromUtf8(Entry->name_)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -421,13 +433,14 @@ namespace hc::plugins
                             auto Materialized = Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
                             if (!Materialized.HasValue()) { Result = Materialized.Failure(); break; }
                             const auto Entry = Input.source_->Describe();
+                            if(ArchiveBroker){ArchiveBroker->Allow(QString::fromStdString(Materialized.Value()->LocalPath()));const auto Origin=ReadingSource(Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());}
                             auto Writer = Input.writer_;
                             if (!Writer && Entry.locator_.kind_ == LocatorKind::Local && !(Entry.attributes_ & 1u))
                                 Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
                             const auto Token = Document->Bind(Entry, Writer, Materialized.Value());
                             if (Token.isEmpty()) { Result = Invalid("document-source-binding"); break; }
                             Inputs.append(QJsonObject{{"path", QString::fromStdString(Materialized.Value()->LocalPath())},
-                                {"displayName", QString::fromUtf8(Entry.name_)}, {"sourceToken", Token}, {"broker", bool(Writer)}});
+                                {"displayName", QString::fromUtf8(Entry.name_)}, {"readingSource",ReadingSource(Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}});
                         }
                         if (Result.HasValue() && Command->parameter_ == 1) {
                             const auto Current = Document->Call("DocumentState", {}, {}, {}, Calls);
@@ -481,7 +494,7 @@ namespace hc::plugins
             { std::lock_guard Lock(State->mutex_); State->details_.host_ = FinalHost; }
             Host.reset();
         }
-        Document.reset(); Lease.reset(); Source.reset();
+        ArchiveBroker.reset(); Document.reset(); Lease.reset(); Source.reset();
         if (Materializer)
         {
             try

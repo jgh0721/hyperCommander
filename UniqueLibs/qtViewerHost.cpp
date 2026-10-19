@@ -48,7 +48,9 @@ private:
     void returnFocus(const std::function<void()>& Hide) {
         const auto Root = reinterpret_cast<HWND>(winId());
         const auto Foreground = GetForegroundWindow();
-        const bool Restore = Foreground == Root || (Foreground && IsChild(Root, Foreground));
+        // A separate viewer may already have returned activation to its owner
+        // before its close notification arrives. Restore native input focus too.
+        const bool Restore = Foreground == Root || Foreground == previousWindow_ || (Foreground && IsChild(Root, Foreground));
         const auto Previous = previousWindow_;
         const auto Focus = previousFocus_;
         auto* Owner = parentWidget();

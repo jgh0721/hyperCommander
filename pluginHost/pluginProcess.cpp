@@ -237,7 +237,7 @@ namespace hc::plugins
     PluginProcess::PluginProcess(std::unique_ptr<State> Value) : state_(std::move(Value)) {}
     PluginProcess::~PluginProcess() { Close(); }
     Result<std::unique_ptr<PluginProcess>> PluginProcess::Start(const QString& Executable, const QString& ManifestPath,
-        const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath)
+        const PluginApproval& Approval, HostLimits Limits, OperationContext Context, const QString& DefaultIniPath, const QJsonObject& ImageArchiveEndpoint)
     {
         if (Limits.startupMs_ < 100 || Limits.startupMs_ > 60000 || Limits.requestMs_ < 100 || Limits.requestMs_ > 60000
             || Limits.archiveWriteMs_ < 100 || Limits.archiveWriteMs_ > 3600000
@@ -311,6 +311,10 @@ namespace hc::plugins
         auto Variables = hc::win::RestrictedEnvironment(qEnvironmentVariable("SystemRoot") + "/System32");
         if (S.helpers_ && Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1")
             Variables << "HC_DOCUMENT_CONFIG_DIR=" + hc::settings::DocumentPaths().directory_;
+        if(!ImageArchiveEndpoint.isEmpty()){
+            if(!S.documentViewer_)return HostError("image-archive-viewer-required");
+            Variables << "HC_IMAGE_ARCHIVE_BROKER="+QString::fromLatin1(QJsonDocument(ImageArchiveEndpoint).toJson(QJsonDocument::Compact).toBase64());
+        }
         QString HelperIni;
         if (S.helpers_ && Inspected.Value().manifest_.compatibility_ == "total7zip")
         {

@@ -9,6 +9,9 @@ if(WIN32)
             string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:${HC_IMPORTED_TARGET}>\"\n")
         endif()
     endforeach()
+    if(TARGET hc_image_codecs_plugin)
+        string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:hc_image_codecs_plugin>\"\n")
+    endif()
     string(APPEND HC_PLUGIN_MANIFEST ")\n")
     file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/hc-qt-plugins-$<CONFIG>.cmake" CONTENT "${HC_PLUGIN_MANIFEST}")
 endif()
@@ -31,8 +34,12 @@ function(hc_enable_qt_deployment Target)
         "-DHC_WITH_PLUGINS=${DEPLOY_PLUGINS}"
         "-DHC_PLUGIN_MANIFEST=${CMAKE_BINARY_DIR}/hc-qt-plugins-$<CONFIG>.cmake"
         "-DHC_RUNTIME_FILE=${DEPLOY_RUNTIME_FILE}"
+        "-DHC_IMAGE_CODEC_PREFIX=${HC_IMAGE_CODEC_PREFIX}"
         -P "${PROJECT_SOURCE_DIR}/cmake/DeployQt.cmake"
     )
+    if(TARGET hc_image_codecs_plugin)
+        add_dependencies(${Target} hc_image_codecs_plugin)
+    endif()
     add_custom_command(TARGET ${Target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" ${HC_ARGS}
         COMMENT "Deploying the selected Qt runtime for ${Target}"

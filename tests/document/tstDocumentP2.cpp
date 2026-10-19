@@ -95,7 +95,7 @@ void largeTextAndCancellation(){
     QTRY_VERIFY_WITH_TIMEOUT(Workspace.IsIdle(),20000);QVERIFY(Workspace.Snapshot()["documents"].toArray().isEmpty());
 }
 void filterKernelsLinearLightAlphaAndTiles(){
-    auto Filters=ImageFilterRegistry::Filters();QCOMPARE(Filters.size(),std::size_t(5));
+    auto Filters=ImageFilterRegistry::Filters();QCOMPARE(Filters.size(),std::size_t(9));
     QVERIFY(!ImageFilterRegistry::Register(Filters.front()));
     for(const auto& Filter:Filters){QVERIFY(Filter.kernel_(0)>0);QCOMPARE(Filter.kernel_(Filter.support_+1),0.0);}
     QVERIFY(Filters[1].kernel_(1.5)<0);QCOMPARE(ImageFilterRegistry::Resolve("auto",QTransform::fromScale(.5,.25)).id_,QString("ewaRobidoux"));

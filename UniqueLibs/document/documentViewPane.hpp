@@ -11,6 +11,8 @@ class QPDFView;
 class QImageView;
 namespace hc::document
 {
+    class ImageReadingView;
+    class ImageFramePlayer;
     class DocumentViewPane final : public QWidget
     {
         Q_OBJECT
@@ -20,6 +22,7 @@ namespace hc::document
         QPlainTextEdit* Editor() const { return editor_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse);
+        void SetReadingSource(const QString& Path,const QString& Entry);
         QByteArray Content() const;
         QByteArray SessionContent() const;
         storage::Result<QByteArray> Export(const QString& Destination) const;
@@ -47,6 +50,8 @@ namespace hc::document
         void SaveRequested();
         void EncodingRequested(const QString& Encoding);
         void ClipboardRequested(const QString& Mode);
+        void EditImageRequested(const QImage& Image);
+        void ReadingSelected();
     private:
         void syncText();
         void applyTheme();
@@ -56,11 +61,14 @@ namespace hc::document
         QTextView* text_ = nullptr;
         QPDFView* pdf_ = nullptr;
         QImageView* image_ = nullptr;
+        ImageReadingView* reading_ = nullptr;
+        ImageFramePlayer* animation_ = nullptr;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
         int quality_ = -1;
         QByteArray originalImageBytes_, originalImageHash_;
         QString originalImagePath_;
+        QString readingPath_,readingEntry_;
         ViewUiContribution contribution_;
     };
 }

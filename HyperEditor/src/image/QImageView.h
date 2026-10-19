@@ -20,9 +20,11 @@ class QImageView : public QBaseView
 
 public:
     void LoadContent(const QImage& Image, const QString& Path, bool Traverse);
+    void DisplayAnimationFrame(const QImage& Image);
     QImage Content() const { return m_displayImage; }
     QByteArray SerializeContent(const QByteArray& Format = "PNG", int Quality = -1) const;
     void CommitContent();
+    bool IsEditing() const { return pendingEdit_; }
     bool IsRendering() const { return rendering_ || pendingEdit_; }
     void CancelWork() { renderStop_->request_stop();editStop_->request_stop(); }
     QString RenderError() const { return renderError_; }

@@ -8,6 +8,8 @@
 #include <QJsonDocument>
 #include <QMap>
 #include "documentViewPane.hpp"
+#include "imageFullscreen.hpp"
+#include "imageReadingView.hpp"
 #include "documentThemeAdapter.hpp"
 #include "documentSettingsDialog.hpp"
 #include "documentShortcutRouter.hpp"
@@ -133,6 +135,7 @@ namespace hc::document
     {
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
         QString sourceToken_, pendingToken_, recoveredName_, temporarySource_, displayName_;
+        QString readingPath_,readingEntry_;
         QByteArray pendingHash_;
         std::uint64_t checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
         std::shared_ptr<DocumentSession> session_ = std::make_shared<DocumentSession>(id_.toStdString());
@@ -163,7 +166,7 @@ namespace hc::document
         toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
-        status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setContentsMargins(8, 4, 8, 4);
+        status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setObjectName("documentStatus");status_->setContentsMargins(8, 4, 8, 4);
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(status_);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
@@ -233,6 +236,8 @@ namespace hc::document
             });
         }
         auto* ViewMenu = menu_->addMenu(tr("보기(&V)"));
+        auto* Fullscreen=new ImageFullscreen(this,[this]()->ImageReadingView*{const auto Tab=active();return Tab?Tab->pane_->findChild<ImageReadingView*>():nullptr;},[this](int Direction){if(auto Tab=active())if(auto* Action=Tab->pane_->findChild<QAction*>(Direction>0?"image.next":"image.previous"))Action->trigger();});Fullscreen->setObjectName("imageFullscreen");
+        auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));connect(FullscreenAction,&QAction::triggered,Fullscreen,&ImageFullscreen::Toggle);
         auto* Preferences = ViewMenu->addAction(tr("설정(&P)…"));
         Preferences->setObjectName("documentPreferences"); Preferences->setShortcut(QKeySequence("Ctrl+,")); addAction(Preferences);
         connect(Preferences, &QAction::triggered, this, &DocumentWorkspaceWidget::showPreferences);
@@ -555,8 +560,15 @@ namespace hc::document
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){update();tryFinishClose();}});
+        connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {if(!Tab->closed_)open(Path,false,{},false);});
         connect(Pane,&DocumentViewPane::SaveRequested,this,[this,Tab] {activate(Tab);findChild<QAction*>("saveDocumentAs")->trigger();});
+        connect(Pane,&DocumentViewPane::EditImageRequested,this,[this](const QImage& Image){
+            const auto Path=recoveryRoot_+"/image-copy-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
+            QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QDir().mkpath(recoveryRoot_);
+            if(!Image.save(&Buffer,"PNG")||!StoreCopy(Path,Bytes)){ShowShellError(tr("이미지 사본을 만들지 못했습니다."));return;}
+            auto Reply=open(Path,false,{},false);if(auto Copy=find(Reply["documentId"].toString())){Copy->originalAuthority_=false;Copy->originalSave_=false;Copy->temporarySource_=Path;}
+        });
         connect(Pane,&DocumentViewPane::EncodingRequested,this,[this,Tab](const QString&) {Tab->error_="document-encoding-unrepresentable";update();});
         documents_.push_back(Tab); workspace_.Add(Tab->session_);
         if (tabbed_) tabs_->addTab(Pane, tr("여는 중…")); else singlePane_->addWidget(Pane);
@@ -587,10 +599,12 @@ namespace hc::document
                     Tab->input_.bom_ = Tab->input_.encoding_ != "CP949" && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
-                Tab->originalSave_ = Tab->originalAuthority_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                Tab->originalSave_ = Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                if (Tab->input_.book_) Tab->broker_ = false;
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
                 Tab->loading_=true;
+                Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_);
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}
@@ -602,6 +616,7 @@ namespace hc::document
                 }
             }
             if(active()==Tab&&Tab->session_->Snapshot().lifecycle_==DocumentLifecycle::Ready){
+                if(Tab->input_.viewId_=="image")findChild<ImageFullscreen*>("imageFullscreen")->Restore();
                 setFocusProxy(Tab->pane_->InputWidget());
                 if (!hosted_ || IsWindowVisible(reinterpret_cast<HWND>(winId()))) Tab->pane_->Focus();
             }
@@ -649,6 +664,20 @@ namespace hc::document
         const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
             || (!TargetCanonical.isEmpty() && TargetCanonical == QFileInfo(Tab->path_).canonicalFilePath());
         if (Original && (!Tab->originalSave_ || Tab->broker_ || Tab->recovered_)) { Tab->error_ = "document-original-save-unavailable"; update(); return; }
+        if(Tab->pane_->ViewState().contains("reading")){
+            // Export is detached from the live book and its provider lease.
+            const auto Encoded=Tab->pane_->Export(Destination);if(!Encoded.HasValue()){Tab->error_=QString::fromStdString(Encoded.Failure().code_);update();return;}
+            const auto Bytes=Encoded.Value();Tab->saving_=true;Tab->error_.clear();Tab->cancellation_=std::make_shared<std::stop_source>();const auto Cancellation=Tab->cancellation_;
+            externalWatcher_->beginSelfWrite(Destination);auto* Watcher=new QFutureWatcher<storage::Result<LocalSaveResult>>(this);
+            connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Destination]{auto Result=Watcher->result();Watcher->deleteLater();Tab->saving_=false;externalWatcher_->endSelfWrite(Destination,Result.HasValue()&&Result.Value().receipt_.destinationCommitted_);
+                if(Tab->closed_)return;if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else if(!Result.Value().receipt_.cleanupErrors_.empty())Tab->error_="document-saved-cleanup-warning";update();tryFinishClose();});
+            Watcher->setFuture(QtConcurrent::run([Destination,Bytes,Cancellation,Overwrite]()->storage::Result<LocalSaveResult>{
+                storage::OperationContext Context;Context.stopToken_=Cancellation->get_token();Context.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+                storage::DestinationExpectation Expected;QByteArray Hash;
+                if(Overwrite&&QFileInfo::exists(Destination)){auto Existing=ReadDocumentFile(Destination,Context);if(!Existing.HasValue())return Existing.Failure();Expected={true,Existing.Value().source_.id_.revision_};Hash=Existing.Value().hash_;}
+                return SaveTextFile(Destination,Bytes,Expected,Hash,Context,true);
+            }));update();return;
+        }
         auto Started = Tab->session_->Save({Original ? SaveDisposition::Original : SaveDisposition::SaveAs, Destination.toUtf8().toStdString()});
         if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         const auto Ticket = Started.Value();const auto Encoded=Tab->pane_->Export(Destination);
@@ -816,7 +845,7 @@ namespace hc::document
                         // original-provider binding without decoding/creating a second view.
                         const auto Begun=Tab->session_->BeginOpen(true);
                         if(!Begun.HasValue())break;
-                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool();
+                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_;
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
@@ -825,6 +854,10 @@ namespace hc::document
                     }
                 }
                 if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool(),{},Item["displayName"].toString()));
+                const auto Origin=Item["readingSource"].toObject();
+                if(!Origin.isEmpty()&&QFileInfo(Origin["path"].toString()).isAbsolute())for(const auto& Tab:documents_)if(Tab->sourceToken_==Item["sourceToken"].toString()&&!Tab->sourceToken_.isEmpty()){
+                    Tab->readingPath_=Origin["path"].toString();Tab->readingEntry_=Origin["entry"].toString().replace('\\','/');Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
+                }
             }
             return Reply({{"documents", Results}});
         }
@@ -985,11 +1018,12 @@ namespace hc::document
         }
         auto Tab = active();
         if (Tab) {
-            workspace_.Activate(Tab->id_.toStdString()); chrome_->SetActive(Tab->pane_->Contribution());
+            workspace_.Activate(Tab->id_.toStdString());if(!findChild<ImageFullscreen*>("imageFullscreen")->Active())chrome_->SetActive(Tab->pane_->Contribution());
             const auto State = Tab->session_->Snapshot();
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : QString{};
             status_->setToolTip(Code); status_->setText(!Code.isEmpty() ? Message(Code) : Tab->loading_ ? tr("여는 중…") : Tab->saving_ || !Tab->pendingToken_.isEmpty() ? tr("저장 중…") :
                 Tab->pane_->IsBusy()?tr("표시 또는 편집 작업 처리 중…") : Tab->pane_->ViewId().toUpper()+(Tab->broker_?tr(" · 원본 공급자에 저장"):Tab->originalSave_?tr(" · 로컬 파일"):tr(" · 사본 · 다른 이름 저장")));
+            const auto Reading=Tab->pane_->ViewState()["reading"].toObject();if(Reading["pageCount"].toInt()>0)status_->setText(QString("%1 · %2 / %3 · %4").arg(Reading["book"].toString()).arg(Reading["page"].toInt()+1).arg(Reading["pageCount"].toInt()).arg(Reading["error"].toString().isEmpty()?Reading["pageName"].toString():Reading["error"].toString()));
         }
         else { chrome_->SetActive({}); status_->setText(shellError_.isEmpty() ? tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다.") : shellError_); }
         const auto Capability = Tab ? Tab->session_->Capabilities() : DocumentCapabilities{};
@@ -1012,6 +1046,7 @@ namespace hc::document
             qBound(1, appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(1), 16) * 1024 * 1024)
             status_->setText(tr("대용량 문서 · 편집·검색에 시간이 걸릴 수 있습니다. ") + status_->text());
         if (Tab && !shellError_.isEmpty()) status_->setText(shellError_ + " · " + status_->text());
+        findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         emit StateChanged();
     }
     void DocumentWorkspaceWidget::retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery)

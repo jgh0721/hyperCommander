@@ -47,6 +47,10 @@ target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVA
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 qt_add_library(hc_document_widgets STATIC
+    ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
+    ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
+    ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp
+    ../UniqueLibs/document/imageFullscreen.cpp ../UniqueLibs/document/imageFullscreen.hpp
     ../UniqueLibs/document/documentTextCodec.cpp ../UniqueLibs/document/documentTextCodec.hpp
     ../UniqueLibs/document/documentViewPane.cpp ../UniqueLibs/document/documentViewPane.hpp
     ../UniqueLibs/document/viewUiContribution.hpp
@@ -68,6 +72,7 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
+target_link_libraries(hc_document_widgets PRIVATE hc_builtin_sevenzip hc_image_archive_transport)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND NOT HC_RHWP_APPROVED_INVENTORY_SHA256)

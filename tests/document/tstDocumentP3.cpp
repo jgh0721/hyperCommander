@@ -69,19 +69,20 @@ public:
 std::shared_ptr<Source> Content(QString Path){auto Reader=MakeNativeReadProvider(LocatorKind::Local);auto At=Reader->Resolve({LocatorKind::Local,Path.toStdString()},{}).get();if(!At.HasValue())return {};auto Result=std::make_shared<Source>();Result->provider_=Reader;Result->entry_=At.Value();return Result;}
 class Lease final:public IMaterializedFileLease{
 public:
-    EntrySnapshot entry_;std::shared_ptr<std::atomic<int>> live_;
-    Lease(EntrySnapshot Entry,std::shared_ptr<std::atomic<int>> Live):entry_(Entry),live_(Live){++*live_;}
+    EntrySnapshot entry_;std::shared_ptr<std::atomic<int>> live_;QString local_;
+    Lease(EntrySnapshot Entry,std::shared_ptr<std::atomic<int>> Live,QString Local={}):entry_(Entry),live_(Live),local_(std::move(Local)){++*live_;}
     ~Lease(){--*live_;}
-    std::string LocalPath()const override{return entry_.locator_.root_;}
+    std::string LocalPath()const override{return local_.isEmpty()?entry_.locator_.root_:local_.toStdString();}
     EntrySnapshot Describe()const override{return entry_;}
     std::size_t Depth()const override{return 0;}
 };
 class Materializer final:public IMaterializer{
 public:
-    std::shared_ptr<std::atomic<int>> live_;
+    std::shared_ptr<std::atomic<int>> live_;QString copyRoot_;
     Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest Request,OperationContext Context)override{
         if(auto Stop=Context.Check({"test"}))return Ready<std::shared_ptr<IMaterializedFileLease>>(*Stop);
-        return Ready<std::shared_ptr<IMaterializedFileLease>>(std::shared_ptr<IMaterializedFileLease>(std::make_shared<Lease>(Request.source_->Describe(),live_)));}
+        QString Local;if(!copyRoot_.isEmpty()){const auto Entry=Request.source_->Describe();Local=copyRoot_+'/'+QFileInfo(QString::fromStdString(Entry.name_)).fileName();if(!QFile::exists(Local)&&!QFile::copy(QString::fromStdString(Entry.locator_.root_),Local))return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::Unavailable,"test-materialize-copy"});}
+        return Ready<std::shared_ptr<IMaterializedFileLease>>(std::shared_ptr<IMaterializedFileLease>(std::make_shared<Lease>(Request.source_->Describe(),live_,Local)));}
     MaterializationCleanup Recover()override{return {};}
     MaterializationCleanup DrainCleanup()override{return {};}
 };
@@ -305,6 +306,34 @@ void isolatedF3WindowOwnership(){
     bool Parsed=false;const auto Native=Surface.Details().documentReply_["nativeWindow"].toString().toULongLong(&Parsed,16);
     QVERIFY(Parsed);QCOMPARE(quintptr(Native),quintptr(Viewer));
     QVERIFY(!IsChild(reinterpret_cast<HWND>(Surface.winId()),Viewer));
+    Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
+}
+void isolatedComicArchiveReading(){
+    QTemporaryDir Root;
+    QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
+    QVERIFY(Page.save(Root.filePath("1.png")));QVERIFY(Page.save(Root.filePath("2.png")));
+    QProcess Pack;Pack.setWorkingDirectory(Root.path());
+    Pack.start(QCoreApplication::applicationDirPath()+"/../sevenzip-tools/official/7z.exe",{"a","-tzip","comic 01.cbz","1.png","2.png"});
+    QVERIFY(Pack.waitForFinished(15000));QCOMPARE(Pack.exitCode(),0);
+    QVERIFY(QFile::copy(Root.filePath("comic 01.cbz"),Root.filePath("comic 02.cbz")));
+    const auto Private=Root.filePath("private");QVERIFY(QDir().mkpath(Private));
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtPluginViewerController Controller(nullptr,[Live,Private]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;Item->copyRoot_=Private;return std::shared_ptr<IMaterializer>(Item);});
+    QtPluginViewerSurface Surface(&Controller);Surface.Open(Options(),Content(Root.filePath("comic 01.cbz")));
+    const bool Ready=Wait([&]{return Surface.IsReady()&&Surface.Details().documentState_["idle"].toBool();},30000);
+    QVERIFY2(Ready,qPrintable(QString::fromStdString(Surface.Snapshot().error_?Surface.Snapshot().error_->code_:std::string{})+" "+QString::fromUtf8(QJsonDocument(Surface.Details().documentState_).toJson(QJsonDocument::Compact))));
+    auto State=Surface.Details().documentState_;const auto Id=State["activeDocumentId"].toString();
+    const auto Document=Doc(State,Id);
+    QVERIFY2(Document["lifecycle"]=="ready",qPrintable(QJsonDocument(State).toJson(QJsonDocument::Compact)));
+    QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject()["book"].toString()==Root.filePath("comic 01.cbz");}));
+    QCOMPARE(Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject()["pageCount"].toInt(),2);
+    const auto Sequence=Surface.SendDocument({{"action","reading.page"},{"page",1},{"documentId",Id}});QVERIFY(Sequence.HasValue());
+    QVERIFY(Wait([&]{return Surface.Details().commandSequence_>=Sequence.Value();}));QVERIFY(!Surface.Details().commandError_);
+    QCOMPARE(Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject()["page"].toInt(),1);
+    const auto Next=Surface.SendDocument({{"action","reading.volume"},{"direction",1},{"documentId",Id}});QVERIFY(Next.HasValue());
+    QVERIFY(Wait([&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject()["book"].toString()==Root.filePath("comic 02.cbz");}));
+    QVERIFY(!Doc(Surface.Details().documentState_,Id)["dirty"].toBool());
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
 void f3WindowStaysRestoredAfterLoadingDialogHides(){

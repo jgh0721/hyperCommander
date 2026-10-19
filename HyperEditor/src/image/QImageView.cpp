@@ -1,6 +1,8 @@
 ﻿#include "image/QImageView.h"
 
 #include "core/ThemeManager.h"
+#include "UniqueLibs/document/imageBook.hpp"
+#include "UniqueLibs/document/imageDisplayColor.hpp"
 #include "core/ToolbarIcons.h"
 #include "utils/FileLoadHelper.h"
 
@@ -221,7 +223,7 @@ void QImageView::closeFile()
 bool QImageView::isModified() const { return m_modified; }
 QStringList QImageView::supportedExtensions() const
 {
-    return {"jpg","jpeg","png","bmp","gif","tiff","tif","ico","webp","svg"};
+    return hc::document::ImageExtensions();
 }
 
 bool QImageView::opensFileAsynchronously() const
@@ -587,9 +589,10 @@ void QImageView::setModifiedState(bool modified)
 QImage QImageView::scaledImage() const
 {
     if(m_displayImage.isNull()||!m_scrollArea)return {};
-    const auto Request=renderRequest();const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
+    auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
     if(Key==renderedKey_)return renderedImage_;
     auto Preview=m_displayImage.scaled(Request.outputSize_,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
+    if(!Preview.colorSpace().isValid())Preview.setColorSpace(QColorSpace::SRgb);Preview=Preview.convertedToColorSpace(hc::document::ImageDisplayColorSpace(screen()));
     Preview.setDevicePixelRatio(devicePixelRatioF());return Preview;
 }
 
@@ -598,13 +601,13 @@ void QImageView::updateDisplay()
     if (m_updatingDisplay || m_displayImage.isNull() || !m_scrollArea || !m_imageLabel) return;
     QScopedValueRollback<bool> guard(m_updatingDisplay, true);
 
-    const auto Request=renderRequest();const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
+    auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
     if(!rendering_&&Key!=renderedKey_&&renderError_.isEmpty()) {
-        rendering_=true;renderStop_=std::make_shared<std::stop_source>();auto Work=Request;Work.stop_=renderStop_->get_token();
+        rendering_=true;renderStop_=std::make_shared<std::stop_source>();auto Work=Request;Work.targetColor_=hc::document::ImageDisplayColorSpace(screen());Work.stop_=renderStop_->get_token();
         auto* Watcher=new QFutureWatcher<hc::document::ImageRenderResult>(this);
         connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Key] {
             const auto Result=Watcher->result();Watcher->deleteLater();rendering_=false;
-            if(!m_displayImage.isNull()&&Key==hc::document::ImageCacheKey(contentRevision_,renderRequest(),devicePixelRatioF())) {
+            if(!m_displayImage.isNull()&&Key==[this]{auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());return hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());}()) {
                 renderError_=Result.error_;renderedKey_=Key;renderedImage_=Result.image_;renderedImage_.setDevicePixelRatio(devicePixelRatioF());
             }
             updateDisplay();
@@ -1376,6 +1379,7 @@ QByteArray QImageView::SerializeContent(const QByteArray& Format,int Quality) co
     return Writer.write(m_displayImage)?Bytes:QByteArray{};
 }
 void QImageView::CommitContent() {m_undoStack->setClean();m_modified=false;}
+void QImageView::DisplayAnimationFrame(const QImage& Image){if(Image.isNull()||m_modified||rendering_||pendingEdit_)return;m_displayImage=Image;++contentRevision_;renderStop_->request_stop();renderedKey_.clear();renderError_.clear();updateDisplay();emit imageChanged();}
 void QImageView::SetDisplayFilter(const QString& Filter)
 {
     if(Filter!="auto") {bool Found=false;for(const auto& Item:hc::document::ImageFilterRegistry::Filters())Found|=Item.id_==Filter;if(!Found)return;}

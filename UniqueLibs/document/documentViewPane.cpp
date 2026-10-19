@@ -1,6 +1,8 @@
 ﻿#include "documentViewPane.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "documentThemeAdapter.hpp"
+#include "imageReadingView.hpp"
+#include "imageFramePlayer.hpp"
 #include "documentTextCodec.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
@@ -24,6 +26,9 @@
 #include <QSignalBlocker>
 #include <QScopedValueRollback>
 #include <QFileInfo>
+#include <QMessageBox>
+#include <QMenu>
+#include <QToolButton>
 #include <QFontDatabase>
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -58,6 +63,11 @@ namespace hc::document
         connect(&Theme,&fm::style::ThemeManager::changed,this,&DocumentViewPane::applyTheme);
         connect(&Theme,&fm::style::ThemeManager::fontsChanged,this,&DocumentViewPane::applyTheme);
     }
+    void DocumentViewPane::SetReadingSource(const QString& Path,const QString& Entry){
+        readingPath_=Path;readingEntry_=Entry;
+        if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
+            reading_->OpenPath(Path,Entry,reading_->State()["mode"].toInt());
+    }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse)
     {
         const QSignalBlocker Block(this),EditorBlock(editor_);
@@ -65,6 +75,9 @@ namespace hc::document
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
         originalImageHash_ = viewId_ == "image" ? Input.hash_ : QByteArray{};
         originalImagePath_ = viewId_ == "image" ? Input.path_ : QString{};
+        if(auto* EditBar=findChild<QToolBar*>("imageEditToolbar"))delete EditBar;
+        if(animation_){delete animation_;animation_=nullptr;}
+        if(reading_){delete reading_;reading_=nullptr;}
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         bool Success=true;
@@ -100,21 +113,73 @@ namespace hc::document
         }
         if(pdf_){connect(pdf_,&QPDFView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(pdf_,&QPDFView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);}
         if(image_) {
+            const auto OriginalActions=toolbar_->actions();
+            reading_=new ImageReadingView(this);reading_->hide();layout()->addWidget(reading_);
+            animation_=new ImageFramePlayer(this);connect(animation_,&ImageFramePlayer::Frame,image_,&QImageView::DisplayAnimationFrame);
+            connect(image_,&QImageView::ContentChanged,animation_,[this]{animation_->Play(false);});
+            auto* Play=toolbar_->addAction(tr("재생/정지"));Play->setShortcut(QKeySequence("Alt+Pause"));Play->setShortcutContext(Qt::WidgetWithChildrenShortcut);addAction(Play);
+            connect(Play,&QAction::triggered,animation_,[this]{if(!reading_->isHidden())reading_->ToggleAnimation();else animation_->Play(!animation_->Playing());});
+            for(int Direction:{-1,1}){auto* Step=toolbar_->addAction(Direction<0?tr("이전 프레임"):tr("다음 프레임"));Step->setObjectName(Direction<0?"imageFramePrevious":"imageFrameNext");connect(Step,&QAction::triggered,animation_,[this,Direction]{if(!reading_->isHidden())reading_->StepAnimation(Direction);else animation_->Step(Direction);});}
+            if(Input.bytes_.startsWith("GIF")||(Input.bytes_.startsWith("RIFF")&&Input.bytes_.mid(8,4)=="WEBP"))animation_->Load(Input.bytes_);
+            auto* Mode=new QComboBox(toolbar_);Mode->setObjectName("imageReadingMode");Mode->setAccessibleName(tr("이미지 보기 모드"));Mode->addItems({tr("일반 이미지"),tr("코믹"),tr("웹툰")});toolbar_->insertWidget(toolbar_->actions().value(0),Mode);
+            const auto Book=Input.book_;const auto Path=Input.path_;const auto First=Input.image_;
+            connect(Mode,&QComboBox::activated,this,[this,Book,Path,First,Mode](int Value){
+                if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);QMessageBox::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
+                if(Value==0&&!Book&&reading_->State()["pageCount"].toInt()==0){reading_->hide();image_->show();return;}
+                if(reading_->State()["pageCount"].toInt()==0){
+                    if(Book)reading_->Load(Book,First);
+                    else reading_->OpenPath(readingPath_.isEmpty()?Path:readingPath_,readingEntry_,Value);
+                }
+                animation_->Clear();image_->hide();if(auto* EditBar=findChild<QToolBar*>("imageEditToolbar"))EditBar->hide();reading_->show();reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
+            });
+            connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
+            const auto ReadingOptionsStart=toolbar_->actions().size();
+            auto* Rtl=toolbar_->addAction(tr("우→좌"));Rtl->setCheckable(true);Rtl->setObjectName("imageRightToLeft");connect(Rtl,&QAction::toggled,reading_,&ImageReadingView::SetRightToLeft);
+            auto* Cover=toolbar_->addAction(tr("표지 단독"));Cover->setObjectName("imageCover");Cover->setCheckable(true);Cover->setChecked(true);connect(Cover,&QAction::toggled,reading_,&ImageReadingView::SetCover);
+            auto* Split=toolbar_->addAction(tr("펼침면 분할"));Split->setObjectName("imageSplit");Split->setCheckable(true);connect(Split,&QAction::toggled,reading_,&ImageReadingView::SetSplit);
+            auto* Auto=toolbar_->addAction(tr("다음 권 자동"));Auto->setObjectName("imageAutoNext");Auto->setCheckable(true);Auto->setChecked(true);connect(Auto,&QAction::toggled,reading_,&ImageReadingView::SetAutomaticNext);
+            auto* NextVolume=toolbar_->addAction(tr("다음 권"));connect(NextVolume,&QAction::triggered,reading_,[this]{reading_->OpenVolume(1);});
+            auto* EditCurrent=toolbar_->addAction(tr("현재 이미지 사본 편집"));connect(EditCurrent,&QAction::triggered,reading_,[this]{const auto Image=!reading_->isHidden()?reading_->CurrentImage():image_->Content();if(!Image.isNull())emit EditImageRequested(Image);});
+            for(const auto& Item:{std::pair{"grayscale",tr("회색조")},std::pair{"invert",tr("색 반전")}}){auto* A=toolbar_->addAction(Item.second);A->setCheckable(true);connect(A,&QAction::toggled,reading_,[this,Name=QString(Item.first)](bool On){reading_->SetAdjustment(Name,On?1:0);});}
+            for(const auto& Item:{std::pair{"brightness",tr("밝기")},std::pair{"contrast",tr("대비")},std::pair{"gamma",tr("감마")},std::pair{"sharpness",tr("선명화")}}){auto* A=toolbar_->addAction(Item.second);connect(A,&QAction::triggered,reading_,[this,Name=QString(Item.first),Label=Item.second]{bool Ok=false;const double V=QInputDialog::getDouble(this,Label,Label,Name=="contrast"||Name=="gamma"?1:0,Name=="brightness"?-1:Name=="gamma"||Name=="contrast"?.1:0,Name=="gamma"?5:3,2,&Ok);if(Ok)reading_->SetAdjustment(Name,V);});}
+            auto* ReadingOptions=new QMenu(tr("읽기 설정"),toolbar_);ReadingOptions->setObjectName("imageReadingOptions");
+            for(auto* A:toolbar_->actions())if(A->objectName().startsWith("imageFrame")){toolbar_->removeAction(A);ReadingOptions->addAction(A);}
+            const auto AllActions=toolbar_->actions();for(int I=int(ReadingOptionsStart)-2;I<AllActions.size();++I){toolbar_->removeAction(AllActions[I]);ReadingOptions->addAction(AllActions[I]);}
+            auto* OptionsButton=new QToolButton(toolbar_);OptionsButton->setText(tr("읽기 설정"));OptionsButton->setPopupMode(QToolButton::InstantPopup);OptionsButton->setMenu(ReadingOptions);toolbar_->addWidget(OptionsButton);
             connect(image_,&QImageView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(image_,&QImageView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             auto* EditToolbar=new QToolBar(tr("이미지 편집"),this);EditToolbar->setObjectName("imageEditToolbar");
-            bool Editing=false;for(auto* Action:toolbar_->actions()){Editing|=Action->isCheckable();if(Editing){toolbar_->removeAction(Action);EditToolbar->addAction(Action);}}
+            for(auto* Action:OriginalActions){
+                const auto Name=Action->objectName();
+                if(Name=="image.previous"||Name=="image.next"){
+                    disconnect(Action,nullptr,image_,nullptr);const auto Direction=Name=="image.next"?1:-1;
+                    connect(Action,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Move(Direction);else if(Direction>0)image_->nextImage();else image_->previousImage();});
+                } else {toolbar_->removeAction(Action);EditToolbar->addAction(Action);}
+            }
+            auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")});Fit->setCurrentIndex(1);toolbar_->addWidget(Fit);
+            connect(Fit,&QComboBox::activated,this,[this](int Value){if(!reading_->isHidden())reading_->SetFit(Value);else image_->setFitMode(static_cast<QImageView::FitMode>(Value));});
+            for(int Direction:{-1,1}){auto* Zoom=toolbar_->addAction(Direction>0?tr("확대"):tr("축소"));connect(Zoom,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Zoom(Direction>0?1.25:.8);else if(Direction>0)image_->setZoomLevel(image_->zoomLevel()*1.25);else image_->setZoomLevel(image_->zoomLevel()*.8);});}
+            auto* Gap=ReadingOptions->addAction(tr("페이지 간격"));connect(Gap,&QAction::triggered,this,[this]{bool Ok=false;const auto Value=QInputDialog::getInt(this,tr("페이지 간격"),tr("간격 (DIP)"),reading_->State()["gap"].toInt(),0,200,1,&Ok);if(Ok)reading_->SetGap(Value);});
+            auto* Bookmark=ReadingOptions->addAction(tr("책갈피 저장"));connect(Bookmark,&QAction::triggered,reading_,&ImageReadingView::Bookmark);
+            auto* OpenBookmark=ReadingOptions->addAction(tr("책갈피 이동"));connect(OpenBookmark,&QAction::triggered,reading_,&ImageReadingView::OpenBookmark);
+            auto* Private=ReadingOptions->addAction(tr("시크릿 읽기"));Private->setCheckable(true);connect(Private,&QAction::toggled,reading_,&ImageReadingView::SetPrivate);
             static_cast<QVBoxLayout*>(layout())->insertWidget(1,EditToolbar);
             auto* Filters=new QComboBox(toolbar_);Filters->setObjectName("imageDisplayFilter");Filters->addItem(tr("자동"),"auto");
             for(const auto& Filter:ImageFilterRegistry::Filters())Filters->addItem(Filter.label_,Filter.id_);
-            auto* Quality=new QSpinBox(toolbar_);Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));toolbar_->addWidget(Quality);
+            auto* Quality=new QSpinBox(toolbar_);Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));EditToolbar->addWidget(Quality);
             connect(Quality,&QSpinBox::valueChanged,this,[this](int Value){quality_=Value;});
-            auto* Resize=toolbar_->addAction(tr("출력 크기"));
+            auto* Resize=EditToolbar->addAction(tr("출력 크기"));
             connect(Resize,&QAction::triggered,this,[this] {
                 bool Accepted=false;const auto Current=image_->Content().size();
                 const int Width=QInputDialog::getInt(this,tr("출력 크기"),tr("너비"),Current.width(),1,16384,1,&Accepted);if(!Accepted)return;
                 const int Height=QInputDialog::getInt(this,tr("출력 크기"),tr("높이"),Current.height(),1,16384,1,&Accepted);if(Accepted)image_->ApplyResize(QSize(Width,Height),image_->DisplayFilter());
             });
-            toolbar_->insertWidget(toolbar_->actions().value(0),Filters);connect(Filters,&QComboBox::activated,image_,[this,Filters](int Index){image_->SetDisplayFilter(Filters->itemData(Index).toString());});
+            toolbar_->insertWidget(toolbar_->actions().value(0),Filters);connect(Filters,&QComboBox::activated,image_,[this,Filters](int Index){image_->SetDisplayFilter(Filters->itemData(Index).toString());if(reading_)reading_->SetFilter(Filters->itemData(Index).toString());});
+            connect(reading_,&ImageReadingView::Changed,this,[this,Mode,Rtl,Cover,Split,Auto,Filters,Fit]{
+                if(!!reading_->isHidden()||!reading_->State()["pageCount"].toInt())return;const auto S=reading_->State();
+                const QSignalBlocker B1(Mode),B2(Rtl),B3(Cover),B4(Split),B5(Auto),B6(Filters),B7(Fit);
+                Mode->setCurrentIndex(S["mode"].toInt());Rtl->setChecked(S["rtl"].toBool());Cover->setChecked(S["cover"].toBool());Split->setChecked(S["split"].toBool());Auto->setChecked(S["automaticNext"].toBool());Filters->setCurrentIndex(Filters->findData(S["filter"].toString()));Fit->setCurrentIndex(S["fit"].toInt());
+            });
+            if(Book){reading_->Load(Book,First);const int Value=reading_->property("readingHistoryRestored").toBool()?reading_->State()["mode"].toInt():1;Mode->setCurrentIndex(Value);emit Mode->activated(Value);EditToolbar->hide();if(!readingPath_.isEmpty()&&readingPath_!=Book->path_)reading_->OpenPath(readingPath_,readingEntry_,Value);}
         }
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
@@ -139,6 +204,11 @@ namespace hc::document
     }
     storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination) const
     {
+        if(reading_&&!reading_->isHidden()){
+            const auto Image=reading_->CurrentImage();if(Image.isNull())return storage::Error{storage::ErrorCategory::Unavailable,"image-page-not-ready"};
+            QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
+            if(!Image.save(&Buffer,QFileInfo(Destination).suffix().toLatin1().constData(),quality_))return storage::Error{storage::ErrorCategory::Unsupported,"document-serialization-or-format"};return Bytes;
+        }
         if(text_)return EncodeDocumentText(text_->Content(),encoding_,bom_);
         const auto Suffix=QFileInfo(Destination).suffix();
         auto Bytes=pdf_?pdf_->SerializeContent():image_?(!image_->isModified() && quality_ < 0
@@ -147,7 +217,7 @@ namespace hc::document
         if(Bytes.isEmpty())return storage::Error{storage::ErrorCategory::InvalidRequest,"document-serialization-or-format"};
         return Bytes;
     }
-    bool DocumentViewPane::IsBusy() const {return (image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());}
+    bool DocumentViewPane::IsBusy() const {return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());}
     bool DocumentViewPane::CanUndo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
     bool DocumentViewPane::CanRedo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
     void DocumentViewPane::Undo(){if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);else if(image_)image_->undoEdit();}
@@ -163,7 +233,7 @@ namespace hc::document
             image_->CommitContent();
         }
     }
-    void DocumentViewPane::Focus(){if(text_)text_->Backend()->widget()->setFocus();else if(view_)view_->setFocus();}
+    void DocumentViewPane::Focus(){if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(view_)view_->setFocus();}
     void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
@@ -194,12 +264,27 @@ namespace hc::document
         if(text_){State["encoding"]=encoding_;State["bom"]=bom_;State["language"]=text_->currentLanguage();State["readOnly"]=text_->isReadOnly();State["lineCount"]=text_->lineCount();}
         if(pdf_){State["page"]=pdf_->currentPage();State["pageCount"]=pdf_->totalPageCount();State["formsSupported"]=false;State["searchCount"]=pdf_->totalSearchResultCount();}
         if(image_){State["filter"]=image_->DisplayFilter();State["width"]=image_->Content().width();State["height"]=image_->Content().height();State["rendering"]=image_->IsRendering();State["renderError"]=image_->RenderError();}
+        if(reading_&&!reading_->isHidden())State["reading"]=reading_->State();
+        if(animation_)State["animationPlaying"]=animation_->Playing();
         return State;
     }
     QJsonObject DocumentViewPane::Execute(const QJsonObject& Request)
     {
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
+        if(reading_&&!reading_->isHidden()&&(Action=="image.rotate"||Action=="image.flip"||Action=="image.crop"||Action=="image.resize"||Action=="image.composite"))return Error("image-copy-edit-required");
+        if(Action.startsWith("reading.")&&reading_){
+            if(Action=="reading.mode"&&(image_->isModified()||image_->IsEditing()))return Error("image-save-before-reading");
+            if(Action=="reading.animation"){reading_->ToggleAnimation();return {{"accepted",true}};}
+            if(Action=="reading.mode"){auto* Mode=findChild<QComboBox*>("imageReadingMode");const auto Value=qBound(0,Request["mode"].toInt(),2);Mode->setCurrentIndex(Value);emit Mode->activated(Value);}
+            else if(Action=="reading.page")reading_->GoTo(Request["page"].toInt(),Request["relative"].toDouble());
+            else if(Action=="reading.next")reading_->Move(1,Request["onePage"].toBool());else if(Action=="reading.previous")reading_->Move(-1,Request["onePage"].toBool());
+            else if(Action=="reading.rtl")reading_->SetRightToLeft(Request["enabled"].toBool());else if(Action=="reading.cover")reading_->SetCover(Request["enabled"].toBool());
+            else if(Action=="reading.split")reading_->SetSplit(Request["enabled"].toBool());else if(Action=="reading.adjust")reading_->SetAdjustment(Request["name"].toString(),Request["value"].toDouble());
+            else if(Action=="reading.zoom")reading_->Zoom(Request["factor"].toDouble(1));else if(Action=="reading.volume")reading_->OpenVolume(Request["direction"].toInt(1));
+            else if(Action=="reading.gap")reading_->SetGap(Request["value"].toInt());else if(Action=="reading.bookmark")reading_->Bookmark();else if(Action=="reading.openBookmark")reading_->OpenBookmark();else if(Action=="reading.private")reading_->SetPrivate(Request["enabled"].toBool());
+            else if(Action=="reading.fit")reading_->SetFit(Request["mode"].toInt());else return Error("reading-command");return {{"accepted",true}};
+        }
         if(text_&&text_->isReadOnly()&&(Action=="replaceText"||Action=="text.replaceAll"))return Error("document-edit-unavailable");
         if(Action=="replaceText"&&text_){auto Text=Request["text"].toString();if(eol_=="CRLF")Text.replace("\r\n","\n").replace("\n","\r\n");text_->ReplaceContent(Text);return {{"accepted",true}};}
         if(Action=="selectAll"&&text_){static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SELECTALL);return {{"accepted",true}};}
@@ -214,8 +299,8 @@ namespace hc::document
         else if(Action=="pdf.search"&&pdf_)pdf_->searchText(Request["text"].toString());
         else if(Action=="pdf.rotate"&&pdf_)pdf_->setRotationAngle(static_cast<QPDFView::RotationAngle>(Request["angle"].toInt()));
         else if(Action=="pdf.annotate"&&pdf_){if(!pdf_->AddAnnotation(Request["page"].toInt(),Request["kind"].toString(),QRectF(Request["x"].toDouble(),Request["y"].toDouble(),Request["width"].toDouble(),Request["height"].toDouble()),Request["text"].toString()))return Error("document-pdf-annotation");}
-        else if(Action=="image.fit"&&image_)image_->setFitMode(static_cast<QImageView::FitMode>(qBound(0,Request["mode"].toInt(),4)));
-        else if(Action=="image.filter"&&image_)image_->SetDisplayFilter(Request["filter"].toString());
+        else if(Action=="image.fit"&&image_){if(reading_&&!reading_->isHidden())reading_->SetFit(Request["mode"].toInt());else image_->setFitMode(static_cast<QImageView::FitMode>(qBound(0,Request["mode"].toInt(),4)));}
+        else if(Action=="image.filter"&&image_){image_->SetDisplayFilter(Request["filter"].toString());if(reading_)reading_->SetFilter(Request["filter"].toString());}
         else if(Action=="image.rotate"&&image_){if(Request["angle"].toInt()==90)image_->rotateClockwise();else if(Request["angle"].toInt()==-90)image_->rotateCounterClockwise();else return Error("document-image-rotation");}
         else if(Action=="image.flip"&&image_){if(Request["vertical"].toBool())image_->flipVertical();else image_->flipHorizontal();}
         else if(Action=="image.crop"&&image_){if(!image_->ApplyCrop(QRect(Request["x"].toInt(),Request["y"].toInt(),Request["width"].toInt(),Request["height"].toInt())))return Error("document-image-crop");}
@@ -226,14 +311,15 @@ namespace hc::document
             QTemporaryFile Artifact; if(!Artifact.open())return Error("document-print-artifact");
             const auto Path=Artifact.fileName();Artifact.close();
             QPrinter Printer(QPrinter::HighResolution);Printer.setOutputFormat(QPrinter::PdfFormat);Printer.setOutputFileName(Path);
-            PrintManager Manager;Manager.printView(view_,&Printer);
+            PrintManager Manager;QImageView Printed;
+            if(reading_&&!reading_->isHidden()){const auto Image=reading_->CurrentImage();if(Image.isNull())return Error("image-page-not-ready");Printed.LoadContent(Image,reading_->CurrentName(),false);Manager.printView(&Printed,&Printer);}else Manager.printView(view_,&Printer);
             QFile File(Path);if(!File.open(QIODevice::ReadOnly)||File.size()>DocumentByteLimit)return Error("document-print-output");
             const auto Bytes=File.readAll();if(!Bytes.startsWith("%PDF-"))return Error("document-print-output");
             const auto Saved=SaveTextFile(Request["path"].toString(),Bytes,{},{});
             if(!Saved.HasValue())return Error(Saved.Failure().code_.c_str());
         }
-        else if(Action=="print"&&view_){QTimer::singleShot(0,this,[this]{PrintManager Printer;Printer.showPrintDialog(view_,this);});}
-        else if(Action=="printPreview"&&view_)QTimer::singleShot(0,this,[this]{view_->printPreview();});
+        else if(Action=="print"&&view_){QTimer::singleShot(0,this,[this]{PrintManager Printer;QImageView Printed;if(reading_&&!reading_->isHidden()){if(reading_->CurrentImage().isNull())return;Printed.LoadContent(reading_->CurrentImage(),reading_->CurrentName(),false);Printer.showPrintDialog(&Printed,this);}else Printer.showPrintDialog(view_,this);});}
+        else if(Action=="printPreview"&&view_)QTimer::singleShot(0,this,[this]{if(reading_&&!reading_->isHidden()){if(reading_->CurrentImage().isNull())return;QImageView Printed;Printed.LoadContent(reading_->CurrentImage(),reading_->CurrentName(),false);PrintManager Printer;Printer.showPreview(&Printed,this);}else view_->printPreview();});
         else if(Action=="watermark"&&view_){auto Config=view_->watermark();Config.enabled=Request["enabled"].toBool();Config.text=Request["text"].toString();view_->setWatermark(Config);}
         else if(Action=="captureProtection"&&view_){view_->setScreenCaptureProtection(Request["enabled"].toBool());if(ScreenProtect::isProtected(view_)!=Request["enabled"].toBool())return Error("document-capture-protection-unavailable");}
         else return Error("document-view-command-unsupported");
@@ -242,10 +328,11 @@ namespace hc::document
 }
 
 namespace hc::document {
-QWidget* DocumentViewPane::InputWidget() const {return text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {return reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();
+    if(reading_&&!reading_->isHidden()){QByteArray Bytes;QBuffer B(&Bytes);if(!B.open(QIODevice::WriteOnly)||!reading_->CurrentImage().save(&B,"PNG"))return {};return {{"mime","image/png"},{"bytes",QString::fromLatin1(Bytes.toBase64())}};}
     if (image_) return image_->ClipboardContent();
     if (!text_) return {};
     auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
@@ -299,10 +386,11 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
 }
 }
 
-namespace hc::document {void DocumentViewPane::Cancel(){if(image_)image_->CancelWork();}}
+namespace hc::document {void DocumentViewPane::Cancel(){if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
 
 namespace hc::document {
 DocumentViewPane::~DocumentViewPane(){
+    if(reading_)reading_->Cancel();
     if(image_)image_->CancelWork();
     // QWidget deletes children after this derived vtable has gone away.
     // Their resource-close signals must not call a DocumentViewPane thunk.

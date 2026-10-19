@@ -53,6 +53,11 @@ namespace hc::plugins
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
                 return Host.Value()->Update(std::move(Request), Context);
             }
+            void Close()
+            {
+                std::lock_guard Lock(mutex_);
+                if (process_) { process_->Close(); process_.reset(); }
+            }
         private:
             Result<std::shared_ptr<IArchiveBackend>> connect(OperationContext Context)
             {
@@ -83,4 +88,8 @@ namespace hc::plugins
         };
     }
     std::shared_ptr<IArchiveBackend> MakeApprovedWcxBackend(ApprovedWcxOptions Options) { return std::make_shared<Backend>(std::move(Options)); }
+    void CloseApprovedWcxBackend(const std::shared_ptr<IArchiveBackend>& Value)
+    {
+        if (auto Admitted = std::dynamic_pointer_cast<Backend>(Value)) Admitted->Close();
+    }
 }

@@ -256,8 +256,14 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Closing.isNull()||(Closing->isHidden()&&Closing->objectName()=="hc.document.prepared"),10000);
         QTRY_COMPARE(GetForegroundWindow(),reinterpret_cast<HWND>(Main.winId()));
         QTRY_VERIFY(Input.hasFocus());
-        QTRY_COMPARE(GetFocus(),reinterpret_cast<HWND>(Input.winId()));
-        QTest::keyClicks(QApplication::focusWidget(),"returned"); QCOMPARE(Input.text(),QString("returned"));
+        // Alien Qt widgets receive native keys through their existing ancestor HWND.
+        // Calling winId() here would create a new HWND after focus was restored.
+        QTRY_COMPARE(GetFocus(),reinterpret_cast<HWND>(Input.effectiveWinId()));
+        for(const auto Character:QString("returned")) {
+            INPUT Keys[2]{};for(auto& Key:Keys){Key.type=INPUT_KEYBOARD;Key.ki.wScan=Character.unicode();Key.ki.dwFlags=KEYEVENTF_UNICODE;}
+            Keys[1].ki.dwFlags|=KEYEVENTF_KEYUP;QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
+        }
+        QTRY_COMPARE(Input.text(),QString("returned"));
         Host.CloseAll();QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(),15000);
     }
     void closedViewerBecomesWarm() {

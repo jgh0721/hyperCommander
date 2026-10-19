@@ -1,5 +1,6 @@
 ﻿#include "documentStorageAdapter.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
+#include "imageBook.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QCryptographicHash>
@@ -33,6 +34,14 @@ namespace hc::document
     Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context)
     {
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
+        if(IsImageBook(Path)||QFileInfo(Path).isDir()) {
+            auto Book=OpenImageBook(Path,Context);if(!Book.HasValue())return Book.Failure();
+            auto Page=ReadImagePage(Book.Value(),0,Context);if(auto Stop=Context.Check({"image-book"}))return *Stop;
+            TextInput Input;Input.path_=QFileInfo(Path).absoluteFilePath();Input.viewId_="image";Input.book_=Book.Value();if(Page.HasValue()){Input.image_=Page.Value().image_;Input.bytes_=Page.Value().bytes_;}
+            if(Book.Value()->archive_){QFile Archive(Path);if(!Archive.open(QIODevice::ReadOnly))return Error{ErrorCategory::Unavailable,"image-book-open"};QCryptographicHash Hash(QCryptographicHash::Sha256);
+                while(!Archive.atEnd()){if(auto Stop=Context.Check({"image-book"}))return *Stop;const auto Chunk=Archive.read(256*1024);if(Chunk.isEmpty()&&!Archive.atEnd())return Error{ErrorCategory::Unavailable,"image-book-read"};Hash.addData(Chunk);}Input.hash_=Hash.result();}
+            else Input.hash_=QCryptographicHash::hash(Input.bytes_,QCryptographicHash::Sha256);return Input;
+        }
         const auto Canonical=QFileInfo(Path).canonicalFilePath();if(Canonical.isEmpty())return Error{ErrorCategory::NotFound,"document-file-missing"};
         auto Reader=MakeNativeReadProvider(LocatorKind::Local);
         auto Before=Reader->Resolve(Local(Canonical),Context).get();if(!Before.HasValue())return Before.Failure();
@@ -63,7 +72,7 @@ namespace hc::document
                 Input.viewId_="image";return Input;
             }
         }
-        if(QStringList{"jpg","jpeg","png","bmp","gif","tif","tiff","webp","ico","svg"}.contains(Suffix))return Invalid("document-image-codec-unavailable-or-corrupt");
+        if(IsImageFile(Path)||QStringList{"heic","heif","avif","jxl"}.contains(Suffix))return Invalid("document-image-codec-unavailable-or-corrupt");
         if(Input.bytes_.size()>TextByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-text-byte-limit"};
         auto Text=DecodeDocumentText(Input.bytes_);if(!Text.HasValue())return Text.Failure();
         Input.text_=Text.Value().text_;Input.encoding_=Text.Value().encoding_;Input.bom_=Text.Value().bom_;

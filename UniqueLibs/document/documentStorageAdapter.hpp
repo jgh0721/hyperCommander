@@ -7,11 +7,13 @@
 
 namespace hc::document
 {
+    struct ImageBook;
     struct TextInput
     {
         QString path_, text_;
         QByteArray hash_, bytes_;
         QImage image_;
+        std::shared_ptr<ImageBook> book_;
         QString viewId_ = "text", encoding_ = "UTF-8";
         bool bom_ = false;
         QString eol_ = "CRLF";

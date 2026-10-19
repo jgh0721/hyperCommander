@@ -21,6 +21,17 @@ set(HC_TRANSLATION_ARGS)
 # Plugins, translations and WebEngine data live under Libs/; Qt DLLs stay beside the exe.
 # Each exe finds them through its embedded qt.conf (cmake/productQtConf/qt.conf).
 set(HC_PLUGIN_ROOT "${HC_OUTPUT}/Libs")
+if(HC_IMAGE_CODEC_PREFIX)
+    file(GLOB HC_CODEC_DLLS "${HC_IMAGE_CODEC_PREFIX}/bin/*.dll")
+    foreach(HC_CODEC_DLL IN LISTS HC_CODEC_DLLS)
+        file(COPY "${HC_CODEC_DLL}" DESTINATION "${HC_PLUGIN_ROOT}/imageformats")
+    endforeach()
+    file(COPY "${HC_IMAGE_CODEC_PREFIX}/Licenses/" DESTINATION "${HC_OUTPUT}/Licenses/ImageCodecs")
+    file(COPY "${CMAKE_CURRENT_LIST_DIR}/../tools/Build-ImageCodecs.ps1"
+        DESTINATION "${HC_OUTPUT}/Licenses/ImageCodecs/build/tools")
+    file(COPY "${CMAKE_CURRENT_LIST_DIR}/ImageCodecDav1d.cmake"
+        DESTINATION "${HC_OUTPUT}/Licenses/ImageCodecs/build/cmake")
+endif()
 if(NOT EXISTS "${HC_QT_BIN}/../translations/catalogs.json")
     list(APPEND HC_TRANSLATION_ARGS --no-translations)
 else()

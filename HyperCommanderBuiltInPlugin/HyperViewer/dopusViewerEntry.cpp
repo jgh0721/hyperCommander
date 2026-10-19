@@ -115,11 +115,11 @@ extern "C" BOOL DVP_IdentifyFileW(HWND, LPWSTR File, LPVIEWERPLUGINFILEINFOW Inf
     WIN32_FILE_ATTRIBUTE_DATA Attributes{};
     if (!GetFileAttributesExW(File, GetFileExInfoStandard, &Attributes) || (Attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
     bool Image = false;
-    for(const auto* Candidate:{L".png",L".jpg",L".jpeg",L".bmp",L".gif",L".tif",L".tiff",L".webp",L".ico",L".svg"})
-        Image |= _wcsicmp(Ext,Candidate)==0;
+    for(const auto Item:hc::document::ImageDocumentExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Image|=_wcsicmp(Ext,Candidate.c_str())==0;}
+    bool Book=false;for(const auto Item:hc::document::ImageBookExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Book|=_wcsicmp(Ext,Candidate.c_str())==0;}
     if (!Supported && !Image && !(Supported = LooksLikeText(File, Abort))) return FALSE;
     const auto Bytes = (std::uint64_t(Attributes.nFileSizeHigh) << 32) | Attributes.nFileSizeLow;
-    if (!Image && Bytes > hc::document::DocumentByteLimit) return FALSE;
+    if (!Image && !Book && Bytes > hc::document::DocumentByteLimit) return FALSE;
     Info->dwFlags = DVPFIF_CanReturnViewer; Info->wMajorType = _wcsicmp(Ext,L".pdf")==0?DVPMajorType_Other:Image?DVPMajorType_Image:DVPMajorType_Text;
     Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / text / image"); return TRUE;
 }

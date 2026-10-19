@@ -54,3 +54,11 @@ target_compile_options(hc_plugin_viewer_sessions PRIVATE $<$<COMPILE_LANG_AND_ID
 qt_add_library(hc_plugin_viewer_qt STATIC ../UniqueLibs/qtPluginViewerSurface.cpp ../UniqueLibs/qtPluginViewerSurface.hpp)
 target_link_libraries(hc_plugin_viewer_qt PUBLIC hc_plugin_viewer_sessions Qt6::Widgets)
 target_compile_options(hc_plugin_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
+qt_add_library(hc_image_archive_transport STATIC imageArchiveTransport.cpp imageArchiveTransport.hpp)
+target_link_libraries(hc_image_archive_transport PUBLIC hc_plugin_process Qt6::Network)
+target_compile_options(hc_image_archive_transport PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+qt_add_library(hc_image_archive_broker STATIC imageArchiveBroker.cpp imageArchiveBroker.hpp)
+target_link_libraries(hc_image_archive_broker PUBLIC hc_image_archive_transport PRIVATE hc_builtin_sevenzip Qt6::Widgets)
+target_compile_options(hc_image_archive_broker PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_plugin_viewer_sessions PRIVATE hc_image_archive_broker)

@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <QImage>
+#include <QColorSpace>
 #include <QTransform>
 #include <QString>
 #include <QRect>
@@ -33,6 +34,7 @@ namespace hc::document
         QRect tile_;
         std::stop_token stop_;
         bool transparentBoundary_ = false;
+        QColorSpace targetColor_;
     };
     struct ImageRenderResult { QImage image_; QString error_; };
     ImageRenderResult ResampleImage(const ImageRenderRequest& Request);

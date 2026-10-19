@@ -14,4 +14,6 @@ namespace hc::plugins
     // Worker calls share an admitted host until it fails or this backend closes.
     // Listings retain their epoch; final process reaping runs off the GUI thread.
     std::shared_ptr<IArchiveBackend> MakeApprovedWcxBackend(ApprovedWcxOptions Options);
+    // Worker-side shutdown after all listing/stream calls have returned.
+    void CloseApprovedWcxBackend(const std::shared_ptr<IArchiveBackend>& Backend);
 }
