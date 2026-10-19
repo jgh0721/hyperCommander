@@ -1081,6 +1081,16 @@ private slots:
         QVERIFY(!Blocked.HasValue());
         QCOMPARE(Blocked.Failure().code_, std::string("reparse-parent-denied"));
         QVERIFY(!writer_->Inspect(at("junction"), {}).HasValue());
+        auto Junction = reader_->Resolve(at("junction"), {}).get(); QVERIFY(Junction.HasValue());
+        for (const auto Mode : {DeleteMode::Permanent, DeleteMode::Recycle}) for (const bool Streaming : {false, true}) {
+            FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+            Request.sources_ = {{Junction.Value(), reader_, writer_}}; Request.deleteMode_ = Mode;
+            Request.deleteWhileListing_ = Streaming; Request.confirmDelete_ = false;
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+            const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Failed);
+            QCOMPARE(Done.snapshot_.error_->code_, std::string("reparse-entry-denied"));
+            QCOMPARE(read("junction-target/sentinel.txt"), QByteArray("preserve"));
+        }
         QCOMPARE(read("junction-target/sentinel.txt"), QByteArray("preserve"));
         QVERIFY(!QFileInfo::exists(root_->filePath("junction-target/escaped.txt")));
     }
@@ -1215,6 +1225,163 @@ private slots:
             }
             QVERIFY(Created); QCOMPARE(Reader->enumerations_, Prescan ? 2 : 1);
             QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty());
+        }
+    }
+    void deleteWhileListing_data()
+    {
+        QTest::addColumn<bool>("Streaming"); QTest::addColumn<bool>("Prescan"); QTest::addColumn<bool>("Cancel");
+        for (const bool Streaming : {false, true}) for (const bool Prescan : {false, true}) for (const bool Cancel : {false, true})
+            QTest::newRow(qPrintable(QString("stream-%1-size-%2-cancel-%3").arg(Streaming).arg(Prescan).arg(Cancel))) << Streaming << Prescan << Cancel;
+    }
+    void deleteWhileListing()
+    {
+        QFETCH(bool, Streaming); QFETCH(bool, Prescan); QFETCH(bool, Cancel);
+        struct Probe { int opened_ = 0, exhausted_ = 0, alive_ = 0; };
+        class Cursor final : public IEntryCursor {
+        public:
+            Cursor(std::unique_ptr<IEntryCursor> Inner, std::shared_ptr<Probe> Probe) : inner_(std::move(Inner)), probe_(std::move(Probe)) { ++probe_->opened_; ++probe_->alive_; }
+            ~Cursor() override { --probe_->alive_; }
+            Task<EntryPage> Next(size_t Count, OperationContext Context) override {
+                return std::async(std::launch::deferred, [this, Count, Context]() -> Result<EntryPage> {
+                    auto Page = inner_->Next(Count, Context).get();
+                    if (Page.HasValue() && Page.Value().end_ && !ended_) { ended_ = true; ++probe_->exhausted_; }
+                    return Page;
+                });
+            }
+        private: std::unique_ptr<IEntryCursor> inner_; std::shared_ptr<Probe> probe_; bool ended_ = false;
+        };
+        class Provider final : public IStorageProvider {
+        public:
+            Provider(std::shared_ptr<IStorageProvider> Inner, std::shared_ptr<Probe> Probe) : inner_(std::move(Inner)), probe_(std::move(Probe)) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext C) override { return inner_->Supports(Op, C); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext C) override { return inner_->Stat(Id, C); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { return inner_->OpenRead(Id, C); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override {
+                return std::async(std::launch::deferred, [this, At, C]() -> Result<std::unique_ptr<IEntryCursor>> {
+                    auto Inner = inner_->Enumerate(At, C).get(); if (!Inner.HasValue()) return Inner.Failure();
+                    return std::unique_ptr<IEntryCursor>(new Cursor(std::move(Inner.Value()), probe_));
+                });
+            }
+        private: std::shared_ptr<IStorageProvider> inner_; std::shared_ptr<Probe> probe_;
+        };
+        const auto Prefix = QString("delete-%1-%2-%3").arg(Streaming).arg(Prescan).arg(Cancel);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/nested")));
+        for (const auto* Name : {"a", "b", "nested/c"}) QVERIFY(write(Prefix + "/" + Name, "payload"));
+        auto Source = writer_->Inspect(at(Prefix), {}); QVERIFY(Source.HasValue() && Source.Value());
+        auto Probe = std::make_shared<struct Probe>(); auto Reader = std::make_shared<Provider>(reader_, Probe);
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+        Request.deleteWhileListing_ = Streaming; Request.calculateSizeBefore_ = Prescan; Request.confirmDelete_ = true;
+        Request.sources_ = {{*Source.Value(), Reader, writer_}};
+        // Duplicate and ancestor selections are rejected before any mutation.
+        auto Duplicate = Request; Duplicate.deleteWhileListing_ = true; Duplicate.sources_.push_back(Duplicate.sources_.front());
+        QVERIFY(!PrepareFileOperation(Duplicate).HasValue());
+        auto Child = writer_->Inspect(at(Prefix + "/a"), {}); QVERIFY(Child.HasValue() && Child.Value());
+        Duplicate.sources_.back() = {*Child.Value(), Reader, writer_}; QVERIFY(!PrepareFileOperation(Duplicate).HasValue());
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.jobId_ = "delete-listing"; Context.committing_ = true; Context.operation_.maxPageItems_ = 1;
+        std::stop_source Stop; Context.operation_.stopToken_ = Stop.get_token();
+        bool Confirmed = false, Removed = false, Completed = false; JobProgress Last;
+        for (int I = 0; I < 1000 && !Completed; ++I) {
+            auto Step = Prepared.Value().task_->Advance(Context); Context.answer_.reset();
+            if (Step.progress_) Last = *Step.progress_;
+            if (Step.next_ == JobState::WaitingForUser) {
+                QVERIFY(!Confirmed); QCOMPARE(Step.interaction_->kind_, InteractionKind::DeleteConfirmation);
+                QVERIFY(QFileInfo::exists(root_->filePath(Prefix + "/a")));
+                QVERIFY(QFileInfo::exists(root_->filePath(Prefix + "/nested/c")));
+                if (Streaming) QCOMPARE(Probe->opened_, 0);
+                Context.answer_ = InteractionAnswer{"", InteractionChoice::Confirm}; Confirmed = true;
+            }
+            QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "delete failed");
+            if (Step.item_ && Step.item_->sourceRemoved_ && Step.item_->source_ && !Step.item_->source_->directory_ && !Removed) {
+                Removed = true; QVERIFY(Confirmed);
+                QCOMPARE(Probe->opened_ > Probe->exhausted_, Streaming);
+                if (Streaming) QVERIFY(!Last.plannedItems_);
+                if (Cancel) {
+                    Stop.request_stop(); auto Cancelled = Prepared.Value().task_->Advance(Context);
+                    QCOMPARE(Cancelled.next_, JobState::Failed); QCOMPARE(Cancelled.error_->category_, ErrorCategory::Cancelled);
+                    QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty()); QCOMPARE(Probe->alive_, 0);
+                    QCOMPARE(QDir(root_->filePath(Prefix)).entryList(QDir::Files).size() + QDir(root_->filePath(Prefix + "/nested")).entryList(QDir::Files).size(), 2);
+                    return;
+                }
+            }
+            Completed = Step.next_ == JobState::Completed;
+        }
+        QVERIFY(Confirmed && Removed && Completed); QVERIFY(!QFileInfo::exists(root_->filePath(Prefix)));
+        QCOMPARE(Last.deletedFiles_.value_or(99), 3ull); QCOMPARE(Last.discoveredFiles_.value_or(99), 3ull);
+        QCOMPARE(Last.discoveredItems_.value_or(99), 5ull); QCOMPARE(Last.plannedItems_.value_or(99), 5ull);
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty()); QCOMPARE(Probe->alive_, 0);
+    }
+    void nativeDeleteEnumerationYieldsBeforeFolderEnd()
+    {
+        const auto Prefix = QString("native-delete-pages"); QVERIFY(QDir().mkpath(root_->filePath(Prefix)));
+        for (int I = 0; I < 8; ++I) QVERIFY(write(Prefix + "/" + QString::number(I), "payload"));
+        OperationContext Context; Context.freshEnumerationMetadata_ = true; Context.incrementalEnumeration_ = true;
+        Context.maxPageItems_ = 1; Context.maxEnumerationEntries_ = 2;
+        auto Cursor = reader_->Enumerate(at(Prefix), Context).get(); QVERIFY(Cursor.HasValue());
+        for (int I = 0; I < 2; ++I) { auto Page = Cursor.Value()->Next(1, Context).get(); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1)); QVERIFY(!Page.Value().end_); }
+        auto Budget = Cursor.Value()->Next(1, Context).get(); QVERIFY(!Budget.HasValue()); QCOMPARE(Budget.Failure().category_, ErrorCategory::BudgetExceeded);
+        std::stop_source Stop; Context.stopToken_ = Stop.get_token(); Stop.request_stop();
+        auto Cancelled = Cursor.Value()->Next(1, Context).get(); QVERIFY(!Cancelled.HasValue()); QCOMPARE(Cancelled.Failure().category_, ErrorCategory::Cancelled);
+        QCOMPARE(QDir(root_->filePath(Prefix)).entryList(QDir::Files).size(), 8);
+    }
+    void incrementalRecycleKeepsSelectedRootsAtomic()
+    {
+        class Provider final : public IStorageProvider {
+        public:
+            explicit Provider(std::shared_ptr<IStorageProvider> Reader) : reader_(std::move(Reader)) {}
+            ProviderId Id() const override { return reader_->Id(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext C) override { return reader_->Supports(Op, C); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext C) override { return reader_->Stat(Id, C); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { return reader_->OpenRead(Id, C); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override { paths_.push_back(At.root_); return reader_->Enumerate(At, C); }
+            std::vector<std::string> paths_;
+        private: std::shared_ptr<IStorageProvider> reader_;
+        };
+        class Bin final : public IWritableStorage {
+        public:
+            Bin(std::shared_ptr<IWritableStorage> Writer, Locator At) : writer_(std::move(Writer)), at_(std::move(At)) {}
+            ProviderId Id() const override { return writer_->Id(); }
+            Result<SupportDecision> Supports(Mutation M, Locator At, OperationContext C) override { return writer_->Supports(M, At, C); }
+            Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext C) override { return writer_->Inspect(At, C); }
+            Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation E, OperationContext C) override { return writer_->BeginWrite(At, E, C); }
+            Result<Unit> MakeDirectory(Locator At, OperationContext C) override { return writer_->MakeDirectory(At, C); }
+            Result<Unit> Remove(EntrySnapshot, OperationContext) override { ++removes_; return Error{ErrorCategory::Internal, "permanent-fallback-forbidden"}; }
+            Result<Unit> Rename(EntrySnapshot E, Locator At, OperationContext C) override { return writer_->Rename(E, At, C); }
+            Result<WriteReceipt> Recycle(EntrySnapshot E, OperationContext C) override {
+                ++recycles_; auto To = at_; To.root_ += "\\" + E.name_;
+                auto Moved = writer_->Rename(E, To, C); if (!Moved.HasValue()) return Moved.Failure(); return WriteReceipt{To};
+            }
+            int removes_ = 0, recycles_ = 0;
+        private: std::shared_ptr<IWritableStorage> writer_; Locator at_;
+        };
+        for (const bool Streaming : {false, true}) {
+            const auto Prefix = QString("recycle-listing-%1").arg(Streaming);
+            QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/a/nested"))); QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/b")));
+            QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/bin")));
+            for (const auto* Name : {"a/one", "a/nested/two", "b/three"}) QVERIFY(write(Prefix + "/" + Name, "payload"));
+            const auto ReadOnly = root_->filePath(Prefix + "/b/three").toStdWString(); QVERIFY(SetFileAttributesW(ReadOnly.c_str(), FILE_ATTRIBUTE_READONLY));
+            const auto Clear = qScopeGuard([&] { SetFileAttributesW(ReadOnly.c_str(), FILE_ATTRIBUTE_NORMAL); });
+            auto Reader = std::make_shared<Provider>(reader_); auto Writer = std::make_shared<Bin>(writer_, at(Prefix + "/bin"));
+            FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.deleteMode_ = DeleteMode::Recycle;
+            Request.confirmDelete_ = false; Request.deleteWhileListing_ = Streaming; Request.readOnly_ = ReadOnlyPolicy::Skip;
+            for (const auto* Name : {"a", "b"}) { auto E = writer_->Inspect(at(Prefix + "/" + Name), {}); QVERIFY(E.HasValue() && E.Value()); Request.sources_.push_back({*E.Value(), Reader, Writer}); }
+            auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue()); JobStepContext C; C.committing_ = true; C.operation_.maxPageItems_ = 1;
+            bool First = false, Completed = false; JobProgress Last;
+            for (int I = 0; I < 1000 && !Completed; ++I) {
+                auto Step = Prepared.Value().task_->Advance(C); if (Step.progress_) Last = *Step.progress_;
+                QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "recycle failed");
+                if (Writer->recycles_ && !First) {
+                    First = true; QCOMPARE(Reader->paths_.size(), Streaming ? size_t(2) : size_t(3));
+                    QVERIFY(QFileInfo::exists(root_->filePath(Prefix + "/bin/a/nested/two")));
+                    QVERIFY(QFileInfo::exists(root_->filePath(Prefix + "/b/three")));
+                    if (Streaming) QVERIFY(!Last.plannedItems_);
+                }
+                Completed = Step.next_ == JobState::Completed;
+            }
+            QVERIFY(First && Completed); QCOMPARE(Writer->recycles_, 1); QCOMPARE(Writer->removes_, 0);
+            QCOMPARE(Last.discoveredFiles_.value_or(99), 3ull); QCOMPARE(Last.deletedFiles_.value_or(99), 2ull);
+            QCOMPARE(Last.plannedItems_.value_or(99), 2ull); QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
         }
     }
     void moveDirectorySharingConflict_data()

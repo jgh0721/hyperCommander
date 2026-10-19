@@ -88,24 +88,26 @@ namespace hc::operations
             std::size_t depth_ = 0;
             bool removeDirectory_ = false;
             bool readOnly_ = false, excluded_ = false;
+            std::size_t root_ = 0;
         };
         class FileTask final : public IJobTask
         {
         public:
             explicit FileTask(FileOperationRequest Request) : request_(std::move(Request))
             {
-                // Ordered archive reads and unconfirmed/recycle deletion need a
-                // complete plan. Native confirmed operations may start as entries
-                // arrive when the user disables the optional size prescan.
-                streaming_ = !request_.calculateSizeBefore_
-                    && (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move
-                        || (request_.operation_ == FileOperation::Delete && !request_.confirmDelete_ && request_.deleteMode_ == DeleteMode::Permanent))
-                    && std::ranges::all_of(request_.sources_, [](const auto& Source) {
+                const bool Native = std::ranges::all_of(request_.sources_, [](const auto& Source) {
                         return (Source.entry_.locator_.kind_ == LocatorKind::Local || Source.entry_.locator_.kind_ == LocatorKind::Smb)
                             && !Source.reader_->UsesOrderedReads();
                     });
-                for (auto& Source : request_.sources_)
-                    pending_.push_back({Source, request_.operation_ == FileOperation::Rename ? request_.destination_ : Child(request_.destination_, request_.destinationName_.empty() ? Source.entry_.name_ : request_.destinationName_)});
+                incrementalDelete_ = request_.operation_ == FileOperation::Delete && request_.deleteWhileListing_ && Native;
+                streaming_ = incrementalDelete_ || (!request_.calculateSizeBefore_ && Native
+                    && (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move));
+                rootFiles_.resize(request_.sources_.size());
+                for (std::size_t Root = 0; auto& Source : request_.sources_) {
+                    PlannedItem Item{Source, request_.operation_ == FileOperation::Rename ? request_.destination_ : Child(request_.destination_, request_.destinationName_.empty() ? Source.entry_.name_ : request_.destinationName_)};
+                    Item.root_ = Root++; pending_.push_back(std::move(Item));
+                }
+                if (incrementalDelete_ && request_.confirmDelete_) phase_ = Phase::Confirm;
             }
             JobStep Advance(JobStepContext Context) override
             {
@@ -125,12 +127,14 @@ namespace hc::operations
                 {
                     if (!Context.answer_)
                     {
-                        JobStep Step{JobState::WaitingForUser};
+                        auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                         Step.interaction_ = InteractionRequest{"", InteractionKind::DeleteConfirmation, request_.deleteMode_ == DeleteMode::Recycle ? "confirm-recycle-delete" : "confirm-permanent-delete",
                             {InteractionChoice::Confirm, InteractionChoice::Cancel}};
                         return Step;
                     }
                     if (Context.answer_->choice_ != InteractionChoice::Confirm) return failed({ErrorCategory::InvalidRequest, "delete-confirmation-required"});
+                    deleteConfirmed_ = true;
+                    if (!planningFinished_) { phase_ = Phase::Preparing; return progress(); }
                     phase_ = Phase::Begin;
                 }
                 if (phase_ == Phase::ReadOnly) {
@@ -221,6 +225,7 @@ namespace hc::operations
             }
             std::vector<Error> Finalize(JobState) override
             {
+                enumerations_.clear(); cursor_.reset();
                 stream_.reset();
                 if (elevatedSession_) {
                     elevatedSession_->Cancel(); auto Errors = elevatedSession_->Close();
@@ -239,6 +244,13 @@ namespace hc::operations
                 return cleanup_;
             }
         private:
+            struct EnumerationFrame {
+                PlannedItem parent_;
+                std::unique_ptr<IEntryCursor> cursor_;
+                std::vector<EntrySnapshot> entries_;
+                std::size_t next_ = 0;
+                bool ended_ = false;
+            };
             enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
@@ -248,8 +260,15 @@ namespace hc::operations
                 JobStep Step{phase_ == Phase::Preparing ? JobState::Preparing : JobState::Running};
                 Step.progress_ = JobProgress{bytesDone_, bytesTotal_, index_ < items_.size() ? current().source_.entry_.name_ : std::string{}};
                 if (phase_ == Phase::Preparing || request_.copyOptions_.streams_ || !request_.calculateSizeBefore_) Step.progress_->bytesTotal_.reset();
-                else Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
+                if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
                     ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_; }) : items_.size();
+                if (request_.operation_ == FileOperation::Delete) {
+                    Step.progress_->discoveredItems_ = verifiedItems_;
+                    Step.progress_->discoveredFiles_ = discoveredFiles_;
+                    Step.progress_->deletedFiles_ = deletedFiles_;
+                    // No partial tree size/count may be published as the total.
+                    if (!planningFinished_) { Step.progress_->bytesTotal_.reset(); Step.progress_->plannedItems_.reset(); }
+                }
                 Step.progress_->currentBytes_ = itemBytes_;
                 if (index_ < items_.size() && !current().source_.entry_.directory_) Step.progress_->currentTotal_ = current().source_.entry_.size_;
                 return Step;
@@ -296,6 +315,8 @@ namespace hc::operations
             }
             JobStep done(ItemOutcome::Status Status = ItemOutcome::Status::Completed, bool Destination = false, bool Removed = false)
             {
+                if (request_.operation_ == FileOperation::Delete && Status == ItemOutcome::Status::Completed && Removed)
+                    deletedFiles_ += current().source_.entry_.directory_ ? (request_.deleteMode_ == DeleteMode::Recycle ? rootFiles_[current().root_] : 0) : 1;
                 auto Step = progress();
                 if (Status == ItemOutcome::Status::Skipped && (request_.operation_ == FileOperation::Move || request_.operation_ == FileOperation::Delete))
                     skippedSources_.push_back(current().source_.entry_.locator_);
@@ -405,6 +426,14 @@ namespace hc::operations
             JobStep prepare(OperationContext Context)
             {
                 Context.freshEnumerationMetadata_ = true;
+                Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
+                if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
+                if (incrementalDelete_ && request_.deleteMode_ == DeleteMode::Recycle && index_ < items_.size()) {
+                    // Recycle a selected directory as one unit, after its own
+                    // readonly/link checks, while later selected roots remain unscanned.
+                    for (const auto& At : readOnlySources_) if (SameOrWithin(At, current().source_.entry_.locator_)) current().readOnly_ = true;
+                    phase_ = Phase::Begin; return progress();
+                }
                 if (request_.operation_ == FileOperation::MakeDirectory)
                 {
                     OperationSource Label;
@@ -424,8 +453,9 @@ namespace hc::operations
                     for (auto& Entry : Page.Value().entries_)
                     {
                         if (!SafeName(Entry.name_)) return failed({ErrorCategory::InvalidRequest, "unsafe-entry-name"});
-                        pending_.push_back({{Entry, enumerating_.source_.reader_, enumerating_.source_.writer_},
-                            Child(enumerating_.destination_, Entry.name_), enumerating_.depth_ + 1});
+                        PlannedItem Item{{Entry, enumerating_.source_.reader_, enumerating_.source_.writer_},
+                            Child(enumerating_.destination_, Entry.name_), enumerating_.depth_ + 1};
+                        Item.root_ = enumerating_.root_; pending_.push_back(std::move(Item));
                     }
                     if (Page.Value().end_) cursor_.reset();
                     return progress();
@@ -463,10 +493,37 @@ namespace hc::operations
                             batchReaders_.push_back(Owner->source_.reader_);
                         }
                     }
-                    phase_ = request_.operation_ == FileOperation::Delete && request_.confirmDelete_ ? Phase::Confirm : Phase::Begin;
+                    phase_ = request_.operation_ == FileOperation::Delete && request_.confirmDelete_ && !deleteConfirmed_ ? Phase::Confirm : Phase::Begin;
                     return progress();
                 }
                 auto Item = std::move(pending_.front()); pending_.pop_front();
+                return prepareItem(std::move(Item), Context);
+            }
+            JobStep prepareIncremental(OperationContext Context)
+            {
+                auto& Frame = enumerations_.back();
+                if (Frame.next_ < Frame.entries_.size()) {
+                    auto Entry = std::move(Frame.entries_[Frame.next_++]);
+                    PlannedItem Item{{std::move(Entry), Frame.parent_.source_.reader_, Frame.parent_.source_.writer_}, {}, Frame.parent_.depth_ + 1};
+                    Item.destination_ = Child(Frame.parent_.destination_, Item.source_.entry_.name_); Item.root_ = Frame.parent_.root_;
+                    return prepareItem(std::move(Item), Context);
+                }
+                if (Frame.ended_) { enumerations_.pop_back(); return progress(); }
+                auto Page = Frame.cursor_->Next(Context.maxPageItems_, Context).get();
+                if (!Page.HasValue()) return failed(Page.Failure());
+                if (Page.Value().entries_.empty() && !Page.Value().end_) return failed({ErrorCategory::Internal, "cursor-no-progress"});
+                if (Page.Value().entries_.size() > request_.maxEntries_ - seen_.size()) return failed({ErrorCategory::BudgetExceeded, "operation-entry-budget"});
+                for (const auto& Entry : Page.Value().entries_) {
+                    if (!SafeName(Entry.name_)) return failed({ErrorCategory::InvalidRequest, "unsafe-entry-name"});
+                    const auto Expected = Child(Frame.parent_.source_.entry_.locator_, Entry.name_);
+                    if (Entry.locator_.kind_ != Expected.kind_ || Entry.locator_.nesting_ != Expected.nesting_ || NativeKey(Entry.locator_.root_) != NativeKey(Expected.root_))
+                        return failed({ErrorCategory::InvalidRequest, "enumerated-child-outside-source"});
+                }
+                Frame.entries_ = std::move(Page.Value().entries_); Frame.next_ = 0; Frame.ended_ = Page.Value().end_;
+                return progress();
+            }
+            JobStep prepareItem(PlannedItem Item, OperationContext Context)
+            {
                 if (Item.depth_ > request_.maxDepth_ || seen_.size() >= request_.maxEntries_)
                     return failed({ErrorCategory::BudgetExceeded, "operation-tree-budget"});
                 if (!seen_.insert(Serialize(Item.source_.entry_.locator_)).second) return failed({ErrorCategory::InvalidRequest, "overlapping-selection"});
@@ -477,8 +534,10 @@ namespace hc::operations
                     return failed({ErrorCategory::Internal, "provider-returned-different-entry"});
                 Item.source_.entry_ = std::move(Fresh.Value());
                 if (Item.source_.entry_.attributes_ & 0x400) return failed({ErrorCategory::Unsupported, "reparse-entry-denied"});
+                ++verifiedItems_;
                 if (!Item.source_.entry_.directory_)
                 {
+                    ++discoveredFiles_; ++rootFiles_[Item.root_];
                     Item.excluded_ = (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move) && !Matches(Item.source_.entry_.name_, request_.includePattern_);
                     if (!Item.excluded_) {
                         if (Item.source_.entry_.size_ > request_.maxBytes_ - bytesTotal_) return failed({ErrorCategory::BudgetExceeded, "operation-byte-budget"});
@@ -495,9 +554,10 @@ namespace hc::operations
                     { auto Removed = Item; Removed.removeDirectory_ = true; directories_.push_back(std::move(Removed)); }
                     auto Cursor = Item.source_.reader_->Enumerate(Item.source_.entry_.locator_, Context).get();
                     if (!Cursor.HasValue()) return failed(Cursor.Failure());
-                    cursor_ = std::move(Cursor.Value()); enumerating_ = std::move(Item);
+                    if (incrementalDelete_) enumerations_.push_back({std::move(Item), std::move(Cursor.Value())});
+                    else { cursor_ = std::move(Cursor.Value()); enumerating_ = std::move(Item); }
                 }
-                if (streaming_ && index_ < items_.size()) phase_ = Phase::Begin;
+                if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)) phase_ = Phase::Begin;
                 return progress();
             }
             JobStep readOnlyQuestion() {
@@ -670,6 +730,8 @@ namespace hc::operations
             std::set<std::string> seen_;
             PlannedItem enumerating_;
             std::unique_ptr<IEntryCursor> cursor_;
+            std::vector<EnumerationFrame> enumerations_;
+            std::vector<std::uint64_t> rootFiles_;
             std::shared_ptr<IReadStream> stream_;
             std::unique_ptr<IWriteSession> session_;
             DestinationExpectation expected_;
@@ -678,6 +740,8 @@ namespace hc::operations
             std::vector<Locator> skippedSources_, readOnlySources_;
             bool allowAllReadOnly_ = false, readOnlyAnswered_ = false;
             bool streaming_ = false, planningFinished_ = false;
+            bool incrementalDelete_ = false, deleteConfirmed_ = false;
+            std::uint64_t verifiedItems_ = 0, discoveredFiles_ = 0, deletedFiles_ = 0;
             std::size_t index_ = 0;
             std::uint32_t sourceRemoveRetries_ = 0;
             std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0;
@@ -694,14 +758,14 @@ namespace hc::operations
         };
     }
     namespace {
-    // A selected directory snapshot is a lease, not an in-memory source array.
-    // Each independent root is coordinated in one bounded continuation; errors
-    // preserve completed roots and remain visible in the shared outcome store.
+    // A selected directory snapshot is a lease. Copy/move coordinate independent
+    // roots; deletion validates all selected roots before its first mutation.
     class SelectionTask final : public IJobTask {
     public:
         explicit SelectionTask(FileOperationRequest Request) : request_(std::move(Request)) {}
         JobStep Advance(JobStepContext Context) override
         {
+            if (const auto Error = Context.operation_.Check({})) return failed(*Error);
             if (!confirmed_ && request_.operation_ == FileOperation::Delete && request_.confirmDelete_) {
                 if (!Context.answer_) {
                     JobStep Step{JobState::WaitingForUser};
@@ -711,6 +775,29 @@ namespace hc::operations
                 if (Context.answer_->choice_ != InteractionChoice::Confirm) return failed({ErrorCategory::InvalidRequest, "delete-confirmation-required"});
                 confirmed_ = true; Context.answer_.reset();
             }
+            if (request_.operation_ == FileOperation::Delete && !deletePrepared_) {
+                // Validate the immutable selected roots before any mutation.
+                // Descendant discovery stays incremental inside one FileTask,
+                // sharing overlap checks, budgets and readonly decisions.
+                const auto Reader = request_.selection_->Provider();
+                auto Page = request_.selection_->Read(offset_, 256, Context.operation_);
+                if (!Page.HasValue()) return failed(Page.Failure());
+                if (Page.Value().entries_.empty() || Page.Value().entries_.size() > request_.selection_->Count() - offset_)
+                    return failed({ErrorCategory::Internal, "selection-no-progress"});
+                for (const auto& Entry : Page.Value().entries_) {
+                    if (Entry.id_.providerId_ != Reader->Id() || !SafeName(Entry.name_) || Child(request_.selectionRoot_, Entry.name_) != Entry.locator_)
+                        return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
+                    deleteSources_.push_back({Entry, Reader, request_.selectionWriter_});
+                }
+                offset_ += Page.Value().entries_.size();
+                if (offset_ == request_.selection_->Count()) {
+                    auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false; Request.sources_ = std::move(deleteSources_);
+                    auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
+                    if (!Prepared.HasValue()) return failed(Prepared.Failure());
+                    inner_ = std::move(Prepared.Value().task_); deletePrepared_ = true;
+                }
+                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{}; Step.progress_->deletedFiles_ = 0; return Step;
+            }
             if (inner_) {
                 if (Context.answer_ && Context.answer_->choice_ == InteractionChoice::ConfirmAll) request_.readOnly_ = ReadOnlyPolicy::Allow;
                 auto Step = inner_->Advance(Context);
@@ -719,9 +806,11 @@ namespace hc::operations
                 if (Step.progress_) {
                     innerBytes_ = Step.progress_->bytesDone_;
                     Step.progress_->bytesDone_ += completedBytes_; Step.progress_->bytesTotal_.reset();
-                    // This is a streaming inner batch, not a complete global plan.
-                    Step.progress_->plannedItems_.reset();
+                    // Delete uses one globally validated selection plan. Other
+                    // operations still coordinate independent root batches.
+                    if (request_.operation_ != FileOperation::Delete) Step.progress_->plannedItems_.reset();
                 }
+                if (request_.operation_ == FileOperation::Delete) return Step;
                 if (Step.next_ == JobState::Completed || Step.next_ == JobState::Failed) {
                     auto Errors = inner_->Finalize(Step.next_); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); inner_.reset();
                     if (Step.next_ == JobState::Failed && !Step.item_) {
@@ -763,6 +852,8 @@ namespace hc::operations
         size_t emitted_ = 0, outcomeBase_ = 0;
         bool confirmed_ = false;
         std::vector<Error> cleanup_;
+        std::vector<OperationSource> deleteSources_;
+        bool deletePrepared_ = false;
     };
     }
     Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)
@@ -788,6 +879,7 @@ namespace hc::operations
         }
         if (Request.selection_) {
             if (!Request.sources_.empty() || !Request.selection_->Provider() || !Request.selection_->Count()
+                || Request.selection_->Count() > Request.maxEntries_
                 || (Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Move && Request.operation_ != FileOperation::Delete)
                 || (Request.operation_ != FileOperation::Copy && !Request.selectionWriter_)
                 || (Request.operation_ != FileOperation::Delete && !Request.destinationWriter_))
@@ -806,7 +898,7 @@ namespace hc::operations
             return Error{ErrorCategory::InvalidRequest, "invalid-file-operation"};
         JobRequest Job;
         Job.correlationId_ = Request.correlationId_; Job.operation_ = Context; Job.maxItemResults_ = Request.maxEntries_;
-        if (!Request.calculateSizeBefore_) {
+        if (!Request.calculateSizeBefore_ || (Request.operation_ == FileOperation::Delete && Request.deleteWhileListing_)) {
             // Streaming must reject overlapping selected roots before publishing
             // any output, rather than discovering duplicates later in the tree.
             std::set<std::pair<LocatorKind, std::string>> Roots;

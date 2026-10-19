@@ -147,6 +147,7 @@ void QMainOpts::LoadSettings()
         defaultPattern_->setText(Options["copyPattern"].toString("*")); defaultSpeed_->setValue(Options["copySpeedMiB"].toInt(0));
         defaultDetailed_->setChecked(Options["jobDetailed"].toBool(true)); defaultClose_->setChecked(Options["jobCloseOnSuccess"].toBool(true));
         findChild<QCheckBox*>("hc.settings.recycleDefault")->setChecked(Options["deleteToRecycle"].toBool(true));
+        findChild<QCheckBox*>("hc.settings.deleteWhileListing")->setChecked(Options["deleteWhileListing"].toBool(true));
         findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(qMax(0, QStringList{"none", "status", "attention", "sound"}.indexOf(Options["jobNotification"].toString("attention"))));
         findChild<QComboBox*>("hc.settings.queueOrder")->setCurrentIndex(Options["queueInsertion"] == "first" ? 1 : 0);
         findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(Options["jobConcurrency"].toInt(2));
@@ -308,6 +309,7 @@ bool QMainOpts::SaveSettings()
     Options["copyPattern"] = defaultPattern_->text().trimmed(); Options["copySpeedMiB"] = defaultSpeed_->value();
     Options["jobDetailed"] = defaultDetailed_->isChecked(); Options["jobCloseOnSuccess"] = defaultClose_->isChecked();
     Options["deleteToRecycle"] = findChild<QCheckBox*>("hc.settings.recycleDefault")->isChecked();
+    Options["deleteWhileListing"] = findChild<QCheckBox*>("hc.settings.deleteWhileListing")->isChecked();
     Options["jobNotification"] = QStringList{"none", "status", "attention", "sound"}.value(findChild<QComboBox*>("hc.settings.jobNotification")->currentIndex(), "attention");
     Options["queueInsertion"] = findChild<QComboBox*>("hc.settings.queueOrder")->currentIndex() == 1 ? "first" : "last";
     Options["jobConcurrency"] = findChild<QSpinBox*>("hc.settings.jobConcurrency")->value();
@@ -965,6 +967,9 @@ void QMainOpts::initializeDesignPages()
     auto* DeleteForm = JobGroup(DeleteRows, tr("휴지통 · 영구 삭제"));
     auto* Delete = DeleteForm->parentWidget();
     auto* RecycleDefault = new QCheckBox(tr("삭제할 때 휴지통을 기본 선택"), Delete); RecycleDefault->setObjectName("hc.settings.recycleDefault"); DeleteForm->addRow(RecycleDefault);
+    auto* IncrementalDelete = new QCheckBox(tr("파일 목록을 확인하는 중에도 삭제 시작(&L)"), Delete);
+    IncrementalDelete->setObjectName("hc.settings.deleteWhileListing"); DeleteForm->addRow(IncrementalDelete);
+    IncrementalDelete->setToolTip(tr("기본값은 켜짐입니다. 확인한 파일부터 처리하며, 전체 목록 확인이 끝나기 전까지 총개수는 집계 중으로 표시합니다.\n끄면 전체 목록 확인 후 삭제합니다. 휴지통 삭제는 복원 구조를 유지하도록 선택 항목별로 확인 후 이동합니다.\n압축 파일 내부는 압축 파일을 갱신하는 일괄 작업으로 처리합니다."));
     auto* DeleteNote = new QLabel(tr("휴지통을 지원하지 않는 위치는 영구 삭제를 직접 선택해야 합니다."), Delete); DeleteNote->setWordWrap(true); DeleteForm->addRow(DeleteNote);
     DeleteRows->addStretch();
     auto* Laboratory = Page(tr("실험실"), tr("실험적인 기능을 선택합니다. 변경한 값은 새 작업부터 적용합니다."));

@@ -25,6 +25,7 @@
 #include <fmwidgets/WrapLayout.h>
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/TransferGraph.h>
+#include <fmwidgets/ProgressBar.h>
 
 using namespace hc::operations;
 using namespace hc::storage;
@@ -98,7 +99,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     status_ = new QLabel(dialog_); status_->setObjectName("hc.jobs.status"); status_->setWordWrap(true);
     status_->setTextFormat(Qt::PlainText);
     Layout->addWidget(status_);
-    progress_ = new QProgressBar(dialog_); progress_->setAccessibleName(tr("선택 작업 진행률")); Layout->addWidget(progress_);
+    progress_ = new fm::ui::ProgressBar(dialog_); progress_->setTextVisible(true); progress_->setAccessibleName(tr("선택 작업 진행률")); Layout->addWidget(progress_);
     metrics_ = new QLabel(dialog_); metrics_->setTextFormat(Qt::PlainText); metrics_->setWordWrap(true);
     metrics_->setObjectName("hc.jobs.metrics"); Layout->addWidget(metrics_);
     graph_ = new fm::ui::TransferGraph(dialog_); graph_->setObjectName("hc.jobs.graph");
@@ -352,6 +353,7 @@ QString FileJobUi::SubmitSecurityJob(const QString& Path,bool Grant,const QJsonO
 Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context, bool Deferred)
 {
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(true);
+    Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(true);
     Context.providerInteractions_ = true;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
@@ -583,7 +585,8 @@ void FileJobUi::retrySelected()
 }
 double FileJobUi::measuredRate(const JobSnapshot& Snapshot) const
 {
-    if ((Snapshot.state_ != JobState::Running && Snapshot.state_ != JobState::Committing) || Snapshot.pauseRequested_ || Snapshot.cancelRequested_) return 0;
+    if ((Snapshot.state_ != JobState::Running && Snapshot.state_ != JobState::Committing
+            && !(Snapshot.state_ == JobState::Preparing && deletionJob(Snapshot))) || Snapshot.pauseRequested_ || Snapshot.cancelRequested_) return 0;
     const auto Found = samples_.find(Snapshot.id_); if (Found == samples_.end() || Found->second.size() < 2) return 0;
     const auto& History = Found->second; const auto& Latest = History.back();
     const auto Begin = std::find_if(History.begin(), History.end(), [&](const auto& Sample) { return Sample.elapsed_ >= Latest.elapsed_ - 2000; });
@@ -591,6 +594,12 @@ double FileJobUi::measuredRate(const JobSnapshot& Snapshot) const
     for (auto It = Begin; It != History.end(); ++It) if (It->paused_) First = std::next(It);
     if (First == History.end() || Latest.elapsed_ <= First->elapsed_ || Latest.bytes_ < First->bytes_) return 0;
     return 1000.0 * (Latest.bytes_ - First->bytes_) / (Latest.elapsed_ - First->elapsed_);
+}
+bool FileJobUi::deletionJob(const JobSnapshot& Snapshot) const
+{
+    if (Snapshot.progress_.deletedFiles_) return true;
+    const int At = jobs_->findData(QString::fromStdString(Snapshot.id_));
+    return At >= 0 && jobs_->itemData(At, Qt::UserRole + 1).toInt() == int(hc::operations::FileOperation::Delete);
 }
 
 void FileJobUi::updateJobs()
@@ -669,20 +678,30 @@ void FileJobUi::updateSelection()
         .arg(Snapshot.completedItems_).arg(Snapshot.skippedItems_).arg(Snapshot.failedItems_)
         .arg(QString::fromStdString(Snapshot.progress_.currentItem_)));
     const auto Operation = static_cast<hc::operations::FileOperation>(jobs_->currentData(Qt::UserRole + 1).toInt());
-    const bool ByteProgress = Operation == hc::operations::FileOperation::Copy || Operation == hc::operations::FileOperation::Move;
+    const bool Delete = deletionJob(Snapshot);
+    const bool ByteProgress = !Delete && (Operation == hc::operations::FileOperation::Copy || Operation == hc::operations::FileOperation::Move);
     const auto Total = ByteProgress ? Snapshot.progress_.bytesTotal_.value_or(0) : 0;
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
     const auto Elapsed = Snapshot.submitted_ == std::chrono::steady_clock::time_point{} ? -1LL
         : std::chrono::duration_cast<std::chrono::seconds>(Now - Snapshot.submitted_).count();
-    const bool Measuring = (Snapshot.state_ == JobState::Running || Snapshot.state_ == JobState::Committing) && !Snapshot.pauseRequested_ && !Snapshot.cancelRequested_;
+    const bool Measuring = (Snapshot.state_ == JobState::Running || Snapshot.state_ == JobState::Committing || (Delete && Snapshot.state_ == JobState::Preparing)) && !Snapshot.pauseRequested_ && !Snapshot.cancelRequested_;
     const auto Rate = measuredRate(Snapshot);
-    const auto Remaining = Total > Snapshot.progress_.bytesDone_ && Rate > 0 ? QString::number((Total - Snapshot.progress_.bytesDone_) / Rate, 'f', 0) + tr("초") : tr("계산 대기");
-    metrics_->setText(tr("속도 %1 · 남은 시간 %2 · 경과 %3").arg(fm::ui::TransferGraph::formatRate(Rate),
+    const auto RateTotal = Delete && Snapshot.progress_.plannedItems_ ? Snapshot.progress_.discoveredFiles_.value_or(0) : Total;
+    const auto RateDone = Delete ? Snapshot.progress_.deletedFiles_.value_or(Snapshot.completedItems_) : Snapshot.progress_.bytesDone_;
+    const auto Remaining = RateTotal > RateDone && Rate > 0 ? QString::number((RateTotal - RateDone) / Rate, 'f', 0) + tr("초") : Delete && !Snapshot.progress_.plannedItems_ ? tr("집계 중") : tr("계산 대기");
+    metrics_->setText(tr("속도 %1 · 남은 시간 %2 · 경과 %3").arg(Delete ? graph_->formatValue(Rate) : fm::ui::TransferGraph::formatRate(Rate),
         Active && Measuring ? Remaining : QStringLiteral("—"), Elapsed >= 0 ? QString::number(Elapsed) + tr("초") : QStringLiteral("—")));
     dialog_->setWindowTitle(tr("%1 · %2").arg(StateText(Snapshot.state_), jobs_->currentText()));
     const auto ProgressTotal=Total ? Total : Snapshot.progress_.plannedItems_.value_or(0);
     const auto ProgressDone=Total ? Snapshot.progress_.bytesDone_ : Snapshot.completedItems_+Snapshot.skippedItems_+Snapshot.failedItems_;
-    if (Active && ProgressTotal == 0) { progress_->setRange(0, 0); }
+    const bool Suspended = Snapshot.state_ == JobState::Paused || Snapshot.state_ == JobState::WaitingForUser || Snapshot.deferred_;
+    static_cast<fm::ui::ProgressBar*>(progress_)->setState(Suspended ? fm::ui::ProgressBar::Paused
+        : Snapshot.state_ == JobState::Failed ? fm::ui::ProgressBar::Error : fm::ui::ProgressBar::Normal);
+    if (Delete && Active && Suspended && ProgressTotal == 0) { progress_->setRange(0, 1000); progress_->setValue(0); progress_->setFormat(QString{}); }
+    else if (Active && ProgressTotal == 0) {
+        progress_->setRange(0, 0);
+        if (Delete) progress_->setFormat(tr("목록 확인 중 · %1개 확인").arg(Snapshot.progress_.discoveredItems_.value_or(0)));
+    }
     else
     {
         progress_->setRange(0, 1000);
@@ -698,7 +717,11 @@ void FileJobUi::updateSelection()
     if (ByteProgress) Extra.append(Snapshot.progress_.bytesTotal_ ? tr("처리량 %1 / %2").arg(SizeText(Snapshot.progress_.bytesDone_),SizeText(*Snapshot.progress_.bytesTotal_))
         : (Active ? tr("처리량 %1 · 전체 크기 집계 중") : tr("처리량 %1")).arg(SizeText(Snapshot.progress_.bytesDone_)));
     else Extra.append(tr("%1개 항목 처리").arg(Snapshot.completedItems_+Snapshot.skippedItems_));
-    if (Snapshot.progress_.currentTotal_) Extra.append(tr("현재 파일 %1 / %2").arg(SizeText(Snapshot.progress_.currentBytes_),SizeText(*Snapshot.progress_.currentTotal_)));
+    if (ByteProgress && Snapshot.progress_.currentTotal_) Extra.append(tr("현재 파일 %1 / %2").arg(SizeText(Snapshot.progress_.currentBytes_),SizeText(*Snapshot.progress_.currentTotal_)));
+    if (Delete) {
+        if (Snapshot.progress_.deletedFiles_) Extra.append(tr("삭제한 파일 %1개").arg(*Snapshot.progress_.deletedFiles_));
+        if (Snapshot.progress_.discoveredItems_) Extra.append(tr("확인한 항목 %1개 · 파일 %2개%3").arg(*Snapshot.progress_.discoveredItems_).arg(Snapshot.progress_.discoveredFiles_.value_or(0)).arg(Snapshot.progress_.plannedItems_ ? QString{} : tr(" · 전체 집계 중")));
+    }
     if (Snapshot.progress_.plannedItems_) Extra.append(tr("예정 %1개").arg(*Snapshot.progress_.plannedItems_));
     metrics_->setText(metrics_->text()+"\n"+Extra.join("\n"));
     bool PermissionError=Snapshot.error_ && Snapshot.error_->category_==ErrorCategory::AccessDenied;
@@ -753,7 +776,8 @@ void FileJobUi::recordSamples()
         const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
         const auto Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Now - Snapshot.submitted_).count();
         if (!History.empty() && (Elapsed <= History.back().elapsed_ || (!IsTerminal(Snapshot.state_) && Elapsed - History.back().elapsed_ < 500))) continue;
-        History.push_back({Elapsed, static_cast<qint64>(std::min<uint64_t>(Snapshot.progress_.bytesDone_, INT64_MAX)),
+        const auto Value = deletionJob(Snapshot) ? Snapshot.progress_.deletedFiles_.value_or(Snapshot.completedItems_) : Snapshot.progress_.bytesDone_;
+        History.push_back({Elapsed, static_cast<qint64>(std::min<uint64_t>(Value, INT64_MAX)),
             Snapshot.state_ == JobState::Paused || Snapshot.state_ == JobState::WaitingForUser || Snapshot.deferred_});
         // A bounded recent history avoids UI memory growing with long-running jobs.
         if (History.size() > 600) History.erase(History.begin());
@@ -761,7 +785,12 @@ void FileJobUi::recordSamples()
 }
 void FileJobUi::updateGraph(const JobSnapshot& Snapshot)
 {
-    const auto Total = static_cast<qint64>(std::min<uint64_t>(Snapshot.progress_.bytesTotal_.value_or(0), INT64_MAX));
+    const bool Delete = deletionJob(Snapshot);
+    graph_->setUnit(Delete ? fm::ui::TransferGraph::Count : fm::ui::TransferGraph::Bytes);
+    graph_->setCountSuffix(Snapshot.progress_.deletedFiles_ ? tr(" 파일/초") : tr(" 항목/초"));
+    graph_->setTitle(Delete ? (Snapshot.progress_.deletedFiles_ ? tr("삭제 속도 · 파일 수") : tr("삭제 속도 · 항목 수")) : tr("처리 속도 · 실제 관측값"));
+    const auto Count = Delete ? (Snapshot.progress_.plannedItems_ ? Snapshot.progress_.discoveredFiles_.value_or(0) : 0) : Snapshot.progress_.bytesTotal_.value_or(0);
+    const auto Total = static_cast<qint64>(std::min<uint64_t>(Count, INT64_MAX));
     if (graphId_ != Snapshot.id_ || graphTotal_ != Total) {
         graphId_ = Snapshot.id_; graphTotal_ = Total; graphElapsed_ = -1; graph_->start(Total);
     }
@@ -782,7 +811,7 @@ void FileJobUi::updateManager()
     std::sort(Queue.begin(), Queue.end(), [](const auto& A, const auto& B) { return A.queueOrder_ < B.queueOrder_; });
     std::map<std::string, size_t> Positions;
     for (size_t Index = 0; Index < Queue.size(); ++Index) Positions[Queue[Index].id_] = Index + 1;
-    int Active = 0, Waiting = 0, Finished = 0, Failed = 0, Queued = 0, Delayed = 0; double TotalRate = 0;
+    int Active = 0, Waiting = 0, Finished = 0, Failed = 0, Queued = 0, Delayed = 0; double TotalRate = 0, DeleteRate = 0, DeleteItemRate = 0;
     for (int Row = jobList_->topLevelItemCount() - 1; Row >= 0; --Row)
         if (jobs_->findData(jobList_->topLevelItem(Row)->data(0, Qt::UserRole)) < 0) delete jobList_->takeTopLevelItem(Row);
     std::map<QString, QTreeWidgetItem*> Rows;
@@ -792,7 +821,10 @@ void FileJobUi::updateManager()
         const auto Found = Snapshots.find(Id.toStdString()); if (Found == Snapshots.end()) continue;
         const auto& Snapshot = Found->second;
         const bool Terminal = IsTerminal(Snapshot.state_);
-        Queued += Snapshot.deferred_; TotalRate += measuredRate(Snapshot);
+        Queued += Snapshot.deferred_;
+        if (deletionJob(Snapshot)) {
+            if (Snapshot.progress_.deletedFiles_) DeleteRate += measuredRate(Snapshot); else DeleteItemRate += measuredRate(Snapshot);
+        } else TotalRate += measuredRate(Snapshot);
         Active += !Terminal; Waiting += Snapshot.state_ == JobState::WaitingForUser;
         Finished += Snapshot.state_ == JobState::Completed;
         Failed += Snapshot.state_ == JobState::Failed || Snapshot.state_ == JobState::Cancelled;
@@ -811,8 +843,11 @@ void FileJobUi::updateManager()
             }
         }
         Delayed += Stalled; if (Stalled) Item->setText(1, Item->text(1) + tr(" · 지연"));
-        Item->setText(2, tr("%1 / %2 B").arg(Snapshot.progress_.bytesDone_).arg(Snapshot.progress_.bytesTotal_ ? QString::number(*Snapshot.progress_.bytesTotal_) : tr("미상")));
-        Item->setText(3, Snapshot.state_ == JobState::Running && !Snapshot.pauseRequested_ ? fm::ui::TransferGraph::formatRate(measuredRate(Snapshot)) : QStringLiteral("—"));
+        const bool Delete = deletionJob(Snapshot);
+        Item->setText(2, Delete ? (Snapshot.progress_.deletedFiles_ ? tr("삭제한 파일 %1개 · %2") : tr("삭제한 항목 %1개 · %2")).arg(Snapshot.progress_.deletedFiles_.value_or(Snapshot.completedItems_)).arg(Snapshot.progress_.plannedItems_ ? tr("집계 완료") : tr("전체 집계 중"))
+            : tr("%1 / %2 B").arg(Snapshot.progress_.bytesDone_).arg(Snapshot.progress_.bytesTotal_ ? QString::number(*Snapshot.progress_.bytesTotal_) : tr("미상")));
+        const auto Rate = Delete ? QLocale().toString(measuredRate(Snapshot), 'f', 1) + (Snapshot.progress_.deletedFiles_ ? tr(" 파일/초") : tr(" 항목/초")) : fm::ui::TransferGraph::formatRate(measuredRate(Snapshot));
+        Item->setText(3, (Snapshot.state_ == JobState::Running || Snapshot.state_ == JobState::Committing || (Delete && Snapshot.state_ == JobState::Preparing)) && !Snapshot.pauseRequested_ ? Rate : QStringLiteral("—"));
         Item->setText(4, QString::fromStdString(Snapshot.progress_.currentItem_));
         const auto Endpoint = endpoints_.contains(Snapshot.id_) ? endpoints_.at(Snapshot.id_) : QString{};
         Item->setToolTip(0, jobs_->itemText(Row) + "\n" + Endpoint + "\n" + Id + "\n" + (Snapshot.submittedUtcMs_ ? QLocale().toString(QDateTime::fromMSecsSinceEpoch(Snapshot.submittedUtcMs_), QLocale::ShortFormat) : tr("이전 버전: 접수 시각 미상")));
@@ -822,8 +857,10 @@ void FileJobUi::updateManager()
         Item->setHidden(!Match || !(Item->text(0) + Item->text(4) + Endpoint).contains(search_->text(), Qt::CaseInsensitive));
         if (Id.toStdString() == selectedId()) jobList_->setCurrentItem(Item);
     }
-    summary_->setToolTip(tr("속도는 최근 2초의 실제 처리 바이트입니다. 10초 이상 바이트 변화가 없으면 지연으로 표시하며, 실패를 뜻하지 않습니다. 그래프는 최근 600개 표본을 보관합니다."));
-    summary_->setText(tr("미완료 %1 · 대기열 %2 · 응답 필요 %3 · 완료 %4 · 실패·취소 %5\n전체 속도 %6 · 10초 이상 진행 지연 %7").arg(Active).arg(Queued).arg(Waiting).arg(Finished).arg(Failed).arg(fm::ui::TransferGraph::formatRate(TotalRate)).arg(Delayed));
+    summary_->setToolTip(tr("속도는 최근 2초의 실제 처리량입니다. 삭제는 파일 수, 복사·이동은 바이트로 집계합니다. 10초 이상 변화가 없으면 지연으로 표시하며, 실패를 뜻하지 않습니다. 그래프는 최근 600개 표본을 보관합니다."));
+    auto Rates = fm::ui::TransferGraph::formatRate(TotalRate) + tr(" · 삭제 %1 파일/초").arg(QLocale().toString(DeleteRate, 'f', 1));
+    if (DeleteItemRate > 0) Rates += tr(" · 삭제 %1 항목/초").arg(QLocale().toString(DeleteItemRate, 'f', 1));
+    summary_->setText(tr("미완료 %1 · 대기열 %2 · 응답 필요 %3 · 완료 %4 · 실패·취소 %5\n전체 속도 %6 · 10초 이상 진행 지연 %7").arg(Active).arg(Queued).arg(Waiting).arg(Finished).arg(Failed).arg(Rates).arg(Delayed));
     std::map<QTreeWidgetItem*, bool> Hidden;
     for (int Index = 0; Index < jobList_->topLevelItemCount(); ++Index) Hidden[jobList_->topLevelItem(Index)] = jobList_->topLevelItem(Index)->isHidden();
     std::vector<QTreeWidgetItem*> Ordered;

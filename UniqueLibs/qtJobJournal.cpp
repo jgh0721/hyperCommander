@@ -56,12 +56,15 @@ namespace hc::operations
             Out.insert("samplePolicy", "recent-600-at-500ms; rate-window-2000ms; samples-session-only");
             if (Snapshot.progress_.bytesTotal_) Out.insert("total", QString::number(*Snapshot.progress_.bytesTotal_));
             if (Snapshot.progress_.plannedItems_) Out.insert("planned", QString::number(*Snapshot.progress_.plannedItems_));
+            if (Snapshot.progress_.discoveredItems_) Out.insert("discoveredItems", QString::number(*Snapshot.progress_.discoveredItems_));
+            if (Snapshot.progress_.discoveredFiles_) Out.insert("discoveredFiles", QString::number(*Snapshot.progress_.discoveredFiles_));
+            if (Snapshot.progress_.deletedFiles_) Out.insert("deletedFiles", QString::number(*Snapshot.progress_.deletedFiles_));
             Out.insert("currentBytes", QString::number(Snapshot.progress_.currentBytes_));
             if (Snapshot.progress_.currentTotal_) Out.insert("currentTotal", QString::number(*Snapshot.progress_.currentTotal_));
             if (Snapshot.error_) Out.insert("error", EncodeError(*Snapshot.error_));
             Out.insert("saveProgress", SaveProgress);
             if (!SaveProgress && !IsTerminal(Snapshot.state_)) {
-                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal"}) Out.remove(Key);
+                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal", "discoveredItems", "discoveredFiles", "deletedFiles"}) Out.remove(Key);
                 // Version 2 reconstructs counts from the durable outcome ledger.
                 // Version 1 embeds outcomes and must retain their matching counts.
                 if (Result.outcomes_) for (const auto* Key : {"completed", "skipped", "failed"}) Out.remove(Key);
@@ -82,6 +85,9 @@ namespace hc::operations
             Snapshot.submittedUtcMs_ = Object["submittedUtcMs"].toString().toLongLong(); Snapshot.retriedAs_ = Object["retriedAs"].toString().toStdString();
             if (Object.contains("total")) Snapshot.progress_.bytesTotal_ = Object["total"].toString().toULongLong();
             if (Object.contains("planned")) Snapshot.progress_.plannedItems_ = Object["planned"].toString().toULongLong();
+            if (Object.contains("discoveredItems")) Snapshot.progress_.discoveredItems_ = Object["discoveredItems"].toString().toULongLong();
+            if (Object.contains("discoveredFiles")) Snapshot.progress_.discoveredFiles_ = Object["discoveredFiles"].toString().toULongLong();
+            if (Object.contains("deletedFiles")) Snapshot.progress_.deletedFiles_ = Object["deletedFiles"].toString().toULongLong();
             Snapshot.progress_.currentBytes_ = Object["currentBytes"].toString().toULongLong();
             if (Object.contains("currentTotal")) Snapshot.progress_.currentTotal_ = Object["currentTotal"].toString().toULongLong();
             if (Object.contains("error")) Snapshot.error_ = DecodeError(Object["error"].toObject());

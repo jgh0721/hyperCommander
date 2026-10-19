@@ -53,6 +53,7 @@ private:
     void retrySelected();
     bool canRetry(const std::string& Id) const;
     double measuredRate(const hc::operations::JobSnapshot& Snapshot) const;
+    bool deletionJob(const hc::operations::JobSnapshot& Snapshot) const;
     void updateJobs();
     void updateManager();
     void showProgress();

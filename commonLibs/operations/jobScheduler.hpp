@@ -35,6 +35,9 @@ namespace hc::operations
         std::string currentItem_;
         std::uint64_t currentBytes_ = 0;
         std::optional<std::uint64_t> currentTotal_, plannedItems_;
+        // Confirmed discovery is a lower bound until plannedItems_ is present.
+        // Deleted files exclude skipped items and directory-removal operations.
+        std::optional<std::uint64_t> discoveredItems_, discoveredFiles_, deletedFiles_;
     };
     struct ItemOutcome
     {

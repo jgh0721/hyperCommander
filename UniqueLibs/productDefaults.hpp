@@ -645,6 +645,7 @@ namespace hc::defaults
                  { "jobDetailed",             true },
                  { "jobCloseOnSuccess",       true },
                  { "deleteToRecycle",         true },
+                 { "deleteWhileListing",      true },
                  { "jobNotification",         "attention" },
                  { "queueInsertion",          "last" },
                  { "jobConcurrency",          2 },

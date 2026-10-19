@@ -1530,6 +1530,72 @@ private slots:
         QCOMPARE(Rolling.timeWindowEndMs()-Rolling.timeWindowStartMs(),Span); QVERIFY(Rolling.timeWindowStartMs()>0);
         QVERIFY(SaveR9Dialog(Rolling,"r21-graph-time-after")); Rolling.hide();
     }
+    void todoBugDeleteProgressUi()
+    {
+        using namespace hc::operations; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options.remove("deleteWhileListing"); Options["enableJobRecovery"] = false;
+        Options["jobCloseOnSuccess"] = false; QVERIFY(Settings.Put(Section::Options, Options));
+        {
+            QMainOpts Dialog(main_); Dialog.LoadSettings(); Dialog.show();
+            auto* Nav = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Nav);
+            for (int I = 0; I < Nav->count(); ++I) if (Nav->item(I)->text() == QStringLiteral("파일 작업")) Nav->setCurrentRow(I);
+            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.settings.fileOperationsTabs"); QVERIFY(Tabs);
+            auto* Page = Dialog.findChild<QWidget*>("hc.settings.fileOperationsDelete"); QVERIFY(Page); Tabs->setCurrentWidget(Page);
+            auto* Check = Dialog.findChild<QCheckBox*>("hc.settings.deleteWhileListing"); QVERIFY(Check); QVERIFY(Check->isChecked());
+            QTRY_VERIFY(Check->isVisible()); QVERIFY(SaveR9Dialog(Dialog, "delete-settings-default-on"));
+            Check->setChecked(false); QVERIFY(Dialog.SaveSettings()); Dialog.accept();
+        }
+        QVERIFY(!Settings.CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(true));
+        { QMainOpts Dialog(main_); Dialog.LoadSettings(); auto* Check = Dialog.findChild<QCheckBox*>("hc.settings.deleteWhileListing");
+          QVERIFY(Check && !Check->isChecked()); Dialog.reject(); }
+        struct Control { std::atomic<bool> planned_{false}, finish_{false}; };
+        class Task final : public IJobTask {
+        public:
+            explicit Task(std::shared_ptr<Control> Control) : control_(std::move(Control)) {}
+            JobStep Advance(JobStepContext) override {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20)); ++count_;
+                JobStep Step{control_->finish_ ? JobState::Completed : JobState::Preparing}; Step.progress_ = JobProgress{};
+                Step.progress_->deletedFiles_ = count_ / 2; Step.progress_->discoveredFiles_ = count_; Step.progress_->discoveredItems_ = count_ + 3;
+                if (control_->planned_) Step.progress_->plannedItems_ = count_ + 3;
+                return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        private: std::shared_ptr<Control> control_; uint64_t count_ = 0;
+        };
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        auto Control = std::make_shared<struct Control>(); PreparedJob Work; Work.task_ = std::make_unique<Task>(Control);
+        auto Started = Jobs.Submit(std::move(Work), QStringLiteral("삭제 진행 시험")); QVERIFY(Started.HasValue());
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); auto* Graph = Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph");
+        auto* Metrics = Window.findChild<QLabel*>("hc.jobs.metrics"); auto* Pause = Window.findChild<QPushButton*>("hc.jobs.pause");
+        auto* Bar = Window.findChild<QProgressBar*>(); QVERIFY(Dialog && Graph && Metrics && Pause && Bar);
+        QTRY_VERIFY(Graph->bytesDone() > 0); QTRY_COMPARE(Bar->maximum(), 0); QCOMPARE(Graph->totalBytes(), 0ll);
+        QVERIFY(Graph->formatValue(12).contains(QStringLiteral("파일/초"))); QVERIFY(!Metrics->text().contains("B/s"));
+        QTRY_VERIFY(Metrics->text().contains(QRegularExpression(QStringLiteral("속도 [1-9]"))));
+        QVERIFY(Metrics->text().contains(QStringLiteral("확인한 항목"))); QVERIFY(Metrics->text().contains(QStringLiteral("전체 집계 중")));
+        QVERIFY(SaveR9Dialog(*Dialog, "delete-discovery-busy"));
+        {
+            auto& Theme = fm::style::ThemeManager::instance(); const auto OriginalDesign = Theme.design();
+            const auto RestoreDesign = qScopeGuard([&] { Theme.setDesign(OriginalDesign); });
+            for (const auto Design : {fm::style::Design::Standard, fm::style::Design::Watercolor}) {
+                Theme.setDesign(Design); QTest::qWait(80); Bar->setTextVisible(false);
+                const auto Before = Bar->grab().toImage(); QTest::qWait(180); const auto After = Bar->grab().toImage();
+                QVERIFY2(Before != After, "Indeterminate deletion progress must animate in both designs.");
+            }
+            Bar->setTextVisible(true);
+        }
+        Pause->click(); QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Paused);
+        QTRY_VERIFY(Bar->maximum() > 0); QVERIFY(Graph->isPaused()); QVERIFY(SaveR9Dialog(*Dialog, "delete-discovery-paused"));
+        Pause->click(); QTRY_COMPARE(Bar->maximum(), 0); Control->planned_ = true; QTRY_VERIFY(Bar->maximum() > 0);
+        Control->finish_ = true; QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
+        auto CancelControl = std::make_shared<struct Control>(); PreparedJob CancelWork; CancelWork.task_ = std::make_unique<Task>(CancelControl);
+        auto CancelJob = Jobs.Submit(std::move(CancelWork), QStringLiteral("목록 확인 취소 시험")); QVERIFY(CancelJob.HasValue());
+        QTRY_COMPARE(Bar->maximum(), 0); auto* Cancel = Window.findChild<QPushButton*>("hc.jobs.cancel");
+        QVERIFY(Cancel && Cancel->isEnabled()); Cancel->click();
+        QTRY_VERIFY(CancelJob.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QCOMPARE(CancelJob.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+    }
     void r23FileWritesUi()
     {
         using namespace hc::settings; using namespace hc::operations; using namespace hc::storage;

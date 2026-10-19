@@ -198,6 +198,53 @@ private slots:
         QVERIFY(Off!=Restart.Value().end()); QCOMPARE(Off->snapshot_.completedItems_,1ull); QCOMPARE(Off->writes_->Count(),1ull);
         QCOMPARE(Off->snapshot_.progress_.bytesDone_,456ull);
     }
+    void deleteProgressJournalRoundTrip()
+    {
+        QTemporaryDir Directory; auto Journal = MakeFileJobJournal(Directory.path(), true); JobResult Record;
+        Record.snapshot_.id_ = "hc-job-delete-count"; Record.snapshot_.state_ = JobState::Preparing;
+        Record.snapshot_.progress_.discoveredItems_ = 10000000000ull;
+        Record.snapshot_.progress_.discoveredFiles_ = 9000000000ull; Record.snapshot_.progress_.deletedFiles_ = 0;
+        QVERIFY(Journal->Checkpoint(Record).HasValue());
+        auto Recovered = Journal->Recover(); QVERIFY(Recovered.HasValue()); QCOMPARE(Recovered.Value().size(), size_t(1));
+        const auto& Progress = Recovered.Value()[0].snapshot_.progress_;
+        QVERIFY(!Progress.plannedItems_); QCOMPARE(Progress.discoveredItems_.value_or(0), 10000000000ull);
+        QCOMPARE(Progress.discoveredFiles_.value_or(0), 9000000000ull); QVERIFY(Progress.deletedFiles_.has_value()); QCOMPARE(*Progress.deletedFiles_, 0ull);
+        Record.snapshot_.state_ = JobState::Completed; Record.snapshot_.progress_.deletedFiles_ = 9000000000ull;
+        Record.snapshot_.progress_.plannedItems_ = 10000000000ull; QVERIFY(Journal->Checkpoint(Record).HasValue());
+        Recovered = Journal->Recover(); QVERIFY(Recovered.HasValue()); QCOMPARE(*Recovered.Value()[0].snapshot_.progress_.deletedFiles_, 9000000000ull);
+        QCOMPARE(*Recovered.Value()[0].snapshot_.progress_.plannedItems_, 10000000000ull);
+    }
+    void manifestDeleteValidationAndCounts()
+    {
+        class Manifest final : public ISelectionManifest {
+        public:
+            std::shared_ptr<IStorageProvider> provider_; std::vector<EntrySnapshot> entries_;
+            uint64_t Count() const override { return entries_.size(); }
+            std::shared_ptr<IStorageProvider> Provider() const override { return provider_; }
+            Result<EntryPage> Read(uint64_t Offset, size_t Count, const OperationContext&) const override {
+                EntryPage Page; const auto End = std::min<uint64_t>(entries_.size(), Offset + Count);
+                for (auto I = Offset; I < End; ++I) Page.entries_.push_back(entries_[I]);
+                Page.end_ = End == entries_.size(); return Page;
+            }
+        };
+        for (const bool Duplicate : {true, false}) for (const bool Streaming : {false, true}) {
+            QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(Put(Directory.filePath("a"), "a")); QVERIFY(Put(Directory.filePath("b"), "b"));
+            auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+            auto Selection = std::make_shared<Manifest>(); Selection->provider_ = Reader;
+            for (const auto* Name : {"a", "b"}) {
+                auto Item = Reader->Resolve({LocatorKind::Local, QDir::toNativeSeparators(Directory.filePath(Name)).toStdString()}, {}).get();
+                QVERIFY(Item.HasValue()); Selection->entries_.push_back(Item.Value());
+            }
+            if (Duplicate) Selection->entries_.back() = Selection->entries_.front();
+            FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.deleteWhileListing_ = Streaming;
+            Request.selection_ = Selection; Request.selectionRoot_ = {LocatorKind::Local, QDir::toNativeSeparators(Directory.path()).toStdString()};
+            Request.selectionWriter_ = Writer; Request.confirmDelete_ = false;
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+            const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, Duplicate ? JobState::Failed : JobState::Completed);
+            if (Duplicate) { QVERIFY(QFileInfo::exists(Directory.filePath("a"))); QVERIFY(QFileInfo::exists(Directory.filePath("b"))); }
+            else { QCOMPARE(Done.snapshot_.completedItems_, 2ull); QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(99), 2ull); QCOMPARE(Done.snapshot_.progress_.plannedItems_.value_or(99), 2ull); }
+        }
+    }
     void identicalCheckpointsAndExternalChanges()
     {
         QTemporaryDir Directory;auto Journal=MakeFileJobJournal(Directory.path(),true);JobResult Record;Record.snapshot_.id_="hc-job-r18-1";Record.snapshot_.state_=JobState::Preparing;

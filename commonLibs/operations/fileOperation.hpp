@@ -48,6 +48,7 @@ namespace hc::operations
         std::optional<storage::DestinationExpectation> approvedDestination_;
         bool confirmDelete_ = true;
         bool calculateSizeBefore_ = true;
+        bool deleteWhileListing_ = true;
         DeleteMode deleteMode_ = DeleteMode::Permanent;
         ReadOnlyPolicy readOnly_ = ReadOnlyPolicy::Ask;
         bool createParents_ = false;
