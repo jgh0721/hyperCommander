@@ -1566,11 +1566,16 @@ private slots:
         };
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         auto Control = std::make_shared<struct Control>(); PreparedJob Work; Work.task_ = std::make_unique<Task>(Control);
+        Work.request_.metadata_ = {"qtbase", "D:/Qt/한글 경로/qtbase", "hcl11:00:", {}};
         auto Started = Jobs.Submit(std::move(Work), QStringLiteral("삭제 진행 시험")); QVERIFY(Started.HasValue());
         auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); auto* Graph = Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph");
         auto* Metrics = Window.findChild<QLabel*>("hc.jobs.metrics"); auto* Pause = Window.findChild<QPushButton*>("hc.jobs.pause");
         auto* Bar = Window.findChild<QProgressBar*>(); QVERIFY(Dialog && Graph && Metrics && Pause && Bar);
         QTRY_VERIFY(Graph->bytesDone() > 0); QTRY_COMPARE(Bar->maximum(), 0); QCOMPARE(Graph->totalBytes(), 0ll);
+        auto* Header = Dialog->findChild<fm::ui::DialogHeader*>(); QVERIFY(Header);
+        QTRY_COMPARE(Header->title(), QStringLiteral("삭제 · D:/Qt/한글 경로/qtbase"));
+        QVERIFY(Header->subtitle().isEmpty()); QCOMPARE(Header->toolTip(), Header->title());
+        QVERIFY(Dialog->windowTitle().contains(Header->title()));
         QVERIFY(Graph->formatValue(12).contains(QStringLiteral("파일/초"))); QVERIFY(!Metrics->text().contains("B/s"));
         QTRY_VERIFY(Metrics->text().contains(QRegularExpression(QStringLiteral("속도 [1-9]"))));
         QVERIFY(Metrics->text().contains(QStringLiteral("확인한 항목"))); QVERIFY(Metrics->text().contains(QStringLiteral("전체 집계 중")));

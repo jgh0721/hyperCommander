@@ -79,6 +79,7 @@ namespace
     }
     QString DisplayPath(const std::string& Value)
     {
+        if (Value == Serialize(Locator{})) return {};
         const auto At = ParseLocator(Value);
         if (!At.HasValue()) return QString::fromStdString(Value);
         auto Path = QString::fromStdString(At.Value().root_);
@@ -410,7 +411,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
-    const auto Destination = DisplayPath(Serialize(Request.destination_));
+    const auto Destination = Operation == hc::operations::FileOperation::Delete ? QString{} : DisplayPath(Serialize(Request.destination_));
     const auto Source = Request.sources_.empty() ? DisplayPath(Serialize(Request.selectionRoot_)) : DisplayPath(Serialize(Request.sources_.front().entry_.locator_));
     if(!Request.elevation_)Request.elevation_=ElevationService();
     auto Prepared = PrepareFileOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
@@ -762,8 +763,13 @@ void FileJobUi::updateSelection()
     previousPage_->setVisible(detailed_); nextPage_->setVisible(detailed_);
     if (!Valid) { permission_->hide(); metrics_->clear(); graph_->hide(); header_->setSubtitle({}); status_->setText(tr("파일 작업이 없습니다.")); details_->clear(); progress_->setRange(0, 1); progress_->setValue(0); progress_->setFormat({}); return; }
     graph_->setVisible(detailed_);
-    header_->setTitle(jobs_->currentText());
-    header_->setSubtitle(!Snapshot.metadata_.destination_.empty() ? tr("대상: %1").arg(DisplayPath(Snapshot.metadata_.destination_))
+    const bool Delete = deletionJob(Snapshot);
+    const auto Source = DisplayPath(Snapshot.metadata_.source_);
+    const auto Title = Delete && !Source.isEmpty() ? tr("삭제 · %1").arg(Source) : jobs_->currentText();
+    header_->setTitle(Title);
+    header_->setToolTip(Title);
+    // Deletion has no destination; show its source path once in the title.
+    header_->setSubtitle(Delete ? QString{} : !Snapshot.metadata_.destination_.empty() ? tr("대상: %1").arg(DisplayPath(Snapshot.metadata_.destination_))
         : endpoints_.contains(Snapshot.id_) ? endpoints_.at(Snapshot.id_) : QString{});
     updateGraph(Snapshot);
     status_->setText(tr("%1 · 완료 %2 / 건너뜀 %3 / 실패 %4\n%5")
@@ -771,7 +777,6 @@ void FileJobUi::updateSelection()
         .arg(Snapshot.completedItems_).arg(Snapshot.skippedItems_).arg(Snapshot.failedItems_)
         .arg(QString::fromStdString(Snapshot.progress_.currentItem_)));
     const auto Operation = static_cast<hc::operations::FileOperation>(jobs_->currentData(Qt::UserRole + 1).toInt());
-    const bool Delete = deletionJob(Snapshot);
     const bool ByteProgress = !Delete && (Operation == hc::operations::FileOperation::Copy || Operation == hc::operations::FileOperation::Move);
     const auto Total = ByteProgress ? Snapshot.progress_.bytesTotal_.value_or(0) : 0;
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
@@ -784,7 +789,7 @@ void FileJobUi::updateSelection()
     const auto Remaining = RateTotal > RateDone && Rate > 0 ? QString::number((RateTotal - RateDone) / Rate, 'f', 0) + tr("초") : Delete && !Snapshot.progress_.plannedItems_ ? tr("집계 중") : tr("계산 대기");
     metrics_->setText(tr("속도 %1 · 남은 시간 %2 · 경과 %3").arg(Delete ? graph_->formatValue(Rate) : fm::ui::TransferGraph::formatRate(Rate),
         Active && Measuring ? Remaining : QStringLiteral("—"), Elapsed >= 0 ? QString::number(Elapsed) + tr("초") : QStringLiteral("—")));
-    dialog_->setWindowTitle(tr("%1 · %2").arg(StateText(Snapshot.state_), jobs_->currentText()));
+    dialog_->setWindowTitle(tr("%1 · %2").arg(StateText(Snapshot.state_), Title));
     const auto ProgressTotal=Total ? Total : Snapshot.progress_.plannedItems_.value_or(0);
     const auto ProgressDone=Total ? Snapshot.progress_.bytesDone_ : Snapshot.completedItems_+Snapshot.skippedItems_+Snapshot.failedItems_;
     const bool Suspended = Snapshot.state_ == JobState::Paused || Snapshot.state_ == JobState::WaitingForUser || Snapshot.deferred_;
