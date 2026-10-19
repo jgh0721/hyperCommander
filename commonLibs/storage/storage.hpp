@@ -75,6 +75,8 @@ namespace hc::storage
         std::optional<ResourceId> resource_;
         bool retryable_ = false;
         std::string userAction_;
+        // Native mutation diagnostics; paths are data, never executable requests.
+        std::string nativePath_;
     };
     template<class T> class Result
     {

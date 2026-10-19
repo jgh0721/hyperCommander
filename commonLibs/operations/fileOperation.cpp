@@ -113,6 +113,7 @@ namespace hc::operations
             {
                 jobId_ = Context.jobId_;
                 if (const auto Error = Context.operation_.Check({})) return failed(*Error);
+                if (phase_ == Phase::LockPrompt) return lockQuestion(Context);
                 if (phase_ == Phase::ElevationPrompt) return permission(Context);
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
                 if (phase_ == Phase::Preparing) return prepare(Context.operation_);
@@ -251,7 +252,7 @@ namespace hc::operations
                 std::size_t next_ = 0;
                 bool ended_ = false;
             };
-            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun };
+            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -281,6 +282,13 @@ namespace hc::operations
             }
             JobStep failed(Error Error)
             {
+                if (request_.fileLockInteractions_ && index_ < items_.size()
+                    && (phase_ == Phase::Rename || phase_ == Phase::Remove)
+                    && current().source_.entry_.locator_.kind_ == LocatorKind::Local
+                    && (Error.code_ == "win32:32" || Error.code_ == "win32:33")) {
+                    lockError_ = Error; resumePhase_ = phase_; phase_ = Phase::LockPrompt;
+                    return progress();
+                }
                 if (Error.category_ == ErrorCategory::AccessDenied && request_.elevation_ && index_ < items_.size()
                     && phase_ != Phase::Preparing && phase_ != Phase::ElevationPrompt && phase_ != Phase::ElevationRun)
                 {
@@ -305,8 +313,33 @@ namespace hc::operations
                 }
                 return terminalFailure(std::move(Error));
             }
+            JobStep lockQuestion(const JobStepContext& Context)
+            {
+                if (!Context.answer_) {
+                    auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, "file-in-use:" + lockError_.code_,
+                        {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
+                        lockError_.nativePath_.empty() ? current().source_.entry_.locator_.root_ : lockError_.nativePath_, current().destination_.root_};
+                    return Step;
+                }
+                if (Context.answer_->choice_ == InteractionChoice::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
+                if (Context.answer_->choice_ == InteractionChoice::Cancel) { auto Step = terminalFailure({ErrorCategory::Cancelled,"file-in-use-cancelled"}); Step.next_ = JobState::Cancelled; return Step; }
+                if (Context.answer_->choice_ != InteractionChoice::Retry) return terminalFailure({ErrorCategory::InvalidRequest,"file-in-use-answer"});
+                if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !current().removeDirectory_) {
+                    if (!publishedDestination_) return terminalFailure({ErrorCategory::StaleRevision,"move-destination-unverified"});
+                    auto Fresh = request_.destinationWriter_->Inspect(current().destination_, Context.operation_);
+                    if (!Fresh.HasValue() || !Fresh.Value() || Fresh.Value()->id_ != publishedDestination_->id_)
+                        return terminalFailure({ErrorCategory::StaleRevision,"move-destination-changed"});
+                }
+                phase_ = resumePhase_;
+                auto Step = progress(); Step.next_ = JobState::Committing; return Step;
+            }
             JobStep terminalFailure(Error Error)
             {
+                if (Error.nativePath_.empty() && index_ < items_.size()
+                    && (phase_ == Phase::Remove || phase_ == Phase::Rename)
+                    && (Error.code_ == "win32:5" || Error.code_ == "win32:32" || Error.code_ == "win32:33" || Error.code_ == "win32:1224"))
+                    Error.nativePath_ = current().source_.entry_.locator_.root_;
                 JobStep Step{JobState::Failed}; Step.error_ = Error;
                 if (phase_ != Phase::Preparing && index_ < items_.size())
                     Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Failed, Error, destinationCommitted_, false, current().source_.entry_};
@@ -413,6 +446,11 @@ namespace hc::operations
                 destinationCommitted_ |= Status.Value().destinationCommitted_;
                 auto Closed = elevatedSession_->Close(); elevatedSession_.reset(); cleanup_.insert(cleanup_.end(), Closed.begin(), Closed.end());
                 if (Status.Value().error_) {
+                    if (request_.fileLockInteractions_ && (Status.Value().error_->code_ == "win32:32" || Status.Value().error_->code_ == "win32:33")
+                        && (elevatedRequest_.action_ == FileElevationAction::Remove || elevatedRequest_.action_ == FileElevationAction::Recycle || elevatedRequest_.action_ == FileElevationAction::Rename)) {
+                        phase_ = elevatedRequest_.action_ == FileElevationAction::Rename ? Phase::Rename : Phase::Remove;
+                        return failed(*Status.Value().error_);
+                    }
                     auto Failed = terminalFailure(*Status.Value().error_);
                     if (Status.Value().error_->category_ == ErrorCategory::Cancelled) Failed.next_ = JobState::Cancelled;
                     return Failed;
@@ -675,7 +713,7 @@ namespace hc::operations
                 auto Receipt = session_->Commit(Context);
                 if (!Receipt.HasValue()) return failed(Receipt.Failure());
                 destinationCommitted_ = true;
-                if (request_.operation_ == FileOperation::Move && request_.elevation_) {
+                if (request_.operation_ == FileOperation::Move && (request_.elevation_ || request_.fileLockInteractions_)) {
                     auto Published = request_.destinationWriter_->Inspect(current().destination_, Context);
                     if (Published.HasValue() && Published.Value()) publishedDestination_ = *Published.Value();
                 }
@@ -724,6 +762,8 @@ namespace hc::operations
             }
             FileOperationRequest request_;
             Phase phase_ = Phase::Preparing;
+            Phase resumePhase_ = Phase::Remove;
+            Error lockError_;
             std::deque<PlannedItem> pending_;
             std::vector<PlannedItem> items_, directories_;
             std::vector<std::shared_ptr<IStorageProvider>> batchReaders_;

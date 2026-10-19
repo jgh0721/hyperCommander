@@ -84,6 +84,7 @@ private:
     QPushButton* cancel_ = nullptr;
     std::map<hc::operations::InteractionChoice, QPushButton*> choices_;
     QPushButton* permission_ = nullptr;
+    QPushButton* fileLocks_ = nullptr;
     QTimer* timer_ = nullptr;
     bool closing_ = false;
     QDialog* manager_ = nullptr;

@@ -1,5 +1,6 @@
 ﻿#include <QtTest>
 #include <QProcess>
+#include <QScopeGuard>
 #include "UniqueLibs/batchRenameJournal.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 
@@ -44,6 +45,25 @@ private:
 class BatchRenameTests : public QObject {
     Q_OBJECT
 private slots:
+    void sharingViolationWaitsBeforeAnyRename() {
+        QTemporaryDir Data, Journal; const auto Rows = Fixture(Data.path()); QCOMPARE(Rows.size(),3);
+        const auto Path = NativePath(Rows[1].source_.path_);
+        HANDLE Held = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+        QVERIFY(Held!=INVALID_HANDLE_VALUE);
+        const auto Close = qScopeGuard([&]{if(Held!=INVALID_HANDLE_VALUE)CloseHandle(Held);});
+        auto Prepared=PrepareBatchRename(Journal.path(),Rows);QVERIFY(Prepared.HasValue());auto Job=std::move(Prepared.Value());
+        const auto RecordId=IdOf(Job);JobStepContext Context;Context.jobId_="owned-rename-lock";Context.operation_.providerInteractions_=true;
+        auto Cleanup=qScopeGuard([&]{Job.task_->Finalize(JobState::Cancelled);});
+        JobStep Step;
+        for(int I=0;I<200;++I){Step=Job.task_->Advance(Context);Context.committing_=Step.next_==JobState::Committing;if(Step.next_==JobState::WaitingForUser||IsTerminal(Step.next_))break;}
+        QCOMPARE(Step.next_,JobState::WaitingForUser);QVERIFY(Step.interaction_);QVERIFY(Step.interaction_->reason_.starts_with("file-in-use:"));
+        for(const auto& Row:Rows){QVERIFY(QFile::exists(Row.source_.path_));QVERIFY(!QFile::exists(Row.target_));}
+        CloseHandle(Held);Held=INVALID_HANDLE_VALUE;Context.answer_=InteractionAnswer{"",InteractionChoice::Retry,{}};
+        for(int I=0;I<300;++I){Step=Job.task_->Advance(Context);Context.answer_.reset();Context.committing_=Step.next_==JobState::Committing;if(IsTerminal(Step.next_))break;}
+        QCOMPARE(Step.next_,JobState::Completed);Job.task_->Finalize(JobState::Completed);Cleanup.dismiss();
+        for(int I=0;I<Rows.size();++I)QVERIFY(Contents(Rows[I].target_,I));
+        const auto Record=ReadRenameRecord(Journal.path(),RecordId);QVERIFY(Record.HasValue());QCOMPARE(Record.Value().state_,RenameState::Completed);
+    }
     void queueLaneAndDurableUndo() {
         QTemporaryDir Data, Journal, General; QVERIFY(Data.isValid()); const auto Rows = Fixture(Data.path(), true); QCOMPARE(Rows.size(), 3);
         auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue()); const auto Id = IdOf(Prepared.Value());

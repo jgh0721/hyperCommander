@@ -53,6 +53,8 @@ set(PROJECT_UI_SRC
         ../UniqueLibs/archiveExtractJob.hpp
         ../UniqueLibs/fileBatchOperations.hpp
         UIs/dialogShell.cpp
+        UIs/fileLockDialog.cpp
+        UIs/fileLockDialog.hpp
         UIs/dialogShell.hpp
         UIs/settingsDraft.hpp
         ../UniqueLibs/settings/singleInstance.hpp
@@ -292,6 +294,7 @@ target_link_libraries(HyperCommander
         Qt6::GuiPrivate
         Qt6::WidgetsPrivate
         hc_viewer_qt hc_document_open
+        hc_file_locks
         hc_wcx_backend
         hc_plugin_process
         hc_builtin_iso

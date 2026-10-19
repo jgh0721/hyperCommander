@@ -87,6 +87,20 @@ public:
           lock_(RecordPath(directory_, record_.id_, ".lock")) { lock_.setStaleLockTime(0); }
     JobStep Advance(JobStepContext Context) override {
         record_.jobId_ = QString::fromStdString(Context.jobId_);
+        if (!lockPath_.isEmpty()) {
+            if (!Context.answer_) {
+                JobStep Step{JobState::WaitingForUser};
+                Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, "file-in-use:win32:" + std::to_string(lockCode_),
+                    {InteractionChoice::Retry,InteractionChoice::Cancel},{},lockPath_.toStdString(),{}};
+                return Step;
+            }
+            if (Context.answer_->choice_ != InteractionChoice::Retry) return fail("rename-lock-cancelled");
+            lockPath_.clear(); pinned_ = 0;
+            const auto PinError = PinNativeParents(record_.folder_, parents_);
+            if (!PinError.isEmpty()) return fail(PinError);
+            if (Identity(parents_.back()->value_) != record_.folderIdentity_) return fail("rename-parent-replaced");
+            return running();
+        }
         if (!started_) {
             if (!lock_.tryLock()) return fail("rename-record-busy");
             auto Fresh = Read(directory_, record_.id_, false);
@@ -127,6 +141,12 @@ public:
             const auto Native = NativePath(Path);
             auto File = std::make_unique<Handle>(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            const auto OpenError = File->value_ == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+            if (!mutated_ && Context.operation_.providerInteractions_ && LocalFolder(record_.folder_)
+                && (OpenError == ERROR_SHARING_VIOLATION || OpenError == ERROR_LOCK_VIOLATION)) {
+                handles_.clear(); parents_.clear(); lockPath_ = Path; lockCode_ = OpenError;
+                return running();
+            }
             const auto Actual = Inspect(Path);
             if (File->value_ == INVALID_HANDLE_VALUE || Identity(File->value_) != Row.source_.identity_ || Actual.identity_ != Row.source_.identity_
                 || Actual.modified_ != Row.source_.modified_ || Actual.size_ != Row.source_.size_ || Actual.directory_ != Row.source_.directory_)
@@ -238,6 +258,8 @@ private:
     std::unique_ptr<Handle> log_;
     std::vector<std::unique_ptr<Handle>> parents_, handles_;
     QStringList current_, candidates_;
+    QString lockPath_;
+    DWORD lockCode_ = 0;
     QHash<QByteArray, int> byIdentity_;
     int candidate_ = 0, pinned_ = 0, phase_ = 0, move_ = 0, outcome_ = 0;
 };

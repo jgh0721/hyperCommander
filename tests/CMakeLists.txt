@@ -392,6 +392,20 @@ target_compile_options(hc_materialization_tests PRIVATE
 target_link_libraries(hc_materialization_tests PRIVATE Qt6::Test)
 add_test(NAME hc.materialization COMMAND hc_materialization_tests)
 set_tests_properties(hc.materialization PROPERTIES TIMEOUT 45)
+qt_add_executable(hc_file_lock_tests
+    tstFileLocks.cpp
+    ../UniqueLibs/nativeWritableStorage.cpp
+    ../UniqueLibs/storageProviders.cpp
+    ../commonLibs/operations/fileOperation.cpp
+)
+target_include_directories(hc_file_lock_tests PRIVATE
+    ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_file_lock_tests PRIVATE hc_file_locks hc_viewer_core Qt6::Test advapi32 shell32 ole32)
+target_compile_options(hc_file_lock_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.file_locks COMMAND hc_file_lock_tests)
+set_tests_properties(hc.file_locks PROPERTIES TIMEOUT 180)
+hc_enable_qt_deployment(hc_file_lock_tests TEST)
+
 qt_add_executable(hc_write_tests
     tstWrites.cpp
     ../UniqueLibs/nativeFileElevation.cpp
@@ -585,6 +599,19 @@ add_custom_target(hc_check
 )
 add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_tests hc_iso_job_tests)
 add_dependencies(hc_check hc_operation_recovery_tests)
+add_dependencies(hc_check hc_file_lock_tests)
+qt_add_executable(hc_file_lock_ui_tests tstFileLockUi.cpp
+    ../HyperCommander/UIs/fileLockDialog.cpp
+    ../HyperCommander/UIs/dialogShell.cpp
+)
+target_include_directories(hc_file_lock_ui_tests PRIVATE
+    ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_file_lock_ui_tests PRIVATE hc_file_locks hc_viewer_qt Qt6::Test Qt6::Concurrent Fm::widgets advapi32 shell32)
+target_compile_options(hc_file_lock_ui_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.file_lock_ui COMMAND hc_file_lock_ui_tests)
+set_tests_properties(hc.file_lock_ui PROPERTIES TIMEOUT 120)
+hc_enable_qt_deployment(hc_file_lock_ui_tests TEST PLUGINS)
+add_dependencies(hc_check hc_file_lock_ui_tests)
 add_dependencies(hc_check hc_workspace_tests hc_search_tests hc_automation_tests hc_script_api_tests)
 add_dependencies(hc_check hc_lua_tests hc_sevenzip_tests)
 if(TARGET hc_unegg_tests)

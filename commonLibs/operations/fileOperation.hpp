@@ -47,6 +47,8 @@ namespace hc::operations
         // decision instead of making a fresh replacement decision after UAC.
         std::optional<storage::DestinationExpectation> approvedDestination_;
         bool confirmDelete_ = true;
+        // Product UI opts in; headless callers retain terminal failure semantics.
+        bool fileLockInteractions_ = false;
         bool calculateSizeBefore_ = true;
         bool deleteWhileListing_ = true;
         DeleteMode deleteMode_ = DeleteMode::Permanent;

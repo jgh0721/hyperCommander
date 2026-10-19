@@ -37,9 +37,10 @@ namespace hc::storage
             ~Handle() { Close(); }
             void Close() { if (value_ != INVALID_HANDLE_VALUE) CloseHandle(std::exchange(value_, INVALID_HANDLE_VALUE)); }
         };
-        Error Failure(DWORD Code, const ProviderId& Id)
+        Error Failure(DWORD Code, const ProviderId& Id, std::string NativePath = {})
         {
             Error Value{ErrorCategory::Unavailable, "win32:" + std::to_string(Code), Id};
+            Value.nativePath_ = std::move(NativePath);
             if (Code == ERROR_FILE_NOT_FOUND || Code == ERROR_PATH_NOT_FOUND) Value.category_ = ErrorCategory::NotFound;
             if (Code == ERROR_ACCESS_DENIED || Code == ERROR_PRIVILEGE_NOT_HELD || Code == ERROR_LOGON_FAILURE)
             { Value.category_ = ErrorCategory::AccessDenied; Value.userAction_ = "check-permission"; }
@@ -129,7 +130,7 @@ namespace hc::storage
                 // is being created. Child operations do not mutate this handle.
                 Handle Directory(CreateFileW(Part.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-                if (Directory.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Id);
+                if (Directory.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Id, Utf8(Part));
                 BY_HANDLE_FILE_INFORMATION Info{};
                 if (!GetFileInformationByHandle(Directory.value_, &Info)) return Failure(GetLastError(), Id);
                 if (!(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
@@ -688,7 +689,11 @@ namespace hc::storage
                 // The Shell still resolves a path; unlike handle deletion this
                 // cannot make the leaf identity check and mutation one atomic step.
                 if (SUCCEEDED(Hr)) { Stage = "recycle"; Hr = Transfer->RecycleItem(Item.Get(), Bin.Get(), TSF_NORMAL, &Recycled); }
-                if (FAILED(Hr) || !Recycled) return Error{ErrorCategory::Unavailable, "native-recycle-" + Stage + "-failed-" + std::to_string(static_cast<unsigned long>(Hr)), id_};
+                if (FAILED(Hr) || !Recycled) {
+                    if (HRESULT_FACILITY(Hr) == FACILITY_WIN32 && (HRESULT_CODE(Hr) == ERROR_SHARING_VIOLATION || HRESULT_CODE(Hr) == ERROR_LOCK_VIOLATION))
+                        return Failure(HRESULT_CODE(Hr), id_, Entry.locator_.root_);
+                    return Error{ErrorCategory::Unavailable, "native-recycle-" + Stage + "-failed-" + std::to_string(static_cast<unsigned long>(Hr)), id_};
+                }
                 PWSTR Name = nullptr; Hr = Recycled->GetDisplayName(SIGDN_FILESYSPATH, &Name);
                 if (FAILED(Hr)) return Error{ErrorCategory::Internal, "recycle-location-unavailable", id_};
                 const auto RecyclePath = Utf8(Name); CoTaskMemFree(Name);

@@ -124,7 +124,21 @@ add_custom_command(TARGET hc-search-index POST_BUILD
     VERBATIM
 )
 hc_enable_qt_deployment(hc-search-index)
+qt_add_library(hc_file_locks STATIC
+    UniqueLibs/nativeFileLocks.cpp
+    UniqueLibs/nativeFileLocks.hpp
+    UniqueLibs/fileLockService.cpp
+    UniqueLibs/fileLockService.hpp
+)
+target_include_directories(hc_file_locks PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommanderAdmin
+    ${PROJECT_SOURCE_DIR}/commonLibs
+)
+target_link_libraries(hc_file_locks PUBLIC Qt6::Core PRIVATE advapi32 shell32 rstrtmgr)
+target_compile_definitions(hc_file_locks PRIVATE NOMINMAX UNICODE _UNICODE)
+target_compile_options(hc_file_locks PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderAdmin)
+target_link_libraries(HyperCommanderAdmin PRIVATE hc_file_locks)
 target_link_libraries(HyperCommanderAdmin PRIVATE hc_update_core)
 add_subdirectory(HyperCommander)
 foreach(HC_UPDATE_ENTRY IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor)
