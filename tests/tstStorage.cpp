@@ -13,6 +13,35 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void redirectedClientShares()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to an accessible drive redirected by the current RDP session.");
+        auto Provider = MakeNativeReadProvider(LocatorKind::Smb);
+        for (const auto& Server : {"\\\\tsclient", "\\\\TSCLIENT"}) {
+            auto Cursor = Provider->Enumerate({LocatorKind::Smb, Server}, {}).get();
+            QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+            bool Found = false;
+            for (;;) {
+                auto Page = Cursor.Value()->Next(1, {}).get(); QVERIFY(Page.HasValue());
+                for (const auto& Entry : Page.Value().entries_) {
+                    QVERIFY(Entry.directory_); QVERIFY(!Entry.id_.revision_);
+                    QCOMPARE(Entry.locator_.root_, std::string(Server) + "\\" + Entry.name_);
+                    QVERIFY(Entry.name_.find('\\') == std::string::npos);
+                    Found |= QString::fromStdString(Entry.name_).compare(Share, Qt::CaseInsensitive) == 0;
+                }
+                if (Page.Value().end_) break;
+            }
+            QVERIFY(Found);
+        }
+        OperationContext Limited; Limited.maxEnumerationEntries_ = 0;
+        auto LimitedResult = Provider->Enumerate({LocatorKind::Smb, "\\\\tsclient"}, Limited).get();
+        QVERIFY(!LimitedResult.HasValue()); QCOMPARE(LimitedResult.Failure().category_, ErrorCategory::BudgetExceeded);
+        std::stop_source Stop; Stop.request_stop();
+        OperationContext Cancelled; Cancelled.stopToken_ = Stop.get_token();
+        auto CancelledResult = Provider->Enumerate({LocatorKind::Smb, "\\\\tsclient"}, Cancelled).get();
+        QVERIFY(!CancelledResult.HasValue()); QCOMPARE(CancelledResult.Failure().category_, ErrorCategory::Cancelled);
+    }
     void protectedChildDoesNotHideParentListing_data()
     {
         QTest::addColumn<bool>("DirectoryChild");

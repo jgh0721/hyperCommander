@@ -2,6 +2,7 @@
 #include "storageProviders.hpp"
 #include "nativeStorageRevision.hpp"
 #include <lm.h>
+#include <winnetwk.h>
 #include <shlobj.h>
 #include <QUuid>
 #include <QFileInfo>
@@ -9,6 +10,7 @@
 #pragma comment(lib, "shlwapi")
 
 #pragma comment(lib, "netapi32")
+#pragma comment(lib, "mpr")
 
 namespace hc::storage
 {
@@ -255,8 +257,55 @@ namespace hc::storage
                         return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Items.Value()), Id));
                     }
                     auto Path = Wide(At.root_);
+                    auto Server = QDir::toNativeSeparators(QString::fromStdString(At.root_));
+                    while (Server.size() > 2 && Server.endsWith('\\')) Server.chop(1);
                     std::vector<EntrySnapshot> Entries;
-                    if (Kind == LocatorKind::Smb && At.root_.starts_with("\\\\") && std::count(At.root_.begin(), At.root_.end(), '\\') == 2)
+                    if (Kind == LocatorKind::Smb && Server.compare("\\\\tsclient", Qt::CaseInsensitive) == 0)
+                    {
+                        // RDP redirected devices are connected resources, not SMB
+                        // server shares. NetShareEnum rejects this virtual server.
+                        HANDLE Handle = nullptr;
+                        const auto Opened = WNetOpenEnumW(RESOURCE_CONNECTED, RESOURCETYPE_DISK, 0, nullptr, &Handle);
+                        if (Opened != NO_ERROR) return NativeError(Opened, Id);
+                        const auto Close = qScopeGuard([&] { WNetCloseEnum(Handle); });
+                        std::vector<NETRESOURCEW> Buffer((64 * 1024 + sizeof(NETRESOURCEW) - 1) / sizeof(NETRESOURCEW));
+                        const auto ServerPrefix = Server + '\\';
+                        QSet<QString> Seen;
+                        for (;;)
+                        {
+                            if (const auto Failure = Context.Check(Id)) return *Failure;
+                            DWORD Count = 0xffffffffUL, Bytes = DWORD(Buffer.size() * sizeof(NETRESOURCEW));
+                            const auto Status = WNetEnumResourceW(Handle, &Count, Buffer.data(), &Bytes);
+                            if (Status == ERROR_NO_MORE_ITEMS) break;
+                            if (Status == ERROR_MORE_DATA && Count == 0)
+                            {
+                                if (Bytes > 1024 * 1024 || Buffer.size() * sizeof(NETRESOURCEW) >= 1024 * 1024)
+                                    return Error{ErrorCategory::BudgetExceeded, "network-resource-buffer-limit", Id};
+                                Buffer.resize((std::max)(Buffer.size() * 2, (Bytes + sizeof(NETRESOURCEW) - 1) / sizeof(NETRESOURCEW)));
+                                continue;
+                            }
+                            if (Status != NO_ERROR && Status != ERROR_MORE_DATA) return NativeError(Status, Id);
+                            if (Count == 0) break;
+                            for (DWORD Index = 0; Index < Count; ++Index)
+                            {
+                                if (const auto Failure = Context.Check(Id)) return *Failure;
+                                if (!Buffer[Index].lpRemoteName) continue;
+                                auto Remote = QDir::toNativeSeparators(QString::fromWCharArray(Buffer[Index].lpRemoteName));
+                                while (Remote.endsWith('\\')) Remote.chop(1);
+                                if (!Remote.startsWith(ServerPrefix, Qt::CaseInsensitive)) continue;
+                                const auto Name = Remote.mid(ServerPrefix.size());
+                                if (Name.isEmpty() || Name.contains('\\') || Seen.contains(Name.toCaseFolded())) continue;
+                                if (Entries.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", Id};
+                                Seen.insert(Name.toCaseFolded());
+                                WIN32_FILE_ATTRIBUTE_DATA Data{};
+                                Data.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+                                Entries.push_back(Entry(Id, Prefix, {Kind, (ServerPrefix + Name).toStdString()}, Name.toStdString(), Data));
+                                Entries.back().id_.revision_.reset();
+                            }
+                        }
+                        if (Entries.empty()) return Error{ErrorCategory::Unavailable, "rdp-drives-unavailable", Id, {}, true, "reconnect-rdp"};
+                    }
+                    else if (Kind == LocatorKind::Smb && At.root_.starts_with("\\\\") && std::count(At.root_.begin(), At.root_.end(), '\\') == 2)
                     {
                         DWORD Resume = 0;
                         NET_API_STATUS Status;

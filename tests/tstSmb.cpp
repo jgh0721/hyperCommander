@@ -2865,6 +2865,62 @@ private slots:
         }
     }
 
+    void todoBugRemoteDesktopParentNavigationUi()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("An explicitly selected RDP drive is required.");
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        const auto Root = QString("\\\\tsclient\\") + Share;
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "rdp-parent";
+        Tab.location_ = {hc::storage::LocatorKind::Smb, Root.toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+        Model->ChangeDirectory("..");
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+        QCOMPARE(QDir::fromNativeSeparators(Panel->CurrentPath()).toLower(), QString("//tsclient"));
+        QVERIFY(!Panel->findChild<QMessageBox*>("hc.navigationError"));
+        QVERIFY(names(Model).contains(Share, Qt::CaseInsensitive));
+        Model->ChangeDirectory(Share);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(!Model->LastNavigationError());
+        QCOMPARE(QDir::fromNativeSeparators(Panel->CurrentPath()).toLower(), QDir::fromNativeSeparators(Root).toLower());
+        // The legacy browsing mode must show the same redirected drives.
+        nsHC::CFSSmb Legacy("\\");
+        const auto Children = Legacy.GetChildItems("\\\\tsclient");
+        QVERIFY(std::any_of(Children.begin(), Children.end(), [&](const auto& Item) { return Item->Name_.compare(Share, Qt::CaseInsensitive) == 0; }));
+    }
+
+    void todoBugNavigationErrorPresentationUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "navigation-description";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        Model->ChangeDirectory("missing-folder");
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->LastNavigationError(), 10000);
+        QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+        QPointer<QMessageBox> Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        QVERIFY(Failure->text().contains(QStringLiteral("폴더를 찾을 수 없습니다")));
+        QVERIFY(!Failure->informativeText().contains("win32:"));
+        QVERIFY(Failure->detailedText().contains("win32:"));
+        QVERIFY(Failure->detailedText().contains("missing-folder"));
+        QVERIFY(Failure->width() >= 520);
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Artifacts.isEmpty()) {
+            QDir().mkpath(Artifacts);
+            QVERIFY(Failure->grab().save(QDir(Artifacts).filePath("navigation-error-readable.png")));
+        }
+        QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
+    }
+
     void driveRootNavigationUi()
     {
         const auto Workspace = main_->CaptureWorkspace();
@@ -4184,7 +4240,8 @@ private slots:
             QCOMPARE(Elevate->text(), QStringLiteral("관리자 권한으로 재시도"));
         }
         QVERIFY(Failure->text().contains(QDir::toNativeSeparators(Protected)));
-        QVERIFY(Failure->informativeText().contains("win32:5"));
+        QVERIFY(Failure->detailedText().contains("win32:5"));
+        QVERIFY(!Failure->informativeText().contains("win32:"));
         const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
         if (!Artifacts.isEmpty()) {
             QDir().mkpath(Artifacts);

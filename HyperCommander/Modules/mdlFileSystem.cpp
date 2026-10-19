@@ -409,6 +409,23 @@ namespace nsHC
     QVector<nsHC::TySpFileSource> CFSSmb::GetChildItems( const QString& Server, bool IncludeDotDot )
     {
         QVector<nsHC::TySpFileSource> Ret;
+        if (Server.compare("\\\\tsclient", Qt::CaseInsensitive) == 0)
+        {
+            const auto Provider = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
+            auto Cursor = Provider->Enumerate({hc::storage::LocatorKind::Smb, Server.toStdString()}, {}).get();
+            if (!Cursor.HasValue()) return Ret;
+            for (;;) {
+                auto Page = Cursor.Value()->Next(128, {}).get();
+                if (!Page.HasValue()) return {};
+                for (const auto& Entry : Page.Value().entries_) {
+                    auto Item = std::make_shared<nsHC::CFileSourceT>();
+                    Item->Name_ = QString::fromStdString(Entry.name_);
+                    Item->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+                    Ret.push_back(std::move(Item));
+                }
+                if (Page.Value().end_) return Ret;
+            }
+        }
         PSHARE_INFO_1 Buffer = nullptr, Cur = nullptr;
         NET_API_STATUS Res;
         DWORD er = 0, tr = 0, resume = 0;

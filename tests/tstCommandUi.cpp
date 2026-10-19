@@ -2,6 +2,7 @@
 #include <QTemporaryDir>
 #include <QLineEdit>
 #include "UniqueLibs/renameSelection.hpp"
+#include "UniqueLibs/navigationError.hpp"
 #include "UniqueLibs/userMenu.hpp"
 #include "UniqueLibs/commandUiWidgets.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -24,6 +25,31 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void navigationErrorDescriptions()
+    {
+        using namespace hc::storage;
+        for (const auto& Error : {Error{ErrorCategory::AccessDenied, "win32:5"},
+            Error{ErrorCategory::NotFound, "win32:3"},
+            Error{ErrorCategory::Unavailable, "provider-session-closed"}}) {
+            const auto Text = DescribeNavigationError(Error, "D:/folder");
+            QVERIFY(!Text.summary_.isEmpty()); QVERIFY(!Text.recovery_.isEmpty());
+            QVERIFY(!Text.summary_.contains(QString::fromStdString(Error.code_)));
+            QVERIFY(!Text.recovery_.contains(QString::fromStdString(Error.code_)));
+            QVERIFY(Text.details_.contains(QString::fromStdString(Error.code_)));
+            QVERIFY(Text.details_.contains("D:\\folder"));
+        }
+        for (const auto& Path : {"\\\\tsclient", "\\\\TSCLIENT\\D", "//tsclient/D/folder"}) {
+            const auto Text = DescribeNavigationError({ErrorCategory::Unavailable, "win32:1707"}, Path);
+            QVERIFY(Text.summary_.contains(QStringLiteral("원격 데스크톱")));
+            QVERIFY(Text.recovery_.contains(QStringLiteral("드라이브")));
+            QVERIFY(Text.details_.contains("win32:1707"));
+            QVERIFY(Text.details_.contains(QStringLiteral("Windows 오류:")));
+            QVERIFY(!Text.summary_.contains("1707")); QVERIFY(!Text.recovery_.contains("1707"));
+        }
+        const auto Missing = DescribeNavigationError({ErrorCategory::Unavailable, "rdp-drives-unavailable"}, "\\\\tsclient");
+        QVERIFY(Missing.summary_.contains(QStringLiteral("원격 데스크톱")));
+        QVERIFY(!Missing.recovery_.contains("rdp-drives-unavailable"));
+    }
     void driveRootCommandsAndShortcuts()
     {
         const auto Descriptors = hc::defaults::BusCommands();

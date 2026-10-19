@@ -9,6 +9,7 @@
 #include <fmwidgets/PanelStatusBar.h>
 #include <fmstyle/ThemeManager.h>
 #include <QtConcurrent>
+#include <QGridLayout>
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
 #include "dlgViewer.hpp"
 
@@ -25,6 +26,7 @@
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/permissionService.hpp"
+#include "UniqueLibs/navigationError.hpp"
 #include "UniqueLibs/externalEditorMgr.hpp"
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
@@ -140,22 +142,16 @@ void CmpPanel::AddTab(bool Navigate)
         if (!State || State->Model != Model || !Error || !isVisible()) return;
         const auto Generation = Model->DirectoryGeneration();
         const bool Denied = Error->category_ == hc::storage::ErrorCategory::AccessDenied;
+        const auto Presentation = hc::ui::DescribeNavigationError(*Error, Path);
         auto* Dialog = new QMessageBox(QMessageBox::Warning, tr("폴더를 열 수 없습니다"),
-            tr("%1\n\n%2").arg(QDir::toNativeSeparators(Path), Denied ? tr("이 폴더에 접근할 권한이 없습니다.") : tr("폴더 목록을 읽지 못했습니다.")),
+            tr("%1\n\n%2").arg(Presentation.summary_, QDir::toNativeSeparators(Path)),
             QMessageBox::Retry | QMessageBox::Cancel, this);
         Dialog->setObjectName("hc.navigationError");
         Dialog->setAttribute(Qt::WA_DeleteOnClose);
         Dialog->setTextFormat(Qt::PlainText);
-        const auto ErrorCode = QString::fromStdString(Error->code_);
-        QString ErrorText = ErrorCode;
-        if (ErrorCode.startsWith("win32:")) {
-            wchar_t Message[1024]{};
-            const auto Code = ErrorCode.mid(6).toULong();
-            if (FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, Code, 0, Message, 1024, nullptr))
-                ErrorText = QString::fromWCharArray(Message).trimmed() + " (" + ErrorCode + ')';
-        }
-        Dialog->setInformativeText(tr("오류: %1\n%2").arg(ErrorText,
-            Denied ? tr("관리자 권한으로도 시스템 보호 폴더에 접근하지 못할 수 있습니다.") : tr("연결 상태와 경로를 확인한 뒤 다시 시도하세요.")));
+        Dialog->setInformativeText(Presentation.recovery_);
+        Dialog->setDetailedText(Presentation.details_);
+        Dialog->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
         Dialog->button(QMessageBox::Retry)->setText(tr("다시 시도"));
         Dialog->button(QMessageBox::Cancel)->setText(tr("취소"));
         Dialog->setDefaultButton(QMessageBox::Cancel);
@@ -166,6 +162,11 @@ void CmpPanel::AddTab(bool Navigate)
             Elevate->setObjectName("hc.navigationElevate");
             Dialog->setInformativeText(Dialog->informativeText() + tr("\nUAC 승인 후 이 탭에서 현재 폴더와 하위 폴더의 목록을 관리자 권한으로 조회합니다. 해당 범위를 벗어나거나 탭을 닫으면 조회 권한을 종료합니다."));
         }
+        // QMessageBox recalculates its fixed size on show. Keep a readable
+        // content width in its layout rather than setting a transient minimum.
+        if (auto* Layout = qobject_cast<QGridLayout*>(Dialog->layout()))
+            Layout->addItem(new QSpacerItem(520, 0, QSizePolicy::Minimum, QSizePolicy::Minimum),
+                Layout->rowCount(), 0, 1, Layout->columnCount());
         const QPointer<CFSModel> Guard(Model);
         connect(Model, &QObject::destroyed, Dialog, &QDialog::reject);
         connect(Dialog, &QDialog::finished, this, [this, Dialog, Elevate, Guard, Generation, Path](int) {
@@ -354,7 +355,9 @@ void CmpPanel::updateWorkspaceStatus()
         ui.lblVolumeStatus->setText(Model->GetRoot() ? Model->GetRoot()->GetRoot() : QString{});
     }
     const auto Error = Model->LastNavigationError();
-    workspaceStatus_->setText(Error ? tr("%1 · %2").arg(QString::fromStdString(Model->WorkspaceLocation().root_), QString::fromStdString(Error->code_)) : QString{});
+    const auto ErrorText = Error ? hc::ui::DescribeNavigationError(*Error, QString::fromStdString(Model->WorkspaceLocation().root_)) : hc::ui::NavigationErrorText{};
+    workspaceStatus_->setText(Error ? tr("%1 · %2").arg(QDir::toNativeSeparators(QString::fromStdString(Model->WorkspaceLocation().root_)), ErrorText.summary_) : QString{});
+    workspaceStatus_->setToolTip(Error ? ErrorText.recovery_ + "\n\n" + ErrorText.details_ : QString{});
     workspaceStatus_->setVisible(bool(Error)); retry_->setVisible(bool(Error));
     workspaceStatus_->parentWidget()->setVisible(bool(Error));
     retry_->setEnabled(!Model->property("hc.restorePending").toBool());

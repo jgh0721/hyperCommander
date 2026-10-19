@@ -7,6 +7,7 @@
 #include "archive/creationJob.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
+#include "navigationError.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
 #include <fmwidgets/FindBox.h>
 #include <fmwidgets/PanelTabStrip.h>
@@ -146,7 +147,9 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     }
     auto Subscription = events_->Subscribe("command.failed", executor_, [Guard = QPointer<QWidget>(Main)](const EventEnvelope& Event) {
         if (auto* Window = qobject_cast<QMainWindow*>(Guard.data()))
-            Window->statusBar()->showMessage(QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
+            Window->statusBar()->showMessage(std::get<std::string>(Event.payload_.at("command")).starts_with("hc.navigate.")
+                ? QObject::tr("폴더 이동을 완료하지 못했습니다. 경로와 연결 상태를 확인하세요.")
+                : QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
     });
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
@@ -274,7 +277,10 @@ void CommandUiBridge::bindModels()
                 hc::plugins::OfferPluginReview(main_, Code, {}, viewers_->reviewPlugin_);
             if (!Success)
                 if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
-                    Window->statusBar()->showMessage(tr("폴더를 열 수 없습니다: %1").arg(Code), 6000);
+                {
+                    const auto Failure = Model->LastNavigationError().value_or(hc::storage::Error{hc::storage::ErrorCategory::Unavailable, Code.toStdString()});
+                    Window->statusBar()->showMessage(hc::ui::DescribeNavigationError(Failure, Model->GetCurrentPathWithRoot()).summary_, 6000);
+                }
         };
         connect(Model, &CFsModelT::sigChangedDirectory, this, [Publish](const QString&) { Publish(true, {}); });
         connect(Model, &CFsModelT::sigNavigationFailed, this, [Publish](const QString& Code) { Publish(false, Code); });
