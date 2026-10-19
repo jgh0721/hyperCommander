@@ -133,7 +133,7 @@ public:
     static QStringList RecentTargets(const QString& Provider);
     static bool RememberTarget(const QString& Provider, const QString& Target);
 private:
-    void validateInput();
+    void validateInput(bool RefreshProbe = true);
     void probeTarget();
     void summarizeSource();
     void arrangeCompactOperation();
@@ -158,6 +158,9 @@ private:
     QFutureWatcher<QJsonObject>* targetWatcher_ = nullptr;
     std::stop_source stop_;
     quint64 generation_ = 0;
+    QString inspectedTarget_;
+    QString targetKind_;
+    bool sourceDirectory_ = false;
     fm::ui::PathEdit* input_ = nullptr;
     fm::ui::FolderPlanView* plan_ = nullptr;
     QLabel* preview_ = nullptr;

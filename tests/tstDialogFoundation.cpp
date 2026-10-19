@@ -289,7 +289,7 @@ private slots:
             Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); Dialog.raise(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
             QTRY_COMPARE(QApplication::focusWidget(), Edit);
             Edit->setText(QString(Command).endsWith("copy") ? "." : "../other/child.txt");
-            QVERIFY(Dialog.AcceptButton()->isEnabled());
+            QTRY_VERIFY(Dialog.AcceptButton()->isEnabled());
             QCOMPARE(QDir::fromNativeSeparators(Dialog.ResolvedTarget()), QString(Command).endsWith("copy") ? QString("D:/source") : QString("D:/other/child.txt"));
             QSignalSpy Completed(&Dialog, &QDialog::accepted); QTest::keyClick(Edit, Qt::Key_Return); QCOMPARE(Completed.count(), 1);
         }
@@ -318,12 +318,16 @@ private slots:
                 for(auto* Button:{Dialog.AcceptButton(),Dialog.CancelButton()}) QVERIFY(Dialog.rect().contains(QRect(Button->mapTo(&Dialog,QPoint()),Button->size())));
                 if(QString(Kind)=="copy") {
                     auto* Tabs=Dialog.findChild<QTabWidget*>("hc.operation.advancedTabs"); QVERIFY(Tabs && !Tabs->isVisible());
-                    auto* Toggle=Dialog.findChild<QPushButton*>("hc.operation.advanced"); QVERIFY(Toggle); Toggle->click(); QTRY_VERIFY(Tabs->isVisible());
+                    auto* Toggle=Dialog.findChild<QPushButton*>("hc.operation.advanced"); QVERIFY(Toggle);
                     auto* Pattern=Dialog.findChild<QLineEdit*>("hc.operation.filter"); auto* Speed=Dialog.findChild<QSpinBox*>("hc.operation.speed");
-                    Pattern->setText("*.txt"); Speed->setValue(32); Dialog.findChild<QCheckBox*>("hc.operation.verify")->setChecked(true);
+                    const auto EditOptions=[&] { Pattern->setText("*.txt"); Speed->setValue(32); Dialog.findChild<QCheckBox*>("hc.operation.verify")->setChecked(true); };
+                    bool Separate=false;
+                    QTimer::singleShot(0,&Dialog,[&] { if(auto* Editor=Dialog.findChild<QDialog*>("hc.operation.advancedDialog")) { Separate=true; EditOptions(); Editor->accept(); } });
+                    Toggle->click(); QCoreApplication::processEvents();
+                    if(!Separate) { QTRY_VERIFY(Tabs->isVisible()); EditOptions(); }
                     auto* Summary=Dialog.findChild<QLabel*>("hc.operation.optionSummary"); QVERIFY(Summary);
                     QVERIFY(Summary->text().contains("*.txt")&&Summary->text().contains("32 MiB/s")&&Summary->text().contains("SHA-256"));
-                    Toggle->click(); QTRY_VERIFY(!Tabs->isVisible());
+                    if(!Separate) Toggle->click(); QTRY_VERIFY(!Tabs->isVisible());
                     const auto Before=Dialog.IncludePattern(); Dialog.setMaximumHeight(Dialog.height()+10);
                     bool Opened=false;
                     QTimer::singleShot(0,&Dialog,[&] { if(auto* Editor=Dialog.findChild<QDialog*>("hc.operation.advancedDialog")) { Opened=true; Pattern->setText("*.bin"); Editor->reject(); } });
@@ -347,6 +351,42 @@ private slots:
             }
         }
     }
+    void automaticTransferTargets()
+    {
+        using namespace hc::ui;
+        QTemporaryDir Root; QVERIFY(Root.isValid()); QVERIFY(QDir(Root.path()).mkdir("existing")); QVERIFY(QDir(Root.path()).mkdir("source-dir"));
+        for(const auto& Name:{"source.txt","target-file"}) { QFile File(Root.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("fixture"); }
+        struct Case { const char* input_; const char* mode_; int count_; bool name_,parents_,valid_; bool sourceDirectory_=false; };
+        const Case Cases[]{
+            {".\\existing","auto",1,false,false,true}, {".\\target-file","auto",1,true,false,true},
+            {".\\f","auto",1,true,false,true}, {".\\f\\","auto",1,false,true,true}, {"./f/","auto",1,false,true,true},
+            {".\\f","auto",2,false,true,true}, {".\\f","folder",1,false,true,true}, {".\\f","name",1,true,false,true},
+            {".\\f\\","name",1,false,true,true}, {".\\existing","name",1,true,false,false},
+            {".\\target-file","folder",1,false,true,false}, {".\\target-file\\","auto",1,false,true,false},
+            {".\\한글 폴더\\","auto",1,false,true,true}, {".\\new.name","auto",1,true,false,true},
+            {".\\target-file","auto",1,true,false,false,true}, {".\\new-folder","auto",1,true,false,true,true}
+        };
+        for(const auto& Case:Cases) {
+            FileOperationDialogRequest Request; Request.command_="hc.file.copy"; Request.source_=Root.path(); Request.nativeDestination_=Request.nativeSource_=true;
+            Request.initialValue_=QString::fromUtf8(Case.input_); Request.names_={Case.sourceDirectory_?QString("source-dir"):QString("source.txt")}; if(Case.count_>1)Request.names_.append("second.txt");
+            FileOperationDialog Dialog(Request); Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+            auto* Mode=Dialog.findChild<QComboBox*>("hc.operation.targetMode"); QVERIFY(Mode); QCOMPARE(Mode->count(),3); Mode->setCurrentIndex(Mode->findData(Case.mode_));
+            QTRY_COMPARE(Dialog.findChild<QLabel*>("hc.operation.targetSummary")->property("target").toString(),Dialog.ResolvedTarget());
+            QCOMPARE(Dialog.TargetIsName(),Case.name_); QCOMPARE(Dialog.CreateParents(),Case.parents_); QCOMPARE(Dialog.AcceptButton()->isEnabled(),Case.valid_);
+            QVERIFY(Dialog.findChild<QLabel*>("hc.operation.preview")->text().contains(QDir::toNativeSeparators(Root.path())));
+            if(Case.count_>1) QVERIFY(!(Mode->model()->flags(Mode->model()->index(2,0))&Qt::ItemIsEnabled));
+            if(Case.valid_ && Case.count_==1 && QString(Case.mode_)=="auto" && QString::fromUtf8(Case.input_)==".\\f") {
+                const auto Out=qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if(!Out.isEmpty()) QVERIFY(Dialog.grab().save(QDir(Out).filePath("target-auto-new-name.png")));
+            }
+            Dialog.reject();
+        }
+        FileOperationDialogRequest Request; Request.command_="hc.file.copy"; Request.source_=Root.path(); Request.nativeDestination_=true; Request.names_={"source.txt"}; Request.initialValue_=Root.filePath("existing");
+        FileOperationDialog Dialog(Request); auto* Edit=Dialog.findChild<QLineEdit*>("hc.operation.editor");
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QVERIFY(!Dialog.TargetIsName()); Edit->setText("./pending/"); QTest::qWait(160);
+        QVERIFY(QDir(Root.path()).rmdir("existing")); { QFile File(Root.filePath("existing")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("directory replaced by file"); }
+        Edit->setText(Root.filePath("existing"));
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QTRY_VERIFY(Dialog.TargetIsName()); QTest::qWait(200); QVERIFY(Dialog.TargetIsName()); QVERIFY(Dialog.AcceptButton()->isEnabled());
+    }
     void operationValidation()
     {
         hc::ui::FileOperationDialog Rename({"hc.file.rename", "D:/source", "report.pdf", {"report.pdf"}, true});
@@ -366,7 +406,7 @@ private slots:
         Policy->setCurrentIndex(1); QCOMPARE(Copy.Conflict(), QStringLiteral("replace"));
         Policy->setCurrentIndex(2); QCOMPARE(Copy.Conflict(), QStringLiteral("skip"));
         Copy.findChild<QLineEdit*>("hc.operation.editor")->setText("relative");
-        QVERIFY(Copy.AcceptButton()->isEnabled());
+        QTRY_VERIFY(Copy.AcceptButton()->isEnabled());
         QCOMPARE(Copy.ResolvedTarget(), QString("D:\\source\\relative"));
         hc::ui::FileOperationDialog Delete({"hc.file.delete", "D:/source", {}, {"a.txt"}, true});
         QVERIFY(!Delete.AcceptButton()->isEnabled());

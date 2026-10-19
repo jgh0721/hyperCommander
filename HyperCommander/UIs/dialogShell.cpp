@@ -27,6 +27,7 @@
 #include <QTabWidget>
 #include <QDialogButtonBox>
 #include <QShortcut>
+#include <QStandardItemModel>
 #include <QScreen>
 #include "commonLibs/operations/fileOperation.hpp"
 #include <QScrollArea>
@@ -383,8 +384,12 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         targetMode_ = new QComboBox(this); targetMode_->setObjectName("hc.operation.targetMode");
         targetMode_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); targetMode_->setMinimumContentsLength(12);
         targetMode_->setAccessibleName(tr("대상 경로 해석 방식"));
-        targetMode_->addItem(tr("대상 폴더")); targetMode_->addItem(tr("단일 항목의 새 이름 또는 전체 경로"));
-        targetMode_->setEnabled(Request.nativeDestination_ && Request.names_.size() == 1 && !Request.manifestSelection_);
+        targetMode_->addItem(tr("자동"), "auto"); targetMode_->addItem(tr("폴더로"), "folder"); targetMode_->addItem(tr("새 이름으로"), "name");
+        targetMode_->setEnabled(Request.nativeDestination_);
+        if (!Request.nativeDestination_) targetMode_->setCurrentIndex(1);
+        if (Request.names_.size() != 1 || Request.manifestSelection_)
+            qobject_cast<QStandardItemModel*>(targetMode_->model())->item(2)->setEnabled(false);
+        targetMode_->setToolTip(tr("자동: 기존 폴더 안으로 복사하며, 파일 하나의 없는 대상은 새 이름으로 해석합니다. 끝이 \\ 또는 /이면 항상 폴더이며 없으면 만듭니다."));
         BodyLayout()->addWidget(targetMode_);
         connect(targetMode_, &QComboBox::currentIndexChanged, this, [this] { validateInput(); });
         auto* Fields = new fm::ui::WrapLayout;
@@ -469,6 +474,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     if (!Mkdir) {
         parents_ = new fm::ui::WrapCheckBox(tr("대상 폴더가 없으면 만들기(&K)"), this);
         parents_->setObjectName("hc.operation.parents"); parents_->setEnabled(Request.nativeDestination_); BodyLayout()->addWidget(parents_);
+        parents_->setToolTip(tr("끝이 \\ 또는 /인 경로, 폴더로 지정한 대상, 자동 모드의 여러 항목 대상은 필요한 폴더를 만듭니다. 이 옵션은 새 이름으로 지정한 파일의 상위 폴더도 만듭니다."));
     }
     targetSummary_ = Label(Request.nativeDestination_ ? tr("대상 볼륨 조회 중…") : tr("공급자 대상은 실행 시 검사합니다."));
     targetSummary_->setObjectName("hc.operation.targetSummary");
@@ -477,10 +483,17 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     connect(probeTimer_, &QTimer::timeout, this, [this] { probeTarget(); });
     connect(targetWatcher_, &QFutureWatcher<QJsonObject>::finished, this, [this] {
         const auto Result = targetWatcher_->result();
-        if (Result["generation"].toVariant().toULongLong() != generation_) { probeTarget(); return; }
+        if (Result["generation"].toVariant().toULongLong() != generation_ || Result["target"].toString() != ResolvedTarget()) {
+            if (inspectedTarget_ != ResolvedTarget() || !targetMode_) probeTarget();
+            return;
+        }
         targetSummary_->setText(request_.command_.endsWith("mkdir") ? Result["text"].toString() : Result["compactText"].toString());
         if (!request_.command_.endsWith("mkdir")) targetSummary_->setToolTip(Result["text"].toString());
         targetSummary_->setProperty("target", Result["target"].toString());
+        if (targetMode_) {
+            inspectedTarget_ = Result["target"].toString(); targetKind_ = Result["kind"].toString(); sourceDirectory_ = Result["sourceDirectory"].toBool();
+            validateInput(false);
+        }
         if (plan_) {
             QList<fm::ui::FolderPlanView::Node> Nodes{{request_.source_, fm::ui::FolderPlanView::Node::Current}};
             for (const auto& Part : Result["plan"].toArray()) {
@@ -493,7 +506,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     });
     AcceptButton()->setText(Copy ? tr("복사(&C)") : Mkdir ? tr("만들기(&O)") : tr("확인(&O)"));
     BodyLayout()->addStretch();
-    connect(input_, &fm::ui::PathEdit::pathChanged, this, [this] { validateInput(); });
+    connect(input_, &fm::ui::PathEdit::pathChanged, this, [this] { inspectedTarget_.clear(); targetKind_.clear(); validateInput(); });
     input_->lineEdit()->selectAll();
     if (Rename) {
         hc::ui::SelectRenameText(input_->lineEdit(), hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameSelectExtension"].toBool(false));
@@ -521,7 +534,7 @@ void FileOperationDialog::arrangeCompactOperation()
     }
     auto* Caption = new QLabel(Rename ? tr("새 이름(&N)") : tr("대상 경로(&D)"), this); Caption->setBuddy(input_->lineEdit());
     auto* PathRow = new QHBoxLayout; PathRow->addWidget(Caption, 1);
-    if (targetMode_) { targetMode_->setItemText(0, tr("폴더로")); targetMode_->setItemText(1, tr("새 이름으로")); PathRow->addWidget(targetMode_); targetMode_->show(); }
+    if (targetMode_) { PathRow->addWidget(targetMode_); targetMode_->show(); }
     BodyLayout()->addLayout(PathRow); Add(input_); Add(preview_);
     if (Rename) {
         Add(extension_); Add(parents_); Add(targetSummary_);
@@ -600,14 +613,28 @@ QString FileOperationDialog::Input() const { return input_ ? input_->path() : QS
 QString FileOperationDialog::Conflict() const { return conflict_ ? conflict_->currentData().toString() : QStringLiteral("ask"); }
 
 FileOperationDialog::~FileOperationDialog() { stop_.request_stop(); }
-bool FileOperationDialog::TargetIsName() const { return targetMode_ && targetMode_->currentIndex() == 1; }
+bool FileOperationDialog::TargetIsName() const
+{
+    if (!targetMode_ || !request_.nativeDestination_ || request_.manifestSelection_ || request_.names_.size() != 1) return false;
+    const auto Path = QDir::fromNativeSeparators(Input());
+    if (Path.endsWith('/')) return false;
+    const auto Mode = targetMode_->currentData().toString();
+    return Mode == "name" || (Mode == "auto" && inspectedTarget_ == ResolvedTarget() && (targetKind_ == "file" || targetKind_ == "missing"));
+}
 bool FileOperationDialog::PreserveMetadata() const { return metadata_ && metadata_->isEnabled() && metadata_->isChecked(); }
 bool FileOperationDialog::VerifyCopy() const { return verify_ && verify_->isEnabled() && verify_->isChecked(); }
 bool FileOperationDialog::CopyAcl() const { return acl_ && acl_->isEnabled() && acl_->isChecked(); }
 bool FileOperationDialog::CopyStreams() const { return streams_ && streams_->isEnabled() && streams_->isChecked(); }
 QString FileOperationDialog::IncludePattern() const { return filter_ && filter_->isEnabled() ? filter_->text().trimmed() : "*"; }
 quint64 FileOperationDialog::SpeedLimit() const { return speed_ && speed_->isEnabled() ? quint64(speed_->value()) * 1024 * 1024 : 0; }
-bool FileOperationDialog::CreateParents() const { return request_.nativeDestination_ && (request_.command_.endsWith("mkdir") || (parents_ && parents_->isChecked())); }
+bool FileOperationDialog::CreateParents() const
+{
+    if (!request_.nativeDestination_) return false;
+    if (request_.command_.endsWith("mkdir") || (parents_ && parents_->isChecked())) return true;
+    if (!targetMode_ || TargetIsName()) return false;
+    return QDir::fromNativeSeparators(Input()).endsWith('/') || targetMode_->currentData() == "folder"
+        || (targetMode_->currentData() == "auto" && (request_.manifestSelection_ || request_.names_.size() != 1));
+}
 bool FileOperationDialog::OpenCreatedFolder() const { return openCreated_ && openCreated_->isEnabled() && openCreated_->isChecked(); }
 bool FileOperationDialog::Recycle() const { return recycle_ && recycle_->isEnabled() && recycle_->isChecked(); }
 bool FileOperationDialog::AllowReadOnly() const { return readonly_ && readonly_->isEnabled() && readonly_->isChecked(); }
@@ -638,7 +665,7 @@ bool FileOperationDialog::RememberTarget(const QString& Provider, const QString&
     // A failed optional history save must not leave an unsaved settings draft.
     Settings.BeginEdit(); Settings.Replace(Before); Settings.DiscardEdit(); return false;
 }
-void FileOperationDialog::validateInput()
+void FileOperationDialog::validateInput(bool RefreshProbe)
 {
     const auto Value = Input();
     const bool Mkdir = request_.command_.endsWith("mkdir");
@@ -662,14 +689,30 @@ void FileOperationDialog::validateInput()
     }
     if (Rename && QDir::cleanPath(Value) == QDir::cleanPath(request_.initialValue_)) { Valid = false; Error = tr("원본과 다른 이름을 입력하세요."); }
     const auto Target = ResolvedTarget();
+    const bool NativeTransfer = targetMode_ && request_.nativeDestination_;
+    const bool Inspected = inspectedTarget_ == Target && !targetKind_.isEmpty();
+    const bool Pending = NativeTransfer && targetMode_->currentData() == "auto" && !Inspected && Valid;
+    if (NativeTransfer && Inspected && Valid) {
+        if (!TargetIsName() && targetKind_ == "file") { Valid = false; Error = tr("대상 경로에 파일이 있습니다. 새 이름으로 지정하거나 다른 폴더를 선택하세요."); }
+        else if (TargetIsName() && targetKind_ == "directory") { Valid = false; Error = tr("대상 경로에 폴더가 있습니다. 폴더로 지정하거나 다른 이름을 입력하세요."); }
+        else if (TargetIsName() && sourceDirectory_ && targetKind_ == "file") { Valid = false; Error = tr("폴더를 기존 파일 위로 복사하거나 이동할 수 없습니다."); }
+        else if (targetMode_->currentData() == "auto" && targetKind_ == "unavailable") { Valid = false; Error = tr("대상 종류를 확인하지 못했습니다. 연결·접근 권한을 확인하거나 폴더로/새 이름으로 직접 지정하세요."); }
+    }
     const bool MovingName = Rename && request_.nativeDestination_ && QDir::cleanPath(QFileInfo(Target).absolutePath()).compare(QDir::cleanPath(QDir::fromNativeSeparators(request_.source_)), Qt::CaseInsensitive) != 0;
     if (Rename) {
         preview_->setText(MovingName ? tr("이동 위치: %1").arg(Target) : tr("%1 → %2").arg(request_.initialValue_, Value));
         if (parents_) parents_->setVisible(MovingName);
         if (targetSummary_) targetSummary_->setVisible(MovingName);
     } else if (!Mkdir && advanced_) {
-        const bool NeedsPreview = TargetIsName() || !request_.nativeDestination_ || !QDir::isAbsolutePath(QDir::fromNativeSeparators(Value));
-        preview_->setText(tr("대상: %1").arg(Target)); preview_->setVisible(NeedsPreview);
+        if (NativeTransfer) {
+            const bool Move = request_.command_.endsWith("move");
+            const auto Actual = TargetIsName() || request_.names_.size() != 1 || request_.manifestSelection_ ? Target : QDir::toNativeSeparators(QDir(Target).filePath(request_.names_.front()));
+            preview_->setText(Pending ? tr("대상 종류 확인 중: %1").arg(Target)
+                : TargetIsName() ? (Move ? tr("새 이름으로 이동: %1 → %2\n저장 위치: %3") : tr("새 이름으로 복사: %1 → %2\n저장 위치: %3")).arg(request_.names_.value(0), QFileInfo(Target).fileName(), Actual)
+                : Inspected && targetKind_ == "missing" && CreateParents() ? (Move ? tr("새 폴더 생성 후 이동: %1") : tr("새 폴더 생성 후 복사: %1")).arg(Actual)
+                : (Move ? tr("폴더로 이동: %1") : tr("폴더로 복사: %1")).arg(Actual));
+        } else preview_->setText(tr("대상: %1").arg(Target));
+        preview_->show();
     } else preview_->setText(tr("대상: %1\n존재 여부·권한·충돌은 실행 시 다시 확인합니다.").arg(Target));
     if (!Mkdir) preview_->setToolTip(Target);
     if (plan_) {
@@ -680,19 +723,28 @@ void FileOperationDialog::validateInput()
     if (filter_ && filter_->isEnabled() && !hc::operations::IsValidCopyPattern(IncludePattern().toStdString())) {
         Valid = false; Error = tr("파일명 패턴을 확인하세요. * · ?와 ; 구분을 사용하며 경로와 빈 패턴은 허용하지 않습니다.");
     }
-    SetAcceptEnabled(Valid);
-    SetMessage(Valid ? QString{} : Error.isEmpty() ? tr("이름 또는 경로를 입력하세요.") : Error, !Valid);
-    ++generation_;
-    if (probeTimer_ && request_.nativeDestination_ && (!Rename || MovingName)) { targetSummary_->setText(tr("대상 볼륨 조회 중…")); probeTimer_->start(); }
+    SetAcceptEnabled(Valid && !Pending);
+    SetMessage(!Valid ? Error.isEmpty() ? tr("이름 또는 경로를 입력하세요.") : Error : Pending ? tr("대상 파일·폴더를 확인하고 있습니다.") : QString{}, !Valid);
+    updateOptionSummary(); FitToContents();
+    if (RefreshProbe && (!NativeTransfer || !Inspected)) {
+        ++generation_;
+        if (probeTimer_ && request_.nativeDestination_ && !Target.isEmpty() && (!Rename || MovingName)) { targetSummary_->setText(tr("대상 볼륨 조회 중…")); probeTimer_->start(); }
+    }
 }
 void FileOperationDialog::probeTarget()
 {
     if (targetWatcher_->isRunning() || stop_.stop_requested()) return;
     const auto Target = ResolvedTarget();
     const bool Folder = !TargetIsName() && !request_.command_.endsWith("rename") && !request_.command_.endsWith("mkdir");
-    targetWatcher_->setFuture(QtConcurrent::run([Target, Folder, Source = request_.source_, Parts = PathParts(Input()), Mkdir = bool(plan_), Generation = generation_, Stop = stop_.get_token()] {
+    targetWatcher_->setFuture(QtConcurrent::run([Target, Folder, Source = request_.source_, SourceName = request_.names_.value(0), NativeSource = request_.nativeSource_, Parts = PathParts(Input()), Mkdir = bool(plan_), Generation = generation_, Stop = stop_.get_token()] {
         QJsonObject Result{{"target", Target}, {"generation", qint64(Generation)}};
         if (Stop.stop_requested()) return Result;
+        auto Native = QDir::toNativeSeparators(Target);
+        if (!Native.startsWith("\\\\?\\")) Native = Native.startsWith("\\\\") ? "\\\\?\\UNC\\" + Native.mid(2) : "\\\\?\\" + Native;
+        const auto Attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(Native.utf16()));
+        if (Attributes != INVALID_FILE_ATTRIBUTES) Result["kind"] = Attributes & FILE_ATTRIBUTE_DIRECTORY ? "directory" : "file";
+        else { const auto Code = GetLastError(); Result["kind"] = Code == ERROR_FILE_NOT_FOUND || Code == ERROR_PATH_NOT_FOUND ? "missing" : "unavailable"; }
+        Result["sourceDirectory"] = NativeSource && QFileInfo(QDir(Source).filePath(SourceName)).isDir();
         auto Existing = Folder ? Target : QFileInfo(Target).absolutePath();
         for (int Depth = 0; Depth < 128 && !QFileInfo::exists(Existing); ++Depth) {
             if (Stop.stop_requested()) return Result;

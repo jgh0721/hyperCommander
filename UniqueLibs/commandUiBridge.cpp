@@ -1134,7 +1134,7 @@ void CommandUiBridge::openArchive()
     hc::ui::DialogShell Dialog(tr("파일 압축"), main_); Dialog.setObjectName("hc.archive.create"); Dialog.resize(680, 480);
     Dialog.SetSummary(tr("선택한 %1개 항목을 7z 또는 ZIP으로 압축합니다.").arg(Sources.size()));
     auto* Layout = Dialog.BodyLayout(); auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Layout->addLayout(Form);
-    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("archive.7z"), &Dialog); Output->setObjectName("hc.archive.create.path"); Form->addRow(tr("저장 경로(&P)"), Output);
+    auto* Output = new QLineEdit(QDir(CurrentDirectory).filePath("archive.7z"), &Dialog); Output->setObjectName("hc.archive.create.path"); Form->addRow(tr("압축 파일 경로(&P)"), Output);
     auto* Format = new QComboBox(&Dialog); Format->setObjectName("hc.archive.create.format"); Format->addItems({"7z", "ZIP"}); Form->addRow(tr("형식(&F)"), Format);
     auto* Level = new QComboBox(&Dialog); Level->setObjectName("hc.archive.create.level");
     for (const auto& Pair : {std::pair{0, tr("압축 안 함")}, {1, tr("빠르게")}, {5, tr("보통")}, {9, tr("최대 압축")}}) Level->addItem(Pair.second, Pair.first);
@@ -1150,8 +1150,13 @@ void CommandUiBridge::openArchive()
         Output->setText(Path + (Format->currentIndex() == 0 ? ".7z" : ".zip"));
     });
     Dialog.AcceptButton()->setText(tr("압축(&S)"));
-    const auto ValidateOutput = [&] { Dialog.SetAcceptEnabled(!hc::ui::ResolveNativeDestination(Output->text(), CurrentDirectory).isEmpty()); };
-    connect(Output, &QLineEdit::textChanged, &Dialog, ValidateOutput); ValidateOutput();
+    auto* OutputPreview = new QLabel(&Dialog); OutputPreview->setObjectName("hc.archive.create.preview"); OutputPreview->setTextFormat(Qt::PlainText); OutputPreview->setWordWrap(true); Layout->addWidget(OutputPreview);
+    const auto ValidateOutput = [&] {
+        auto Path=NativeOutputPath(Output->text(),CurrentDirectory,"archive"); const auto Suffix=Format->currentIndex()==0?QString(".7z"):QString(".zip");
+        if(!Path.isEmpty()&&!Path.endsWith(Suffix,Qt::CaseInsensitive)) Path+=Suffix;
+        Dialog.SetAcceptEnabled(!Path.isEmpty()); OutputPreview->setText(tr("생성할 압축 파일: %1\n상대경로는 현재 패널 폴더 기준입니다.").arg(QDir::toNativeSeparators(Path)));
+    };
+    connect(Output, &QLineEdit::textChanged, &Dialog, ValidateOutput); connect(Format,&QComboBox::currentIndexChanged,&Dialog,ValidateOutput); ValidateOutput();
     Output->selectAll(); Dialog.SetInitialInput(Output);
     if (Dialog.exec() != QDialog::Accepted) return;
     hc::sevenzip::CreateRequest Request; Request.sources_ = std::move(Sources); Request.format_ = Format->currentIndex() == 0 ? "7z" : "zip";
