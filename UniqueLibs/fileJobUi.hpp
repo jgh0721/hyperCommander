@@ -110,7 +110,9 @@ private:
     QPushButton* managerOpen_ = nullptr;
     QPushButton* indicator_ = nullptr;
     QCheckBox* autoClose_ = nullptr;
-    bool detailed_ = true;
+    bool detailed_ = false;
+    bool appliedShowRecords_ = false;
+    QLabel* notice_ = nullptr;
     std::string graphId_;
     qint64 graphElapsed_ = -1;
     qint64 graphTotal_ = -1;

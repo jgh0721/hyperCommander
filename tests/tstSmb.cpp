@@ -1638,6 +1638,48 @@ private slots:
             QCOMPARE(Data["payload.flush.skipped"].toObject()["count"].toInt(),Delayed?1:0);
         }
     }
+    void todoBugOperationDetailsSettingUi()
+    {
+        using namespace hc::operations; using namespace hc::settings;
+        auto& Settings=AppSettings(); const auto Original=Settings.Object();
+        const auto Restore=qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options=Settings.Read(Section::Options).toObject(); Options.remove("showJobDetails"); Options["jobDetailed"]=false;
+        Options["enableJobRecovery"]=false; Options["jobCloseOnSuccess"]=false; QVERIFY(Settings.Put(Section::Options,Options));
+        { QMainOpts Dialog(main_); Dialog.LoadSettings(); auto* Check=Dialog.findChild<QCheckBox*>("hc.settings.showJobDetails");
+          QVERIFY(Check && Check->isEnabled() && !Check->isChecked()); Check->setChecked(true); Dialog.reject(); }
+        QVERIFY(!Settings.CommittedObject()["options"].toObject()["showJobDetails"].toBool());
+        struct Control { std::atomic<bool> password_{false}; };
+        class Task final : public IJobTask {
+        public:
+            explicit Task(std::shared_ptr<Control> Control):control_(std::move(Control)){}
+            JobStep Advance(JobStepContext) override {
+                const bool Password=control_->password_.load();
+                JobStep Step{Password?JobState::WaitingForUser:JobState::Running};
+                if(Password) { InteractionRequest Request; Request.id_="details-password"; Request.kind_=InteractionKind::Password; Request.choices_={InteractionChoice::Confirm,InteractionChoice::Skip}; Step.interaction_=Request; }
+                else Step.deferFor_=std::chrono::milliseconds(20);
+                return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override {return {};}
+        private: std::shared_ptr<Control> control_;
+        };
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose,false); FileJobUi Jobs(&Window,std::make_shared<hc::commands::EventHub>());
+        auto Control=std::make_shared<struct Control>(); PreparedJob Work; Work.request_.metadata_={"fixture","D:/source","D:/target","fixture-options"}; Work.task_=std::make_unique<Task>(Control);
+        auto Started=Jobs.Submit(std::move(Work),QStringLiteral("상세 기록 설정 시험")); QVERIFY(Started.HasValue());
+        auto* Dialog=Window.findChild<QDialog*>("hc.fileJobs"); auto* Details=Window.findChild<QPlainTextEdit*>("hc.jobs.details");
+        auto* Toggle=Window.findChild<QPushButton*>("hc.jobs.toggleDetails"); auto* Notice=Window.findChild<QLabel*>("hc.jobs.notice");
+        QVERIFY(Dialog && Details && Toggle && Notice); QTRY_VERIFY(Dialog->isVisible()); QVERIFY(!Details->isVisible());
+        Toggle->click(); QTRY_VERIFY(Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph")->isVisible()); QVERIFY(!Details->isVisible());
+        Options=Settings.Read(Section::Options).toObject(); Options["showJobDetails"]=true; QVERIFY(Settings.Put(Section::Options,Options)); Jobs.ApplyDefaults(); QTRY_VERIFY(Details->isVisible());
+        Toggle->click(); QVERIFY(Details->isVisible());
+        Options["showJobDetails"]=false; QVERIFY(Settings.Put(Section::Options,Options)); Jobs.ApplyDefaults(); QTRY_VERIFY(!Details->isVisible());
+        Control->password_=true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::WaitingForUser);
+        QTRY_VERIFY(Notice->isVisible()); QVERIFY(Notice->text().contains(QStringLiteral("암호"))); QVERIFY(!Details->isVisible());
+        QTRY_COMPARE(Window.findChild<QLineEdit*>("hc.jobs.newName")->echoMode(),QLineEdit::Password);
+        QVERIFY(SaveR9Dialog(*Dialog,"operation-progress-records-off-password")); Jobs.Scheduler().Cancel(Started.Value().id_);
+        QTRY_VERIFY(Started.Value().completion_.wait_for(std::chrono::milliseconds(0))==std::future_status::ready);
+        { QMainOpts Editor(main_); Editor.LoadSettings(); auto* Check=Editor.findChild<QCheckBox*>("hc.settings.showJobDetails"); Check->setChecked(true); QVERIFY(Editor.SaveSettings()); Editor.accept(); }
+        Repository Reload(QFileInfo(Settings.FileName()).absolutePath()); QVERIFY(Reload.Read(Section::Options).toObject()["showJobDetails"].toBool());
+    }
     void r22LaboratoryUi()
     {
         using namespace hc::settings; auto& Settings=AppSettings(); const auto Saved=Settings.CommittedObject()["options"].toObject(); Settings.BeginEdit();
@@ -6863,8 +6905,8 @@ private slots:
         }
         NewFileDialog Create(Temp.path(), true, main_); Create.show(); QTest::qWait(30);
         auto* Name = Create.findChild<QLineEdit*>("hc.newFile.name"); QVERIFY(Name); Name->setText("document");
-        for (int I=0; I<8; ++I) { auto* Card = Create.findChild<fm::ui::ChoiceCard*>("hc.newFile.template." + QString::number(I)); QVERIFY(Card); Card->click(); Save(&Create, "p5-template-" + QString::number(I)); }
-        Create.findChild<fm::ui::ChoiceCard*>("hc.newFile.template.6")->click(); Name->setText("created.json");
+        for (int I=0; I<8; ++I) { auto* Type = Create.findChild<QComboBox*>("hc.newFile.type"); QVERIFY(Type); Type->setCurrentIndex(I); Save(&Create, "p5-template-" + QString::number(I)); }
+        Create.findChild<QComboBox*>("hc.newFile.type")->setCurrentIndex(6); Name->setText("created.json");
         Create.findChild<QCheckBox*>("hc.newFile.bom")->setChecked(true); Create.AcceptButton()->click(); QTRY_COMPARE(Create.result(), int(QDialog::Accepted));
         QFile Json(Temp.filePath("created.json")); QVERIFY(Json.open(QIODevice::ReadOnly)); QVERIFY(Json.readAll().startsWith(QByteArray::fromHex("efbbbf"))); Json.close();
         NewFileDialog Conflict(Temp.path(), true, main_); Conflict.show(); Conflict.findChild<QLineEdit*>("hc.newFile.name")->setText("created.json"); Conflict.AcceptButton()->click();
@@ -7476,7 +7518,7 @@ private slots:
         QTimer::singleShot(0,main_,[&] {
             auto* Dialog = static_cast<NewFileDialog*>(main_->findChild<QDialog*>("hc.newFile")); QVERIFY(Dialog);
             const auto Cleanup = qScopeGuard([&] { if (!Opened) Dialog->CancelButton()->click(); });
-            Dialog->findChild<fm::ui::ChoiceCard*>("hc.newFile.template.6")->click(); Dialog->findChild<QLineEdit*>("hc.newFile.name")->setText("새 문서.json"); Dialog->findChild<QCheckBox*>("hc.newFile.bom")->setChecked(true);
+            Dialog->findChild<QComboBox*>("hc.newFile.type")->setCurrentIndex(6); Dialog->findChild<QLineEdit*>("hc.newFile.name")->setText("새 문서.json"); Dialog->findChild<QCheckBox*>("hc.newFile.bom")->setChecked(true);
             QVERIFY(SaveR9Dialog(*Dialog,"r9-new-file")); Opened = true; Dialog->AcceptButton()->click(); QTimer::singleShot(10000,Dialog,[Dialog] { if (Dialog->isVisible()) Dialog->CancelButton()->click(); });
         });
         main_->findChild<QAction*>("hc.menu.file.new")->trigger(); QVERIFY(Opened); QVERIFY(QFileInfo::exists(Directory.filePath("새 문서.json")));
@@ -7506,6 +7548,10 @@ private slots:
         auto& Theme = fm::style::ThemeManager::instance(); const auto Scheme = Theme.scheme();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Theme.setScheme(Scheme); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkdir(Directory.filePath("target")));
+        if(localOnly_) for(auto* Panel:panels_) {
+            if(auto* Error=Panel->findChild<QMessageBox*>("hc.navigationError")) { qInfo()<<"Isolating startup navigation failure"<<Error->text(); Error->reject(); }
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(unc_),{}); QTRY_VERIFY(!model(Panel)->IsLoading());
+        }
         { QFile Sample(Directory.filePath("sample.txt")); QVERIFY(Sample.open(QIODevice::WriteOnly)); QCOMPARE(Sample.write(QByteArray(262144, 'd')), qint64(262144)); }
         auto Options = Settings.Read(hc::settings::Section::Options).toObject(); Options["copyMetadata"] = true; Options["copyVerify"] = true; Options["copyAcl"] = true; Options["copyStreams"] = true; Options["copyPattern"] = "*.txt"; Options["copySpeedMiB"] = 1; QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
         const auto Save = [&](QWidget* Widget, const QString& Name) {
@@ -7527,6 +7573,7 @@ private slots:
           QCOMPARE(Dialog.findChild<QLineEdit*>("hc.settings.copyPattern")->text(), QString("*.txt"));
           bool SpeedLabelVisible = false; for (auto* Label : Dialog.findChildren<QLabel*>()) if (Label->text() == "새 복사·이동의 속도 제한" && Label->isVisible()) SpeedLabelVisible = true; QVERIFY(SpeedLabelVisible);
           Save(&Dialog, "r8-copy-settings");
+          Dialog.raise(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
           Dialog.findChild<QLineEdit*>("hc.settings.copyPattern")->setText("../*"); Tabs->setCurrentIndex(3);
           QVERIFY(Dialog.findChild<QCheckBox*>("hc.settings.recycleDefault")->isVisible()); Category->setCurrentRow(0);
           QVERIFY(!Dialog.SaveSettings()); QCOMPARE(Category->currentItem()->text(), QString("파일 작업")); QCOMPARE(Tabs->currentIndex(), 1);

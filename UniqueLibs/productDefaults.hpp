@@ -642,7 +642,7 @@ namespace hc::defaults
                  { "copyPattern",             "*" },
                  { "copySpeedMiB",            0 },
                  { "delayedFileWrites",       true },
-                 { "jobDetailed",             true },
+                 { "jobDetailed",             false },
                  { "jobCloseOnSuccess",       true },
                  { "deleteToRecycle",         true },
                  { "deleteWhileListing",      true },
@@ -651,6 +651,7 @@ namespace hc::defaults
                  { "jobConcurrency",          2 },
                  { "enableJobRecovery",       false },
                  { "saveJobProgress",         false },
+                 { "showJobDetails",          false },
                  { "fileColorRules",          FileGroups() } };
     }
     inline QJsonObject DocumentHandlers()

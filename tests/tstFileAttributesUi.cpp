@@ -1,4 +1,5 @@
-﻿#include "HyperCommander/UIs/fileAttributesDialog.hpp"
+﻿#include "stdafx.h"
+#include "HyperCommander/UIs/fileAttributesDialog.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
@@ -6,6 +7,8 @@
 #include <QPushButton>
 #include <fmwidgets/Button.h>
 #include <fmstyle/ThemeManager.h>
+#include <QScrollArea>
+#include <QScrollBar>
 
 class AttributeUiTests : public QObject
 {
@@ -16,6 +19,8 @@ private slots:
         auto& Theme = fm::style::ThemeManager::instance();
         Theme.setScheme(qEnvironmentVariable("HC_ATTRIBUTE_DARK").isEmpty() ? fm::style::ThemeManager::Scheme::Light : fm::style::ThemeManager::Scheme::Dark);
         Theme.install(*qobject_cast<QApplication*>(QApplication::instance()));
+        const auto Points=qEnvironmentVariableIntValue("HC_ATTRIBUTE_FONT_PT");
+        if(Points>0) { auto Font=qApp->font(); Font.setPointSize(Points); qApp->setFont(Font); }
     }
     void previewApplyAndRecursiveInvalidation()
     {
@@ -41,6 +46,7 @@ private slots:
         auto* ShowDetails = Dialog.findChild<QPushButton*>("hc.attributes.showDetails"); QVERIFY(ShowDetails);
         QTest::mouseClick(ShowDetails, Qt::LeftButton); QVERIFY(Details->isVisible());
         QTest::mouseClick(ShowDetails, Qt::LeftButton); QVERIFY(!Details->isVisible());
+        auto* Scroll=Dialog.findChild<QScrollArea*>(); QVERIFY(Scroll); QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(),0);
         const auto Shot = qEnvironmentVariable("HC_ATTRIBUTE_SHOT"); if (!Shot.isEmpty()) { QTest::qWait(100); QVERIFY(Dialog.grab().save(Shot)); }
         QTest::mouseClick(Dialog.AcceptButton(), Qt::LeftButton);
         QTRY_COMPARE_WITH_TIMEOUT(Dialog.AcceptButton()->text(), QString::fromUtf8("닫기"), 5000);

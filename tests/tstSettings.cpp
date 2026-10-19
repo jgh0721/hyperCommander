@@ -1,4 +1,5 @@
-﻿#include "UniqueLibs/settings/appSettings.hpp"
+﻿#include "stdafx.h"
+#include "UniqueLibs/settings/appSettings.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 using namespace hc::settings;
@@ -100,6 +101,18 @@ private slots:
         QVERIFY(Settings.Put(Section::Options,Options)); Repository Reload(Directory.path()); QVERIFY(Reload.Read(Section::Options).toObject()["saveJobProgress"].toBool());
         Reload.BeginEdit(); Options["saveJobProgress"]="true"; QVERIFY(Reload.Put(Section::Options,Options)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
         Options["saveJobProgress"]=false; QVERIFY(Reload.Put(Section::Options,Options)); Repository Off(Directory.path()); QVERIFY(!Off.Read(Section::Options).toObject()["saveJobProgress"].toBool(true));
+    }
+    void laboratoryDetailsSetting()
+    {
+        QTemporaryDir Directory; Repository Settings(Directory.path());
+        QVERIFY(!Settings.Read(Section::Options).toObject()["showJobDetails"].toBool(true));
+        auto Options=Settings.Read(Section::Options).toObject(); Options["showJobDetails"]=true;
+        Settings.BeginEdit(); QVERIFY(Settings.Put(Section::Options,Options)); Settings.DiscardEdit();
+        QVERIFY(!Settings.CommittedObject()["options"].toObject()["showJobDetails"].toBool(true));
+        QVERIFY(Settings.Put(Section::Options,Options)); Repository Reload(Directory.path());
+        QVERIFY(Reload.Read(Section::Options).toObject()["showJobDetails"].toBool());
+        QVERIFY(!Reload.Read(Section::Options).toObject()["enableJobRecovery"].toBool());
+        Reload.BeginEdit(); Options["showJobDetails"]="true"; QVERIFY(Reload.Put(Section::Options,Options)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
     }
     void r13OptionsPersistenceAndValidation()
     {

@@ -604,7 +604,7 @@ endforeach()
 
 
 qt_add_executable(hc_settings_tests tstSettings.cpp)
-target_include_directories(hc_settings_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_include_directories(hc_settings_tests PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
 target_link_libraries(hc_settings_tests PRIVATE Qt6::Test)
 target_compile_options(hc_settings_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_test(NAME hc.settings COMMAND hc_settings_tests)
@@ -633,7 +633,7 @@ qt_add_executable(hc_dialog_foundation_tests
     ../HyperCommander/UIs/dialogShell.hpp
     ../HyperCommander/UIs/settingsDraft.hpp
 )
-target_include_directories(hc_dialog_foundation_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_include_directories(hc_dialog_foundation_tests PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
 target_link_libraries(hc_dialog_foundation_tests PRIVATE hc_viewer_qt Qt6::Test Qt6::Concurrent Fm::widgets Advapi32 Shell32)
 target_compile_options(hc_dialog_foundation_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_test(NAME hc.dialog_foundation COMMAND hc_dialog_foundation_tests)

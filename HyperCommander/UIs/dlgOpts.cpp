@@ -145,7 +145,7 @@ void QMainOpts::LoadSettings()
         defaultAcl_->setChecked(Options["copyAcl"].toBool(false)); defaultStreams_->setChecked(Options["copyStreams"].toBool(false));
         findChild<QCheckBox*>("hc.settings.delayedFileWrites")->setChecked(Options["delayedFileWrites"].toBool(true));
         defaultPattern_->setText(Options["copyPattern"].toString("*")); defaultSpeed_->setValue(Options["copySpeedMiB"].toInt(0));
-        defaultDetailed_->setChecked(Options["jobDetailed"].toBool(true)); defaultClose_->setChecked(Options["jobCloseOnSuccess"].toBool(true));
+        defaultDetailed_->setChecked(Options["jobDetailed"].toBool(false)); defaultClose_->setChecked(Options["jobCloseOnSuccess"].toBool(true));
         findChild<QCheckBox*>("hc.settings.recycleDefault")->setChecked(Options["deleteToRecycle"].toBool(true));
         findChild<QCheckBox*>("hc.settings.deleteWhileListing")->setChecked(Options["deleteWhileListing"].toBool(true));
         findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(qMax(0, QStringList{"none", "status", "attention", "sound"}.indexOf(Options["jobNotification"].toString("attention"))));
@@ -154,6 +154,7 @@ void QMainOpts::LoadSettings()
         findChild<QCheckBox*>("hc.settings.enableJobRecovery")->setChecked(Options["enableJobRecovery"].toBool(false));
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setEnabled(Options["enableJobRecovery"].toBool(false));
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setChecked(Options["saveJobProgress"].toBool(false));
+        findChild<QCheckBox*>("hc.settings.showJobDetails")->setChecked(Options["showJobDetails"].toBool(false));
     }
 
 
@@ -315,6 +316,7 @@ bool QMainOpts::SaveSettings()
     Options["jobConcurrency"] = findChild<QSpinBox*>("hc.settings.jobConcurrency")->value();
     Options["enableJobRecovery"] = findChild<QCheckBox*>("hc.settings.enableJobRecovery")->isChecked();
     Options["saveJobProgress"] = findChild<QCheckBox*>("hc.settings.saveJobProgress")->isChecked();
+    Options["showJobDetails"] = findChild<QCheckBox*>("hc.settings.showJobDetails")->isChecked();
     hc::settings::AppSettings().Put(hc::settings::Section::Options, Options);
     const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
     QVector<QPointer<CGridView>> Targets; QVector<hc::columns::ColumnProfile> PreviousProfiles;
@@ -921,7 +923,7 @@ void QMainOpts::initializeDesignPages()
     FolderHelp->setWordWrap(true); FolderForm->addRow(FolderHelp);
     auto* ProgressForm = JobGroup(CommonRows, tr("진행창 · 완료 알림"));
     auto* Progress = ProgressForm->parentWidget();
-    defaultDetailed_ = new QCheckBox(tr("처음 열 때 자세히 보기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(defaultDetailed_);
+    defaultDetailed_ = new QCheckBox(tr("처음 열 때 그래프 보이기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(defaultDetailed_);
     defaultClose_ = new QCheckBox(tr("성공하면 진행창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(defaultClose_);
     auto* Notification = new QComboBox(Progress); Notification->setObjectName("hc.settings.jobNotification"); Notification->addItems({tr("알리지 않음"), tr("상태 표시줄"), tr("상태 표시줄 · 작업 표시줄"), tr("상태 표시줄 · 작업 표시줄 · 소리")}); ProgressForm->addRow(tr("백그라운드 작업 완료 알림"), Notification);
     auto* QueueForm = JobGroup(CommonRows, tr("대기열 · 동시 실행"));
@@ -972,7 +974,7 @@ void QMainOpts::initializeDesignPages()
     IncrementalDelete->setToolTip(tr("기본값은 켜짐입니다. 확인한 파일부터 처리하며, 전체 목록 확인이 끝나기 전까지 총개수는 집계 중으로 표시합니다.\n끄면 전체 목록 확인 후 삭제합니다. 휴지통 삭제는 복원 구조를 유지하도록 선택 항목별로 확인 후 이동합니다.\n압축 파일 내부는 압축 파일을 갱신하는 일괄 작업으로 처리합니다."));
     auto* DeleteNote = new QLabel(tr("휴지통을 지원하지 않는 위치는 영구 삭제를 직접 선택해야 합니다."), Delete); DeleteNote->setWordWrap(true); DeleteForm->addRow(DeleteNote);
     DeleteRows->addStretch();
-    auto* Laboratory = Page(tr("실험실"), tr("실험적인 기능을 선택합니다. 변경한 값은 새 작업부터 적용합니다."));
+    auto* Laboratory = Page(tr("실험실"), tr("실험적인 기능을 선택합니다. 적용 시점은 각 항목의 설명을 확인하세요."));
     Laboratory->setObjectName("hc.settings.laboratory");
     auto* RecoveryCard = new fm::ui::Card(Laboratory); auto* RecoveryLayout = new QVBoxLayout(RecoveryCard);
     auto* EnableRecovery = new QCheckBox(tr("작업 복구"), RecoveryCard); EnableRecovery->setObjectName("hc.settings.enableJobRecovery"); RecoveryLayout->addWidget(EnableRecovery);
@@ -983,7 +985,12 @@ void QMainOpts::initializeDesignPages()
     auto* ProgressNote = new QLabel(tr("작업 중 처리량과 현재 파일의 진행 위치를 디스크에 저장합니다. 기본값은 꺼짐이며, 켜면 반복 저장으로 작업 속도가 낮아질 수 있습니다.\n작업 복구가 켜져 있을 때 사용할 수 있습니다. 진행률 저장을 꺼도 복구에 필요한 작업 결과·파일 쓰기 단계는 저장합니다. 실시간 화면 갱신은 두 설정과 관계없이 유지됩니다."), ProgressCard);
     connect(EnableRecovery, &QCheckBox::toggled, SaveProgress, &QCheckBox::setEnabled);
     ProgressNote->setWordWrap(true); ProgressLayout->addWidget(ProgressNote);
-    qobject_cast<QVBoxLayout*>(Laboratory->layout())->addWidget(ProgressCard); qobject_cast<QVBoxLayout*>(Laboratory->layout())->addStretch();
+    qobject_cast<QVBoxLayout*>(Laboratory->layout())->addWidget(ProgressCard);
+    auto* DetailsCard = new fm::ui::Card(Laboratory); auto* DetailsLayout = new QVBoxLayout(DetailsCard);
+    auto* ShowDetails = new QCheckBox(tr("상세 기록 보이기"), DetailsCard); ShowDetails->setObjectName("hc.settings.showJobDetails"); DetailsLayout->addWidget(ShowDetails);
+    auto* DetailsNote = new QLabel(tr("작업 진행 창에 파일별 처리 결과와 진단 기록을 표시합니다. 기본값은 꺼짐입니다. 오류 안내와 확인·암호 입력 요청은 이 설정과 관계없이 표시합니다. 작업 복구·진행률 저장과 독립적으로 사용합니다."), DetailsCard);
+    DetailsNote->setWordWrap(true); DetailsLayout->addWidget(DetailsNote); qobject_cast<QVBoxLayout*>(Laboratory->layout())->addWidget(DetailsCard);
+    qobject_cast<QVBoxLayout*>(Laboratory->layout())->addStretch();
     auto* Keyboard = ui.pgShortcut;
     ui.keySequenceEdit->setMaximumSequenceLength(1);
     auto* KeyOptions = new QWidget(Keyboard); auto* KeyForm = new QFormLayout(KeyOptions);

@@ -103,7 +103,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     dialog_ = new QDialog(Main);
     dialog_->setObjectName("hc.fileJobs");
     dialog_->setWindowTitle(tr("파일 작업"));
-    dialog_->resize(700, 650);
+    dialog_->resize(700, 380);
     dialog_->setMinimumSize(520, 350);
     auto* Layout = new QVBoxLayout(dialog_);
     header_ = new fm::ui::DialogHeader(dialog_);
@@ -117,16 +117,18 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     progress_ = new fm::ui::ProgressBar(dialog_); progress_->setTextVisible(true); progress_->setAccessibleName(tr("선택 작업 진행률")); Layout->addWidget(progress_);
     metrics_ = new QLabel(dialog_); metrics_->setTextFormat(Qt::PlainText); metrics_->setWordWrap(true);
     metrics_->setObjectName("hc.jobs.metrics"); Layout->addWidget(metrics_);
+    notice_ = new QLabel(dialog_); notice_->setObjectName("hc.jobs.notice"); notice_->setTextFormat(Qt::PlainText); notice_->setWordWrap(true); notice_->hide(); Layout->addWidget(notice_);
     graph_ = new fm::ui::TransferGraph(dialog_); graph_->setObjectName("hc.jobs.graph");
     graph_->setTitle(tr("처리 속도 · 실제 관측값")); graph_->setMinimumHeight(130); Layout->addWidget(graph_, 1);
     auto* Display = new QHBoxLayout;
-    auto* Toggle = new fm::ui::Button(tr("간단히 보기(&D)"), dialog_); Toggle->setObjectName("hc.jobs.toggleDetails");
+    auto* Toggle = new fm::ui::Button(tr("그래프 보기(&D)"), dialog_); Toggle->setObjectName("hc.jobs.toggleDetails");
     auto* Axis = new QComboBox(dialog_); Axis->addItems({tr("진행률 축"), tr("시간 축 · 최근 60초")});
     Axis->setAccessibleName(tr("처리 속도 그래프 축"));
     Display->addWidget(Toggle); Display->addWidget(Axis); Display->addStretch(); Layout->addLayout(Display);
+    graph_->hide(); Axis->hide();
     connect(Axis, &QComboBox::currentIndexChanged, this, [this](int Index) { graph_->setAxis(Index ? fm::ui::TransferGraph::Time : fm::ui::TransferGraph::Progress); });
     details_ = new QPlainTextEdit(dialog_); details_->setReadOnly(true); details_->setAccessibleName(tr("선택 작업 상세 결과"));
-    details_->setObjectName("hc.jobs.details"); details_->setMinimumHeight(40); Layout->addWidget(details_);
+    details_->setObjectName("hc.jobs.details"); details_->setMinimumHeight(40); details_->setMaximumHeight(160); Layout->addWidget(details_);
     auto* Pages = new QHBoxLayout;
     previousPage_ = new fm::ui::Button(tr("이전 결과"), dialog_); previousPage_->setObjectName("hc.jobs.previousResults");
     nextPage_ = new fm::ui::Button(tr("다음 결과"), dialog_); nextPage_->setObjectName("hc.jobs.nextResults");
@@ -137,9 +139,9 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     renamed_->setAccessibleName(tr("충돌한 항목의 새 이름"));
     renamed_->setObjectName("hc.jobs.newName"); Layout->addWidget(renamed_);
     connect(Toggle, &QPushButton::clicked, this, [this, Toggle, Axis] {
-        detailed_ = !detailed_; Toggle->setText(detailed_ ? tr("간단히 보기(&D)") : tr("자세히 보기(&D)"));
+        detailed_ = !detailed_; Toggle->setText(detailed_ ? tr("그래프 접기(&D)") : tr("그래프 보기(&D)"));
         graph_->setVisible(detailed_); Axis->setVisible(detailed_);
-        updateSelection(); dialog_->resize(700, detailed_ ? 650 : 350);
+        updateSelection(); dialog_->resize(700, std::min(dialog_->sizeHint().height(),dialog_->screen()->availableGeometry().height()-80));
     });
     autoClose_ = new QCheckBox(tr("성공하면 창 닫기(&W)"), dialog_); autoClose_->setObjectName("hc.jobs.closeOnSuccess"); Layout->addWidget(autoClose_);
     auto* Buttons = new fm::ui::WrapLayout; Layout->addLayout(Buttons);
@@ -520,7 +522,7 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
         }
     }
     autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(true));
-    if (detailed_ != Defaults["jobDetailed"].toBool(true)) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
+    if (detailed_ != Defaults["jobDetailed"].toBool(false)) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
     if (Snapshot.HasValue() && Snapshot.Value().deferred_) Show(); else showProgress();
     return Handle;
 }
@@ -529,6 +531,11 @@ void FileJobUi::ApplyDefaults()
 {
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
     SetFileJobPersistence(journal_, Options["enableJobRecovery"].toBool(false), Options["saveJobProgress"].toBool(false));
+    const bool ShowRecords = Options["showJobDetails"].toBool(false);
+    if (ShowRecords != appliedShowRecords_) {
+        appliedShowRecords_ = ShowRecords;
+        updateSelection(); dialog_->resize(dialog_->width(),std::min(dialog_->sizeHint().height(),dialog_->screen()->availableGeometry().height()-80));
+    }
     const auto Limit = Options["jobConcurrency"].toInt(2);
     if (Limit == appliedConcurrency_) return; // Preserve a session override until the stored default changes.
     if (scheduler_.SetConcurrencyLimit(Limit).HasValue()) {
@@ -538,7 +545,7 @@ void FileJobUi::ApplyDefaults()
 }
 
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
-void FileJobUi::showProgress() { dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection(); }
+void FileJobUi::showProgress() { updateSelection(); dialog_->resize(dialog_->width(),std::min(dialog_->sizeHint().height(),dialog_->screen()->availableGeometry().height()-80)); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); }
 void FileJobUi::controlSelected(bool Pause)
 {
     const auto Id = selectedId();
@@ -759,8 +766,22 @@ void FileJobUi::updateSelection()
         : Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("허용")
         : Snapshot.interaction_ && Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("휴지통으로") : tr("영구 삭제"));
     renamed_->setVisible(Password || choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
-    details_->setVisible(detailed_ || Snapshot.interaction_.has_value() || Snapshot.error_.has_value());
-    previousPage_->setVisible(detailed_); nextPage_->setVisible(detailed_);
+    const bool ShowRecords = hc::settings::AppSettings().CommittedObject()["options"].toObject()["showJobDetails"].toBool(false);
+    details_->setVisible(ShowRecords);
+    previousPage_->setVisible(ShowRecords); nextPage_->setVisible(ShowRecords);
+    QString Notice;
+    if (Snapshot.error_) Notice = ErrorText(*Snapshot.error_);
+    if (Snapshot.interaction_) {
+        if (!Notice.isEmpty()) Notice += "\n";
+        Notice += Password ? tr("압축 파일의 암호를 입력하세요.") : Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
+            ? Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("선택한 항목을 Windows 휴지통으로 이동합니다.") : tr("선택한 항목과 하위 항목을 영구 삭제합니다. 복원할 수 없습니다.")
+            : Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("읽기 전용 항목의 삭제를 허용할지 선택하세요. 모두 허용은 이 작업 안에서 적용됩니다.")
+            : Snapshot.interaction_->kind_ == InteractionKind::Overwrite ? tr("대상에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.")
+            : Snapshot.interaction_->kind_ == InteractionKind::Elevation ? tr("작업에 필요한 권한을 얻지 못했습니다. 권한 오류 자세히에서 지원 가능한 응답을 확인하세요.")
+            : Snapshot.interaction_->kind_ == InteractionKind::RetryFailure ? tr("작업 실패 후 재시도 또는 취소 응답을 기다립니다.")
+            : tr("작업을 계속하려면 아래에서 응답을 선택하세요.");
+    }
+    notice_->setText(Notice); notice_->setVisible(Valid && !Notice.isEmpty());
     if (!Valid) { permission_->hide(); metrics_->clear(); graph_->hide(); header_->setSubtitle({}); status_->setText(tr("파일 작업이 없습니다.")); details_->clear(); progress_->setRange(0, 1); progress_->setValue(0); progress_->setFormat({}); return; }
     graph_->setVisible(detailed_);
     const bool Delete = deletionJob(Snapshot);
@@ -860,10 +881,10 @@ void FileJobUi::updateSelection()
     if (details_->toPlainText() != Details) details_->setPlainText(Details);
     const auto LineHeight=QFontMetrics(details_->font()).lineSpacing();
     const auto ContentHeight=QFontMetrics(details_->font()).boundingRect(QRect(0,0,std::max(100,details_->viewport()->width()-24),INT_MAX),Qt::TextWordWrap,Details).height()+16;
-    details_->setMaximumHeight(std::clamp(ContentHeight,std::max(40,LineHeight+16),std::max(40,LineHeight*8+16)));
-    details_->setVisible(!Details.isEmpty() && (detailed_ || Snapshot.interaction_.has_value() || Snapshot.error_.has_value()));
-    previousPage_->setVisible(detailed_ && results_.contains(Snapshot.id_));
-    nextPage_->setVisible(detailed_ && results_.contains(Snapshot.id_));
+    details_->setMaximumHeight(std::clamp(ContentHeight,std::max(40,LineHeight+16),std::max(LineHeight+16,std::min(180,LineHeight*8+16))));
+    details_->setVisible(ShowRecords && !Details.isEmpty());
+    previousPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
+    nextPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
 }
 
 void FileJobUi::recordSamples()

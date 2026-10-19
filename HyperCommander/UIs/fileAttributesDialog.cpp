@@ -1,4 +1,5 @@
-﻿#include "fileAttributesDialog.hpp"
+﻿#include "stdafx.h"
+#include "fileAttributesDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QGridLayout>
@@ -6,6 +7,7 @@
 #include <QPushButton>
 #include <QTimeZone>
 #include <fmwidgets/Button.h>
+#include <QTabWidget>
 
 namespace hc::ui
 {
@@ -32,6 +34,8 @@ namespace hc::ui
         recursive_->setEnabled(manifest_ || std::any_of(roots_.begin(), roots_.end(), [](const auto& E) { return E.directory_; }));
         BodyLayout()->addWidget(recursive_);
         scope_ = new QLabel(this); scope_->setWordWrap(true); scope_->setTextFormat(Qt::PlainText); BodyLayout()->addWidget(scope_);
+        auto* Tabs = new QTabWidget(this); Tabs->setObjectName("hc.attributes.tabs"); BodyLayout()->addWidget(Tabs);
+        auto* AttributesPage = new QWidget(Tabs); auto* AttributesLayout = new QVBoxLayout(AttributesPage);
         auto* Grid = new QGridLayout;
         Grid->addWidget(new QLabel(tr("속성"), this), 0, 0); Grid->addWidget(new QLabel(tr("현재 상태"), this), 0, 1); Grid->addWidget(new QLabel(tr("변경 지시"), this), 0, 2);
         const QStringList Names{tr("R 읽기 전용"), tr("H 숨김"), tr("S 시스템"), tr("A 기록")};
@@ -42,14 +46,16 @@ namespace hc::ui
             Grid->addWidget(Label, I + 1, 0); Grid->addWidget(current_[I], I + 1, 1); Grid->addWidget(values_[I], I + 1, 2);
             connect(values_[I], &QComboBox::currentIndexChanged, this, [this] { update(); });
         }
-        BodyLayout()->addLayout(Grid);
+        AttributesLayout->addLayout(Grid);
         auto* Hint = new QLabel(tr("유지는 항목별 값을 보존합니다. 폴더의 읽기 전용 속성은 하위 파일의 쓰기 권한을 제한하지 않습니다."), this);
-        Hint->setWordWrap(true); BodyLayout()->addWidget(Hint);
-        changeTime_ = new QCheckBox(tr("수정 시각 변경"), this); changeTime_->setObjectName("hc.attributes.changeTime"); BodyLayout()->addWidget(changeTime_);
+        Hint->setWordWrap(true); AttributesLayout->addWidget(Hint); AttributesLayout->addStretch(); Tabs->addTab(AttributesPage,tr("파일 속성"));
+        auto* DatesPage = new QWidget(Tabs); auto* DatesLayout = new QVBoxLayout(DatesPage);
+        changeTime_ = new QCheckBox(tr("수정 시각 변경"), this); changeTime_->setObjectName("hc.attributes.changeTime"); DatesLayout->addWidget(changeTime_);
         auto* Time = new QHBoxLayout; timestamp_ = new QDateTimeEdit(QDateTime::currentDateTime(), this); timestamp_->setCalendarPopup(true);
         timestamp_->setDisplayFormat("yyyy-MM-dd HH:mm:ss"); timestamp_->setAccessibleName(tr("수정 시각"));
-        now_ = new QPushButton(tr("현재 시각"), this); now_->setAutoDefault(false); Time->addWidget(timestamp_, 1); Time->addWidget(now_); BodyLayout()->addLayout(Time);
-        BodyLayout()->addWidget(new QLabel(tr("시간대: %1 · 생성·접근 시각 유지").arg(QString::fromUtf8(QTimeZone::systemTimeZoneId())), this));
+        now_ = new QPushButton(tr("현재 시각"), this); now_->setAutoDefault(false); Time->addWidget(timestamp_, 1); Time->addWidget(now_); DatesLayout->addLayout(Time);
+        auto* TimeNote = new QLabel(tr("시간대: %1 · 생성·접근 시각 유지").arg(QString::fromUtf8(QTimeZone::systemTimeZoneId())), this);
+        TimeNote->setWordWrap(true); DatesLayout->addWidget(TimeNote); DatesLayout->addStretch(); Tabs->addTab(DatesPage,tr("날짜·시간"));
         summary_ = new QLabel(this); summary_->setWordWrap(true); summary_->setTextFormat(Qt::PlainText); summary_->setObjectName("hc.attributes.summary"); BodyLayout()->addWidget(summary_);
         retry_ = new QPushButton(tr("실패 항목만 다시 확인"), this); retry_->setAutoDefault(false); retry_->hide(); BodyLayout()->addWidget(retry_);
         connect(retry_, &QPushButton::clicked, this, [this] {
@@ -63,7 +69,9 @@ namespace hc::ui
         connect(recursive_, &QCheckBox::toggled, this, [this] { if (!busy_) { ready_ = false; result_ = false; update(); } });
         connect(watcher_, &QFutureWatcher<void>::finished, this, [this] { complete(); });
         connect(timer_, &QTimer::timeout, this, [this] { poll(); }); timer_->start(100);
-        collect();
+        EnableCompactLayout(720);
+        connect(showDetails_, &QPushButton::toggled, this, [this] { FitToContents(); });
+        collect(); FitToContents();
     }
     FileAttributesDialog::~FileAttributesDialog() { state_->stop_.request_stop(); }
     void FileAttributesDialog::updateTargetSummary(const std::vector<storage::EntrySnapshot>& Entries)

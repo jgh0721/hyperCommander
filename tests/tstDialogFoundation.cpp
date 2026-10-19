@@ -1,4 +1,5 @@
-﻿#include "HyperCommander/UIs/dialogShell.hpp"
+﻿#include "stdafx.h"
+#include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/settingsDraft.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
@@ -21,6 +22,11 @@
 #include <QRadioButton>
 #include <QLockFile>
 #include <QTemporaryDir>
+#include <QTabWidget>
+#include <QTimer>
+#include <QSpinBox>
+#include <QScrollArea>
+#include <QLabel>
 
 class DialogFoundationTests : public QObject
 {
@@ -286,6 +292,59 @@ private slots:
             QVERIFY(Dialog.AcceptButton()->isEnabled());
             QCOMPARE(QDir::fromNativeSeparators(Dialog.ResolvedTarget()), QString(Command).endsWith("copy") ? QString("D:/source") : QString("D:/other/child.txt"));
             QSignalSpy Completed(&Dialog, &QDialog::accepted); QTest::keyClick(Edit, Qt::Key_Return); QCOMPARE(Completed.count(), 1);
+        }
+    }
+    void compactOperationLayouts()
+    {
+        using namespace hc::ui;
+        const auto Original=qApp->font(); const auto Restore=qScopeGuard([&]{qApp->setFont(Original);});
+        auto& Theme=fm::style::ThemeManager::instance(); Theme.setDesign(fm::style::Design::Watercolor);
+        if(!Theme.isInstalled()) Theme.install(*qApp);
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        for(const bool Dark:{false,true}) for(const int Points:{11,18}) {
+            Theme.setScheme(Dark?fm::style::ThemeManager::Scheme::Dark:fm::style::ThemeManager::Scheme::Light);
+            auto Font=Original; Font.setPointSize(Points); qApp->setFont(Font);
+            for(const auto& Kind:{"copy","move","rename","delete"}) {
+                FileOperationDialogRequest Request; Request.command_="hc.file."+QString::fromLatin1(Kind); Request.source_=Root.path();
+                Request.names_={"sample.txt"}; Request.initialValue_=QString(Kind)=="rename"?QString("sample.txt"):Root.path();
+                Request.nativeSource_=Request.nativeDestination_=true;
+                FileOperationDialog Dialog(Request); Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+                auto* Scroll=Dialog.findChild<QScrollArea*>(); QVERIFY(Scroll);
+                QTest::qWait(100);
+                qInfo()<<Kind<<Dark<<Points<<Dialog.size()<<Scroll->size()<<Scroll->widget()->minimumSizeHint()<<Scroll->widget()->sizeHint();
+                const auto Artifacts=qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+                if(!Artifacts.isEmpty()) { QDir().mkpath(Artifacts); QVERIFY(Dialog.grab().save(QDir(Artifacts).filePath(QString("compact-%1-%2-%3.png").arg(Kind).arg(Dark).arg(Points)))); }
+                QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(),0);
+                for(auto* Button:{Dialog.AcceptButton(),Dialog.CancelButton()}) QVERIFY(Dialog.rect().contains(QRect(Button->mapTo(&Dialog,QPoint()),Button->size())));
+                if(QString(Kind)=="copy") {
+                    auto* Tabs=Dialog.findChild<QTabWidget*>("hc.operation.advancedTabs"); QVERIFY(Tabs && !Tabs->isVisible());
+                    auto* Toggle=Dialog.findChild<QPushButton*>("hc.operation.advanced"); QVERIFY(Toggle); Toggle->click(); QTRY_VERIFY(Tabs->isVisible());
+                    auto* Pattern=Dialog.findChild<QLineEdit*>("hc.operation.filter"); auto* Speed=Dialog.findChild<QSpinBox*>("hc.operation.speed");
+                    Pattern->setText("*.txt"); Speed->setValue(32); Dialog.findChild<QCheckBox*>("hc.operation.verify")->setChecked(true);
+                    auto* Summary=Dialog.findChild<QLabel*>("hc.operation.optionSummary"); QVERIFY(Summary);
+                    QVERIFY(Summary->text().contains("*.txt")&&Summary->text().contains("32 MiB/s")&&Summary->text().contains("SHA-256"));
+                    Toggle->click(); QTRY_VERIFY(!Tabs->isVisible());
+                    const auto Before=Dialog.IncludePattern(); Dialog.setMaximumHeight(Dialog.height()+10);
+                    bool Opened=false;
+                    QTimer::singleShot(0,&Dialog,[&] { if(auto* Editor=Dialog.findChild<QDialog*>("hc.operation.advancedDialog")) { Opened=true; Pattern->setText("*.bin"); Editor->reject(); } });
+                    Toggle->click(); QVERIFY(Opened); QCOMPARE(Dialog.IncludePattern(),Before);
+                }
+                Dialog.reject();
+            }
+            for(const bool NewFile:{false,true}) {
+                std::unique_ptr<DialogShell> Dialog;
+                if(NewFile) Dialog=std::make_unique<NewFileDialog>(Root.path(),true);
+                else Dialog=std::make_unique<ArchiveExtractDialog>(QStringList{"sample.zip","other.zip"},Root.path(),false);
+                Dialog->show(); QVERIFY(QTest::qWaitForWindowExposed(Dialog.get())); QTest::qWait(50);
+                auto* Scroll=Dialog->findChild<QScrollArea*>(); QVERIFY(Scroll); QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(),0);
+                if(NewFile) {
+                    auto* Type=Dialog->findChild<QComboBox*>("hc.newFile.type"); QVERIFY(Type); QCOMPARE(Type->count(),8); Type->setCurrentIndex(6);
+                    auto* Open=Dialog->findChild<QCheckBox*>("hc.newFile.open"); QVERIFY(Open); Open->setChecked(true); QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(),0);
+                }
+                const auto Artifacts=qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+                if(!Artifacts.isEmpty()) QVERIFY(Dialog->grab().save(QDir(Artifacts).filePath(QString("compact-%1-%2-%3.png").arg(NewFile?"new-file":"extract").arg(Dark).arg(Points))));
+                Dialog->reject();
+            }
         }
     }
     void operationValidation()

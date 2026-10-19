@@ -1,4 +1,5 @@
-﻿#include "fileToolsDialogs.hpp"
+﻿#include "stdafx.h"
+#include "fileToolsDialogs.hpp"
 #include "permissionDialogs.hpp"
 #include <fmwidgets/WrapLayout.h>
 #include <QtConcurrent>
@@ -7,6 +8,7 @@
 #include <fmwidgets/DialogWidgets.h>
 #include <fmwidgets/RenameComparisonView.h>
 #include <fmwidgets/SegmentedControl.h>
+#include <QShortcut>
 #include "UniqueLibs/settings/appSettings.hpp"
 
 namespace hc::ui {
@@ -25,15 +27,16 @@ NewFileDialog::NewFileDialog(const QString& Folder, bool Supported, QWidget* Par
     setObjectName("hc.newFile"); resize(680, 520); SetSummary(QDir::toNativeSeparators(Folder));
     RestoreToolGeometry(this, "newFileGeometry");
     controls_ = new QWidget(this); auto* Layout = new QVBoxLayout(controls_); Layout->setContentsMargins(0,0,0,0); BodyLayout()->addWidget(controls_);
-    auto* Form = new QFormLayout; Layout->addLayout(Form); name_ = new QLineEdit(tr("새 파일"), this); name_->setObjectName("hc.newFile.name"); Form->addRow(tr("파일 이름(&N)"), name_);
-    auto* Grid = new QGridLayout; Layout->addLayout(Grid); const auto Templates = filetools::Templates();
+    auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Layout->addLayout(Form);
+    name_ = new QLineEdit(tr("새 파일"), this); name_->setObjectName("hc.newFile.name");
+    auto* Type = new QComboBox(controls_); Type->setObjectName("hc.newFile.type"); Type->setAccessibleName(tr("파일 형식"));
+    Form->addRow(tr("파일 형식(&T)"), Type); Form->addRow(tr("파일 이름(&N)"), name_);
+    const auto Templates = filetools::Templates();
     for (int I = 0; I < Templates.size(); ++I) {
-        auto* Card = new fm::ui::ChoiceCard(Templates[I].label_, controls_); Card->setObjectName("hc.newFile.template." + QString::number(I));
-        Card->setDetail(!Templates[I].fixedName_.isEmpty() ? Templates[I].fixedName_ : Templates[I].extension_.isEmpty() ? tr("확장자 없음") : '.' + Templates[I].extension_);
-        Card->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
-        Card->setKeyHint(QString::number(I+1)); Card->setShortcut(QKeySequence("Alt+" + QString::number(I+1))); Grid->addWidget(Card, I/2, I%2);
-        if (I == 0) Card->setChecked(true);
-        connect(Card, &QRadioButton::clicked, this, [this, I] { type_ = I; name_->setText(filetools::TemplateName(name_->text(), I)); validate(); });
+        const auto Detail = !Templates[I].fixedName_.isEmpty() ? Templates[I].fixedName_ : Templates[I].extension_.isEmpty() ? tr("확장자 없음") : '.' + Templates[I].extension_;
+        Type->addItem(Templates[I].label_ + " · " + Detail);
+        auto* Shortcut = new QShortcut(QKeySequence("Alt+" + QString::number(I+1)), controls_);
+        Shortcut->setAutoRepeat(false); connect(Shortcut, &QShortcut::activated, this, [Type,I] { Type->setCurrentIndex(I); });
     }
     open_ = new QCheckBox(tr("만든 후 텍스트 편집기로 열기(&O)"), controls_); open_->setObjectName("hc.newFile.open"); Layout->addWidget(open_);
     editor_ = new QComboBox(controls_); editor_->setObjectName("hc.newFile.editor");
@@ -41,15 +44,20 @@ NewFileDialog::NewFileDialog(const QString& Folder, bool Supported, QWidget* Par
     for (const auto& Value : hc::document::EditorItems(settings::AppSettings().Read(settings::Section::Editors))) {
         const auto Record = Value.toObject(); if (!Record["program"].toString().isEmpty()) editor_->addItem(Record["name"].toString(Record["program"].toString()), Record);
     }
-    auto* EditorForm = new QFormLayout; Layout->addLayout(EditorForm); EditorForm->addRow(tr("텍스트 편집기"), editor_); editor_->setEnabled(false);
+    auto* EditorRow = new QWidget(controls_); auto* EditorForm = new QFormLayout(EditorRow); EditorForm->setContentsMargins(0,0,0,0);
+    EditorForm->setRowWrapPolicy(QFormLayout::WrapLongRows); Layout->addWidget(EditorRow); EditorForm->addRow(tr("텍스트 편집기"), editor_); EditorRow->hide(); editor_->setEnabled(false);
     editor_->setToolTip(tr("설정의 편집기 목록을 사용합니다. 인자의 %FILE%를 생성된 파일 경로로 바꾸며, 토큰이 없으면 마지막 인자로 추가합니다."));
     connect(open_, &QCheckBox::toggled, editor_, &QComboBox::setEnabled);
+    connect(open_, &QCheckBox::toggled, this, [this,EditorRow](bool Checked) { EditorRow->setVisible(Checked); FitToContents(); });
     bom_ = new QCheckBox(tr("UTF-8 BOM 포함(&U)"), controls_); bom_->setObjectName("hc.newFile.bom"); Layout->addWidget(bom_);
     auto* Note = new QLabel(tr("기존 파일은 덮어쓰지 않습니다. 빈 파일은 항상 0바이트로 만듭니다."), controls_); Note->setWordWrap(true); Layout->addWidget(Note);
-    AcceptButton()->setText(tr("만들기(&S)")); connect(name_, &QLineEdit::textChanged, this, [this] { validate(); }); validate(); SetInitialInput(name_); name_->selectAll();
+    connect(Type, &QComboBox::currentIndexChanged, this, [this](int Index) { type_=Index; name_->setText(filetools::TemplateName(name_->text(), Index)); validate(); FitToContents(); });
+    Layout->addStretch(); EnableCompactLayout(680);
+    AcceptButton()->setText(tr("만들기(&S)")); connect(name_, &QLineEdit::textChanged, this, [this] { validate(); }); validate(); SetInitialInput(name_); name_->selectAll(); FitToContents();
 }
 void NewFileDialog::validate() {
     bom_->setEnabled(type_ != 0);
+    bom_->setVisible(type_ != 0);
     const auto Error = supported_ ? filetools::NameError(name_->text()) : tr("이 위치의 새 파일 생성을 지원하지 않습니다. 압축 컨테이너의 파일 추가는 별도 구현이 필요합니다.");
     SetMessage(Error, !Error.isEmpty()); SetAcceptEnabled(!busy_ && Error.isEmpty());
 }

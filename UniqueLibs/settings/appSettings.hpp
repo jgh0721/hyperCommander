@@ -328,7 +328,7 @@ protected:
         if (Copy.contains("folderSizeMode") && !QStringList{"manual", "local", "all", "everything"}.contains(Copy["folderSizeMode"].toString())) {
             Copy["folderSizeMode"] = "everything"; Report("options.folderSizeMode");
         }
-        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
+        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "showJobDetails", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
             Copy[Key] = QString(Key) == "copyMetadata" || QString(Key) == "jobCloseOnSuccess" || QString(Key) == "delayedFileWrites" || QString(Key) == "renameInDialog" || QString(Key) == "renameOnSlowClick"; Report(QString("options.") + Key);
         }
         if (Copy.contains("copyPattern")) {

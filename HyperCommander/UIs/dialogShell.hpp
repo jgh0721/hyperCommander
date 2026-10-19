@@ -9,6 +9,9 @@
 #include <stop_token>
 class QTimer;
 class QRadioButton;
+class QScrollArea;
+class QTabWidget;
+class QPushButton;
 
 class QVBoxLayout;
 class QLabel;
@@ -35,11 +38,14 @@ public:
     void SetMessage(const QString& Text, bool Error = false);
     void SetAcceptEnabled(bool Enabled);
     void SetInitialInput(QLineEdit* Input);
+    void EnableCompactLayout(int Width = 720);
+    void FitToContents();
 
 protected:
     void accept() override;
     void showEvent(QShowEvent* Event) override;
     bool eventFilter(QObject* Watched, QEvent* Event) override;
+    void ResetBody();
 
 private:
     fm::ui::DialogHeader* header_ = nullptr;
@@ -48,6 +54,11 @@ private:
     fm::ui::Button* accept_ = nullptr;
     fm::ui::Button* cancel_ = nullptr;
     QPointer<QLineEdit> initialInput_;
+    QScrollArea* bodyScroll_ = nullptr;
+    QWidget* body_ = nullptr;
+    QWidget* headerContainer_ = nullptr;
+    QWidget* footer_ = nullptr;
+    bool compact_ = false;
 };
 
 // Context remains in the command adapter: this value cannot execute file operations.
@@ -125,6 +136,9 @@ private:
     void validateInput();
     void probeTarget();
     void summarizeSource();
+    void arrangeCompactOperation();
+    void updateOptionSummary();
+    void toggleAdvancedOptions();
     QCheckBox* metadata_ = nullptr;
     QCheckBox* verify_ = nullptr;
     QCheckBox* acl_ = nullptr;
@@ -149,5 +163,9 @@ private:
     QLabel* preview_ = nullptr;
     QComboBox* conflict_ = nullptr;
     QCheckBox* extension_ = nullptr;
+    QWidget* advanced_ = nullptr;
+    QTabWidget* advancedTabs_ = nullptr;
+    QPushButton* advancedToggle_ = nullptr;
+    QLabel* optionSummary_ = nullptr;
 };
 } // namespace hc::ui
