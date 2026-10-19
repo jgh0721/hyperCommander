@@ -353,14 +353,22 @@ void isolatedImageSiblingKeyboardNavigation(){
     auto* Surface=Window->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
     const auto Pid=Surface->Details().host_.processId_;
     QVERIFY(Wait([&]{DWORD ForegroundPid=0;GetWindowThreadProcessId(GetForegroundWindow(),&ForegroundPid);return ForegroundPid==Pid;}));
+    const auto Viewer=GetForegroundWindow();
     const auto Current=[&]{const auto State=Surface->Details().documentState_;return Doc(State,State["activeDocumentId"].toString());};
+    const auto Id=Current()["documentId"].toString();
     QCOMPARE(Current()["path"].toString(),Private+"/2.png");
+    QVERIFY(!Current()["sourceToken"].toString().isEmpty());
     const auto Press=[&](WORD Key){INPUT Keys[2]{};Keys[0].type=Keys[1].type=INPUT_KEYBOARD;Keys[0].ki.wVk=Keys[1].ki.wVk=Key;Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;return SendInput(2,Keys,sizeof(INPUT));};
     QCOMPARE(Press(VK_SPACE),UINT(2));
     QVERIFY(Wait([&]{return Current()["path"].toString()==Root.filePath("3.png")&&Current()["lifecycle"]=="ready";},20000));
+    QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);QCOMPARE(Current()["documentId"].toString(),Id);
+    QVERIFY(Current()["sourceToken"].toString().isEmpty());
     QCOMPARE(Press(VK_BACK),UINT(2));
     QVERIFY(Wait([&]{return Current()["path"].toString()==Root.filePath("2.png")&&Current()["lifecycle"]=="ready";},20000));
+    QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);QCOMPARE(Current()["documentId"].toString(),Id);
     QVERIFY(!Current()["dirty"].toBool());
+    QVERIFY(PostMessageW(Viewer,WM_CLOSE,0,0));
+    QVERIFY(Wait([&]{return !IsWindow(Viewer)||!IsWindowVisible(Viewer);},20000));
 }
 void f3WindowStaysRestoredAfterLoadingDialogHides(){
     QTemporaryDir Root;const auto Path=Root.filePath("visible.txt");QVERIFY(Put(Path,"visible"));

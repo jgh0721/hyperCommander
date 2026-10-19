@@ -65,6 +65,7 @@ namespace hc::document
             const QString& RecoveryPath = {}, const QString& DisplayName = {});
         void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false);
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});
+        void navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path);
         void retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery = false);
         void cleanupRecovery(const std::shared_ptr<Tab>& Tab, std::uint64_t ThroughRevision);
         QWidget* currentPane() const;
@@ -89,6 +90,7 @@ namespace hc::document
         std::function<int(const QString&)> closePrompt_;
         QString shellError_;
         bool closingWorkspace_ = false;
+        bool pendingActionsScheduled_ = false;
         bool closeViewerOnEscape_ = true, viewerCloseRequested_ = false;
         QShortcut* viewerEscape_ = nullptr;
         int recoveryWorkers_ = 0;

@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QScopeGuard>
 #include <QLineEdit>
+#include <QMessageBox>
 #include "pluginHost/imageArchiveBroker.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "image/QImageView.h"
@@ -581,7 +582,7 @@ class ImageReadingTests : public QObject
             QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/3.png"));
             QTest::keyClick(Image, Qt::Key_Backspace);
             QCOMPARE(Open.size(), 2);
-            QCOMPARE(Open.last().at(0).toString(), Original);
+            QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/1.png"));
             QTest::keyClick(Image, Qt::Key_Backspace, Qt::ControlModifier);
             QCOMPARE(Open.size(), 2);
             QLineEdit Field(Image); Field.show(); Field.setFocus();
@@ -616,13 +617,95 @@ class ImageReadingTests : public QObject
         };
         W.Handle({{"action", "open"}, {"path", Root.filePath("images/2.png")}});
         QTRY_VERIFY_WITH_TIMEOUT(Current()["lifecycle"] == "ready", 20000);
+        const auto Id = Current()["documentId"].toString();
         auto* Pane = W.findChild<DocumentViewPane*>(); QVERIFY(Pane); Pane->Focus();
         QTest::keyClick(Pane->InputWidget(), Qt::Key_Space);
         QTRY_COMPARE_WITH_TIMEOUT(Current()["path"].toString(), Root.filePath("images/3.png"), 20000);
         QTRY_VERIFY_WITH_TIMEOUT(Current()["lifecycle"] == "ready", 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Current()["loading"].toBool(), 20000);
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(), 1);
+        QCOMPARE(Current()["documentId"].toString(), Id);
         auto* Image = qobject_cast<QImageView*>(QApplication::focusWidget()); QVERIFY(Image);
         QTest::keyClick(Image, Qt::Key_Backspace);
         QTRY_COMPARE_WITH_TIMEOUT(Current()["path"].toString(), Root.filePath("images/2.png"), 20000);
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(), 1);
+        QCOMPARE(Current()["documentId"].toString(), Id);
+    }
+    void navigationKeepsDirtyImageOnCancelOrDecodeFailure()
+    {
+        QTemporaryDir Root; Fixture(Root.path(), 3);
+        DocumentWorkspaceWidget W(Root.filePath("recovery")); W.resize(800,600); W.show(); W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));
+        W.Handle({{"action","open"},{"path",Root.filePath("2.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+        const auto Id=Document(W)["documentId"].toString();
+        W.Handle({{"action","image.rotate"},{"angle",90},{"documentId",Id}});
+        QVERIFY(Document(W)["dirty"].toBool());
+        auto* Pane=W.findChild<DocumentViewPane*>();QVERIFY(Pane);Pane->Focus();
+        W.SetClosePrompt([](const QString&){return int(QMessageBox::Cancel);});
+        QTest::keyClick(Pane->InputWidget(),Qt::Key_Space);
+        QCOMPARE(Document(W)["path"].toString(),Root.filePath("2.png"));QVERIFY(Document(W)["dirty"].toBool());
+        QFile Broken(Root.filePath("3.png"));QVERIFY(Broken.open(QIODevice::WriteOnly|QIODevice::Truncate));Broken.write("broken");Broken.close();
+        W.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+        QTest::keyClick(Pane->InputWidget(),Qt::Key_Space);
+        QTRY_VERIFY_WITH_TIMEOUT(!Document(W)["loading"].toBool(),20000);
+        QVERIFY(!Document(W)["error"].toString().isEmpty());
+        QCOMPARE(Document(W)["path"].toString(),Root.filePath("2.png"));QVERIFY(Document(W)["dirty"].toBool());
+        QCOMPARE(Pane->findChild<QImageView*>()->Content().size(),QSize(120,80));
+        QVERIFY(Picture(Qt::blue).save(Root.filePath("3.png")));
+        W.SetClosePrompt([](const QString&){return int(QMessageBox::Save);});
+        QTest::keyClick(Pane->InputWidget(),Qt::Key_Space);
+        QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("3.png"),20000);
+        QCOMPARE(Document(W)["documentId"].toString(),Id);QVERIFY(!Document(W)["dirty"].toBool());
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(),1);
+        QCOMPARE(QImage(Root.filePath("2.png")).size(),QSize(120,80));
+        QCOMPARE(QImage(Root.filePath("3.png")).size(),QSize(80,120));
+    }
+    void tabAndWindowCloseDuringImageRendering()
+    {
+        QTemporaryDir Root; Fixture(Root.path(),1);
+        for(const bool CloseWindow:{false,true}){
+            DocumentWorkspaceWidget W(Root.filePath("recovery"),true);W.resize(800,600);W.show();
+            W.Handle({{"action","open"},{"path",Root.filePath("1.png")}});
+            QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+            auto* Image=W.findChild<QImageView*>();QVERIFY(Image);
+            Image->SetDisplayFilter("spline64");QVERIFY(Image->IsRendering());
+            if(CloseWindow){W.RequestViewerClose();QTRY_VERIFY_WITH_TIMEOUT(W.Snapshot()["closeRequested"].toBool(),20000);}
+            else{auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);}
+            QCOMPARE(W.Snapshot()["documents"].toArray().size(),0);
+            QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+        }
+    }
+    void tabCloseDuringPendingEditWaitsForSaveChoice()
+    {
+        QTemporaryDir Root; Fixture(Root.path(),1);
+        DocumentWorkspaceWidget W(Root.filePath("recovery"));W.resize(800,600);W.show();
+        W.Handle({{"action","open"},{"path",Root.filePath("1.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+        auto* Image=W.findChild<QImageView*>();QVERIFY(Image);
+        QVERIFY(Image->ApplyResize(QSize(200,300),"spline16"));QVERIFY(Image->IsEditing());
+        int Prompts=0;W.SetClosePrompt([&](const QString&){++Prompts;return int(QMessageBox::Cancel);});
+        auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(),1);
+        QTRY_COMPARE_WITH_TIMEOUT(Prompts,1,20000);
+        QVERIFY(Document(W)["dirty"].toBool());
+        QTest::qWait(50);QCOMPARE(Prompts,1);
+        W.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});emit Tabs->tabCloseRequested(0);
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(),0);
+    }
+    void tabCloseDuringSaveCompletesTheWrite()
+    {
+        QTemporaryDir Root; Fixture(Root.path(),1);
+        DocumentWorkspaceWidget W(Root.filePath("recovery"));W.resize(800,600);W.show();
+        W.Handle({{"action","open"},{"path",Root.filePath("1.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+        const auto Id=Document(W)["documentId"].toString();
+        W.Handle({{"action","image.rotate"},{"angle",90},{"documentId",Id}});
+        W.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Document(W)["saving"].toBool());
+        auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);
+        QCOMPARE(W.Snapshot()["documents"].toArray().size(),1);
+        QTRY_COMPARE_WITH_TIMEOUT(W.Snapshot()["documents"].toArray().size(),0,20000);
+        QCOMPARE(QImage(Root.filePath("1.png")).size(),QSize(120,80));
     }
     void readingBackspaceMovesToPreviousPage()
     {

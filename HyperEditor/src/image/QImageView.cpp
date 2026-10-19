@@ -543,12 +543,12 @@ void QImageView::startSlideshow(int ms)
 void QImageView::stopSlideshow()         { m_slideshowTimer->stop(); emit slideshowStateChanged(false); }
 void QImageView::nextImage()
 {
-    if (!m_dirFiles.isEmpty()) { m_dirIndex=(m_dirIndex+1)%m_dirFiles.size(); emit OpenRequested(m_dirFiles[m_dirIndex]); }
+    if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex+1)%m_dirFiles.size()]);
 }
 
 void QImageView::previousImage()
 {
-    if (!m_dirFiles.isEmpty()) { m_dirIndex=(m_dirIndex-1+m_dirFiles.size())%m_dirFiles.size(); emit OpenRequested(m_dirFiles[m_dirIndex]); }
+    if (!m_dirFiles.isEmpty()) emit OpenRequested(m_dirFiles[(m_dirIndex-1+m_dirFiles.size())%m_dirFiles.size()]);
 }
 QSize QImageView::originalImageSize() const { return m_originalImage.size(); }
 int  QImageView::imageIndexInDirectory() const { return m_dirIndex; }
@@ -1452,7 +1452,7 @@ bool QImageView::startImageEdit(hc::document::ImageRenderRequest Request,const Q
     const auto Revision=contentRevision_;const auto Before=m_displayImage;auto* Watcher=new QFutureWatcher<hc::document::ImageRenderResult>(this);
     connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Revision,Before,Label]{
         const auto Result=Watcher->result();Watcher->deleteLater();pendingEdit_=false;setEnabled(true);
-        if(Revision!=contentRevision_)return;
+        if(Revision!=contentRevision_){emit viewStateChanged();return;}
         if(!Result.error_.isEmpty()){renderError_=Result.error_;emit viewStateChanged();return;}
         m_displayImage=Label=="Composite"?Before:Result.image_;
         if(Label=="Composite"){QPainter Painter(&m_displayImage);Painter.drawImage(0,0,Result.image_);}
