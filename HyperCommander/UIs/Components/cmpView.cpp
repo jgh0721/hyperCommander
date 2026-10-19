@@ -113,11 +113,11 @@ public:
         QFont Font = Cell.data(Qt::FontRole).value<QFont>();
         if (Font.family().isEmpty()) Font = Option.font;
         const bool Name = Cell.column() == 0;
-        if (!Name) Font = fm::style::pixelFont(Font, std::max(8, Appearance.fontPx - 1));
+        if (!Name) Font = fm::style::pixelFont(Font, std::max(8, Appearance.fontPx - 1), Font.weight());
         if (Text.bold && Name) Font.setBold(true);
         QColor Foreground = Name ? Text.name : Text.meta;
         if (Cell.siblingAtColumn(0).data(CFSModel::FileColorOverrideRole).toBool() &&
-            !State.marked && !invertedCursor(Appearance, State) && Name)
+            !State.marked && !invertedCursor(Appearance, State))
             Foreground = Cell.data(Qt::ForegroundRole).value<QColor>();
         auto Rect = Option.rect.adjusted(8 + Geometry.sideMargin, 0, -8 - Geometry.sideMargin, 0);
         Painter->save(); Painter->setFont(Font); Painter->setPen(Foreground);

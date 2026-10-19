@@ -67,6 +67,7 @@
 #include "qtViewerSurface.hpp"
 #include <QPdfWriter>
 #include <QPainter>
+#include <QtnGridEditors.h>
 #include <fpdfview.h>
 #include <fpdf_edit.h>
 #include "qtViewerHost.hpp"
@@ -6699,6 +6700,64 @@ private slots:
         QCOMPARE(Saved["schemes"].toObject()["user-custom"].toObject()["futureMetadata"].toString(), QString("preserve"));
         Dialog.findChild<QSpinBox*>("hc.settings.listFontSize")->setValue(17); Dialog.reject();
         QCOMPARE(Colors->GetColorScheme("user-custom").FileList_Font.pointSize(), 15);
+    }
+
+    void todoBugFileStylesAllColumns()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); Settings.Commit(); emit Colors->sigColorSchemeChanged(OriginalScheme); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("row-style.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("all columns"); File.close();
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading() && names(model(Panel)).contains("row-style.txt"));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(View->ApplyColumnProfile(hc::columns::ReferenceProfile()));
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        const auto Paint = [&](const QModelIndex& Index) {
+            auto* Column = static_cast<Qtitan::GridTableColumn*>(View->BaseView()->getColumnByModelColumn(Index.column()));
+            auto* Repository = static_cast<Qtitan::GridDelegateAdapterEditorRepository*>(Column->editorRepository());
+            QImage Image(420, 64, QImage::Format_ARGB32_Premultiplied); Image.fill(Qt::transparent);
+            QPainter Painter(&Image); QStyleOptionViewItem Option; Option.rect = Image.rect(); Option.font = View->font();
+            const auto Cell = View->BaseView()->getRow(Index.row()).modelIndex(Index.column());
+            Repository->getDelegate()->paint(&Painter, Option, Cell); Painter.end(); return Image;
+        };
+        const auto HasColor = [](const QImage& Image, const QColor& Color) {
+            for (int Y = 0; Y < Image.height(); ++Y) for (int X = 0; X < Image.width(); ++X) {
+                const auto Pixel = Image.pixelColor(X, Y);
+                if (Pixel.alpha() > 200 && qAbs(Pixel.red() - Color.red()) < 12 && qAbs(Pixel.green() - Color.green()) < 12 && qAbs(Pixel.blue() - Color.blue()) < 12) return true;
+            }
+            return false;
+        };
+        for (const bool Dark : {false, true}) for (const auto* Mode : {"one-line", "two-line"}) {
+            const auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+            const QColor Foreground(Dark ? "#48ed73" : "#9434b0");
+            QVERIFY(View->SetListMode(Mode)); View->RestoreSelection({}, {}); View->BaseView()->setFocusedRowIndex(0);
+            QVector<QImage> Plain;
+            for (const bool Bold : {false, true}) {
+                auto Rules = FileColorRules::Empty(); Rules["groups"] = QJsonArray{QJsonObject{{"id", "row-style"}, {"name", "행 스타일"}, {"enabled", true}, {"join", "any"},
+                    {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
+                    {"light", QJsonObject{{"foreground", "#9434b0"}}}, {"dark", QJsonObject{{"foreground", "#48ed73"}}}, {"font", QJsonObject{{"bold", Bold}}}}};
+                auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+                emit Colors->sigColorSchemeChanged(Scheme); QTest::qWait(100);
+                int Row = -1; for (int I = 0; I < Model->rowCount(); ++I) if (Model->GetName(Model->index(I, 0)) == "row-style.txt") Row = I;
+                QVERIFY(Row >= 0); QVERIFY(Model->columnCount() >= 5);
+                for (int Column = 0; Column < Model->columnCount(); ++Column) {
+                    const auto Index = Model->index(Row, Column); QVERIFY(!Index.data().toString().isEmpty());
+                    QCOMPARE(Index.data(Qt::ForegroundRole).value<QColor>(), Foreground); QCOMPARE(Index.data(Qt::FontRole).value<QFont>().bold(), Bold);
+                    const auto Image = Paint(Index); QVERIFY2(HasColor(Image, Foreground), qPrintable(QString("Rule color missing in column %1 (%2)").arg(Column).arg(Index.data().toString())));
+                    if (Bold) { if (Column > 0) QVERIFY2(Image != Plain[Column], qPrintable(QString("Bold has no visual effect in column %1").arg(Column))); } else Plain.append(Image);
+                }
+                if (Bold) {
+                    const auto Key = hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_);
+                    View->RestoreSelection({Key}, Key);
+                    for (int Column = 0; Column < Model->columnCount(); ++Column) QVERIFY(!HasColor(Paint(Model->index(Row, Column)), Foreground));
+                    View->RestoreSelection({}, {});
+                }
+            }
+            const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (!Out.isEmpty()) QVERIFY(main_->grab().save(QDir(Out).filePath(QString("all-columns-%1-%2.png").arg(Dark ? "dark" : "light", Mode))));
+        }
     }
 
     void fileColorSettingsUi()
