@@ -11,12 +11,14 @@
 #include <QScrollBar>
 #include <QToolBar>
 #include <QMenu>
+#include <QMenuBar>
 #include <QStyleOptionSlider>
 #include <fmstyle/ThemeManager.h>
 #include <fmstyle/WatercolorStyle.h>
 #include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
 #include "core/ExternalChangeWatcher.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include <QWindow>
 #include <QScreen>
 #include "text/ITextEditorBackend.h"
@@ -84,6 +86,15 @@ private slots:
             const auto Slider = Bar->style()->subControlRect(QStyle::CC_ScrollBar, &Option, QStyle::SC_ScrollBarSlider, Bar);
             QVERIFY(Bar->rect().contains(Slider)); QVERIFY(Slider.width() > 5 && Slider.height() > 5);
         }
+        auto* MainMenu = Window.findChild<QMenuBar*>("mainMenu"); QVERIFY(MainMenu);
+        for (auto* Menu : MainMenu->findChildren<QMenu*>()) {
+            if (Menu->title().isEmpty()) continue; // QMenuBar's internal overflow popup contains top-level menu titles.
+            for (auto* Action : Menu->actions()) {
+                if (Action->isSeparator() || (Action->isCheckable() && Action->icon().isNull())) continue;
+                QVERIFY2(!Action->icon().isNull(), qPrintable(Menu->title() + ": " + Action->text()));
+                QVERIFY2(Action->isIconVisibleInMenu(), qPrintable(Action->text()));
+            }
+        }
         QVERIFY(!Area->testAttribute(Qt::WA_OpaquePaintEvent));
         QVERIFY(!Area->testAttribute(Qt::WA_NoSystemBackground));
         QVERIFY(Area->viewport()->testAttribute(Qt::WA_OpaquePaintEvent));
@@ -91,7 +102,85 @@ private slots:
         QTest::qWait(100); const auto Scrolled = Area->grab().toImage();
         Area->viewport()->repaint(); QCOMPARE(Area->grab().toImage(), Scrolled);
         const auto Capture = qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");
-        if (!Capture.isEmpty()) { QDir().mkpath(Capture); QVERIFY(Window.grab().save(Capture + "/scroll-" + (hosted ? "viewer-" : "editor-") + mode + ".png")); }
+        if (!Capture.isEmpty()) {
+            QDir().mkpath(Capture); const auto Prefix = (hosted ? QString("viewer-") : QString("editor-")) + mode;
+            QVERIFY(Window.grab().save(Capture + "/scroll-" + Prefix + ".png"));
+            int MenuIndex = 0;
+            for (auto* Top : MainMenu->actions()) if (auto* Menu = Top->menu()) {
+                Menu->ensurePolished(); Menu->adjustSize();
+                QVERIFY(Menu->grab().save(Capture + "/menu-" + Prefix + '-' + QString::number(MenuIndex++) + ".png"));
+            }
+        }
+    }
+    void textThemeSwitchPreservesAllStyles_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::newRow("viewer") << true;
+        QTest::newRow("editor") << false;
+    }
+    void textThemeSwitchPreservesAllStyles()
+    {
+        QFETCH(bool, Hosted);
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        auto& Theme = fm::style::ThemeManager::instance(); const auto OldScheme = Theme.scheme();
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(OldScheme); qApp->setProperty("documentViewsConfigDir", Previous); });
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"), Hosted);
+        Window.resize(900, 600); Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        QList<QTextView*> Views;
+        for (int Index = 0; Index < 2; ++Index) {
+            const auto Path = Temp.filePath(QString("theme-%1.cpp").arg(Index));
+            Write(Path, "// Theme transition\nint main() {\n    return 42;\n}\n");
+            QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error"));
+            QTRY_VERIFY(Window.IsIdle());
+        }
+        Views = Window.findChildren<QTextView*>(); QCOMPARE(Views.size(), 2);
+        const auto SciColor = [](QColor Color) { return Color.red() | (Color.green() << 8) | (Color.blue() << 16); };
+        for (const auto& Mode : {QString("light"), QString("dark"), QString("light"), QString("dark")}) {
+            QVERIFY(Window.ApplyChromeSettings({{"schemaVersion", 1}, {"themeMode", Mode}}));
+            for (auto* Text : Views) {
+                const auto Original = Text->Content();
+                const auto Check = [&] {
+                    auto* Backend = static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+                    QCOMPARE(Text->currentTheme(), Mode == "dark" ? QBaseView::Dark : QBaseView::Light);
+                    const auto& Colors = ThemeManager::instance();
+                    const auto ExpectedPalette = Theme.colors().toPalette();
+                    QCOMPARE(Text->palette().color(QPalette::Window), ExpectedPalette.color(QPalette::Window));
+                    auto* Ruler = Text->findChild<QWidget*>("columnRuler"); QVERIFY(Ruler);
+                    QCOMPARE(Ruler->palette().color(QPalette::Window), ExpectedPalette.color(QPalette::Window));
+                    auto* Search = Text->findChild<FindReplaceWidget*>(); QVERIFY(Search);
+                    QCOMPARE(Search->palette().color(QPalette::Text), ExpectedPalette.color(QPalette::Text));
+                    int TextIcons = 0;
+                    for (auto* Action : Search->findChildren<QAction*>()) {
+                        if (!Action->isCheckable() || Action->icon().isNull()) continue;
+                        const auto Image = Action->icon().pixmap(QSize(16, 16), QIcon::Normal, QIcon::Off).toImage();
+                        QColor Ink(Qt::transparent);
+                        for (int Y = 0; Y < Image.height(); ++Y) for (int X = 0; X < Image.width(); ++X)
+                            if (Image.pixelColor(X, Y).alpha() > Ink.alpha()) Ink = Image.pixelColor(X, Y);
+                        QVERIFY(Ink.alpha() > 0); QCOMPARE(Ink.rgb(), ExpectedPalette.color(QPalette::Text).rgb());
+                        ++TextIcons;
+                    }
+                    QCOMPARE(TextIcons, 2);
+                    QCOMPARE(Backend->Send(SCI_STYLEGETBACK, STYLE_DEFAULT), SciColor(Colors.color("text.background")));
+                    QCOMPARE(Backend->Send(SCI_STYLEGETBACK, STYLE_LINENUMBER), SciColor(Colors.color("text.marginBackground")));
+                    QCOMPARE(Backend->Send(SCI_STYLEGETFORE, STYLE_LINENUMBER), SciColor(Colors.color("text.marginForeground")));
+                    QCOMPARE(Backend->Send(SCI_STYLEGETFORE, STYLE_INDENTGUIDE), SciColor(Colors.color("text.indentGuide")));
+                    QCOMPARE(Backend->Send(SCI_STYLEGETFORE, 5), SciColor(Colors.color("text.lexer.keyword")));
+                    QCOMPARE(Backend->Send(SCI_GETCARETFORE), SciColor(Colors.color("text.caret")));
+                    QCOMPARE(Text->Content(), Original); QVERIFY(!Text->isModified());
+                };
+                Check(); if (QTest::currentTestFailed()) return;
+                // Preference reload and direct font changes both used to erase gutter/syntax colors.
+                Text->ReloadPreferences(); Check(); if (QTest::currentTestFailed()) return;
+                auto Font = Text->editorFont(); Font.setPointSize(13); Text->Backend()->setEditorFont(Font);
+                Check(); if (QTest::currentTestFailed()) return;
+            }
+            const auto Capture = qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");
+            if (!Capture.isEmpty()) {
+                QDir().mkpath(Capture); QTest::qWait(30);
+                QVERIFY(Window.grab().save(Capture + "/text-switch-" + (Hosted ? "viewer-" : "editor-") + Mode + ".png"));
+            }
+        }
     }
     void renderingSettingsApplyWithoutContentChanges()
     {

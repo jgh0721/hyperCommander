@@ -125,7 +125,7 @@ namespace hc::document
         }
         void RefreshWorkspaceIcons(QWidget& Workspace)
         {
-            ThemeManager::instance().setTheme(Workspace.palette().color(QPalette::Window).lightness() < 128
+            ThemeManager::instance().setTheme(fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant())
                 ? ThemeManager::Dark : ThemeManager::Light);
             static const QMap<QString, QString> Icons{
                 {"newDocument", "new-file"}, {"openDocument", "open"}, {"saveDocument", "save"},
@@ -135,14 +135,16 @@ namespace hc::document
                 {"undoDocument", "undo"}, {"redoDocument", "redo"}, {"documentPreferences", "toc-toggle"},
                 {"workspaceDisplayOptions", "view-preview"}, {"documentWatermark", "watermark"},
                 {"documentCaptureProtection", "capture-exclude"}, {"documentRecovery", "refresh"},
-                {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"},
+                {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"}, {"view.fullscreen", "fullscreen"},
+                {"edit.cut", "cut"}, {"edit.copy", "copy"}, {"edit.paste", "paste"}, {"edit.selectAll", "select-all"},
                 {"text.find", "search-next"}, {"text.findNext", "search-next"}, {"text.findPrev", "search-prev"},
                 {"text.replace", "replace"}, {"text.goToLine", "toc-toggle"}, {"text.wordWrap", "word-wrap"},
                 {"text.foldAll", "code-folding"}, {"text.unfoldAll", "code-folding"}};
             for (auto* Action : Workspace.findChildren<QAction*>()) {
-                const auto Icon = Icons.constFind(Action->objectName());
-                if (Icon == Icons.cend()) continue;
-                Action->setIcon(ToolbarIcons::iconByName(*Icon));
+                const auto NamedIcon = Action->property("documentIconName").toString();
+                const auto Icon = NamedIcon.isEmpty() ? Icons.value(Action->objectName()) : NamedIcon;
+                if (Icon.isEmpty()) continue;
+                Action->setIcon(ToolbarIcons::iconByName(Icon));
                 Action->setIconVisibleInMenu(true);
             }
         }
@@ -271,7 +273,7 @@ namespace hc::document
         }
         auto* ViewMenu = menu_->addMenu(tr("보기(&V)"));
         auto* Fullscreen=new ImageFullscreen(this,[this]()->ImageReadingView*{const auto Tab=active();return Tab?Tab->pane_->findChild<ImageReadingView*>():nullptr;},[this](int Direction){if(auto Tab=active())if(auto* Action=Tab->pane_->findChild<QAction*>(Direction>0?"image.next":"image.previous"))Action->trigger();});Fullscreen->setObjectName("imageFullscreen");
-        auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));connect(FullscreenAction,&QAction::triggered,Fullscreen,&ImageFullscreen::Toggle);
+        auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));FullscreenAction->setObjectName("view.fullscreen");connect(FullscreenAction,&QAction::triggered,Fullscreen,&ImageFullscreen::Toggle);
         auto* Preferences = ViewMenu->addAction(tr("설정(&P)…"));
         Preferences->setObjectName("documentPreferences"); Preferences->setShortcut(QKeySequence("Ctrl+,")); addAction(Preferences);
         connect(Preferences, &QAction::triggered, this, &DocumentWorkspaceWidget::showPreferences);
@@ -281,15 +283,19 @@ namespace hc::document
         setContextMenuPolicy(Qt::ActionsContextMenu); addAction(Options);
         for (const bool Menu : {true, false}) {
             auto* Modes = ViewMenu->addMenu(Menu ? tr("주 메뉴 표시") : tr("공통 도구모음 표시"));
+            Modes->menuAction()->setProperty("documentIconName", Menu ? "view-source" : "view-preview");
             for (const auto& Mode : {QString("recommended"), QString("show"), QString("hide")}) {
                 auto* Action = Modes->addAction(Mode == "recommended" ? tr("뷰 권장값") : Mode == "show" ? tr("표시") : tr("숨기기"));
+                Action->setProperty("documentIconName", Mode == "hide" ? "stop" : Mode == "show" ? "view-preview" : "refresh");
                 connect(Action, &QAction::triggered, this, [this, Menu, Mode] {
                     chrome_->SetGlobal(Menu, Mode); emit ChromeSettingsChanged(chrome_->Settings());
                 });
             }
             auto* Overrides = Modes->addMenu(tr("현재 뷰 설정"));
+            Overrides->menuAction()->setProperty("documentIconName", "toc-toggle");
             for (const auto& Mode : {QString("inherit"), QString("show"), QString("hide")}) {
                 auto* Action = Overrides->addAction(Mode == "inherit" ? tr("전역 설정 사용") : Mode == "show" ? tr("표시") : tr("숨기기"));
+                Action->setProperty("documentIconName", Mode == "hide" ? "stop" : Mode == "show" ? "view-preview" : "refresh");
                 connect(Action, &QAction::triggered, this, [this, Menu, Mode] {
                     const auto Tab = active(); if (!Tab) return;
                     chrome_->SetViewOverride(Tab->pane_->Contribution().viewId_, Menu, Mode); emit ChromeSettingsChanged(chrome_->Settings());
@@ -299,8 +305,10 @@ namespace hc::document
         auto* Watermark=ViewMenu->addAction(tr("워터마크"));Watermark->setObjectName("documentWatermark");connect(Watermark,&QAction::triggered,this,[this]{if(auto Tab=active()){if(!Tab->pane_->View())return;WatermarkDialog Dialog(Tab->pane_->View()->watermark(),this);if(Dialog.exec()==QDialog::Accepted)Tab->pane_->View()->setWatermark(Dialog.result());}});
         auto* Protection=ViewMenu->addAction(tr("화면 캡처 보호"));Protection->setCheckable(true);connect(Protection,&QAction::toggled,this,[this](bool Enabled){if(auto Tab=active()){auto Reply=Tab->pane_->Execute({{"action","captureProtection"},{"enabled",Enabled}});if(Reply.contains("error"))ShowShellError(tr("이 호스트에서는 화면 캡처 보호를 적용할 수 없습니다."));}});
         auto* Themes = ViewMenu->addMenu(tr("테마"));
+        Themes->menuAction()->setProperty("documentIconName", "theme-toggle");
         for (const auto& Mode : {QString("system"), QString("light"), QString("dark")}) {
             auto* Action = Themes->addAction(Mode == "system" ? tr("시스템") : Mode == "light" ? tr("라이트") : tr("다크"));
+            Action->setProperty("documentIconName", "theme-toggle");
             connect(Action, &QAction::triggered, this, [this, Mode] {
                 DocumentThemeAdapter::SetMode(Mode); auto Settings = chrome_->Settings(); Settings["themeMode"] = Mode;
                 chrome_->ApplySettings(Settings); emit ChromeSettingsChanged(Settings);
@@ -1192,14 +1200,24 @@ namespace hc::document
     }
     bool DocumentWorkspaceWidget::eventFilter(QObject* Watched, QEvent* Event)
     {
-        if (hosted_ && closeViewerOnEscape_ && Event->type() == QEvent::KeyPress) {
+        if (Event->type() == QEvent::ShortcutOverride || Event->type() == QEvent::KeyPress) {
             auto* Key = static_cast<QKeyEvent*>(Event);
             auto* Widget = qobject_cast<QWidget*>(Watched);
             if (Key->key() == Qt::Key_Escape && Key->modifiers() == Qt::NoModifier && !Key->isAutoRepeat()
                 && !QApplication::activePopupWidget() && !QApplication::activeModalWidget()
                 && !(preferences_ && preferences_->isVisible())
                 && Widget && (Widget == this || isAncestorOf(Widget))) {
-                escapeViewer(); return true;
+                const auto Tab = active();
+                auto* Text = Tab && Tab->pane_->ViewId() == "text" ? Tab->pane_->findChild<QTextView*>() : nullptr;
+                // Reserve ESC before Qt's window shortcut can close the viewer.
+                // Search takes precedence even when focus has returned to the document.
+                if (Text && Text->IsFindBarVisible()) {
+                    if (Event->type() == QEvent::KeyPress) Text->hideFindBar();
+                    Event->accept(); return true;
+                }
+                if (hosted_ && closeViewerOnEscape_ && Event->type() == QEvent::KeyPress) {
+                    escapeViewer(); return true;
+                }
             }
         }
         if (Watched == qApp && Event->type() == QEvent::DynamicPropertyChange

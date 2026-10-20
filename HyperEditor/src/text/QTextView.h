@@ -111,6 +111,7 @@ public:
     // ── 찾기/바꾸기 바 ──
     void showFindBar(bool replaceMode = false);
     void hideFindBar();
+    bool IsFindBarVisible() const;
 
     // ── 줄바꿈 ──
     LineEnding detectedLineEnding() const;

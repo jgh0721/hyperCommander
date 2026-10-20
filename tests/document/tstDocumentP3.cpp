@@ -16,6 +16,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
+#include <QToolButton>
+#include "text/QTextView.h"
+#include "text/ITextEditorBackend.h"
+#include "text/FindReplaceWidget.h"
 #include <QStackedLayout>
 #include <QScrollArea>
 #include <QDialog>
@@ -128,6 +132,53 @@ void viewerEscapeSettingAndUnsavedChanges(){
     QTest::keyClick(&Editor,Qt::Key_Escape);
     QVERIFY(Editor.isVisible()); QVERIFY(!Editor.Snapshot()["closeRequested"].toBool());
     QVERIFY(!Editor.Handle({{"action","escape"}})["accepted"].toBool());
+}
+void textSearchEscapeTakesPriority_data(){
+    QTest::addColumn<bool>("Hosted");
+    QTest::addColumn<bool>("CloseOnEscape");
+    QTest::addColumn<bool>("ReplaceMode");
+    QTest::addColumn<int>("FocusTarget");
+    for (const bool Hosted : {false, true})
+        for (const bool CloseOnEscape : {false, true})
+            for (const bool ReplaceMode : {false, true})
+                for (int FocusTarget = 0; FocusTarget < 3; ++FocusTarget) {
+                    const auto Name = QString("%1-close%2-replace%3-focus%4")
+                        .arg(Hosted ? "viewer" : "editor").arg(CloseOnEscape).arg(ReplaceMode).arg(FocusTarget);
+                    QTest::newRow(qPrintable(Name)) << Hosted << CloseOnEscape << ReplaceMode << FocusTarget;
+                }
+}
+void textSearchEscapeTakesPriority(){
+    QFETCH(bool, Hosted); QFETCH(bool, CloseOnEscape); QFETCH(bool, ReplaceMode); QFETCH(int, FocusTarget);
+    QTemporaryDir Root; const auto Previous = qApp->property("documentViewsConfigDir");
+    qApp->setProperty("documentViewsConfigDir", Root.path());
+    const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+    DocumentSettingsDialog Settings(hc::settings::UnifiedConfig::FileName(Root.path()), {});
+    auto* Option = Settings.findChild<QCheckBox*>("documentViews/common/closeViewerOnEscape");
+    QVERIFY(Option); Option->setChecked(CloseOnEscape); QVERIFY(Settings.Apply());
+    const auto Path = Root.filePath("search.txt"); const QByteArray Content("search text\nsearch again\n");
+    QVERIFY(Put(Path, Content));
+    DocumentWorkspaceWidget Window(Root.filePath("recovery"), Hosted);
+    Window.show(); Window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Window));
+    const auto Id = Window.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString();
+    QVERIFY(!Id.isEmpty()); QTRY_COMPARE(Doc(Window.Snapshot(), Id)["lifecycle"].toString(), QString("ready"));
+    auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
+    auto* Input = Text->Backend()->widget(); QVERIFY(Input); Input->setFocus();
+    QTest::keyClick(Input, ReplaceMode ? Qt::Key_H : Qt::Key_F, Qt::ControlModifier);
+    auto* Search = Text->findChild<FindReplaceWidget*>(); QVERIFY(Search);
+    QVERIFY(Search->isVisible()); QCOMPARE(Search->isReplaceMode(), ReplaceMode);
+    QWidget* Target = QApplication::focusWidget(); QVERIFY(qobject_cast<QLineEdit*>(Target));
+    if (FocusTarget == 1) Target = Input;
+    if (FocusTarget == 2) Target = Search->findChild<QToolButton*>();
+    QVERIFY(Target); Target->setFocus(); QTRY_VERIFY(Target->hasFocus());
+    QTest::keyClick(Target, Qt::Key_Escape);
+    QVERIFY(!Search->isVisible()); QVERIFY(Window.isVisible());
+    QVERIFY(!Window.Snapshot()["closeRequested"].toBool());
+    QCOMPARE(Window.Snapshot()["documents"].toArray().size(), 1);
+    QVERIFY(!Doc(Window.Snapshot(), Id)["dirty"].toBool());
+    QCOMPARE(Text->Content().toUtf8(), Content); QTRY_VERIFY(Input->hasFocus());
+    QTest::keyClick(Input, Qt::Key_Escape);
+    QTRY_COMPARE(Window.Snapshot()["closeRequested"].toBool(), Hosted && CloseOnEscape);
+    QCOMPARE(Read(Path), Content);
 }
 void largeImageEscapesFromImageViewport(){
     QTemporaryDir Root;

@@ -9,15 +9,27 @@
 #include <QLabel>
 #include <QInputDialog>
 #include <QSignalBlocker>
+#include "core/ToolbarIcons.h"
+#include <fmstyle/ThemeManager.h>
 
 namespace
 {
+    void SetMenuIcon(QAction* Action, const QString& Name)
+    {
+        const auto Refresh = [Action, Name] {
+            Action->setIcon(ToolbarIcons::iconByName(Name));
+            Action->setIconVisibleInMenu(true);
+        };
+        Refresh();
+        QObject::connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, Action, Refresh);
+    }
     void AddMenuControl(QMenu* Menu, QAction* Source, const QString& Label)
     {
         auto* WidgetAction = qobject_cast<QWidgetAction*>(Source);
         auto* Widget = WidgetAction ? WidgetAction->defaultWidget() : nullptr;
         if (auto* Combo = qobject_cast<QComboBox*>(Widget)) {
             auto* Choices = Menu->addMenu(Label.isEmpty() ? Combo->accessibleName() : Label);
+            SetMenuIcon(Choices->menuAction(), Combo->objectName() == "wordWrapMode" ? "word-wrap" : "view-source");
             QObject::connect(Choices, &QMenu::aboutToShow, Choices, [Choices, Combo] {
                 Choices->clear();
                 for (int Index = 0; Index < Combo->count(); ++Index) {
@@ -31,6 +43,7 @@ namespace
         }
         if (auto* Spin = qobject_cast<QSpinBox*>(Widget)) {
             auto* Item = Menu->addAction(Label + QStringLiteral("…"));
+            SetMenuIcon(Item, "view-source");
             QObject::connect(Item, &QAction::triggered, Menu, [Spin, Label] {
                 bool Accepted = false;
                 const int Value = QInputDialog::getInt(Spin, Label, Label, Spin->value(), Spin->minimum(), Spin->maximum(), Spin->singleStep(), &Accepted);
@@ -39,6 +52,7 @@ namespace
         }
         if (auto* Check = qobject_cast<QCheckBox*>(Widget)) {
             auto* Item = Menu->addAction(Check->toolTip().isEmpty() ? Check->text() : Check->toolTip());
+            SetMenuIcon(Item, "view-source");
             Item->setCheckable(true); Item->setChecked(Check->isChecked());
             QObject::connect(Item, &QAction::triggered, Check, &QCheckBox::setChecked);
             QObject::connect(Check, &QCheckBox::toggled, Item, &QAction::setChecked); return;
@@ -49,6 +63,7 @@ namespace
         auto* Item = Menu->addAction(Source->icon(), Source->text().isEmpty() ? Source->toolTip() : Source->text());
         const auto Sync = [Item, Source] {
             const QSignalBlocker Block(Item); Item->setIcon(Source->icon());
+            Item->setIconVisibleInMenu(true);
             Item->setText(Source->text().isEmpty() ? Source->toolTip() : Source->text());
             Item->setEnabled(Source->isEnabled()); Item->setVisible(Source->isVisible());
             Item->setCheckable(Source->isCheckable()); Item->setChecked(Source->isChecked());

@@ -10,7 +10,7 @@
 
 namespace {
 
-QIcon iconFromText(const QString& text, int size = 16)
+QIcon iconFromText(const QString& text, const QPalette& palette, int size = 16)
 {
     QPixmap pix(size, size);
     pix.fill(Qt::transparent);
@@ -20,7 +20,7 @@ QIcon iconFromText(const QString& text, int size = 16)
     font.setPixelSize(size - 4);
     font.setBold(true);
     p.setFont(font);
-    p.setPen(QApplication::palette().color(QPalette::Text));
+    p.setPen(palette.color(QPalette::Text));
     p.drawText(pix.rect(), Qt::AlignCenter, text);
     p.end();
 
@@ -30,7 +30,7 @@ QIcon iconFromText(const QString& text, int size = 16)
     QPainter pc(&pixChecked);
     pc.setRenderHint(QPainter::Antialiasing);
     pc.setFont(font);
-    pc.setPen(QApplication::palette().color(QPalette::Highlight));
+    pc.setPen(palette.color(QPalette::Highlight));
     pc.drawText(pixChecked.rect(), Qt::AlignCenter, text);
     pc.end();
 
@@ -92,7 +92,7 @@ void FindReplaceWidget::setupUi()
     m_caseAction = new QAction(this);
     m_caseAction->setCheckable(true);
     m_caseAction->setToolTip(tr("대/소문자 구분"));
-    m_caseAction->setIcon(iconFromText(QStringLiteral("Aa")));
+    m_caseAction->setIcon(iconFromText(QStringLiteral("Aa"), palette()));
     m_searchEdit->addAction(m_caseAction, QLineEdit::TrailingPosition);
     connect(m_caseAction, &QAction::toggled, this, [this] {
         updatePlaceholderText();
@@ -103,7 +103,7 @@ void FindReplaceWidget::setupUi()
     m_wordAction = new QAction(this);
     m_wordAction->setCheckable(true);
     m_wordAction->setToolTip(tr("단어 일치"));
-    m_wordAction->setIcon(iconFromText(QStringLiteral("W")));
+    m_wordAction->setIcon(iconFromText(QStringLiteral("W"), palette()));
     m_searchEdit->addAction(m_wordAction, QLineEdit::TrailingPosition);
     connect(m_wordAction, &QAction::toggled, this, [this] {
         updatePlaceholderText();
@@ -386,6 +386,18 @@ void FindReplaceWidget::paintEvent(QPaintEvent* event)
 // ═══════════════════════════════════════════════════════════
 // 이벤트 필터 (ESC, F3, Shift+F3)
 // ═══════════════════════════════════════════════════════════
+
+void FindReplaceWidget::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {
+        // These pixmap icons retain their creation colors until regenerated.
+        if (m_caseAction) m_caseAction->setIcon(iconFromText(QStringLiteral("Aa"), palette()));
+        if (m_wordAction) m_wordAction->setIcon(iconFromText(QStringLiteral("W"), palette()));
+        if (m_clearAction) m_clearAction->setIcon(style()->standardIcon(QStyle::SP_LineEditClearButton));
+        if (m_closeBtn) m_closeBtn->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+    }
+}
 
 bool FindReplaceWidget::eventFilter(QObject* obj, QEvent* event)
 {

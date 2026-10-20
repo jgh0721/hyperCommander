@@ -24,6 +24,11 @@
         <file>icons/toolbar/fit-width.svg</file>
         <file>icons/toolbar/flip-horizontal.svg</file>
         <file>icons/toolbar/flip-vertical.svg</file>
+        <file>icons/toolbar/copy.svg</file>
+        <file>icons/toolbar/cut.svg</file>
+        <file>icons/toolbar/fullscreen.svg</file>
+        <file>icons/toolbar/paste.svg</file>
+        <file>icons/toolbar/select-all.svg</file>
         <file>icons/toolbar/font.svg</file>
         <file>icons/toolbar/missing-icon.svg</file>
         <file>icons/toolbar/manifest.json</file>

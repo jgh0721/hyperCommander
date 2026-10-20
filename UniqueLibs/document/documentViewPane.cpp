@@ -251,7 +251,10 @@ namespace hc::document
     void DocumentViewPane::applyTheme()
     {
         if(!view_)return;const auto& Theme=fm::style::ThemeManager::instance();
-        const auto Dark=palette().color(QPalette::Window).lightness()<128;
+        // Palette-change delivery can lag the theme signal, especially for
+        // inactive tabs. Resolve from the new theme before updating child views.
+        setPalette(Theme.colors().toPalette());
+        const auto Dark=fm::style::isDarkVariant(Theme.effectiveVariant());
         ThemeManager::instance().setTheme(Dark?ThemeManager::Dark:ThemeManager::Light);view_->setTheme(Dark?QBaseView::Dark:QBaseView::Light);
         // Actions are created before the workspace applies its palette. Refresh
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.

@@ -1401,6 +1401,11 @@ void QTextView::showFindBar(bool replaceMode)
     updateMatchCount();
 }
 
+bool QTextView::IsFindBarVisible() const
+{
+    return m_findWidget && m_findWidget->isVisible();
+}
+
 void QTextView::hideFindBar()
 {
     if (!m_findWidget)

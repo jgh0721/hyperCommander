@@ -667,7 +667,9 @@ void ScintillaQtDirectBackend::setEditorFont(const QFont& font)
 	m_editor->send(sciMessage(SCI_STYLESETSIZE), STYLE_DEFAULT, pointSize);
 	m_editor->sends(sciMessage(SCI_STYLESETFONT), STYLE_LINENUMBER, family.constData());
 	m_editor->send(sciMessage(SCI_STYLESETSIZE), STYLE_LINENUMBER, pointSize);
-	m_editor->send(sciMessage(SCI_STYLECLEARALL));
+	// Propagate the font while restoring colors cleared by SCI_STYLECLEARALL.
+	// Preference reloads must preserve gutter, indent and lexer styles.
+	applyThemeColors(m_darkTheme);
 	updateLineNumberMargin(m_lineNumberMarginDigits);
 }
 
