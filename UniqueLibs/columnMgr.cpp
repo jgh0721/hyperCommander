@@ -38,6 +38,8 @@ hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsH
     File.attributes_ = Info->Attributes_;
     File.created_ = Info->Created_; File.modified_ = Info->Modified_;
     File.parentPath_ = ParentPath;
+    if (Info->storageEntry_ && Info->storageEntry_->hints_.contains("filesystemPath"))
+        File.parentPath_ = QFileInfo(QString::fromStdString(Info->storageEntry_->hints_.at("filesystemPath"))).absolutePath();
     if (Info->storageEntry_) {
         const auto& Hints = Info->storageEntry_->hints_;
         if (const auto It = Hints.find("accessedUtcMs"); It != Hints.end()) {

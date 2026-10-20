@@ -1,5 +1,7 @@
 ﻿#include "commonLibs/storage/search.hpp"
 #include "UniqueLibs/qtSearch.hpp"
+#include "UniqueLibs/everythingSearchSession.hpp"
+#include "everythingStreamFixture.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "memoryStorage.hpp"
 #include "UniqueLibs/folderSize.hpp"
@@ -21,6 +23,52 @@ using namespace hc::storage;
 class SearchTests : public QObject {
     Q_OBJECT
 private slots:
+    void everythingDisplayIntervalSettings() {
+        using hc::quickfind::Settings;
+        QCOMPARE(Settings::FromJson({}).everythingDisplayIntervalMs_, 500);
+        for (const auto Value : {QJsonValue(0), QJsonValue(-1), QJsonValue(49), QJsonValue(5001), QJsonValue(500.5), QJsonValue("1000"), QJsonValue(true)})
+            QCOMPARE(Settings::FromJson({{"everythingDisplayIntervalMs", Value}}).everythingDisplayIntervalMs_, 500);
+        for (const int Value : {50, 501, 1000, 5000}) {
+            const auto SettingsValue = Settings::FromJson({{"everythingDisplayIntervalMs", Value}});
+            QCOMPARE(SettingsValue.everythingDisplayIntervalMs_, Value);
+            QCOMPARE(Settings::FromJson(SettingsValue.ToJson()).everythingDisplayIntervalMs_, Value);
+        }
+    }
+    void everythingStreamAllResultsAndCancellation() {
+        QTemporaryDir Dir; QVERIFY(Dir.isValid()); QJsonArray Paths;
+        for (int I = 0; I < 4101; ++I) {
+            const auto Path = Dir.filePath(QStringLiteral("검색-%1.txt").arg(I));
+            QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("test"); Paths.append(Path);
+        }
+        QFile Fixture(Dir.filePath("input.json")); QVERIFY(Fixture.open(QIODevice::WriteOnly));
+        Fixture.write(QJsonDocument(Paths).toJson()); Fixture.close();
+        qputenv("HC_EVERYTHING_TEST_INPUT", Fixture.fileName().toUtf8()); qputenv("HC_EVERYTHING_TEST_MODE", "slow");
+        const auto Restore = qScopeGuard([] { qunsetenv("HC_EVERYTHING_TEST_INPUT"); qunsetenv("HC_EVERYTHING_TEST_MODE"); });
+        hc::search::EverythingSession Session(nullptr, MakeNativeReadProvider(LocatorKind::Local), MakeNativeReadProvider(LocatorKind::Smb));
+        std::set<std::string> Seen; QString Status; int Calls = 0;
+        Session.append_ = [&](auto Entries) { ++Calls; for (const auto& Entry : Entries) { QVERIFY(Entry.id_.revision_); QVERIFY(Entry.hints_.contains("filesystemPath")); Seen.insert(Entry.locator_.root_); } };
+        Session.status_ = [&](const QString& Text) { Status = Text; };
+        Session.Start("검색", "contains", 5000, QCoreApplication::applicationFilePath());
+        QTRY_VERIFY_WITH_TIMEOUT(!Seen.empty(), 5000); QVERIFY(Seen.size() < 4101);
+        Session.SetDisplayInterval(50);
+        QTRY_VERIFY_WITH_TIMEOUT(!Session.Running(), 30000);
+        QCOMPARE(Seen.size(), size_t(4101)); QVERIFY(Calls > 1); QVERIFY(!Status.contains("부분"));
+        hc::search::EverythingSession Cancelled(nullptr, MakeNativeReadProvider(LocatorKind::Local), MakeNativeReadProvider(LocatorKind::Smb));
+        int Appended = 0; Cancelled.append_ = [&](auto Entries) { Appended += int(Entries.size()); };
+        Cancelled.Start("검색", "starts", 50, QCoreApplication::applicationFilePath());
+        QTRY_VERIFY_WITH_TIMEOUT(Appended > 0, 5000); Cancelled.Cancel(); const auto Before = Appended;
+        QTest::qWait(250); QCOMPARE(Appended, Before); QVERIFY(!Cancelled.Running());
+    }
+    void everythingStreamProtocolFailure() {
+        QTemporaryDir Dir; QFile Fixture(Dir.filePath("input.json")); QVERIFY(Fixture.open(QIODevice::WriteOnly));
+        Fixture.write(QJsonDocument(QJsonArray{Dir.filePath("missing.txt")}).toJson()); Fixture.close();
+        qputenv("HC_EVERYTHING_TEST_INPUT", Fixture.fileName().toUtf8()); qputenv("HC_EVERYTHING_TEST_MODE", "bad-sequence");
+        const auto Restore = qScopeGuard([] { qunsetenv("HC_EVERYTHING_TEST_INPUT"); qunsetenv("HC_EVERYTHING_TEST_MODE"); });
+        hc::search::EverythingSession Session(nullptr, MakeNativeReadProvider(LocatorKind::Local), MakeNativeReadProvider(LocatorKind::Smb));
+        QString Status; Session.status_ = [&](const QString& Text) { Status = Text; };
+        Session.Start("a", "contains", 50, QCoreApplication::applicationFilePath());
+        QTRY_VERIFY_WITH_TIMEOUT(!Session.Running(), 5000); QVERIFY(Status.contains("부분"));
+    }
     void folderSizeTraversalAndPolicies() {
         test::MemoryProvider Provider;
         const auto Folder = Provider.Add(Provider.Root(), "folder", {}, true);
@@ -186,6 +234,8 @@ private slots:
     }
 };
 int main(int Argc, char** Argv) {
+    if (Argc == 4 && QByteArray(Argv[1]) == "--quick-find-stream" && qEnvironmentVariableIsSet("HC_EVERYTHING_TEST_INPUT"))
+        return EverythingStreamFixture(Argc, Argv);
     if (Argc == 3 && QByteArray(Argv[1]) == "--folder-sizes" && qEnvironmentVariableIsSet("HC_FOLDER_SIZE_TEST_HELPER")) {
         QCoreApplication App(Argc, Argv);
         const auto Mode = qgetenv("HC_FOLDER_SIZE_TEST_HELPER"); if (Mode == "slow") QThread::msleep(5000);

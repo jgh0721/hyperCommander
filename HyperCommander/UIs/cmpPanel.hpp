@@ -62,6 +62,8 @@ class CmpPanel : public QWidget
         int                         footerFileCount_ = 0, footerDirectoryCount_ = 0;
         bool                        footerValid_ = false, automaticSnapshot_ = false;
         hc::workspace::TabState     workspace_;
+        std::optional<hc::workspace::TabState> searchOrigin_;
+        QJsonObject searchScroll_;
         bool                       pending_ = false, restoreSelection_ = false;
 
         CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }
@@ -86,6 +88,9 @@ public:
     QString                         Search() const;
     QString                         SearchMatch() const;
     void                            SetSearch(const QString& Query, const QString& Match = {});
+    void StartEverythingSearch(const QString& Query, const QString& Match, int Interval);
+    void StopEverythingSearch(bool Restore = true);
+    void OpenSearchLocation();
     void                            NavigateHistory(int Offset);
     bool                            CanNavigateHistory(int Offset) const;
     void                            PrevTab();

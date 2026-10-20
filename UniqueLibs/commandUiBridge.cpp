@@ -238,6 +238,17 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
             if (Model->GetRoot() && Model->ProviderEnabled() && !Model->IsLoading())
                 for (const auto& At : It->second)
                 {
+                    if (Model->IsSearchResults()) {
+                        bool Affected = false;
+                        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+                            if (!Item || !Item->storageEntry_ || Item->storageEntry_->locator_.kind_ != At.kind_) continue;
+                            const auto Parent = QFileInfo(QString::fromStdString(Item->storageEntry_->locator_.root_)).absolutePath();
+                            if (QDir::cleanPath(QString::fromStdString(At.root_)).compare(QDir::cleanPath(Parent), Qt::CaseInsensitive) == 0) { Affected = true; break; }
+                        }
+                        if (Affected) { Model->Refresh(); break; }
+                        continue;
+                    }
                     const auto Current = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
                     if (Current.kind_ == At.kind_ && QDir::cleanPath(QString::fromStdString(At.root_)).compare(
                         QDir::cleanPath(QString::fromStdString(Current.root_)), Qt::CaseInsensitive) == 0)
@@ -402,6 +413,7 @@ hc::automation::Host CommandUiBridge::AutomationHost()
             if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Id) { Selected = *Entry->storageEntry_; break; }
         }
         if (!Selected || Selected->directory_) return Error{ErrorCategory::StaleRevision, "script-viewer-resource"};
+        Reader = Model->ProviderFor(*Selected);
         QPointer<QDialog> Window = Guard->viewers_->OpenFull(std::make_shared<ProviderContentSource>(std::move(Reader), *Selected));
         QPointer<QtViewerSurface> Surface = Window->findChild<QtViewerSurface*>();
         if (!Surface) { Window->close(); return Error{ErrorCategory::Internal, "script-viewer-surface"}; }
@@ -557,6 +569,8 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     }
     if (!NavigateToPath && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.cancel" && Model->IsSearchResults())
+        Panel->StopEverythingSearch(false);
     if (Id == "hc.viewer.open" || Id == "hc.file.edit") return executeDocument(Invocation, Model);
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
     if (Id.starts_with("hc.viewer.")) return executeViewer(Invocation, Model);
@@ -686,9 +700,9 @@ void CommandUiBridge::createActions()
     connect(RenameBatch, &QAction::triggered, this, [this] { PromptFileTools(true); });
     auto* Permissions=Files->addAction(tr("선택 항목 권한 확인…")); Permissions->setObjectName("hc.menu.permissions");
     connect(Permissions,&QAction::triggered,this,[this] {
-        const auto Context=captureFiles({},false); auto* Model=findModel(Context.tabId_); if(!Model||Context.location_.kind_!=LocatorKind::Local)return;
-        QStringList Paths; for(int Row=0;Row<Model->rowCount()&&Paths.size()<256;++Row){const auto E=Model->GetFileInfo(Model->index(Row,0));if(E&&E->storageEntry_&&std::find(Context.selection_.begin(),Context.selection_.end(),E->storageEntry_->id_)!=Context.selection_.end())Paths.append(QDir(QString::fromStdString(Context.location_.root_)).filePath(E->Name_));}
-        if(Paths.isEmpty())Paths.append(QString::fromStdString(Context.location_.root_)); hc::ui::ShowPermissionInspection(Paths,main_);
+        const auto Context=captureFiles({},false); auto* Model=findModel(Context.tabId_); if(!Model||(!Model->IsSearchResults()&&Context.location_.kind_!=LocatorKind::Local))return;
+        QStringList Paths; for(int Row=0;Row<Model->rowCount()&&Paths.size()<256;++Row){const auto E=Model->GetFileInfo(Model->index(Row,0));if(E&&E->storageEntry_&&std::find(Context.selection_.begin(),Context.selection_.end(),E->storageEntry_->id_)!=Context.selection_.end())Paths.append(Model->GetFileFullPath(Model->index(Row,0)));}
+        if(Paths.isEmpty()&&!Model->IsSearchResults())Paths.append(QString::fromStdString(Context.location_.root_)); if(!Paths.isEmpty())hc::ui::ShowPermissionInspection(Paths,main_);
     });
     auto* Jobs = Files->addAction(tr("작업 목록"));
     Jobs->setObjectName("hc.menu.jobs.show");
@@ -864,6 +878,9 @@ void CommandUiBridge::refreshActionState()
     // These legacy handlers are still empty. Keep their IDs for old settings,
     // but don't advertise an operation which cannot change anything yet.
     for (const auto* Id : {"hc.file.normalize"}) if (auto* Command = Action(Id)) Command->setEnabled(false);
+    for (const auto* Id : {"hc.file.new", "hc.file.mkdir"})
+        if (auto* Command = Action(Id)) Command->setEnabled(Ready && !Model->IsSearchResults());
+    if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
     if (auto* Command = Action("hc.file.attributes")) {
         const bool Native = Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
         Command->setEnabled(Native);
@@ -973,9 +990,10 @@ void CommandUiBridge::createCommandUi()
         SyncFind(); refreshActionState();
     });
     if (auto* Main = qobject_cast<QMainUI*>(Window)) connect(Main, &QMainUI::sigActivePanelChanged, this, [this, SyncFind](CmpPanel* Panel) { activePanel_ = Panel; SyncFind(); refreshActionState(); });
-    Add("hc.search.focus", tr("현재 폴더에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
-    // Ctrl+F edits the current-tab filter; the existing scope-search command is retained.
-    for (const auto* Id : {"hc.search.focus", "hc.navigate.back", "hc.navigate.forward"}) {
+    Add("hc.search.focus", tr("설정 범위에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
+    Add("hc.search.everything", tr("Everything에서 찾기"), [QuickFind] { QuickFind->FocusEverything(); });
+    Add("hc.search.openLocation", tr("검색 결과의 원본 위치 열기"), [this] { if (activePanel_) activePanel_->OpenSearchLocation(); });
+    for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward"}) {
         auto* Key = new QShortcut(Window); Key->setContext(Qt::WindowShortcut);
         const auto Update = [Key, Id] { Key->setKeys(hc::ui::CommandKeys(TyStCommandMgr::GetInstance()->Retrieve(), Id)); };
         Update(); connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, Key, Update);
@@ -1049,8 +1067,8 @@ void CommandUiBridge::PromptArchive(bool Extract, const QModelIndex& Index) {
 void CommandUiBridge::extractArchive() {
     const auto Context = captureFiles(commandIndex(), false); auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->GetRoot() || !Model->ProviderEnabled() || Model->IsLoading()) return;
-    const bool Inside = Context.location_.kind_ == LocatorKind::Archive;
-    if (!Inside && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
+    const bool Inside = !Model->IsSearchResults() && Context.location_.kind_ == LocatorKind::Archive;
+    if (!Model->IsSearchResults() && !Inside && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
         QMessageBox::information(main_, tr("파일 압축 해제"), tr("로컬·SMB의 압축 파일 또는 열린 압축 파일 안의 항목을 선택하세요.")); return;
     }
     std::vector<hc::operations::OperationSource> Sources; QStringList Names; auto Reader = Model->SnapshotProvider();
@@ -1058,16 +1076,17 @@ void CommandUiBridge::extractArchive() {
         const auto Item = Model->GetFileInfo(Model->index(Row,0));
         if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end()) {
             if (!Inside && Item->storageEntry_->directory_) { QMessageBox::information(main_, tr("파일 압축 해제"), tr("압축 파일만 선택하세요.")); return; }
-            Sources.push_back({*Item->storageEntry_, Reader, {}}); Names.append(Item->Name_);
+            Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}}); Names.append(Item->Name_);
         }
     }
     if (Context.selectionManifest_) Names.append(tr("전체 선택 %1개").arg(Context.selectionManifest_->Count()));
     if (Sources.empty() && !Context.selectionManifest_) { QMessageBox::information(main_, tr("파일 압축 해제"), tr("압축 파일이나 내부 항목을 먼저 선택하세요.")); return; }
     auto Destination = QString::fromStdString(Context.location_.root_); if (Inside) Destination = QFileInfo(Destination).absolutePath();
-    for (auto* Other : main_->findChildren<CmpPanel*>()) if (Other != PanelOf(Model)) if (auto* Target = PanelModel(Other); Target && Target->GetRoot()) {
+    if (Model->IsSearchResults() && !Sources.empty()) Destination = QFileInfo(QString::fromStdString(Sources.front().entry_.locator_.root_)).absolutePath();
+    const auto RelativeBase = Destination;
+    for (auto* Other : main_->findChildren<CmpPanel*>()) if (Other != PanelOf(Model)) if (auto* Target = PanelModel(Other); Target && Target->GetRoot() && !Target->IsSearchResults()) {
         const auto Location = Target->WorkspaceLocation(); if (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb) Destination = QString::fromStdString(Location.root_);
     }
-    const auto RelativeBase = Inside ? QFileInfo(QString::fromStdString(Context.location_.root_)).absolutePath() : QString::fromStdString(Context.location_.root_);
     hc::ui::ArchiveExtractDialog Dialog(Names, Destination, Inside, main_, RelativeBase); if (Dialog.exec() != QDialog::Accepted) return;
     const auto Path = Dialog.Destination(); Locator Target{(Path.startsWith("//") && (!Path.startsWith("//?/") || Path.startsWith("//?/UNC/", Qt::CaseInsensitive))) ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
     auto Native = MakeNativeReadProvider(Target.kind_); auto Writer = MakeNativeWritableStorage(Target.kind_, Native);
@@ -1134,14 +1153,19 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
     if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
         const auto Item = Model->GetFileInfo(Model->index(Row, 0));
         if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
-            Sources.push_back({*Item->storageEntry_, Reader, {}});
+            Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}});
     }
     const auto Count = Context.selectionManifest_ ? Context.selectionManifest_->Count() : Sources.size();
     if (!Count) { QMessageBox::information(main_, tr("파일 압축"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
     auto Directory = QString::fromStdString(Context.location_.root_);
     if (Context.location_.kind_ == LocatorKind::Archive) Directory = QFileInfo(Directory).absolutePath();
     else if (Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) Directory = QDir::homePath();
-    hc::archive::CreationDialog Dialog(hc::settings::AppSettings(), Context.location_, Directory, Count, main_, InitialFormat);
+    auto SourceLocation = Context.location_;
+    if (Model->IsSearchResults() && !Sources.empty()) {
+        SourceLocation = Sources.front().entry_.locator_;
+        Directory = QFileInfo(QString::fromStdString(SourceLocation.root_)).absolutePath(); SourceLocation.root_ = Directory.toStdString();
+    }
+    hc::archive::CreationDialog Dialog(hc::settings::AppSettings(), SourceLocation, Directory, Count, main_, InitialFormat);
     if (Dialog.exec() != QDialog::Accepted) return;
     hc::archive::CreateJobRequest Request; Request.value_ = Dialog.Request(); Request.creator_ = Dialog.Creator();
     Request.sources_ = std::move(Sources); Request.selection_ = Context.selectionManifest_;
@@ -1174,7 +1198,7 @@ void CommandUiBridge::openIso(bool Inspect)
     for (int Row = 0; Row < Model->rowCount(); ++Row) {
         const auto Item = Model->GetFileInfo(Model->index(Row, 0));
         if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
-            Sources.push_back({*Item->storageEntry_, Reader, {}});
+            Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}});
     }
     const auto CurrentDirectory = Context.location_.kind_ == LocatorKind::Archive ? QFileInfo(QString::fromStdString(Context.location_.root_)).absolutePath() : QString::fromStdString(Context.location_.root_);
     if (Inspect) {
@@ -1418,7 +1442,9 @@ Result<std::string> CommandUiBridge::captureDocument(const CommandInvocation& In
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
             const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
             if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Id) {
-                Request.documents_.push_back({std::make_shared<ProviderContentSource>(Reader, *Entry->storageEntry_), Writer}); Found = true; break;
+                auto EntryReader = Model->ProviderFor(*Entry->storageEntry_);
+                auto EntryWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry->storageEntry_->locator_.kind_, EntryReader) : Writer;
+                Request.documents_.push_back({std::make_shared<ProviderContentSource>(EntryReader, *Entry->storageEntry_), EntryWriter}); Found = true; break;
             }
         }
         if (!Found) return Error{ErrorCategory::StaleRevision, "document-selection-changed"};
@@ -1455,6 +1481,7 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
     }
     if (!Selected) return Error{ErrorCategory::StaleRevision, "selection-changed"};
     if (Selected->directory_) return Error{ErrorCategory::Unsupported, "viewer-directory"};
+    Reader = Model->ProviderFor(*Selected);
     auto Content = std::make_shared<ProviderContentSource>(std::move(Reader), *Selected);
     if (Invocation.id_ == "hc.viewer.open") { viewers_->OpenFull(std::move(Content)); return CommandOutcome{}; }
     auto* SourcePanel = PanelOf(Model);
@@ -1525,12 +1552,15 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model || !Model->GetRoot()) return;
+    if (Model->IsSearchResults() && Id == "hc.file.mkdir") {
+        QMessageBox::information(main_, tr("새 폴더"), tr("검색 결과에는 기본 목적지가 없습니다. 실제 폴더를 연 뒤 실행하세요.")); return;
+    }
     if (Id == "hc.file.rename") {
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
         if (Source == "cell-click" && !Options["renameOnSlowClick"].toBool(true)) return;
         const auto Panel = PanelOf(Model);
         const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
-        if ((Source == "cell-click" || !Options["renameInDialog"].toBool(true)) && View && !View->IsThumbnailMode()) {
+        if (!Model->IsSearchResults() && (Source == "cell-click" || !Options["renameInDialog"].toBool(true)) && View && !View->IsThumbnailMode()) {
             View->BeginRename(Index, Options["renameSelectExtension"].toBool(false),
                 [Guard = QPointer<CommandUiBridge>(this)](const QModelIndex& At, const QString& Name, CGridView::RenameCompletion Completion) {
                     if (Guard) Guard->submitInlineRename(At, Name, std::move(Completion));
@@ -1544,11 +1574,15 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     DialogRequest.source_ = QString::fromStdString(Invocation.context_.location_.root_);
     DialogRequest.manifestSelection_ = bool(Invocation.context_.selectionManifest_);
     DialogRequest.nativeSource_ = Invocation.context_.location_.kind_ == LocatorKind::Local || Invocation.context_.location_.kind_ == LocatorKind::Smb;
+    if (Model->IsSearchResults()) DialogRequest.nativeSource_ = true;
     for (const auto& Selected : Invocation.context_.selection_)
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
             const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
             if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected) {
-                DialogRequest.names_.append(Entry->Name_); break;
+                if (Model->IsSearchResults() && DialogRequest.names_.isEmpty())
+                    DialogRequest.source_ = QFileInfo(QString::fromStdString(Entry->storageEntry_->locator_.root_)).absolutePath();
+                DialogRequest.names_.append(Model->IsSearchResults() && Id != "hc.file.rename"
+                    ? Model->GetFileFullPath(Model->index(Row, 0)) : Entry->Name_); break;
             }
         }
     if (Id == "hc.file.delete") {
@@ -1562,11 +1596,15 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     {
         const bool NameOnly = Id == "hc.file.rename" || Id == "hc.file.mkdir";
         auto Destination = Invocation.context_.location_;
+        if (Model->IsSearchResults()) {
+            const auto Native = QDir::toNativeSeparators(DialogRequest.source_);
+            Destination = {Native.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local, Native.toStdString()};
+        }
         std::string DestinationTab;
         if (!NameOnly)
             for (auto* Other : main_->findChildren<CmpPanel*>())
                 if (Other != PanelOf(Model))
-                    if (auto* Target = PanelModel(Other); Target && Target->GetRoot())
+                    if (auto* Target = PanelModel(Other); Target && Target->GetRoot() && !Target->IsSearchResults())
                     {
                         Destination = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
                         DestinationTab = Target->property("hc.tabId").toString().toStdString();
@@ -1686,6 +1724,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
 {
     using namespace hc::operations;
     if (Model->IsLoading()) return Error{ErrorCategory::InvalidRequest, "navigation-in-progress"};
+    if (Model->IsSearchResults() && (Invocation.id_ == "hc.file.new" || Invocation.id_ == "hc.file.mkdir"))
+        return Error{ErrorCategory::InvalidRequest, "search-results-have-no-destination"};
     if (Invocation.id_ == "hc.file.new") {
         const auto Kind = Invocation.context_.location_.kind_; auto Reader = Model->SnapshotProvider();
         if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
@@ -1734,7 +1774,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             return Error{ErrorCategory::InvalidRequest, "invalid-conflict-policy"};
         Request.conflict_ = Policy == "replace" ? ConflictPolicy::Replace : Policy == "skip" ? ConflictPolicy::Skip : ConflictPolicy::Ask;
     }
-    const auto Kind = Invocation.context_.location_.kind_;
+    const auto Kind = Model->IsSearchResults() ? LocatorKind::Local : Invocation.context_.location_.kind_;
     if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Archive && Kind != LocatorKind::Plugin)
         return Error{ErrorCategory::Unsupported, "file-operation-provider-required"};
     auto Reader = Model->SnapshotProvider();
@@ -1752,7 +1792,11 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             {
                 const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
                 if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected)
-                { Request.sources_.push_back({*Entry->storageEntry_, Reader, Writer}); Found = true; break; }
+                {
+                    auto EntryReader = Model->ProviderFor(*Entry->storageEntry_);
+                    auto EntryWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry->storageEntry_->locator_.kind_, EntryReader) : Writer;
+                    Request.sources_.push_back({*Entry->storageEntry_, EntryReader, EntryWriter}); Found = true; break;
+                }
             }
             if (!Found) return Error{ErrorCategory::StaleRevision, "selection-changed-or-provider-disabled"};
         }
@@ -1781,8 +1825,10 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     }
     const auto FullTarget = Request.destination_;
     const bool NativeTarget = Request.destination_.kind_ == LocatorKind::Local || Request.destination_.kind_ == LocatorKind::Smb;
+    const auto SourceParent = Model->IsSearchResults() && Request.sources_.size() == 1
+        ? QFileInfo(QString::fromStdString(Request.sources_[0].entry_.locator_.root_)).absolutePath() : QString::fromStdString(Invocation.context_.location_.root_);
     const bool RenameToOtherFolder = Request.operation_ == hc::operations::FileOperation::Rename && NativeTarget
-        && QDir::cleanPath(QFileInfo(QString::fromStdString(Request.destination_.root_)).absolutePath()).compare(QDir::cleanPath(QString::fromStdString(Invocation.context_.location_.root_)), Qt::CaseInsensitive) != 0;
+        && QDir::cleanPath(QFileInfo(QString::fromStdString(Request.destination_.root_)).absolutePath()).compare(QDir::cleanPath(SourceParent), Qt::CaseInsensitive) != 0;
     if (NativeTarget && (Flag("targetIsName") || RenameToOtherFolder)) {
         if (Request.selection_ || Request.sources_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-source-name-required"};
         const QFileInfo Target(QString::fromStdString(Request.destination_.root_));
@@ -1796,7 +1842,12 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     const auto RecentProvider = Remember ? std::get<std::string>(Invocation.parameters_.at("recentProvider")) : std::string{};
     if (Remember && ((!NativeTarget) || RecentProvider != (Request.destination_.kind_ == LocatorKind::Smb ? "smb" : "local")))
         return Error{ErrorCategory::InvalidRequest, "recent-provider-mismatch"};
-    std::vector<Locator> Affected{Invocation.context_.location_};
+    std::vector<Locator> Affected;
+    if (!Model->IsSearchResults()) Affected.push_back(Invocation.context_.location_);
+    else if (Request.operation_ != hc::operations::FileOperation::Copy)
+        for (const auto& Source : Request.sources_) {
+            auto Parent = Source.entry_.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString(); Affected.push_back(std::move(Parent));
+        }
     if (Request.operation_ != hc::operations::FileOperation::Delete)
     {
         auto Destination = Request.destination_;
@@ -1944,8 +1995,9 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     const auto Context = captureFiles(Index, false);
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->GetRoot() || Model->IsLoading()) return;
+    if (!Rename && Model->IsSearchResults()) return;
     const auto Folder = QString::fromStdString(Context.location_.root_);
-    const bool Supported = Context.location_.kind_ == LocatorKind::Local || Context.location_.kind_ == LocatorKind::Smb;
+    const bool Supported = Model->IsSearchResults() || Context.location_.kind_ == LocatorKind::Local || Context.location_.kind_ == LocatorKind::Smb;
     // The location and selection are immutable across the nested dialog loop.
     const auto Refresh = [Guard = QPointer<CommandUiBridge>(this), Folder, Kind = Context.location_.kind_] {
         if (!Guard || !Guard->main_) return;
@@ -1978,7 +2030,7 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     for (int Row = 0; Row < Model->rowCount(); ++Row) {
         const auto E = Model->GetFileInfo(Model->index(Row, 0)); if (!E || E->Name_ == "..") continue;
         const auto Id = E->storageEntry_ ? E->storageEntry_->id_ : ResourceId{{"legacy"}, E->Name_.toStdString(), IdentityScope::NavigationSession, {}};
-        if (std::find(Context.selection_.begin(), Context.selection_.end(), Id) != Context.selection_.end()) Paths.append(QDir(Folder).filePath(E->Name_));
+        if (std::find(Context.selection_.begin(), Context.selection_.end(), Id) != Context.selection_.end()) Paths.append(Model->GetFileFullPath(Model->index(Row, 0)));
     }
     hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_); Dialog.onChanged_ = Refresh; Dialog.exec();
 }
@@ -1988,7 +2040,7 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
     const auto Context = captureFiles(Index, false);
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->GetRoot() || Model->IsLoading()) return;
-    if (Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
+    if (!Model->IsSearchResults() && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
         QMessageBox::information(main_, tr("속성 변경"), tr("이 저장소에서는 속성 변경을 지원하지 않습니다.")); return;
     }
     std::vector<EntrySnapshot> Entries;
@@ -1999,6 +2051,12 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
     }
     if (Entries.empty() && !Context.selectionManifest_) { QMessageBox::information(main_, tr("속성 변경"), tr("변경할 파일이나 폴더를 선택하세요.")); return; }
     auto Reader = Model->SnapshotProvider(); if (!Reader) Reader = MakeNativeReadProvider(Context.location_.kind_);
+    if (Model->IsSearchResults() && !Entries.empty()) {
+        Reader = Model->ProviderFor(Entries.front());
+        for (const auto& Entry : Entries) if (Model->ProviderFor(Entry) != Reader) {
+            QMessageBox::information(main_, tr("속성 변경"), tr("로컬 파일과 네트워크 파일의 속성은 각각 선택하여 변경하세요.")); return;
+        }
+    }
     const QPointer<CmpPanel> Panel = PanelOf(Model);
     hc::ui::FileAttributesDialog Dialog(std::move(Entries), Reader, Context.selectionManifest_, main_);
     Dialog.exec();

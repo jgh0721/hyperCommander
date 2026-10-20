@@ -48,7 +48,7 @@ namespace hc::storage
         {
             return native::ListingRevision(Data);
         }
-        bool ReadAttributes(const std::wstring& Path, WIN32_FILE_ATTRIBUTE_DATA& Data, ResourceRevision* ActualRevision = nullptr, BY_HANDLE_FILE_INFORMATION* ActualInfo = nullptr)
+        bool ReadAttributes(const std::wstring& Path, WIN32_FILE_ATTRIBUTE_DATA& Data, ResourceRevision* ActualRevision = nullptr, BY_HANDLE_FILE_INFORMATION* ActualInfo = nullptr, DWORD* ReparseTag = nullptr)
         {
             // Query the opened object. SMB/NTFS pathname metadata caches can lag
             // behind a child's deletion and falsely invalidate a directory job.
@@ -59,6 +59,11 @@ namespace hc::storage
             BY_HANDLE_FILE_INFORMATION Info{};
             const bool Success = GetFileInformationByHandle(Handle, &Info);
             const auto Code = GetLastError();
+            if (ReparseTag) {
+                FILE_ATTRIBUTE_TAG_INFO Tag{};
+                *ReparseTag = Success && (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                    && GetFileInformationByHandleEx(Handle, FileAttributeTagInfo, &Tag, sizeof(Tag)) ? Tag.ReparseTag : 0;
+            }
             CloseHandle(Handle);
             if (!Success) { SetLastError(Code); return false; }
             Data = {Info.dwFileAttributes, Info.ftCreationTime, Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
@@ -231,10 +236,12 @@ namespace hc::storage
                     if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
                     ResourceRevision ActualRevision;
-                    if (!ReadAttributes(Wide(At.root_), Data, &ActualRevision)) return NativeError(GetLastError(), Id);
+                    DWORD ReparseTag = 0;
+                    if (!ReadAttributes(Wide(At.root_), Data, &ActualRevision, nullptr, &ReparseTag)) return NativeError(GetLastError(), Id);
                     const auto Separator = At.root_.find_last_of("\\/");
                     auto Value = Entry(Id, Prefix, At, At.root_.substr(Separator == std::string::npos ? 0 : Separator + 1), Data);
                     Value.id_.revision_ = std::move(ActualRevision);
+                    Value.hints_["reparseTag"] = std::to_string(ReparseTag);
                     return Value;
                 });
             }

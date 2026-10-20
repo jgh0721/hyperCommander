@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
 #include "dlgGridStyle.hpp"
 #include <fmwidgets/PanelTabStrip.h>
@@ -130,6 +131,18 @@ void CmpPanel::AddTab(bool Navigate)
     };
     connect(View, &CGridView::sigThumbnailSelectionChanged, this, UpdateSelectionSizes);
     connect(Model, &CFSModel::DirectorySizesChanged, this, UpdateSelectionSizes);
+    connect(Model, &CFSModel::SearchResultsChanged, this, [this, Model] {
+        if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
+            processPanelStatusText();
+            if (Model->IsSearchResults()) path_->setFullPath(tr("Everything · %1").arg(Model->EverythingQuery()));
+        }
+    });
+    connect(Model, &CFSModel::SearchRefreshRequested, this, [this, Model] {
+        if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
+            const auto Config = hc::quickfind::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject());
+            StartEverythingSearch(Model->EverythingQuery(), Config.match_, Config.everythingDisplayIntervalMs_);
+        }
+    });
     connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);
     connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search(), Proxy->SearchMatch()); });
     connect(Model, &CFSModel::RetryRequested, this, [this, Model] {
@@ -193,6 +206,9 @@ void CmpPanel::AddTab(bool Navigate)
             Tab->automaticSnapshot_ = Model->IsAutomaticRefresh();
             if (Tab->restoreSelection_ && !Model->LastNavigationError()) {
                 static_cast<CGridView*>(Tab->View)->RestoreSelection(Tab->workspace_.selection_, Tab->workspace_.focus_);
+                if (!Tab->searchScroll_.isEmpty()) {
+                    static_cast<CGridView*>(Tab->View)->RestoreScrollState(Tab->searchScroll_); Tab->searchScroll_ = {};
+                }
                 Tab->restoreSelection_ = false;
             }
             const auto Selection = static_cast<CGridView*>(Tab->View)->CaptureSelection();
@@ -275,6 +291,11 @@ hc::workspace::PaneState CmpPanel::CaptureWorkspace() const
         auto Tab = State->workspace_;
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto View = static_cast<CGridView*>(State->View);
+        if (State->searchOrigin_) {
+            Tab = *State->searchOrigin_;
+            Tab.view_["listPresentation"] = View->CaptureWorkspaceView()["listPresentation"];
+            Result.tabs_.append(std::move(Tab)); continue;
+        }
         if (!State->pending_) {
             Tab.location_ = Model->WorkspaceLocation();
             if (!Model->GetRoot() && !Model->HasPlaceholder() && Tab.location_.root_.empty())
@@ -326,6 +347,7 @@ void CmpPanel::restoreTab(int Index)
 {
     if (Index < 0 || Index >= vecTabStates.size()) return;
     const auto State = vecTabStates[Index]; State->pending_ = false;
+    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); State->searchOrigin_.reset();
     // Reuse discovered volumes, retaining their cached labels and capabilities
     // without another filesystem-information query during workspace restore.
     nsHC::TySpFileSystem Native;
@@ -616,9 +638,13 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
 
     const auto ModelIndex = State->ConvertToSrcIndex( SrcIndex );
     const auto EntryInfo = State->Model->GetFileInfo( ModelIndex );
+    if (!EntryInfo) return;
 
     if( EntryInfo->Attributes_ & FILE_ATTRIBUTE_DIRECTORY )
     {
+        if (static_cast<CFSModel*>(State->Model)->IsSearchResults()) {
+            ChangeCurrentPath(State->Model->GetFileFullPath(ModelIndex), {}); return;
+        }
         State->Model->ChangeDirectory( ModelIndex );
     }
     else
@@ -630,6 +656,7 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
 
         if( VecWCXs.count() > 0 )
         {
+            if (static_cast<CFSModel*>(State->Model)->IsSearchResults()) StopEverythingSearch(false);
             State->Model->ChangeDirectory( ModelIndex );
             return;
         }
@@ -740,6 +767,7 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
 
 void CmpPanel::ChangeVolume( const QString& Drive )
 {
+    StopEverythingSearch(false);
     int FsIndex = -1;
 
     for( int idx = 0; idx < ui.cbxVolume->count(); ++idx )
@@ -768,11 +796,13 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
     Q_UNUSED(Parameter);
     const auto State = retrieveFocusState(); if (!State || Path.trimmed().isEmpty()) return;
     auto* Model = static_cast<CFSModel*>(State->Model);
+    const bool WasSearch = Model->IsSearchResults();
+    if (WasSearch) StopEverythingSearch(false);
     if (Model->IsLoading()) Model->CancelNavigation();
     const auto Location = Model->WorkspaceLocation();
     emit sig_NotifyPanelActivated();
     Model->setProperty("hc.historyTarget", {});
-    if (Path.trimmed() == CurrentPath()) return;
+    if (!WasSearch && Path.trimmed() == CurrentPath()) return;
     if (Location.kind_ == hc::storage::LocatorKind::Archive && Model->GetRoot()) {
         const auto Root = Model->GetRoot()->GetRoot();
         if (Path.startsWith(Root, Qt::CaseInsensitive) && Path.size() > Root.size() && (Path[Root.size()] == '/' || Path[Root.size()] == '\\')) {
@@ -872,6 +902,7 @@ void CmpPanel::OnChangedDirectory(const QString& CurrentPath)
 
 void CmpPanel::changeVolumeIndex( int index, const QString& Path )
 {
+    StopEverythingSearch(false);
     // TODO: 실제 파일시스템 외의 것들은 예외처리 필요함
     const auto State = retrieveFocusState();
     if( State == nullptr )
@@ -910,7 +941,10 @@ void CmpPanel::on_tabWidget_currentChanged(int Index)
     const auto State = vecTabStates[Index];
     if (State->pending_) restoreTab(Index);
     for (int Candidate = 0; Candidate < vecTabStates.size(); ++Candidate)
+    {
+        if (Candidate != Index) static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->StopEverythingSearch();
         static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->SetWatchEnabled(Candidate == Index);
+    }
     if (search_) { QSignalBlocker Blocker(search_); search_->setText(State->ProxyModel->Search()); }
     if (history_) {
         QSignalBlocker Blocker(history_); history_->clear();
@@ -1060,6 +1094,59 @@ void CmpPanel::SetSearch(const QString& Query, const QString& Match)
     { QSignalBlocker Blocker(search_); search_->setText(Query); }
     processPanelStatusText(); emit sigNavigationStateChanged();
 }
+void CmpPanel::StartEverythingSearch(const QString& Query, const QString& Match, int Interval)
+{
+    const auto State = retrieveFocusState(); if (!State || Query.isEmpty()) return;
+    auto* Model = static_cast<CFSModel*>(State->Model);
+    if (!State->searchOrigin_) {
+        State->searchOrigin_ = CaptureWorkspace().tabs_[CurrentTabIndex()];
+        auto* View = static_cast<CGridView*>(State->View);
+        State->searchScroll_ = View->CaptureScrollState();
+        const auto Mode = View->ListMode();
+        auto Profile = View->ColumnProfile();
+        auto Found = std::find_if(Profile.columns_.begin(), Profile.columns_.end(), [](const auto& C) { return C.fieldId_ == "file.parentPath"; });
+        if (Found == Profile.columns_.end()) {
+            hc::columns::ColumnDefinition Location; Location.fieldId_ = "file.parentPath"; Location.title_ = tr("위치");
+            Profile.columns_.append(Location);
+        } else for (auto& Width : Found->widths_) Width.hidden_ = false;
+        View->ApplyColumnProfile(Profile); View->SetListMode(Mode);
+    }
+    State->ProxyModel->SetSearch({});
+    { const QSignalBlocker Block(search_); search_->clear(); }
+    Model->StartEverythingSearch(Query, Match, Interval);
+    processPanelStatusText();
+}
+
+void CmpPanel::StopEverythingSearch(bool Restore)
+{
+    const auto State = retrieveFocusState(); if (!State || !State->searchOrigin_) return;
+    const auto Origin = *State->searchOrigin_; State->searchOrigin_.reset();
+    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true);
+    auto* View = static_cast<CGridView*>(State->View);
+    const auto Presentation = View->CaptureWorkspaceView()["listPresentation"];
+    State->workspace_ = Origin;
+    auto Settings = Origin.view_; Settings["listPresentation"] = Presentation;
+    View->RestoreWorkspaceView(Settings);
+    if (Restore) { State->restoreSelection_ = true; restoreTab(CurrentTabIndex()); }
+    else State->searchScroll_ = {};
+    syncPanelChrome();
+}
+
+void CmpPanel::OpenSearchLocation()
+{
+    const auto State = retrieveFocusState(); if (!State || !static_cast<CFSModel*>(State->Model)->IsSearchResults()) return;
+    auto* View = static_cast<CGridView*>(State->View);
+    const auto Focus = View->CaptureFocus();
+    for (int Row = 0; Row < State->Model->rowCount(); ++Row) {
+        const auto Item = State->Model->GetFileInfo(State->Model->index(Row, 0));
+        if (!Item || !Item->storageEntry_ || hc::workspace::SelectionKey(*Item->storageEntry_) != Focus) continue;
+        const auto Entry = *Item->storageEntry_;
+        const auto Parent = QFileInfo(QString::fromStdString(Entry.locator_.root_)).absolutePath();
+        ChangeCurrentPath(Parent, {});
+        State->workspace_.selection_ = {Focus}; State->workspace_.focus_ = Focus; State->restoreSelection_ = true; break;
+    }
+}
+
 bool CmpPanel::CanNavigateHistory(int Offset) const
 {
     const int Index = ui.tabWidget->currentIndex(); if (Index < 0 || Index >= vecTabStates.size()) return false;
@@ -1073,6 +1160,7 @@ void CmpPanel::NavigateHistory(int Offset)
 void CmpPanel::navigateHistoryIndex(int Index)
 {
     const auto State = retrieveFocusState();
+    if (State->searchOrigin_) StopEverythingSearch(false);
     if (Index < 0 || Index >= State->workspace_.history_.size() || static_cast<CFSModel*>(State->Model)->IsLoading()) return;
     emit sig_NotifyPanelActivated();
     auto Saved = CaptureWorkspace().tabs_[ui.tabWidget->currentIndex()]; Saved.location_ = State->workspace_.history_[Index];
@@ -1094,7 +1182,8 @@ void CmpPanel::syncPanelChrome()
     }
     Bar->setCurrentIndex(ui.tabWidget->currentIndex());
     Bar->setMaximumWidth(std::max(30, Bar->sizeHint().width()));
-    path_->setFullPath(CurrentPath());
+    const auto* SearchModel = static_cast<CFSModel*>(retrieveFocusState()->Model);
+    path_->setFullPath(SearchModel->IsSearchResults() ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath());
     { QSignalBlocker ViewBlocker(viewMode_);
       auto* View = static_cast<CGridView*>(retrieveFocusState()->View);
       viewMode_->setCurrentIndex(QStringList{"one-line", "two-line", "auto", "thumbnails"}.indexOf(View->ListMode()));
@@ -1316,6 +1405,12 @@ void CmpPanel::processPanelStatusText()
                            .arg( State->SelectedFileCount ).arg( State->footerFileCount_ )
                            .arg( State->SelectedDirectoryCount ).arg( State->footerDirectoryCount_ ) );
     if (status_) {
+        const auto* SearchModel = static_cast<CFSModel*>(State->Model);
+        if (SearchModel->IsSearchResults()) {
+            status_->setLeftText(SearchModel->EverythingStatus());
+            status_->setRightText(tr("%1개 선택").arg(State->SelectedFileCount + State->SelectedDirectoryCount));
+            return;
+        }
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto First = Model->rowCount() ? Model->GetFileInfo(Model->index(0, 0)) : nullptr;
         const int ParentCount = First && First->Name_ == ".." ? 1 : 0;

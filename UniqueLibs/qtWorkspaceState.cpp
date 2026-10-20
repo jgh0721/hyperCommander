@@ -97,6 +97,9 @@ void DirectoryIndex::Publish(const std::vector<storage::EntrySnapshot>& Entries)
     }
     records_ = std::move(Next); ++generation_;
 }
+void DirectoryIndex::Append(const std::vector<storage::EntrySnapshot>& Entries) {
+    for (const auto& Entry : Entries) records_.insert(SelectionKey(Entry), Record{Entry, {}});
+}
 bool DirectoryIndex::Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation) {
     // A refresh may finish while metadata is being queried. An unchanged
     // revision still describes the same content; unversioned entries require

@@ -22,6 +22,7 @@
 #include <QtnGridViewGraphics.h>
 #include <QtnGridEditors.h>
 #include <QScopeGuard>
+#include <limits>
 #include <fmfilelist/ListPresentation.h>
 #include <fmfilelist/ThumbnailView.h>
 #include <fmfilelist/FileRoles.h>
@@ -662,8 +663,8 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
-        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); });
-        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); });
+        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState(); });
+        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); RestoreScrollState(queryScroll_); });
         connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
         connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
             view_->beginUpdate();
@@ -1149,6 +1150,45 @@ QString CGridView::CaptureFocus() const
     return Item && Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : QString{};
 }
 
+QJsonObject CGridView::CaptureScrollState() const
+{
+    QJsonObject State;
+    for (auto* Bar : grid_->findChildren<QScrollBar*>()) if (Bar->isVisible())
+        State[Bar->orientation() == Qt::Vertical ? "y" : "x"] = Bar->value();
+    int Top = std::numeric_limits<int>::max();
+    for (const auto& Hit : grid_->hitInfoAll()) {
+        if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.modelIndex().column() != 0 || Hit.rect().bottom() < ListContentTopLeft().y() || Hit.rect().top() >= Top) continue;
+        auto At = Hit.modelIndex(); if (proxy_) At = proxy_->mapToSource(At);
+        const auto Item = model_->GetFileInfo(At); if (!Item || !Item->storageEntry_) continue;
+        Top = Hit.rect().top(); State["anchor"] = hc::workspace::SelectionKey(*Item->storageEntry_);
+        State["offset"] = Top - ListContentTopLeft().y();
+    }
+    return State;
+}
+
+void CGridView::RestoreScrollState(const QJsonObject& State)
+{
+    if (State.isEmpty()) return;
+    for (auto* Bar : grid_->findChildren<QScrollBar*>()) {
+        const auto Key = Bar->orientation() == Qt::Vertical ? "y" : "x";
+        if (Bar->isVisible() && State.contains(Key)) Bar->setValue(State[Key].toInt());
+    }
+    const auto Anchor = State["anchor"].toString(); if (Anchor.isEmpty()) return;
+    for (int Row = 0; Row < model_->rowCount(); ++Row) {
+        const auto At = model_->index(Row, 0); const auto Item = model_->GetFileInfo(At);
+        if (!Item || !Item->storageEntry_ || hc::workspace::SelectionKey(*Item->storageEntry_) != Anchor) continue;
+        const auto Visible = proxy_ ? proxy_->mapFromSource(At) : At; if (!Visible.isValid()) break;
+        view_->scrollToIndex(Visible, false);
+        const auto GridRow = view_->getRow(Visible);
+        for (const auto& Hit : grid_->hitInfoAll()) if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == GridRow.rowIndex()) {
+            const int Delta = Hit.rect().top() - ListContentTopLeft().y() - State["offset"].toInt();
+            for (auto* Bar : grid_->findChildren<QScrollBar*>()) if (Bar->orientation() == Qt::Vertical && Bar->isVisible()) Bar->setValue(Bar->value() + Delta);
+            return;
+        }
+        break;
+    }
+}
+
 void CGridView::RestoreSelection(const QStringList& Selection, const QString& Focus)
 {
     const QSet<QString> Keys(Selection.begin(), Selection.end());
@@ -1232,7 +1272,7 @@ QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelectio
     const auto* Native = qobject_cast<CFSModel*>(model_);
     if (!Native || Native->IsLoading() || !view_) return {};
     const auto Kind = Native->WorkspaceLocation().kind_;
-    if (Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
+    if (!Native->IsSearchResults() && Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
     const auto SourceIndex = [](QModelIndex At) {
         while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
         return At;

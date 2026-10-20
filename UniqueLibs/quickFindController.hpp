@@ -21,6 +21,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <functional>
+#include <QtitanGrid.h>
 #include <windows.h>
 
 namespace hc::ui {
@@ -49,12 +50,26 @@ public:
         const auto Path = Panel ? Panel->CurrentPath() : QString{};
         if (quick_ && View == source_ && Path == sourcePath_ &&
             (scope_ == "everything" || (cursor_ && Panel->Search().isEmpty()))) return;
+        if (auto* OldView = qobject_cast<CGridView*>(source_.data()); OldView && View != source_)
+            if (auto* Old = qobject_cast<CFSModel*>(OldView->BaseModel())) Old->StopEverythingSearch();
         cancel(); source_ = View; sourcePath_ = Path;
+        const auto* Grid = qobject_cast<CGridView*>(View);
+        const auto* Model = Grid ? qobject_cast<CFSModel*>(Grid->BaseModel()) : nullptr;
+        if (Model && Model->IsSearchResults()) {
+            quick_ = true; cursor_ = false; scope_ = "everything";
+            const QSignalBlocker Block(find_); find_->setText(Model->EverythingQuery()); updateModeHint(); return;
+        }
         quick_ = Panel && !Panel->SearchMatch().isEmpty(); scope_ = "panel"; cursor_ = false;
         const QSignalBlocker Block(find_); find_->setText(Panel ? Panel->Search() : QString{});
     }
+    void FocusEverything()
+    {
+        auto Config = configuration(); Config.scope_ = "everything"; begin(Config); find_->selectAll();
+    }
     void FocusStandard()
     {
+        if (configuration().scope_ == "everything") { FocusEverything(); return; }
+        if (auto* Panel = panel_()) { applying_ = true; Panel->StopEverythingSearch(); applying_ = false; }
         quick_ = false; cursor_ = false; scope_ = "panel"; composing_ = false; cancel();
         find_->setPlaceholderText(tr("현재 폴더에서 찾기  Ctrl+F"));
         updateModeHint();
@@ -80,12 +95,6 @@ protected:
     bool eventFilter(QObject* Object, QEvent* Event) override
     {
         auto* Widget = qobject_cast<QWidget*>(Object);
-        if (Object == window_ && Event->type() == QEvent::Resize && results_ && results_->isVisible()) positionResults();
-        if (results_ && Widget && (Event->type() == QEvent::FocusIn || Event->type() == QEvent::MouseButtonPress) &&
-            Widget != find_ && !find_->isAncestorOf(Widget) && Widget != results_ && !results_->isAncestorOf(Widget)) results_->hide();
-        if (Object == tree_ && Event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(Event)->key() == Qt::Key_Escape) {
-            find_->clear(); quick_ = false; cancel(); returnToList(); return true;
-        }
         if (Object == find_) {
             if (Event->type() == QEvent::InputMethod) {
                 composing_ = !static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
@@ -121,11 +130,11 @@ protected:
                     Event->accept();
                     if (Event->type() == QEvent::ShortcutOverride) return true;
                     if (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter) {
-                        if (scope_ == "everything") openCurrent(); else returnToList();
+                        returnToList();
                     } else if (scope_ == "panel" && cursor_) moveCursor(Key->key() == Qt::Key_Down ? 1 : -1);
-                    else if (tree_ && tree_->topLevelItemCount()) {
-                        const int Row = tree_->indexOfTopLevelItem(tree_->currentItem());
-                        tree_->setCurrentItem(tree_->topLevelItem(qBound(0, Row + (Key->key() == Qt::Key_Down ? 1 : -1), tree_->topLevelItemCount() - 1)));
+                    else if (auto* View = qobject_cast<CGridView*>(source_.data())) {
+                        auto* Grid = View->BaseView();
+                        if (Key->key() == Qt::Key_Down) Grid->navigateDown(Qt::NoModifier); else Grid->navigateUp(Qt::NoModifier);
                     }
                     return true;
                 }
@@ -134,6 +143,14 @@ protected:
         }
         auto* View = listView(Widget);
         if (!View || transferring_) return false;
+        if (quick_ && scope_ == "everything" && View == source_ &&
+            (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride) &&
+            static_cast<QKeyEvent*>(Event)->key() == Qt::Key_Escape) {
+            Event->accept(); if (Event->type() == QEvent::KeyPress) {
+                find_->clear(); quick_ = false; cancel(); returnToList();
+            }
+            return true;
+        }
         const auto Config = configuration(); if (!Config.enabled_) return false;
         if (Event->type() == QEvent::InputMethod && Config.activation_ == "typing") {
             const auto* Input = static_cast<QInputMethodEvent*>(Event);
@@ -189,7 +206,7 @@ private:
     }
     void updateModeHint()
     {
-        const auto Hint = scope_ == "everything" ? tr("Everything 검색 · ↑/↓: 결과 이동 · Enter: 위치 열기")
+        const auto Hint = scope_ == "everything" ? tr("Everything 검색 · ↑/↓: 결과 이동 · Enter: 파일 패널 · Esc: 원래 폴더")
             : cursor_ ? tr("커서 이동 · ↑/↓: 이전/다음 일치 항목 · Ctrl+S: 필터링으로 전환")
             : tr("필터링 · Ctrl+S: 커서 이동으로 전환");
         find_->setToolTip(Hint); find_->setAccessibleDescription(Hint);
@@ -218,9 +235,14 @@ private:
         auto* Panel = panel_(); if (!Panel) return;
         const auto Config = configuration();
         updateHighlight(qobject_cast<CGridView*>(source_.data()), quick_ && scope_ == "panel" ? find_->text() : QString{});
-        if (quick_ && !Config.enabled_) { quick_ = false; cancel(); }
         if (quick_ && scope_ == "everything") {
-            cancel(); if (!find_->text().isEmpty()) debounce_.start(); return;
+            cancel();
+            if (!find_->text().isEmpty()) {
+                if (auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())))
+                    if (auto* Model = qobject_cast<CFSModel*>(Grid->BaseModel())) Model->StopEverythingSearch();
+                debounce_.start();
+            } else { applying_ = true; Panel->StopEverythingSearch(); applying_ = false; }
+            return;
         }
         if (quick_ && cursor_) {
             applying_ = true;
@@ -233,63 +255,17 @@ private:
     {
         debounce_.stop(); ++generation_;
         if (auto* View = qobject_cast<CGridView*>(source_.data())) { View->CancelQuickFind(); updateHighlight(View, {}); }
-        if (process_) { process_->disconnect(this); process_->kill(); process_->deleteLater(); process_ = nullptr; }
-        if (results_) results_->hide();
-    }
-    void ensureResults()
-    {
-        if (results_) return;
-        results_ = new QFrame(window_); results_->setObjectName("hc.quickFind.results"); results_->setFrameShape(QFrame::StyledPanel);
-        results_->setAutoFillBackground(true);
-        auto* Layout = new QVBoxLayout(results_);
-        status_ = new QLabel(results_); status_->setWordWrap(true); status_->setObjectName("hc.quickFind.status"); Layout->addWidget(status_);
-        tree_ = new QTreeWidget(results_); tree_->setObjectName("hc.quickFind.matches"); tree_->setHeaderLabels({tr("이름"), tr("위치")});
-        tree_->setItemDelegate(new quickfind::ResultHighlightDelegate(tree_));
-        tree_->setRootIsDecorated(false); Layout->addWidget(tree_);
-        connect(tree_, &QTreeWidget::itemActivated, this, [this] { openCurrent(); });
-    }
-    void positionResults()
-    {
-        const auto Point = find_->mapTo(window_, QPoint(0, find_->height()));
-        const int Width = qMin(720, window_->width() - 12);
-        results_->setGeometry(qBound(0, Point.x(), window_->width() - Width), Point.y(), Width, qMin(320, window_->height() - Point.y() - 8));
-        results_->raise();
     }
     void searchEverything()
     {
         if (!quick_ || scope_ != "everything" || find_->text().isEmpty()) return;
-        ensureResults(); tree_->clear(); status_->setText(tr("Everything 검색 중…"));
-        tree_->setProperty("hc.quickFind.text", find_->text()); tree_->setProperty("hc.quickFind.highlight", configuration().highlight_);
-        positionResults(); if (find_->hasFocus()) results_->show();
-        auto* Process = new QProcess(this); process_ = Process; const auto Generation = generation_;
-        Process->setProgram(QCoreApplication::applicationDirPath() + "/hc-search-index.exe");
-        Process->setArguments({"--quick-find", find_->text(), configuration().match_});
-        const auto Failed = [this, Generation] {
-            if (Generation == generation_) status_->setText(tr("Everything 검색을 사용할 수 없습니다. Everything 실행 상태를 확인한 뒤 다시 입력하세요."));
-        };
-        connect(Process, &QProcess::errorOccurred, this, [Failed](QProcess::ProcessError) { Failed(); });
-        connect(Process, &QProcess::finished, this, [this, Process, Generation, Failed](int Code, QProcess::ExitStatus Exit) {
-            Process->deleteLater(); if (Generation != generation_) return; process_ = nullptr;
-            const auto Bytes = Process->readAllStandardOutput(); const auto Doc = QJsonDocument::fromJson(Bytes);
-            if (Code || Exit != QProcess::NormalExit || Bytes.size() > 1024 * 1024 || !Doc.isObject() || !Doc["paths"].isArray()) { Failed(); return; }
-            const auto Paths = Doc["paths"].toArray();
-            for (const auto& Value : Paths) {
-                const auto Path = Value.toString(); if (Path.isEmpty()) continue;
-                auto* Item = new QTreeWidgetItem(tree_, {QFileInfo(Path).fileName(), QDir::toNativeSeparators(QFileInfo(Path).absolutePath())});
-                Item->setData(0, Qt::UserRole, Path);
-                Item->setToolTip(0, QDir::toNativeSeparators(Path)); Item->setToolTip(1, QDir::toNativeSeparators(Path));
-            }
-            status_->setText(tr("Everything · %1개 일치 · 최대 100개 표시 · Enter: 위치 열기").arg(Doc["total"].toDouble(), 0, 'f', 0));
-            if (tree_->topLevelItemCount()) tree_->setCurrentItem(tree_->topLevelItem(0));
-            tree_->resizeColumnToContents(0);
-        });
-        Process->start(); QTimer::singleShot(5000, Process, [Process] { if (Process->state() != QProcess::NotRunning) Process->kill(); });
-    }
-    void openCurrent()
-    {
-        if (!tree_ || !tree_->currentItem()) return;
-        const auto Path = tree_->currentItem()->data(0, Qt::UserRole).toString();
-        quick_ = false; cancel(); open_(Path);
+        if (auto* Panel = panel_()) {
+            applying_ = true;
+            const auto Config = configuration();
+            Panel->StartEverythingSearch(find_->text(), Config.match_, Config.everythingDisplayIntervalMs_);
+            applying_ = false;
+            updateHighlight(qobject_cast<CGridView*>(source_.data()), find_->text());
+        }
     }
     QPointer<QWidget> window_;
     QPointer<QLineEdit> find_;
@@ -298,10 +274,6 @@ private:
     QPointer<CViewT> source_;
     QString sourcePath_, scope_;
     QTimer debounce_;
-    QPointer<QProcess> process_;
-    QPointer<QFrame> results_;
-    QLabel* status_ = nullptr;
-    QTreeWidget* tree_ = nullptr;
     quint64 generation_ = 0;
     bool quick_ = false, cursor_ = false, composing_ = false, applying_ = false, transferring_ = false;
 };

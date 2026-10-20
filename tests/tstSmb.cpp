@@ -12,6 +12,7 @@
 #include <QInputMethodEvent>
 #include <imm.h>
 #include "UniqueLibs/quickFindSettings.hpp"
+#include "everythingStreamFixture.hpp"
 #include "UniqueLibs/quickFindHighlight.hpp"
 #include <QAccessible>
 #include <QScrollArea>
@@ -232,7 +233,8 @@ private slots:
         {
             const QStringList Allowed{"itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
-                || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug"), "Local UI mode cannot execute an SMB scenario");
+                || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
+                || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi", "Local UI mode cannot execute an SMB scenario");
         }
     }
 
@@ -1046,10 +1048,13 @@ private slots:
         auto* Match = Page->findChild<QComboBox*>("hc.navigation.quickFind.match"); QVERIFY(Match);
         auto* Result = Page->findChild<QComboBox*>("hc.navigation.quickFind.result"); QVERIFY(Result);
         auto* Highlight = Page->findChild<QCheckBox*>("hc.navigation.quickFind.highlight"); QVERIFY(Highlight);
+        auto* DisplayInterval = Page->findChild<QSpinBox*>("hc.navigation.quickFind.everythingDisplayIntervalMs"); QVERIFY(DisplayInterval);
+        DisplayInterval->setValue(750);
         QVERIFY(hc::quickfind::Settings::FromJson({}).highlight_); QVERIFY(Highlight->isChecked());
         QCOMPARE(hc::quickfind::Settings::FromJson({}).result_, QString("cursor"));
         QCOMPARE(Result->currentData().toString(), QString("cursor"));
         Enabled->setChecked(false); QVERIFY(!Activation->isEnabled() && !Scope->isEnabled() && !Match->isEnabled() && !Result->isEnabled());
+        QVERIFY(DisplayInterval->isEnabled());
         Enabled->setChecked(true); QVERIFY(Activation->isEnabled());
         Activation->setCurrentIndex(Activation->findData("typing")); Scope->setCurrentIndex(Scope->findData("everything")); Match->setCurrentIndex(Match->findData("ends"));
         Result->setCurrentIndex(Result->findData("filter"));
@@ -1057,8 +1062,10 @@ private slots:
         QVERIFY(SaveR9Dialog(Dialog, "quick-find-settings"));
         QVERIFY(Dialog.SaveSettings()); Dialog.reject();
         const auto Saved = Settings.Read(hc::settings::Section::General).toObject()["quickFind"].toObject();
+        QCOMPARE(Saved["everythingDisplayIntervalMs"].toInt(), 750);
         QCOMPARE(Saved["activation"].toString(), QString("typing")); QCOMPARE(Saved["scope"].toString(), QString("everything")); QCOMPARE(Saved["match"].toString(), QString("ends"));
         QMainOpts Reopened(main_); Reopened.LoadSettings();
+        QCOMPARE(Reopened.findChild<QSpinBox*>("hc.navigation.quickFind.everythingDisplayIntervalMs")->value(), 750);
         QVERIFY(!Reopened.findChild<QCheckBox*>("hc.navigation.quickFind.highlight")->isChecked());
         QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.activation")->currentData().toString(), QString("typing"));
         QCOMPARE(Reopened.findChild<QComboBox*>("hc.navigation.quickFind.scope")->currentData().toString(), QString("everything"));
@@ -1112,6 +1119,89 @@ private slots:
         QVERIFY(hc::quickfind::Matches(QStringLiteral("notes 한글.txt"), "한글.txt", "ends"));
         Target = Focus(); QTest::keyClick(Target, Qt::Key_C, Qt::ControlModifier); QVERIFY(!Find->hasFocus());
         TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); QTest::keyClicks(Find, "ext:log"); QTRY_COMPARE(View->BaseView()->getRowCount(), 2); QVERIFY(Panel->SearchMatch().isEmpty());
+    }
+
+    void everythingPanelStreamingUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        const auto Restore = qScopeGuard([&] {
+            Find->clear(); qunsetenv("HC_EVERYTHING_TEST_INPUT"); qunsetenv("HC_EVERYTHING_TEST_MODE");
+            Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Dir; QVERIFY(Dir.isValid()); QDir Root(Dir.path()); QVERIFY(Root.mkpath("origin")); QVERIFY(Root.mkpath("a")); QVERIFY(Root.mkpath("b"));
+        QJsonArray Paths;
+        const auto Anchor = Dir.filePath("origin/hc-everything-anchor.txt");
+        { QFile File(Anchor); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("anchor"); } Paths.append(Anchor);
+        for (int I = 0; I < 301; ++I) {
+            const auto Name = I < 2 ? QString("hc-everything-same.txt") : QString("hc-everything-%1.txt").arg(I);
+            const auto Path = Dir.filePath((I % 2 ? "a/" : "b/") + Name);
+            QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(QByteArray("data-") + QByteArray::number(I)); Paths.append(Path);
+        }
+        QFile Fixture(Dir.filePath("input.json")); QVERIFY(Fixture.open(QIODevice::WriteOnly)); Fixture.write(QJsonDocument(Paths).toJson()); Fixture.close();
+        qputenv("HC_EVERYTHING_TEST_INPUT", Fixture.fileName().toUtf8()); qputenv("HC_EVERYTHING_TEST_MODE", "slow");
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["quickFind"] = QJsonObject{{"enabled", false}, {"scope", "everything"}, {"match", "starts"}, {"everythingDisplayIntervalMs", 50}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); QVERIFY(Settings.Commit());
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Dir.filePath("origin"), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        const auto AnchorKey = hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(1, 0))->storageEntry_);
+        const auto OriginalColor = Model->index(1, 0).data(Qt::ForegroundRole); View->RestoreSelection({AnchorKey}, AnchorKey);
+        Model->setProperty("hc.search.helper", QCoreApplication::applicationFilePath());
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier); QTRY_VERIFY(Find->hasFocus());
+        Find->setText("hc-everything"); QTRY_VERIFY(Model->IsSearchResults());
+        QTRY_VERIFY_WITH_TIMEOUT(Model->rowCount() > 0, 6000); QVERIFY(Model->rowCount() < 302);
+        QSignalSpy AppendResets(Model, &QAbstractItemModel::modelReset);
+        View->RestoreSelection({AnchorKey}, AnchorKey);
+        QTRY_COMPARE_WITH_TIMEOUT(Model->rowCount(), 302, 15000); QVERIFY(!Model->UsesIndexedOrder()); QCOMPARE(Model->EntryCount(), quint64(302));
+        QCOMPARE(AppendResets.size(), 0); QCOMPARE(View->CaptureFocus(), AnchorKey); QVERIFY(View->CaptureSelection().contains(AnchorKey));
+        QSet<QString> Actual; int Same = 0;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Index = Model->index(Row, 0); const auto Entry = Model->GetFileInfo(Index);
+            QVERIFY(Entry && Entry->storageEntry_); QVERIFY(Entry->Name_ != "..");
+            Actual.insert(QDir::fromNativeSeparators(Model->GetFileFullPath(Index)));
+            if (Entry->Name_ == "hc-everything-same.txt") ++Same;
+            if (hc::workspace::SelectionKey(*Entry->storageEntry_) == AnchorKey) QCOMPARE(Index.data(Qt::ForegroundRole), OriginalColor);
+        }
+        QCOMPARE(Actual.size(), 302); QCOMPARE(Same, 2); QVERIFY(!main_->findChild<QWidget*>("hc.quickFind.matches"));
+        // A source in another folder must never resolve against the origin.
+        const auto Wanted = QDir::toNativeSeparators(Dir.filePath("b/hc-everything-same.txt"));
+        QModelIndex SourceIndex;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetFileFullPath(Model->index(Row, 0)) == Wanted) SourceIndex = Model->index(Row, 0);
+        QVERIFY(SourceIndex.isValid()); const auto CopyEntry = *Model->GetFileInfo(SourceIndex)->storageEntry_;
+        const auto CopyKey = hc::workspace::SelectionKey(CopyEntry); View->RestoreSelection({CopyKey}, CopyKey);
+        QVERIFY(Root.mkpath("copied"));
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", Dir.filePath("copied")}}, "everything-test", SourceIndex);
+        QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); const auto Copied = Copy.get();
+        QVERIFY2(Copied.HasValue(), Copied.HasValue() ? "" : Copied.Failure().code_.c_str());
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        QTRY_COMPARE(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
+        QFile Output(Dir.filePath("copied/hc-everything-same.txt")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), QByteArray("data-0"));
+        QVERIFY(QFile::exists(Dir.filePath("a/hc-everything-same.txt"))); QVERIFY(Model->IsSearchResults());
+        const auto Capture = qEnvironmentVariable("HC_EVERYTHING_CAPTURE_ROOT");
+        for (const auto* Mode : {"one-line", "two-line", "auto"}) {
+            QVERIFY(View->SetListMode(Mode)); QTest::qWait(60);
+            QCOMPARE(Model->rowCount(), 302); QCOMPARE(View->BaseView()->getRowCount(), 302); QCOMPARE(AppendResets.size(), 0);
+            if (!Capture.isEmpty()) { QDir().mkpath(Capture); QVERIFY(View->grab().save(QDir(Capture).filePath(QString("everything-%1.png").arg(Mode)))); }
+        }
+        QTest::keyClick(Find, Qt::Key_Escape); QTRY_VERIFY(!Model->IsSearchResults() && !Model->IsLoading());
+        QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Panel->CurrentPath())), QDir::cleanPath(Dir.filePath("origin")));
+        QTRY_COMPARE(View->CaptureFocus(), AnchorKey); QCOMPARE(Model->rowCount(), 2);
+        General["quickFind"] = QJsonObject{{"enabled", false}, {"scope", "panel"}, {"everythingDisplayIntervalMs", 1000}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); QVERIFY(Settings.Commit());
+        { QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.LoadSettings();
+          auto* Interval = Dialog.findChild<QSpinBox*>("hc.navigation.quickFind.everythingDisplayIntervalMs");
+          QVERIFY(Interval); QVERIFY(Interval->isEnabled()); QCOMPARE(Interval->value(), 1000); QCOMPARE(Interval->minimum(), 50); QCOMPARE(Interval->maximum(), 5000); }
+        View->EnsureKeyboardFocusOnView();
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(Find->hasFocus());
+        Find->setText("hc-everything"); QTRY_VERIFY(Model->IsSearchResults());
+        QCOMPARE(Settings.CommittedObject()["general"].toObject()["quickFind"].toObject()["scope"].toString(), QString("panel"));
+        QTest::keyClick(Find, Qt::Key_Escape); QTRY_VERIFY(!Model->IsSearchResults() && !Model->IsLoading()); QTest::qWait(250);
+        QCOMPARE(Model->rowCount(), 2);
     }
 
     void todoBugSearchEscapeFocus()
@@ -1245,6 +1335,7 @@ private slots:
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Stem = "hcqf" + QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-');
         const auto Path = Directory.filePath(Stem + ".txt"); { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("indexed quick find"); }
+        for (int I = 0; I < 128; ++I) { QFile File(Directory.filePath(Stem + QString("_%1.txt").arg(I, 3, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("indexed extra"); }
         const auto Query = [&](const QString& Text, const QString& Match) {
             QProcess Process; Process.start(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", {"--quick-find", Text, Match});
             if (!Process.waitForFinished(6000) || Process.exitCode() != 0) return false;
@@ -1252,7 +1343,7 @@ private slots:
             for (const auto& Value : Paths) if (QDir::cleanPath(QDir::fromNativeSeparators(Value.toString())).compare(Path, Qt::CaseInsensitive) == 0) return true;
             return false;
         };
-        QTRY_VERIFY_WITH_TIMEOUT(Query(Stem, "starts"), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(Query(Stem + ".txt", "starts"), 30000);
         QVERIFY(Query(Stem.mid(4), "contains")); QVERIFY(Query(Stem.mid(4) + ".txt", "ends"));
         auto General = Settings.Read(hc::settings::Section::General).toObject();
         General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "everything"}, {"match", "starts"}};
@@ -1261,14 +1352,18 @@ private slots:
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); View->EnsureKeyboardFocusOnView(); QTest::qWait(30);
         auto* Target = QApplication::focusWidget(); QVERIFY(Target && Target != Find);
         QTest::keyClick(Target, Qt::Key_H); QTRY_VERIFY(Find->hasFocus()); QTest::keyClicks(Find, Stem.mid(1));
-        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QTreeWidget*>("hc.quickFind.matches") && main_->findChild<QTreeWidget*>("hc.quickFind.matches")->topLevelItemCount() == 1, 8000);
-        auto* Results = main_->findChild<QTreeWidget*>("hc.quickFind.matches");
-        QCOMPARE(QDir::fromNativeSeparators(Results->topLevelItem(0)->data(0, Qt::UserRole).toString()), Path);
+        auto* Results = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(Results->IsSearchResults() && Results->rowCount() == 129, 15000);
+        QSet<QString> Found;
+        for (int Row = 0; Row < Results->rowCount(); ++Row) Found.insert(QDir::fromNativeSeparators(Results->GetFileFullPath(Results->index(Row, 0))));
+        QCOMPARE(Found.size(), 129); QVERIFY(Found.contains(Path));
         QVERIFY(Panel->Search().isEmpty());
         QVERIFY(SaveR9Dialog(*main_, "quick-find-everything"));
         QTest::keyClick(Find, Qt::Key_Return);
-        QTRY_VERIFY(!model(Panel)->IsLoading() && QDir::fromNativeSeparators(Panel->CurrentPath()) == Directory.path());
-        QVERIFY(main_->findChild<QWidget*>("hc.quickFind.results")->isHidden());
+        QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+        Panel->OpenSearchLocation();
+        QTRY_VERIFY(!Results->IsSearchResults() && !Results->IsLoading() && QDir::fromNativeSeparators(Panel->CurrentPath()) == Directory.path());
+        QVERIFY(!main_->findChild<QWidget*>("hc.quickFind.results"));
     }
 
     void todoBugQuickFindNativeIme()
@@ -8568,6 +8663,8 @@ private:
 
 int main(int Argc, char** Argv)
 {
+    if (Argc == 4 && QByteArray(Argv[1]) == "--quick-find-stream" && qEnvironmentVariableIsSet("HC_EVERYTHING_TEST_INPUT"))
+        return EverythingStreamFixture(Argc, Argv);
     if (Argc >= 3 && QByteArray(Argv[1]) == "--r13-ipc-probe") {
         QCoreApplication App(Argc, Argv); hc::settings::SingleInstance Instance;
         const auto Result = Instance.Start(QString::fromLocal8Bit(Argv[2]), hc::settings::SingleInstance::Paths(App.arguments().mid(2)), [](const QJsonArray&) { return false; });

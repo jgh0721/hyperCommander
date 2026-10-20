@@ -181,7 +181,17 @@
         {
           "id": "find",
           "command": "hc.search.focus",
-          "label": "현재 폴더에서 찾기"
+          "label": "설정 범위에서 찾기"
+        },
+        {
+          "id": "find-everything",
+          "command": "hc.search.everything",
+          "label": "Everything에서 찾기"
+        },
+        {
+          "id": "search-location",
+          "command": "hc.search.openLocation",
+          "label": "검색 결과의 원본 위치 열기"
         },
         {
           "id": "path",

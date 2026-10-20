@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
 #include "quickFindSettings.hpp"
+#include "everythingSearchSession.hpp"
 #include "directoryRefreshOrder.hpp"
 #include "columnNativeFields.hpp"
 #include "folderSize.hpp"
@@ -373,6 +374,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
 void CFSModel::doRefresh()
 {
+    if (searchResults_) { emit SearchRefreshRequested(); return; }
     if (placeholder_ && !GetRoot()) { emit RetryRequested(); return; }
     placeholder_.reset();
     if (const auto Root = GetRoot()) Root->RefreshReadProvider();
@@ -574,7 +576,7 @@ void CFSModel::SetWatchEnabled(bool Enabled)
     // Registering a native watcher on an unreachable server can block the GUI.
     const auto Native = Root && !Root->IsRemote() && Location.kind_ == hc::storage::LocatorKind::Local
         && Location.nesting_.empty() ? QString::fromStdString(Location.root_) : QString{};
-    tracker_.SetLocation(Enabled && Root && providerEnabled_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
+    tracker_.SetLocation(Enabled && Root && providerEnabled_ && !searchResults_ ? hc::workspace::LocationKey(Location) : QString{}, Native,
         QString::fromStdString(Location.root_));
 }
 
@@ -607,6 +609,7 @@ bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<Q
 
 CFSModel::~CFSModel()
 {
+    everythingSession_.reset();
     navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop(); directorySizeStop_.request_stop();
     if (FsIconGatherer_)
     {
@@ -983,6 +986,101 @@ QPixmap GenericIcon(bool Directory, int Pixels)
 }
 }
 
+void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match, int Interval)
+{
+    StopEverythingSearch(); CancelNavigation(); navigationError_.reset();
+    searchResults_ = true; everythingQuery_ = Query;
+    pageSource_.reset(); pageView_.reset(); index_.Publish({});
+    columnQueries_->Reset(); iconStop_.request_stop(); ++iconGeneration_;
+    SetWatchEnabled(watchEnabled_);
+    if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+    if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
+    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
+    fileColorCache_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0; endResetModel();
+    everythingSession_ = std::make_unique<hc::search::EverythingSession>(this, searchLocal_, searchSmb_);
+    everythingSession_->append_ = [this](auto Entries) { appendSearchResults(std::move(Entries)); };
+    everythingSession_->status_ = [this](const QString& Text) { everythingStatus_ = Text; emit SearchResultsChanged(); };
+    everythingSession_->Start(Query, Match, Interval, property("hc.search.helper").toString());
+}
+
+void CFSModel::StopEverythingSearch(bool Leave)
+{
+    if (everythingSession_) { everythingSession_->Cancel(); everythingSession_.reset(); }
+    if (Leave) { searchResults_ = false; everythingQuery_.clear(); everythingStatus_.clear(); }
+    else if (searchResults_) { everythingStatus_ = tr("Everything 검색 중단 · %1개 표시").arg(vecNode_.size()); emit SearchResultsChanged(); }
+}
+
+void CFSModel::SetEverythingDisplayInterval(int Interval)
+{
+    if (everythingSession_) everythingSession_->SetDisplayInterval(Interval);
+}
+
+std::shared_ptr<hc::storage::IStorageProvider> CFSModel::ProviderFor(const hc::storage::EntrySnapshot& Entry) const
+{
+    if (!searchResults_) return acceptedProvider_;
+    return Entry.locator_.kind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_;
+}
+
+std::shared_ptr<hc::storage::IEntryIndex> CFSModel::DirectoryEntries() const
+{
+    if (!searchResults_) return pageSource_;
+    class Snapshot final : public hc::storage::IEntryIndex {
+    public:
+        std::vector<hc::storage::EntrySnapshot> entries_;
+        std::uint64_t Count() const override { return entries_.size(); }
+        hc::storage::Result<hc::storage::EntryPage> Read(std::uint64_t Offset, std::size_t MaxItems, const hc::storage::OperationContext& Context) const override {
+            if (const auto Failure = Context.Check({"search-results"})) return *Failure;
+            hc::storage::EntryPage Page;
+            for (auto Row = Offset; Row < entries_.size() && Page.entries_.size() < MaxItems; ++Row) Page.entries_.push_back(entries_[Row]);
+            Page.end_ = Offset + Page.entries_.size() >= entries_.size(); return Page;
+        }
+    };
+    auto Value = std::make_shared<Snapshot>(); Value->entries_.reserve(vecNode_.size());
+    for (const auto& Item : vecNode_) if (Item->storageEntry_) Value->entries_.push_back(*Item->storageEntry_);
+    return Value;
+}
+
+nsHC::TySpFileSource CFSModel::makeDisplayItem(hc::storage::EntrySnapshot Entry, const QPixmap& FolderIcon, const QPixmap& FileIcon) const
+{
+    nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
+    Item->Name_ = QString::fromStdString(Entry.name_); Item->Ext_ = nsCmn::nsCmnPath::GetFileExtension(Item->Name_);
+    Item->Attributes_ = Entry.attributes_; Item->Size_ = qint64(Entry.size_);
+    if (Entry.createdUtcMs_) Item->Created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
+    if (Entry.modifiedUtcMs_) Item->Modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
+    if (hc::settings::FileColorRules::HasDecomposedName(Item->Name_)) Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
+    if (Entry.hints_.contains("reparseTag")) Item->Reserved0_ = QString::fromStdString(Entry.hints_.at("reparseTag")).toUInt();
+    if (Entry.hints_.contains("shellPidl")) {
+        const auto Bytes = QByteArray::fromBase64(QByteArray::fromStdString(Entry.hints_.at("shellPidl")));
+        Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Bytes.size()));
+        if (Item->PIDL) memcpy(Item->PIDL, Bytes.data(), Bytes.size());
+        Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_PIDL;
+    }
+    Item->Icon = Entry.directory_ ? FolderIcon : FileIcon; Item->storageEntry_ = std::move(Entry);
+    return Item;
+}
+
+void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entries)
+{
+    if (!searchResults_ || Entries.empty()) return;
+    emit ColumnValuesChanging();
+    const auto FolderIcon = GenericIcon(true, iconPixels_), FileIcon = GenericIcon(false, iconPixels_);
+    QVector<nsHC::TySpFileSource> Items; Items.reserve(Entries.size());
+    for (const auto& Entry : Entries) Items.push_back(makeDisplayItem(Entry, FolderIcon, FileIcon));
+    createBuiltFsValues(Items); index_.Append(Entries);
+    const auto First = vecNode_.size();
+    beginInsertRows({}, int(First), int(First + Items.size() - 1));
+    for (auto& Item : Items) {
+        auto Color = qMakePair(colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor);
+        for (const auto& Set : vecFileSetColors_) if (TyStColorSchemeMgr::GetInstance()->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
+        vecRowColors_.push_back(Color);
+        if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ++directoryCount_;
+        else { ++fileCount_; totalSize_ += quint64(Item->Size_); }
+        vecNode_.push_back(std::move(Item));
+    }
+    refreshNameSortRanks(int(First)); endInsertRows(); refreshColumnSortRanks(int(First)); refreshDisplayIcons(int(First));
+    emit ColumnValuesChanged(); emit SearchResultsChanged();
+}
+
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 {
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
@@ -1072,6 +1170,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 void CFSModel::ApplyDisplaySettings()
 {
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    SetEverythingDisplayInterval(hc::quickfind::Settings::FromJson(General["quickFind"].toObject()).everythingDisplayIntervalMs_);
     const bool IconsChanged = displaySettings_["iconMode"] != General["iconMode"];
     displaySettings_ = General;
     if (UsesIndexedOrder() && !loading_) requestPage(0, true);
@@ -1184,7 +1283,7 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     }));
 }
 
-void CFSModel::refreshNameSortRanks()
+void CFSModel::refreshNameSortRanks(int First)
 {
     // Supply numeric ranks to the grid so locale and natural-number options
     // remain independent, without relying on its locale-only numeric comparator.
@@ -1221,15 +1320,22 @@ void CFSModel::refreshNameSortRanks()
         }
         return L < Left.size() ? 1 : R < Right.size() ? -1 : 0;
     };
-    QVector<int> Order; Order.reserve(vecNode_.size());
-    for (int Row = 0; Row < vecNode_.size(); ++Row) Order.push_back(Row);
-    std::stable_sort(Order.begin(), Order.end(), [&](int Left, int Right) {
+    const bool Merge = searchResults_ && First > 0 && nameSortRanks_.size() == First;
+    QVector<int> Order(vecNode_.size());
+    if (Merge) for (int Row = 0; Row < First; ++Row) Order[nameSortRanks_[Row]] = Row;
+    else First = 0;
+    std::iota(Order.begin() + First, Order.end(), First);
+    const auto Less = [&](int Left, int Right) {
         const auto Group = [&](int Row) { return vecNode_[Row]->Name_ == ".." ? 0 : (vecNode_[Row]->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2; };
         if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
         const auto Name = [&](int Row) { const auto& Item = vecNode_[Row];
             return Item->columnValues_.isEmpty() ? Item->Name_ : Item->columnValues_.front().Raw().toString(); };
-        return Compare(Name(Left), Name(Right)) < 0;
-    });
+        const auto Compared = Compare(Name(Left), Name(Right));
+        if (Compared || !searchResults_) return Compared < 0;
+        return hc::workspace::SelectionKey(*vecNode_[Left]->storageEntry_) < hc::workspace::SelectionKey(*vecNode_[Right]->storageEntry_);
+    };
+    std::stable_sort(Order.begin() + First, Order.end(), Less);
+    if (Merge) std::inplace_merge(Order.begin(), Order.begin() + First, Order.end(), Less);
     nameSortRanks_.resize(Order.size());
     for (int Rank = 0; Rank < Order.size(); ++Rank) nameSortRanks_[Order[Rank]] = Rank;
 }
@@ -1242,10 +1348,10 @@ void CFSModel::SetIconPixels(int Pixels)
     if (!vecNode_.isEmpty()) refreshDisplayIcons();
 }
 
-void CFSModel::refreshDisplayIcons()
+void CFSModel::refreshDisplayIcons(int First)
 {
-    iconStop_.request_stop(); iconStop_ = std::stop_source{};
-    const auto Generation = ++iconGeneration_;
+    if (!First) { iconStop_.request_stop(); iconStop_ = std::stop_source{}; ++iconGeneration_; }
+    const auto Generation = iconGeneration_;
     const auto Mode = displaySettings_["iconMode"].toString("standard");
     const int Pixels = iconPixels_;
     // Device ratio 1: the pixmap holds exactly Pixels physical pixels and the view paints it at the logical size.
@@ -1253,7 +1359,8 @@ void CFSModel::refreshDisplayIcons()
     const auto FileIcon = GenericIcon(false, Pixels);
     struct IconRequest { QString name_; QString path_; bool directory_; };
     QVector<IconRequest> Requests;
-    for (auto& Item : vecNode_) {
+    for (int Row = First; Row < vecNode_.size(); ++Row) {
+        auto& Item = vecNode_[Row];
         const bool Directory = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         Item->Icon = Mode == "none" || Item->Name_ == ".." ? QPixmap{} : Directory ? FolderIcon : FileIcon;
         QString Path;
@@ -1264,11 +1371,11 @@ void CFSModel::refreshDisplayIcons()
     }
     if (Mode != "all" && Mode != "associated") return;
     auto* Watcher = new QFutureWatcher<QVector<QImage>>(this);
-    connect(Watcher, &QFutureWatcher<QVector<QImage>>::finished, this, [this, Watcher, Generation] {
+    connect(Watcher, &QFutureWatcher<QVector<QImage>>::finished, this, [this, Watcher, Generation, First] {
         const auto Images = Watcher->result(); Watcher->deleteLater();
-        if (Generation != iconGeneration_ || Images.size() != vecNode_.size()) return;
-        for (int Row = 0; Row < Images.size(); ++Row) if (!Images[Row].isNull()) vecNode_[Row]->Icon = QPixmap::fromImage(Images[Row]);
-        if (rowCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, 0), {Qt::DecorationRole});
+        if (Generation != iconGeneration_ || First + Images.size() > vecNode_.size()) return;
+        for (int Row = 0; Row < Images.size(); ++Row) if (!Images[Row].isNull()) vecNode_[First + Row]->Icon = QPixmap::fromImage(Images[Row]);
+        if (!Images.isEmpty()) emit dataChanged(index(First, 0), index(First + Images.size() - 1, 0), {Qt::DecorationRole});
     });
     const auto Stop = iconStop_.get_token();
     Watcher->setFuture(QtConcurrent::run([Requests, Mode, Stop, Pixels] {
@@ -1601,7 +1708,7 @@ QVector<hc::columns::PreviewSample> CFSModel::ColumnSamples(const QStringList& S
         if (!Selection.isEmpty() && !Selection.contains(Sample.identity_)) continue;
         Sample.path_ = queryPath(Item); Sample.name_ = Item->Name_; Sample.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         for (const auto& Field : Fields) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = readField(Item, Field.id_, false, false);
-        if (Item->storageEntry_ && SnapshotProvider()) Sample.source_ = std::make_shared<hc::storage::ProviderContentSource>(SnapshotProvider(), *Item->storageEntry_);
+        if (Item->storageEntry_ && ProviderFor(*Item->storageEntry_)) Sample.source_ = std::make_shared<hc::storage::ProviderContentSource>(ProviderFor(*Item->storageEntry_), *Item->storageEntry_);
         Samples.append(std::move(Sample)); if (Samples.size() == 50) break;
     }
     return Samples;
@@ -1612,7 +1719,7 @@ QString CFSModel::queryPath(const nsHC::TySpFileSource& Item) const
     if (!Item->storageEntry_ || Item->Name_ == "..") return {};
     const auto& Location = Item->storageEntry_->locator_;
     if (Location.kind_ != hc::storage::LocatorKind::Local && Location.kind_ != hc::storage::LocatorKind::Smb) return {};
-    return QDir::toNativeSeparators(QDir(GetCurrentPathWithRoot()).filePath(Item->Name_));
+    return QDir::toNativeSeparators(QString::fromStdString(Location.root_));
 }
 
 hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent) const
@@ -1651,7 +1758,8 @@ hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, con
         if (IsPluginField(Field) && Value.State() == ValueState::OnDemand) requestOnlyValues_ = true;
         return Value;
     }
-    return CColumnMgr::GetFieldValue(Field, Item.get(), GetCurrentPathWithRoot());
+    const auto Native = queryPath(Item);
+    return CColumnMgr::GetFieldValue(Field, Item.get(), Native.isEmpty() ? GetCurrentPathWithRoot() : QFileInfo(Native).absolutePath());
 }
 
 hc::columns::CellValue CFSModel::evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort) const
@@ -1706,7 +1814,7 @@ void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
     columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
 }
 
-void CFSModel::refreshColumnSortRanks()
+void CFSModel::refreshColumnSortRanks(int First)
 {
     using namespace hc::columns;
     if (loading_) return;
@@ -1725,6 +1833,8 @@ void CFSModel::refreshColumnSortRanks()
         Orders.append(Sort.order_); Bindings.append(&*It);
     }
     if (Bindings.isEmpty()) return;
+    const bool Merge = searchResults_ && First > 0 && searchSortRows_.size() == First && searchSortOrder_.size() == First && searchSorts_ == columnSorts_;
+    if (Merge) Rows = searchSortRows_;
     QSet<QString> Families;
     for (const auto* Binding : Bindings) {
         auto Fields = Binding->compiled_.dependencies_;
@@ -1735,7 +1845,8 @@ void CFSModel::refreshColumnSortRanks()
     if (qint64(vecNode_.size()) * Families.size() > 4096) { emit ColumnQueryStatus(tr("정렬 조회 한도(4096건)를 초과했습니다. 범위를 줄이거나 중지하세요.")); return; }
     columnQueries_->BeginSnapshot();
     int Pending = 0; QSet<QString> Jobs;
-    for (const auto& Item : vecNode_) {
+    for (int ItemRow = Merge ? First : 0; ItemRow < vecNode_.size(); ++ItemRow) {
+        const auto& Item = vecNode_[ItemRow];
         SortRow Row; Row.parent_ = Item->Name_ == ".."; Row.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         Row.id_ = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
         for (const auto* Binding : Bindings) {
@@ -1756,7 +1867,19 @@ void CFSModel::refreshColumnSortRanks()
         for (const auto& Item : vecNode_) for (const auto* Binding : Bindings) evaluateColumn(Item, *Binding, true, true);
         emit ColumnQueryStatus(tr("정렬 값을 조회 중… 남은 값 %1개").arg(Pending)); return;
     }
-    columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
+    if (searchResults_) {
+        const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
+            displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+        auto Order = Merge ? searchSortOrder_ : QVector<int>{};
+        const auto Start = Order.size();
+        for (int Row = Start; Row < Rows.size(); ++Row) Order.append(Row);
+        const auto Less = [&](int A, int B) { return Compare(Rows[A], Rows[B]); };
+        std::stable_sort(Order.begin() + Start, Order.end(), Less);
+        if (Merge) std::inplace_merge(Order.begin(), Order.begin() + Start, Order.end(), Less);
+        columnSortRanks_.resize(Order.size());
+        for (int Rank = 0; Rank < Order.size(); ++Rank) columnSortRanks_[Order[Rank]] = Rank;
+        searchSortRows_ = std::move(Rows); searchSortOrder_ = std::move(Order); searchSorts_ = columnSorts_;
+    } else columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
         displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
     columnQueries_->EndSnapshot();
     completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});

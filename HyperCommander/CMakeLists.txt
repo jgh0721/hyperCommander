@@ -203,6 +203,7 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/backgroundJobMgr.hpp
         ../UniqueLibs/builtInFsModel.cpp
         ../UniqueLibs/builtInFsModel.hpp
+        ../UniqueLibs/everythingSearchSession.hpp
         ../UniqueLibs/builtInVolumeModel.cpp
         ../UniqueLibs/builtInVolumeModel.hpp
         ../UniqueLibs/cmnHCModelUtils.cpp

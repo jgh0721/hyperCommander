@@ -196,7 +196,11 @@ DECLARE_CMD( BuiltInCMD_Back,                     QObject::tr( "탐색" ),    "h
 DECLARE_CMD( BuiltInCMD_Forward,                  QObject::tr( "탐색" ),    "hc.navigate.forward",
              Qt::AltModifier | Qt::Key_Right,                           QObject::tr( "방문 기록 앞으로" ) );
 DECLARE_CMD( BuiltInCMD_FindCurrent,              QObject::tr( "탐색" ),    "hc.search.focus",
-             Qt::ControlModifier | Qt::Key_F,                           QObject::tr( "현재 폴더에서 찾기" ) );
+             Qt::ControlModifier | Qt::Key_F,                           QObject::tr( "설정 범위에서 찾기" ) );
+DECLARE_CMD( BuiltInCMD_FindEverything,           QObject::tr( "탐색" ),    "hc.search.everything",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_F,         QObject::tr( "Everything에서 찾기" ) );
+DECLARE_CMD( BuiltInCMD_SearchLocation,           QObject::tr( "탐색" ),    "hc.search.openLocation",
+             Qt::Key_unknown,                                          QObject::tr( "검색 결과의 원본 위치 열기" ) );
 
 // 추가 메뉴 명령도 동일한 목록에서 관리한다. 기본 단축키는 지정하지 않는다.
 DECLARE_CMD( BuiltInCMD_OPs_Permissions,          QObject::tr( "동작" ),    "hc.file.permissions",
@@ -310,6 +314,8 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Back,
     BuiltInCMD_Forward,
     BuiltInCMD_FindCurrent,
+    BuiltInCMD_FindEverything,
+    BuiltInCMD_SearchLocation,
 
     BuiltInCMD_OPs_Permissions,
     BuiltInCMD_Iso_Create,

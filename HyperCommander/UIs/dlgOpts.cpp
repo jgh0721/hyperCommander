@@ -196,6 +196,7 @@ void QMainOpts::LoadSettings()
         const auto Name = "hc.navigation.quickFind." + It.key();
         if (auto* Check = findChild<QCheckBox*>(Name)) Check->setChecked(It.value().toBool());
         else if (auto* Choice = findChild<QComboBox*>(Name)) Choice->setCurrentIndex(Choice->findData(It.value().toString()));
+        else if (auto* Interval = findChild<QSpinBox*>(Name)) Interval->setValue(It.value().toInt());
     }
     const auto Refresh = hc::refresh::Settings::FromJson(General["refresh"].toObject()).ToJson();
     for (auto It = Refresh.begin(); It != Refresh.end(); ++It) {
@@ -356,6 +357,7 @@ bool QMainOpts::SaveSettings()
         const auto Name = "hc.navigation.quickFind." + It.key();
         if (auto* Check = findChild<QCheckBox*>(Name)) QuickFind[It.key()] = Check->isChecked();
         else if (auto* Choice = findChild<QComboBox*>(Name)) QuickFind[It.key()] = Choice->currentData().toString();
+        else if (auto* Interval = findChild<QSpinBox*>(Name)) QuickFind[It.key()] = Interval->value();
     }
     General["quickFind"] = QuickFind;
     auto Refresh = General["refresh"].toObject();
@@ -432,6 +434,8 @@ bool QMainOpts::SaveSettings()
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) Bridge->FileJobs()->ApplyDefaults();
     if (auto* Owner = parentWidget()) for (auto* Model : Owner->findChildren<CFSModel*>()) {
         Model->ApplyDirectorySizeSettings(); Model->ApplyRefreshSettings();
+        Model->SetEverythingDisplayInterval(hc::quickfind::Settings::FromJson(
+            hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject()).everythingDisplayIntervalMs_);
     }
     committedSettings_ = hc::settings::AppSettings().Object();
     if (auto* Status = findChild<QLabel*>("hc.settings.saveStatus")) Status->setText(tr("적용 완료 · 이후 변경은 다시 적용하거나 취소하세요."));
@@ -704,7 +708,15 @@ void QMainOpts::initialize()
     QuickChoice("result", tr("결과 표시(&R):"), {{tr("필터링"), "filter"}, {tr("커서 이동 (기본값)"), "cursor"}});
     auto* QuickHighlight = new QCheckBox(tr("일치하는 부분 문자열 강조 표시(&H)"), QuickOptions);
     QuickHighlight->setObjectName("hc.navigation.quickFind.highlight"); QuickForm->addRow(QuickHighlight);
-    auto* QuickNote = new QLabel(tr("파일 목록에서 입력을 시작하면 상단 검색창으로 이동하여 첫 글자부터 이어서 입력합니다.\n커서 이동은 전체 목록을 유지하며 첫 일치 항목으로 이동합니다. 위·아래 화살표로 이전·다음 일치 항목을 찾습니다.\n검색창에서 Ctrl+S를 누르면 검색어를 유지한 채 필터링과 커서 이동을 전환합니다.\n결과 표시 방식은 현재 패널 목록 검색에 적용합니다. Everything 검색은 별도 결과 목록을 표시합니다.\n한글 등 IME 조합 입력을 지원하며, 이름 변경 중에는 활성화하지 않습니다.\nEverything 검색에는 실행 중인 Everything이 필요합니다. Esc를 누르면 빠른 찾기를 닫고 목록으로 돌아갑니다."), QuickPage);
+    auto* EverythingOptions = new QGroupBox(tr("Everything 결과 표시"), QuickPage); QuickLayout->addWidget(EverythingOptions);
+    auto* EverythingForm = new QFormLayout(EverythingOptions);
+    auto* EverythingInterval = new QSpinBox(EverythingOptions);
+    EverythingInterval->setObjectName("hc.navigation.quickFind.everythingDisplayIntervalMs");
+    EverythingInterval->setRange(hc::quickfind::Settings::MinimumDisplayInterval, hc::quickfind::Settings::MaximumDisplayInterval);
+    EverythingInterval->setSingleStep(50); EverythingInterval->setSuffix(tr(" ms")); EverythingInterval->setValue(500);
+    EverythingInterval->setToolTip(tr("응답을 받은 뒤 파일 패널에 결과를 추가하는 간격입니다. 첫 결과와 마지막 결과는 준비되는 대로 표시합니다. 검색 요청 간격이나 Everything 응답 대기 시간에는 영향을 주지 않습니다."));
+    EverythingForm->addRow(tr("Everything 응답 표시 주기(&E):"), EverythingInterval);
+    auto* QuickNote = new QLabel(tr("파일 목록에서 입력을 시작하면 상단 검색창으로 이동하여 첫 글자부터 이어서 입력합니다.\n커서 이동은 전체 목록을 유지하며 첫 일치 항목으로 이동합니다. 위·아래 화살표로 이전·다음 일치 항목을 찾습니다.\n검색창에서 Ctrl+S를 누르면 검색어를 유지한 채 필터링과 커서 이동을 전환합니다.\n결과 표시 방식은 현재 패널 목록 검색에 적용합니다. Everything 검색은 파일 패널에 결과를 누적 표시합니다. Ctrl+F는 설정 범위, Ctrl+Alt+F는 Everything에서 검색합니다.\n한글 등 IME 조합 입력을 지원하며, 이름 변경 중에는 활성화하지 않습니다.\nEverything 검색에는 실행 중인 Everything이 필요합니다. Esc를 누르면 빠른 찾기를 닫고 목록으로 돌아갑니다."), QuickPage);
     QuickNote->setWordWrap(true); QuickLayout->addWidget(QuickNote); QuickLayout->addStretch();
     connect(QuickEnabled, &QCheckBox::toggled, QuickOptions, &QWidget::setEnabled);
     auto* RefreshScroll = new QScrollArea(NavigationTabs); RefreshScroll->setWidgetResizable(true); RefreshScroll->setFrameShape(QFrame::NoFrame);

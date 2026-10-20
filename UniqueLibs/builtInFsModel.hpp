@@ -4,6 +4,7 @@
 
 #include "columnMgr.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
+#include "commonLibs/columns/columnSort.hpp"
 #include "qtWorkspaceState.hpp"
 #include "qtDirectoryTracker.hpp"
 #include "qtPagedStorage.hpp"
@@ -11,6 +12,7 @@
 
 #include "Modules/mdlFileModel.hpp"
 namespace hc::permissions { class DirectoryElevationSession; }
+namespace hc::search { class EverythingSession; }
 
 // https://github.com/KubaO/stackoverflown/blob/master/questions/icon-proxy-39144638/main.cpp
 
@@ -59,6 +61,13 @@ public:
     QVector<hc::columns::FieldDefinition> AvailableColumns() const;
     QVector<hc::columns::PreviewSample> ColumnSamples(const QStringList& Selection = {}) const;
     int PendingColumnQueries() const { return columnQueries_->Pending(); }
+    void StartEverythingSearch(const QString& Query, const QString& Match, int Interval);
+    void StopEverythingSearch(bool Leave = false);
+    void SetEverythingDisplayInterval(int Interval);
+    bool IsSearchResults() const { return searchResults_; }
+    QString EverythingQuery() const { return everythingQuery_; }
+    QString EverythingStatus() const { return everythingStatus_; }
+    std::shared_ptr<hc::storage::IStorageProvider> ProviderFor(const hc::storage::EntrySnapshot& Entry) const;
     static constexpr int FileColorOverrideRole = Qt::UserRole + 66;
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;
@@ -71,7 +80,7 @@ public:
     void ClearPlaceholder();
     bool HasPlaceholder() const { return placeholder_.has_value(); }
     quint64 DirectoryGeneration() const { return generation_; }
-    std::shared_ptr<hc::storage::IEntryIndex> DirectoryEntries() const { return pageSource_; }
+    std::shared_ptr<hc::storage::IEntryIndex> DirectoryEntries() const;
     quint64 MetadataGeneration() const { return index_.Generation(); }
     auto SearchMetadata() const { return index_.SearchMetadata(); }
     bool PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
@@ -82,7 +91,7 @@ public:
     // Large directories use a disk-backed sort snapshot, but expose every row.
     static constexpr std::uint64_t IndexedOrderThreshold = 4096;
     bool UsesIndexedOrder() const { return pageSource_ && pageSource_->Count() > IndexedOrderThreshold; }
-    std::uint64_t EntryCount() const { return pageView_ ? pageView_->Count() : 0; }
+    std::uint64_t EntryCount() const { return searchResults_ ? vecNode_.size() : pageView_ ? pageView_->Count() : 0; }
     bool IsPageLoading() const { return pageBusy_; }
     void SetPageFilter(const QString& Query, bool ShowHidden, const QString& Match = {});
     hc::storage::Result<std::shared_ptr<hc::storage::ISelectionManifest>> SelectAllEntries() const;
@@ -122,7 +131,7 @@ public:
 
     // Resource IDs belong to the provider that published the displayed rows.
     // Another tab may refresh the provider cached by a shared filesystem root.
-    std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return acceptedProvider_; }
+    std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return searchResults_ ? searchLocal_ : acceptedProvider_; }
 
 signals:
     void NavigationCancelled();
@@ -135,6 +144,8 @@ signals:
     void ColumnQueryStatus(const QString& Text);
     void ColumnSortCancelled();
     void PageChanged();
+    void SearchResultsChanged();
+    void SearchRefreshRequested();
 protected:
     void                            doRefresh() override;
 
@@ -148,8 +159,14 @@ private:
     void requestPage(std::uint64_t Offset, bool Rebuild);
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
-    void                            refreshDisplayIcons();
-    void                            refreshNameSortRanks();
+    void                            refreshDisplayIcons(int First = 0);
+    void                            refreshNameSortRanks(int First = 0);
+    void appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entries);
+    nsHC::TySpFileSource makeDisplayItem(hc::storage::EntrySnapshot Entry, const QPixmap& FolderIcon, const QPixmap& FileIcon) const;
+    bool searchResults_ = false;
+    QString everythingQuery_, everythingStatus_;
+    std::unique_ptr<hc::search::EverythingSession> everythingSession_;
+    std::shared_ptr<hc::storage::IStorageProvider> searchLocal_, searchSmb_;
     hc::columns::CellValue readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent = true) const;
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
@@ -159,7 +176,10 @@ private:
     mutable bool requestOnlyValues_ = false;
     QVector<int>                    nameSortRanks_, columnSortRanks_;
     QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_;
-    void refreshColumnSortRanks();
+    void refreshColumnSortRanks(int First = 0);
+    QVector<hc::columns::SortRow> searchSortRows_;
+    QVector<int> searchSortOrder_;
+    QVector<hc::columns::SortDefinition> searchSorts_;
     QJsonObject                     displaySettings_;
     quint64                         iconGeneration_ = 0;
     int                             iconPixels_ = 32;

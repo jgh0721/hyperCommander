@@ -112,6 +112,8 @@ public:
     void                           RestoreWorkspaceView(const QJsonObject& View);
     QStringList                    CaptureSelection() const;
     QString                        CaptureFocus() const;
+    QJsonObject CaptureScrollState() const;
+    void RestoreScrollState(const QJsonObject& State);
     void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
 
 signals:
@@ -209,6 +211,7 @@ private:
     QLabel*                         columnStatus_ = nullptr;
     QStringList                     querySelection_;
     QString                         queryFocus_;
+    QJsonObject queryScroll_;
     int                             fileNameColumnIndex = -1;       // 추후 사용.
 };
 

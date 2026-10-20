@@ -56,6 +56,7 @@ bool Save(hc::settings::JsonStore& Settings, Loaded& Previous, const State& Valu
 class DirectoryIndex {
 public:
     void Publish(const std::vector<storage::EntrySnapshot>& Entries);
+    void Append(const std::vector<storage::EntrySnapshot>& Entries);
     bool Put(const storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation);
     QMap<QString, QString> Metadata(const storage::EntrySnapshot& Entry) const;
     QMap<QString, QMap<QString, QString>> SearchMetadata() const {
