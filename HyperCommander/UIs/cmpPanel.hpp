@@ -63,7 +63,8 @@ class CmpPanel : public QWidget
         bool                        footerValid_ = false, automaticSnapshot_ = false;
         hc::workspace::TabState     workspace_;
         std::optional<hc::workspace::TabState> searchOrigin_;
-        QJsonObject searchScroll_;
+        QJsonObject searchScroll_, searchGroups_;
+        bool restoreSearchGroups_ = false;
         bool                       pending_ = false, restoreSelection_ = false;
 
         CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }

@@ -22,6 +22,10 @@
     {
       "id": "HC-QTN-009",
       "purpose": "Per-row key change relocation, persistent key snapshots, incremental group interval split/merge, expansion ancestry and visible subtree preservation"
+    },
+    {
+      "id": "HC-QTN-010",
+      "purpose": "Independent group identity, order and caption; stable incremental grouping without changing file sort roles"
     }
   ],
   "integrated": {
@@ -42,7 +46,14 @@
       ],
       "src/grid/QtnGridModelController.h": [
         "setIncrementalSortThreshold",
-        "clearRoleCache"
+        "clearRoleCache",
+        "setGroupingRoles",
+        "groupKeyRole",
+        "groupSortRole",
+        "groupTextRole",
+        "groupText() const",
+        "groupRows() const",
+        "setGroupExpanded(int index, bool expanded)"
       ],
       "src/grid/QtnGridCardView.h": [
         "setColumnCaptionsVisible",

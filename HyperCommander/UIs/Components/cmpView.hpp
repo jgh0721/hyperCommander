@@ -5,6 +5,7 @@
 #include <stop_token>
 #include <fmfilelist/RecordPainting.h>
 #include "filePanelSettings.hpp"
+#include "commonLibs/columns/columnGrouping.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "Modules/mdlFileSystem.hpp"
@@ -115,11 +116,22 @@ public:
     QJsonObject CaptureScrollState() const;
     void RestoreScrollState(const QJsonObject& State);
     void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
+    bool SetGrouping(const hc::columns::GroupingState& State);
+    hc::columns::GroupingState Grouping() const { return grouping_; }
+    bool GroupingActive() const;
+    bool IsGroupFocused() const;
+    void SetGroupsExpanded(bool Expanded);
+    QJsonObject CaptureGroupExpansion() const { return {{"defaultExpanded", groupsExpandedByDefault_}, {"groups", groupExpansion_}}; }
+    void RestoreGroupExpansion(const QJsonObject& State);
+    QModelIndexList SelectionCandidates() const;
+    QModelIndexList SelectedSourceIndexes() const;
+    bool IsSourceSelected(const QModelIndex& Index) const;
 
 signals:
     void                           sigViewSettingsChanged();
     void                           sigListPresentationChanged();
     void sigThumbnailSelectionChanged();
+    void sigSelectionIdentityChanged();
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
@@ -139,6 +151,32 @@ protected:
     bool                            nativeEvent( const QByteArray& eventType, void* message, qintptr* result ) override;
 
 private:
+    void initializeGrouping();
+    void applyGrouping();
+    void applyGroupExpansion();
+    void projectGroupedSelection();
+    QString sourceSelectionKey(QModelIndex Index) const;
+    void showGroupingMenu(Qtitan::ContextMenuEventArgs* Args);
+    hc::columns::GroupingState grouping_;
+    QJsonObject unsupportedGrouping_, groupExpansion_;
+    QSet<QString> groupedSelection_;
+    QHash<QString, QString> groupLastFocus_;
+    QString groupingContext_;
+    bool groupingProjection_ = false, groupingReset_ = false, userGroupCollapse_ = false;
+    bool groupsExpandedByDefault_ = true, groupInteractionPending_ = false;
+    QString groupCollapseFocus_, groupInteractionFocus_;
+    int groupingUpdateDepth_ = 0;
+    QTimer groupingTimer_, groupingDateTimer_, groupInteractionTimer_;
+    void queueSelectionKey(QKeyCombination Key);
+    void drainSelectionKeys();
+    void finishSelectionInput();
+    void syncSelectionInputActivity();
+    QList<QKeyCombination> pendingSelectionKeys_;
+    CFsModelT* selectionKeyModel_ = nullptr;
+    QString selectionKeyLocation_;
+    bool processingSelectionKey_ = false;
+    int selectionHeldKey_ = 0;
+    QTimer selectionKeyTimer_;
     void resetRenameClicks();
     void selectRenameText(bool IncludeExtension);
     void positionRenameEditor();

@@ -1,5 +1,6 @@
 ﻿#include "qtitanRegression.hpp"
 #include <QPainter>
+#include "qtitanGroupingRegression.hpp"
 
 class RecordPainter final : public Qtitan::GridRecordPainter
 {
@@ -22,6 +23,7 @@ class QtitanIntegration final : public QObject
 {
     Q_OBJECT
 private slots:
+    void independentGrouping() { hc::tests::GridIndependentGroupingRegression(); }
     void fileManager() { hc::tests::GridFileManagerRegression(); }
     void cacheAndSort() { hc::tests::GridCacheAndSortRegression(); }
     void recordPainterWithFileManager()

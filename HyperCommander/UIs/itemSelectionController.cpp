@@ -186,6 +186,8 @@ struct Scan {
     int offset_ = 0, rows_ = 0, matched_ = 0, added_ = 0, removed_ = 0, total_ = 0;
     QBitArray before_, after_; QStringList beforeKeys_, names_; bool ready_ = false;
     QString command_, location_; QSet<QString> restoreKeys_;
+    bool grouped_ = false; int sourceRows_ = 0;
+    QModelIndexList entries_; QStringList afterKeys_;
 };
 }
 
@@ -205,7 +207,9 @@ struct ItemSelectionController::State {
     }
     bool valid(const std::shared_ptr<Scan>& Scan) const {
         return scan_ == Scan && view_ && !loading() && Scan->generation_ == generation_ && Scan->selection_ == selection_
-            && Scan->rows_ == view_->BaseView()->getRowCount() && Scan->location_ == locationKey();
+            && Scan->grouped_ == view_->GroupingActive()
+            && (Scan->grouped_ ? Scan->sourceRows_ == model_->rowCount() : Scan->rows_ == view_->BaseView()->getRowCount())
+            && Scan->location_ == locationKey();
     }
     void message(const QString& Text) {
         if (auto* Window = qobject_cast<QMainWindow*>(view_ ? view_->window() : nullptr)) Window->statusBar()->showMessage(Text, 8000);
@@ -225,6 +229,8 @@ struct ItemSelectionController::State {
         const auto Error = Work->matcher_.Compile(Criteria);
         if (!Error.isEmpty()) { if (dialog_) dialog_->Result({}, false, hasPrevious_, Error); else message(Error); return; }
         Work->generation_ = generation_; Work->selection_ = selection_; Work->rows_ = view_->BaseView()->getRowCount(); Work->location_ = locationKey();
+        Work->grouped_ = view_->GroupingActive(); Work->sourceRows_ = model_->rowCount();
+        if (Work->grouped_) { Work->entries_ = view_->SelectionCandidates(); Work->rows_ = Work->entries_.size(); }
         Work->before_.resize(Work->rows_); Work->after_.resize(Work->rows_);
         if (Command == "restore") Work->restoreKeys_ = QSet<QString>(previous_.begin(), previous_.end());
         if (Command == "recall") Work->restoreKeys_ = QSet<QString>(remembered_.begin(), remembered_.end());
@@ -235,8 +241,9 @@ struct ItemSelectionController::State {
         if (!valid(Work)) return;
         QList<RowInput> Batch; QElapsedTimer Budget; Budget.start(); auto* Grid = view_->BaseView();
         while (Work->offset_ < Work->rows_ && Batch.size() < 128 && Budget.elapsed() < 8) {
-            const int At = Work->offset_++; const auto Row = Grid->getRow(At);
-            auto Index = Row.modelIndex(0); if (!Index.isValid()) continue;
+            const int At = Work->offset_++;
+            const auto Row = Work->grouped_ ? Qtitan::GridRow{} : Grid->getRow(At);
+            auto Index = Work->grouped_ ? Work->entries_[At] : Row.modelIndex(0); if (!Index.isValid()) continue;
             while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
             const auto Item = view_->BaseModel()->GetFileInfo(Index);
             if (!Item || Item->Name_ == "..") continue;
@@ -249,7 +256,7 @@ struct ItemSelectionController::State {
                 Input.rule_.modifiedUtcMs_ = settings::FileColorRules::MetadataTime(Item->storageEntry_->modifiedUtcMs_);
             } else Input.key_ = "legacy:" + Item->Name_;
             if (Item->Reserved0_) Input.rule_.reparseTag_ = Item->Reserved0_;
-            Input.row_ = At; Input.selected_ = Grid->modelController()->isRowSelected(Row); Batch.append(std::move(Input));
+            Input.row_ = At; Input.selected_ = Work->grouped_ ? view_->IsSourceSelected(Index) : Grid->modelController()->isRowSelected(Row); Batch.append(std::move(Input));
         }
         auto* Watcher = new QFutureWatcher<QList<bool>>(owner_);
         QObject::connect(Watcher, &QFutureWatcherBase::finished, owner_, [this, Work, Watcher, Batch] {
@@ -261,6 +268,7 @@ struct ItemSelectionController::State {
                 After = Matcher::Selected(Work->criteria_.operation_, Input.selected_, Match);
                 Work->before_.setBit(Input.row_, Input.selected_); Work->after_.setBit(Input.row_, After);
                 if (Input.selected_) Work->beforeKeys_.append(Input.key_);
+                if (After) Work->afterKeys_.append(Input.key_);
                 Work->matched_ += Match; Work->added_ += After && !Input.selected_; Work->removed_ += !After && Input.selected_; Work->total_ += After;
                 if (Match && Work->names_.size() < 12) Work->names_.append(Input.rule_.name_);
             }
@@ -287,7 +295,10 @@ struct ItemSelectionController::State {
         // A changed input invalidates the preview before its debounce expires.
         if (Work->command_.isEmpty() && dialog_ && Work->criteria_.Save() != dialog_->Read().Save()) return;
         if (!Work->added_ && !Work->removed_) { message(Text("선택 변경 없음")); return; }
-        auto* Grid = view_->BaseView(); applying_ = true; Grid->beginUpdate(); Grid->deselectAll();
+        auto* Grid = view_->BaseView(); applying_ = true;
+        if (Work->grouped_) view_->RestoreSelection(Work->afterKeys_, view_->CaptureFocus());
+        else {
+        Grid->beginUpdate(); Grid->deselectAll();
         for (int At = 0; At < Work->after_.size();) {
             if (!Work->after_.testBit(At)) { ++At; continue; }
             const int First = At; while (At < Work->after_.size() && Work->after_.testBit(At)) ++At;
@@ -297,7 +308,9 @@ struct ItemSelectionController::State {
             const auto* FirstColumn = Grid->getFirstColumn(); const auto* LastColumn = Grid->getLastColumn();
             Grid->selectRange(First, At - 1, FirstColumn ? FirstColumn->index() : -1, LastColumn ? LastColumn->index() : -1, Qtitan::Select);
         }
-        Grid->endUpdate(); view_->BaseModel()->setProperty("hc.selectAllEntries", false); applying_ = false; ++selection_;
+        Grid->endUpdate();
+        }
+        view_->BaseModel()->setProperty("hc.selectAllEntries", false); applying_ = false; ++selection_;
         const bool Restore = Work->command_ == "restore";
         previous_ = Work->beforeKeys_; hasPrevious_ = !Restore; historyLocation_ = locationKey();
         emit view_->sigThumbnailSelectionChanged(); view_->SyncThumbnailCursor();
@@ -339,6 +352,7 @@ struct ItemSelectionController::State {
         else if (Command == "clear") C.operation_ = Operation::Remove;
         else if (Command == "invertAll" || Command == "restore" || Command == "recall") C.operation_ = Operation::Replace;
         else if (Command == "sameExtension" || Command == "clearExtension") {
+            if (view_->IsGroupFocused()) { message(Text("파일 항목에 커서를 둔 뒤 실행하십시오.")); return; }
             const auto Focus = view_->BaseView()->focusedRow(); auto Index = Focus.isValid() ? Focus.modelIndex(0) : QModelIndex{};
             while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
             const auto Item = Index.isValid() ? view_->BaseModel()->GetFileInfo(Index) : nsHC::TySpFileSource{};
@@ -366,9 +380,26 @@ ItemSelectionController::ItemSelectionController(CGridView* View) : QObject(View
     connect(Model, &QAbstractItemModel::layoutAboutToBeChanged, this, [this] { state_->invalidate(); });
     connect(Model, &QAbstractItemModel::rowsAboutToBeInserted, this, [this] { state_->invalidate(); });
     connect(Model, &QAbstractItemModel::rowsAboutToBeRemoved, this, [this] { state_->invalidate(); });
-    connect(View->BaseView(), &Qtitan::GridViewBase::sortingChanged, this, [this] { state_->invalidate(); });
-    connect(View->BaseView(), &Qtitan::GridViewBase::selectionChanged, this, [this] {
+    const auto ViewOrderChanged = [this] {
+        // Grouped scans retain source indexes and stable keys; native row layout
+        // changes do not invalidate their candidates. Source/proxy mutations do.
+        if (state_->scan_ && state_->scan_->grouped_ && state_->view_->GroupingActive()) return;
+        state_->invalidate();
+    };
+    connect(View->BaseView(), &Qtitan::GridViewBase::sortingChanged, this, ViewOrderChanged);
+    connect(View->BaseView(), &Qtitan::GridViewBase::groupingChanged, this, ViewOrderChanged);
+    connect(View, &CGridView::sigSelectionIdentityChanged, this, [this] {
         if (state_->applying_) return; ++state_->selection_; state_->scan_.reset();
+        if (state_->dialog_) state_->start(state_->dialog_->Read());
+    });
+    if (auto* Visible = View->BaseView()->model(); Visible != Model) {
+        connect(Visible, &QAbstractItemModel::modelReset, this, [this] { state_->invalidate(); });
+        connect(Visible, &QAbstractItemModel::layoutChanged, this, [this] { state_->invalidate(); });
+        connect(Visible, &QAbstractItemModel::rowsInserted, this, [this] { state_->invalidate(); });
+        connect(Visible, &QAbstractItemModel::rowsRemoved, this, [this] { state_->invalidate(); });
+    }
+    connect(View->BaseView(), &Qtitan::GridViewBase::selectionChanged, this, [this] {
+        if (state_->applying_ || state_->view_->GroupingActive()) return; ++state_->selection_; state_->scan_.reset();
         if (state_->dialog_) state_->start(state_->dialog_->Read());
     });
 }

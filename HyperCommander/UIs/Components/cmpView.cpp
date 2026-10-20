@@ -273,6 +273,8 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
     TableOpts.setColumnsQuickCustomization( false );
+    // Route header context events through the shared menu, including grouping.
+    TableOpts.setColumnsQuickMenuVisible( false );
     
     BandedOpts.setBandsHeader( false );
     BandedOpts.setBandsQuickCustomization( false );
@@ -354,7 +356,10 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     connect(&columnSortTimer_, &QTimer::timeout, this, [this] {
         if (auto* Model = qobject_cast<CFSModel*>(model_)) {
             const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
-            Model->SetColumnSorts(ColumnProfile().sorts_); RestoreSelection(Selected, Focus);
+            const auto Scroll = CaptureScrollState();
+            QScopedValueRollback GroupGuard(groupingProjection_, true);
+            Model->SetColumnSorts(ColumnProfile().sorts_); applyGroupExpansion();
+            RestoreSelection(Selected, Focus); RestoreScrollState(Scroll);
         }
     });
     setLayout( vbox_ );
@@ -363,6 +368,16 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     // Percentage/fixed widths are applied by QtitanColumnAdapter after header measurement.
     view_->bestFit( FitToHeader );
     columnAdapter_ = new QtitanColumnAdapter(this, grid_, view_);
+    initializeGrouping();
+    selectionKeyTimer_.setSingleShot(true); selectionKeyTimer_.setInterval(10);
+    connect(&selectionKeyTimer_, &QTimer::timeout, this, &CGridView::drainSelectionKeys);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
+        if (State != Qt::ApplicationActive) finishSelectionInput();
+    });
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* Focus) {
+        if (Focus && Focus != grid_ && !grid_->isAncestorOf(Focus)) finishSelectionInput();
+    });
+    columnAdapter_->SetViewportHandlers([this] { return CaptureScrollState(); }, [this](const auto& State) { RestoreScrollState(State); });
     recordPainter_ = new ProductRecordPainter(this); view_->setRecordPainter(recordPainter_);
     selectionSummaryTimer_.setSingleShot(true);
     connect(&selectionSummaryTimer_, &QTimer::timeout, this, &CGridView::sigThumbnailSelectionChanged);
@@ -380,6 +395,8 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 CGridView::~CGridView()
 {
     CancelQuickFind();
+    pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     presentationTimer_.stop();
     automaticColumnsStop_.request_stop();
     thumbnailModel_->SetEnabled(false);
@@ -394,6 +411,8 @@ void CGridView::CancelQuickFind()
 void CGridView::MoveQuickFindCursor(const QString& Query, const QString& Match, int Direction)
 {
     CancelQuickFind();
+    pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     QPointer<CFSModel> Native = qobject_cast<CFSModel*>(model_);
     if (!Native || Query.isEmpty()) return;
     const auto Request = quickFindGeneration_;
@@ -414,7 +433,9 @@ void CGridView::MoveQuickFindCursor(const QString& Query, const QString& Match, 
         const int Start = !Direction ? 0 : Current < 0 ? (Direction > 0 ? 0 : Count - 1) : (Current + (Direction > 0 ? 1 : Count - 1)) % Count;
         for (int Step = 0; Step < Count; ++Step) {
             const int Row = (Start + (Direction < 0 ? Count - Step : Step)) % Count;
-            const auto Visible = view_->getRow(Row).modelIndex(0);
+            const auto ItemRow = view_->getRow(Row);
+            if (ItemRow.type() != Qtitan::GridRow::DataRow) continue;
+            const auto Visible = ItemRow.modelIndex(0);
             const auto Source = proxy_ ? proxy_->mapToSource(Visible) : Visible;
             const auto Item = Native->GetFileInfo(Source);
             if (!Item || !Item->storageEntry_ || !hc::quickfind::Matches(QString::fromStdString(Item->storageEntry_->name_), Query, Match)) continue;
@@ -474,6 +495,7 @@ void CGridView::applyThumbnailPresentation()
         if (Column.id_ == Sort.columnId_) Sorts.append(Column.title_ + (Sort.order_ == Qt::AscendingOrder ? " ↑" : " ↓"));
     thumbnails_->setSortText(Sorts.isEmpty() ? tr("모델 순서") : Sorts.join(" · "));
     presentationStack_->setCurrentWidget(Show ? static_cast<QWidget*>(thumbnails_) : grid_);
+    if (Changed) groupingTimer_.start(0);
     thumbnailModel_->SetEnabled(Show && isVisible());
     setProperty("hc.thumbnailTargetPercent", Percent); SyncThumbnailCursor();
     if (Changed) {
@@ -588,6 +610,16 @@ void CGridView::applyPresentation()
     view_->beginUpdate();
     view_->options().setRowAutoHeight(false);
     view_->options().setCellHeight(recordGeometry_.cellHeight());
+    view_->options().setGroupRowHeight(QFontMetrics(grid_->font()).height() + 12);
+    auto GroupPalette = grid_->palette();
+    GroupPalette.setColor(QPalette::All, QPalette::Base, recordColors_[fm::style::Token::Head]);
+    GroupPalette.setColor(QPalette::All, QPalette::Window, recordColors_[fm::style::Token::Head]);
+    GroupPalette.setColor(QPalette::All, QPalette::BrightText, recordColors_[fm::style::Token::Fg]);
+    GroupPalette.setColor(QPalette::All, QPalette::Text, recordColors_[fm::style::Token::Fg]);
+    GroupPalette.setColor(QPalette::All, QPalette::Dark, recordColors_[fm::style::Token::Head]);
+    GroupPalette.setColor(QPalette::All, QPalette::Highlight, recordColors_[fm::style::Token::InvCur]);
+    GroupPalette.setColor(QPalette::All, QPalette::HighlightedText, recordColors_[fm::style::Token::OnInvCur]);
+    view_->options().setGroupPalette(0, GroupPalette);
     view_->options().setColumnHeight(std::max(QFontMetrics(grid_->font()).height() + 4,
         recordGeometry_.twoLine ? recordGeometry_.headerHeight / 2 : recordGeometry_.headerHeight));
     for (int Index = 0; Index < model_->columnCount(); ++Index)
@@ -602,6 +634,8 @@ void CGridView::applyPresentation()
 
 void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns )
 {
+    pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
+    if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     CancelRename();
     if (Source && !Source->QObject::parent()) Source->setParent(this);
     if (Proxy && !Proxy->QObject::parent()) Proxy->setParent(this);
@@ -633,11 +667,11 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     disconnect(selectionReset_);
     selectionReset_ = connect(Source, &QAbstractItemModel::modelAboutToBeReset,
         this, [this] {
-            resetRenameClicks();
+            resetRenameClicks(); groupingReset_ = true;
             resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
             resetPath_ = model_->property("hc.snapshotLocation").toString();
             model_->setProperty("hc.selectAllEntries", false);
-            view_->deselectAll();
+            QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
         }, Qt::DirectConnection);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
@@ -663,8 +697,18 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
-        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] { querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState(); });
-        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] { RestoreSelection(querySelection_, queryFocus_); RestoreScrollState(queryScroll_); });
+        connect(Native, &CFSModel::ColumnValuesChanging, this, [this] {
+            if (groupingUpdateDepth_++ == 0) {
+                querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState(); view_->beginUpdate();
+            }
+        });
+        connect(Native, &CFSModel::ColumnValuesChanged, this, [this] {
+            if (groupingUpdateDepth_ > 0 && --groupingUpdateDepth_ == 0) {
+                const bool Restore = !groupingProjection_;
+                QScopedValueRollback GroupGuard(groupingProjection_, true); view_->endUpdate();
+                if (Restore) { applyGroupExpansion(); RestoreSelection(querySelection_, queryFocus_); RestoreScrollState(queryScroll_); }
+            }
+        });
         connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
         connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
             view_->beginUpdate();
@@ -680,6 +724,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         Source->setProperty("hc.presentationSignals", true);
         const auto Schedule = [this] { requestPresentation(); };
         connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
+        connect(Source, &QAbstractItemModel::modelReset, this, [this] { groupingTimer_.start(0); });
         connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
         connect(Source, &QAbstractItemModel::dataChanged, this, Schedule);
         if (Proxy) {
@@ -741,6 +786,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                     Sort.order_ == Qt::AscendingOrder ? Qtitan::SortAscending : Qtitan::SortDescending);
     }
     columnAdapter_->Bind(*Columns);
+    groupingTimer_.start(0);
     if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetColumnSorts(Columns->profile_.sorts_);
     ApplyDisplaySettings();
     requestPresentation();
@@ -854,7 +900,7 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 
 void CGridView::SetPanelActive(bool Active)
 {
-    if (!Active) { resetRenameClicks(); }
+    if (!Active) { resetRenameClicks(); finishSelectionInput(); }
     panelActive_ = Active;
     thumbnails_->setPaneActive(Active);
     grid_->viewport()->update();
@@ -955,7 +1001,9 @@ void CGridView::commitRename(int Direction)
         const auto Visible = proxy_ ? proxy_->mapFromSource(renameIndex_) : QModelIndex(renameIndex_);
         const auto Current = view_->getRow(Visible);
         for (int Row = Current.rowIndex() + Direction; Row >= 0 && Row < view_->getRowCount(); Row += Direction) {
-            auto At = view_->getRow(Row).modelIndex(0);
+            const auto ItemRow = view_->getRow(Row);
+            if (ItemRow.type() != Qtitan::GridRow::DataRow) continue;
+            auto At = ItemRow.modelIndex(0);
             if (proxy_) At = proxy_->mapToSource(At);
             const auto Entry = model_->GetFileInfo(At);
             if (Entry && Entry->Name_ != "..") { renameNext_ = Entry->Name_; break; }
@@ -1049,13 +1097,14 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
         nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
     }
     view_->beginUpdate();
+    QScopedValueRollback GroupGuard(groupingProjection_, true);
     view_->deselectAll(); view_->setModel(nullptr); view_->removeColumns();
     auto Binding = BindColumnProfile(Profile);
     SetModel(model_, proxy_, &Binding);
     columnAdapter_->UseProfileWidths();
     columnAdapter_->Apply();
     view_->endUpdate();
-    RestoreSelection(Selected, Focus);
+    groupingTimer_.start(0); RestoreSelection(Selected, Focus);
     return true;
 }
 
@@ -1077,13 +1126,17 @@ QJsonObject CGridView::CaptureWorkspaceView() const
     Layout["manualSelection"] = manualColumns_;
     if (automaticColumnsBase_) Layout["automaticBase"] = hc::columns::EncodeProfile(*automaticColumnsBase_);
     if (columnAdapter_->Writable()) Layout["definition"] = hc::columns::EncodeProfile(ColumnProfile());
-    return {{"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
+    return {{"groupingV1", unsupportedGrouping_.isEmpty() ? hc::columns::EncodeGrouping(grouping_) : unsupportedGrouping_}, {"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
         {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}, {"searchMatch", Proxy ? Proxy->SearchMatch() : QString{}}};
 }
 
 void CGridView::RestoreWorkspaceView(const QJsonObject& View)
 {
     QScopedValueRollback RestoreGuard(restoringPresentation_, true);
+    const auto SavedGrouping = View.value("groupingV1").toObject();
+    const auto DecodedGrouping = hc::columns::DecodeGrouping(SavedGrouping);
+    if (DecodedGrouping) { grouping_ = *DecodedGrouping; unsupportedGrouping_ = {}; }
+    else { grouping_ = {}; unsupportedGrouping_ = SavedGrouping; }
     const auto Layout = View.value(hc::columns::WorkspaceKey).toObject();
     manualColumns_ = Layout["manualSelection"].toBool(Layout.contains("definition"));
     automaticColumnsBase_ = hc::columns::DecodeProfile(Layout["automaticBase"].toObject());
@@ -1120,22 +1173,17 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
                 Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["sortNumericAware"].toBool(true));
         }
     view_->endUpdate();
-    restorePresentation(View);
+    restorePresentation(View); groupingTimer_.start(0);
     if (auto* Proxy = qobject_cast<CFSProxyModel*>(proxy_))
     { Proxy->SetHiddenSystem(View.value("hiddenSystem").toBool()); Proxy->SetSearch(View.value("search").toString(), View.value("searchMatch").toString()); }
 }
 
 QStringList CGridView::CaptureSelection() const
 {
+    if (GroupingActive()) return groupedSelection_.values();
     QStringList Result;
-    if (!model_ || !view_) return Result;
-    for (const auto Row : view_->selection()->selectedRowIndexes())
-    {
-        auto Index = view_->getRow(Row).modelIndex(0);
-        if (!Index.isValid()) continue;
-        if (proxy_) Index = proxy_->mapToSource(Index);
-        const auto Item = model_->GetFileInfo(Index);
-        if (Item && Item->storageEntry_) Result.append(hc::workspace::SelectionKey(*Item->storageEntry_));
+    for (const auto& Index : SelectedSourceIndexes()) {
+        const auto Key = sourceSelectionKey(Index); if (!Key.isEmpty()) Result.append(Key);
     }
     return Result;
 }
@@ -1143,70 +1191,79 @@ QStringList CGridView::CaptureSelection() const
 QString CGridView::CaptureFocus() const
 {
     if (!model_ || !view_) return {};
-    auto Index = view_->focusedRow().modelIndex(0);
-    if (!Index.isValid()) return {};
-    if (proxy_) Index = proxy_->mapToSource(Index);
-    const auto Item = model_->GetFileInfo(Index);
-    return Item && Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : QString{};
+    const auto Row = view_->focusedRow(); if (!Row.isValid()) return {};
+    if (Row.type() == Qtitan::GridRow::GroupRow) return "@group:" + Row.groupValue().toString();
+    return sourceSelectionKey(Row.modelIndex(0));
 }
 
 QJsonObject CGridView::CaptureScrollState() const
 {
-    QJsonObject State;
-    for (auto* Bar : grid_->findChildren<QScrollBar*>()) if (Bar->isVisible())
-        State[Bar->orientation() == Qt::Vertical ? "y" : "x"] = Bar->value();
-    int Top = std::numeric_limits<int>::max();
-    for (const auto& Hit : grid_->hitInfoAll()) {
-        if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.modelIndex().column() != 0 || Hit.rect().bottom() < ListContentTopLeft().y() || Hit.rect().top() >= Top) continue;
-        auto At = Hit.modelIndex(); if (proxy_) At = proxy_->mapToSource(At);
-        const auto Item = model_->GetFileInfo(At); if (!Item || !Item->storageEntry_) continue;
-        Top = Hit.rect().top(); State["anchor"] = hc::workspace::SelectionKey(*Item->storageEntry_);
-        State["offset"] = Top - ListContentTopLeft().y();
+    if (!view_ || !model_) return {};
+    auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); Layout->getModelHeight();
+    const int Scroll = view_->verticalScrollBar()->value();
+    auto State = QJsonObject{{"version", 1}, {"y", Scroll}, {"x", view_->horizontalScrollBar()->value()}};
+    if (!view_->getRowCount()) return State;
+    int Low = 0, High = view_->getRowCount();
+    while (Low + 1 < High) {
+        const int Middle = (Low + High) / 2;
+        if (Layout->getRowScrollPos(Middle) <= Scroll) Low = Middle; else High = Middle;
     }
+    const auto Row = view_->getRow(Low);
+    const bool Group = Row.type() == Qtitan::GridRow::GroupRow;
+    State["kind"] = Group ? "group" : "entry";
+    State["anchor"] = Group ? Row.groupValue().toString() : sourceSelectionKey(Row.modelIndex(0));
+    State["offset"] = Scroll - Layout->getRowScrollPos(Low);
     return State;
 }
 
 void CGridView::RestoreScrollState(const QJsonObject& State)
 {
-    if (State.isEmpty()) return;
-    for (auto* Bar : grid_->findChildren<QScrollBar*>()) {
-        const auto Key = Bar->orientation() == Qt::Vertical ? "y" : "x";
-        if (Bar->isVisible() && State.contains(Key)) Bar->setValue(State[Key].toInt());
-    }
-    const auto Anchor = State["anchor"].toString(); if (Anchor.isEmpty()) return;
-    for (int Row = 0; Row < model_->rowCount(); ++Row) {
-        const auto At = model_->index(Row, 0); const auto Item = model_->GetFileInfo(At);
-        if (!Item || !Item->storageEntry_ || hc::workspace::SelectionKey(*Item->storageEntry_) != Anchor) continue;
-        const auto Visible = proxy_ ? proxy_->mapFromSource(At) : At; if (!Visible.isValid()) break;
-        view_->scrollToIndex(Visible, false);
-        const auto GridRow = view_->getRow(Visible);
-        for (const auto& Hit : grid_->hitInfoAll()) if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == GridRow.rowIndex()) {
-            const int Delta = Hit.rect().top() - ListContentTopLeft().y() - State["offset"].toInt();
-            for (auto* Bar : grid_->findChildren<QScrollBar*>()) if (Bar->orientation() == Qt::Vertical && Bar->isVisible()) Bar->setValue(Bar->value() + Delta);
-            return;
-        }
+    if (State.isEmpty() || !view_ || !model_) return;
+    auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); Layout->updateLayout(); Layout->getModelHeight();
+    int Position = -1;
+    const auto Anchor = State["anchor"].toString();
+    if (State["kind"] == QJsonValue("group")) {
+        for (const auto& Group : view_->modelController()->groupRows()) if (Group._groupValue.toString() == Anchor) { Position = Group.rowIndex; break; }
+    } else if (!Anchor.isEmpty()) for (const auto& Index : SelectionCandidates()) {
+        if (sourceSelectionKey(Index) != Anchor) continue;
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Index) : Index;
+        const auto Row = view_->getRow(Visible); if (Row.isValid()) Position = Row.rowIndex();
         break;
     }
+    int Scroll = State["y"].toInt();
+    if (Position >= 0 && Position < view_->getRowCount()) {
+        const auto Row = view_->getRow(Position);
+        const int Offset = std::clamp(State["offset"].toInt(), 0, (std::max)(0, Layout->calculateGridRowLength(Row, false) - 1));
+        Scroll = Layout->getRowScrollPos(Position) + Offset;
+    }
+    view_->verticalScrollBar()->setValue(Scroll); view_->horizontalScrollBar()->setValue(State["x"].toInt());
 }
 
 void CGridView::RestoreSelection(const QStringList& Selection, const QString& Focus)
 {
+    if (!model_ || !view_) return;
     const QSet<QString> Keys(Selection.begin(), Selection.end());
-    view_->deselectAll();
-    for (int Index = 0; Index < model_->rowCount(); ++Index)
-    {
-        const auto Source = model_->index(Index, 0);
-        const auto Item = model_->GetFileInfo(Source);
-        if (!Item || !Item->storageEntry_) continue;
-        const auto Key = hc::workspace::SelectionKey(*Item->storageEntry_);
-        if (!Keys.contains(Key) && Key != Focus) continue;
+    const auto Previous = groupedSelection_;
+    QScopedValueRollback Guard(groupingProjection_, true);
+    view_->beginUpdate(); view_->deselectAll();
+    if (GroupingActive()) groupedSelection_.clear();
+    int FocusRow = -1;
+    for (const auto& Source : SelectionCandidates()) {
+        const auto Key = sourceSelectionKey(Source);
+        const bool Selected = !Key.isEmpty() && Keys.contains(Key);
+        if (!Selected && Key != Focus) continue;
         const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
-        if (!Visible.isValid()) continue;
-        const auto Row = view_->getRow(Visible);
-        if (!Row.isValid()) continue;
-        if (Keys.contains(Key)) view_->selectRow(Row.rowIndex(), Qtitan::Select);
-        if (Key == Focus) view_->setFocusedRowIndex(Row.rowIndex());
+        if (Selected && GroupingActive()) groupedSelection_.insert(Key);
+        const auto Row = view_->getRow(Visible); if (!Row.isValid()) continue;
+        if (Selected && Row.type() == Qtitan::GridRow::DataRow) view_->selectRow(Row.rowIndex(), Qtitan::Select);
+        if (!Key.isEmpty() && Key == Focus) FocusRow = Row.rowIndex();
     }
+    if (Focus.startsWith("@group:")) for (const auto& Group : view_->modelController()->groupRows())
+        if (Group._groupValue.toString() == Focus.mid(7)) { FocusRow = Group.rowIndex; break; }
+    if (FocusRow >= 0) view_->setFocusedRowIndex(FocusRow);
+    view_->endUpdate();
+    if (GroupingActive() && Previous != groupedSelection_) emit sigSelectionIdentityChanged();
+    selectionSummaryTimer_.start(0);
 }
 
 void CGridView::EnsureKeyboardFocusOnView() const
@@ -1245,21 +1302,92 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
 
     if( view_ == nullptr )
         return {};
-    
+    if (IsGroupFocused()) {
+        if (IsMoveDown) view_->navigateDown(Qt::ControlModifier);
+        return {};
+    }
+    if (!SrcIndex.isValid()) return {};
     const auto Row = view_->getRow( SrcIndex );
+    if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) return {};
     const auto ModelIndex = proxy_ != nullptr ? proxy_->mapToSource( SrcIndex ) : SrcIndex;
     nsHC::TySpFileSource Info = model_->GetFileInfo( ModelIndex );
 
-    view_->selectRow( Row.rowIndex(), Qtitan::Invert );
-    IsSelected = view_->modelController()->isRowSelected( Row );
+    if (!Info || Info->Name_ == "..") {
+        if (IsMoveDown) view_->navigateDown(Qt::ControlModifier);
+        return {};
+    }
+    if (GroupingActive()) {
+        const auto Key = sourceSelectionKey(ModelIndex); if (Key.isEmpty()) return {};
+        IsSelected = !groupedSelection_.contains(Key);
+        if (IsSelected) groupedSelection_.insert(Key); else groupedSelection_.remove(Key);
+        {
+            QScopedValueRollback Guard(groupingProjection_, true);
+            view_->selectRow(Row.rowIndex(), IsSelected ? Qtitan::Select : Qtitan::Unselect);
+        }
+        emit sigSelectionIdentityChanged(); selectionSummaryTimer_.start(0);
+    } else {
+        view_->selectRow(Row.rowIndex(), Qtitan::Invert);
+        IsSelected = view_->modelController()->isRowSelected(Row);
+    }
     if (IsSelected && Info && Info->Name_ != ".." && (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
         && hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeOnSpace"].toBool(true))
         if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->RequestDirectorySizes({ModelIndex});
     
     if( IsMoveDown == true )
-        view_->navigateDown( Qt::NoModifier );
+        view_->navigateDown( Qt::ControlModifier );
 
     return Info;
+}
+
+void CGridView::queueSelectionKey(QKeyCombination Key)
+{
+    if (!model_) return;
+    if (pendingSelectionKeys_.isEmpty() && !processingSelectionKey_) {
+        selectionKeyModel_ = model_;
+        selectionKeyLocation_ = model_->property("hc.snapshotLocation").toString();
+    }
+    pendingSelectionKeys_.append(Key); syncSelectionInputActivity();
+    drainSelectionKeys();
+}
+
+void CGridView::drainSelectionKeys()
+{
+    // COM and Qtitan can pump native input during command dispatch. A nested
+    // repeat must resolve its file index after the preceding cursor move.
+    if (processingSelectionKey_) return;
+    QPointer<CGridView> Alive(this);
+    processingSelectionKey_ = true;
+    const auto Finish = qScopeGuard([Alive] {
+        if (Alive) { Alive->processingSelectionKey_ = false; Alive->syncSelectionInputActivity(); }
+    });
+    while (!pendingSelectionKeys_.isEmpty()) {
+        if (!panelActive_ || IsEditing() || !model_ || model_ != selectionKeyModel_
+            || model_->property("hc.snapshotLocation").toString() != selectionKeyLocation_) {
+            pendingSelectionKeys_.clear(); selectionKeyTimer_.stop(); return;
+        }
+        const auto* Native = qobject_cast<CFSModel*>(model_);
+        if (groupingProjection_ || groupingReset_ || groupingUpdateDepth_ || groupInteractionPending_
+            || (Native && Native->IsLoading())) {
+            selectionKeyTimer_.start(); return;
+        }
+        const auto Key = pendingSelectionKeys_.takeFirst();
+        QKeyEvent Event(QEvent::KeyPress, Key.key(), Key.keyboardModifiers());
+        TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, retrieveCursorIndex());
+        if (!Alive) return;
+    }
+    selectionKeyTimer_.stop();
+}
+
+void CGridView::finishSelectionInput()
+{
+    selectionHeldKey_ = 0;
+    syncSelectionInputActivity();
+}
+
+void CGridView::syncSelectionInputActivity()
+{
+    if (auto* Native = qobject_cast<CFSModel*>(model_))
+        Native->SetSelectionInputActive(selectionHeldKey_ != 0 || processingSelectionKey_ || !pendingSelectionKeys_.isEmpty());
 }
 
 void CGridView::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
@@ -1285,7 +1413,7 @@ QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelectio
         if (Item && Item->Name_ != "..") Paths.append(Native->GetFileFullPath(Source));
     };
     if (UseSelection)
-        for (const auto Row : view_->selection()->selectedRowIndexes()) Append(view_->getRow(Row).modelIndex(0));
+        for (const auto& Source : SelectedSourceIndexes()) Append(Source);
     if (Paths.isEmpty()) Append(Index.isValid() ? Index : retrieveCursorIndex());
     if (Paths.isEmpty()) Paths.append(model_->GetCurrentPathWithRoot());
     for (auto& Path : Paths) Path = QDir::fromNativeSeparators(Path);
@@ -1296,6 +1424,7 @@ QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelectio
 bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
 {
     if (IsEditing()) return false;
+    if (IsGroupFocused() && !Index.isValid() && CaptureSelection().isEmpty()) return false;
     auto Source = Index.isValid() ? Index : retrieveCursorIndex();
     while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
     if (Source.isValid() && Source.model() != model_) return false;
@@ -1349,6 +1478,7 @@ void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 {
     const auto Info = Args->hitInfo();
     const auto Type = Info.info();
+    if (Type == GridHitInfo::Column || Type == GridHitInfo::GroupRow || Type == GridHitInfo::GroupBranchButton) { showGroupingMenu(Args); return; }
     if (Type != GridHitInfo::Cell && Type != GridHitInfo::Rows) return;
     ShowShellMenu(Type == GridHitInfo::Cell ? Info.modelIndex() : QModelIndex{}, true);
     Args->setHandled( true );
@@ -1383,7 +1513,8 @@ void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
 
 void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 {
-    const auto Row = Args->row();
+    auto Row = Args->row();
+    if (Row.isValid() && Row.type() == Qtitan::GridRow::GroupRow) { Row.setGroupExpanded(!Row.isGroupExpanded()); Args->setHandled(true); return; }
     const auto Index = Row.modelIndex( 0 );
     const auto StCommandMgr = TyStCommandMgr::GetInstance();
 
@@ -1477,6 +1608,15 @@ void CGridView::oo_grid_editorPosting( Qtitan::EditorEventArgs* Args )
 
 void CGridView::oo_grid_selectionChanged( Qtitan::GridSelection* NewSelection, Qtitan::GridSelection* OldSelection )
 {
+    if (GroupingActive() && !groupingProjection_ && !groupInteractionPending_ && !groupingReset_ && !groupingUpdateDepth_) {
+        const auto Before = groupedSelection_;
+        QSet<QString> Old, Next;
+        for (const auto& Index : OldSelection->selectedRowIndexes()) { const auto Key = sourceSelectionKey(Index); if (!Key.isEmpty()) Old.insert(Key); }
+        for (const auto& Index : NewSelection->selectedRowIndexes()) { const auto Key = sourceSelectionKey(Index); if (!Key.isEmpty()) Next.insert(Key); }
+        for (const auto& Key : Old) if (!Next.contains(Key)) groupedSelection_.remove(Key);
+        groupedSelection_.unite(Next);
+        if (Before != groupedSelection_) emit sigSelectionIdentityChanged();
+    }
     if (model_) {
         model_->setProperty("hc.selectAllEntries", false);
         // Publish after legacy panel toggle bookkeeping and reset restoration.
@@ -1504,6 +1644,18 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (Event->type() == QEvent::KeyRelease && (Watched == grid_ || Watched == grid_->viewport())) {
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        if (!Key->isAutoRepeat() && Key->key() == selectionHeldKey_) finishSelectionInput();
+    }
+    if (Event->type() == QEvent::KeyPress && (Watched == grid_ || Watched == grid_->viewport()) && !IsEditing()) {
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        if (hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(Key->keyCombination())) == "hc.selection.invert") {
+            Event->accept(); resetRenameClicks();
+            if (!Key->isAutoRepeat()) selectionHeldKey_ = Key->key();
+            queueSelectionKey(Key->keyCombination()); return true;
+        }
+    }
     if (Watched == grid_->viewport()
         && (Event->type() == QEvent::MouseButtonPress || Event->type() == QEvent::MouseButtonDblClick)) {
         const auto* Mouse = static_cast<QMouseEvent*>(Event);
@@ -1542,6 +1694,20 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             }
         }
     }
+    if (Event->type() == QEvent::KeyPress && (Watched == grid_ || Watched == grid_->viewport()) && IsGroupFocused()) {
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        if ((Key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier
+            && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter || Key->key() == Qt::Key_Left || Key->key() == Qt::Key_Right)) {
+            auto Row = view_->focusedRow();
+            Row.setGroupExpanded(Key->key() == Qt::Key_Right ? true : Key->key() == Qt::Key_Left ? false : !Row.isGroupExpanded());
+            return true;
+        }
+    }
+    if ((Event->type() == QEvent::DragMove || Event->type() == QEvent::Drop) && (Watched == grid_ || Watched == grid_->viewport())) {
+        const auto* Drop = static_cast<QDropEvent*>(Event);
+        const auto Info = grid_->hitInfo(grid_->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint())).info();
+        if (Info == Qtitan::GridHitInfo::GroupRow || Info == Qtitan::GridHitInfo::GroupBranchButton) { Event->ignore(); return true; }
+    }
     // Changing the main window frame stylesheet on maximize repolishes children,
     // which resets viewport auto-fill. Restore it after stylesheet processing.
     if (Watched == grid_ && Event->type() == QEvent::StyleChange)
@@ -1549,6 +1715,7 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     // A DPI change reloads icons at the new physical size.
     if (Event->type() == QEvent::FontChange || Event->type() == QEvent::Show || Event->type() == QEvent::DevicePixelRatioChange) requestPresentation();
     if (Watched == grid_->viewport() && Event->type() == QEvent::KeyPress) resetRenameClicks();
+
     if( Event->type() == QEvent::KeyPress && Watched != grid_->viewport() )
     {
         resetRenameClicks();
@@ -1564,7 +1731,11 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             return true;
         // Configured commands take priority over the legacy Ctrl+A fallback.
         if (KeyEvent->matches(QKeySequence::SelectAll) && qobject_cast<CFSModel*>(model_)) {
-            view_->selectAll(); model_->setProperty("hc.selectAllEntries", true);
+            if (GroupingActive()) {
+                QStringList Keys; for (const auto& Index : SelectionCandidates()) { const auto Key = sourceSelectionKey(Index); if (!Key.isEmpty()) Keys.append(Key); }
+                RestoreSelection(Keys, CaptureFocus());
+            } else view_->selectAll();
+            model_->setProperty("hc.selectAllEntries", true);
             if (IsThumbnailMode()) emit sigThumbnailSelectionChanged();
             return true;
         }
@@ -1610,8 +1781,7 @@ QModelIndex CGridView::retrieveCursorIndex() const
         return {};
 
     const auto& Row = view_->focusedRow();
-    if( Row.isValid() == false )
-        return {};
+    if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) return {};
 
     return Row.modelIndex( 0 );
 }

@@ -743,7 +743,7 @@ QModelIndex CommandUiBridge::commandIndex() const
     auto* View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
     if (!View || !View->BaseView()) return {};
     const auto Row = View->BaseView()->focusedRow();
-    return Row.isValid() ? Row.modelIndex(0) : QModelIndex{};
+    return Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? Row.modelIndex(0) : QModelIndex{};
 }
 
 bool CommandUiBridge::ExecuteCommand(const QString& Id, const QModelIndex& Index)
@@ -1415,7 +1415,7 @@ void CommandUiBridge::refreshPreview()
     if (!Model || !View || Model->IsLoading() || !Model->ProviderEnabled())
     { quick_->CloseView(); quickKey_.clear(); return; }
     const auto Focused = View->BaseView()->focusedRow();
-    const auto Index = Focused.isValid() ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
+    const auto Index = Focused.isValid() && Focused.type() == Qtitan::GridRow::DataRow ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
     const auto Entry = Index.isValid() ? Model->GetFileInfo(Index) : nsHC::TySpFileSource{};
     if (!Entry || !Entry->storageEntry_ || Entry->storageEntry_->directory_)
     { quick_->CloseView(); quickKey_.clear(); return; }
@@ -1523,11 +1523,11 @@ CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Sing
     }
     QList<QModelIndex> Selected;
     if (!Single)
-        for (const auto Row : Grid->selection()->selectedRowIndexes()) Selected.push_back(SourceIndex(Row));
+        for (const auto& SelectedIndex : View->SelectedSourceIndexes()) Selected.push_back(SelectedIndex);
     if (Selected.isEmpty())
     {
         const auto Focused = Grid->focusedRow();
-        const auto Cursor = Index.isValid() ? SourceIndex(Index) : Focused.isValid() ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
+        const auto Cursor = Index.isValid() ? SourceIndex(Index) : Focused.isValid() && Focused.type() == Qtitan::GridRow::DataRow ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
         if (Cursor.isValid()) Selected.push_back(Cursor);
     }
     Context.selection_.clear();

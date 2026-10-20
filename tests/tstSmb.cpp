@@ -92,6 +92,7 @@
 #include <AclAPI.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
+#include "filePanelGroupingUi.hpp"
 #include "colorSchemeMgr.hpp"
 #include <fmstyle/ThemeManager.h>
 #include <fmstyle/WatercolorStyle.h>
@@ -201,6 +202,11 @@ private:
         return Host && Entry && Entry->storageEntry_ && Host->OpenFull(std::make_shared<hc::storage::ProviderContentSource>(Model->SnapshotProvider(), *Entry->storageEntry_));
     }
 private slots:
+    void filePanelGroupingUi() { hc::tests::FilePanelGroupingUi(main_, panels_.front()); }
+    void filePanelGroupingInputUi() { hc::tests::FilePanelGroupingInputUi(main_, panels_.front()); }
+    void filePanelGroupingReentryUi() { hc::tests::FilePanelGroupingReentryUi(main_, panels_.front()); }
+    void filePanelGroupingSearchUi() { hc::tests::FilePanelGroupingSearchUi(main_, panels_.front()); }
+    void filePanelGroupingLargeUi() { hc::tests::FilePanelGroupingLargeUi(main_, panels_.front()); }
     void initTestCase()
     {
         server_ = qEnvironmentVariable("HC_SMB_SERVER", "DEVTESTER-QTS");
@@ -234,7 +240,8 @@ private slots:
             const QStringList Allowed{"itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
-                || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi", "Local UI mode cannot execute an SMB scenario");
+                || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
+                || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
         }
     }
 

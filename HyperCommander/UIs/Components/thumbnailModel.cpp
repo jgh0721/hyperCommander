@@ -49,7 +49,9 @@ void ThumbnailModel::Rebuild()
     if (!Native || !Model) return;
     QVector<Tile> Tiles;
     for (int Row = 0; Row < Native->getRowCount(); ++Row) {
-        const auto Visible = Native->getRow(Row).modelIndex(0);
+        const auto GridRow = Native->getRow(Row);
+        if (GridRow.type() != Qtitan::GridRow::DataRow) continue;
+        const auto Visible = GridRow.modelIndex(0);
         const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Visible.model());
         const auto Source = Proxy ? Proxy->mapToSource(Visible) : Visible;
         const auto Item = Model->GetFileInfo(Source);
@@ -175,7 +177,19 @@ int ThumbnailModel::FullNameLines(int Width, const QFont& Font) const
 double ThumbnailModel::TargetPercent() const
 {
     int Count = 0, Targets = 0;
-    for (const auto& Tile : tiles_) {
+    QVector<Tile> Candidates;
+    if (owner_->GroupingActive()) {
+        for (const auto& Source : owner_->SelectionCandidates()) {
+            const auto Item = owner_->BaseModel()->GetFileInfo(Source);
+            if (!Item || !Item->storageEntry_) continue;
+            Tile Value; Value.entry_ = *Item->storageEntry_; Value.name_ = Item->Name_; Value.up_ = Value.name_ == "..";
+            if (Value.entry_.locator_.kind_ == hc::storage::LocatorKind::Local || Value.entry_.locator_.kind_ == hc::storage::LocatorKind::Smb)
+                Value.path_ = QString::fromStdString(Value.entry_.locator_.root_);
+            Candidates.append(std::move(Value));
+        }
+    }
+    const auto& Eligible = owner_->GroupingActive() ? Candidates : tiles_;
+    for (const auto& Tile : Eligible) {
         if (Tile.up_ || Tile.entry_.directory_) continue;
         ++Count;
         const auto Extension = QFileInfo(Tile.name_).suffix();

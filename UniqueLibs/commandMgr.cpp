@@ -243,7 +243,8 @@ DEFINE_HC_COMMAND( CCommandMgr, FileAttributes )
 }
 DEFINE_HC_COMMAND( CCommandMgr, SelectionInvert )
 {
-    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+    // Complete the cursor move before a queued selection repeat resolves its index.
+    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::AutoConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, FileNew )

@@ -183,12 +183,15 @@ int QtitanColumnAdapter::AvailableWidth() const
     }
     // This view disables row selectors, frozen-row buttons and quick customization;
     // those public options reserve no separate row-header strip (see upgrade notes).
+    Width -= static_cast<Qtitan::GridViewBase*>(view_)->layout()->getRowGroupIndent();
     return std::max(0, Width);
 }
 
 QtitanColumnAdapter::ViewportAnchor QtitanColumnAdapter::CaptureViewport() const
 {
-    ViewportAnchor Result; Result.horizontal_ = view_->horizontalScrollBar()->value();
+    ViewportAnchor Result;
+    if (captureViewport_) { Result.state_ = captureViewport_(); return Result; }
+    Result.horizontal_ = view_->horizontalScrollBar()->value();
     if (view_->getRowCount() <= 0) return Result;
     auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); Layout->getModelHeight();
     const int Scroll = view_->verticalScrollBar()->value();
@@ -204,6 +207,7 @@ QtitanColumnAdapter::ViewportAnchor QtitanColumnAdapter::CaptureViewport() const
 }
 void QtitanColumnAdapter::RestoreViewport(const ViewportAnchor& Anchor)
 {
+    if (restoreViewport_ && !Anchor.state_.isEmpty()) { restoreViewport_(Anchor.state_); return; }
     if (!Anchor.entry_.isValid()) return;
     auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); Layout->updateLayout(); Layout->getModelHeight();
     const auto Row = view_->getRow(Anchor.entry_);

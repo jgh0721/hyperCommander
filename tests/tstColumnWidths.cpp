@@ -3,6 +3,7 @@
 #include "commonLibs/columns/luaColumns.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/columns/columnSort.hpp"
+#include "commonLibs/columns/columnGrouping.hpp"
 #include <atomic>
 #include <thread>
 #include <limits>
@@ -15,6 +16,30 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void groupingDateBoundariesAndStorage()
+    {
+        using namespace hc::columns;
+        const auto Zone = QTimeZone::utc(); const QDate Today(2026, 3, 2);
+        const auto Group = [&](QDate Date) { return MakeGroupValue("file.modified", "relativeDate", CellValue::Ready(QDateTime(Date, QTime(12, 0), Zone)), Today, Zone); };
+        QCOMPARE(Group(Today).key_, QString("relativeDate/today"));
+        QCOMPARE(Group(Today.addDays(-1)).key_, QString("relativeDate/yesterday"));
+        QCOMPARE(Group(QDate(2026, 2, 25)).key_, QString("relativeDate/lastWeek"));
+        QCOMPARE(Group(QDate(2026, 2, 15)).key_, QString("relativeDate/lastMonth"));
+        QCOMPARE(Group(Today.addDays(1)).key_, QString("relativeDate/future"));
+        QVERIFY(Group(Today).order_.toInt() > Group(Today.addDays(-1)).order_.toInt());
+        QVERIFY(!MakeGroupValue("file.modified", "date", CellValue::Missing(ValueState::Empty)).order_.isValid());
+        const auto Leap = MakeGroupValue("file.created", "date", CellValue::Ready(QDateTime(QDate(2024, 2, 29), QTime(12, 0), Zone)), Today, Zone);
+        QCOMPARE(Leap.key_, QString("date/2024-02-29"));
+        const auto Local = MakeGroupValue("file.created", "date", CellValue::Ready(QDateTime(QDate(2026, 3, 1), QTime(16, 0), Zone)), Today, QTimeZone::fromSecondsAheadOfUtc(9 * 3600));
+        QCOMPARE(Local.key_, QString("date/2026-03-02"));
+        QCOMPARE(MakeGroupValue("file.extension", "value", CellValue::Ready(QString("TXT"))).key_, MakeGroupValue("file.extension", "value", CellValue::Ready(QString("txt"))).key_);
+        QVERIFY(MakeGroupValue("file.extension", "value", CellValue::Ready(QString{})).order_.isValid());
+        GroupingState State{true, QUuid::createUuid(), "relativeDate", Qt::DescendingOrder};
+        QVERIFY(DecodeGrouping(EncodeGrouping(State)) == State);
+        auto Future = EncodeGrouping(State); Future["version"] = 2; QVERIFY(!DecodeGrouping(Future));
+        Future = EncodeGrouping(State); Future["order"] = "sideways"; QVERIFY(!DecodeGrouping(Future));
+        Future = EncodeGrouping(State); Future["enabled"] = "yes"; QVERIFY(!DecodeGrouping(Future));
+    }
     void listIconSizeFollowsRecordHeight()
     {
         // 1-line: largest of 16/24/32/48/64 within the record minus 2 px top and bottom.

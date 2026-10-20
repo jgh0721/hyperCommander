@@ -205,6 +205,10 @@ void CmpPanel::AddTab(bool Navigate)
             if (Tab->Model != Model) continue;
             Tab->automaticSnapshot_ = Model->IsAutomaticRefresh();
             if (Tab->restoreSelection_ && !Model->LastNavigationError()) {
+                if (Tab->restoreSearchGroups_) {
+                    static_cast<CGridView*>(Tab->View)->RestoreGroupExpansion(Tab->searchGroups_);
+                    Tab->searchGroups_ = {}; Tab->restoreSearchGroups_ = false;
+                }
                 static_cast<CGridView*>(Tab->View)->RestoreSelection(Tab->workspace_.selection_, Tab->workspace_.focus_);
                 if (!Tab->searchScroll_.isEmpty()) {
                     static_cast<CGridView*>(Tab->View)->RestoreScrollState(Tab->searchScroll_); Tab->searchScroll_ = {};
@@ -1102,6 +1106,7 @@ void CmpPanel::StartEverythingSearch(const QString& Query, const QString& Match,
         State->searchOrigin_ = CaptureWorkspace().tabs_[CurrentTabIndex()];
         auto* View = static_cast<CGridView*>(State->View);
         State->searchScroll_ = View->CaptureScrollState();
+        State->searchGroups_ = View->CaptureGroupExpansion();
         const auto Mode = View->ListMode();
         auto Profile = View->ColumnProfile();
         auto Found = std::find_if(Profile.columns_.begin(), Profile.columns_.end(), [](const auto& C) { return C.fieldId_ == "file.parentPath"; });
@@ -1127,8 +1132,8 @@ void CmpPanel::StopEverythingSearch(bool Restore)
     State->workspace_ = Origin;
     auto Settings = Origin.view_; Settings["listPresentation"] = Presentation;
     View->RestoreWorkspaceView(Settings);
-    if (Restore) { State->restoreSelection_ = true; restoreTab(CurrentTabIndex()); }
-    else State->searchScroll_ = {};
+    if (Restore) { State->restoreSearchGroups_ = true; State->restoreSelection_ = true; restoreTab(CurrentTabIndex()); }
+    else { State->searchScroll_ = {}; State->searchGroups_ = {}; State->restoreSearchGroups_ = false; }
     syncPanelChrome();
 }
 
@@ -1301,9 +1306,8 @@ QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
         if( BaseGrid == nullptr )
             break;
 
-        for( const auto Row : BaseGrid->selection()->selectedRowIndexes() )
+        for (const auto& Index : View->SelectedSourceIndexes())
         {
-            const auto Index = SrcState->ConvertToSrcIndex( Row );
             if( SrcState->Model->GetName( Index ) == ".." )
                 continue;
 
@@ -1314,7 +1318,7 @@ QVector<QModelIndex> CmpPanel::makeSrcModel( const TySpTabState& SrcState )
         if( SrcModel.isEmpty() == true )
         {
             const auto Row = BaseGrid->focusedRow();
-            if( Row.isValid() == true )
+            if (Row.isValid() && Row.type() == Qtitan::GridRow::DataRow)
             {
                 const auto Index = SrcState->ConvertToSrcIndex( Row.modelIndex( 0 ) );
                 if( SrcState->Model->GetName( Index ) != ".." )

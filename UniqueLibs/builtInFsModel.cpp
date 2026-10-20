@@ -237,6 +237,18 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
     CCmnMutexLocker Locker( &lock );
 
+    // Group roles are snapshot values and do not need file-color evaluation.
+    const bool GroupOnly = std::all_of(roleDataSpan.begin(), roleDataSpan.end(), [](const auto& Role) {
+        return Role.role() == GroupKeyRole || Role.role() == GroupOrderRole || Role.role() == GroupTextRole;
+    });
+    if (GroupOnly) {
+        const auto& Definition = columnView_.VecColumns[Col].definition_;
+        const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, grouping_.mode_, readField(vecNode_[Row], Definition.fieldId_, false), groupingDate_, groupingZone_);
+        for (auto& Role : roleDataSpan) Role.setData(Role.role() == GroupKeyRole ? QVariant(Value.key_)
+            : Role.role() == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
+        return;
+    }
+
     // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
     const auto& RuleItem = vecNode_[Row];
     hc::settings::FileRuleInput RuleInput{RuleItem->Name_, RuleItem->Attributes_, quint64(qMax<qint64>(0, RuleItem->Size_)), colorScheme_.IsDarkMode};
@@ -257,6 +269,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
         switch( Role )
         {
+            case GroupKeyRole: case GroupOrderRole: case GroupTextRole: {
+                const auto& Definition = columnView_.VecColumns[Col].definition_;
+                const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, grouping_.mode_, readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
+                RoleWith.setData(Role == GroupKeyRole ? QVariant(Value.key_) : Role == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
+            } break;
             case GridSortRole: {
                 if (columnSortRanks_.size() == vecNode_.size() && !columnSorts_.isEmpty()) {
                     const auto Id = columnView_.VecColumns[Col].definition_.id_;
@@ -537,7 +554,7 @@ CFSModel::CFSModel()
             carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
         }
     });
-    connect(this, &CFSModel::sigRefreshCompleted, this, [this] { tracker_.SetBusy(loading_); });
+    connect(this, &CFSModel::sigRefreshCompleted, this, [this] { tracker_.SetBusy(loading_ || selectionInputActive_); });
     connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
         const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
         tracker_.SetSuspended(Settings.pauseInBackground && State != Qt::ApplicationActive);
@@ -566,6 +583,14 @@ void CFSModel::NotifyNetworkChange()
     if ((Location.kind_ == hc::storage::LocatorKind::Smb && Location.root_ == "\\")
         || (Location.kind_ == hc::storage::LocatorKind::Shell && Location.root_ == "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"))
         tracker_.Invalidate();
+}
+
+void CFSModel::SetSelectionInputActive(bool Active)
+{
+    if (selectionInputActive_ == Active) return;
+    selectionInputActive_ = Active;
+    // Keep native notifications pending until a held selection key is released.
+    tracker_.SetBusy(loading_ || selectionInputActive_);
 }
 
 void CFSModel::SetWatchEnabled(bool Enabled)
@@ -757,9 +782,9 @@ void CFSModel::refreshProvider()
         // navigation. Publishing a location outside it releases the helper.
         elevatedDirectorySession_ = Result.Value().session_;
         pageSource_ = Result.Value().source_; pageView_ = Result.Value().view_;
-        completedSorts_ = Sorts;
+        pageSorts_ = Sorts; completedSorts_ = Sorts;
         appendOrder_ = Append;
-        if (UsesIndexedOrder() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); emit ColumnSortCancelled(); }
+        if (UsesIndexedOrder() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); emit ColumnSortCancelled(); }
         publishProvider(Result.Value().page_.entries_);
         setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
         SetWatchEnabled(watchEnabled_);
@@ -903,7 +928,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
     using namespace hc::storage;
     auto Compare = pageComparison();
     if (Rebuild && !Compare.HasValue()) {
-        columnSorts_ = completedSorts_; emit ColumnSortCancelled();
+        columnSorts_ = pageSorts_; completedSorts_ = pageSorts_; emit ColumnSortCancelled();
         emit ColumnQueryStatus(tr("이 컬럼은 전체 목록의 정렬 값 수집을 아직 지원하지 않습니다.")); return;
     }
     pageStop_.request_stop(); pageStop_ = std::stop_source{};
@@ -911,7 +936,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
     const auto Generation = ++pageGeneration_; const auto Navigation = generation_;
     const auto Source = pageSource_; const auto Current = pageView_;
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_; const auto Metadata = index_;
-    const auto Sorts = columnSorts_;
+    const auto Sorts = Rebuild ? columnSorts_ : pageSorts_;
     OperationContext Context; Context.stopToken_ = pageStop_.get_token();
     struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; };
     using PageResult = Result<Listing>;
@@ -922,10 +947,10 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
         if (Generation != pageGeneration_ || Navigation != generation_) return;
         pageBusy_ = false;
         if (!Result.HasValue()) {
-            columnSorts_ = completedSorts_; emit ColumnSortCancelled();
+            columnSorts_ = pageSorts_; completedSorts_ = pageSorts_; emit ColumnSortCancelled();
             emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
         }
-        pageView_ = Result.Value().view_; completedSorts_ = Sorts;
+        pageView_ = Result.Value().view_; pageSorts_ = Sorts; completedSorts_ = Sorts;
         publishProvider(Result.Value().page_.entries_);
         emit PageChanged(); emit sigRefreshCompleted(); emit ColumnQueryStatus({});
     });
@@ -1806,11 +1831,34 @@ void CFSModel::ResumeColumnQueries()
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole, ColumnStateRole});
 }
 
+void CFSModel::SetGrouping(const hc::columns::GroupingState& State)
+{
+    if (grouping_ == State) return;
+    emit ColumnValuesChanging();
+    grouping_ = State; groupingDate_ = QDate::currentDate(); groupingZone_ = QTimeZone::systemTimeZone();
+    refreshColumnSortRanks();
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole, GridSortRole});
+    emit ColumnValuesChanged();
+    // Grouped sorting uses snapshot ranks. Rebuild a paged listing when its
+    // accepted file sort changed while grouping was active.
+    if (!State.enabled_ && UsesIndexedOrder() && !loading_ && columnSorts_ != pageSorts_) requestPage(0, true);
+}
+
+void CFSModel::RefreshGroupingDate()
+{
+    if (!grouping_.enabled_) return;
+    const auto Today = QDate::currentDate(); const auto Zone = QTimeZone::systemTimeZone();
+    if (groupingDate_ == Today && groupingZone_ == Zone) return;
+    emit ColumnValuesChanging(); groupingDate_ = Today; groupingZone_ = Zone;
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole});
+    emit ColumnValuesChanged();
+}
+
 void CFSModel::SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts)
 {
     if (Sorts == columnSorts_ && columnSortRanks_.size() == vecNode_.size()) return;
     if (Sorts != columnSorts_) appendOrder_ = false;
-    if (UsesIndexedOrder()) { if (Sorts != columnSorts_) { columnSorts_ = Sorts; if (!loading_) requestPage(0, true); } return; }
+    if (UsesIndexedOrder() && !grouping_.enabled_) { if (Sorts != columnSorts_) { columnSorts_ = Sorts; if (!loading_) requestPage(0, true); } return; }
     columnQueries_->Resume(); columnSorts_ = Sorts; refreshColumnSortRanks();
 }
 
@@ -1818,7 +1866,7 @@ void CFSModel::refreshColumnSortRanks(int First)
 {
     using namespace hc::columns;
     if (loading_) return;
-    if (UsesIndexedOrder() || appendOrder_) {
+    if ((UsesIndexedOrder() || appendOrder_) && !grouping_.enabled_) {
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
         return;
     }

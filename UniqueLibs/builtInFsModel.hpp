@@ -5,6 +5,7 @@
 #include "columnMgr.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/columns/columnSort.hpp"
+#include "commonLibs/columns/columnGrouping.hpp"
 #include "qtWorkspaceState.hpp"
 #include "qtDirectoryTracker.hpp"
 #include "qtPagedStorage.hpp"
@@ -56,6 +57,11 @@ public:
     int IconPixels() const { return iconPixels_; }
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
+    void SetGrouping(const hc::columns::GroupingState& State);
+    void RefreshGroupingDate();
+    static constexpr int GroupKeyRole = Qt::UserRole + 70;
+    static constexpr int GroupOrderRole = Qt::UserRole + 71;
+    static constexpr int GroupTextRole = Qt::UserRole + 72;
     void CancelColumnQueries();
     void ResumeColumnQueries();
     QVector<hc::columns::FieldDefinition> AvailableColumns() const;
@@ -72,6 +78,7 @@ public:
     static constexpr int GridSortRole = Qt::UserRole + 65;
     static constexpr int ColumnStateRole = Qt::UserRole + 64;
     void SetWatchEnabled(bool Enabled);
+    void SetSelectionInputActive(bool Active);
     void ApplyRefreshSettings();
     bool IsAutomaticRefresh() const { return automaticRefresh_; }
     void NotifyNetworkChange();
@@ -175,7 +182,10 @@ private:
     QMap<QUuid, QString> scriptRevisions_;
     mutable bool requestOnlyValues_ = false;
     QVector<int>                    nameSortRanks_, columnSortRanks_;
-    QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_;
+    hc::columns::GroupingState grouping_;
+    QDate groupingDate_ = QDate::currentDate();
+    QTimeZone groupingZone_ = QTimeZone::systemTimeZone();
+    QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_, pageSorts_;
     void refreshColumnSortRanks(int First = 0);
     QVector<hc::columns::SortRow> searchSortRows_;
     QVector<int> searchSortOrder_;
@@ -193,6 +203,7 @@ private:
     bool                            providerEnabled_ = true;
     QtDirectoryTracker              tracker_;
     bool                            watchEnabled_ = false;
+    bool                            selectionInputActive_ = false;
     bool                            autoRefreshRequested_ = false, automaticRefresh_ = false;
     bool                            appendOrder_ = false;
     std::optional<hc::storage::Locator> placeholder_;

@@ -35,7 +35,9 @@ public:
     QString ColumnId(int ModelColumn) const { return ids_.value(ModelColumn); }
     int AvailableWidth() const;
     int OneLineNameWidth(int Available) const;
-    struct ViewportAnchor { QPersistentModelIndex entry_; int offset_ = 0, horizontal_ = 0; };
+    struct ViewportAnchor { QPersistentModelIndex entry_; int offset_ = 0, horizontal_ = 0; QJsonObject state_; };
+    void SetViewportHandlers(std::function<QJsonObject()> Capture, std::function<void(const QJsonObject&)> Restore)
+    { captureViewport_ = std::move(Capture); restoreViewport_ = std::move(Restore); }
     ViewportAnchor CaptureViewport() const;
     void RestoreViewport(const ViewportAnchor& Anchor);
     void SetLayoutObserver(std::function<void(const QString&)> Observer) { layoutObserver_ = std::move(Observer); }
@@ -51,6 +53,8 @@ private:
     QMap<QString, hc::view::ColumnWidthPolicy> defaultsForLayout(const QString& Mode) const;
     std::optional<hc::view::ColumnWidthResult> resolveWidth(const QString& Id, int Available) const;
     std::function<void(const QString&)> layoutObserver_;
+    std::function<QJsonObject()> captureViewport_;
+    std::function<void(const QJsonObject&)> restoreViewport_;
     QPointer<QWidget> owner_;
     Qtitan::Grid* grid_;
     Qtitan::GridBandedTableView* view_;
