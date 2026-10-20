@@ -360,8 +360,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         }));
         BodyLayout()->addStretch();
         arrangeCompactOperation();
-        AcceptButton()->setDefault(false); AcceptButton()->setAutoDefault(false); CancelButton()->setDefault(true);
-        CancelButton()->setFocus();
+        AcceptButton()->setFocus(Qt::OtherFocusReason);
         return;
     }
     auto* InputLabel = Label(Mkdir ? tr("폴더 이름(&N)") : Rename ? tr("새 이름(&N)") : tr("대상 폴더(&D)"));

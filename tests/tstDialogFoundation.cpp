@@ -387,6 +387,50 @@ private slots:
         Edit->setText(Root.filePath("existing"));
         QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QTRY_VERIFY(Dialog.TargetIsName()); QTest::qWait(200); QVERIFY(Dialog.TargetIsName()); QVERIFY(Dialog.AcceptButton()->isEnabled());
     }
+    void deleteConfirmationKeyboard_data()
+    {
+        QTest::addColumn<QString>("Mode");
+        QTest::addColumn<int>("Key");
+        for (const auto& Mode : {"permanent", "recycle"}) {
+            QTest::newRow(qPrintable(QString(Mode) + "-return")) << QString(Mode) << int(Qt::Key_Return);
+            QTest::newRow(qPrintable(QString(Mode) + "-keypad-enter")) << QString(Mode) << int(Qt::Key_Enter);
+            QTest::newRow(qPrintable(QString(Mode) + "-escape")) << QString(Mode) << int(Qt::Key_Escape);
+        }
+        QTest::newRow("unavailable-return") << QString("unavailable") << int(Qt::Key_Return);
+        QTest::newRow("unavailable-keypad-enter") << QString("unavailable") << int(Qt::Key_Enter);
+    }
+    void deleteConfirmationKeyboard()
+    {
+        QFETCH(QString, Mode);
+        QFETCH(int, Key);
+        QTemporaryDir Temp;
+        QVERIFY(Temp.isValid());
+        QFile File(Temp.filePath("sample.txt"));
+        QVERIFY(File.open(QIODevice::WriteOnly)); File.write("keyboard confirmation fixture"); File.close();
+        const bool Available = Mode != "unavailable";
+        hc::ui::FileOperationDialogRequest Request;
+        Request.command_ = "hc.file.delete"; Request.source_ = Temp.path(); Request.names_ = {"sample.txt"};
+        Request.nativeSource_ = Available;
+        hc::ui::FileOperationDialog Dialog(Request);
+        Dialog.findChild<QRadioButton*>("hc.operation.permanent")->setChecked(Mode == "permanent");
+        Dialog.findChild<QRadioButton*>("hc.operation.recycle")->setChecked(Mode != "permanent");
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted), Rejected(&Dialog, &QDialog::rejected);
+        Dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+        if (Available) QTRY_VERIFY(Dialog.AcceptButton()->isEnabled());
+        else QVERIFY(!Dialog.AcceptButton()->isEnabled());
+        // Exercise the initial keyboard focus, without clicking the action button.
+        QTest::keyClick(Dialog.focusWidget() ? Dialog.focusWidget() : &Dialog, Qt::Key(Key),
+            Key == Qt::Key_Enter ? Qt::KeypadModifier : Qt::NoModifier);
+        QCOMPARE(Accepted.count(), Available && Key != Qt::Key_Escape ? 1 : 0);
+        QCOMPARE(Rejected.count(), Key == Qt::Key_Escape ? 1 : 0);
+        if (!Available) {
+            QVERIFY(Dialog.isVisible());
+            QTest::keyClick(&Dialog, Qt::Key_Escape);
+            QCOMPARE(Rejected.count(), 1);
+        }
+        QVERIFY(QFileInfo::exists(File.fileName()));
+    }
     void operationValidation()
     {
         hc::ui::FileOperationDialog Rename({"hc.file.rename", "D:/source", "report.pdf", {"report.pdf"}, true});
