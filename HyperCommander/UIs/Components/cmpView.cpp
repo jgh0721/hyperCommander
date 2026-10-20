@@ -134,6 +134,11 @@ public:
                 Painter->setOpacity(1.0); Rect.setLeft(Rect.left() + Size + hc::view::ListIconTextGap(false));
             }
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            if (owner_->EverythingPresentation()) {
+                const auto Prefix = QStringLiteral("→ ");
+                Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Prefix);
+                Rect.setLeft(Rect.left() + Metrics.horizontalAdvance(Prefix));
+            }
             const auto Shown = ElideFileName(Cell.data().toString(), Metrics, Rect.width(), Appearance.nameElide, Directory);
             const auto Query = owner_->property("hc.quickFind.text").toString();
             if (owner_->property("hc.quickFind.highlight").toBool() && !Query.isEmpty() &&
@@ -144,7 +149,8 @@ public:
             const auto* Column = owner_->BaseView()->getColumnByModelColumn(Cell.column());
             const auto Alignment = static_cast<const Qtitan::GridTableColumn*>(Column)->textAlignment();
             if (Geometry.twoLine && Column->visualIndex() == 1) Rect.setLeft(Rect.left() + owner_->TwoLineTextIndent());
-            Painter->drawText(Rect, Alignment | Qt::AlignVCenter, Metrics.elidedText(Cell.data().toString(), Qt::ElideRight, Rect.width()));
+            const bool Path = owner_->EverythingPresentation() && Column->property("hc.everything.path").toBool();
+            Painter->drawText(Rect, Alignment | Qt::AlignVCenter, Metrics.elidedText(Cell.data().toString(), Path ? Qt::ElideMiddle : Qt::ElideRight, Rect.width()));
         }
         Painter->restore();
     }
@@ -479,10 +485,10 @@ void CGridView::applyThumbnailPresentation()
 {
     const auto Settings = hc::ui::ReadThumbnailSettings(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["thumbnails"].toObject());
     thumbnailModel_->Apply(Settings);
-    const bool Automatic = ListMode() == "auto" && Settings.autoSwitch_;
+    const bool Automatic = !everythingPresentation_ && ListMode() == "auto" && Settings.autoSwitch_;
     if (ListMode() == "thumbnails" || Automatic) thumbnailModel_->Rebuild();
-    const auto Percent = thumbnailModel_->TargetPercent();
-    const bool Show = ListMode() == "thumbnails" || (Automatic && Percent >= Settings.autoPercent_);
+    const auto Percent = Automatic ? thumbnailModel_->TargetPercent() : 0.0;
+    const bool Show = !everythingPresentation_ && (ListMode() == "thumbnails" || (Automatic && Percent >= Settings.autoPercent_));
     const bool Changed = Show != IsThumbnailMode();
     const bool HadFocus = grid_->hasFocus() || grid_->viewport()->hasFocus() || thumbnails_->listView()->hasFocus();
     auto Appearance = Settings.appearance_;
@@ -511,16 +517,23 @@ int CGridView::ListIconSize() const
 int CGridView::TwoLineTextIndent() const { return ListIconSize() + hc::view::ListIconTextGap(true); }
 QString CGridView::ListMode() const
 {
+    if (everythingPresentation_) return "two-line";
     return listModeOverride_.isEmpty() ? hc::ui::ReadFilePanelSettings(
         hc::settings::AppSettings().Read(hc::settings::Section::General).toObject().value("filePanel").toObject()).mode_ : listModeOverride_;
 }
 bool CGridView::SetListMode(const QString& Mode)
 {
+    if (everythingPresentation_) return Mode == "two-line";
     if (!hc::ui::ListModes.contains(Mode) || !columnAdapter_->Writable() || !unsupportedPresentation_.isEmpty()) return false;
     listModeOverride_ = Mode == "inherit" ? QString{} : Mode;
     nameBelowOverride_.reset(); autoInitialized_ = false;
     applyPresentation(); emit sigListPresentationChanged(); emit sigViewSettingsChanged();
     return true;
+}
+void CGridView::SetEverythingPresentation(bool Enabled)
+{
+    if (everythingPresentation_ == Enabled) return;
+    everythingPresentation_ = Enabled; requestPresentation(); emit sigListPresentationChanged();
 }
 QJsonObject CGridView::capturePresentation() const
 {
@@ -566,6 +579,7 @@ void CGridView::applyPresentation()
     auto Appearance = Settings.appearance_;
     Appearance.invertCursor = listAppearance_.invertCursor; Appearance.invertSelection = listAppearance_.invertSelection;
     if (nameBelowOverride_) Appearance.nameBelow = *nameBelowOverride_;
+    if (everythingPresentation_) Appearance.nameBelow = true;
     Appearance.fontPx = QFontMetrics(grid_->font()).height() > 0
         ? (grid_->font().pixelSize() > 0 ? grid_->font().pixelSize() : qRound(grid_->font().pointSizeF() * logicalDpiY() / 72.0)) : 13;
     const auto Location = model_->property("hc.snapshotLocation").toString();
@@ -758,6 +772,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             GridColumn->setMinWidth( 30 );
             // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.definition_.alignment_ );
+              GridColumn->setProperty("hc.everything.path", Column.definition_.fieldId_ == "file.parentPath");
             GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
             GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
             if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
@@ -1092,7 +1107,7 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
     if (!restoringPresentation_ && !applyingAutoColumns_) {
         manualColumns_ = true; automaticColumnsBase_.reset(); automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
     }
-    if (!restoringPresentation_) {
+    if (!restoringPresentation_ && !everythingPresentation_) {
         listModeOverride_ = Profile.mode_ == hc::columns::LayoutMode::Details ? "one-line" : "two-line";
         nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
     }

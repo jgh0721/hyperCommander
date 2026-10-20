@@ -87,8 +87,25 @@ private slots:
         Size = hc::folders::Measure(Provider, Root, Context); QVERIFY(!Size.HasValue()); QCOMPARE(Size.Failure().category_, ErrorCategory::Cancelled);
         const Locator Local{LocatorKind::Local, "C:\\fixture"}, Network{LocatorKind::Smb, "\\\\server\\share"};
         QVERIFY(!hc::folders::Automatic("manual", Local)); QVERIFY(hc::folders::Automatic("local", Local));
-        QVERIFY(!hc::folders::Automatic("local", Network)); QVERIFY(hc::folders::Automatic("all", Network));
-        QVERIFY(hc::folders::Automatic("everything", Network)); QVERIFY(!hc::folders::Automatic("all", {LocatorKind::Archive, "archive.zip"}));
+        QVERIFY(!hc::folders::Automatic("local", Network)); QVERIFY(!hc::folders::Automatic("all", Network));
+        QVERIFY(!hc::folders::Automatic("everything", Network)); QVERIFY(!hc::folders::Automatic("all", {LocatorKind::Archive, "archive.zip"}));
+        const Locator UncLocal{LocatorKind::Local, "\\\\server\\share\\folder"};
+        const Locator ExtendedUnc{LocatorKind::Local, "\\\\?\\UNC\\server\\share\\folder"};
+        for (const auto& At : {Network, UncLocal, ExtendedUnc}) {
+            QVERIFY(hc::folders::IsNetwork(At));
+            for (const auto* Mode : {"manual", "local", "all", "everything"}) QVERIFY(!hc::folders::Automatic(Mode, At));
+            auto Remote = Root; Remote.locator_ = At;
+            const auto Denied = hc::folders::Measure(Provider, Remote, {});
+            QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().code_, std::string("folder-size-network-disabled"));
+            const auto IndexDenied = hc::folders::Indexed(QString::fromStdString(At.root_), {}, "must-not-start.exe");
+            QVERIFY(!IndexDenied.HasValue()); QCOMPARE(IndexDenied.Failure().code_, std::string("folder-size-network-disabled"));
+        }
+        const auto Drives = GetLogicalDrives();
+        for (int I = 0; I < 26; ++I) if (Drives & (1u << I)) {
+            const auto Drive = QString(QChar('A' + I)) + ":\\";
+            if (GetDriveTypeW(reinterpret_cast<LPCWSTR>(Drive.utf16())) == DRIVE_REMOTE)
+                QVERIFY(hc::folders::IsNetwork({LocatorKind::Local, (Drive + "folder").toStdString()}));
+        }
     }
     void folderSizeIndexParentPaths() {
         QVERIFY(hc::search::IndexParentMatches("D:", "D:/"));

@@ -929,9 +929,9 @@ void QMainOpts::initializeDesignPages()
         ->setToolTip(tr("끄면 전체 크기 사전 계산을 생략합니다. 휴지통 삭제와 압축 파일의 순차 읽기에 필요한 항목 확인은 유지합니다."));
     AddFolderCheck(tr("Everything 사용(&E)"), "folderSizeUseEverything");
     auto* FolderMode = new QComboBox(FolderForm->parentWidget()); FolderMode->setObjectName("hc.settings.folderSizeMode");
-    FolderMode->addItems({tr("수동: Alt+Shift+Enter"), tr("자동: 로컬 드라이브만"), tr("자동: 네트워크에서도"), tr("자동: Everything으로만")});
+    FolderMode->addItems({tr("수동: Alt+Shift+Enter"), tr("자동: 로컬 드라이브만"), tr("자동: 모두(네트워크 제외)"), tr("자동: Everything으로만")});
     FolderForm->addRow(tr("자동 계산 범위(&A)"), FolderMode);
-    auto* FolderHelp = new QLabel(tr("폴더 안의 파일 크기를 합산해 목록에 표시합니다. 링크·정션의 대상은 따라가지 않습니다.\nEverything을 사용할 수 없으면 직접 계산합니다. ‘자동: Everything으로만’에서는 직접 탐색하지 않습니다. 수동 계산 단축키는 키보드 설정에서 변경할 수 있습니다."), FolderForm->parentWidget());
+    auto* FolderHelp = new QLabel(tr("폴더 안의 파일 크기를 합산해 목록에 표시합니다. 링크·정션의 대상은 따라가지 않습니다.\nUNC 경로와 매핑된 네트워크 드라이브는 자동·수동·작업 전 용량 계산에서 제외합니다.\nEverything을 사용할 수 없으면 직접 계산합니다. ‘자동: Everything으로만’에서는 직접 탐색하지 않습니다. 수동 계산 단축키는 키보드 설정에서 변경할 수 있습니다."), FolderForm->parentWidget());
     FolderHelp->setWordWrap(true); FolderForm->addRow(FolderHelp);
     auto* ProgressForm = JobGroup(CommonRows, tr("진행창 · 완료 알림"));
     auto* Progress = ProgressForm->parentWidget();

@@ -73,6 +73,7 @@ public:
     bool IsSearchResults() const { return searchResults_; }
     QString EverythingQuery() const { return everythingQuery_; }
     QString EverythingStatus() const { return everythingStatus_; }
+    bool IsEverythingRunning() const;
     std::shared_ptr<hc::storage::IStorageProvider> ProviderFor(const hc::storage::EntrySnapshot& Entry) const;
     static constexpr int FileColorOverrideRole = Qt::UserRole + 66;
     static constexpr int GridSortRole = Qt::UserRole + 65;

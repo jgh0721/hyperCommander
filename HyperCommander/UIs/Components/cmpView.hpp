@@ -65,6 +65,8 @@ public:
     CGridView( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
     ~CGridView() override;
     bool SetListMode(const QString& Mode);
+    void SetEverythingPresentation(bool Enabled);
+    bool EverythingPresentation() const { return everythingPresentation_; }
     QString ListMode() const;
     void MoveQuickFindCursor(const QString& Query, const QString& Match, int Direction = 0);
     void CancelQuickFind();
@@ -210,6 +212,7 @@ private:
     QJsonObject capturePresentation() const;
     void restorePresentation(const QJsonObject& View);
     QString listModeOverride_;
+    bool everythingPresentation_ = false;
     std::optional<bool> nameBelowOverride_;
     QJsonObject unsupportedPresentation_;
     fm::filelist::ListAppearance listAppearance_;

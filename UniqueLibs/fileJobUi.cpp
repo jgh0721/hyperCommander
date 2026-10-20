@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "fileJobUi.hpp"
+#include "folderSize.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/fileLockDialog.hpp"
 #include "nativeFileLocks.hpp"
@@ -445,6 +446,9 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
 {
     Request.fileLockInteractions_ = true;
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(true);
+    if ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
+        || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return hc::folders::IsNetwork(Source.entry_.locator_); }))
+        Request.calculateSizeBefore_ = false;
     Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(true);
     Context.providerInteractions_ = true;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);

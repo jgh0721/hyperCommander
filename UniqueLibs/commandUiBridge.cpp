@@ -7,6 +7,7 @@
 #include "archive/creationJob.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
+#include "folderSize.hpp"
 #include "HyperCommander/UIs/itemSelectionController.hpp"
 #include "navigationError.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
@@ -869,7 +870,8 @@ void CommandUiBridge::refreshActionState()
     const bool Ready = Model && Model->GetRoot() && !Model->IsLoading();
     for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
         if (It.key().startsWith("hc.selection.") && It.value()) It.value()->setEnabled(Ready);
-    if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled());
+    if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled()
+        && (Model->IsSearchResults() || !hc::folders::IsNetwork(Model->WorkspaceLocation())));
     for (const auto* Id : {"hc.file.shellMenu", "hc.file.context"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
     for (const auto* Id : {"hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new", "hc.file.batchRename",

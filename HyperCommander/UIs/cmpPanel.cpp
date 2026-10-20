@@ -352,6 +352,7 @@ void CmpPanel::restoreTab(int Index)
     if (Index < 0 || Index >= vecTabStates.size()) return;
     const auto State = vecTabStates[Index]; State->pending_ = false;
     static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); State->searchOrigin_.reset();
+    static_cast<CGridView*>(State->View)->SetEverythingPresentation(false);
     // Reuse discovered volumes, retaining their cached labels and capabilities
     // without another filesystem-information query during workspace restore.
     nsHC::TySpFileSystem Native;
@@ -1107,14 +1108,15 @@ void CmpPanel::StartEverythingSearch(const QString& Query, const QString& Match,
         auto* View = static_cast<CGridView*>(State->View);
         State->searchScroll_ = View->CaptureScrollState();
         State->searchGroups_ = View->CaptureGroupExpansion();
-        const auto Mode = View->ListMode();
+        View->SetEverythingPresentation(true);
         auto Profile = View->ColumnProfile();
         auto Found = std::find_if(Profile.columns_.begin(), Profile.columns_.end(), [](const auto& C) { return C.fieldId_ == "file.parentPath"; });
-        if (Found == Profile.columns_.end()) {
-            hc::columns::ColumnDefinition Location; Location.fieldId_ = "file.parentPath"; Location.title_ = tr("위치");
-            Profile.columns_.append(Location);
-        } else for (auto& Width : Found->widths_) Width.hidden_ = false;
-        View->ApplyColumnProfile(Profile); View->SetListMode(Mode);
+        hc::columns::ColumnDefinition Location;
+        if (Found != Profile.columns_.end()) { Location = *Found; Profile.columns_.erase(Found); }
+        Location.fieldId_ = "file.parentPath"; Location.title_ = tr("경로");
+        for (auto& Width : Location.widths_) { Width.hidden_ = false; Width.unit_ = hc::view::WidthUnit::Percent; Width.value_ = 60; Width.minimum_ = 20; Width.maximum_ = 100; }
+        Profile.columns_.insert(1, Location); Profile.mode_ = hc::columns::LayoutMode::NameLast;
+        View->ApplyColumnProfile(Profile);
     }
     State->ProxyModel->SetSearch({});
     { const QSignalBlocker Block(search_); search_->clear(); }
@@ -1128,7 +1130,8 @@ void CmpPanel::StopEverythingSearch(bool Restore)
     const auto Origin = *State->searchOrigin_; State->searchOrigin_.reset();
     static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true);
     auto* View = static_cast<CGridView*>(State->View);
-    const auto Presentation = View->CaptureWorkspaceView()["listPresentation"];
+    View->SetEverythingPresentation(false);
+    const auto Presentation = View->CaptureWorkspaceView().value("listPresentation");
     State->workspace_ = Origin;
     auto Settings = Origin.view_; Settings["listPresentation"] = Presentation;
     View->RestoreWorkspaceView(Settings);

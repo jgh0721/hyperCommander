@@ -27,12 +27,13 @@ inline bool IsNetwork(const Locator& Location)
 inline bool Automatic(const QString& Mode, const Locator& Location)
 {
     const bool Native = Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb;
-    return Native && (Mode == "everything" || Mode == "all" || (Mode == "local" && !IsNetwork(Location)));
+    return Native && !IsNetwork(Location) && (Mode == "everything" || Mode == "all" || Mode == "local");
 }
 // Folder sizes are logical file bytes. Links/junctions are never followed;
 // a failed or incomplete traversal must not be presented as a measured zero.
 inline Result<std::uint64_t> Measure(IStorageProvider& Provider, const EntrySnapshot& Root, OperationContext Context)
 {
+    if (IsNetwork(Root.locator_)) return Error{ErrorCategory::Unsupported, "folder-size-network-disabled"};
     std::vector<std::pair<Locator, unsigned>> Pending{{Root.locator_, 0}};
     std::set<std::string> Visited;
     std::uint64_t Bytes = 0, Entries = 0;
@@ -67,6 +68,7 @@ inline Result<std::uint64_t> Measure(IStorageProvider& Provider, const EntrySnap
 inline Result<QMap<QString, quint64>> Indexed(const QString& Parent, OperationContext Context,
     const QString& Executable = QCoreApplication::applicationDirPath() + "/hc-search-index.exe")
 {
+    if (IsNetwork({LocatorKind::Local, Parent.toStdString()})) return Error{ErrorCategory::Unsupported, "folder-size-network-disabled"};
     QProcess Process;
     if (const auto Failure = Context.Check({"everything"})) return *Failure;
     Process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* Arguments) {

@@ -15,6 +15,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QElapsedTimer>
+#include <QPainter>
 #include <QProcess>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -25,6 +27,39 @@
 #include <windows.h>
 
 namespace hc::ui {
+class QuickFindProgress final : public QWidget {
+public:
+    explicit QuickFindProgress(QLineEdit* Input) : QWidget(Input), input_(Input)
+    {
+        setObjectName("hc.quickFind.progress");
+        setAttribute(Qt::WA_TransparentForMouseEvents); setFocusPolicy(Qt::NoFocus);
+        setAccessibleName(tr("Everything 검색 결과를 가져오는 중"));
+        animation_.setInterval(30);
+        connect(&animation_, &QTimer::timeout, this, [this] { update(); });
+        hide();
+    }
+    void Place() { setGeometry(2, qMax(0, input_->height() - 5), qMax(0, input_->width() - 4), 2); }
+    void SetBusy(bool Busy)
+    {
+        if (Busy == animation_.isActive()) return;
+        input_->setProperty("hc.quickFind.busy", Busy);
+        if (Busy) { Place(); elapsed_.start(); show(); raise(); animation_.start(); }
+        else { animation_.stop(); hide(); }
+    }
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter Painter(this);
+        const int Length = qMax(24, width() / 4);
+        const int X = int((elapsed_.elapsed() % 1100) * (width() + Length) / 1100) - Length;
+        Painter.fillRect(QRect(X, 0, Length, height()), palette().color(QPalette::Highlight));
+    }
+private:
+    QLineEdit* input_;
+    QTimer animation_;
+    QElapsedTimer elapsed_;
+};
+
 class QuickFindController final : public QObject, public QAbstractNativeEventFilter {
 public:
     QuickFindController(QWidget* Window, QLineEdit* Find, std::function<CmpPanel*()> Panel,
@@ -32,6 +67,7 @@ public:
         : QObject(Window), window_(Window), find_(Find), panel_(std::move(Panel)), open_(std::move(Open))
     {
         setObjectName("hc.quickFind.controller");
+        progress_ = new QuickFindProgress(Find);
         debounce_.setSingleShot(true); debounce_.setInterval(180);
         connect(&debounce_, &QTimer::timeout, this, [this] { searchEverything(); });
         connect(Find, &QLineEdit::textChanged, this, [this] { if (!composing_) apply(); });
@@ -52,12 +88,12 @@ public:
             (scope_ == "everything" || (cursor_ && Panel->Search().isEmpty()))) return;
         if (auto* OldView = qobject_cast<CGridView*>(source_.data()); OldView && View != source_)
             if (auto* Old = qobject_cast<CFSModel*>(OldView->BaseModel())) Old->StopEverythingSearch();
-        cancel(); source_ = View; sourcePath_ = Path;
+        cancel(); source_ = View; sourcePath_ = Path; observeSearchProgress();
         const auto* Grid = qobject_cast<CGridView*>(View);
         const auto* Model = Grid ? qobject_cast<CFSModel*>(Grid->BaseModel()) : nullptr;
         if (Model && Model->IsSearchResults()) {
             quick_ = true; cursor_ = false; scope_ = "everything";
-            const QSignalBlocker Block(find_); find_->setText(Model->EverythingQuery()); updateModeHint(); return;
+            const QSignalBlocker Block(find_); find_->setText(Model->EverythingQuery()); updateModeHint(); updateSearchProgress(); return;
         }
         quick_ = Panel && !Panel->SearchMatch().isEmpty(); scope_ = "panel"; cursor_ = false;
         const QSignalBlocker Block(find_); find_->setText(Panel ? Panel->Search() : QString{});
@@ -96,6 +132,7 @@ protected:
     {
         auto* Widget = qobject_cast<QWidget*>(Object);
         if (Object == find_) {
+            if (Event->type() == QEvent::Resize || Event->type() == QEvent::Show) progress_->Place();
             if (Event->type() == QEvent::InputMethod) {
                 composing_ = !static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
                 // Run after QLineEdit has processed commit/replacement text.
@@ -125,6 +162,17 @@ protected:
             }
             if (quick_ && (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride)) {
                 const auto* Key = static_cast<QKeyEvent*>(Event);
+                if (!composing_ && scope_ == "everything" && Key->modifiers() == Qt::NoModifier &&
+                    (Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End || Key->key() == Qt::Key_PageUp || Key->key() == Qt::Key_PageDown)) {
+                    Event->accept();
+                    if (Event->type() == QEvent::KeyPress) if (auto* View = qobject_cast<CGridView*>(source_.data())) {
+                        auto* Grid = View->BaseView();
+                        if (Key->key() == Qt::Key_PageUp) Grid->navigatePageUp();
+                        else if (Key->key() == Qt::Key_PageDown) Grid->navigatePageDown();
+                        else if (Grid->getRowCount()) Grid->setFocusedRowIndex(Key->key() == Qt::Key_Home ? 0 : Grid->getRowCount() - 1);
+                    }
+                    return true;
+                }
                 if (!composing_ && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter ||
                     ((scope_ == "everything" || cursor_) && (Key->key() == Qt::Key_Down || Key->key() == Qt::Key_Up)))) {
                     Event->accept();
@@ -200,13 +248,14 @@ private:
     {
         cancel(); quick_ = true; scope_ = Config.scope_; cursor_ = Config.result_ == "cursor"; composing_ = false;
         if (auto* Panel = panel_()) { source_ = Panel->GetFocusView(Panel->CurrentTabIndex()); sourcePath_ = Panel->CurrentPath(); }
+        observeSearchProgress();
         find_->setPlaceholderText(scope_ == "everything" ? tr("Everything 빠른 찾기") : tr("현재 목록 빠른 찾기"));
         updateModeHint();
         find_->clear(); find_->setFocus(Qt::ShortcutFocusReason);
     }
     void updateModeHint()
     {
-        const auto Hint = scope_ == "everything" ? tr("Everything 검색 · ↑/↓: 결과 이동 · Enter: 파일 패널 · Esc: 원래 폴더")
+        const auto Hint = scope_ == "everything" ? tr("Everything 검색 · ↑/↓·Home/End·PgUp/PgDn: 결과 이동 · Enter: 파일 패널 · Esc: 원래 폴더")
             : cursor_ ? tr("커서 이동 · ↑/↓: 이전/다음 일치 항목 · Ctrl+S: 필터링으로 전환")
             : tr("필터링 · Ctrl+S: 커서 이동으로 전환");
         find_->setToolTip(Hint); find_->setAccessibleDescription(Hint);
@@ -241,6 +290,7 @@ private:
                 if (auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())))
                     if (auto* Model = qobject_cast<CFSModel*>(Grid->BaseModel())) Model->StopEverythingSearch();
                 debounce_.start();
+                updateSearchProgress();
             } else { applying_ = true; Panel->StopEverythingSearch(); applying_ = false; }
             return;
         }
@@ -254,6 +304,7 @@ private:
     void cancel()
     {
         debounce_.stop(); ++generation_;
+        if (progress_) progress_->SetBusy(false);
         if (auto* View = qobject_cast<CGridView*>(source_.data())) { View->CancelQuickFind(); updateHighlight(View, {}); }
     }
     void searchEverything()
@@ -265,10 +316,29 @@ private:
             Panel->StartEverythingSearch(find_->text(), Config.match_, Config.everythingDisplayIntervalMs_);
             applying_ = false;
             updateHighlight(qobject_cast<CGridView*>(source_.data()), find_->text());
+            updateSearchProgress();
         }
+    }
+    void observeSearchProgress()
+    {
+        auto* View = qobject_cast<CGridView*>(source_.data());
+        auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+        if (progressModel_ == Model) return;
+        disconnect(progressConnection_); progressModel_ = Model;
+        if (Model) progressConnection_ = connect(Model, &CFSModel::SearchResultsChanged, this, [this] { updateSearchProgress(); });
+    }
+    void updateSearchProgress()
+    {
+        auto* Panel = panel_();
+        const bool Active = Panel && Panel->GetFocusView(Panel->CurrentTabIndex()) == source_;
+        if (progress_) progress_->SetBusy(Active && quick_ && scope_ == "everything" && !find_->text().isEmpty()
+            && (debounce_.isActive() || (progressModel_ && progressModel_->IsEverythingRunning())));
     }
     QPointer<QWidget> window_;
     QPointer<QLineEdit> find_;
+    QPointer<QuickFindProgress> progress_;
+    QPointer<CFSModel> progressModel_;
+    QMetaObject::Connection progressConnection_;
     std::function<CmpPanel*()> panel_;
     std::function<void(const QString&)> open_;
     QPointer<CViewT> source_;

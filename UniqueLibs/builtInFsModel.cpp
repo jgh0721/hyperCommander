@@ -1035,6 +1035,11 @@ void CFSModel::StopEverythingSearch(bool Leave)
     else if (searchResults_) { everythingStatus_ = tr("Everything 검색 중단 · %1개 표시").arg(vecNode_.size()); emit SearchResultsChanged(); }
 }
 
+bool CFSModel::IsEverythingRunning() const
+{
+    return everythingSession_ && everythingSession_->Running();
+}
+
 void CFSModel::SetEverythingDisplayInterval(int Interval)
 {
     if (everythingSession_) everythingSession_->SetDisplayInterval(Interval);
@@ -1225,8 +1230,9 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
     const auto Mode = Options["folderSizeMode"].toString("everything");
     const auto Location = WorkspaceLocation();
+    if (!searchResults_ && hc::folders::IsNetwork(Location)) return;
     if (Automatic && !hc::folders::Automatic(Mode, Location)) return;
-    const bool UseIndex = Options["folderSizeUseEverything"].toBool(true)
+    const bool UseIndex = !searchResults_ && Options["folderSizeUseEverything"].toBool(true)
         && (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb);
     const bool IndexOnly = Automatic && Mode == "everything";
     if (IndexOnly && !UseIndex) return;
@@ -1238,6 +1244,7 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         const auto& Item = vecNode_[Row];
         if (!Item->storageEntry_ || Item->Name_ == ".." || !Item->storageEntry_->directory_
             || (Item->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        if (hc::folders::IsNetwork(Item->storageEntry_->locator_)) continue;
         const auto Key = QString::fromStdString(Serialize(Item->storageEntry_->id_));
         // Automatic passes re-measure only carried-over sizes, and keep showing them meanwhile.
         const bool Refresh = Automatic && directorySizeStale_.contains(Key);

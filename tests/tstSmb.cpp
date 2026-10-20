@@ -1155,16 +1155,42 @@ private slots:
         auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         const auto AnchorKey = hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(1, 0))->storageEntry_);
         const auto OriginalColor = Model->index(1, 0).data(Qt::ForegroundRole); View->RestoreSelection({AnchorKey}, AnchorKey);
+        QVERIFY(View->SetListMode("one-line"));
+        const auto OriginalPresentation = View->CaptureWorkspaceView().value("listPresentation");
         Model->setProperty("hc.search.helper", QCoreApplication::applicationFilePath());
         main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
         View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
         QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier); QTRY_VERIFY(Find->hasFocus());
-        Find->setText("hc-everything"); QTRY_VERIFY(Model->IsSearchResults());
+        Find->setText("hc-everything");
+        auto* Progress = Find->findChild<QWidget*>("hc.quickFind.progress"); QVERIFY(Progress);
+        QVERIFY(Progress->isVisible()); QCOMPARE(Progress->height(), 2); QVERIFY(Find->property("hc.quickFind.busy").toBool());
+        QTRY_VERIFY(Model->IsSearchResults());
         QTRY_VERIFY_WITH_TIMEOUT(Model->rowCount() > 0, 6000); QVERIFY(Model->rowCount() < 302);
+        QVERIFY(Progress->isVisible());
+        const auto BeforeProgress = Progress->grab().toImage(); QTest::qWait(90);
+        QVERIFY(BeforeProgress != Progress->grab().toImage());
+        const auto Capture = qEnvironmentVariable("HC_EVERYTHING_CAPTURE_ROOT");
+        if (!Capture.isEmpty()) { QDir().mkpath(Capture); QVERIFY(main_->grab().save(QDir(Capture).filePath("everything-loading.png"))); QVERIFY(Find->grab().save(QDir(Capture).filePath("everything-loading-input.png"))); }
         QSignalSpy AppendResets(Model, &QAbstractItemModel::modelReset);
         View->RestoreSelection({AnchorKey}, AnchorKey);
         QTRY_COMPARE_WITH_TIMEOUT(Model->rowCount(), 302, 15000); QVERIFY(!Model->UsesIndexedOrder()); QCOMPARE(Model->EntryCount(), quint64(302));
         QCOMPARE(AppendResets.size(), 0); QCOMPARE(View->CaptureFocus(), AnchorKey); QVERIFY(View->CaptureSelection().contains(AnchorKey));
+        QTRY_VERIFY(!Model->IsEverythingRunning()); QTRY_VERIFY(!Progress->isVisible()); QVERIFY(!Find->property("hc.quickFind.busy").toBool());
+        QTRY_VERIFY(View->IsTwoLine()); QCOMPARE(View->ListMode(), QString("two-line")); QVERIFY(View->ListAppearance().nameBelow);
+        const auto Profile = View->ColumnProfile(); QCOMPARE(Profile.mode_, hc::columns::LayoutMode::NameLast);
+        const auto Location = std::find_if(Profile.columns_.begin(), Profile.columns_.end(), [](const auto& Column) { return Column.fieldId_ == "file.parentPath"; });
+        QVERIFY(Location != Profile.columns_.end());
+        for (int Column = 0; Column < Model->columnCount(); ++Column) if (View->ColumnWidths()->ColumnId(Column) == hc::columns::IdText(Location->id_)) {
+            auto* PathColumn = static_cast<Qtitan::GridBandedTableColumn*>(View->BaseView()->getColumnByModelColumn(Column));
+            QCOMPARE(PathColumn->rowIndex(), 0); QCOMPARE(PathColumn->visualIndex(), 1);
+        }
+        QCOMPARE(static_cast<Qtitan::GridBandedTableColumn*>(View->BaseView()->getColumnByModelColumn(0))->rowIndex(), 1);
+        QVERIFY(Find->hasFocus()); const auto QueryText = Find->text(); const auto Caret = Find->cursorPosition();
+        QTest::keyClick(Find, Qt::Key_Home); QCOMPARE(View->BaseView()->focusedRowIndex(), 0); QVERIFY(Find->hasFocus());
+        QTest::keyClick(Find, Qt::Key_PageDown); const int PageDown = View->BaseView()->focusedRowIndex(); QVERIFY(PageDown > 0); QVERIFY(Find->hasFocus());
+        QTest::keyClick(Find, Qt::Key_PageUp); QVERIFY(View->BaseView()->focusedRowIndex() < PageDown); QVERIFY(Find->hasFocus());
+        QTest::keyClick(Find, Qt::Key_End); QCOMPARE(View->BaseView()->focusedRowIndex(), View->BaseView()->getRowCount() - 1); QVERIFY(Find->hasFocus());
+        QCOMPARE(Find->text(), QueryText); QCOMPARE(Find->cursorPosition(), Caret);
         QSet<QString> Actual; int Same = 0;
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
             const auto Index = Model->index(Row, 0); const auto Entry = Model->GetFileInfo(Index);
@@ -1189,15 +1215,13 @@ private slots:
         QTRY_COMPARE(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
         QFile Output(Dir.filePath("copied/hc-everything-same.txt")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), QByteArray("data-0"));
         QVERIFY(QFile::exists(Dir.filePath("a/hc-everything-same.txt"))); QVERIFY(Model->IsSearchResults());
-        const auto Capture = qEnvironmentVariable("HC_EVERYTHING_CAPTURE_ROOT");
-        for (const auto* Mode : {"one-line", "two-line", "auto"}) {
-            QVERIFY(View->SetListMode(Mode)); QTest::qWait(60);
-            QCOMPARE(Model->rowCount(), 302); QCOMPARE(View->BaseView()->getRowCount(), 302); QCOMPARE(AppendResets.size(), 0);
-            if (!Capture.isEmpty()) { QDir().mkpath(Capture); QVERIFY(View->grab().save(QDir(Capture).filePath(QString("everything-%1.png").arg(Mode)))); }
-        }
+        QVERIFY(!View->SetListMode("one-line")); QVERIFY(View->SetListMode("two-line")); QTest::qWait(60);
+        QCOMPARE(Model->rowCount(), 302); QCOMPARE(View->BaseView()->getRowCount(), 302); QCOMPARE(AppendResets.size(), 0);
+        if (!Capture.isEmpty()) QVERIFY(View->grab().save(QDir(Capture).filePath("everything-path-name.png")));
         QTest::keyClick(Find, Qt::Key_Escape); QTRY_VERIFY(!Model->IsSearchResults() && !Model->IsLoading());
         QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Panel->CurrentPath())), QDir::cleanPath(Dir.filePath("origin")));
         QTRY_COMPARE(View->CaptureFocus(), AnchorKey); QCOMPARE(Model->rowCount(), 2);
+        QCOMPARE(View->ListMode(), QString("one-line")); QCOMPARE(View->CaptureWorkspaceView()["listPresentation"], OriginalPresentation);
         General["quickFind"] = QJsonObject{{"enabled", false}, {"scope", "panel"}, {"everythingDisplayIntervalMs", 1000}};
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); QVERIFY(Settings.Commit());
         { QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.LoadSettings();
@@ -1206,9 +1230,11 @@ private slots:
         View->EnsureKeyboardFocusOnView();
         QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(Find->hasFocus());
         Find->setText("hc-everything"); QTRY_VERIFY(Model->IsSearchResults());
+        QTRY_VERIFY(Progress->isVisible());
         QCOMPARE(Settings.CommittedObject()["general"].toObject()["quickFind"].toObject()["scope"].toString(), QString("panel"));
         QTest::keyClick(Find, Qt::Key_Escape); QTRY_VERIFY(!Model->IsSearchResults() && !Model->IsLoading()); QTest::qWait(250);
         QCOMPARE(Model->rowCount(), 2);
+        QVERIFY(!Progress->isVisible());
     }
 
     void todoBugSearchEscapeFocus()
@@ -3345,6 +3371,15 @@ private slots:
         QCOMPARE(*Item("beta")->directorySize_, 13u); QCOMPARE(Model->GetTotalSize(), Total);
         QVERIFY(QFile::remove(Directory.filePath("added.txt"))); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 4, 10000);
         Model->SetWatchEnabled(false);
+        // Mixed search results must reject network folders before clearing a known size or queuing I/O.
+        for (const auto& Remote : {hc::storage::Locator{hc::storage::LocatorKind::Smb, "\\\\unreachable.invalid\\share\\alpha"},
+                 hc::storage::Locator{hc::storage::LocatorKind::Local, "\\\\?\\UNC\\unreachable.invalid\\share\\alpha"}}) {
+            const auto Folder = Item("alpha"); const auto Previous = Folder->storageEntry_->locator_;
+            const auto RestoreLocation = qScopeGuard([&] { Folder->storageEntry_->locator_ = Previous; });
+            Folder->storageEntry_->locator_ = Remote;
+            Model->RequestDirectorySizes({IndexFor("alpha")});
+            QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(Folder->directorySize_); QCOMPARE(*Folder->directorySize_, 8u);
+        }
         { QMainOpts Dialog(main_); Dialog.LoadSettings(); Dialog.show(); QTest::qWait(150);
             auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
             for (int Row = 0; Row < Categories->count(); ++Row) if (Categories->item(Row)->text() == "파일 작업") Categories->setCurrentRow(Row);
