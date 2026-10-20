@@ -61,6 +61,30 @@ DECLARE_CMD( BuiltInCMD_OPs_SetAttrib,            QObject::tr( "동작" ),    "h
 
 DECLARE_CMD( BuiltInCMD_Sel_Inverse,              QObject::tr( "선택" ),    "hc.selection.invert",
              Qt::Key_Space,                                             QObject::tr( "파일 선택을 반전하고 다음으로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Sel_Select, QObject::tr("선택"), "hc.selection.select",
+             Qt::ControlModifier | Qt::Key_Equal, QObject::tr("항목 선택…") );
+DECLARE_CMD( BuiltInCMD_Sel_SelectKeypad, QObject::tr("선택"), "hc.selection.select",
+             Qt::KeypadModifier | Qt::Key_Plus, QObject::tr("항목 선택…") );
+DECLARE_CMD( BuiltInCMD_Sel_Deselect, QObject::tr("선택"), "hc.selection.deselect",
+             Qt::ControlModifier | Qt::Key_Minus, QObject::tr("항목 선택 해제…") );
+DECLARE_CMD( BuiltInCMD_Sel_DeselectKeypad, QObject::tr("선택"), "hc.selection.deselect",
+             Qt::KeypadModifier | Qt::Key_Minus, QObject::tr("항목 선택 해제…") );
+DECLARE_CMD( BuiltInCMD_Sel_All, QObject::tr("선택"), "hc.selection.all",
+             Qt::ControlModifier | Qt::KeypadModifier | Qt::Key_Plus, QObject::tr("전체 선택") );
+DECLARE_CMD( BuiltInCMD_Sel_Clear, QObject::tr("선택"), "hc.selection.clear",
+             Qt::ControlModifier | Qt::KeypadModifier | Qt::Key_Minus, QObject::tr("전체 선택 해제") );
+DECLARE_CMD( BuiltInCMD_Sel_InvertAll, QObject::tr("선택"), "hc.selection.invertAll",
+             Qt::KeypadModifier | Qt::Key_Asterisk, QObject::tr("전체 선택 반전") );
+DECLARE_CMD( BuiltInCMD_Sel_SameExtension, QObject::tr("선택"), "hc.selection.sameExtension",
+             Qt::AltModifier | Qt::KeypadModifier | Qt::Key_Plus, QObject::tr("현재 항목과 같은 확장자 선택") );
+DECLARE_CMD( BuiltInCMD_Sel_ClearExtension, QObject::tr("선택"), "hc.selection.clearExtension",
+             Qt::AltModifier | Qt::KeypadModifier | Qt::Key_Minus, QObject::tr("같은 확장자 선택 해제") );
+DECLARE_CMD( BuiltInCMD_Sel_Restore, QObject::tr("선택"), "hc.selection.restore",
+             Qt::KeypadModifier | Qt::Key_Slash, QObject::tr("이전 선택 복원") );
+DECLARE_CMD( BuiltInCMD_Sel_Remember, QObject::tr("선택"), "hc.selection.remember",
+             Qt::Key_unknown, QObject::tr("현재 선택 기억") );
+DECLARE_CMD( BuiltInCMD_Sel_Recall, QObject::tr("선택"), "hc.selection.recall",
+             Qt::Key_unknown, QObject::tr("기억한 선택 불러오기") );
 
 DECLARE_CMD( BuiltInCMD_Archive_Create,           QObject::tr( "동작" ),    "hc.archive.create",
              Qt::ControlModifier | Qt::Key_A,                           QObject::tr( "파일 압축" ) );
@@ -227,6 +251,11 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_OPs_SetAttrib,
 
     BuiltInCMD_Sel_Inverse,
+    BuiltInCMD_Sel_Select, BuiltInCMD_Sel_SelectKeypad,
+    BuiltInCMD_Sel_Deselect, BuiltInCMD_Sel_DeselectKeypad,
+    BuiltInCMD_Sel_All, BuiltInCMD_Sel_Clear, BuiltInCMD_Sel_InvertAll,
+    BuiltInCMD_Sel_SameExtension, BuiltInCMD_Sel_ClearExtension,
+    BuiltInCMD_Sel_Restore, BuiltInCMD_Sel_Remember, BuiltInCMD_Sel_Recall,
     BuiltInCMD_FolderSize,
     BuiltInCMD_FolderSizeKeypad,
 

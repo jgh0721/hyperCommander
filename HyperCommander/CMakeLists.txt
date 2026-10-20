@@ -33,6 +33,9 @@ set(PROJECT_MODULE_SRC
 )
 
 set(PROJECT_UI_SRC
+        UIs/itemSelectionController.cpp
+        UIs/itemSelectionController.hpp
+        ../UniqueLibs/itemSelection.hpp
         UIs/Components/cmpView.cpp
         UIs/Components/cmpView.hpp
         UIs/Components/thumbnailModel.cpp

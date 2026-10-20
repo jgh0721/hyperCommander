@@ -7,6 +7,7 @@
 #include "archive/creationJob.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
+#include "HyperCommander/UIs/itemSelectionController.hpp"
 #include "navigationError.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
 #include <fmwidgets/FindBox.h>
@@ -852,6 +853,8 @@ void CommandUiBridge::refreshActionState()
     const auto* Model = PanelModel(activePanel_);
     if (auto* Compatibility = Action("hc.navigate.compatibility")) Compatibility->setChecked(Model && !Model->ProviderEnabled());
     const bool Ready = Model && Model->GetRoot() && !Model->IsLoading();
+    for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
+        if (It.key().startsWith("hc.selection.") && It.value()) It.value()->setEnabled(Ready);
     if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled());
     for (const auto* Id : {"hc.file.shellMenu", "hc.file.context"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
@@ -911,6 +914,12 @@ void CommandUiBridge::createCommandUi()
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
+            if (Id.startsWith("hc.selection.") && Id != "hc.selection.invert") {
+                auto* Panel = activePanel_.data();
+                auto* View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
+                if (auto* Selection = hc::ui::ItemSelectionController::For(View)) Selection->Execute(Id);
+                return;
+            }
             if (Id.startsWith("hc.navigate.gotoDrive")) { Dispatch(Id, {}, "ui"); return; }
             if (Id.startsWith("hc.tab.")) { Dispatch(Id, {}, "ui"); return; }
             if (Id == "hc.viewer.quick" || Id == "hc.viewer.open") { Dispatch(Id, {}, "ui"); return; }

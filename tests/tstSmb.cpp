@@ -7,6 +7,7 @@
 #include "UniqueLibs/columnAutoSelection.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
+#include "HyperCommander/UIs/itemSelectionController.hpp"
 #include <QRadioButton>
 #include <QInputMethodEvent>
 #include <imm.h>
@@ -229,13 +230,174 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug"), "Local UI mode cannot execute an SMB scenario");
         }
     }
 
 
+
+    void itemSelectionUi()
+    {
+        auto& Settings = hc::settings::AppSettings();
+        const auto OriginalOptions = Settings.Read(hc::settings::Section::Options);
+        const auto RestoreOptions = qScopeGuard([&] { Settings.Put(hc::settings::Section::Options, OriginalOptions); });
+        const QJsonObject DocumentRule{{"id", "selection-documents"}, {"name", "업무 문서"}, {"enabled", true}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "pdf,hwpx,txt"}}}}};
+        const QJsonObject ImageRule{{"id", "selection-images"}, {"name", "검토 이미지"}, {"enabled", true}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "png"}}}}};
+        auto Options = OriginalOptions.toObject();
+        Options["fileColorRules"] = QJsonObject{{"version", 2}, {"mode", "first"}, {"groups", QJsonArray{DocumentRule, ImageRule}}};
+        QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["selectionDialog"] = QJsonObject{{"last", QJsonObject{{"groupId", "builtin.document"}, {"pattern", "*.pdf"}}}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"report.pdf", "notes.hwpx", "todo.txt", "image.png", "noextension"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("selection fixture");
+        }
+        QVERIFY(QDir(Directory.path()).mkdir("folder.pdf"));
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 7);
+        Panel->sig_NotifyPanelActivated();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        auto* Grid = View->BaseView();
+        const auto Row = [&](const QString& Name) {
+            for (int I = 0; I < Grid->getRowCount(); ++I) {
+                const auto GridRow = Grid->getRow(I); auto Index = GridRow.modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.isValid() && model(Panel)->GetFileInfo(Index)->Name_ == Name) return GridRow.rowIndex();
+            }
+            return -1;
+        };
+        QVERIFY(Row("image.png") >= 0); Grid->deselectAll(); Grid->selectRow(Row("image.png"), Qtitan::Select);
+        QCOMPARE(View->CaptureSelection().size(), 1);
+        const auto DialogKey = [&](Qt::Key Key, Qt::KeyboardModifiers Mods, const QString& Capture, bool ApplyThenCancel = false) {
+            QTimer Timer; Timer.setInterval(15); int Stage = 0, Ticks = 0; bool Completed = false;
+            connect(&Timer, &QTimer::timeout, main_, [&] {
+                auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog");
+                if (++Ticks > 800) { Completed = false; if (Dialog) Dialog->reject(); Timer.stop(); return; }
+                if (!Dialog) return;
+                if (Stage == 4) return;
+                if (Stage == 3) {
+                    Completed = Dialog->isVisible(); Stage = 4;
+                    QTest::keyClick(Dialog, Qt::Key_C, Qt::AltModifier); return;
+                }
+                auto* Group = Dialog->findChild<QComboBox*>("hc.selection.group");
+                auto* Accept = Dialog->findChild<QPushButton*>("hc.dialog.accept");
+                if (!Stage) {
+                    if (Group->count() != 3 || Group->itemText(1) != QStringLiteral("업무 문서") || Group->itemText(2) != QStringLiteral("검토 이미지")) {
+                        Dialog->reject(); Timer.stop(); return;
+                    }
+                    Group->setCurrentIndex(Group->findData("user:selection-documents")); Stage = 1; return; }
+                if (!Accept->isEnabled()) return;
+                const auto Preview = Dialog->findChild<QLabel*>("hc.selection.preview")->text();
+                if (!Preview.startsWith(QStringLiteral("일치 3개"))) return;
+                const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+                if (Stage == 1 && !Out.isEmpty() && !Capture.isEmpty()) {
+                    Timer.stop();
+                    QDir().mkpath(Out); auto& Theme = fm::style::ThemeManager::instance(); const auto Before = Theme.scheme();
+                    for (const bool Dark : {true, false}) {
+                        Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+                        QTest::qWait(50);
+                        Dialog->grab().save(QDir(Out).filePath(Capture + (Dark ? "-dark-" : "-light-") + QString::number(Dialog->devicePixelRatioF()) + ".png"));
+                    }
+                    Theme.setScheme(Before);
+                    Stage = 2; Timer.start();
+                    Group->setCurrentIndex(0); Group->setCurrentIndex(Group->findData("user:selection-documents"));
+                    return;
+                }
+                if (ApplyThenCancel) {
+                    Stage = 3; QTest::keyClick(Dialog, Qt::Key_A, Qt::AltModifier);
+                } else {
+                    Completed = true; Stage = 4;
+                    QTest::keyClick(Dialog, Key == Qt::Key_Minus ? Qt::Key_D : Qt::Key_S, Qt::AltModifier);
+                }
+            });
+            Timer.start(); View->EnsureKeyboardFocusOnView();
+            auto* Target = View->IsThumbnailMode() ? View->findChild<QWidget*>("hc.thumbnailTiles") : View->findChild<QWidget*>("grid");
+            if (!Target) Target = View->findChild<Qtitan::Grid*>();
+            QTest::keyClick(Target, Key, Mods);
+            Timer.stop(); return Completed;
+        };
+        QVERIFY(DialogKey(Qt::Key_Equal, Qt::ControlModifier, "selection-document-add", true));
+        QTRY_COMPARE(View->CaptureSelection().size(), 4);
+        QVERIFY(DialogKey(Qt::Key_Minus, Qt::ControlModifier, "selection-document-remove"));
+        QTRY_COMPARE(View->CaptureSelection().size(), 1);
+        QVERIFY(DialogKey(Qt::Key_Plus, Qt::KeypadModifier, {})); QTRY_COMPARE(View->CaptureSelection().size(), 4);
+        QVERIFY(DialogKey(Qt::Key_Minus, Qt::KeypadModifier, {})); QTRY_COMPARE(View->CaptureSelection().size(), 1);
+        QVERIFY(hc::settings::AppSettings().Error().isEmpty());
+        QCOMPARE(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["selectionDialog"].toObject()["last"].toObject()["groupId"].toString(), QString("user:selection-documents"));
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.restore")); QTRY_COMPARE(View->CaptureSelection().size(), 4);
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.clear")); QTRY_COMPARE(View->CaptureSelection().size(), 0);
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.all")); QTRY_COMPARE(View->CaptureSelection().size(), 6);
+        QVERIFY(model(Panel)->property("hc.selectAllEntries").toBool() == false);
+        Grid->setFocusedRowIndex(Row("report.pdf"));
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.clearExtension")); QTRY_COMPARE(View->CaptureSelection().size(), 5);
+        QVERIFY(!Grid->modelController()->isRowSelected(Grid->getRow(Row(".."))));
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.remember"));
+        QTRY_VERIFY(main_->statusBar()->currentMessage().contains(QStringLiteral("현재 선택을 기억")));
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.clear")); QTRY_COMPARE(View->CaptureSelection().size(), 0);
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.recall")); QTRY_COMPARE(View->CaptureSelection().size(), 5);
+        QVERIFY(Bridge->ExecuteCommand("hc.selection.invertAll")); QTRY_COMPARE(View->CaptureSelection().size(), 1);
+        QTemporaryDir CopiedFiles; QVERIFY(CopiedFiles.isValid());
+        auto Copy = Bridge->Dispatch("hc.file.copy", {{"destination", CopiedFiles.path()}}, "selection-test");
+        QTRY_VERIFY(Copy.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Copied = Copy.get(); QVERIFY(Copied.HasValue());
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        QTRY_VERIFY_WITH_TIMEOUT(hc::operations::IsTerminal(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_), 10000);
+        QCOMPARE(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
+        QCOMPARE(QDir(CopiedFiles.path()).entryList(QDir::Files | QDir::NoDotAndDotDot), QStringList{"report.pdf"});
+        QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(View->CaptureSelection().size(), 1);
+        QVERIFY(View->SetListMode("thumbnails"));
+        QVERIFY(DialogKey(Qt::Key_Equal, Qt::ControlModifier, "selection-thumbnail-add"));
+        QTRY_COMPARE(View->CaptureSelection().size(), 3);
+        QVERIFY(View->SetListMode("one-line"));
+        const auto Keys = View->CaptureSelection();
+        QTimer Cancel; Cancel.setInterval(15); int CancelTicks = 0;
+        connect(&Cancel, &QTimer::timeout, main_, [&] {
+            if (++CancelTicks > 800) { Cancel.stop(); return; }
+            if (auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog")) { Cancel.stop(); Dialog->reject(); }
+        });
+        Cancel.start(); QVERIFY(Bridge->ExecuteCommand("hc.selection.deselect")); Cancel.stop();
+        QCOMPARE(View->CaptureSelection(), Keys);
+        auto ChangedRule = DocumentRule; ChangedRule["name"] = "PDF 문서";
+        ChangedRule["conditions"] = QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "pdf"}}};
+        Options["fileColorRules"] = QJsonObject{{"version", 2}, {"mode", "first"}, {"groups", QJsonArray{ImageRule, ChangedRule}}};
+        QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
+        QTimer ReloadGroups; ReloadGroups.setInterval(15); int ReloadTicks = 0; bool Reloaded = false;
+        connect(&ReloadGroups, &QTimer::timeout, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog");
+            if (++ReloadTicks > 600) { if (Dialog) Dialog->reject(); ReloadGroups.stop(); return; }
+            if (!Dialog) return;
+            const auto Preview = Dialog->findChild<QLabel*>("hc.selection.preview")->text();
+            if (!Preview.startsWith(QStringLiteral("일치 1개"))) return;
+            auto* Group = Dialog->findChild<QComboBox*>("hc.selection.group");
+            Reloaded = Group->count() == 3 && Group->itemText(1) == QStringLiteral("검토 이미지")
+                && Group->currentText() == QStringLiteral("PDF 문서");
+            ReloadGroups.stop(); Dialog->reject();
+        });
+        ReloadGroups.start(); QVERIFY(Bridge->ExecuteCommand("hc.selection.deselect")); ReloadGroups.stop(); QVERIFY(Reloaded);
+        QCOMPARE(View->CaptureSelection(), Keys);
+        QTemporaryDir Other; QVERIFY(Other.isValid());
+        { QFile File(Other.filePath("other.pdf")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("other location"); }
+        QTimer Navigate; Navigate.setInterval(20); int NavigationStage = 0, NavigationTicks = 0; bool RejectedStale = false;
+        connect(&Navigate, &QTimer::timeout, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog");
+            if (++NavigationTicks > 600) { if (Dialog) Dialog->reject(); Navigate.stop(); return; }
+            if (!Dialog) return;
+            if (!NavigationStage) { Panel->ChangeCurrentPath(QDir::toNativeSeparators(Other.path()), {}); NavigationStage = 1; return; }
+            if (model(Panel)->IsLoading() || NavigationTicks < 25) return;
+            if (NavigationStage == 1) { Dialog->findChild<QLineEdit*>("hc.selection.pattern")->setText("*.pdf"); NavigationStage = 2; NavigationTicks = 0; return; }
+            RejectedStale = !Dialog->findChild<QPushButton*>("hc.dialog.accept")->isEnabled(); Navigate.stop(); Dialog->reject();
+        });
+        Navigate.start(); QVERIFY(Bridge->ExecuteCommand("hc.selection.select")); Navigate.stop(); QVERIFY(RejectedStale);
+        QCOMPARE(View->CaptureSelection().size(), 0);
+    }
 
     void todoBugFileAttributesCommand()
     {

@@ -122,10 +122,24 @@
       "id": "select",
       "label": "선택(&S)",
       "items": [
+        { "id": "select-items", "command": "hc.selection.select", "label": "항목 선택…" },
+        { "id": "deselect-items", "command": "hc.selection.deselect", "label": "항목 선택 해제…" },
+        { "type": "separator" },
+        { "id": "select-all", "command": "hc.selection.all", "label": "전체 선택" },
+        { "id": "deselect-all", "command": "hc.selection.clear", "label": "전체 선택 해제" },
+        { "id": "invert-all", "command": "hc.selection.invertAll", "label": "전체 선택 반전" },
+        { "type": "separator" },
+        { "id": "same-extension", "command": "hc.selection.sameExtension", "label": "현재 항목과 같은 확장자 선택" },
+        { "id": "clear-extension", "command": "hc.selection.clearExtension", "label": "같은 확장자 선택 해제" },
+        { "type": "separator" },
+        { "id": "restore-selection", "command": "hc.selection.restore", "label": "이전 선택 복원" },
+        { "id": "remember-selection", "command": "hc.selection.remember", "label": "현재 선택 기억" },
+        { "id": "recall-selection", "command": "hc.selection.recall", "label": "기억한 선택 불러오기" },
+        { "type": "separator" },
         {
           "id": "invert",
           "command": "hc.selection.invert",
-          "label": "선택 반전 · 다음 항목"
+          "label": "현재 항목 선택 전환 · 다음 항목"
         }
       ]
     },

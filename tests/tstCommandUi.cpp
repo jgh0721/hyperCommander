@@ -7,6 +7,7 @@
 #include "UniqueLibs/commandUiWidgets.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
+#include "UniqueLibs/itemSelection.hpp"
 
 using namespace hc::ui;
 namespace {
@@ -25,6 +26,79 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void itemSelectionConditionsAndGroups()
+    {
+        using namespace hc::selection;
+        Matcher M; Criteria C; C.pattern_ = "*.jpg; *.png"; C.exclude_ = "*_backup.*";
+        QVERIFY(M.Compile(C).isEmpty());
+        QVERIFY(M.Matches({"COVER.JPG", 0, 100, false}));
+        QVERIFY(!M.Matches({"cover_backup.png", 0, 100, false}));
+        QVERIFY(!M.Matches({"folder.png", 0x10, 0, false}));
+        QVERIFY(!M.Matches({"..", 0x10, 0, false}));
+        C.pattern_ = "*.*"; QVERIFY(M.Compile(C).isEmpty()); QVERIFY(M.Matches({"README", 0, 0, false}));
+        C.pattern_ = "["; C.syntax_ = Syntax::Regex; QVERIFY(!M.Compile(C).isEmpty());
+        C.pattern_ = "^cover\\.jpg$"; QVERIFY(M.Compile(C).isEmpty()); QVERIFY(M.Matches({"cover.jpg", 0, 0, false}));
+        C.caseSensitive_ = true; QVERIFY(M.Compile(C).isEmpty()); QVERIFY(!M.Matches({"COVER.JPG", 0, 0, false}));
+        QVERIFY(hc::selection::Groups({}).isEmpty());
+        QVERIFY(hc::selection::Groups(hc::settings::FileColorRules::Empty()).isEmpty());
+        const QJsonObject Rule{{"id", "custom"}, {"name", "recent-doc"}, {"join", "all"}, {"enabled", true},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "pdf,hwpx"}},
+                QJsonObject{{"type", "size"}, {"op", "ge"}, {"value", "2"}, {"unit", "MiB"}}}}};
+        auto Disabled = Rule; Disabled["id"] = "disabled"; Disabled["name"] = "disabled-doc"; Disabled["enabled"] = false;
+        const auto UserGroups = hc::selection::Groups({{"version", 2}, {"mode", "first"}, {"groups", QJsonArray{Disabled, Rule}}});
+        QCOMPARE(UserGroups.size(), 1); QCOMPARE(UserGroups.front().id_, "user:custom"); QCOMPARE(UserGroups.front().name_, "recent-doc");
+        C = {}; C.groupId_ = UserGroups.front().id_; C.group_ = UserGroups.front().rule_;
+        QVERIFY(M.Compile(C).isEmpty()); QVERIFY(!M.Matches({"report.pdf", 0, 1024, false}));
+        QVERIFY(M.Matches({"report.pdf", 0, 3 * 1048576, false}));
+        QVERIFY(M.Matches({"한글.HWPX", 0, 3 * 1048576, false}));
+        QVERIFY(!M.Matches({"image.png", 0, 3 * 1048576, false}));
+        C.group_ = {}; QVERIFY(!M.Compile(C).isEmpty());
+        const QJsonObject LegacyRule{{"id", "legacy"}, {"name", "legacy-doc"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "pdf"}},
+                QJsonObject{{"type", "sizeMore"}, {"value", "100"}}}}};
+        const auto LegacyGroups = hc::selection::Groups({{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{LegacyRule}}});
+        QCOMPARE(LegacyGroups.size(), 1); C.groupId_ = LegacyGroups.front().id_; C.group_ = LegacyGroups.front().rule_;
+        QVERIFY(M.Compile(C).isEmpty()); QVERIFY(M.Matches({"report.pdf", 0, 101, false}));
+        QVERIFY(!M.Matches({"report.pdf", 0, 100, false}));
+        const auto Retired = Criteria::Load({{"groupId", "builtin.document"}, {"pattern", "*.pdf; *.hwpx"}});
+        QVERIFY(Retired.groupId_.isEmpty()); QVERIFY(M.Compile(Retired).isEmpty());
+        QVERIFY(M.Matches({"report.pdf", 0, 0, false})); QVERIFY(!M.Matches({"image.png", 0, 0, false}));
+    }
+    void itemSelectionAdvancedAndSetOperations()
+    {
+        using namespace hc::selection;
+        Criteria C; C.advanced_ = true; C.pattern_ = "*.jpg"; C.size_ = "2"; C.modified_ = QDate(2026, 10, 13);
+        Matcher M; QVERIFY(M.Compile(C).isEmpty());
+        hc::settings::FileRuleInput Input{"photo.jpg", 0, 3 * 1048576, false};
+        Input.modifiedUtcMs_ = C.modified_.startOfDay().toMSecsSinceEpoch(); QVERIFY(M.Matches(Input));
+        Input.modifiedUtcMs_.reset(); QVERIFY(!M.Matches(Input));
+        C.all_ = false; QVERIFY(M.Compile(C).isEmpty()); QVERIFY(M.Matches(Input));
+        C.exclude_ = "*.jpg"; QVERIFY(M.Compile(C).isEmpty()); QVERIFY(!M.Matches(Input));
+        C.size_ = "nan"; QVERIFY(!M.Compile(C).isEmpty()); C.size_ = "-1"; QVERIFY(!M.Compile(C).isEmpty());
+        C.size_ = "1e100"; QVERIFY(!M.Compile(C).isEmpty());
+        for (const bool Before : {false, true}) for (const bool Match : {false, true}) {
+            QCOMPARE(Matcher::Selected(Operation::Add, Before, Match), Before || Match);
+            QCOMPARE(Matcher::Selected(Operation::Remove, Before, Match), Before && !Match);
+            QCOMPARE(Matcher::Selected(Operation::Replace, Before, Match), Match);
+            QCOMPARE(Matcher::Selected(Operation::Intersect, Before, Match), Before && Match);
+        }
+        const auto Encoded = C.Save(); QCOMPARE(Criteria::Load(Encoded).Save(), Encoded);
+    }
+    void itemSelectionShortcutsAndOverrides()
+    {
+        for (const auto& Preset : {"legacy", "prototype"}) {
+            const auto Keys = EffectiveShortcuts({{"shortcutPreset", Preset}}, {});
+            const auto Command = [&](Qt::KeyboardModifiers Mod, Qt::Key Key) { return CommandId(Keys.value(QKeyCombination(Mod, Key))); };
+            QCOMPARE(Command(Qt::ControlModifier, Qt::Key_Equal), "hc.selection.select");
+            QCOMPARE(Command(Qt::ControlModifier, Qt::Key_Minus), "hc.selection.deselect");
+            QCOMPARE(Command(Qt::KeypadModifier, Qt::Key_Plus), "hc.selection.select");
+            QCOMPARE(Command(Qt::KeypadModifier, Qt::Key_Minus), "hc.selection.deselect");
+            QCOMPARE(Command(Qt::ControlModifier, Qt::Key_A), "hc.archive.create");
+        }
+        const auto Keys = EffectiveShortcuts({}, {{"Ctrl+=", "hc.file.copy"}, {"Ctrl+-", QJsonValue::Null}});
+        QCOMPARE(CommandId(Keys.value(QKeyCombination(Qt::ControlModifier, Qt::Key_Equal))), "hc.file.copy");
+        QVERIFY(!Keys.contains(QKeyCombination(Qt::ControlModifier, Qt::Key_Minus)));
+    }
     void navigationErrorDescriptions()
     {
         using namespace hc::storage;
@@ -337,6 +411,24 @@ private slots:
         QFile File(":/HyperCommander/menu-bar.json"); QVERIFY(File.open(QIODevice::ReadOnly));
         const auto Definition = MenuDefinition::Parse(File.readAll(), {}, {"plugins", "automation"});
         QVERIFY2(Definition.error_.isEmpty(), qPrintable(Definition.error_)); QCOMPARE(Definition.menus_.size(), 9);
+    }
+    void stockSelectionMenuUpgradePreservesUserFile()
+    {
+        QTemporaryDir Directory; QMenuBar Bar; QAction Select("Select", &Bar), Toggle("Toggle", &Bar);
+        QMenu Plugins("Plugins", &Bar), Scripts("Automation", &Bar);
+        QFile Resource(":/HyperCommander/menu-bar.json"); QVERIFY(Resource.open(QIODevice::ReadOnly));
+        auto Root = QJsonDocument::fromJson(Resource.readAll()).object(); auto Menus = Root["menus"].toArray();
+        for (qsizetype I = 0; I < Menus.size(); ++I) if (Menus[I].toObject()["id"] == "select") {
+            auto Old = Menus[I].toObject();
+            Old["items"] = QJsonArray{QJsonObject{{"id", "invert"}, {"command", "hc.selection.invert"}, {"label", QStringLiteral("선택 반전 · 다음 항목")}}};
+            Menus[I] = Old;
+        }
+        Root["menus"] = Menus; const auto Bytes = QJsonDocument(Root).toJson();
+        const auto Path = Directory.filePath("menu-bar.json"); QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly));
+        QCOMPARE(File.write(Bytes), Bytes.size()); File.close(); Resource.seek(0);
+        UserMenu Menu(&Bar, Path, Resource.readAll(), {{"hc.selection.select", &Select}, {"hc.selection.invert", &Toggle}}, {{"plugins", &Plugins}, {"automation", &Scripts}});
+        QVERIFY(Menu.Reload()); QVERIFY(Bar.findChild<QAction*>("hc.userMenu.select-items"));
+        QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Bytes);
     }
 };
 QTEST_MAIN(CommandUiTests)

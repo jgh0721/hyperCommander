@@ -141,7 +141,20 @@ private:
     bool fail(const QString& Error) { error_ = path_ + ": " + Error; if (report_) report_(error_); return false; }
     bool apply(const QByteArray& Bytes)
     {
-        const auto Definition = MenuDefinition::Parse(Bytes, QSet<QString>(commands_.keyBegin(), commands_.keyEnd()), QSet<QString>(sections_.keyBegin(), sections_.keyEnd()));
+        // Expand only the exact old stock selection section for display. The
+        // user's file and any edited/deleted selection section remain intact.
+        auto Root = QJsonDocument::fromJson(Bytes).object(); auto Menus = Root["menus"].toArray();
+        const QJsonObject OldItem{{"id", "invert"}, {"command", "hc.selection.invert"}, {"label", QStringLiteral("선택 반전 · 다음 항목")}};
+        const auto Defaults = QJsonDocument::fromJson(builtIn_).object()["menus"].toArray();
+        for (qsizetype I = 0; I < Menus.size(); ++I) {
+            const auto Menu = Menus[I].toObject();
+            if (Menu["id"] != "select" || Menu["label"] != QStringLiteral("선택(&S)") || Menu["items"].toArray() != QJsonArray{OldItem}) continue;
+            for (const auto& Default : Defaults) if (Default.toObject()["id"] == "select") Menus[I] = Default;
+        }
+        const bool HasMenus = Root["menus"].isArray();
+        if (HasMenus) Root["menus"] = Menus;
+        const auto Effective = HasMenus ? QJsonDocument(Root).toJson() : Bytes;
+        const auto Definition = MenuDefinition::Parse(Effective, QSet<QString>(commands_.keyBegin(), commands_.keyEnd()), QSet<QString>(sections_.keyBegin(), sections_.keyEnd()));
         if (!Definition.error_.isEmpty()) return fail(Definition.error_);
         QList<QMenu*> Prepared;
         std::function<void(QMenu*, const QList<MenuNode>&)> Fill;

@@ -242,6 +242,14 @@ target_link_libraries(hc_wlx_sdk_fixture PRIVATE user32)
 target_compile_options(hc_wlx_sdk_fixture PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set_target_properties(hc_wlx_sdk_fixture PROPERTIES SUFFIX ".wlx64")
 if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1")
+    foreach(HC_SELECTION_DPR 1 1.5)
+        string(REPLACE "." "_" HC_SELECTION_SUFFIX "${HC_SELECTION_DPR}")
+        add_test(NAME hc.selection_ui_${HC_SELECTION_SUFFIX}
+            COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                -Executable "$<TARGET_FILE:hc_smb_tests>" -SelectionOnly -Dpr ${HC_SELECTION_DPR} -TimeoutSeconds 90)
+        set_tests_properties(hc.selection_ui_${HC_SELECTION_SUFFIX} PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE LABELS "interactive;selection")
+    endforeach()
     add_test(NAME hc.automation_ui
         COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
             -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
