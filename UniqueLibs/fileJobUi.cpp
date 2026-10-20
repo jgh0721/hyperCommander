@@ -109,6 +109,9 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     dialog_->resize(700, 380);
     dialog_->setMinimumSize(520, 350);
     auto* Layout = new QVBoxLayout(dialog_);
+    // Metrics and interaction rows grow after the window first opens. Keep
+    // their minimum height enforced so the graph cannot cover its controls.
+    Layout->setVerticalSizeConstraint(QLayout::SetMinimumSize);
     header_ = new fm::ui::DialogHeader(dialog_);
     header_->setTitle(tr("파일 작업 진행")); header_->setSubtitleElide(Qt::ElideMiddle);
     Layout->addWidget(header_);
@@ -949,6 +952,7 @@ void FileJobUi::updateSelection()
     details_->setVisible(ShowRecords && !Details.isEmpty());
     previousPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
     nextPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
+    dialog_->layout()->activate();
 }
 
 void FileJobUi::recordSamples()

@@ -39,6 +39,15 @@ QIcon ProductIcon(const QVariant& Value)
 {
     return Value.metaType() == QMetaType::fromType<QPixmap>() ? QIcon(Value.value<QPixmap>()) : Value.value<QIcon>();
 }
+// Use the painted filename bounds for overlays as well as normal cell text.
+QRect ProductNameTextRect(const CGridView* Owner, const QRect& Cell, bool HasIcon)
+{
+    const auto& Geometry = Owner->RecordGeometry();
+    auto Rect = Cell.adjusted(8 + Geometry.sideMargin, 0, -8 - Geometry.sideMargin, 0);
+    if (Geometry.twoLine) Rect.setLeft(Rect.left() + Owner->TwoLineTextIndent());
+    else if (HasIcon) Rect.setLeft(Rect.left() + Owner->ListIconSize() + hc::view::ListIconTextGap(false));
+    return Rect;
+}
 // QIcon::paint never enlarges a smaller pixmap, so pixmaps are drawn to fill the icon slot.
 void PaintListIcon(QPainter* Painter, const QVariant& Value, const QRect& Rect)
 {
@@ -125,14 +134,14 @@ public:
         const QFontMetrics Metrics(Font);
         if (Name) {
             const auto Icon = ProductIcon(Cell.data(Qt::DecorationRole));
-            if (Geometry.twoLine) Rect.setLeft(Rect.left() + owner_->TwoLineTextIndent());
-            else if (!Icon.isNull()) {
+            if (!Geometry.twoLine && !Icon.isNull()) {
                 const int Size = owner_->ListIconSize();
                 const auto Block = Geometry.block(Option.rect);
                 Painter->setOpacity(State.hidden ? 0.6 : 1.0);
                 PaintListIcon(Painter, Cell.data(Qt::DecorationRole), QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
-                Painter->setOpacity(1.0); Rect.setLeft(Rect.left() + Size + hc::view::ListIconTextGap(false));
+                Painter->setOpacity(1.0);
             }
+            Rect = ProductNameTextRect(owner_, Option.rect, !Icon.isNull());
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
             if (owner_->EverythingPresentation()) {
                 const auto Prefix = QStringLiteral("→ ");
@@ -683,15 +692,47 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         this, [this] {
             resetRenameClicks(); groupingReset_ = true;
             resetSelection_ = CaptureSelection(); resetFocus_ = CaptureFocus();
+            // Prefer the next surviving entry, then walk backwards when the
+            // focused entry disappears (including discontiguous deletions).
+            resetFocusFallback_.clear();
+            const int FocusRow = view_->focusedRowIndex();
+            if (!resetFocus_.isEmpty() && !resetFocus_.startsWith("@group:")) {
+                const auto Remember = [this](int At) {
+                    const auto Row = view_->getRow(At);
+                    if (Row.type() != Qtitan::GridRow::DataRow) return;
+                    const auto Key = sourceSelectionKey(Row.modelIndex(0));
+                    if (!Key.isEmpty()) resetFocusFallback_.append(Key);
+                };
+                for (int At = FocusRow + 1; At < view_->getRowCount(); ++At) Remember(At);
+                for (int At = FocusRow - 1; At >= 0; --At) Remember(At);
+            }
             resetPath_ = model_->property("hc.snapshotLocation").toString();
             model_->setProperty("hc.selectAllEntries", false);
             QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
         }, Qt::DirectConnection);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
-        if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString())
-            RestoreSelection(resetSelection_, resetFocus_);
-        resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear();
+        if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString()) {
+            auto Focus = resetFocus_;
+            if (!Focus.isEmpty() && !Focus.startsWith("@group:")) {
+                QSet<QString> Present;
+                for (const auto& Index : SelectionCandidates()) Present.insert(sourceSelectionKey(Index));
+                if (!Present.contains(Focus)) {
+                    Focus.clear();
+                    for (const auto& Key : resetFocusFallback_) if (Present.contains(Key)) { Focus = Key; break; }
+                }
+            }
+            RestoreSelection(resetSelection_, Focus);
+            if (!Focus.isEmpty() && Focus != resetFocus_) {
+                const auto Row = view_->focusedRow();
+                bool Visible = false;
+                for (const auto& Hit : grid_->hitInfoAll())
+                    if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex()
+                        && Hit.rect().top() >= 0 && Hit.rect().bottom() < grid_->viewport()->height()) { Visible = true; break; }
+                if (Row.isValid() && !Visible) view_->scrollToIndex(Row.modelIndex(0), false);
+            }
+        }
+        resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear(); resetFocusFallback_.clear();
         const auto Previous = model_->property("hc.parentFocusName").toString();
         const bool ParentNavigation = model_->property("hc.parentNavigation").toBool();
         model_->setProperty("hc.parentFocusName", QVariant{}); model_->setProperty("hc.parentNavigation", false);
@@ -958,7 +999,15 @@ bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, Rena
     const auto Row = view_->getRow(Visible);
     if (!Row.isValid()) { CancelRename(); return false; }
     view_->setFocusedRowIndex(Row.rowIndex());
-    view_->scrollToIndex(Visible, false);
+    // scrollToIndex(false) bottom-aligns even an already visible file.
+    // Reveal the name only when it is clipped or outside the current viewport.
+    const auto RowsRect = BaseView()->layout()->rowsPanel()->boundedRect();
+    bool NameVisible = false;
+    for (const auto& Hit : grid_->hitInfoAll()) {
+        if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0
+            && Hit.rect().top() >= RowsRect.top() && Hit.rect().bottom() <= RowsRect.bottom()) { NameVisible = true; break; }
+    }
+    if (!NameVisible) view_->scrollToIndex(Visible, false);
     renameEditor_ = new QLineEdit(renameOriginal_, grid_->viewport());
     renameEditor_->setObjectName("hc.file.renameEditor");
     renameEditor_->setAccessibleName(tr("파일 이름 변경"));
@@ -997,9 +1046,10 @@ void CGridView::positionRenameEditor()
     const auto Row = view_->getRow(Visible);
     for (const auto& Hit : grid_->hitInfoAll()) {
         if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.row().rowIndex() != Row.rowIndex() || Hit.modelIndex().column() != 0) continue;
-        auto Rect = Hit.rect().adjusted(2, 1, -2, -1);
+        auto Rect = ProductNameTextRect(this, Hit.rect(), !ProductIcon(Visible.data(Qt::DecorationRole)).isNull()).adjusted(0, 1, 0, -1);
         if (IsTwoLine()) Rect.setHeight(qMin(Rect.height(), renameEditor_->sizeHint().height()));
-        Rect.setWidth(qMin(qMax(Rect.width(), 120), grid_->viewport()->width() - Rect.left()));
+        Rect = Rect.intersected(grid_->viewport()->rect());
+        if (!Rect.isValid()) { CancelRename(); return; }
         renameEditor_->setGeometry(Rect); return;
     }
     // A scrolled-away editor must not remain over a different file.
@@ -1060,7 +1110,7 @@ void CGridView::continueRename()
     if (Target.isValid()) {
         const auto Visible = proxy_ ? proxy_->mapFromSource(Target) : Target;
         const auto Row = view_->getRow(Visible);
-        if (Row.isValid()) { view_->setFocusedRowIndex(Row.rowIndex()); view_->scrollToIndex(Visible, false); }
+        if (Row.isValid()) view_->setFocusedRowIndex(Row.rowIndex());
         if ((Continue || Retry) && BeginRename(Target, SelectExtension, Handler) && Retry) {
             renameEditor_->setText(Draft); selectRenameText(SelectExtension);
         }

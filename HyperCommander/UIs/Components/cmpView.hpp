@@ -238,7 +238,7 @@ private:
     QtitanColumnAdapter*            columnAdapter_ = nullptr;
     QMetaObject::Connection         selectionReset_;
     QMetaObject::Connection         selectionRestore_;
-    QStringList                    resetSelection_;
+    QStringList                    resetSelection_, resetFocusFallback_;
     QString                        resetFocus_, resetPath_;
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머

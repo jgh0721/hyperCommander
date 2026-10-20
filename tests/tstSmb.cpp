@@ -93,6 +93,7 @@
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
 #include "filePanelGroupingUi.hpp"
+#include "inlineRenameGeometryUi.hpp"
 #include "colorSchemeMgr.hpp"
 #include <fmstyle/ThemeManager.h>
 #include <fmstyle/WatercolorStyle.h>
@@ -237,7 +238,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -246,6 +247,71 @@ private slots:
     }
 
 
+
+    void fileDeleteCursorUi()
+    {
+        using namespace hc::operations;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 120; ++I) {
+            QFile File(Directory.filePath(QString("entry%1.txt").arg(I, 3, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("cursor fixture");
+        }
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 121);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        auto* Grid = View->BaseView();
+        const auto RowFor = [&](const QString& Name) {
+            for (int I = 0; I < Grid->getRowCount(); ++I) {
+                auto Index = Grid->getRow(I).modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.isValid() && Model->GetName(Index) == Name) return I;
+            }
+            return -1;
+        };
+        const auto FocusName = [&] {
+            auto Index = Grid->focusedRow().modelIndex(0);
+            while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            return Index.isValid() ? Model->GetName(Index) : QString{};
+        };
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        const auto Delete = [&](const QString& Focus, const QStringList& Selected) {
+            Grid->deselectAll(); Grid->setFocusedRowIndex(RowFor(Focus));
+            for (const auto& Name : Selected) Grid->selectRow(RowFor(Name), Qtitan::Select);
+            View->EnsureKeyboardFocusOnView();
+            return Bridge->Dispatch("hc.file.delete", {{"deleteMode", "permanent"}, {"confirmed", true}}, "cursor-test");
+        };
+        auto Single = Delete("entry060.txt", {});
+        QTRY_VERIFY(Single.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto SingleJob = Single.get(); QVERIFY(SingleJob.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(SingleJob.Value().jobId_).Value().state_), 10000);
+        QCOMPARE(Bridge->FileJobs()->Scheduler().Snapshot(SingleJob.Value().jobId_).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 120);
+        QTRY_COMPARE(FocusName(), QString("entry061.txt"));
+        QVERIFY(SaveR9Dialog(*main_, "delete-cursor-middle"));
+        auto Multiple = Delete("entry061.txt", {"entry010.txt", "entry061.txt", "entry062.txt"});
+        QTRY_VERIFY(Multiple.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto MultipleJob = Multiple.get(); QVERIFY(MultipleJob.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(MultipleJob.Value().jobId_).Value().state_), 10000);
+        QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 117);
+        QTRY_COMPARE(FocusName(), QString("entry063.txt"));
+        auto Last = Delete("entry119.txt", {});
+        QTRY_VERIFY(Last.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto LastJob = Last.get(); QVERIFY(LastJob.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(LastJob.Value().jobId_).Value().state_), 10000);
+        QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 116);
+        QTRY_COMPARE(FocusName(), QString("entry118.txt"));
+        auto Other = Delete("entry070.txt", {"entry005.txt"});
+        QTRY_VERIFY(Other.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto OtherJob = Other.get(); QVERIFY(OtherJob.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(OtherJob.Value().jobId_).Value().state_), 10000);
+        QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 115);
+        QTRY_COMPARE(FocusName(), QString("entry070.txt"));
+    }
 
     void itemSelectionUi()
     {
@@ -1817,8 +1883,8 @@ private slots:
     void r21TransferProgressUi()
     {
         using namespace hc::operations; using namespace hc::settings;
-        auto& Settings=AppSettings(); const auto Original=Settings.Object(); const auto Restore=qScopeGuard([&]{Settings.DiscardEdit();Settings.Replace(Original);});
-        auto Options=Settings.Read(Section::Options).toObject(); Options.remove("jobCloseOnSuccess"); Options["saveJobProgress"]=false; QVERIFY(Settings.Put(Section::Options,Options));
+        auto& Settings=AppSettings(); const auto Original=Settings.Object(); const auto Restore=qScopeGuard([&]{Settings.DiscardEdit();Settings.Replace(Original);Settings.Commit();});
+        auto Options=Settings.Read(Section::Options).toObject(); Options.remove("jobCloseOnSuccess"); Options["saveJobProgress"]=false; Options["jobDetailed"]=true; QVERIFY(Settings.Put(Section::Options,Options)); QVERIFY(Settings.Commit());
         struct Control { std::atomic<bool> commit_{false},unknown_{false},finish_{false}; };
         class Task final : public IJobTask {
         public:
@@ -1835,7 +1901,9 @@ private slots:
         private:
             std::shared_ptr<Control> control_; uint64_t count_=0;
         };
-        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose,false); FileJobUi Jobs(&Window,std::make_shared<hc::commands::EventHub>());
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose,false);
+        auto ProgressFont = Window.font(); ProgressFont.setPointSize(12); Window.setFont(ProgressFont);
+        FileJobUi Jobs(&Window,std::make_shared<hc::commands::EventHub>());
         auto Control=std::make_shared<struct Control>(); PreparedJob Work; Work.request_.metadata_={"","source.7z","D:/Qt/output","extract; shared-folder"}; Work.task_=std::make_unique<Task>(Control);
         auto Started=Jobs.Submit(std::move(Work),QStringLiteral("파일 압축 해제")); QVERIFY(Started.HasValue());
         auto* Dialog=Window.findChild<QDialog*>("hc.fileJobs"); auto* Pause=Window.findChild<QPushButton*>("hc.jobs.pause"); auto* Graph=Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph");
@@ -1845,6 +1913,32 @@ private slots:
         QTRY_VERIFY(Graph->bytesDone()>0); QTRY_VERIFY(Bar->maximum()>0 && Bar->value()>0); QVERIFY(Graph->totalBytes()==16*1024*1024);
         QVERIFY(Metrics->text().contains("MiB")); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Details->isVisible());
         auto* Header=Dialog->findChild<fm::ui::DialogHeader*>(); QVERIFY(Header); QVERIFY(Header->subtitle().contains("D:/Qt/output")); QVERIFY(!Header->subtitle().contains("hc-job-"));
+        auto* Toggle = Dialog->findChild<QPushButton*>("hc.jobs.toggleDetails"); QVERIFY(Toggle);
+        QComboBox* Axis = nullptr;
+        for (auto* Combo : Dialog->findChildren<QComboBox*>()) if (Combo->itemText(0) == QStringLiteral("진행률 축")) Axis = Combo;
+        QVERIFY(Axis);
+        if (!Graph->isVisible()) Toggle->click();
+        QTest::qWait(200);
+        QVERIFY2(Graph->geometry().bottom() < Toggle->geometry().top(), qPrintable(QString("graph=%1,%2 %3x%4 toggle=%5,%6 %7x%8")
+            .arg(Graph->x()).arg(Graph->y()).arg(Graph->width()).arg(Graph->height()).arg(Toggle->x()).arg(Toggle->y()).arg(Toggle->width()).arg(Toggle->height())));
+        QVERIFY(Graph->geometry().bottom() < Axis->geometry().top());
+        QVERIFY(Toggle->geometry().bottom() < AutoClose->geometry().top());
+        QVERIFY(Axis->geometry().bottom() < AutoClose->geometry().top());
+        QVERIFY(SaveR9Dialog(*Dialog, "progress-graph-expanded"));
+        Toggle->click(); QTRY_VERIFY(!Graph->isVisible()); QVERIFY(!Axis->isVisible());
+        QVERIFY(SaveR9Dialog(*Dialog, "progress-graph-collapsed"));
+        Toggle->click(); QTRY_VERIFY(Graph->isVisible() && Axis->isVisible());
+        QTRY_VERIFY(Graph->geometry().bottom() < Toggle->geometry().top());
+        Axis->setCurrentIndex(1); QCOMPARE(Graph->axis(), fm::ui::TransferGraph::Time);
+        for (const int Points : {9, 12, 16}) {
+            auto Font = Dialog->font(); Font.setPointSize(Points); Dialog->setFont(Font);
+            Dialog->resize(700, 350); QTest::qWait(100);
+            QTRY_VERIFY(Graph->geometry().bottom() < Toggle->geometry().top());
+            QVERIFY(Graph->geometry().bottom() < Axis->geometry().top());
+            QVERIFY(Toggle->geometry().bottom() < AutoClose->geometry().top());
+            QVERIFY(Axis->geometry().bottom() < AutoClose->geometry().top());
+            QVERIFY(Dialog->rect().contains(Pause->geometry()));
+        }
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-known"));
         Control->commit_=true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::Committing); QTest::qWait(250); QVERIFY(Pause->isEnabled());
         Pause->click(); QTRY_VERIFY(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().pauseRequested_); Control->commit_=false;
@@ -1852,7 +1946,10 @@ private slots:
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-paused")); Pause->click(); QTRY_VERIFY(!Graph->isPaused());
         Control->unknown_=true; QTRY_COMPARE(Bar->maximum(),0); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Metrics->text().contains(QStringLiteral("예정")));
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-preparing"));
-        Control->unknown_=false; QTRY_VERIFY(Bar->maximum()>0); AutoClose->setChecked(true); Control->finish_=true;
+        Control->unknown_=false; QTRY_VERIFY(Bar->maximum()>0);
+        QTRY_VERIFY(Graph->geometry().bottom() < Toggle->geometry().top());
+        QVERIFY(Graph->geometry().bottom() < Axis->geometry().top());
+        AutoClose->setChecked(true); Control->finish_=true;
         QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_)); QTRY_VERIFY(!Dialog->isVisible());
         fm::ui::TransferGraph Rolling; Rolling.resize(760,170); Rolling.setAxis(fm::ui::TransferGraph::Time); Rolling.start(100000000);
         for(qint64 Ms=0;Ms<=55000;Ms+=500) Rolling.addSample(Ms*1000+(Ms>30000?10000000:0),Ms);
@@ -3503,6 +3600,7 @@ private slots:
         QTRY_COMPARE(QDir::cleanPath(QDir::fromNativeSeparators(model(Left)->GetCurrentPathWithRoot())), QDir::cleanPath(Directory.filePath("subdir")));
         QTest::qWait(Settle); QVERIFY(!View->IsEditing());
     }
+    void inlineRenameGeometryUi() { hc::tests::InlineRenameGeometryUi(main_, panels_.front()); }
     void inlineRenameUi()
     {
         using namespace hc::settings;
