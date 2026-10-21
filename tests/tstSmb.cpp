@@ -49,6 +49,7 @@
 #include "UIs/menuBarSettingsPage.hpp"
 #include "UIs/themeSettingsPage.hpp"
 #include "UIs/keyboardSettingsPage.hpp"
+#include "UIs/legacySettingsPage.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
@@ -244,6 +245,7 @@ private slots:
         {
             const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
+                || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
@@ -1829,7 +1831,7 @@ private slots:
         auto Fixture = FileColorRules::Empty(); Fixture["groups"] = QJsonArray{MakeGroup("one", "실행파일", "#D00000"), MakeGroup("two", "도구", "#008577"), MakeGroup("three", "기타 실행파일", "#0055CC")};
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
-        QCOMPARE(Categories->count(), 13);
+        QCOMPARE(Categories->count(), 14);
         for (int Row = 0; Row < Categories->count(); ++Row) {
             QVERIFY(!Categories->item(Row)->text().contains("기존 파일집합"));
             Categories->setCurrentRow(Row); QCoreApplication::processEvents();
@@ -4297,6 +4299,108 @@ private slots:
         { QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
           auto* Toggle = Dialog.findChild<QCheckBox*>("hc.settings.inverseCursor"); Toggle->setChecked(!Toggle->isChecked()); Dialog.reject(); }
         QCOMPARE(Settings.Object(), Before);
+    }
+
+    void legacySettingsDraftUi()
+    {
+        auto Fixture = hc::defaults::Settings();
+        auto Appearance = Fixture["appearance"].toObject(); auto Schemes = Appearance["schemes"].toObject();
+        auto Dark = Schemes[QStringLiteral("기본 다크")].toObject(); QJsonObject Flags;
+        for (const auto& Key : Dark["colors"].toObject().keys()) Flags[Key] = true;
+        Dark["colorOverrides"] = Flags; Dark["future"] = "retained"; Schemes[QStringLiteral("기본 다크")] = Dark;
+        Appearance["schemes"] = Schemes; Appearance["selected"] = QStringLiteral("기본 다크"); Fixture["appearance"] = Appearance;
+        auto General = Fixture["general"].toObject(); General["themeMode"] = "dark"; Fixture["general"] = General;
+        auto Plugins = Fixture["plugins"].toObject(); Plugins["wlx"] = QJsonArray{QJsonObject{{"path", "old.wlx64"}, {"detect", "EXT=\"TXT\""}, {"future", true}}}; Fixture["plugins"] = Plugins;
+        Fixture["future"] = QJsonObject{{"retain", true}};
+        hc::ui::LegacySettingsPage Page; Page.Load(Fixture);
+        QVERIFY(Page.Prepare()); auto Unchanged = Fixture; QVERIFY(Page.Apply(Unchanged)); QCOMPARE(Unchanged, Fixture);
+        auto* Cursor = Page.findChild<QCheckBox*>("hc.legacy.override.listCursor"); QVERIFY(Cursor); QVERIFY(Cursor->isChecked()); Cursor->setChecked(false);
+        Page.findChild<QComboBox*>("hc.legacy.defaultView")->setEditText("external.viewer");
+        Page.findChild<QComboBox*>("hc.legacy.selectionPolicy")->setEditText("comparison-only");
+        Page.findChild<QTableWidget*>("hc.legacy.wlxDetect")->item(0, 1)->setText("EXT=\"MD\"");
+        auto* Standard = Page.findChild<QPlainTextEdit*>("hc.legacy.standard"); Standard->setPlainText("{\"dark\":{\"seeds\":{\"invcur\":\"#445566\"}}}");
+        auto Current = Fixture; auto NewGeneral = Current["general"].toObject(); NewGeneral["monoFontPx"] = 23; Current["general"] = NewGeneral;
+        auto NewPlugins = Current["plugins"].toObject(); auto Wlx = NewPlugins["wlx"].toArray(); auto Item = Wlx[0].toObject(); Item["hostManifest"] = "new-manifest.json"; Wlx[0] = Item;
+        Wlx.append(QJsonObject{{"path", "added.wlx64"}, {"detect", ""}}); NewPlugins["wlx"] = Wlx; Current["plugins"] = NewPlugins;
+        QVERIFY(Page.Prepare()); QVERIFY(Page.Apply(Current));
+        QCOMPARE(Current["general"].toObject()["monoFontPx"].toInt(), 23);
+        const auto SavedDark = Current["appearance"].toObject()["schemes"].toObject()[QStringLiteral("기본 다크")].toObject();
+        QVERIFY(!SavedDark["colorOverrides"].toObject()["listCursor"].toBool()); QVERIFY(SavedDark["colorOverrides"].toObject()["listText"].toBool()); QCOMPARE(SavedDark["future"].toString(), QString("retained"));
+        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray().size(), 2);
+        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray()[0].toObject()["hostManifest"].toString(), QString("new-manifest.json"));
+        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray()[0].toObject()["detect"].toString(), QString("EXT=\"MD\""));
+        QCOMPARE(Current["editors"].toObject()["documentHandlers"].toObject()["defaultViewHandlerId"].toString(), QString("external.viewer"));
+        QCOMPARE(Current["editors"].toObject()["documentHandlers"].toObject()["selectionPolicy"].toString(), QString("comparison-only"));
+        QCOMPARE(Current["future"], Fixture["future"]);
+        Page.Load(Current); QVERIFY(Page.Prepare()); auto Again = Current; QVERIFY(Page.Apply(Again)); QCOMPARE(Again, Current);
+        auto* Text = Page.findChild<QLineEdit*>("hc.legacy.color.listCursor"); Cursor->setChecked(true); Text->setText("invalid");
+        QVERIFY(!Page.Prepare()); QVERIFY(!Page.findChild<QLabel*>("hc.legacy.error")->text().isEmpty());
+        Text->setText("#445566"); QVERIFY(Page.Prepare()); QVERIFY(Page.Apply(Again));
+        auto Removed = Current; auto RemovedPlugins = Removed["plugins"].toObject(); RemovedPlugins["wlx"] = QJsonArray{}; Removed["plugins"] = RemovedPlugins;
+        Page.Load(Current); Page.findChild<QTableWidget*>("hc.legacy.wlxDetect")->item(0, 1)->setText("EXT=\"LOG\""); QVERIFY(Page.Prepare());
+        const auto BeforeFailure = Removed; QVERIFY(!Page.Apply(Removed)); QCOMPARE(Removed, BeforeFailure);
+    }
+
+    void legacySettingsApplyCancelUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(OriginalScheme); TyStCommandMgr::GetInstance()->Refresh(); });
+        auto Fixture = hc::defaults::Settings(); auto Appearance = Fixture["appearance"].toObject(); auto Schemes = Appearance["schemes"].toObject();
+        auto Light = Schemes[QStringLiteral("기본 라이트")].toObject(); QJsonObject Flags;
+        for (const auto& Key : Light["colors"].toObject().keys()) Flags[Key] = true;
+        Light["colorOverrides"] = Flags; Light["inverseCursor"] = true; Schemes[QStringLiteral("기본 라이트")] = Light; Appearance["schemes"] = Schemes; Fixture["appearance"] = Appearance;
+        Fixture["fileSets"] = QJsonArray{QJsonObject{{"name", "legacy-test"}, {"flags", 2}, {"filters", QJsonArray{}}, {"extensions", QJsonArray{"txt"}}, {"attributes", 0}, {"size", 0}, {"future", "retained"}}};
+        QVERIFY(Settings.Replace(Fixture)); QVERIFY(Settings.Commit()); Colors->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
+        const auto ReadDisk = [&] { QFile File(Settings.FileName()); if (!File.open(QIODevice::ReadOnly)) return QByteArray{}; return File.readAll(); };
+        const auto Before = ReadDisk();
+        { QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
+          auto* Page = Dialog.findChild<QWidget*>("hc.settings.legacy"); QVERIFY(Page);
+          Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(false); Dialog.reject(); }
+        QCOMPARE(ReadDisk(), Before);
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); const auto Matches = Categories->findItems(QStringLiteral("레거시"), Qt::MatchExactly); QCOMPARE(Matches.size(), 1); Categories->setCurrentItem(Matches.front());
+        Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(false);
+        Dialog.findChild<QCheckBox*>("hc.legacy.builtInShortcuts")->setChecked(false);
+        Dialog.findChild<QSpinBox*>("hc.settings.monoSize")->setValue(17);
+        QVERIFY(Dialog.SaveSettings());
+        QVERIFY(!Settings.Read(Section::Appearance).toObject()["schemes"].toObject()[QStringLiteral("기본 라이트")].toObject()["colorOverrides"].toObject()["listCursor"].toBool());
+        QVERIFY(!Settings.Read(Section::General).toObject()["useBuiltInShortcuts"].toBool(true));
+        QCOMPARE(Settings.Read(Section::General).toObject()["monoFontPx"].toInt(), 17);
+        QCOMPARE(Settings.Read(Section::FileSets).toArray()[0].toObject()["future"].toString(), QString("retained"));
+        QVERIFY(TyStCommandMgr::GetInstance()->Retrieve().isEmpty());
+        QVERIFY(!Colors->GetColorScheme(Colors->GetCurrentColorScheme()).explicitColors_.contains("listCursor"));
+        auto* PanelView = static_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
+        QVERIFY(PanelView->ListAppearance().invertCursor);
+        QCOMPARE(PanelView->RecordColors()[fm::style::Token::InvCur], fm::style::themeColorsFor(PanelView)[fm::style::Token::InvCur]);
+        QVERIFY(Dialog.SaveSettings()); const auto Applied = ReadDisk();
+        Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(true);
+        Dialog.findChild<QLineEdit*>("hc.legacy.color.listCursor")->setText("invalid");
+        QVERIFY(!Dialog.SaveSettings()); QCOMPARE(ReadDisk(), Applied);
+        Dialog.reject(); QCOMPARE(ReadDisk(), Applied);
+        Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QVERIFY(!Restart.Read(Section::General).toObject()["useBuiltInShortcuts"].toBool(true));
+    }
+
+    void legacySettingsLayoutUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(OriginalScheme); });
+        for (int Mode = 0; Mode < 2; ++Mode) {
+            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
+            Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Mode); QVERIFY(Dialog.SaveSettings());
+            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); Categories->setCurrentItem(Categories->findItems(QStringLiteral("레거시"), Qt::MatchExactly).front());
+            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.legacy.tabs"); QCOMPARE(Tabs->count(), 4);
+            Dialog.resize(1000, 720);
+            for (int Tab = 0; Tab < Tabs->count(); ++Tab) {
+                Tabs->setCurrentIndex(Tab); QTest::qWait(30);
+                QVERIFY(Dialog.findChild<QPushButton*>("btnApply")->isVisible());
+                QVERIFY(Dialog.height() <= Dialog.screen()->availableGeometry().height());
+                const auto Path = QDir(QCoreApplication::applicationDirPath()).filePath(QString("legacy-%1-%2.png").arg(Mode ? "dark" : "light").arg(Tab)); QVERIFY(Dialog.grab().save(Path));
+            }
+            Dialog.reject();
+        }
     }
 
     void jsonSettingsUi()

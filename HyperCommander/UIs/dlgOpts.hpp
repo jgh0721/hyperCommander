@@ -10,7 +10,7 @@ struct TyColorScheme;
 class QPluginManagementPage;
 class CGridView;
 class QtColumnProfileEditor;
-namespace hc::ui { class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; }
+namespace hc::ui { class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; class LegacySettingsPage; }
 
 
 class QMainOpts : public nsHC::QBaseUI
@@ -73,6 +73,7 @@ private:
     QJsonObject committedSettings_;
     hc::ui::ThemeSettingsPage* themeSettings_ = nullptr;
     hc::ui::KeyboardSettingsPage* keyboardSettings_ = nullptr;
+    hc::ui::LegacySettingsPage* legacySettings_ = nullptr;
 
     hc::ui::MenuBarSettingsPage* menuSettings_ = nullptr;
     hc::ui::ThumbnailSettingsPage* thumbnailSettings_ = nullptr;
@@ -107,6 +108,7 @@ private:
     QPushButton* useListDefault_ = nullptr;
     bool resetListModeDraft_ = false;
     bool filePanelSupported_ = true;
+    bool themeModeEdited_ = false;
     QtColumnProfileEditor* columnEditor_ = nullptr;
     QCheckBox* focusPreviousDirectory_ = nullptr;
     QButtonGroup* iconModes_ = nullptr;

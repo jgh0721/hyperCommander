@@ -16,10 +16,15 @@ void CFileSetMgr::Refresh()
 
 void CFileSetMgr::SaveSettings()
 {
+    const auto Previous = hc::settings::AppSettings().Read(hc::settings::Section::FileSets).toArray();
     QJsonArray Items;
-    for (const auto& Item : mapNameToFileSet) Items.append(QJsonObject{{"name",Item.Name},{"flags",qint64(Item.Flags)},
-        {"filters",QJsonArray::fromStringList(Item.Filters)},{"extensions",QJsonArray::fromStringList(Item.VecExtFilters)},
-        {"attributes",qint64(Item.Attributes)},{"size",qint64(Item.Size)}});
+    for (const auto& Item : mapNameToFileSet) {
+        QJsonObject Record;
+        for (const auto& Value : Previous) if (Value.toObject()["name"] == Item.Name) { Record = Value.toObject(); break; }
+        Record["name"] = Item.Name; Record["flags"] = qint64(Item.Flags);
+        Record["filters"] = QJsonArray::fromStringList(Item.Filters); Record["extensions"] = QJsonArray::fromStringList(Item.VecExtFilters);
+        Record["attributes"] = qint64(Item.Attributes); Record["size"] = qint64(Item.Size); Items.append(Record);
+    }
     hc::settings::AppSettings().Put(hc::settings::Section::FileSets, Items);
 }
 

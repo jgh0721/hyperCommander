@@ -5,6 +5,7 @@
 #include "menuBarSettingsPage.hpp"
 #include "themeSettingsPage.hpp"
 #include "keyboardSettingsPage.hpp"
+#include "legacySettingsPage.hpp"
 #include <QStyleHints>
 #include <QTabWidget>
 #include "commonLibs/operations/fileOperation.hpp"
@@ -264,6 +265,8 @@ void QMainOpts::LoadSettings()
     TyStCommandMgr::GetInstance()->Refresh();
     RefreshShortcuts();
     if (keyboardSettings_) keyboardSettings_->Load();
+    if (legacySettings_) legacySettings_->Load(hc::settings::AppSettings().Object(), hc::settings::WorkspaceSettings().Object()["workspace"].toObject());
+    themeModeEdited_ = false;
 }
 
 void QMainOpts::SetListView(CGridView* View)
@@ -302,6 +305,11 @@ void QMainOpts::ShowPluginSettingsPage(const QString& Binary, bool Review)
 
 bool QMainOpts::SaveSettings()
 {
+    if (legacySettings_ && !legacySettings_->Prepare()) {
+        for (int Row = 0; Row < ui.lstOptCate->count(); ++Row)
+            if (ui.lstOptCate->item(Row)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(legacySettings_)) ui.lstOptCate->setCurrentRow(Row);
+        return false;
+    }
     if (pluginManagement_ && !pluginManagement_->Validate()) return false;
     const auto PreviousSettings = committedSettings_;
     if (menuSettings_ && !menuSettings_->Prepare()) {
@@ -414,7 +422,7 @@ bool QMainOpts::SaveSettings()
         General["filePanel"] = Panel;
     }
     if (keyboardSettings_ && !keyboardSettings_->SaveFunctions(General)) return false;
-    General["themeMode"] = QStringList{"light", "dark", "system"}.value(findChild<QComboBox*>("hc.settings.theme")->currentIndex(), "light");
+    if (themeModeEdited_) General["themeMode"] = QStringList{"light", "dark", "system"}.value(findChild<QComboBox*>("hc.settings.theme")->currentIndex(), "light");
     General["darkTitleBar"] = findChild<QCheckBox*>("hc.settings.darkTitle")->isChecked();
     General["showCommandLine"] = findChild<QCheckBox*>("hc.settings.showCommandLine")->isChecked();
     General["showFunctionBar"] = findChild<QCheckBox*>("hc.settings.showFunctionBar")->isChecked();
@@ -430,6 +438,17 @@ bool QMainOpts::SaveSettings()
     RefreshColorScheme(selectedScheme_);
     TyStFileSetMgr::GetInstance()->SaveSettings(); SaveSettings_PluginList();
     TyStCommandMgr::GetInstance()->SaveSettings();
+    if (legacySettings_) {
+        auto Draft = hc::settings::AppSettings().Object();
+        if (!legacySettings_->Apply(Draft)) {
+            for (int Row = 0; Row < ui.lstOptCate->count(); ++Row)
+                if (ui.lstOptCate->item(Row)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(legacySettings_)) ui.lstOptCate->setCurrentRow(Row);
+            return false;
+        }
+        if (!hc::settings::AppSettings().Replace(Draft)) return false;
+        TyStColorSchemeMgr::GetInstance()->Refresh();
+        RefreshColorScheme(TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme());
+    }
     if (!hc::settings::AppSettings().Commit()) {
         QMessageBox Message(QMessageBox::Warning, tr("설정 저장 실패"),
             tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
@@ -452,6 +471,8 @@ bool QMainOpts::SaveSettings()
         const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
         QMessageBox::warning(this, tr("메뉴 저장 실패"), Restored ? tr("기존 설정과 메뉴를 유지했습니다. 메뉴 페이지에서 오류를 확인하세요.") : tr("메뉴 저장 및 설정 복구에 실패했습니다. 디스크 설정을 확인하세요.")); return false;
     }
+    TyStFileSetMgr::GetInstance()->Refresh(); TyStPlugInMgr::GetInstance()->Refresh();
+    TyStCommandMgr::GetInstance()->Refresh();
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) { Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar(); }
     if (ColumnsChanged) columnEditor_->MarkSaved();
     if (resetListModeDraft_ && listView_) { listView_->SetListMode("inherit"); resetListModeDraft_ = false; }
@@ -470,6 +491,16 @@ bool QMainOpts::SaveSettings()
             hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject()).everythingDisplayIntervalMs_);
     }
     committedSettings_ = hc::settings::AppSettings().Object();
+    if (legacySettings_) legacySettings_->Load(committedSettings_, hc::settings::WorkspaceSettings().Object()["workspace"].toObject());
+    if (PreviousSettings["general"].toObject()["useBuiltInShortcuts"] != committedSettings_["general"].toObject()["useBuiltInShortcuts"] && keyboardSettings_) keyboardSettings_->Load();
+    if (auto* Theme = findChild<QComboBox*>("hc.settings.theme")) {
+        const QSignalBlocker Block(Theme);
+        const auto Mode = committedSettings_["general"].toObject()["themeMode"].toString();
+        const int Index = Mode == "system" ? 2 : Scheme.IsDarkMode ? 1 : 0;
+        Theme->setCurrentIndex(Index);
+        if (auto* Card = findChild<fm::ui::ThemeModeCard*>("hc.settings.themeCard" + QString::number(Index))) Card->setChecked(true);
+    }
+    themeModeEdited_ = false;
     if (auto* Status = findChild<QLabel*>("hc.settings.saveStatus")) Status->setText(tr("적용 완료 · 이후 변경은 다시 적용하거나 취소하세요."));
     return true;
 }
@@ -844,8 +875,9 @@ void QMainOpts::initializeDesignPages()
         Mode->setText(I == 2 ? tr("시스템(&Y)") : I == 1 ? tr("다크(&K)") : tr("라이트(&L)"));
         Mode->setCheckable(true); Group->addButton(Mode, I); Modes->addWidget(Mode);
     }
-    connect(Group, &QButtonGroup::idClicked, Theme, &QComboBox::setCurrentIndex);
+    connect(Group, &QButtonGroup::idClicked, this, [this, Theme](int Index) { themeModeEdited_ = true; Theme->setCurrentIndex(Index); });
     connect(Theme, &QComboBox::currentIndexChanged, this, [this, Group, Theme](int Value) {
+        themeModeEdited_ = true;
         if (auto* B = Group->button(Value)) B->setChecked(true);
         const bool Dark = Value == 1 || (Value == 2 && qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark);
         RefreshColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
@@ -1056,10 +1088,11 @@ void QMainOpts::initializeDesignPages()
     // Resolve page indices from widgets so removing a page cannot retarget navigation.
     menuSettings_ = new hc::ui::MenuBarSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(menuSettings_);
     auto* Permissions=hc::ui::PermissionSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(Permissions);
+    legacySettings_ = new hc::ui::LegacySettingsPage(ui.stkOpts); ui.stkOpts->addWidget(legacySettings_);
     const QSignalBlocker Block(ui.lstOptCate); ui.lstOptCate->clear();
     const QList<QPair<QString, int>> Pages{{tr("일반 · 모양"), ui.stkOpts->indexOf(General)}, {tr("테마 색상"), ui.stkOpts->indexOf(themeSettings_)}, {tr("파일 패널"), ui.stkOpts->indexOf(ui.pgDisplay)},
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
-        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}};
+        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
     auto* SaveStatus = new QLabel(this); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText); SaveStatus->setWordWrap(true); SaveStatus->setContentsMargins(12, 4, 12, 4);
     SaveStatus->setText(tr("초안 · 적용/확인으로 저장 · 취소로 이전 설정 유지\n%1").arg(hc::settings::AppSettings().FileName())); ui.verticalLayout->insertWidget(ui.verticalLayout->count() - 1, SaveStatus);
