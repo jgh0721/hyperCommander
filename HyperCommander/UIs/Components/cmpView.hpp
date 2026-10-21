@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QtWidgets>
+#include <QCache>
 #include <functional>
 #include <stop_token>
 #include <fmfilelist/RecordPainting.h>
@@ -240,6 +241,8 @@ private:
     QMetaObject::Connection         selectionRestore_;
     QStringList                    resetSelection_, resetFocusFallback_;
     QString                        resetFocus_, resetPath_;
+    // Keep only recent positions; a long-lived tab may visit many paths.
+    QCache<QString, QJsonObject>    navigationScroll_{128};
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;

@@ -242,7 +242,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -2931,6 +2931,88 @@ private slots:
                 if (auto* TargetProxy = qobject_cast<QAbstractProxyModel*>(TargetView->BaseView()->model())) Index = TargetProxy->mapToSource(Index);
                 QCOMPARE(TargetModel->GetName(Index), Enabled ? QString("zzPrevious") : QString(".."));
             }
+        }
+    }
+    void archiveNavigationPositionUi_data()
+    {
+        QTest::addColumn<QString>("Mode"); QTest::addColumn<bool>("Viewport"); QTest::addColumn<bool>("FocusPrevious"); QTest::addColumn<int>("NativeKey");
+        for (const auto& Mode : {QString("one-line"), QString("two-line")}) for (bool Viewport : {false, true}) for (bool FocusPrevious : {true, false})
+            QTest::newRow(qPrintable(Mode + (Viewport ? "-viewport" : "-grid") + (FocusPrevious ? "-restore" : "-top"))) << Mode << Viewport << FocusPrevious << 0;
+        for (const auto& Mode : {QString("one-line"), QString("two-line")}) for (int NativeKey : {1, 2})
+            QTest::newRow(qPrintable(Mode + (NativeKey == 1 ? "-native-navigation" : "-native-keypad"))) << Mode << false << true << NativeKey;
+    }
+    void archiveNavigationPositionUi()
+    {
+        QFETCH(QString, Mode); QFETCH(bool, Viewport); QFETCH(bool, FocusPrevious); QFETCH(int, NativeKey);
+        main_->resize(1400, 900); main_->show();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto& Settings = hc::settings::AppSettings(); const auto OriginalGeneral = Settings.Read(hc::settings::Section::General).toObject();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Put(hc::settings::Section::General, OriginalGeneral); main_->RestoreWorkspace(Workspace); QThreadPool::globalInstance()->waitForDone(); });
+        auto General = OriginalGeneral; General["focusPreviousDirectory"] = FocusPrevious; QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        for (int I = 0; I < 200; ++I) {
+            QFile File(Directory.filePath(QString("file%1.txt").arg(I, 3, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly)); QVERIFY(File.write("payload") > 0);
+        }
+        const auto Name = QString("file100.zip"); const auto ArchivePath = Directory.filePath(Name);
+        hc::plugins::ArchiveUpdate Create{ArchivePath.toStdString(), Directory.path().toStdString(), {"file000.txt"}};
+        Create.creation_ = hc::plugins::ArchiveCreationOptions{1, false};
+        auto Made = hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinSevenZipOptions())->Update(Create, {});
+        QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        Model->SetProviderEnabled(true); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!Model->IsLoading()); QVERIFY(View->SetListMode(Mode));
+        const auto Find = [&](const QString& Wanted) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Wanted) return Model->index(Row, 0); return QModelIndex{}; };
+        const auto Entry = Model->GetFileInfo(Find(Name)); QVERIFY(Entry && Entry->storageEntry_);
+        const auto Focus = hc::workspace::SelectionKey(*Entry->storageEntry_);
+        View->RestoreSelection({}, Focus); QTest::qWait(80);
+        auto* Native = View->BaseView(); auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        Native->verticalScrollBar()->setValue(Native->verticalScrollBar()->maximum() / 2); QTest::qWait(80);
+        const auto Before = View->CaptureScrollState(); QVERIFY(Before["y"].toInt() > 0);
+        QVERIFY(Panel->grab().save(QCoreApplication::applicationDirPath() + "/archive-before-" + QTest::currentDataTag() + ".png"));
+        auto* Busy = Panel->findChild<fm::ui::ProgressBar*>("hc.navigation.progress"); QVERIFY(Busy);
+        bool ArchiveProgress = false;
+        connect(Model, &CFSModel::DirectoryReadStarted, View, [&](const QString&, bool Archive) {
+            if (Archive) ArchiveProgress = !Busy->isHidden() && Busy->minimum() == 0 && Busy->maximum() == 0;
+        });
+        Panel->sig_NotifyPanelActivated(); QApplication::setActiveWindow(main_); Panel->SetFocusView(Panel->CurrentTabIndex());
+        if (NativeKey) {
+            const auto Window = reinterpret_cast<HWND>(main_->winId());
+            const bool Topmost = GetWindowLongPtrW(Window, GWL_EXSTYLE) & WS_EX_TOPMOST;
+            SetWindowPos(Window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            RECT Rect{}; GetWindowRect(Window, &Rect); POINT Cursor{}; GetCursorPos(&Cursor);
+            SetCursorPos(Rect.left + 100, Rect.top + 12);
+            INPUT Click[2]{}; Click[0].type = Click[1].type = INPUT_MOUSE; Click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN; Click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            QCOMPARE(SendInput(2, Click, sizeof(INPUT)), UINT(2)); QTest::qWait(50); SetCursorPos(Cursor.x, Cursor.y);
+            if (!Topmost) SetWindowPos(Window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            QTRY_COMPARE(GetForegroundWindow(), Window);
+            Panel->SetFocusView(Panel->CurrentTabIndex());
+            QTRY_VERIFY(QApplication::focusWidget() == Grid || Grid->isAncestorOf(QApplication::focusWidget()));
+            qInfo() << "Native archive input focus" << QApplication::focusWidget();
+        }
+        QWidget* Target = Viewport ? Grid->viewport() : Grid;
+        for (int Cycle = 0; Cycle < 2; ++Cycle) {
+            View->RestoreSelection({}, Focus); View->RestoreScrollState(Before);
+            if (NativeKey) {
+                INPUT Keys[4]{};
+                for (auto& Key : Keys) Key.type = INPUT_KEYBOARD;
+                Keys[0].ki.wVk = Keys[3].ki.wVk = VK_CONTROL; Keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+                Keys[1].ki.wVk = Keys[2].ki.wVk = VK_NEXT;
+                Keys[1].ki.dwFlags = NativeKey == 1 ? KEYEVENTF_EXTENDEDKEY : 0; Keys[2].ki.dwFlags = Keys[1].ki.dwFlags | KEYEVENTF_KEYUP;
+                QCOMPARE(SendInput(4, Keys, sizeof(INPUT)), UINT(4));
+            } else QTest::keyClick(Target, Qt::Key_PageDown, Qt::ControlModifier);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && ((Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK) || Model->LastNavigationError()), 15000);
+            QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+            QVERIFY(Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK); QVERIFY(ArchiveProgress); QVERIFY(Busy->isHidden());
+            QVERIFY(Find("file000.txt").isValid());
+            QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.navigate.parent"));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !(Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK), 15000);
+            if (FocusPrevious) QTRY_COMPARE(View->CaptureFocus(), Focus);
+            else QTRY_COMPARE(Native->focusedRowIndex(), 0);
+            QTest::qWait(100);
+            QVERIFY(Panel->grab().save(QCoreApplication::applicationDirPath() + "/archive-after-" + QTest::currentDataTag() + ".png"));
+            if (FocusPrevious) QCOMPARE(View->CaptureScrollState(), Before);
+            else QCOMPARE(Native->verticalScrollBar()->value(), 0);
         }
     }
     void navigationProgressUi_data()

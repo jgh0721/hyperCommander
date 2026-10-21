@@ -679,6 +679,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     }
 
     appliedDisplaySettings_ = {};
+    if (model_ != Source) navigationScroll_.clear();
     model_ = Source;
     proxy_ = Proxy;
     thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
@@ -705,11 +706,19 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                 for (int At = FocusRow - 1; At >= 0; --At) Remember(At);
             }
             resetPath_ = model_->property("hc.snapshotLocation").toString();
+            if (!resetPath_.isEmpty()) navigationScroll_.insert(resetPath_, new QJsonObject(CaptureScrollState()));
             model_->setProperty("hc.selectAllEntries", false);
             QScopedValueRollback GroupGuard(groupingProjection_, true); view_->deselectAll();
         }, Qt::DirectConnection);
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
+        const auto Path = model_->property("hc.snapshotLocation").toString();
+        const auto* SavedScroll = !resetPath_.isEmpty() && resetPath_ != Path ? navigationScroll_.object(Path) : nullptr;
+        const auto ReturnScroll = SavedScroll ? *SavedScroll : QJsonObject{};
+        bool ParentFocused = false;
+        // Focusing the parent entry can scroll it to the viewport edge. Apply
+        // the saved anchor afterwards so returning preserves its screen position.
+        const auto RestoreScroll = qScopeGuard([this, ReturnScroll, &ParentFocused] { if (ParentFocused) RestoreScrollState(ReturnScroll); });
         if (!resetPath_.isEmpty() && resetPath_ == model_->property("hc.snapshotLocation").toString()) {
             auto Focus = resetFocus_;
             if (!Focus.isEmpty() && !Focus.startsWith("@group:")) {
@@ -744,7 +753,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
             if (!Visible.isValid()) break;
             const auto Row = view_->getRow(Visible);
-            if (Row.isValid()) view_->setFocusedRowIndex(Row.rowIndex());
+            if (Row.isValid()) { view_->setFocusedRowIndex(Row.rowIndex()); ParentFocused = true; }
             break;
         }
     });
