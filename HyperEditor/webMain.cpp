@@ -117,12 +117,12 @@ namespace
             && QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &Job, sizeof(Job), nullptr)
             && (Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
             && !(Job.BasicLimitInformation.LimitFlags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK))
-            && (Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS)
-            && (Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)
-            && (Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY)
-            && Job.ProcessMemoryLimit >= 256ULL * 1024 * 1024 && Job.ProcessMemoryLimit <= 8ULL * 1024 * 1024 * 1024
-            && Job.JobMemoryLimit >= 256ULL * 1024 * 1024 && Job.JobMemoryLimit <= 8ULL * 1024 * 1024 * 1024
-            && Job.BasicLimitInformation.ActiveProcessLimit >= 2 && Job.BasicLimitInformation.ActiveProcessLimit <= 64;
+            && (!(Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS)
+                || (Job.BasicLimitInformation.ActiveProcessLimit>=2&&Job.BasicLimitInformation.ActiveProcessLimit<=64))
+            && (!(Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)
+                || (Job.ProcessMemoryLimit>=256ULL*1024*1024&&Job.ProcessMemoryLimit<=8ULL*1024*1024*1024))
+            && (!(Job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY)
+                || (Job.JobMemoryLimit>=256ULL*1024*1024&&Job.JobMemoryLimit<=8ULL*1024*1024*1024));
     }
 }
 int main(int Argc, char** Argv)

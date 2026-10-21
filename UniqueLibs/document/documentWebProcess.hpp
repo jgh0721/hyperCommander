@@ -23,6 +23,7 @@ namespace hc::document
     };
     struct WebProcessLimits
     {
+        // Zero delegates process/memory capacity to Windows.
         std::uint32_t processes_ = 0;
         std::uint64_t memoryBytes_ = 0;
         std::uint32_t startupMs_ = 5000;

@@ -302,13 +302,10 @@ namespace hc::plugins
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-        // The qualified RHWP renderer uses the same bounded process tree as
-        // the viewer DLL. A default viewer requires only its plugin host.
-#ifdef HC_RHWP_HOST_RUNTIME
-        Job.BasicLimitInformation.ActiveProcessLimit = S.documentViewer_ ? 9 : S.helpers_ ? 3 : 1;
-#else
-        Job.BasicLimitInformation.ActiveProcessLimit = S.documentViewer_ ? 1 : S.helpers_ ? 3 : 1;
-#endif
+        // The built-in workspace lets Windows manage its process capacity.
+        // Third-party hosts retain their reviewed process quota.
+        if(S.documentViewer_)Job.BasicLimitInformation.LimitFlags&=~JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        else Job.BasicLimitInformation.ActiveProcessLimit=S.helpers_?3:1;
         if (!S.documentViewer_ && !ArchiveHost) {
             Job.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
             Job.ProcessMemoryLimit = static_cast<SIZE_T>(Limits.memoryBytes_);
@@ -318,6 +315,12 @@ namespace hc::plugins
         JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
             | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_EXITWINDOWS};
         if (Limits.purpose_ == HostPurpose::Configuration) Ui.UIRestrictionsClass &= ~JOB_OBJECT_UILIMIT_HANDLES;
+#ifdef HC_RHWP_HOST_RUNTIME
+        // A reviewed, signed built-in workspace must create nested WebEngine
+        // Jobs and native print dialogs. UI-restricted Jobs cannot do that.
+        // Third-party plugin hosts keep the restrictions above.
+        if(S.documentViewer_)Ui.UIRestrictionsClass=0;
+#endif
         if (!SetInformationJobObject(S.job_.Get(), JobObjectBasicUIRestrictions, &Ui, sizeof(Ui))) return HostError("host-job-ui", GetLastError());
         // An unprivileged host cannot OpenProcess on an elevated parent. Give
         // it only a lifetime/identity handle, through an explicit inheritance
@@ -490,11 +493,16 @@ namespace hc::plugins
             bool Parsed = false; const auto Value = Request["parent"].toString().toULongLong(&Parsed, 16);
             const auto Parent = reinterpret_cast<HWND>(static_cast<quintptr>(Value)); DWORD Owner = 0;
             if (!Parsed || !Parent || !GetWindowThreadProcessId(Parent, &Owner) || Owner != GetCurrentProcessId()) return HostError("host-viewer-parent");
-            // Keep HANDLES restrictions and grant only the caller-owned surface.
-            // Do not remove the restriction for all windows on the desktop.
-            if (!UserHandleGrantAccess(Parent, S.job_.Get(), TRUE)) return HostError("host-viewer-parent-grant", GetLastError());
-            S.viewerParent_ = Parent;
-            if (S.documentViewer_) {
+            JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{};
+            if(!QueryInformationJobObject(S.job_.Get(),JobObjectBasicUIRestrictions,&Ui,sizeof(Ui),nullptr))return HostError("host-viewer-ui-policy",GetLastError());
+            const bool Restricted=(Ui.UIRestrictionsClass&JOB_OBJECT_UILIMIT_HANDLES)!=0;
+            // A grant is valid only for a Job with HANDLES restrictions. The
+            // RHWP-enabled built-in workspace has native desktop UI access.
+            if(Restricted){
+                if(!UserHandleGrantAccess(Parent,S.job_.Get(),TRUE))return HostError("host-viewer-parent-grant",GetLastError());
+                S.viewerParent_=Parent;
+            }
+            if (Restricted && S.documentViewer_) {
                 // The embedded Qt window needs its native activation root. The
                 // user-authorized exception grants only this caller-owned root;
                 // every other desktop window remains behind HANDLES restrictions.

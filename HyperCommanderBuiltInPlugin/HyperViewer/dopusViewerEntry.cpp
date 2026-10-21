@@ -10,6 +10,7 @@ using LPCBYTE = const BYTE*;
 #include "plugin support.h"
 #include "viewer plugins.h"
 #include "viewerHostBridge.hpp"
+#include "UniqueLibs/document/hwpProcessBackend.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include <cwchar>
 #include <algorithm>
@@ -85,7 +86,7 @@ namespace
     }
 }
 extern "C" BOOL DVP_InitEx(LPDVPINITEXDATA Data) { return Data && Data->cbSize >= sizeof(DVPINITEXDATA); }
-extern "C" void DVP_Uninit() {}
+extern "C" void DVP_Uninit() { hc::document::HwpProcessBackend::ReleaseLifecycle(); }
 extern "C" BOOL DVP_IdentifyW(LPVIEWERPLUGININFOW Info)
 {
     if (!Info || Info->cbSize < sizeof(VIEWERPLUGININFOW)) return FALSE;
@@ -96,7 +97,7 @@ extern "C" BOOL DVP_IdentifyW(LPVIEWERPLUGININFOW Info)
     }
     Copy(Info->lpszHandleExts, Info->cchHandleExtsMax, Extensions.c_str());
     Copy(Info->lpszName, Info->cchNameMax, L"HyperViewer");
-    Copy(Info->lpszDescription, Info->cchDescriptionMax, L"HyperViewer PDF, text and image workspace");
+    Copy(Info->lpszDescription, Info->cchDescriptionMax, L"HyperViewer PDF, HWP/HWPX, text and image workspace");
     Info->dwVersionHigh = 0; Info->dwVersionLow = 6; Info->uiMajorFileType = DVPMajorType_Other;
     Info->idPlugin = {0x5095a16b, 0xe90f, 0x4b39, {0xa0, 0x70, 0x7d, 0xdd, 0x52, 0x65, 0x62, 0x01}};
     return TRUE;
@@ -116,18 +117,18 @@ extern "C" BOOL DVP_IdentifyFileW(HWND, LPWSTR File, LPVIEWERPLUGINFILEINFOW Inf
     if (!GetFileAttributesExW(File, GetFileExInfoStandard, &Attributes) || (Attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
     bool Image = false;
     for(const auto Item:hc::document::ImageDocumentExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Image|=_wcsicmp(Ext,Candidate.c_str())==0;}
-    bool Book=false;for(const auto Item:hc::document::ImageBookExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Book|=_wcsicmp(Ext,Candidate.c_str())==0;}
     if (!Supported && !Image && !(Supported = LooksLikeText(File, Abort))) return FALSE;
-    const auto Bytes = (std::uint64_t(Attributes.nFileSizeHigh) << 32) | Attributes.nFileSizeLow;
-    if (!Image && !Book && Bytes > hc::document::DocumentByteLimit) return FALSE;
-    Info->dwFlags = DVPFIF_CanReturnViewer; Info->wMajorType = _wcsicmp(Ext,L".pdf")==0?DVPMajorType_Other:Image?DVPMajorType_Image:DVPMajorType_Text;
-    Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / text / image"); return TRUE;
+    const bool Document=_wcsicmp(Ext,L".pdf")==0||_wcsicmp(Ext,L".hwp")==0||_wcsicmp(Ext,L".hwpx")==0;
+    Info->dwFlags = DVPFIF_CanReturnViewer; Info->wMajorType = Document?DVPMajorType_Other:Image?DVPMajorType_Image:DVPMajorType_Text;
+    Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / HWP / HWPX / text / image"); return TRUE;
 }
 extern "C" HWND DVP_CreateViewer(HWND Parent, LPRECT Rect, DWORD)
 {
     if (!Parent || !IsWindow(Parent) || !Rect) return nullptr;
     HMODULE Module = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&WindowProc), &Module);
+    // Qt font/style caches can retain strings owned by this module. Match the
+    // Qt plugin lifetime rule: release viewer resources, keep code mapped until exit.
+    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&WindowProc), &Module)) return nullptr;
     WNDCLASSW Class{}; Class.hInstance = Module; Class.lpszClassName = ClassName; Class.lpfnWndProc = WindowProc; Class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     if (!RegisterClassW(&Class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return nullptr;
     return CreateWindowExW(0, ClassName, L"HyperViewer", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,

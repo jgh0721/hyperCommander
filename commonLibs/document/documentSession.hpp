@@ -59,6 +59,7 @@ namespace hc::document
         bool IsBusy() const { return saving_.has_value() || pending_.has_value(); }
         void SetHistoryState(bool Undo, bool Redo);
         void SetBinaryContent(bool Binary) { binary_ = Binary; }
+        void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
         const std::string& Text() const { return text_; }
     private:
         struct PendingOperation
@@ -79,5 +80,6 @@ namespace hc::document
         std::optional<SaveTicket> saving_;
         std::uint64_t nextSave_ = 0;
         bool undo_ = false, redo_ = false, binary_ = false;
+        bool unlimitedBytes_ = false;
     };
 }

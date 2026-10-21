@@ -60,6 +60,15 @@ int main(int Argc, char** Argv)
         if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
         auto Runtime = hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),
             QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256));
+        if(!RhwpEdit){
+            Workspace Window(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recovery/viewer",true);
+            Window.ConfigureHwp(std::move(Runtime));
+            QObject::connect(&Window,&hc::document::DocumentWorkspaceWidget::StateChanged,&Window,[&Window]{
+                if(Window.Snapshot()["closeRequested"].toBool())Window.close();
+            });
+            Window.show();
+            Window.Handle({{"action","open"},{"path",Path}});return App.exec();
+        }
         hc::document::HwpOpenWindow Window(Path,
             QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp", std::move(Runtime), {}, RhwpEdit, !Parser.isSet("rhwp-edit-copy"));
         QObject::connect(&App,&QCoreApplication::aboutToQuit,&App,[] {
@@ -81,6 +90,7 @@ int main(int Argc, char** Argv)
     Windows.reserve(Files.size());
     for (const auto& File : Files) {
         auto Window = std::make_unique<Workspace>(RecoveryRoot, false);
+        Window->ConfigureHwp(hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         if (Appearance.contains("documentWorkspace") && !Window->ApplyChromeSettings(Appearance["documentWorkspace"].toObject()))
             Window->ShowShellError(QObject::tr("문서 표시 설정을 적용하지 못하여 기본 표시를 사용합니다."));
         auto* Current = Window.get();

@@ -134,11 +134,10 @@ namespace hc::document
         Result<QJsonArray> Index(const QString& Root)
         {
             QFile File(Root + "/index.json"); if (!File.exists()) return QJsonArray{};
-            if (!File.open(QIODevice::ReadOnly) || File.size() > DocumentByteLimit * 2) return Failure("document-recovery-index-read");
+            if (!File.open(QIODevice::ReadOnly)) return Failure("document-recovery-index-read");
             QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(File.readAll(), &Parse);
             const auto Json = Document.object();
-            if (Parse.error != QJsonParseError::NoError || !Document.isObject() || Json["schemaVersion"] != QJsonValue(1) || !Json["entries"].isArray()
-                || Json["entries"].toArray().size() > 512) return Failure("document-recovery-index-schema");
+            if (Parse.error != QJsonParseError::NoError || !Document.isObject() || Json["schemaVersion"] != QJsonValue(1) || !Json["entries"].isArray()) return Failure("document-recovery-index-schema");
             for (const auto& Value : Json["entries"].toArray()) {
                 if (!Value.isObject()) return Failure("document-recovery-index-schema");
                 const auto Item = Value.toObject(); std::uint64_t Revision = 0, Generation = 0;
@@ -172,7 +171,7 @@ namespace hc::document
     }
     Result<RecoverySnapshot> DocumentRecoveryStore::Store(RecoverySnapshot Snapshot)
     {
-        if (!IdValid(Snapshot.document_.id_) || Snapshot.bytes_.size() > DocumentByteLimit) return Failure("document-recovery-budget");
+        if (!IdValid(Snapshot.document_.id_)) return Failure("document-recovery-budget");
         if (!Snapshot.document_.generation_ || Snapshot.document_.savedRevision_ > Snapshot.document_.revision_)
             return Failure("document-recovery-generation");
         const bool External = Snapshot.document_.contentMode_ == DocumentContentMode::ExternalModel;
@@ -226,7 +225,6 @@ namespace hc::document
             if (!ExternalSourceValid(Identity, Record)) return Failure("document-recovery-source");
         }
         const auto Payload = QJsonDocument(Record).toJson(QJsonDocument::Compact);
-        if (Payload.size() > DocumentByteLimit * 2) return Failure("document-recovery-budget");
         if (!StoreBytes(QString::fromStdString(Snapshot.snapshotPath_), Payload)) return Failure("document-recovery-write");
         QJsonArray Next; Next.append(QJsonObject{{"documentId", Id}, {"generation", QString::number(Snapshot.document_.generation_)}, {"revision", QString::number(Snapshot.document_.revision_)}, {"path", Name}});
         QStringList Retired; int Previous = 0;
@@ -237,7 +235,7 @@ namespace hc::document
         }
         // A snapshot is immutable and complete before its index is published.
         // A failed index update leaves the previous indexed generations intact.
-        if (Next.size() > 512 || !PutIndex(root_, Next)) return Failure("document-recovery-index-write");
+        if (!PutIndex(root_, Next)) return Failure("document-recovery-index-write");
         // Compatibility alias for the P0 host harness; recovery enumeration uses
         // indexed immutable generations and never trusts incomplete orphan files.
         StoreBytes(root_ + "/" + Id + ".json", Payload);
@@ -253,14 +251,14 @@ namespace hc::document
         if (Root.isEmpty() || Canonical.isEmpty() || QFileInfo(Canonical).absolutePath() != Root || !Canonical.endsWith(".json"))
             return Failure("document-recovery-path");
         QFile File(Canonical);
-        if (!File.open(QIODevice::ReadOnly) || File.size() > DocumentByteLimit * 2) return Failure("document-recovery-read");
+        if (!File.open(QIODevice::ReadOnly)) return Failure("document-recovery-read");
         QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(File.readAll(), &Parse);
         const auto Json = Document.object(); const auto Schema = Json["schemaVersion"].toInt();
         const auto Bytes = QByteArray::fromBase64(Json["bytes"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
         const auto Id = Json["documentId"].toString().toStdString(); bool RevisionValid = false;
         const auto Revision = Json["revision"].toString().toULongLong(&RevisionValid);
         if (Parse.error != QJsonParseError::NoError || !Document.isObject() || (Schema != 1 && Schema != 2 && Schema != 3)
-            || !IdValid(Id) || !RevisionValid || Bytes.size() > DocumentByteLimit || Bytes.toBase64() != Json["bytes"].toString().toLatin1()
+            || !IdValid(Id) || !RevisionValid || Bytes.toBase64() != Json["bytes"].toString().toLatin1()
             || QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Json["sha256"].toString().toLatin1())
             return Failure("document-recovery-checksum-or-schema");
         RecoverySnapshot Result; Result.document_.id_ = Id; Result.document_.revision_ = Revision;

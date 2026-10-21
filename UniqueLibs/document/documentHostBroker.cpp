@@ -6,10 +6,20 @@
 
 namespace hc::document
 {
+    std::optional<DocumentHostBroker::EditorInput> DocumentHostBroker::ResolveEditorInput(const QString& SourceToken) const
+    {
+        const auto At=sources_.find(SourceToken);if(At==sources_.end())return {};
+        const auto& Binding=At->second;
+        const auto Kind=Binding.source_.locator_.kind_;
+        if(Kind==storage::LocatorKind::Local||Kind==storage::LocatorKind::Smb)
+            return EditorInput{QString::fromUtf8(Binding.source_.locator_.root_),true,{}};
+        if(Binding.lease_)return EditorInput{QString::fromUtf8(Binding.lease_->LocalPath()),false,Binding.lease_};
+        return {};
+    }
     QString DocumentHostBroker::Bind(storage::EntrySnapshot Source, std::shared_ptr<storage::IWritableStorage> Writer,
         std::shared_ptr<storage::IMaterializedFileLease> Lease, QByteArray ContentHash)
     {
-        if (!Source.id_.revision_ || Source.directory_ || sources_.size() >= 16) return {};
+        if (!Source.id_.revision_ || Source.directory_) return {};
         const auto Token = QUuid::createUuid().toString(QUuid::Id128);
         sources_.emplace(Token, Binding{std::move(Source), std::move(Writer), std::move(Lease), std::move(ContentHash)}); return Token;
     }
@@ -31,7 +41,6 @@ namespace hc::document
         if (At == sources_.end() || !At->second.writer_ || SaveToken.size() != 32 || retiredSaves_.contains(SaveToken)) return Fail("document-stale-source-or-save-token");
         if (retiredSaves_.size() >= 4096) return Fail("p0-save-token-budget");
         auto& Binding = At->second;
-        if (Bytes.size() > DocumentByteLimit) return Fail("document-save-byte-budget");
         if (Prepared.contains("byteLength") && Prepared["byteLength"].toString() != QString::number(Bytes.size())) return Fail("document-save-length");
         if (Prepared.contains("sha256") && Prepared["sha256"].toString().toLatin1() != QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex()) return Fail("document-save-checksum");
         // Replay is rejected even after an unsuccessful attempt. A retry captures
@@ -42,7 +51,7 @@ namespace hc::document
         if (Binding.source_.locator_.kind_ == storage::LocatorKind::Local && !Binding.hash_.isEmpty())
         {
             QFile Current(QString::fromUtf8(Binding.source_.locator_.root_));
-            if (!Current.open(QIODevice::ReadOnly) || Current.size() > DocumentByteLimit) return Fail("document-source-read");
+            if (!Current.open(QIODevice::ReadOnly)) return Fail("document-source-read");
             QCryptographicHash Hash(QCryptographicHash::Sha256);
             while (!Current.atEnd()) {
                 if (auto Stop = Context.Check({"document"})) return Fail(QString::fromStdString(Stop->code_), Stop->category_);

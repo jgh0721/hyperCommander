@@ -11,7 +11,7 @@ namespace hc::document {
         public: bool exceeded_ = false;
         protected:
             qint64 writeData(const char* Data,qint64 Length) override {
-                if(Length<0 || pos()+Length>64LL*1024*1024){exceeded_=true;return -1;}
+                if(Length<0 || Length>std::numeric_limits<qint64>::max()-pos()){exceeded_=true;return -1;}
                 return QBuffer::writeData(Data,Length);
             }
         };
@@ -21,8 +21,8 @@ namespace hc::document {
         const std::vector<int>& RequestedPages,const HwpPrintFrames& Frames) {
         if(Expected.operation_!=DocumentOperation::Printing || Expected.documentId_.empty() || !Expected.generation_
             || !Expected.token_ || !Expected.revision_ || !Expected.model_.epoch_ || Expected.model_.savepoint_.empty()
-            || !(Frames.ticket_==Expected) || Frames.totalPages_<1 || Frames.totalPages_>128
-            || RequestedPages.empty() || RequestedPages.size()>128 || Frames.pages_.size()!=RequestedPages.size())
+            || !(Frames.ticket_==Expected) || Frames.totalPages_<1
+            || RequestedPages.empty() || Frames.pages_.size()!=RequestedPages.size())
             return Invalid("rhwp-print-identity");
         quint64 Pixels=0,Bytes=0;int Previous=-1;
         std::vector<QImage> Images;Images.reserve(Frames.pages_.size());
@@ -32,12 +32,10 @@ namespace hc::document {
                 return Invalid("rhwp-print-page-range");
             Previous=RequestedPages[Index];const auto Paper=Page.paperPixels_;
             if(!std::isfinite(Paper.width()) || !std::isfinite(Paper.height()) || Paper.width()<=0 || Paper.height()<=0
-                || Paper.width()>4096 || Paper.height()>4096 || Page.png_.isEmpty() || Page.png_.size()>16*1024*1024
-                || (Bytes+=Page.png_.size())>64*1024*1024)return Invalid("rhwp-print-budget");
+                || Page.png_.isEmpty())return Invalid("rhwp-print-budget");
             QBuffer Input;Input.setData(Page.png_);Input.open(QIODevice::ReadOnly);QImageReader Reader(&Input,"PNG");
             Reader.setDecideFormatFromContent(false);const auto Size=Reader.size();
-            if(Size.isEmpty() || Size.width()>4096 || Size.height()>4096
-                || (Pixels+=static_cast<quint64>(Size.width())*Size.height())>64*1024*1024)return Invalid("rhwp-print-pixel-budget");
+            if(Size.isEmpty())return Invalid("rhwp-print-pixel-budget");
             auto Image=Reader.read();if(Image.isNull() || Image.size()!=Size)return Invalid("rhwp-print-image");
             Images.push_back(std::move(Image));
         }

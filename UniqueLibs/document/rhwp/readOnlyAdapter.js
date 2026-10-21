@@ -35,7 +35,7 @@ async function OpenDocument(Bridge, Engine, CreateCanvas, AllPages, Options = {}
         const Meta = await Call('PendingOpen');
         Check();
         if (Meta.version !== 1 || Meta.readOnly !== true || !['hwp','hwpx'].includes(Meta.format)
-            || !Number.isInteger(Meta.byteLength) || Meta.byteLength < 1 || Meta.byteLength > 64 * 1024 * 1024
+            || !Number.isInteger(Meta.byteLength) || Meta.byteLength < 1
             || Meta.chunkSize !== 192 * 1024 || !/^[0-9a-f]{64}$/.test(Meta.sha256)) throw new Error('metadata');
         if(AllPages && Meta.renderMode!=='viewport-v1')throw new Error('render-mode');
         Identity = Object.fromEntries(['version','format','documentId','documentGeneration',
@@ -62,7 +62,7 @@ async function OpenDocument(Bridge, Engine, CreateCanvas, AllPages, Options = {}
         Doc = new Engine.HwpDocument(Bytes);
         if (Doc.getSourceFormat() !== Meta.format) throw new Error('format');
         const Pages = Doc.pageCount();
-        if (!Number.isInteger(Pages) || Pages < 1 || Pages > 100000) throw new Error('pages');
+        if (!Number.isInteger(Pages) || Pages < 1) throw new Error('pages');
         Trace?.end('js.parseLayout',ParseStart);
         const ParsedStart=Trace?.begin();
         if (!await Report('Parsed', {pageCount:Pages})) throw new Error('parsed-rejected');
@@ -70,9 +70,7 @@ async function OpenDocument(Bridge, Engine, CreateCanvas, AllPages, Options = {}
         Trace?.end('js.parsedAck',ParsedStart);
         const PreflightStart=Trace?.begin();
         const Count = AllPages ? Pages : 1;
-        if (Count > 128) throw new Error('page-count-budget');
-        // Preflight the entire allocation before rendering any page. 64M pixels
-        // bounds canvas backing stores (~256 MiB), not total renderer memory.
+        // Validate page dimensions before asking the engine to allocate canvases.
         let Pixels = 0;
         const Sizes = [];
         for (let Page = 0; Page < Count; ++Page) {
@@ -84,10 +82,7 @@ async function OpenDocument(Bridge, Engine, CreateCanvas, AllPages, Options = {}
             // ceil(original dimension). Reserve the full rounding interval.
             const Width = Math.ceil(Info.width + 0.05);
             const Height = Math.ceil(Info.height + 0.05);
-            if (Width > 4096 || Height > 4096 || Width * Height > 16 * 1024 * 1024)
-                throw new Error('page-budget');
             Pixels += Width * Height;
-            if (Pixels > 64 * 1024 * 1024) throw new Error('document-pixel-budget');
             Sizes.push({width:Width, height:Height});
         }
         Trace?.end('js.preflight',PreflightStart);
@@ -164,7 +159,7 @@ async function OpenDocument(Bridge, Engine, CreateCanvas, AllPages, Options = {}
         Notify();
         return {pageCount:Pages,...First,get renderedPages(){return Painted.size;},get disposed(){return Cancelled;},
             snapshotBytes(){Check();return Bytes.slice();}, // One retained source buffer; copy only for a print operation.
-            requestPages(Indices){Check();if(!Array.isArray(Indices)||Indices.length>128||Indices.some(P=>!Number.isInteger(P)||P<0||P>=Pages))throw new Error('page-selection');
+            requestPages(Indices){Check();if(!Array.isArray(Indices)||Indices.some(P=>!Number.isInteger(P)||P<0||P>=Pages))throw new Error('page-selection');
                 Queue=[...new Set(Indices)].filter(P=>!Painted.has(P));Schedule();},
             async pause(){Check();++Paused;await Safe;Check();},
             resume(){if(Cancelled)return;Paused=Math.max(0,Paused-1);Schedule();},dispose:Dispose};

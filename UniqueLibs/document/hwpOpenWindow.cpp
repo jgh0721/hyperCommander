@@ -193,8 +193,9 @@ namespace hc::document
             auto Entry = Provider->Resolve({LocatorKind::Local, Path.toUtf8().toStdString()}, Context).get();
             if (!Entry.HasValue()) return Fail(QString::fromStdString(Entry.Failure().code_));
             if (!QDir().mkpath(Cache)) return Fail("rhwp-cache-directory");
-            MaterializationLimits Limits; Limits.maxFileBytes_ = 64ULL * 1024 * 1024;
-            Limits.maxTotalBytes_ = 256ULL * 1024 * 1024; Limits.maxActiveFiles_ = 4;
+            MaterializationLimits Limits;
+            if(Editable){Limits.maxFileBytes_=64ULL*1024*1024;Limits.maxTotalBytes_=256ULL*1024*1024;Limits.maxActiveFiles_=4;}
+            else Limits.maxActiveFiles_=std::numeric_limits<std::size_t>::max();
             auto Store = MakeNativeMaterializer(Cache.toUtf8().toStdString(), Limits);
             if (!Store.HasValue()) return Fail(QString::fromStdString(Store.Failure().code_));
             Out->materializer_ = std::move(Store.Value()); MaterializationRequest Request;
@@ -224,7 +225,7 @@ namespace hc::document
         if (closing_) { cleanup(); return; }
         const QPointer<HwpOpenWindow> Guard(this);
         if (!resources_->error_.isEmpty()) { fail(resources_->error_); if (Guard) cleanup(); return; }
-        auto Backend = factory_ ? factory_() : std::make_unique<HwpProcessBackend>(runtime_, WebProcessLimits{8, 2048ULL * 1024 * 1024, 10000}, 30000, editable_);
+        auto Backend = factory_ ? factory_() : std::make_unique<HwpProcessBackend>(runtime_, editable_?WebProcessLimits{8,2048ULL*1024*1024,10000}:WebProcessLimits{0,0,10000}, 30000, editable_);
         if (!Guard) return;
         if (closing_) { cleanup(); return; }
         if (!Backend) { fail("rhwp-backend-unavailable"); if (Guard) cleanup(); return; }
@@ -377,7 +378,7 @@ namespace hc::document
         else {
             QPrintDialog Dialog(Job->printer_.get(),this);printDialog_=&Dialog;Dialog.setWindowTitle(tr("한글 문서 인쇄"));
             Dialog.setOption(QAbstractPrintDialog::PrintPageRange,true);Dialog.setOption(QAbstractPrintDialog::PrintToFile,true);
-            Dialog.setMinMax(1,128);Accepted=Dialog.exec()==QDialog::Accepted;
+            Dialog.setMinMax(1,std::numeric_limits<int>::max());Accepted=Dialog.exec()==QDialog::Accepted;
             if(!Guard)return;printDialog_.clear();
         }
         if(!Guard)return;
@@ -385,7 +386,7 @@ namespace hc::document
         std::vector<int> Pages;
         if(Job->printer_->printRange()==QPrinter::PageRange) {
             const auto First=Job->printer_->fromPage(),Last=Job->printer_->toPage();
-            if(First<1||Last<First||Last>128){finishPrint(storage::Error{storage::ErrorCategory::InvalidRequest,"rhwp-print-page-range"});return;}
+            if(First<1||Last<First){finishPrint(storage::Error{storage::ErrorCategory::InvalidRequest,"rhwp-print-page-range"});return;}
             for(int I=First;I<=Last;++I)Pages.push_back(I-1);
         }
         if(!document_->Print(Pages)) {if(Guard)finishPrint(storage::Error{storage::ErrorCategory::InvalidRequest,"rhwp-print-unavailable"});}

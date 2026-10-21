@@ -44,12 +44,12 @@ namespace hc::document
             const auto Sha = Request["sha256"].toString().toLatin1();
             const auto Format = Request["format"].toString();
             if(Request.size() != 7 || !IdentityValid(Identity) || Request["readOnly"] != QJsonValue(true)
-                || !Request["byteLength"].isDouble() || Size < 1 || Size > 64 * 1024 * 1024
+                || !Request["byteLength"].isDouble() || Size < 1 || Size > 9007199254740991.0
                 || std::floor(Size) != Size || (Format != "hwp" && Format != "hwpx")
                 || !Request["sha256"].isString() || Sha.size() != 64 || QByteArray::fromHex(Sha).toHex() != Sha
                 || timeoutMs_ < 1 || timeoutMs_ > 120000) return reject("rhwp-input-admission");
             input_.identity_ = Identity; input_.format_ = Format; input_.sha256_ = Sha;
-            length_ = static_cast<int>(Size); deadline_ = QDeadlineTimer(timeoutMs_, Qt::PreciseTimer);
+            length_ = static_cast<qsizetype>(Size); deadline_ = QDeadlineTimer(timeoutMs_, Qt::PreciseTimer);
             state_ = State::Receiving; return reply("InputAccepted");
         }
         if(Identity != input_.identity_) return reject("rhwp-input-stale");

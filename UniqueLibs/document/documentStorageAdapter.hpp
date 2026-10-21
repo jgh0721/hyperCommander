@@ -26,10 +26,10 @@ namespace hc::document
         storage::EntrySnapshot source_;
         QByteArray hash_;
     };
-    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {});
+    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false);
     storage::Result<TextInput> ReadTextFile(const QString& Path, storage::OperationContext Context = {});
     storage::Result<LocalSaveResult> SaveTextFile(const QString& Path, const QByteArray& Bytes,
         storage::DestinationExpectation Expected, const QByteArray& ExpectedHash,
-        storage::OperationContext Context = {}, bool Image = false);
+        storage::OperationContext Context = {}, bool Image = false, bool Unlimited = false);
     QByteArray EncodeText(const QString& Text, bool Bom, const QString& Eol);
 }

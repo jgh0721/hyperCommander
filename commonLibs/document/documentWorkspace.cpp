@@ -4,7 +4,7 @@ namespace hc::document
     using namespace storage;
     Result<Unit> DocumentWorkspace::Add(std::shared_ptr<IDocumentSession> Session)
     {
-        if (!Session || Session->Snapshot().id_.empty() || Session->Snapshot().lifecycle_ == DocumentLifecycle::Closed || Find(Session->Snapshot().id_) || sessions_.size() >= 16)
+        if (!Session || Session->Snapshot().id_.empty() || Session->Snapshot().lifecycle_ == DocumentLifecycle::Closed || Find(Session->Snapshot().id_) || (maxTabs_ && sessions_.size() >= maxTabs_))
             return Error{ErrorCategory::InvalidRequest, "document-workspace-session"};
         activeId_ = Session->Snapshot().id_; sessions_.push_back(std::move(Session)); return Unit{};
     }

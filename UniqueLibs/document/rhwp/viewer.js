@@ -2,14 +2,14 @@ import * as Engine from './rhwp.js';
 import {OpenReadOnlyPages} from './readOnlyAdapter.js';
 import {ConnectPrint} from './hostPrint.js';
 const Status=document.getElementById('status'),Pages=document.getElementById('pages');
-const PrintButton=document.createElement('button');PrintButton.textContent='인쇄 (Ctrl+P)';PrintButton.disabled=true;Status.before(PrintButton);
 let Controller,Printer,Observer,Frame,Stopped=false,CancelSignal,Shortcut;
 const Frames=[],Lifetime=new AbortController();
 const StopObservers=()=>{Observer?.disconnect();if(Frame!==undefined)cancelAnimationFrame(Frame);Frame=undefined;
     window.removeEventListener('scroll',Schedule);window.removeEventListener('resize',Schedule);};
 const Dispose=()=>{if(Stopped)return;Stopped=true;Lifetime.abort();StopObservers();Controller?.dispose();Printer?.stop();
-    document.removeEventListener('keydown',Shortcut,true);CancelSignal?.disconnect(Dispose);window.removeEventListener('pagehide',Dispose);PrintButton.disabled=true;};
+    document.removeEventListener('keydown',Shortcut,true);CancelSignal?.disconnect(Dispose);window.removeEventListener('pagehide',Dispose);};
 const LateFailure=(Error,Page)=>{
+    Status.hidden=false;
     if(Stopped)return;const Label=Frames[Page]?.querySelector('.page-placeholder');if(Label)Label.textContent=(Page+1)+' 페이지 표시 실패';
     Status.textContent='일부 페이지를 표시하지 못했습니다. 문서를 다시 열어 주세요.';Dispose();
 };
@@ -46,7 +46,7 @@ try {
                 before:()=>Controller.pause(),snapshot:async()=>Controller.snapshotBytes(),after:()=>Controller.resume()
             });
             if(Stopped){Printer.stop();return;}
-            PrintButton.disabled=false;PrintButton.addEventListener('click',()=>{if(!Stopped)void Printer.request();});
+            Status.hidden=true;
             Shortcut=Event=>{if(!Stopped&&Event.ctrlKey&&!Event.altKey&&!Event.shiftKey&&!Event.isComposing&&Event.key.toLowerCase()==='p'){
                 Event.preventDefault();Event.stopImmediatePropagation();void Printer.request();}};
             document.addEventListener('keydown',Shortcut,true);
@@ -54,7 +54,7 @@ try {
             Observer=new IntersectionObserver(Schedule,{rootMargin:'100% 0px'});Frames.forEach(Element=>Observer.observe(Element));
             window.addEventListener('scroll',Schedule,{passive:true});window.addEventListener('resize',Schedule,{passive:true});Schedule();
         }).catch(()=>{
-            if(Stopped)return;Dispose();Pages.replaceChildren();Pages.setAttribute('aria-busy','false');
+            if(Stopped)return;Status.hidden=false;Dispose();Pages.replaceChildren();Pages.setAttribute('aria-busy','false');
             Status.textContent='문서를 표시하지 못했습니다. 지원 범위 또는 문서 상태를 확인해 주세요.';
         });
     });

@@ -55,7 +55,7 @@ namespace hc::document {
     }
     HwpInputInspection InspectHwpInput(const QByteArray& Bytes,const QString& Format) {
         HwpInputInspection Result{false,false,Format,"rhwp-input-container"};
-        if(Bytes.isEmpty() || Bytes.size()>64*1024*1024){Result.error_="rhwp-input-budget";return Result;}
+        if(Bytes.isEmpty()){Result.error_="rhwp-input-budget";return Result;}
         if(Format=="hwp") {
             if(!Bytes.startsWith(QByteArray::fromHex("d0cf11e0a1b11ae1")))return Result;
             return Cfb(Bytes);
@@ -68,7 +68,7 @@ namespace hc::document {
         }
         if(End<0 || U16(Bytes,End+4) || U16(Bytes,End+6) || U16(Bytes,End+8)!=U16(Bytes,End+10))return Result;
         const auto Count=U16(Bytes,End+10); const quint64 Length=U32(Bytes,End+12), Offset=U32(Bytes,End+16);
-        if(!Count || Count>2048 || Offset+Length!=static_cast<quint64>(End))return Result;
+        if(!Count || Offset+Length!=static_cast<quint64>(End))return Result;
         struct Entry { QString name_; quint64 offset_, size_, compressed_; quint16 method_; quint32 crc_; bool directory_; };
         std::vector<Entry> Entries;
         std::vector<std::pair<quint64,quint64>> Ranges;
@@ -80,8 +80,7 @@ namespace hc::document {
             const quint64 Next=static_cast<quint64>(At)+46+NameLength+U16(Bytes,At+30)+U16(Bytes,At+32);
             if(Next>static_cast<quint64>(End) || !NameLength || U16(Bytes,At+34) || (Method!=0 && Method!=8))return Result;
             if(Flags&(1|64)){Result.error_="rhwp-password-required";return Result;}
-            if(Size>16*1024*1024 || (Expanded+=Size)>64*1024*1024 || Size>qMax<quint64>(1,Compressed)*1000
-                || (Method==0 && Size!=Compressed)){Result.error_="rhwp-zip-expansion-budget";return Result;}
+            if(Method==0 && Size!=Compressed)return Result;
             const auto RawName=Bytes.mid(At+46,NameLength); const auto Name=QString::fromUtf8(RawName);
             const auto Parts=Name.split('/');
             if(Name.toUtf8()!=RawName || Name.contains(QChar(0)) || Name.contains('\\') || Name.contains(':')

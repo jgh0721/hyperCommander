@@ -34,7 +34,7 @@ private slots:
         HwpPrintTransfer Partial(T);QVERIFY(Partial.Handle(Message("PrintBegin",{{"totalPages",1}})));
         QVERIFY(!Partial.Handle(Message("PrintCommit")));
         HwpPrintTransfer Budget(T);QVERIFY(Budget.Handle(Message("PrintBegin",{{"totalPages",1}})));
-        QVERIFY(!Budget.Handle(Message("PrintPageBegin",{{"page",0},{"width",794},{"height",1123},{"byteLength",17*1024*1024},{"sha256",QString(64,'a')}})));
+        QVERIFY(Budget.Handle(Message("PrintPageBegin",{{"page",0},{"width",794},{"height",1123},{"byteLength",17*1024*1024},{"sha256",QString(64,'a')}})));
         HwpPrintTransfer Range(T,{1});QVERIFY(!Range.Handle(Message("PrintBegin",{{"totalPages",1}})));
     }
     void printCancellationRequiresRendererRetirement() {
@@ -63,7 +63,7 @@ private slots:
     }
     void rejectsImageAndGeometry() {
         HwpPrintFrames Frames{Ticket(),1,{Page(0)}};Frames.pages_[0].png_="invalid";
-        QVERIFY(!BuildHwpPdf(Ticket(),{0},Frames).HasValue());Frames.pages_={Page(0,{5000,100})};
+        QVERIFY(!BuildHwpPdf(Ticket(),{0},Frames).HasValue());Frames.pages_={Page(0,{0,100})};
         QVERIFY(!BuildHwpPdf(Ticket(),{0},Frames).HasValue());
     }
     void printingNeverSavesChanges() {

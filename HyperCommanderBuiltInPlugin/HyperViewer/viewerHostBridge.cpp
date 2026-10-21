@@ -51,6 +51,7 @@ namespace hc::document
         if (!ConfigDirectory.isEmpty()) qApp->setProperty("documentViewsConfigDir", ConfigDirectory);
         const auto Root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/viewer";
         state_->window_ = std::make_unique<ViewerWindow>(Root);
+        state_->window_->ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         state_->rhwp_ = std::make_unique<HwpHostSession>(
             QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp",
             MakeProductHwpRuntime(QCoreApplication::applicationDirPath(), QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
@@ -88,16 +89,7 @@ namespace hc::document
     {
         if (!state_->window_ || !Path) return false;
         const auto LocalPath = QString::fromWCharArray(Path);
-        const auto Suffix = QFileInfo(LocalPath).suffix().toLower();
-        if (Suffix == "hwp" || Suffix == "hwpx") {
-#ifdef HC_RHWP_HOST_RUNTIME
-            return state_->rhwp_ && !state_->rhwp_->OpenHost(LocalPath).contains("error");
-#else
-            return false;
-#endif
-        }
-        const auto Result = state_->rhwp_->Dispatch({{"action", "openHost"}, {"path", LocalPath}},
-            [this](const QJsonObject& Request) { return state_->window_->Handle(Request); });
+        const auto Result = state_->window_->Handle({{"action", "openHost"}, {"path", LocalPath}});
         return !Result.contains("error");
     }
 
@@ -175,7 +167,9 @@ namespace hc::document
             }
             return Reply;
         };
-        const auto Reply = state_->rhwp_ ? state_->rhwp_->Dispatch(Object, Dispatch) : Dispatch(Object);
+        // Explicit diagnostic RHWP commands retain their versioned endpoint;
+        // every product open, including SDK HWP loads, belongs to mixed tabs.
+        const auto Reply = state_->rhwp_&&Object["action"].toString().startsWith("rhwp") ? state_->rhwp_->Handle(Object) : Dispatch(Object);
         Output = QJsonDocument(Reply).toJson(QJsonDocument::Compact).toStdString();
         return true;
     }

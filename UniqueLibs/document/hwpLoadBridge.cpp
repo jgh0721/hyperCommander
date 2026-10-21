@@ -18,7 +18,7 @@ namespace hc::document
     }
     QVariantMap HwpLoadEndpoint::PendingOpen() const
     { return bridge_ ? bridge_->PendingOpen() : QVariantMap{}; }
-    QString HwpLoadEndpoint::ReadChunk(const QString& Operation, int Offset) const
+    QString HwpLoadEndpoint::ReadChunk(const QString& Operation, qint64 Offset) const
     { return bridge_ ? bridge_->ReadChunk(Operation, Offset) : QString{}; }
     bool HwpLoadEndpoint::Report(const QString& Json)
     { return bridge_ && bridge_->Report(Json); }
@@ -71,7 +71,7 @@ namespace hc::document
         if (TimeoutMs < 1 || TimeoutMs > 120000 || state_ != State::Idle || Request.documentId_.isEmpty() || Request.documentId_.size() > 128 || !Request.documentGeneration_
             || !Request.bindingOwner_ || !Request.bindingGeneration_ || !Request.epoch_
             || (Request.format_ != "hwp" && Request.format_ != "hwpx")
-            || Bytes.isEmpty() || Bytes.size() > 64LL * 1024 * 1024
+            || Bytes.isEmpty()
             || Request.sha256_.size() != 64
             || QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Request.sha256_) {
             Error = "rhwp-load-admission"; return false;
@@ -100,12 +100,12 @@ namespace hc::document
         auto Result = identity_;
         if(deferredPages_)Result["renderMode"]="viewport-v1";
         Result["readOnly"] = true;
-        Result["byteLength"] = static_cast<int>(bytes_.size());
+        Result["byteLength"] = qint64(bytes_.size());
         Result["chunkSize"] = 192 * 1024;
         Result["sha256"] = QString::fromLatin1(sha256_);
         return Result.toVariantMap();
     }
-    QString HwpLoadBridge::ReadChunk(const QString& Operation, int Offset) const
+    QString HwpLoadBridge::ReadChunk(const QString& Operation, qint64 Offset) const
     {
         if (expired() || (state_ != State::Loading && state_ != State::Parsed)
             || Operation != identity_["operation"].toString() || Offset < 0
@@ -134,13 +134,13 @@ namespace hc::document
         };
         if (Type == "Parsed" && state_ == State::Loading) {
             pageCount_=Report.value("pageCount").toInt(-1);
-            if (!Positive("pageCount", deferredPages_ ? 128 : 100000) || !Report.isEmpty()) return false;
+            if (!Positive("pageCount", std::numeric_limits<int>::max()) || !Report.isEmpty()) return false;
             state_ = State::Parsed; return true;
         }
         if (Type == "FirstFrame" && state_ == State::Parsed) {
             const auto Page = Report.take("page");
-            if (!Page.isDouble() || Page.toDouble(-1) != 0 || !Positive("width", 32768)
-                || !Positive("height", 32768) || !Report.isEmpty()) return false;
+            if (!Page.isDouble() || Page.toDouble(-1) != 0 || !Positive("width", std::numeric_limits<int>::max())
+                || !Positive("height", std::numeric_limits<int>::max()) || !Report.isEmpty()) return false;
             timer_.stop(); rendered_.insert(0); state_ = State::Ready; bytes_.clear();
             startup::Data().EndNamed("helper.bridgeToFirstFrame");
             emit Ready(); return true;
@@ -162,7 +162,7 @@ namespace hc::document
                 renderSequence_=Sequence;activePage_=Page;rendering_=true;renderDeadline_=QDeadlineTimer(renderTimeoutMs_,Qt::PreciseTimer);timer_.start(renderTimeoutMs_);return true;
             }
             if(Type=="ViewRenderEnd"&&rendering_&&Sequence==renderSequence_&&Page==activePage_
-                &&Positive("width",4096)&&Positive("height",4096)&&Report.isEmpty()) {
+                &&Positive("width",std::numeric_limits<int>::max())&&Positive("height",std::numeric_limits<int>::max())&&Report.isEmpty()) {
                 timer_.stop();rendering_=false;rendered_.insert(Page);activePage_=-1;return true;
             }
             return false;

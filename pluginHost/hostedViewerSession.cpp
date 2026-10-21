@@ -151,7 +151,7 @@ namespace hc::plugins
         std::lock_guard Lock(state_->mutex_);
         if (!state_->details_.documentChannel_ || state_->stop_.stop_requested() || state_->details_.viewer_.status_ != ViewerStatus::Ready)
             return Error{ErrorCategory::Unavailable, "document-channel-not-ready"};
-        if (Inputs.empty() || Inputs.size() > 16 || state_->queue_.size() >= 16
+        if (Inputs.empty() || state_->queue_.size() >= 16
             || std::any_of(Inputs.begin(), Inputs.end(), [](const auto& Item) { return !Item.source_; }))
             return Invalid("document-open-inputs");
         const auto Sequence = state_->nextCommand_++;
@@ -175,7 +175,9 @@ namespace hc::plugins
             || std::any_of(Candidates.begin(), Candidates.end(), [](const auto& Item) { return Item.flags_ < 0 || Item.flags_ > 511; }))
             return Invalid("invalid-wlx-session-request");
         if (!maxSessions_ || maxSessions_ > 16) return Invalid("invalid-wlx-session-budget");
-        Collect(); if (tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
+        const bool BuiltinViewer=Candidates.size()==1&&Candidates.front().approval_.reviewed_.id_=="builtin.hyperviewer"
+            &&Candidates.front().approval_.reviewed_.compatibility_=="hyperviewer-v1";
+        Collect(); if (!BuiltinViewer&&tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
         auto State = std::make_shared<HostedViewerSession::State>(); State->size_ = {Width, Height};
         State->details_.viewer_.id_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
         State->details_.viewer_.provider_ = Policy ? "plugin-viewer.automatic"

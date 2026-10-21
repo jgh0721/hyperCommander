@@ -36,6 +36,7 @@
 #include <QPrinter>
 #include <QTimer>
 #include <QFile>
+#include <QStandardPaths>
 #include <Scintilla.h>
 void InitializePortedViewResources();
 namespace hc::document
@@ -81,6 +82,20 @@ namespace hc::document
         if(reading_){delete reading_;reading_=nullptr;}
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
+        if(hwp_){delete hwp_;hwp_=nullptr;}
+        if(IsHwp()) {
+            hwp_=new HwpOpenWindow(Input.path_,QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/rhwp",hwpRuntime_);
+            hwp_->setParent(this,Qt::Widget);hwp_->setAttribute(Qt::WA_QuitOnClose,false);
+            // The workspace owns the print command and its shortcut.
+            if(auto* Print=hwp_->findChild<QAction*>("rhwp.nativePrint")){Print->setShortcut({});hwp_->removeAction(Print);}
+            hwp_->setContextMenuPolicy(Qt::NoContextMenu);
+            layout()->addWidget(hwp_);hwp_->show();
+            contribution_={};contribution_.viewId_=viewId_;contribution_.menuTitle_=tr("한글 문서");
+            connect(hwp_,&HwpOpenWindow::StateChanged,this,&DocumentViewPane::ViewStateChanged);
+            connect(hwp_,&HwpOpenWindow::Closed,this,&DocumentViewPane::ViewStateChanged);
+            QTimer::singleShot(0,hwp_,&HwpOpenWindow::Open);
+            return true;
+        }
         bool Success=true;
         if(viewId_=="pdf") {pdf_=new QPDFView(this);view_=pdf_;Success=pdf_->LoadContent(Input.bytes_,Input.path_);}
         else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);if(readingEntry_.isEmpty()&&!readingPath_.isEmpty())image_->SetNavigationSource(readingPath_);}
@@ -218,7 +233,15 @@ namespace hc::document
         if(Bytes.isEmpty())return storage::Error{storage::ErrorCategory::InvalidRequest,"document-serialization-or-format"};
         return Bytes;
     }
-    bool DocumentViewPane::IsBusy() const {return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());}
+    bool DocumentViewPane::IsBusy() const {
+        if(hwp_&&!hwp_->IsClosed()) {
+            const auto* Document=hwp_->Document();
+            return hwp_->IsBusy()||(!Document&&hwp_->Error().isEmpty())
+                ||(Document&&(Document->IsBusy()||Document->Snapshot().lifecycle_==DocumentLifecycle::Opening));
+        }
+        return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());
+    }
+    bool DocumentViewPane::RequestClose(){if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
     bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing();}
     bool DocumentViewPane::CanUndo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
     bool DocumentViewPane::CanRedo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
@@ -235,7 +258,7 @@ namespace hc::document
             image_->CommitContent();
         }
     }
-    void DocumentViewPane::Focus(){if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();}
+    void DocumentViewPane::Focus(){if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();}
     void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
@@ -271,12 +294,23 @@ namespace hc::document
         if(image_){State["filter"]=image_->DisplayFilter();State["width"]=image_->Content().width();State["height"]=image_->Content().height();State["rendering"]=image_->IsRendering();State["renderError"]=image_->RenderError();}
         if(reading_&&!reading_->isHidden())State["reading"]=reading_->State();
         if(animation_)State["animationPlaying"]=animation_->Playing();
+        if(hwp_){
+            State["readOnly"]=true;State["closed"]=hwp_->IsClosed();State["error"]=hwp_->Error();
+            const auto* Document=hwp_->Document();
+            State["ready"]=Document&&Document->Snapshot().lifecycle_==DocumentLifecycle::Ready&&!hwp_->IsClosing();
+            if(Document&&Document->Snapshot().error_)State["error"]=QString::fromStdString(Document->Snapshot().error_->code_);
+        }
         return State;
     }
     QJsonObject DocumentViewPane::Execute(const QJsonObject& Request)
     {
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
+        if(hwp_){
+            if(Action!="print")return Error("document-view-command-unsupported");
+            if(IsBusy()||!ViewState()["ready"].toBool())return Error("document-not-ready");
+            QTimer::singleShot(0,hwp_,&HwpOpenWindow::Print);return {{"accepted",true}};
+        }
         if(reading_&&!reading_->isHidden()&&(Action=="image.rotate"||Action=="image.flip"||Action=="image.crop"||Action=="image.resize"||Action=="image.composite"))return Error("image-copy-edit-required");
         if(Action.startsWith("reading.")&&reading_){
             if(Action=="reading.mode"&&(image_->isModified()||image_->IsEditing()))return Error("image-save-before-reading");
@@ -318,7 +352,7 @@ namespace hc::document
             QPrinter Printer(QPrinter::HighResolution);Printer.setOutputFormat(QPrinter::PdfFormat);Printer.setOutputFileName(Path);
             PrintManager Manager;QImageView Printed;
             if(reading_&&!reading_->isHidden()){const auto Image=reading_->CurrentImage();if(Image.isNull())return Error("image-page-not-ready");Printed.LoadContent(Image,reading_->CurrentName(),false);Manager.printView(&Printed,&Printer);}else Manager.printView(view_,&Printer);
-            QFile File(Path);if(!File.open(QIODevice::ReadOnly)||File.size()>DocumentByteLimit)return Error("document-print-output");
+            QFile File(Path);if(!File.open(QIODevice::ReadOnly))return Error("document-print-output");
             const auto Bytes=File.readAll();if(!Bytes.startsWith("%PDF-"))return Error("document-print-output");
             const auto Saved=SaveTextFile(Request["path"].toString(),Bytes,{},{});
             if(!Saved.HasValue())return Error(Saved.Failure().code_.c_str());
@@ -333,7 +367,7 @@ namespace hc::document
 }
 
 namespace hc::document {
-QWidget* DocumentViewPane::InputWidget() const {return reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {return hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();
@@ -371,7 +405,7 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
         if (Start < 0 || End < Start || End > Backend->documentLength() || Start < PreviousEnd) return;
         PreviousEnd = End; Projected += Bytes.size() + (Mode == "paste" ? Virtual : 0) - (End - Start);
     }
-    if (Projected > TextByteLimit) return;
+    if (!unlimitedBytes_ && Projected > TextByteLimit) return;
     Backend->Send(SCI_BEGINUNDOACTION);
     Backend->Send(SCI_CLEARSELECTIONS);
     for (int Index = 0; Index < Ordered.size(); ++Index) {
@@ -391,7 +425,7 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
 }
 }
 
-namespace hc::document {void DocumentViewPane::Cancel(){if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
+namespace hc::document {void DocumentViewPane::Cancel(){if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
 
 namespace hc::document {
 DocumentViewPane::~DocumentViewPane(){

@@ -47,6 +47,9 @@
 #include <QApplication>
 #include <QRegularExpression>
 #include <QBuffer>
+#include <QProcess>
+#include <QToolButton>
+#include <QImageReader>
 #include "capture/CaptureOverlay.h"
 #include "core/PrintManager.h"
 #include "core/AppSettings.h"
@@ -132,6 +135,7 @@ namespace hc::document
                 {"saveDocumentAs", "save-as"}, {"reloadDocument", "refresh"},
                 {"resolveDocumentConflict", "replace"}, {"closeDocument", "stop"}, {"cancelDocument", "stop"},
                 {"printDocument", "print"}, {"previewDocument", "print-preview"}, {"captureScreen", "screen-capture"},
+                {"editHwpDocument", "annotation-freetext"},
                 {"undoDocument", "undo"}, {"redoDocument", "redo"}, {"documentPreferences", "toc-toggle"},
                 {"workspaceDisplayOptions", "view-preview"}, {"documentWatermark", "watermark"},
                 {"documentCaptureProtection", "capture-exclude"}, {"documentRecovery", "refresh"},
@@ -166,6 +170,7 @@ namespace hc::document
         std::shared_ptr<std::stop_source> cancellation_ = std::make_shared<std::stop_source>();
         bool loading_ = true, saving_ = false, hostSlot_ = false, broker_ = false;
         bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
+        bool reloadAfterClose_ = false;
         bool originalAuthority_ = false, originalSave_ = true, closed_ = false, checkpointing_ = false, closeAfterSave_ = false, recovered_ = false;
         QByteArray pendingBytes_;
         bool Dirty() const { return session_->Snapshot().dirty_; }
@@ -173,9 +178,9 @@ namespace hc::document
     };
     DocumentWorkspaceWidget::DocumentWorkspaceWidget(QString RecoveryRoot, bool Hosted, QWidget* Parent)
         : QWidget(Parent), recoveryRoot_(std::move(RecoveryRoot)),
-          workspaceId_(QUuid::createUuid().toString(QUuid::Id128)), hosted_(Hosted)
+          workspaceId_(QUuid::createUuid().toString(QUuid::Id128)), hosted_(Hosted), workspace_(Hosted?0:16)
     {
-        if (Hosted) DocumentThemeAdapter::InstallLocal(*this);
+        if (Hosted) { DocumentThemeAdapter::InstallLocal(*this); QImageReader::setAllocationLimit(0); }
         else DocumentThemeAdapter::Install(*qApp);
         InitializePortedViewResources();
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
@@ -255,6 +260,9 @@ namespace hc::document
             if (auto Tab = active()) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); }
         });
         Add(tr("인쇄"),QKeySequence::Print,"printDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","print"}});});
+        auto* EditHwp=Add(tr("편집"),{},"editHwpDocument",[this]{editHwp(active());});
+        EditHwp->setVisible(false);EditHwp->setToolTip(tr("HyperEditor에서 한글 문서 편집"));
+        if(auto* Button=qobject_cast<QToolButton*>(toolbar_->widgetForAction(EditHwp)))Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         Add(tr("인쇄 미리보기"),{},"previewDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","printPreview"}});});
         Add(tr("화면 캡처"),QKeySequence("Alt+Shift+S"),"captureScreen",[this]{
             if(clipboardBroker_)return;const auto Captured=Capture::CaptureOverlay::run(this);if(!Captured.accepted||Captured.image.isNull())return;
@@ -487,7 +495,7 @@ namespace hc::document
     }
     QJsonObject DocumentWorkspaceWidget::newDocument()
     {
-        if (documents_.size() >= 16 || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
+        if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
         const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + ".txt";
         if (!QDir().mkpath(recoveryRoot_) || !StoreCopy(Path, {})) return Error("document-new-file-failed");
         const auto Reply = open(Path, false, {}, false);
@@ -523,6 +531,11 @@ namespace hc::document
         if (Settings.contains("themeMode")) DocumentThemeAdapter::SetMode(Settings["themeMode"].toString()); return true;
     }
     QJsonObject DocumentWorkspaceWidget::ChromeSettings() const { return chrome_->Settings(); }
+    void DocumentWorkspaceWidget::SetClipboardBroker(bool Enabled)
+    {
+        clipboardBroker_=Enabled;
+        for(const auto& Tab:documents_)Tab->pane_->SetClipboardBroker(Enabled);
+    }
     void DocumentWorkspaceWidget::ShowShellError(const QString& Message) { shellError_ = Message; update(); }
     bool DocumentWorkspaceWidget::IsIdle() const
     {
@@ -535,12 +548,16 @@ namespace hc::document
     {
         if (!QFileInfo(Path).isAbsolute() || Path.contains(QChar::Null)) return Error("document-open-path");
         for (const auto& Tab : documents_) if (Tab->hostSlot_ && HostSlot) {
+            if(Tab->pane_->IsHwp()&&!Tab->pane_->RequestClose()) {
+                pendingHostOpen_={{"path",Path},{"sourceToken",SourceToken},{"broker",Broker},{"displayName",DisplayName}};
+                return {{"replacing",true},{"documentId",Tab->id_}};
+            }
             if (Tab->loading_ || Tab->navigating_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy()) {
                 pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             if (Tab->Dirty()) {
-                if (Tab->session_->Text().size() > DocumentByteLimit) return Error("p0-text-byte-limit");
+                if (!hosted_ && Tab->session_->Text().size() > DocumentByteLimit) return Error("p0-text-byte-limit");
                 // SDK owns one slot; a newer pending Load supersedes its predecessor.
                 pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 Tab->editor_->setReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
@@ -551,14 +568,16 @@ namespace hc::document
             && !HostSlot && !QFileInfo(Path).canonicalFilePath().isEmpty() && Tab->broker_ == Broker && Tab->sourceToken_ == SourceToken) {
             activate(Tab); return {{"documentId", Tab->id_}, {"duplicate", true}};
         }
-        if (documents_.size() >= 16 || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
+        if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
         auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path;
+        Tab->session_->SetUnlimitedBytes(hosted_);
         Tab->displayName_ = DisplayName;
         Tab->hostSlot_ = HostSlot; Tab->sourceToken_ = SourceToken; Tab->broker_ = Broker; Tab->recovered_ = !RecoveryPath.isEmpty();
         // Authority follows the source: SDK slots have no original-provider link,
         // while explicitly opened local files are writable in either product.
         Tab->originalAuthority_ = !HostSlot && !Broker && SourceToken.isEmpty() && !Tab->recovered_; Tab->originalSave_ = Tab->originalAuthority_;
         auto* Pane = new DocumentViewPane(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
+        Pane->SetUnlimitedBytes(hosted_);
         auto* Editor = Pane->Editor(); Tab->pane_ = Pane; Tab->editor_ = Editor;
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         Editor->installEventFilter(this); Editor->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -575,7 +594,7 @@ namespace hc::document
         connect(Editor, &QPlainTextEdit::textChanged, this, [this, Tab] {
             if (Tab->loading_ || Tab->closed_) return;
             const auto Text = EditorText(Tab->editor_);
-            auto Result = !Text.isValidUtf16() || EncodeText(Text, Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit
+            auto Result = !Text.isValidUtf16() || (!hosted_ && EncodeText(Text, Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit)
                 ? storage::Result<storage::Unit>{storage::Error{storage::ErrorCategory::BudgetExceeded, "p0-text-byte-limit"}}
                 : Tab->session_->Execute("document.setText", Tab->pane_->Content().toStdString());
             if (!Result.HasValue()) {
@@ -684,6 +703,8 @@ namespace hc::document
     void DocumentWorkspaceWidget::load(const std::shared_ptr<Tab>& Tab, bool Discard, const QString& RecoveryPath)
     {
         if (Tab->choosingSavePath_ || Tab->saving_ || Tab->navigating_ || !Tab->pendingToken_.isEmpty()) return;
+        if(Tab->pane_->IsHwp()&&!Tab->pane_->RequestClose()) {Tab->reloadAfterClose_=true;return;}
+        Tab->reloadAfterClose_=false;
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         Tab->cancellation_->request_stop(); Tab->cancellation_ = std::make_shared<std::stop_source>();
         Tab->loading_ = true; Tab->pane_->SetReadOnly(true); Tab->error_.clear();
@@ -707,12 +728,15 @@ namespace hc::document
                     Tab->input_.bom_ = Tab->input_.encoding_ != "CP949" && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
-                Tab->originalSave_ = Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
+                Tab->originalSave_ = !Hwp && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                if(Hwp)Tab->broker_=false;
                 if (Tab->input_.book_) Tab->broker_ = false;
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
                 Tab->loading_=true;
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
+                Tab->pane_->ConfigureHwp(hwpRuntime_);
                 const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_);
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}
@@ -731,27 +755,28 @@ namespace hc::document
             update(); tryFinishClose();
         });
         auto Recovery = recovery_;
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery] {
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             if (!RecoveryPath.isEmpty()) {
                 auto Record = Recovery->Read(RecoveryPath.toStdString()); if (!Record.HasValue()) return storage::Result<TextInput>{Record.Failure()};
                 if (auto Stop = Context.Check({"document"})) return storage::Result<TextInput>{*Stop};
                 if (!StoreCopy(Path, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
-                auto Input = ReadDocumentFile(Path, Context); if (Input.HasValue()) Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
+                auto Input = ReadDocumentFile(Path, Context, Unlimited); if (Input.HasValue()) Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
                 return Input;
             }
-            return ReadDocumentFile(Path, Context);
+            return ReadDocumentFile(Path, Context, Unlimited);
         })); update();
     }
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)
     {
+        if(Tab&&Tab->pane_->IsHwp())return Error("document-edit-in-hypereditor");
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
         if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) return Error("document-source-token-required");
         auto Started = Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
         if (!Started.HasValue()) return Error(QString::fromStdString(Started.Failure().code_));
         Tab->pending_ = Started.Value(); const auto Exported = Tab->pane_->Export(Tab->path_);
         Tab->pendingBytes_ = Exported.HasValue() ? Exported.Value() : QByteArray{};
-        if (!Exported.HasValue() || Tab->pendingBytes_.size() > DocumentByteLimit) {
+        if (!Exported.HasValue() || (!hosted_ && Tab->pendingBytes_.size() > DocumentByteLimit)) {
             const auto Failure = Exported.HasValue() ? storage::Error{storage::ErrorCategory::BudgetExceeded, "document-save-byte-budget"} : Exported.Failure();
             Tab->session_->CompleteSave(*Tab->pending_, {false, {}, Failure});
             Tab->pending_.reset(); Tab->pendingBytes_.clear(); return Error(QString::fromStdString(Failure.code_));
@@ -767,6 +792,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite)
     {
+        if(Tab&&Tab->pane_->IsHwp()){Tab->error_="document-edit-in-hypereditor";update();return;}
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
         const auto TargetCanonical = QFileInfo(Destination).canonicalFilePath();
         const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
@@ -824,14 +850,14 @@ namespace hc::document
         });
         auto Cancellation = Tab->cancellation_;
         const bool Image = Tab->pane_->ViewId() == "image";
-        Watcher->setFuture(QtConcurrent::run([Destination, Bytes, Expected, Hash, Cancellation, Original, Overwrite, Image] {
+        Watcher->setFuture(QtConcurrent::run([Destination, Bytes, Expected, Hash, Cancellation, Original, Overwrite, Image, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             auto Expectation = Expected; auto ContentHash = Hash;
             if (Overwrite && QFileInfo::exists(Destination)) {
-                auto Existing = ReadDocumentFile(Destination, Context); if (!Existing.HasValue()) return storage::Result<LocalSaveResult>{Existing.Failure()};
+                auto Existing = ReadDocumentFile(Destination, Context, Unlimited); if (!Existing.HasValue()) return storage::Result<LocalSaveResult>{Existing.Failure()};
                 Expectation = {true, Existing.Value().source_.id_.revision_}; ContentHash = Existing.Value().hash_;
             }
-            return SaveTextFile(Destination, Bytes, Expectation, ContentHash, Context, Image);
+            return SaveTextFile(Destination, Bytes, Expectation, ContentHash, Context, Image, Unlimited);
         })); update();
     }
     void DocumentWorkspaceWidget::cleanupRecovery(const std::shared_ptr<Tab>& Tab, std::uint64_t ThroughRevision)
@@ -858,7 +884,7 @@ namespace hc::document
         for (const auto& Tab : documents_) {
             if (Tab->loading_ || Tab->navigating_ || Tab->closed_ || Tab->checkpointing_ || !Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) continue;
             const auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content() : QByteArray::fromStdString(Tab->session_->Text());
-            if (Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
+            if (!hosted_ && Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
             RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = Bytes.toStdString();Record.viewId_=Tab->pane_->ViewId().toStdString();
             const auto Revision = Tab->Revision(); Tab->checkpointing_ = true;
             auto* Watcher = new QFutureWatcher<storage::Result<RecoverySnapshot>>(this);
@@ -883,12 +909,18 @@ namespace hc::document
         K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&Memory), sizeof(Memory));
         QJsonArray Tabs, Pending;
         for (const auto& Tab : documents_) {
-            const auto State = Tab->session_->Snapshot(); const auto Capability = Tab->session_->Capabilities();
+            auto State = Tab->session_->Snapshot(); auto Capability = Tab->session_->Capabilities();
+            if(Tab->pane_->IsHwp()){
+                const auto View=Tab->pane_->ViewState();Capability.save_=Capability.saveAs_=false;
+                if(!View["error"].toString().isEmpty())State.error_=storage::Error{storage::ErrorCategory::Unavailable,View["error"].toString().toStdString()};
+                if(State.error_)State.lifecycle_=DocumentLifecycle::Failed;
+                else if(!View["ready"].toBool())State.lifecycle_=DocumentLifecycle::Opening;
+            }
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : !State.cleanupErrors_.empty() ? QString("document-saved-cleanup-warning") : QString{};
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
             Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
                 {"displayName", Tab->displayName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->displayName_},
-                {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_},
+                {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsHwp()&&State.lifecycle_==DocumentLifecycle::Opening)},
                 {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
@@ -900,7 +932,7 @@ namespace hc::document
                 {"sha256", QString::fromLatin1(Tab->pendingHash_)}});
         }
         return {{"protocolVersion", int(HostVersion)}, {"workspaceId", workspaceId_}, {"documents", Tabs}, {"pendingSaves", Pending},
-            {"clipboard", clipboardRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", active() ? active()->id_ : QString{}}, {"idle", IsIdle()},
+            {"clipboard", clipboardRequest_}, {"editRequest",editRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", active() ? active()->id_ : QString{}}, {"idle", IsIdle()},
             {"memoryPrivateBytes", QString::number(Memory.PrivateUsage)}, {"memoryPeakWorkingSetBytes", QString::number(Memory.PeakWorkingSetSize)}, {"memoryPeakPrivateBytes", QString::number(Memory.PeakPagefileUsage)},
             {"recoveryRoot", recoveryRoot_}, {"dpr", devicePixelRatioF()}, {"tabbed", tabbed_}, {"chrome", chrome_->Settings()},
             {"closeViewerOnEscape", closeViewerOnEscape_}, {"closeRequested", viewerCloseRequested_}};
@@ -925,13 +957,16 @@ namespace hc::document
         lastMessage_ = Id;
         if (Type == "Hello") {
             if (negotiated_) return Reply(Error("document-hello-repeated"));
+            // Negotiating the existing broker channel keeps clipboard commands
+            // on the parent side even when RHWP needs an unrestricted native UI.
+            SetClipboardBroker(true);
             negotiated_ = true; return Reply({{"capabilities", QJsonArray{"mixedTabs", "saveStream", "clipboardBroker", "recovery"}},
-                {"maxDocumentBytes", int(DocumentByteLimit)}, {"maxChunkBytes", int(HostChunkLimit)}, {"maxTabs", 16}}, "Ready");
+                {"maxDocumentBytes", hosted_?0:int(DocumentByteLimit)}, {"maxChunkBytes", int(HostChunkLimit)}, {"maxTabs", hosted_?0:16}}, "Ready");
         }
         if (Type == "Heartbeat") return Reply({{"alive", true}, {"idle", IsIdle()}});
         if (Type == "OpenDocuments") {
             const auto Inputs = Payload["documents"].toArray();
-            if (Inputs.isEmpty() || Inputs.size() > 16) return Reply(Error("document-open-count"));
+            if (Inputs.isEmpty() || (!hosted_ && Inputs.size() > 16)) return Reply(Error("document-open-count"));
             for (const auto& Input : Inputs) {
                 const auto Name = Input.toObject()["displayName"];
                 if (!Name.isUndefined() && (!Name.isString() || Name.toString().size() > 1024
@@ -953,7 +988,7 @@ namespace hc::document
                         // original-provider binding without decoding/creating a second view.
                         const auto Begun=Tab->session_->BeginOpen(true);
                         if(!Begun.HasValue())break;
-                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_;
+                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_&&!Tab->pane_->IsHwp();
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
@@ -1019,6 +1054,11 @@ namespace hc::document
         if (Action == "chrome") { if (!ApplyChromeSettings(Request["settings"].toObject())) return Error("document-chrome-settings"); emit ChromeSettingsChanged(chrome_->Settings()); return {{"accepted", true}}; }
         if (Action == "cancelHost") { for (const auto& Tab : documents_) if (Tab->hostSlot_) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); } return {{"accepted", true}}; }
         if (Action == "checkpoint") { Checkpoint(); return {{"accepted", true}}; }
+        if(Action=="editResult"){
+            if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
+            if(auto Target=find(editRequest_["documentId"].toString());Target&&!Request["accepted"].toBool())Target->error_="document-editor-start-failed";
+            editRequest_={};update();return {{"accepted",true}};
+        }
         if (Action == "prepareClose") { for (const auto& Tab : documents_) if (Tab->Dirty()) return {{"canClose", false}}; return {{"canClose", IsIdle()}}; }
         if (Action == "recoveryList") {
             if (recoveryList_["loading"].toBool()) return recoveryList_;
@@ -1057,6 +1097,7 @@ namespace hc::document
         if (Request.contains("revision") && Action != "commitSave" && Action != "saveRead" && Request["revision"].toString() != QString::number(Tab->Revision())) return Error("document-stale-revision");
         if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
+        if(Tab->pane_->IsHwp()&&(Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error("document-edit-in-hypereditor");
         if (Action == "close") {
             if (Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
@@ -1064,10 +1105,11 @@ namespace hc::document
         }
         if (Tab->loading_ || Tab->navigating_ || !Tab->editor_) return Error("document-not-ready");
         if (Action == "activate") { activate(Tab); Tab->pane_->Focus(); }
+        else if(Action=="editHwp")return editHwp(Tab);
         else if (Action == "replaceText") {
             if (!Request["text"].toString().isValidUtf16()) return Error("p0-utf8-text-required");
             if(Tab->pane_->ViewId()!="text")return Error("document-text-command-on-binary");
-            if (!Request["text"].isString() || EncodeText(Request["text"].toString(), Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit || Request["text"].toString().contains(QChar::Null)) return Error("p0-text-byte-limit");
+            if (!Request["text"].isString() || (!hosted_ && EncodeText(Request["text"].toString(), Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit) || Request["text"].toString().contains(QChar::Null)) return Error("p0-text-byte-limit");
             if (Tab->editor_->isReadOnly()) return Error("document-edit-unavailable");
             auto Result=Tab->pane_->Execute(Request);if(Result.contains("error"))return Result;
         }
@@ -1110,6 +1152,19 @@ namespace hc::document
         else {auto Result=Tab->pane_->Execute(Request);if(Result.contains("error"))return Result;}
         update(); tryFinishClose(); return {{"accepted", true}};
     }
+    QJsonObject DocumentWorkspaceWidget::editHwp(const std::shared_ptr<Tab>& Tab)
+    {
+        if(!Tab||!Tab->pane_->IsHwp()||Tab->loading_||Tab->pane_->IsBusy()||!Tab->pane_->ViewState()["ready"].toBool())return Error("document-edit-unavailable");
+        if(!editRequest_.isEmpty())return Error("document-edit-busy");
+        if(hosted_){
+            editRequest_={{"token",QUuid::createUuid().toString(QUuid::Id128)},{"documentId",Tab->id_},
+                {"generation",QString::number(Tab->session_->Snapshot().generation_)}};
+        }else{
+            const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
+            if(!QProcess::startDetached(Program,{"--rhwp-edit","--config-dir",QFileInfo(settingsPath_).absolutePath(),"--",Tab->path_}))return Error("document-editor-start-failed");
+        }
+        update();return {{"accepted",true}};
+    }
     void DocumentWorkspaceWidget::update()
     {
         if (externalWatcher_) {
@@ -1128,7 +1183,8 @@ namespace hc::document
         if (Tab) {
             workspace_.Activate(Tab->id_.toStdString());if(!findChild<ImageFullscreen*>("imageFullscreen")->Active())chrome_->SetActive(Tab->pane_->Contribution());
             const auto State = Tab->session_->Snapshot();
-            const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : QString{};
+            const auto ViewError=Tab->pane_->ViewState()["error"].toString();
+            const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : !ViewError.isEmpty()?ViewError:State.error_ ? QString::fromStdString(State.error_->code_) : QString{};
             status_->setToolTip(Code); status_->setText(!Code.isEmpty() ? Message(Code) : Tab->loading_ || Tab->navigating_ ? tr("여는 중…") : Tab->saving_ || !Tab->pendingToken_.isEmpty() ? tr("저장 중…") :
                 Tab->pane_->IsBusy()?tr("표시 또는 편집 작업 처리 중…") : Tab->pane_->ViewId().toUpper()+(Tab->broker_?tr(" · 원본 공급자에 저장"):Tab->originalSave_?tr(" · 로컬 파일"):tr(" · 사본 · 다른 이름 저장")));
             const auto Reading=Tab->pane_->ViewState()["reading"].toObject();if(Reading["pageCount"].toInt()>0)status_->setText(QString("%1 · %2 / %3 · %4").arg(Reading["book"].toString()).arg(Reading["page"].toInt()+1).arg(Reading["pageCount"].toInt()).arg(Reading["error"].toString().isEmpty()?Reading["pageName"].toString():Reading["error"].toString()));
@@ -1142,12 +1198,21 @@ namespace hc::document
             std::pair{"reloadDocument", Tab && !Tab->saving_ && Tab->pendingToken_.isEmpty()}}) {
             if (auto* Action = findChild<QAction*>(Item.first)) Action->setEnabled(Item.second);
         }
+        const bool Hwp=Tab&&Tab->pane_->IsHwp();
+        auto* EditHwp=findChild<QAction*>("editHwpDocument");EditHwp->setVisible(Hwp);
+        EditHwp->setEnabled(Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy()&&Tab->pane_->ViewState()["ready"].toBool()&&editRequest_.isEmpty());
+        if(Hwp){
+            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
+            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("%1 · 읽기 전용 · 편집 버튼으로 HyperEditor 열기").arg(Tab->pane_->ViewId().toUpper()));
+        }
+        findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
+        findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->editor_->isReadOnly()));
-            if (Id == "file.new") Action->setEnabled(documents_.size() < 16 && (tabbed_ || documents_.empty()));
+            if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
         if (Tab && Tab->pane_->ViewId() == "text" && Tab->input_.bytes_.size() >=
@@ -1159,6 +1224,8 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery)
     {
+        if(!Tab->pane_->RequestClose()){Tab->closeRequested_=true;return;}
+        if(editRequest_["documentId"]==Tab->id_)editRequest_={};
         if (!workspace_.Remove(Tab->id_.toStdString(), Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges).HasValue()) return;
         Tab->cancellation_->request_stop(); Tab->closed_ = true; Tab->pane_->Cancel();
         if (tabbed_) tabs_->removeTab(tabs_->indexOf(Tab->pane_)); else singlePane_->removeWidget(Tab->pane_);
@@ -1171,6 +1238,7 @@ namespace hc::document
         if (Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
+        if(Target->pane_->IsHwp()&&!Target->pane_->RequestClose())return;
         if (Target->choosingSavePath_ || Target->saving_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
@@ -1248,7 +1316,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::tryFinishClose()
     {
         if(pendingActionsScheduled_)return;
-        if(!closingWorkspace_&&std::none_of(documents_.begin(),documents_.end(),[](const auto& Tab){return Tab->closeRequested_||!Tab->navigationAfterSave_.isEmpty();}))return;
+        if(!closingWorkspace_&&std::none_of(documents_.begin(),documents_.end(),[](const auto& Tab){return Tab->closeRequested_||Tab->reloadAfterClose_||!Tab->navigationAfterSave_.isEmpty();}))return;
         pendingActionsScheduled_=true;
         QTimer::singleShot(0,this,[this]{
             pendingActionsScheduled_=false;
@@ -1257,6 +1325,7 @@ namespace hc::document
             for(const auto& Tab:Pending){
                 if(Tab->closed_)continue;
                 if(Tab->closeRequested_){const auto At=std::find(documents_.begin(),documents_.end(),Tab);if(At!=documents_.end())closeTab(int(std::distance(documents_.begin(),At)));}
+                else if(Tab->reloadAfterClose_&&Tab->pane_->ViewState()["closed"].toBool())load(Tab,true);
                 else if(!Tab->navigationAfterSave_.isEmpty()&&!Tab->saving_&&Tab->pendingToken_.isEmpty()&&!Tab->checkpointing_){
                     const auto State=Tab->session_->Snapshot();
                     if(State.saveState_==DocumentSaveState::Failed||State.saveState_==DocumentSaveState::Conflict)Tab->navigationAfterSave_.clear();

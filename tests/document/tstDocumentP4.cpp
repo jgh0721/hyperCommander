@@ -162,18 +162,19 @@ private slots:
     void productRhwpViewOnlyCatalog() {
         QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
         const auto Result = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath());
-        const auto At = Result.targets_.find("builtin.rhwp-viewer");
-        if (At == Result.targets_.end()) QSKIP("RHWP product package not configured");
+        const auto At = Result.targets_.find("builtin.hyperviewer");
+        QVERIFY(At != Result.targets_.end());
         const auto& Target = At->second;
         QVERIFY(Target.descriptor_.available_);
         QVERIFY(DocumentHandlerResolver::Supports(Target.descriptor_, DocumentIntent::View, {"a.HWP", "b.hwpx"}));
         QVERIFY(!DocumentHandlerResolver::Supports(Target.descriptor_, DocumentIntent::Edit, {"a.hwp"}));
-        QCOMPARE(Target.descriptor_.delivery_, FileDelivery::OnePerProcess);
-        QCOMPARE(DocumentOpenController::Arguments(Target.arguments_, {"C:/한글 문서.hwp"}),
-            (QStringList{"--rhwp-view", "--", QDir::toNativeSeparators("C:/한글 문서.hwp")}));
+        QCOMPARE(Target.descriptor_.delivery_, FileDelivery::Workspace);
+        QCOMPARE(Target.descriptor_.kind_, HandlerKind::Plugin);
+        QVERIFY(!Result.targets_.contains("builtin.rhwp-viewer"));
+        QVERIFY(DocumentHandlerResolver::Supports(Target.descriptor_,DocumentIntent::View,{"a.pdf","b.hwp","c.hwpx"}));
         for (const auto* Name : {"a.hwp", "a.hwpx", "a.HWP", "a.HWPX"})
             QCOMPARE(DocumentHandlerResolver::Resolve(Result.registry_, DocumentIntent::View, {{Name}}).candidates_,
-                std::vector<std::string>{"builtin.rhwp-viewer"});
+                std::vector<std::string>{"builtin.hyperviewer"});
     }
     void zeroCandidatesAndCancelDoNoIo() {
         QWidget Window; auto Candidates = Catalog({}); int Launches = 0;

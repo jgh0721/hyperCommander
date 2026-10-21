@@ -155,7 +155,11 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
-    viewers_ = new QtViewerHost(Main, [Base = QDir::tempPath().toStdString()] { return MakeNativeMaterializer(Base); },
+    viewers_ = new QtViewerHost(Main, [] {
+        const auto Base=QDir::tempPath()+"/hc-viewer-content";QDir().mkpath(Base);
+        MaterializationLimits Limits;Limits.maxActiveFiles_=std::numeric_limits<std::size_t>::max();
+        return MakeNativeMaterializer(Base.toStdString(),Limits);
+    },
         [] { return QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); },
         [] { return QPluginHostSettings::ViewerSelection(hc::settings::AppSettings()); });
     viewers_->reviewPlugin_ = [this](const QString& Binary) {

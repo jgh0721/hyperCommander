@@ -25,7 +25,7 @@ namespace hc::document {
         if(Type=="PrintFailed")return fail("rhwp-print-renderer-failure");
         if(Type=="PrintBegin" && !begun_ && M.size()==4) {
             const auto Count=M["totalPages"].toInt(-1);
-            if(M["totalPages"]!=QJsonValue(Count) || Count<1 || Count>128)return fail("rhwp-print-page-count");
+            if(M["totalPages"]!=QJsonValue(Count) || Count<1)return fail("rhwp-print-page-count");
             frames_.totalPages_=Count;
             if(pages_.empty())for(int I=0;I<Count;++I)pages_.push_back(I);
             int Previous=-1;
@@ -38,12 +38,11 @@ namespace hc::document {
             const auto W=page_.paperPixels_.width(),H=page_.paperPixels_.height();
             const auto Length=M["byteLength"].toDouble(-1);pageHash_=M["sha256"].toString().toLatin1();
             if(M["page"]!=QJsonValue(page_.index_) || page_.index_!=pages_[frames_.pages_.size()]
-                || !std::isfinite(W)||!std::isfinite(H)||W<=0||H<=0||W>4096||H>4096
-                || Length<1||Length>16*1024*1024||std::floor(Length)!=Length
+                || !std::isfinite(W)||!std::isfinite(H)||W<=0||H<=0
+                || Length<1||Length>9007199254740991.0||std::floor(Length)!=Length
                 || pageHash_.size()!=64||QByteArray::fromHex(pageHash_).toHex()!=pageHash_)
                 return fail("rhwp-print-page-metadata");
             pageLength_=qint64(Length);bytes_+=pageLength_;
-            if(bytes_>64LL*1024*1024)return fail("rhwp-print-byte-budget");
             pageBytes_.clear();pageOpen_=true;return true;
         }
         if(Type=="PrintChunk" && pageOpen_ && M.size()==5) {
@@ -59,10 +58,9 @@ namespace hc::document {
                 return fail("rhwp-print-page-hash");
             QBuffer Buffer(&pageBytes_);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer,"PNG");Reader.setDecideFormatFromContent(false);
             const auto Size=Reader.size();
-            if(Size.isEmpty()||Size.width()>4096||Size.height()>4096
+            if(Size.isEmpty()
                 ||Size.width()>std::ceil((page_.paperPixels_.width()+0.05)*2)
-                ||Size.height()>std::ceil((page_.paperPixels_.height()+0.05)*2)
-                ||(pixels_+=quint64(Size.width())*Size.height())>64ULL*1024*1024)return fail("rhwp-print-pixel-budget");
+                ||Size.height()>std::ceil((page_.paperPixels_.height()+0.05)*2))return fail("rhwp-print-pixel-budget");
             auto Image=Reader.read();if(Image.isNull()||Image.size()!=Size)return fail("rhwp-print-png");
             page_.png_=std::move(pageBytes_);frames_.pages_.push_back(std::move(page_));pageOpen_=false;return true;
         }
@@ -72,14 +70,14 @@ namespace hc::document {
     void HwpPrintBridge::Activate(QJsonObject Binding) {binding_=std::move(Binding);command_={};message_={};retired_={};action_=false;}
     QVariantMap HwpPrintBridge::State() const {return {{"version",1},{"binding",binding_}};}
     bool HwpPrintBridge::Begin(QJsonObject Identity,QJsonArray Pages) {
-        if(binding_.isEmpty()||!command_.isEmpty()||Identity.size()!=9||Pages.size()>128)return false;
+        if(binding_.isEmpty()||!command_.isEmpty()||Identity.size()!=9)return false;
         for(auto I=binding_.begin();I!=binding_.end();++I)if(Identity[I.key()]!=I.value())return false;
         for(const auto& Name:{"revision","token","changeSequence"}) {
             bool Ok=false;const auto S=Identity[Name].toString();const auto N=S.toULongLong(&Ok);
             if(!Ok||QString::number(N)!=S||(Name!=QString("changeSequence")&&!N))return false;
         }
         const auto Point=Identity["savepoint"].toString();if(Point.isEmpty()||Point.size()>128)return false;
-        int Previous=-1;for(const auto& V:Pages){const auto Page=V.toInt(-1);if(V!=QJsonValue(Page)||Page<=Previous||Page>=128)return false;Previous=Page;}
+        int Previous=-1;for(const auto& V:Pages){const auto Page=V.toInt(-1);if(V!=QJsonValue(Page)||Page<=Previous)return false;Previous=Page;}
         retired_={};command_={{"version",1},{"id",QUuid::createUuid().toString(QUuid::Id128)},{"identity",Identity},{"pages",Pages}};return true;
     }
     void HwpPrintBridge::Cancel() { message_={};action_=false;if(!command_.isEmpty())command_["cancel"]=true; }

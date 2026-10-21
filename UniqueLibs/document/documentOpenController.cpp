@@ -27,7 +27,7 @@ struct PreparedOpen {
 bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
     if (Entry.locator_.kind_ != LocatorKind::Local || Entry.directory_) return false;
     QFile File(QString::fromStdString(Entry.locator_.root_));
-    if (!File.open(QIODevice::ReadOnly) || File.size() > TextByteLimit) return false;
+    if (!File.open(QIODevice::ReadOnly)) return false;
     auto Sample = File.read(64 * 1024);
     if (Sample.isEmpty() && File.size()) return false;
     // A prefix can end inside a UTF-8/CP949 sequence; trim only that boundary.

@@ -29,6 +29,8 @@ namespace hc::document
         // GUI-thread shutdown gate. Keep processing events until IsDrained().
         // Normal application Quit events are deferred automatically; exit() is not.
         static void InitializeLifecycle();
+        // Release the drained QApplication-owned registry before a plugin unload.
+        static void ReleaseLifecycle();
         static void RequestShutdown();
         static bool IsDrained();
     protected:

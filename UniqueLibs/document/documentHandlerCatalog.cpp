@@ -33,6 +33,10 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     Result.defaultView_ = Config["defaultViewHandlerId"].toString("builtin.hyperviewer").toStdString();
     Result.defaultEdit_ = Config["defaultEditHandlerId"].toString("builtin.hypereditor").toStdString();
     Result.overrides_ = Config["fileTypeOverrides"].toObject();
+    // Preserve old saved handler selections while moving F3 into the workspace.
+    if(Result.defaultView_=="builtin.rhwp-viewer")Result.defaultView_="builtin.hyperviewer";
+    for(auto It=Result.overrides_.begin();It!=Result.overrides_.end();++It){auto Override=It.value().toObject();
+        if(Override["view"]=="builtin.rhwp-viewer"){Override["view"]="builtin.hyperviewer";It.value()=Override;}}
     const bool Compatible = Config["schemaVersion"].toInt() == 1;
     const auto Add = [&](DocumentHandlerTarget Target) {
         auto& Descriptor = Target.descriptor_;
@@ -51,6 +55,7 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     std::vector<std::string> Formats; for (const auto Ext : DocumentExtensions) Formats.emplace_back(Ext);
     DocumentHandlerTarget Viewer;
     Viewer.descriptor_ = {"builtin.hyperviewer", "HyperViewer", HandlerKind::Plugin, FileDelivery::Workspace, Formats, true, false, true, false, 16};
+    Viewer.descriptor_.maxFiles_=std::numeric_limits<std::size_t>::max();
     const QDir ViewerPackage(QDir(Directory).filePath(hc::layout::HyperViewerPackage));
     [[maybe_unused]] const auto RhwpInventory = QDir::cleanPath(QDir(QDir(Directory).filePath(hc::layout::RhwpRuntime)).filePath("runtime-inventory.json"));
     auto& Options = Viewer.plugin_; Options.binaryPath_ = ViewerPackage.filePath("HyperViewer.dll");
@@ -65,16 +70,6 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
         }
     }
     Viewer.descriptor_.unavailableReason_ = "hyperviewer-package-unavailable"; Add(Viewer);
-#ifdef HC_RHWP_F3_RUNTIME
-    DocumentHandlerTarget Rhwp;
-    Rhwp.executable_ = QDir(Directory).filePath("HyperEditor.exe");
-    Rhwp.arguments_ = "--rhwp-view -- %FILE%";
-    Rhwp.descriptor_ = {"builtin.rhwp-viewer", "HyperViewer (HWP/HWPX)", HandlerKind::Executable,
-        FileDelivery::OnePerProcess, {"hwp", "hwpx"}, true, false, false,
-        QFileInfo(Rhwp.executable_).isFile() && QFileInfo(RhwpInventory).isFile(), 16};
-    Rhwp.descriptor_.unavailableReason_ = "rhwp-runtime-unavailable";
-    Add(std::move(Rhwp));
-#endif
 #ifdef HC_RHWP_F4_RUNTIME
     DocumentHandlerTarget RhwpEditor;
     RhwpEditor.rhwpEditor_ = true; RhwpEditor.executable_ = QDir(Directory).filePath("HyperEditor.exe");

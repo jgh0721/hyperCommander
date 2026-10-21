@@ -244,9 +244,9 @@ namespace hc::document
     }
     bool HwpSdiWindow::Print(const std::vector<int>& Pages)
     {
-        if(stopped_||closing_||IsBusy()||!closeSync_.isEmpty()||Pages.size()>128)return false;
+        if(stopped_||closing_||IsBusy()||!closeSync_.isEmpty())return false;
         int Previous=-1;QJsonArray Selection;
-        for(const auto Page:Pages){if(Page<=Previous||Page>=128)return false;Previous=Page;Selection.append(Page);}
+        for(const auto Page:Pages){if(Page<=Previous)return false;Previous=Page;Selection.append(Page);}
         auto Ticket=session_.BeginPrint();if(!Ticket.HasValue())return false;
         printTicket_=Ticket.Value();print_=std::make_unique<HwpPrintTransfer>(*printTicket_,Pages);
         if(!backend_->EditorCommand({{"type","DocumentPrint"},{"printIdentity",HwpPrintIdentity(*printTicket_)},{"pages",Selection}})) {

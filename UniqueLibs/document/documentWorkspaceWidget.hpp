@@ -3,6 +3,7 @@
 #include "commonLibs/document/documentWorkspace.hpp"
 #include "documentRecoveryStore.hpp"
 #include "workspaceChromeController.hpp"
+#include "hwpOpenWindow.hpp"
 #include <functional>
 #include <QWidget>
 #include <QJsonObject>
@@ -41,7 +42,8 @@ namespace hc::document
         void SetClosePrompt(std::function<int(const QString&)> Prompt) { closePrompt_ = std::move(Prompt); }
         void Checkpoint();
         QString RecoveryRoot() const { return recoveryRoot_; }
-        void SetClipboardBroker(bool Enabled) { clipboardBroker_ = Enabled; }
+        void SetClipboardBroker(bool Enabled);
+        void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
     signals:
@@ -72,12 +74,15 @@ namespace hc::document
         void activate(const std::shared_ptr<Tab>& Tab);
         QJsonObject prepareSave(const std::shared_ptr<Tab>& Tab);
         void update();
+        QJsonObject editHwp(const std::shared_ptr<Tab>& Tab);
         void tryFinishClose();
         void escapeViewer();
         void finishWindowClose();
         void closeTab(int Index);
         QJsonObject clipboard(const std::shared_ptr<Tab>& Tab, const QString& Mode);
         QJsonObject clipboardRequest_, pendingHostOpen_, recoveryList_, clipboardSelection_;
+        QJsonObject editRequest_;
+        WebProcessRuntime hwpRuntime_;
         QTextCursor clipboardCursor_;
         bool clipboardBroker_ = false, negotiated_ = false;
         quint64 lastMessage_ = 0;

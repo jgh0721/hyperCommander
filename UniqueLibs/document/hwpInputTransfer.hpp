@@ -28,7 +28,8 @@ namespace hc::document
         QJsonObject fail(const char* Code);
         State state_ = State::Idle;
         bool approved_;
-        int timeoutMs_, length_ = 0;
+        int timeoutMs_;
+        qsizetype length_ = 0;
         QDeadlineTimer deadline_;
         QCryptographicHash hash_{QCryptographicHash::Sha256};
         HwpTransferredInput input_;

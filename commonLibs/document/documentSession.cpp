@@ -49,7 +49,7 @@ namespace hc::document
         if (snapshot_.contentMode_ != DocumentContentMode::InlineBytes) return Invalid("document-external-model-command");
         if (Command != "document.setText") return Invalid("document-command-unsupported");
         if (!Capabilities().edit_) return Invalid("document-edit-unavailable");
-        if (Text.size() > (binary_ ? DocumentByteLimit : TextByteLimit) || (!binary_ && !ValidText(Text))) return Invalid("document-text-budget-or-nul");
+        if ((!unlimitedBytes_ && Text.size() > (binary_ ? DocumentByteLimit : TextByteLimit)) || (!binary_ && !ValidText(Text))) return Invalid("document-text-budget-or-nul");
         if (Text != text_) { text_ = std::move(Text); ++snapshot_.revision_; }
         snapshot_.dirty_ = text_ != savedText_;
         return Unit{};
@@ -66,7 +66,7 @@ namespace hc::document
     {
         if (snapshot_.contentMode_ != DocumentContentMode::InlineBytes) return false;
         if (Generation != snapshot_.generation_ || snapshot_.lifecycle_ != DocumentLifecycle::Opening) return false;
-        if (Result.HasValue() && (Result.Value().text_.size() > (binary_ ? DocumentByteLimit : TextByteLimit) || (!binary_ && !ValidText(Result.Value().text_))))
+        if (Result.HasValue() && ((!unlimitedBytes_ && Result.Value().text_.size() > (binary_ ? DocumentByteLimit : TextByteLimit)) || (!binary_ && !ValidText(Result.Value().text_))))
             Result = Invalid("document-text-budget-or-nul");
         if (!Result.HasValue()) { snapshot_.lifecycle_ = DocumentLifecycle::Failed; snapshot_.error_ = Result.Failure(); return true; }
         snapshot_.source_ = std::move(Result.Value().source_);

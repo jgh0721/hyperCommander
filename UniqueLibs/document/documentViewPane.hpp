@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "viewUiContribution.hpp"
 #include "documentStorageAdapter.hpp"
+#include "hwpOpenWindow.hpp"
 #include <QWidget>
 #include <QJsonObject>
 class QPlainTextEdit;
@@ -22,6 +23,10 @@ namespace hc::document
         QPlainTextEdit* Editor() const { return editor_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse);
+        void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
+        void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
+        bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
+        bool RequestClose();
         void SetReadingSource(const QString& Path,const QString& Entry);
         QByteArray Content() const;
         QByteArray SessionContent() const;
@@ -64,8 +69,11 @@ namespace hc::document
         QImageView* image_ = nullptr;
         ImageReadingView* reading_ = nullptr;
         ImageFramePlayer* animation_ = nullptr;
+        HwpOpenWindow* hwp_ = nullptr;
+        WebProcessRuntime hwpRuntime_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
+        bool unlimitedBytes_ = false;
         int quality_ = -1;
         QByteArray originalImageBytes_, originalImageHash_;
         QString originalImagePath_;

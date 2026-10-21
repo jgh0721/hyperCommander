@@ -197,41 +197,27 @@ private slots:
         QWidget Parent; Parent.resize(800, 500); Parent.show();
         const auto Dll = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll";
         auto Module = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Dll.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); QVERIFY(Module);
-        HWND Viewer = nullptr; auto Cleanup = qScopeGuard([&] { if (Viewer && IsWindow(Viewer)) DestroyWindow(Viewer); FreeLibrary(Module); });
+        HWND Viewer = nullptr; auto Cleanup = qScopeGuard([&] { if (Viewer && IsWindow(Viewer)) DestroyWindow(Viewer); if (auto Uninit = reinterpret_cast<dopus::Uninit>(GetProcAddress(Module,"DVP_Uninit"))) Uninit(); FreeLibrary(Module); });
         auto Create = reinterpret_cast<dopus::CreateViewer>(GetProcAddress(Module, "DVP_CreateViewer")); QVERIFY(Create);
         RECT Rect{0, 0, 800, 500}; Viewer = Create(reinterpret_cast<HWND>(Parent.winId()), &Rect, 0); QVERIFY(Viewer);
         const auto Load = [&](const QString& Path) { const auto Wide = Path.toStdWString(); return SendMessageW(Viewer, dopus::ViewerLoadW, 0, reinterpret_cast<LPARAM>(Wide.c_str())); };
         QVERIFY(Load(First)); QJsonObject State;
-        const auto Poll = [&] { State = Native(Viewer, Module, {{"action", "rhwpHostState"}, {"version", 1}}); return State["state"] == "ready" || State["state"] == "failed"; };
-        QTRY_VERIFY_WITH_TIMEOUT(Poll(), 30000);
-        QVERIFY2(State["state"] == "ready", QJsonDocument(State).toJson().constData());
-        const auto Id = State["documentId"].toString(); QVERIFY(!Id.isEmpty());
-        QVERIFY(State["capabilities"].toObject()["view"].toBool()); QVERIFY(!State["capabilities"].toObject()["edit"].toBool());
-        QCOMPARE(Native(Viewer, Module, {{"action", "hostRuntime"}})["processLimit"].toInt(), 9);
-        for (const auto Action : {"openHost", "cancelHost"}) {
-            QCOMPARE(Native(Viewer, Module, {{"action", Action}, {"path", Root.filePath("other.txt")}, {"protocolVersion", 99}})["error"].toString(), QString("document-protocol-version"));
-            QVERIFY(Poll()); QCOMPARE(State["state"].toString(), QString("ready")); QCOMPARE(State["documentId"].toString(), Id);
-        }
-        auto Child = GetWindow(Viewer, GW_CHILD); DWORD Pid = 0; QVERIFY(GetWindowThreadProcessId(Child, &Pid));
-        HANDLE Process = OpenProcess(SYNCHRONIZE, FALSE, Pid); QVERIFY(Process); auto Close = qScopeGuard([&] { CloseHandle(Process); });
-        CapturedRhwpTree FirstTree; QVERIFY(FirstTree.Capture(Pid));
-        QVERIFY(Load(Next));
-        QTRY_VERIFY_WITH_TIMEOUT(Poll() && State["documentId"].toString() != Id, 30000);
-        QVERIFY2(State["state"] == "ready", QJsonDocument(State).toJson().constData());
-        QTRY_VERIFY_WITH_TIMEOUT(FirstTree.Exited(), 5000);
-        CapturedRhwpTree NextTree; QVERIFY(NextTree.Capture(Pid));
-        QCOMPARE(Native(Viewer, Module, {{"action", "rhwpClose"}, {"version", 1}, {"documentId", Id}})["error"].toString(), QString("rhwp-host-stale-document"));
-        Native(Viewer, Module, {{"action", "cancelHost"}});
-        QTRY_COMPARE_WITH_TIMEOUT(Native(Viewer, Module, {{"action", "rhwpHostState"}, {"version", 1}})["state"].toString(), QString("closed"), 10000);
-        QTRY_VERIFY_WITH_TIMEOUT(NextTree.Exited(), 5000);
-        QCOMPARE(Read(First), Bytes); QCOMPARE(Read(Next), Bytes);
-        QVERIFY(Load(First)); QTRY_VERIFY_WITH_TIMEOUT(Poll(), 30000);
-        QVERIFY2(State["state"] == "ready", QJsonDocument(State).toJson().constData());
-        CapturedRhwpTree FinalTree; QVERIFY(FinalTree.Capture(Pid));
-        qInfo("Captured descendants: first=%zu reload=%zu final=%zu", FirstTree.handles_.size(), NextTree.handles_.size(), FinalTree.handles_.size());
-        DestroyWindow(Viewer); Viewer = nullptr;
-        QTRY_COMPARE_WITH_TIMEOUT(WaitForSingleObject(Process, 0), DWORD(WAIT_OBJECT_0), 5000);
-        QTRY_VERIFY_WITH_TIMEOUT(FinalTree.Exited(), 5000);
+        const auto Poll=[&]{State=Native(Viewer,Module,{{"action","state"}});return Ready(State,State["activeDocumentId"].toString());};
+        QTRY_VERIFY_WITH_TIMEOUT(Poll(),45000);
+        const auto Id=State["activeDocumentId"].toString();QVERIFY(!Id.isEmpty());
+        QVERIFY(Document(State,Id)["view"].toObject()["readOnly"].toBool());
+        QVERIFY(!Document(State,Id)["canSave"].toBool());
+        QCOMPARE(Native(Viewer,Module,{{"action","hostRuntime"}})["processLimit"].toInt(),0);
+        const auto Added=Native(Viewer,Module,{{"action","open"},{"path",Next}})["documentId"].toString();
+        QTRY_VERIFY_WITH_TIMEOUT(Ready(Native(Viewer,Module,{{"action","state"}}),Added),45000);
+        QCOMPARE(Native(Viewer,Module,{{"action","state"}})["documents"].toArray().size(),2);
+        CapturedRhwpTree Tree;QVERIFY(Tree.Capture(GetCurrentProcessId()));
+        Native(Viewer,Module,{{"action","close"},{"documentId",Added}});
+        Native(Viewer,Module,{{"action","close"},{"documentId",Id}});
+        QTRY_VERIFY_WITH_TIMEOUT(Native(Viewer,Module,{{"action","state"}})["documents"].toArray().isEmpty(),30000);
+        QTRY_VERIFY_WITH_TIMEOUT(Tree.Exited(),10000);
+        QCOMPARE(Read(First),Bytes);QCOMPARE(Read(Next),Bytes);
+        DestroyWindow(Viewer);Viewer=nullptr;
 #endif
     }
     void nativeSdkContainerAndTwoHelperTabs()
@@ -240,7 +226,7 @@ private slots:
         QWidget Parent; Parent.resize(800, 500); Parent.show();
         const auto Dll = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll";
         auto Module = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Dll.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); QVERIFY(Module);
-        HWND Viewer = nullptr; auto Cleanup = qScopeGuard([&] { if (Viewer && IsWindow(Viewer)) DestroyWindow(Viewer); FreeLibrary(Module); });
+        HWND Viewer = nullptr; auto Cleanup = qScopeGuard([&] { if (Viewer && IsWindow(Viewer)) DestroyWindow(Viewer); if (auto Uninit = reinterpret_cast<dopus::Uninit>(GetProcAddress(Module,"DVP_Uninit"))) Uninit(); FreeLibrary(Module); });
         for (auto Name : {"DVP_InitEx", "DVP_Uninit", "DVP_IdentifyW", "DVP_IdentifyFileW", "DVP_CreateViewer", "HC_DocumentCommand"}) QVERIFY(GetProcAddress(Module, Name));
         auto Create = reinterpret_cast<dopus::CreateViewer>(GetProcAddress(Module, "DVP_CreateViewer")); RECT Rect{0, 0, 800, 500};
         Viewer = Create(reinterpret_cast<HWND>(Parent.winId()), &Rect, 0); QVERIFY(Viewer);
@@ -341,6 +327,8 @@ private slots:
         };
         QJsonObject State; QTRY_VERIFY_WITH_TIMEOUT((State = Call({{"action", "state"}})).contains("documents") && !State["documents"].toArray().isEmpty(), 15000);
         const auto HostSlot = State["documents"].toArray()[0].toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Call({{"action", "state"}}), HostSlot));
+        const auto Hello=Call({{"protocolVersion",int(HostVersion)},{"requestId","1"},{"workspaceId",""},{"documentId",""},{"generation",""},{"messageType","Hello"},{"payloadLength",2},{"payload",QJsonObject{}}});
+        QCOMPARE(Hello["messageType"].toString(),QString("Ready"));
         auto Input = Worker([&] { return ReadTextFile(Path); }); QVERIFY(Input.HasValue());
         DocumentHostBroker Broker; auto Reader = MakeNativeReadProvider(LocatorKind::Local);
         auto Token = Broker.Bind(Input.Value().source_, MakeNativeWritableStorage(LocatorKind::Local, Reader), {}, Input.Value().hash_);
@@ -357,7 +345,8 @@ private slots:
         QVERIFY(Document(Call({{"action", "state"}}), Id)["dirty"].toBool());
         Call({{"action", "checkpoint"}}); State = Call({{"action", "state"}});
         const auto RecoveryPath = State["recoveryRoot"].toString() + "/" + Id + ".json"; QTRY_VERIFY(QFile::exists(RecoveryPath));
-        auto Snapshot = Worker([&] { return Process->Snapshot(); }); QVERIFY(Snapshot.activeProcesses_ >= 2u && Snapshot.activeProcesses_ <= 3u); QVERIFY(Snapshot.totalProcesses_ >= 2u);
+        auto Snapshot = Worker([&] { return Process->Snapshot(); }); QVERIFY(Snapshot.activeProcesses_ >= 1u); QVERIFY(Snapshot.totalProcesses_ >= 1u);
+        const auto Runtime=Call({{"action","hostRuntime"}});QCOMPARE(Runtime["processLimit"].toInt(),0);QCOMPARE(Runtime["jobMemoryBytes"].toString(),QString("0"));QVERIFY(!Runtime["uiRestricted"].toBool());
         if (Forced) {
             auto Host = OpenProcess(PROCESS_TERMINATE, FALSE, Snapshot.processId_); QVERIFY(Host);
             QVERIFY(TerminateProcess(Host, 0xe0000200)); CloseHandle(Host);

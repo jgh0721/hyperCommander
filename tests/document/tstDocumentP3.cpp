@@ -17,6 +17,9 @@
 #include <QLineEdit>
 #include <QShortcut>
 #include <QToolButton>
+#include <QToolBar>
+#include <QUuid>
+#include "UniqueLibs/document/hwpOpenWindow.hpp"
 #include "text/QTextView.h"
 #include "text/ITextEditorBackend.h"
 #include "text/FindReplaceWidget.h"
@@ -39,6 +42,7 @@
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
+#include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "pluginHost/dopusAbi.hpp"
@@ -98,6 +102,103 @@ PluginViewerOptions Options(){PluginViewerOptions Result;Result.executable_=QCor
 class DocumentP3Tests final:public QObject{
     Q_OBJECT
 private slots:
+void viewerUnboundedTabsAndFiles(){
+    QTemporaryDir Root;DocumentWorkspaceWidget Viewer(Root.filePath("recovery"),true);QStringList Ids;
+    for(int Index=0;Index<20;++Index){
+        const auto Path=Root.filePath(QString::number(Index)+".txt");QVERIFY(Put(Path,"tab\n"));
+        const auto Reply=Viewer.Handle({{"action","open"},{"path",Path}});QVERIFY2(!Reply.contains("error"),qPrintable(Reply["error"].toString()));Ids<<Reply["documentId"].toString();
+    }
+    QVERIFY(Wait([&]{return Viewer.IsIdle();},30000));QCOMPARE(Viewer.Snapshot()["documents"].toArray().size(),20);
+    for(const auto& Id:Ids)QCOMPARE(Doc(Viewer.Snapshot(),Id)["lifecycle"].toString(),QString("ready"));
+    const auto TextPath=Root.filePath("large.txt");QByteArray Text;Text.reserve(17*1024*1024);while(Text.size()<=16*1024*1024)Text+="line with bounded paragraph layout 0123456789\r\n";
+    QVERIFY(Put(TextPath,Text));const auto TextId=Viewer.Handle({{"action","open"},{"path",TextPath}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),TextId)["lifecycle"]!="opening";},45000));QCOMPARE(Doc(Viewer.Snapshot(),TextId)["lifecycle"].toString(),QString("ready"));
+    const auto Original=Read(Fixture("basic.pdf"));QVERIFY(Original.contains("startxref"));
+    auto Pdf=Original;Pdf+=QByteArray(65*1024*1024,' ');Pdf+='\n';Pdf+=Original.mid(Original.lastIndexOf("startxref"));
+    const auto PdfPath=Root.filePath("large.pdf");QVERIFY(Put(PdfPath,Pdf));
+    const auto PdfId=Viewer.Handle({{"action","open"},{"path",PdfPath}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),PdfId)["lifecycle"]!="opening";},45000));QCOMPARE(Doc(Viewer.Snapshot(),PdfId)["lifecycle"].toString(),QString("ready"));
+    QCOMPARE(Doc(Viewer.Snapshot(),PdfId)["view"].toObject()["pageCount"].toInt(),2);
+    Viewer.RequestClose();QVERIFY(Wait([&]{return Viewer.Snapshot()["documents"].toArray().isEmpty();},30000));
+}
+void mixedPdfHwpTabs(){
+    const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");
+    if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
+    QTemporaryDir Root;const auto Previous=qApp->property("documentViewsConfigDir");
+    qApp->setProperty("documentViewsConfigDir",Root.path());
+    const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",Previous);});
+    QFile Inventory(QCoreApplication::applicationDirPath()+"/runtime-inventory.json");QVERIFY(Inventory.open(QIODevice::ReadOnly));
+    DocumentWorkspaceWidget Viewer(Root.filePath("recovery"),true);
+    Viewer.ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QCryptographicHash::hash(Inventory.readAll(),QCryptographicHash::Sha256).toHex()));
+    Viewer.show();
+    const auto Pdf=Viewer.Handle({{"action","open"},{"path",Fixture("basic.pdf")}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Pdf)["lifecycle"]=="ready";}));
+    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");auto* Edit=Viewer.findChild<QAction*>("editHwpDocument");
+    QVERIFY(Tabs);QVERIFY(Edit);QVERIFY(!Edit->isVisible());QStringList Ids;
+    for(const auto& Name:{QString("c02.hwp"),QString("c05.hwpx")}){
+        const auto Path=Corpus+'/'+Name;const auto Before=Read(Path);QVERIFY(!Before.isEmpty());
+        const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());Ids<<Id;
+        QVERIFY2(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]!="opening";},45000),"RHWP load timed out");
+        const auto State=Doc(Viewer.Snapshot(),Id);QVERIFY2(State["lifecycle"]=="ready",QJsonDocument(State).toJson().constData());
+        QCOMPARE(Tabs->count(),int(Ids.size()+1));QVERIFY(Edit->isVisible());QVERIFY(Edit->isEnabled());
+        QVERIFY(Viewer.findChild<QToolBar*>("mainToolbar")->actions().contains(Edit));
+        QVERIFY(!State["canSave"].toBool());QVERIFY(!State["canSaveAs"].toBool());
+        auto* Window=Tabs->currentWidget()->findChild<HwpOpenWindow*>();QVERIFY(Window);QVERIFY(!Window->isWindow());
+        int Prints=0;Window->SetPrintDialogFactory([&](QPrinter&,QWidget*){++Prints;return false;});
+        Viewer.findChild<QAction*>("printDocument")->trigger();QTRY_COMPARE(Prints,1);QVERIFY(!Doc(Viewer.Snapshot(),Id)["dirty"].toBool());
+        Edit->trigger();const auto Request=Viewer.Snapshot()["editRequest"].toObject();QCOMPARE(Request["documentId"].toString(),Id);
+        QVERIFY(!Viewer.Handle({{"action","editResult"},{"token",Request["token"]},{"accepted",true}}).contains("error"));
+        QCOMPARE(Read(Path),Before);QCOMPARE(Viewer.Handle({{"action","saveAs"},{"documentId",Id},{"path",Root.filePath("forbidden.hwp")}})["error"].toString(),QString("document-edit-in-hypereditor"));
+        QVERIFY(!QFile::exists(Root.filePath("forbidden.hwp")));
+    }
+    Viewer.Handle({{"action","activate"},{"documentId",Pdf}});QVERIFY(!Edit->isVisible());QCOMPARE(Doc(Viewer.Snapshot(),Pdf)["view"].toObject()["viewId"].toString(),QString("pdf"));
+    Viewer.Handle({{"action","activate"},{"documentId",Ids.last()}});
+    const auto Evidence=qEnvironmentVariable("HC_RHWP_TEST_EVIDENCE");if(!Evidence.isEmpty()){
+        Viewer.raise();Viewer.activateWindow();QTest::qWait(300);
+        const auto Top=Viewer.mapToGlobal(QPoint());
+        QVERIFY(Viewer.screen()->grabWindow(0,Top.x(),Top.y(),Viewer.width(),Viewer.height()).save(Evidence+"/mixed-tabs-screen.png"));
+    }
+    Viewer.RequestClose();QVERIFY(Wait([&]{return Viewer.Snapshot()["documents"].toArray().isEmpty()&&HwpProcessBackend::IsDrained();},30000));
+}
+void hostedMixedHwpTabs(){
+    const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
+    QtPluginViewerController Controller(nullptr,[] {return MakeNativeMaterializer(QDir::tempPath().toStdString());});
+    QtPluginViewerSurface Surface(&Controller);Surface.resize(1000,760);Surface.show();Surface.Open(Options(),Content(Fixture("basic.pdf")));
+    QVERIFY2(Wait([&]{return Surface.IsReady();},30000),qPrintable(Surface.Snapshot().error_?QString::fromStdString(Surface.Snapshot().error_->code_):QString("not-ready")));
+    for(const auto& Name:{QString("c02.hwp"),QString("c05.hwpx")}){
+        auto Sent=Surface.SendDocument({{"action","open"},{"path",Corpus+'/'+Name}});QVERIFY(Sent.HasValue());
+        QVERIFY(Wait([&]{return Surface.Details().commandSequence_>=Sent.Value();},10000));
+        QVERIFY2(!Surface.Details().commandError_,"Open command failed");
+        const auto Ready=[&]{const auto S=Surface.Details().documentState_;const auto D=Doc(S,S["activeDocumentId"].toString());return D["lifecycle"]=="ready"||D["lifecycle"]=="failed";};
+        QVERIFY(Wait(Ready,45000));const auto S=Surface.Details().documentState_;const auto D=Doc(S,S["activeDocumentId"].toString());
+        QVERIFY2(D["lifecycle"]=="ready",QJsonDocument(D).toJson().constData());
+    }
+    QCOMPARE(Surface.Details().documentState_["documents"].toArray().size(),3);
+    Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();},30000));
+}
+void hostedHwpEditLaunch(){
+    const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
+    QTemporaryDir Root;const auto Name="edit-"+QUuid::createUuid().toString(QUuid::Id128)+".hwp";const auto Path=Root.filePath(Name);
+    QVERIFY(QFile::copy(Corpus+"/c02.hwp",Path));const auto Before=Read(Path);
+    QtPluginViewerController Controller(nullptr,[]{return MakeNativeMaterializer(QDir::tempPath().toStdString());});
+    QtPluginViewerSurface Surface(&Controller);Surface.resize(1000,760);Surface.show();Surface.Open(Options(),Content(Path));
+    QVERIFY2(Wait([&]{return Surface.IsReady();},45000),qPrintable(Surface.Snapshot().error_?QString::fromStdString(Surface.Snapshot().error_->code_):QString("not-ready")));
+    const auto Id=Surface.Details().documentState_["activeDocumentId"].toString();
+    QVERIFY(Surface.SendDocument({{"action","editHwp"},{"documentId",Id}}).HasValue());
+    struct EditorSearch {QString name_;HWND window_=nullptr;DWORD pid_=0;} Editor{Name};
+    const auto Find=[&]{EnumWindows([](HWND Window,LPARAM Data)->BOOL{
+        auto* Search=reinterpret_cast<EditorSearch*>(Data);wchar_t Title[1024]{};GetWindowTextW(Window,Title,1024);
+        const auto Text=QString::fromWCharArray(Title);
+        if(Text.startsWith(Search->name_)&&Text.contains(QString::fromUtf8("한글 문서 편집"))){Search->window_=Window;GetWindowThreadProcessId(Window,&Search->pid_);return FALSE;}return TRUE;
+    },reinterpret_cast<LPARAM>(&Editor));return Editor.window_!=nullptr;};
+    const auto Cleanup=qScopeGuard([&]{if(Editor.window_&&IsWindow(Editor.window_))PostMessageW(Editor.window_,WM_CLOSE,0,0);});
+    QVERIFY(Wait(Find,45000));HANDLE Process=OpenProcess(SYNCHRONIZE,FALSE,Editor.pid_);QVERIFY(Process);
+    const auto Release=qScopeGuard([&]{CloseHandle(Process);});
+    Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();},30000));
+    QCOMPARE(WaitForSingleObject(Process,0),DWORD(WAIT_TIMEOUT));QVERIFY(IsWindow(Editor.window_));
+    PostMessageW(Editor.window_,WM_CLOSE,0,0);QVERIFY(Wait([&]{return WaitForSingleObject(Process,0)==WAIT_OBJECT_0;},30000));
+    QCOMPARE(Read(Path),Before);
+}
 void viewerEscapeSettingAndUnsavedChanges(){
     QTemporaryDir Root; const auto Previous=qApp->property("documentViewsConfigDir");
     qApp->setProperty("documentViewsConfigDir",Root.path());

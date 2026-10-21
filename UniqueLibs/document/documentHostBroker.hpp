@@ -18,6 +18,12 @@ namespace hc::document
         QJsonObject CommitBytes(const QJsonObject& Prepared, const QByteArray& Bytes, storage::OperationContext Context = {});
         void Retain(const std::set<QString>& Tokens);
         void Close();
+        struct EditorInput {
+            QString path_;
+            bool original_ = false;
+            std::shared_ptr<storage::IMaterializedFileLease> lease_;
+        };
+        std::optional<EditorInput> ResolveEditorInput(const QString& SourceToken) const;
     private:
         struct Binding
         {

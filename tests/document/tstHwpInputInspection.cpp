@@ -180,7 +180,7 @@ private slots:
     void expansionBudget() {
         auto Data=Zip(); const auto Central=Data.indexOf(QByteArray::fromHex("504b0102"));
         qToLittleEndian<quint32>(17*1024*1024,Data.data()+Central+24);
-        QCOMPARE(InspectHwpInput(Data,"hwpx").error_,QString("rhwp-zip-expansion-budget"));
+        QVERIFY(!InspectHwpInput(Data,"hwpx").accepted_);
     }
     void realCorpus_data() {
         QTest::addColumn<QString>("Name");QTest::addColumn<QString>("Format");

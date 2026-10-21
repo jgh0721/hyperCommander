@@ -49,7 +49,7 @@ namespace hc::document
             return Bytes;
         }
     }
-    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context)
+    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited)
     {
         ImageTraceSpan Trace("document.read",Path);
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
@@ -83,12 +83,15 @@ namespace hc::document
         // Metadata-only sources have no reliable per-handle identity to cache;
         // their exact version is rechecked by Stat and their bytes by SHA-256.
         const bool HasIdentity=Before.Value().id_.revision_&&Before.Value().id_.revision_->token_.find(":identity:")!=std::string::npos;
-        auto Bytes=Read(Canonical,Context,ImageContent,&Digest,HasIdentity?&Revision:nullptr);if(!Bytes.HasValue())return Bytes.Failure();
+        auto Bytes=Read(Canonical,Context,ImageContent||Unlimited,&Digest,HasIdentity?&Revision:nullptr);if(!Bytes.HasValue())return Bytes.Failure();
         auto After=Reader->Stat(Before.Value().id_,Context).get();if(!After.HasValue())return After.Failure();
         documentReadRevision(After.Value(),Canonical);
         TextInput Input;Input.path_=Canonical;Input.source_=After.Value();Input.bytes_=std::move(Bytes.Value());
         Input.hash_=Digest.result();
         const auto Suffix=QFileInfo(Path).suffix().toLower();
+        // RHWP validates the container and renders in its isolated process.
+        // Never decode an HWPX ZIP or binary HWP as text or an image book.
+        if(Suffix=="hwp"||Suffix=="hwpx") {Input.viewId_=Suffix;return Input;}
         if(Input.bytes_.startsWith("%PDF-")) {Input.viewId_="pdf";return Input;}
         if(Suffix=="pdf")return Invalid("document-pdf-invalid-header");
         Input.image_=ImageDecodeCache::FindDecoded(Canonical,Input.hash_);
@@ -112,7 +115,7 @@ namespace hc::document
             }
         }
         if(IsImageFile(Path)||QStringList{"heic","heif","avif","jxl"}.contains(Suffix))return Invalid("document-image-codec-unavailable-or-corrupt");
-        if(Input.bytes_.size()>TextByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-text-byte-limit"};
+        if(!Unlimited&&Input.bytes_.size()>TextByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-text-byte-limit"};
         auto Text=DecodeDocumentText(Input.bytes_);if(!Text.HasValue())return Text.Failure();
         Input.text_=Text.Value().text_;Input.encoding_=Text.Value().encoding_;Input.bom_=Text.Value().bom_;
         auto Other=Input.text_;const auto CrLf=Other.count("\r\n");Other.remove("\r\n");
@@ -154,9 +157,9 @@ namespace hc::document
         return (Bom ? QByteArray("\xef\xbb\xbf") : QByteArray{}) + Output.toUtf8();
     }
     Result<LocalSaveResult> SaveTextFile(const QString& Path, const QByteArray& Bytes,
-        DestinationExpectation Expected, const QByteArray& ExpectedHash, OperationContext Context, bool Image)
+        DestinationExpectation Expected, const QByteArray& ExpectedHash, OperationContext Context, bool Image, bool Unlimited)
     {
-        if (!QFileInfo(Path).isAbsolute() || (!Image && Bytes.size() > DocumentByteLimit)) return Invalid("p0-save-target-or-budget");
+        if (!QFileInfo(Path).isAbsolute() || (!Unlimited && !Image && Bytes.size() > DocumentByteLimit)) return Invalid("p0-save-target-or-budget");
         if (Expected.exists_ && !ExpectedHash.isEmpty())
         {
             QFile Current(Path); if (!Current.open(QIODevice::ReadOnly)) return Error{ErrorCategory::AccessDenied, "document-open-denied"};

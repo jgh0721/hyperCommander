@@ -13,7 +13,6 @@
 #include <QFileInfo>
 #include <QColorSpace>
 #include <QSignalBlocker>
-namespace { constexpr qsizetype ArtifactLimit = 64*1024*1024; }
 qintptr ScintillaQtDirectBackend::Send(unsigned int Message, quintptr W, qintptr L) const
 { return m_editor ? m_editor->send(Message,W,L) : 0; }
 ITextEditorBackend* QTextView::Backend() const { return m_editor; }
@@ -40,11 +39,10 @@ void QTextView::CommitContent() { if(m_editor)m_editor->setModified(false); }
 bool QPDFView::LoadContent(const QByteArray& Bytes, const QString& Path)
 {
     closeFile();m_fileData=Bytes;m_filePath=Path;
-    if(Bytes.size()>ArtifactLimit) return false;
     m_document=FPDF_LoadMemDocument64(m_fileData.constData(),m_fileData.size(),nullptr);
     if(!m_document) { m_fileData.clear();return false; }
     m_pageCount=FPDF_GetPageCount(m_document);
-    if(m_pageCount<=0||m_pageCount>10000) { closeFile();return false; }
+    if(m_pageCount<=0) { closeFile();return false; }
     m_currentPage=0;m_rotationAngle=Rotate0;m_annotationManager.setDocument(m_document);
     // Original form implementation never creates a valid form handle. Keep it
     // unavailable until a separate, validated form-fill lifecycle is implemented.
@@ -59,7 +57,7 @@ QByteArray QPDFView::SerializeContent() const
         QByteArray bytes_;
         static int Write(FPDF_FILEWRITE* Self,const void* Data,unsigned long Size) {
             auto* W=static_cast<Writer*>(Self);
-            if(Size>ArtifactLimit || W->bytes_.size()+Size>ArtifactLimit)return 0;
+            if(qsizetype(Size)>std::numeric_limits<qsizetype>::max()-W->bytes_.size())return 0;
             W->bytes_.append(static_cast<const char*>(Data),Size);return 1;
         }
     } Writer;

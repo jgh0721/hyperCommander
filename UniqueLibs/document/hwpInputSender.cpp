@@ -27,8 +27,7 @@ namespace hc::document
         const auto Format = QFileInfo(QString::fromUtf8(Entry.name_)).suffix().toLower();
         if (Entry.directory_ || (Format != "hwp" && Format != "hwpx"))
             return Error{ErrorCategory::InvalidRequest, "rhwp-source-format"};
-        constexpr quint64 Limit = 64 * 1024 * 1024;
-        if (!Entry.size_ || Entry.size_ > Limit)
+        if (!Entry.size_)
             return Error{ErrorCategory::BudgetExceeded, "rhwp-input-budget"};
         // Native materialization verifies the captured revision before and after
         // copying and retains parent leases. Never lend the original file itself.
@@ -51,7 +50,6 @@ namespace hc::document
             const auto Chunk = File.read(192 * 1024);
             if (Chunk.isEmpty()) return Error{ErrorCategory::Unavailable, "rhwp-input-read"};
             Total += Chunk.size();
-            if (Total > Limit) return Error{ErrorCategory::BudgetExceeded, "rhwp-input-budget"};
             Hash.addData(Chunk);
         }
         if (File.error() != QFileDevice::NoError || Total != Entry.size_)
@@ -97,7 +95,7 @@ namespace hc::document
             || (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
             || !GetFileSizeEx(Handle, &Size)) return {};
         Error = "rhwp-input-budget";
-        if(Size.QuadPart < 1 || Size.QuadPart > 64 * 1024 * 1024) return {};
+        if(Size.QuadPart < 1 || quint64(Size.QuadPart)>quint64(std::numeric_limits<qsizetype>::max())) return {};
         auto Input = std::unique_ptr<HwpAdmittedInput>(new HwpAdmittedInput);
         Input->ticket_ = Ticket; Input->file_ = std::move(File);
         startup::Scope HashRead("input.lockedReadHash");

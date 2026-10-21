@@ -71,7 +71,7 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
-target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
+target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_link_libraries(hc_document_widgets PRIVATE hc_builtin_sevenzip hc_image_archive_transport)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")

@@ -29,6 +29,8 @@ namespace hc::document
         void RequestClose();
         void Save(bool SaveAs = false);
         void Print();
+        void SetPrintDialogFactory(PrintDialogFactory Factory) { printDialogFactory_ = std::move(Factory); }
+        bool IsBusy() const { return preparing_ || cleaning_ || (closing_ && !closed_) || bool(printJob_) || (document_ && document_->IsBusy()); }
         QString Error() const { return error_; }
         bool IsClosed() const { return closed_; }
         bool IsClosing() const { return closing_; }

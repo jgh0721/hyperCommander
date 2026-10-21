@@ -202,8 +202,9 @@ namespace hc::document
                 *PendingRetirement=std::unique_ptr<DocumentWebProcess>(new DocumentWebProcess(std::move(S)));
             return {};
         };
-        if(Limits.processes_<2 || Limits.processes_>64 || Limits.memoryBytes_<256ULL*1024*1024
-            || Limits.memoryBytes_>8ULL*1024*1024*1024 || !Limits.startupMs_ || Limits.startupMs_>30000) return Fail("web-owner-limits");
+        if((Limits.processes_&&(Limits.processes_<2 || Limits.processes_>64))
+            || (Limits.memoryBytes_&&(Limits.memoryBytes_<256ULL*1024*1024||Limits.memoryBytes_>8ULL*1024*1024*1024))
+            || !Limits.startupMs_ || Limits.startupMs_>30000) return Fail("web-owner-limits");
         BOOL InJob=FALSE;
         if(!IsProcessInJob(GetCurrentProcess(),nullptr,&InJob)) return Fail("web-owner-job-query");
         if(InJob)
@@ -308,7 +309,9 @@ namespace hc::document
         const auto Nonce=QUuid::createUuid().toRfc4122(); std::memcpy(S->connection_.data(),Nonce.constData(),16);
         S->job_.value_=CreateJobObjectW(nullptr,nullptr); if(!S->job_.Valid()) return Fail("web-owner-job");
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
-        Job.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_ACTIVE_PROCESS|JOB_OBJECT_LIMIT_PROCESS_MEMORY|JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+        Job.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+        if(Limits.processes_)Job.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        if(Limits.memoryBytes_)Job.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_PROCESS_MEMORY|JOB_OBJECT_LIMIT_JOB_MEMORY;
         Job.BasicLimitInformation.ActiveProcessLimit=Limits.processes_;
         Job.ProcessMemoryLimit=Job.JobMemoryLimit=SIZE_T(Limits.memoryBytes_);
         if(!SetInformationJobObject(S->job_.value_,JobObjectExtendedLimitInformation,&Job,sizeof(Job))) return Fail("web-owner-job-limits");

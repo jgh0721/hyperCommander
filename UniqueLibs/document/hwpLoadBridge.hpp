@@ -26,7 +26,7 @@ namespace hc::document
     public:
         HwpLoadEndpoint(HwpLoadBridge* Bridge, QObject* Parent);
         Q_INVOKABLE QVariantMap PendingOpen() const;
-        Q_INVOKABLE QString ReadChunk(const QString& Operation, int Offset) const;
+        Q_INVOKABLE QString ReadChunk(const QString& Operation, qint64 Offset) const;
         Q_INVOKABLE bool Report(const QString& Json);
     signals:
         void CancelRequested();
@@ -48,7 +48,7 @@ namespace hc::document
         void Retire();
         State CurrentState() const { return state_; }
         QVariantMap PendingOpen() const;
-        QString ReadChunk(const QString& Operation, int Offset) const;
+        QString ReadChunk(const QString& Operation, qint64 Offset) const;
         bool Report(const QString& Json);
     signals:
         // Native owner must retire the entire process tree before calling Retire.

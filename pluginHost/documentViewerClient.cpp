@@ -4,6 +4,12 @@
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <thread>
+#include <future>
+#include <QProcess>
+#include <QFileInfo>
+#include <QCoreApplication>
+#include <QDir>
+#include "UniqueLibs/settings/appSettings.hpp"
 namespace hc::plugins
 {
     using namespace storage;
@@ -65,12 +71,43 @@ namespace hc::plugins
             const auto Token = Item.toObject()["sourceToken"].toString(); if (!Token.isEmpty()) Tokens.insert(Token);
         }
         broker_.Retain(Tokens);
+        const auto Edit=state_["editRequest"].toObject();
+        if(!Edit.isEmpty()){
+            std::optional<document::DocumentHostBroker::EditorInput> Input;
+            for(const auto& Item:state_["documents"].toArray()){
+                const auto Tab=Item.toObject();const auto View=Tab["view"].toObject();
+                if(Tab["documentId"]!=Edit["documentId"]||Tab["generation"]!=Edit["generation"]
+                    ||Tab["lifecycle"]!="ready"||Tab["loading"].toBool()||!View["ready"].toBool()
+                    ||(View["viewId"]!="hwp"&&View["viewId"]!="hwpx"))continue;
+                const auto SourceToken=Tab["sourceToken"].toString();
+                if(!SourceToken.isEmpty())Input=broker_.ResolveEditorInput(SourceToken);
+                else if(!Tab["hostSlot"].toBool())Input=document::DocumentHostBroker::EditorInput{Tab["path"].toString(),true,{}};
+                break;
+            }
+            bool Started=false;
+            if(Input&&QFileInfo(Input->path_).isAbsolute()&&QStringList{"hwp","hwpx"}.contains(QFileInfo(Input->path_).suffix().toLower())){
+                const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
+                const QStringList Args{Input->original_?"--rhwp-edit":"--rhwp-edit-copy","--config-dir",hc::settings::DocumentPaths().directory_,"--",Input->path_};
+                auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();
+                // Run outside the restricted viewer Job. Retain provider input
+                // until the independent editor exits, even after the tab closes.
+                std::thread([Program,Args,Lease=Input->lease_,Start]{
+                    QProcess Process;Process.start(Program,Args);const bool Started=Process.waitForStarted(5000);
+                    Start->set_value(Started);if(Started)Process.waitForFinished(-1);
+                }).detach();
+                Started=Result.get();
+            }
+            auto Completed=Call("Execute",{{"action","editResult"},{"token",Edit["token"]},{"accepted",Started}},{},{},Context);
+            // Closing the originating tab can retire its token while the
+            // independent editor is starting. That reply does not fail the viewer.
+            if(!Completed.HasValue()&&Completed.Failure().code_!="document-edit-token")return Completed.Failure();
+        }
         for (const auto& Item : state_["pendingSaves"].toArray()) {
             const auto Prepared = Item.toObject(); bool Valid = false;
             const auto Length = Prepared["byteLength"].toString().toULongLong(&Valid);
             const auto Id = Prepared["documentId"].toString(), Generation = Prepared["generation"].toString();
             QByteArray Bytes; std::optional<Error> Failure;
-            if (!Valid || Length > document::DocumentByteLimit) Failure = Error{ErrorCategory::BudgetExceeded, "document-save-stream-length"};
+            if (!Valid || Length > quint64(std::numeric_limits<qsizetype>::max())) Failure = Error{ErrorCategory::BudgetExceeded, "document-save-stream-length"};
             while (!Failure && quint64(Bytes.size()) < Length) {
                 auto Chunk = Call("SaveRead", {{"saveToken", Prepared["saveToken"]}, {"offset", QString::number(Bytes.size())},
                     {"count", int(document::HostChunkLimit)}}, Id, Generation, Context);

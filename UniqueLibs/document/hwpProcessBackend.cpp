@@ -55,9 +55,14 @@ namespace hc::document
     public:
         static Registry& Instance()
         {
-            static QPointer<Registry> Value;
+            auto& Value = instance();
             if(!Value) Value = new Registry;
             return *Value;
+        }
+        static void ReleaseLifecycle()
+        {
+            auto& Value = instance();
+            if(Value && Value->Drained()) delete Value.data();
         }
         std::shared_ptr<BindingState> Add(HwpProcessBackend* Host, const std::shared_ptr<Work>& Work)
         {
@@ -114,6 +119,11 @@ namespace hc::document
             return QObject::eventFilter(Object, Event);
         }
     private:
+        static QPointer<Registry>& instance()
+        {
+            static QPointer<Registry> Value;
+            return Value;
+        }
         Registry() : QObject(qApp)
         {
             parking_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC", L"", WS_POPUP,
@@ -187,6 +197,7 @@ namespace hc::document
         if(IsCurrentBinding(Binding)) Registry::Instance().Invalidate(native_);
     }
     void HwpProcessBackend::InitializeLifecycle() { Registry::Instance(); }
+    void HwpProcessBackend::ReleaseLifecycle() { Registry::ReleaseLifecycle(); }
     void HwpProcessBackend::RequestShutdown() { Registry::Instance().Shutdown(); }
     bool HwpProcessBackend::IsDrained() { return Registry::Instance().Drained(); }
     bool HwpProcessBackend::event(QEvent* Event)
