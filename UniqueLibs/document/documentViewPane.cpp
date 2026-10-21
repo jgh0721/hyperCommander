@@ -37,6 +37,7 @@
 #include <QTimer>
 #include <QFile>
 #include <QStandardPaths>
+#include <qt_windows.h>
 #include <Scintilla.h>
 void InitializePortedViewResources();
 namespace hc::document
@@ -84,6 +85,7 @@ namespace hc::document
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
         if(IsHwp()) {
+            hwpFocusPending_=true;
             hwp_=new HwpOpenWindow(Input.path_,QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/rhwp",hwpRuntime_);
             hwp_->setParent(this,Qt::Widget);hwp_->setAttribute(Qt::WA_QuitOnClose,false);
             // The workspace owns the print command and its shortcut.
@@ -91,7 +93,12 @@ namespace hc::document
             hwp_->setContextMenuPolicy(Qt::NoContextMenu);
             layout()->addWidget(hwp_);hwp_->show();
             contribution_={};contribution_.viewId_=viewId_;contribution_.menuTitle_=tr("한글 문서");
-            connect(hwp_,&HwpOpenWindow::StateChanged,this,&DocumentViewPane::ViewStateChanged);
+            connect(hwp_,&HwpOpenWindow::StateChanged,this,[this]{
+                emit ViewStateChanged();
+                if(hwpFocusPending_ && hwp_->Document() && hwp_->Document()->Snapshot().lifecycle_==DocumentLifecycle::Ready){
+                    hwpFocusPending_=false;if(isVisible())Focus();
+                }
+            });
             connect(hwp_,&HwpOpenWindow::Closed,this,&DocumentViewPane::ViewStateChanged);
             QTimer::singleShot(0,hwp_,&HwpOpenWindow::Open);
             return true;
@@ -258,7 +265,14 @@ namespace hc::document
             image_->CommitContent();
         }
     }
-    void DocumentViewPane::Focus(){if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();}
+    void DocumentViewPane::Focus(){
+        const auto Native=reinterpret_cast<HWND>(window()->internalWinId());
+        if(isVisible() && Native && GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Native,GA_ROOT)
+            && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()){
+            if(QApplication::activeWindow()!=window())QApplication::setActiveWindow(window());
+        }
+        if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+    }
     void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {

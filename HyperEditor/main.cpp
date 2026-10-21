@@ -71,6 +71,7 @@ int main(int Argc, char** Argv)
         }
         hc::document::HwpOpenWindow Window(Path,
             QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp", std::move(Runtime), {}, RhwpEdit, !Parser.isSet("rhwp-edit-copy"));
+        QObject::connect(&Window, &hc::document::HwpOpenWindow::Closed, &App, &QCoreApplication::quit);
         QObject::connect(&App,&QCoreApplication::aboutToQuit,&App,[] {
             // The Ready observation has completed; all owners drain before normal quit.
             const auto Trace = hc::document::startup::Data().Snapshot();

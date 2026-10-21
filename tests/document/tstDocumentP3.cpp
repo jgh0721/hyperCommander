@@ -16,6 +16,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
+#include <QAbstractNativeEventFilter>
 #include <QToolButton>
 #include <QToolBar>
 #include <QUuid>
@@ -25,6 +26,10 @@
 #include "text/FindReplaceWidget.h"
 #include <QStackedLayout>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QSpinBox>
+#include <QTabBar>
+#include "pdf/QPDFView.h"
 #include <QDialog>
 #include <QCheckBox>
 #include <QMessageBox>
@@ -37,6 +42,7 @@
 #include <fpdf_text.h>
 #include <atomic>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentHostBroker.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
@@ -51,6 +57,23 @@ using namespace hc::document;
 using namespace hc::storage;
 using namespace hc::plugins;
 namespace {
+bool Foreground(HWND Window){
+    // Give the test the same activation permission as a real title-bar click.
+    // Merely calling SetForegroundWindow does not create last-input ownership.
+    const bool WasTopmost=(GetWindowLongPtrW(Window,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
+    SetWindowPos(Window,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    RECT Bounds{};POINT Cursor{};GetCursorPos(&Cursor);if(!GetWindowRect(Window,&Bounds))return false;
+    SetCursorPos(Bounds.left+std::min<LONG>(100,(Bounds.right-Bounds.left)/2),Bounds.top+12);
+    INPUT Click[2]{};Click[0].type=Click[1].type=INPUT_MOUSE;Click[0].mi.dwFlags=MOUSEEVENTF_LEFTDOWN;Click[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
+    SendInput(2,Click,sizeof(INPUT));QTest::qWait(30);SetCursorPos(Cursor.x,Cursor.y);
+    if(!WasTopmost)SetWindowPos(Window,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    return GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Window,GA_ROOT);
+}
+bool NativeKey(WORD Key,bool Control=false){
+    std::vector<INPUT> Keys;const auto Add=[&](WORD Value,bool Up){INPUT I{};I.type=INPUT_KEYBOARD;I.ki.wVk=Value;I.ki.dwFlags=(Up?KEYEVENTF_KEYUP:0)|((Value>=VK_PRIOR&&Value<=VK_DOWN)?KEYEVENTF_EXTENDEDKEY:0);Keys.push_back(I);};
+    if(Control)Add(VK_CONTROL,false);Add(Key,false);Add(Key,true);if(Control)Add(VK_CONTROL,true);
+    return SendInput(UINT(Keys.size()),Keys.data(),sizeof(INPUT))==Keys.size();
+}
 bool Put(const QString& Path,const QByteArray& Bytes){QFile File(Path);return File.open(QIODevice::WriteOnly)&&File.write(Bytes)==Bytes.size();}
 QByteArray Read(const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};}
 bool Wait(std::function<bool()> Predicate,int Timeout=15000){QElapsedTimer Timer;Timer.start();do{if(Predicate())return true;QTest::qWait(20);}while(Timer.elapsed()<Timeout);return false;}
@@ -102,6 +125,136 @@ PluginViewerOptions Options(){PluginViewerOptions Result;Result.executable_=QCor
 class DocumentP3Tests final:public QObject{
     Q_OBJECT
 private slots:
+void workspaceReactivation_data(){
+    QTest::addColumn<bool>("Hosted");QTest::addColumn<QString>("Kind");QTest::addColumn<bool>("Minimize");
+    for(bool Hosted:{false,true})for(const auto& Kind:{QString("text"),QString("pdf"),QString("image"),QString("hwp"),QString("hwpx")})for(bool Minimize:{false,true})
+        QTest::newRow(qPrintable(QString("%1-%2-%3").arg(Hosted?"viewer":"editor",Kind,Minimize?"minimize":"switch")))<<Hosted<<Kind<<Minimize;
+}
+void workspaceReactivation(){
+    QFETCH(bool,Hosted);QFETCH(QString,Kind);QFETCH(bool,Minimize);QTemporaryDir Root;
+    const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if((Kind=="hwp"||Kind=="hwpx")&&Corpus.isEmpty())QSKIP("RHWP corpus required");
+    QString Path=Root.filePath("input.txt");QVERIFY(Put(Path,"body alpha"));
+    if(Kind=="pdf")Path=Fixture("basic.pdf");
+    if(Kind=="image"){for(int I=0;I<3;++I){QImage Image(80,80,QImage::Format_RGB32);Image.fill(QColor(30+I*60,70,100));QVERIFY(Image.save(Root.filePath(QString("image%1.png").arg(I))));}Path=Root.filePath("image0.png");}
+    if(Kind=="hwp"||Kind=="hwpx")Path=Corpus+(Kind=="hwp"?"/c02.hwp":"/c07.hwpx");
+    DocumentWorkspaceWidget Viewer(Root.filePath("recovery"),Hosted);Viewer.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+    if(Kind=="hwp"||Kind=="hwpx"){QFile Inventory(QCoreApplication::applicationDirPath()+"/runtime-inventory.json");QVERIFY(Inventory.open(QIODevice::ReadOnly));Viewer.ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QCryptographicHash::hash(Inventory.readAll(),QCryptographicHash::Sha256).toHex()));}
+    Viewer.resize(900,700);Viewer.show();const auto Window=reinterpret_cast<HWND>(Viewer.winId());Foreground(Window);QTRY_COMPARE(GetForegroundWindow(),Window);
+    const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]=="ready";},45000));
+    auto* Pane=Viewer.findChild<DocumentViewPane*>();QVERIFY(Pane);
+    auto* ToolbarField=new QLineEdit;Viewer.findChild<QToolBar*>("mainToolbar")->addWidget(ToolbarField);
+    int Acks=0;if(auto* Hwp=Viewer.findChild<HwpOpenWindow*>())for(auto* W:Hwp->findChildren<QWidget*>())if(auto* B=dynamic_cast<HwpProcessBackend*>(W))
+        connect(B,&HwpSdiBackend::EditorReply,&Viewer,[&](quint64,QJsonObject R){if(R["requestType"]=="DocumentNavigate"&&R["ok"].toBool())++Acks;});
+    QProcess Peer;Peer.start(QCoreApplication::applicationFilePath(),{"--focus-peer"});QVERIFY(Wait([&]{return Peer.canReadLine();}));
+    const auto Other=reinterpret_cast<HWND>(Peer.readLine().trimmed().toULongLong());QVERIFY(IsWindow(Other));
+    const auto Cleanup=qScopeGuard([&]{SendMessageW(Other,WM_APP+117,reinterpret_cast<WPARAM>(Window),0);Peer.kill();Peer.waitForFinished();Viewer.RequestClose();Wait([&]{return Viewer.Snapshot()["documents"].toArray().isEmpty();},30000);});
+    ShowWindow(Other,SW_SHOWNOACTIVATE);Foreground(Window);QTRY_COMPARE(GetForegroundWindow(),Window);
+    for(int Cycle=0;Cycle<2;++Cycle){
+        QTest::qWait(50);ToolbarField->setFocus();QCOMPARE(QApplication::focusWidget(),ToolbarField);
+        QVERIFY(AllowSetForegroundWindow(DWORD(Peer.processId())));
+        if(Minimize)Viewer.showMinimized();SendMessageW(Other,WM_APP+117,reinterpret_cast<WPARAM>(Other),0);QTRY_COMPARE(GetForegroundWindow(),Other);
+        ToolbarField->setFocus(Qt::ActiveWindowFocusReason);QTest::qWait(60);QCOMPARE(GetForegroundWindow(),Other);
+        if(Minimize)ShowWindow(Window,SW_RESTORE);SendMessageW(Other,WM_APP+117,reinterpret_cast<WPARAM>(Window),0);QTRY_COMPARE(GetForegroundWindow(),Window);
+        QWidget* Input=Pane->InputWidget();while(Input&&Input->focusProxy())Input=Input->focusProxy();QVERIFY(Input);QTRY_COMPARE(QApplication::focusWidget(),Input);
+        QVERIFY(GetFocus()&&(GetFocus()==Window||IsChild(Window,GetFocus())));
+        if(Kind=="text"){QVERIFY(NativeKey('X'));auto* Text=Pane->findChild<QTextView*>();QVERIFY(Text);QTRY_COMPARE(Text->Content().count('x'),Cycle+1);}
+        else if(Kind=="pdf"){QVERIFY(NativeKey(Cycle?VK_HOME:VK_END));QTRY_COMPARE(Pane->ViewState()["page"].toInt(),Cycle?0:1);}
+        else if(Kind=="image"){QVERIFY(NativeKey(VK_SPACE));QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["path"].toString()==Root.filePath(QString("image%1.png").arg(Cycle+1))&&Viewer.IsIdle();}));}
+        else {QVERIFY(NativeKey(Cycle?VK_HOME:VK_NEXT));QTRY_COMPARE_WITH_TIMEOUT(Acks,Cycle+1,10000);}
+        QVERIFY(ToolbarField->text().isEmpty());
+    }
+}
+void nativeHwpEditorReactivation_data(){QTest::addColumn<QString>("Name");QTest::newRow("hwp")<<QString("c02.hwp");QTest::newRow("hwpx")<<QString("c05.hwpx");}
+void nativeHwpEditorReactivation(){
+    QFETCH(QString,Name);const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("RHWP corpus required");
+    QTemporaryDir Root;const auto Original=Read(Corpus+'/'+Name);const auto FileName="focus-"+QUuid::createUuid().toString(QUuid::Id128)+'.'+QFileInfo(Name).suffix();
+    const auto Path=Root.filePath(FileName);QVERIFY(Put(Path,Original));
+    QProcess Editor;Editor.start(QCoreApplication::applicationDirPath()+"/HyperEditor.exe",{"--rhwp-edit","--config-dir",Root.filePath("config"),"--",Path});QVERIFY(Editor.waitForStarted());
+    struct Search{QString name_;DWORD pid_;HWND window_=nullptr;} Target{FileName,DWORD(Editor.processId())};
+    const auto Title=[&]{wchar_t Text[1024]{};if(Target.window_)GetWindowTextW(Target.window_,Text,1024);return QString::fromWCharArray(Text);};
+    const auto Stop=qScopeGuard([&]{if(Target.window_)PostMessageW(Target.window_,WM_CLOSE,0,0);if(!Editor.waitForFinished(2000)){Editor.kill();Editor.waitForFinished();}});
+    QVERIFY(Wait([&]{EnumWindows([](HWND W,LPARAM P)->BOOL{auto& S=*reinterpret_cast<Search*>(P);DWORD Pid=0;GetWindowThreadProcessId(W,&Pid);wchar_t Text[1024]{};GetWindowTextW(W,Text,1024);if(Pid==S.pid_&&QString::fromWCharArray(Text).startsWith(S.name_)){S.window_=W;return FALSE;}return TRUE;},reinterpret_cast<LPARAM>(&Target));return Target.window_&&Title().contains(QString::fromUtf8("한글 문서 편집"));},45000));
+    QProcess Peer;Peer.start(QCoreApplication::applicationFilePath(),{"--focus-peer"});QVERIFY(Wait([&]{return Peer.canReadLine();}));const auto Other=reinterpret_cast<HWND>(Peer.readLine().trimmed().toULongLong());QVERIFY(IsWindow(Other));
+    const auto StopPeer=qScopeGuard([&]{Peer.kill();Peer.waitForFinished();});
+    ShowWindow(Other,SW_SHOWNOACTIVATE);ShowWindow(Target.window_,SW_RESTORE);Foreground(Target.window_);
+    QVERIFY2(Wait([&]{return GetAncestor(GetForegroundWindow(),GA_ROOT)==Target.window_;},5000),qPrintable(QString("editor foreground=%1 expected=%2 visible=%3").arg(quintptr(GetForegroundWindow())).arg(quintptr(Target.window_)).arg(IsWindowVisible(Target.window_))));
+    for(int Cycle=0;Cycle<2;++Cycle){
+        const auto Before=QCryptographicHash::hash(Read(Path),QCryptographicHash::Sha256);
+        if(Cycle)ShowWindow(Target.window_,SW_MINIMIZE);Foreground(Other);QTRY_COMPARE(GetForegroundWindow(),Other);
+        QTest::qWait(60);QCOMPARE(GetForegroundWindow(),Other);if(Cycle)ShowWindow(Target.window_,SW_RESTORE);
+        SendMessageW(Other,WM_APP+117,reinterpret_cast<WPARAM>(Target.window_),0);QTRY_COMPARE(GetAncestor(GetForegroundWindow(),GA_ROOT),Target.window_);
+        const auto Thread=GetWindowThreadProcessId(Target.window_,nullptr);
+        QVERIFY(Wait([&]{GUITHREADINFO Info{sizeof(GUITHREADINFO)};DWORD Pid=0;if(!GetGUIThreadInfo(Thread,&Info)||!Info.hwndFocus||!IsChild(Target.window_,Info.hwndFocus))return false;GetWindowThreadProcessId(Info.hwndFocus,&Pid);return Pid!=Target.pid_;},10000));
+        QVERIFY(NativeKey('X'));QVERIFY(Wait([&]{return Title().contains('*');},10000));
+        QVERIFY(NativeKey('S',true));QVERIFY(Wait([&]{return !Title().contains('*')&&QCryptographicHash::hash(Read(Path),QCryptographicHash::Sha256)!=Before;},30000));
+    }
+    QCOMPARE(Read(Corpus+'/'+Name),Original);QTest::qWait(200);PostMessageW(Target.window_,WM_CLOSE,0,0);
+    QVERIFY2(Wait([&]{return Editor.state()==QProcess::NotRunning;},20000),qPrintable(QString("close title=%1 visible=%2 stderr=%3").arg(Title()).arg(IsWindowVisible(Target.window_)).arg(QString::fromUtf8(Editor.readAllStandardError()))));
+}
+void pdfNavigationKeys_data(){
+    QTest::addColumn<bool>("Hosted");QTest::addColumn<int>("Target");
+    for(bool Hosted:{false,true})for(int Target=0;Target<4;++Target)
+        QTest::newRow(qPrintable(QString("%1-%2").arg(Hosted?"viewer":"editor").arg(Target)))<<Hosted<<Target;
+}
+void pdfNavigationKeys(){
+    QFETCH(bool,Hosted);QFETCH(int,Target);QTemporaryDir Root;
+    DocumentWorkspaceWidget Viewer(Root.path(),Hosted);Viewer.resize(900,650);Viewer.show();
+    const auto Id=Viewer.Handle({{"action","open"},{"path",Fixture("basic.pdf")}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]=="ready";}));
+    auto* Pdf=Viewer.findChild<QPDFView*>();QVERIFY(Pdf);QCOMPARE(Pdf->totalPageCount(),2);
+    auto* Scroll=Pdf->findChild<QScrollArea*>("canvasScrollArea");QVERIFY(Scroll);
+    QWidget* Input=Target==0?static_cast<QWidget*>(Pdf):Target==1?Scroll->viewport():Target==2?static_cast<QWidget*>(Scroll):Scroll->verticalScrollBar();
+    QCOMPARE(Pdf->focusPolicy(),Qt::StrongFocus);QCOMPARE(Scroll->focusProxy(),Pdf);
+    for(const auto Step:{std::pair{Qt::Key_PageDown,1},std::pair{Qt::Key_PageUp,0},std::pair{Qt::Key_End,1},std::pair{Qt::Key_Home,0},std::pair{Qt::Key_PageUp,0}}){
+        QTest::keyClick(Input,Step.first);QTRY_COMPARE(Pdf->currentPage(),Step.second);
+    }
+    QTest::keyClick(Input,Qt::Key_End,Qt::ControlModifier);QTRY_COMPARE(Pdf->currentPage(),1);
+    QTest::keyClick(Input,Qt::Key_Home,Qt::ControlModifier);QTRY_COMPARE(Pdf->currentPage(),0);
+    QTest::keyClick(Input,Qt::Key_End,Qt::KeypadModifier);QTRY_COMPARE(Pdf->currentPage(),1);QTest::keyClick(Input,Qt::Key_Home,Qt::KeypadModifier);QTRY_COMPARE(Pdf->currentPage(),0);
+    Pdf->setZoomLevel(200);QTRY_VERIFY(Scroll->verticalScrollBar()->maximum()>0);
+    Scroll->verticalScrollBar()->setValue(0);QTest::keyClick(Input,Qt::Key_Down);QTRY_VERIFY(Scroll->verticalScrollBar()->value()>0);
+    QTest::keyClick(Input,Qt::Key_Up);QTRY_COMPARE(Scroll->verticalScrollBar()->value(),0);
+    auto* PageBox=Viewer.findChild<QSpinBox*>();QVERIFY(PageBox);auto* Field=PageBox->findChild<QLineEdit*>();QVERIFY(Field);
+    Pdf->goToPage(1);QTest::keyClick(Field,Qt::Key_Home);QCOMPARE(Pdf->currentPage(),1);QCOMPARE(Field->cursorPosition(),0);
+    QTest::keyClick(Field,Qt::Key_End);QCOMPARE(Pdf->currentPage(),1);QCOMPARE(Field->cursorPosition(),Field->text().size());
+}
+void hwpNavigationKeys_data(){QTest::addColumn<QString>("Name");QTest::newRow("hwp")<<QString("c02.hwp");QTest::newRow("hwpx")<<QString("c07.hwpx");}
+void pdfTabNavigationFocus(){
+    QTemporaryDir Root;const auto SecondPath=Root.filePath("second.pdf");QVERIFY(QFile::copy(Fixture("basic.pdf"),SecondPath));
+    DocumentWorkspaceWidget Viewer(Root.path(),true);Viewer.show();QApplication::setActiveWindow(&Viewer);
+    const auto First=Viewer.Handle({{"action","open"},{"path",Fixture("basic.pdf")}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),First)["lifecycle"]=="ready";}));
+    auto* Pdf=Viewer.findChild<QPDFView*>();QVERIFY(Pdf);
+    const auto Second=Viewer.Handle({{"action","open"},{"path",SecondPath}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Second)["lifecycle"]=="ready";}));
+    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);QCOMPARE(Tabs->count(),2);
+    QTest::mouseClick(Tabs->tabBar(),Qt::LeftButton,Qt::NoModifier,Tabs->tabBar()->tabRect(0).center());
+    QTRY_VERIFY(Pdf->hasFocus());QTest::keyClick(QApplication::focusWidget(),Qt::Key_End);QTRY_COMPARE(Pdf->currentPage(),1);
+    QCOMPARE(Doc(Viewer.Snapshot(),Second)["view"].toObject()["page"].toInt(),0);
+}
+void hwpNavigationKeys(){
+    QFETCH(QString,Name);const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
+    QTemporaryDir Root;QFile Inventory(QCoreApplication::applicationDirPath()+"/runtime-inventory.json");QVERIFY(Inventory.open(QIODevice::ReadOnly));
+    DocumentWorkspaceWidget Viewer(Root.path(),true);Viewer.ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QCryptographicHash::hash(Inventory.readAll(),QCryptographicHash::Sha256).toHex()));
+    Viewer.show();Foreground(reinterpret_cast<HWND>(Viewer.winId()));QApplication::setActiveWindow(&Viewer);
+    const auto Pdf=Viewer.Handle({{"action","open"},{"path",Fixture("basic.pdf")}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Pdf)["lifecycle"]=="ready";}));
+    const auto Path=Corpus+'/'+Name;const auto Before=Read(Path);
+    const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]=="ready";},45000));
+    auto* Window=Viewer.findChild<HwpOpenWindow*>();QVERIFY(Window);QCOMPARE(Window->focusProxy(),Window->Document());
+    HwpProcessBackend* Backend=nullptr;for(auto* W:Window->findChildren<QWidget*>())if(auto* B=dynamic_cast<HwpProcessBackend*>(W))Backend=B;
+    QVERIFY(Backend);QCOMPARE(Window->Document()->focusProxy(),Backend);QCOMPARE(Backend->focusPolicy(),Qt::StrongFocus);
+    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);
+    Tabs->setCurrentIndex(0);Tabs->setCurrentIndex(1);QTRY_VERIFY(Backend->hasFocus());
+    int Acks=0;connect(Backend,&HwpSdiBackend::EditorReply,&Viewer,[&](quint64,QJsonObject Reply){if(Reply["requestType"]=="DocumentNavigate"&&Reply["ok"].toBool())++Acks;});
+    for(const auto Key:{Qt::Key_PageDown,Qt::Key_PageUp,Qt::Key_End,Qt::Key_Home,Qt::Key_Down,Qt::Key_Up})QTest::keyClick(QApplication::focusWidget(),Key);
+    QTRY_COMPARE_WITH_TIMEOUT(Acks,6,10000);
+    QTest::keyClick(Backend,Qt::Key_End,Qt::ControlModifier);QTest::keyClick(Backend,Qt::Key_Home,Qt::ControlModifier);QTRY_COMPARE_WITH_TIMEOUT(Acks,8,10000);
+    QTest::keyClick(Backend,Qt::Key_End,Qt::KeypadModifier);QTest::keyClick(Backend,Qt::Key_Home,Qt::KeypadModifier);QTRY_COMPARE_WITH_TIMEOUT(Acks,10,10000);
+    QVERIFY(!Doc(Viewer.Snapshot(),Id)["dirty"].toBool());QCOMPARE(Read(Path),Before);
+    Viewer.RequestClose();QVERIFY(Wait([&]{return Viewer.Snapshot()["documents"].toArray().isEmpty()&&HwpProcessBackend::IsDrained();},30000));
+}
 void viewerUnboundedTabsAndFiles(){
     QTemporaryDir Root;DocumentWorkspaceWidget Viewer(Root.filePath("recovery"),true);QStringList Ids;
     for(int Index=0;Index<20;++Index){
@@ -666,7 +819,7 @@ void f3TextAcceptsKeyboardWithoutClick(){
     QTemporaryDir Root; const auto Path=Root.filePath("keyboard.txt"); QVERIFY(Put(Path,"keyboard fixture"));
     QWidget Main; QVBoxLayout Layout(&Main); QLineEdit Input; Layout.addWidget(&Input);
     Main.resize(800,600); Main.show(); Main.activateWindow();
-    SetForegroundWindow(reinterpret_cast<HWND>(Main.winId()));
+    Foreground(reinterpret_cast<HWND>(Main.winId()));QTRY_COMPARE(GetForegroundWindow(),reinterpret_cast<HWND>(Main.winId()));
     QVERIFY(QTest::qWaitForWindowActive(&Main)); Input.setFocus();
     auto Live=std::make_shared<std::atomic<int>>(0);
     QtViewerHost Host(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
@@ -903,6 +1056,17 @@ void memoryByDocumentSizeAndTabCount(){
 }
 };
 int main(int Argc,char** Argv){
+    for(int I=1;I<Argc;++I)if(QByteArray(Argv[I])=="--focus-peer"){
+        WNDCLASSW Class{};Class.hInstance=GetModuleHandleW(nullptr);Class.lpszClassName=L"HC.DocumentFocusPeer";Class.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+        Class.lpfnWndProc=[](HWND Window,UINT Message,WPARAM W,LPARAM L)->LRESULT{
+            if(Message==WM_APP+117)return SetForegroundWindow(reinterpret_cast<HWND>(W));
+            if(Message==WM_DESTROY){PostQuitMessage(0);return 0;}return DefWindowProcW(Window,Message,W,L);
+        };
+        if(!RegisterClassW(&Class))return 20;
+        const auto Window=CreateWindowExW(0,Class.lpszClassName,L"Document focus peer",WS_OVERLAPPEDWINDOW,GetSystemMetrics(SM_CXSCREEN)-440,80,400,200,nullptr,nullptr,Class.hInstance,nullptr);
+        if(!Window)return 21;ShowWindow(Window,SW_SHOWNOACTIVATE);std::cout<<quintptr(Window)<<std::endl;
+        MSG Message{};while(GetMessageW(&Message,nullptr,0,0)>0){TranslateMessage(&Message);DispatchMessageW(&Message);}return 0;
+    }
     QApplication App(Argc,Argv);QTemporaryDir Config;App.setProperty("documentViewsConfigDir",Config.path());
     if(App.arguments().contains("--probe-dpr")){std::cout<<App.primaryScreen()->devicePixelRatio()<<std::endl;return 0;}
     if(App.arguments().contains("--parent-probe")){

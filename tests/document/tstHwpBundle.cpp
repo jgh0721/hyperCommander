@@ -190,6 +190,18 @@ private slots:
         Eval("for(const P of [4,0,3,1,4])document.querySelector('[data-page=\"'+P+'\"]').scrollIntoView();true");
         QTRY_VERIFY_WITH_TIMEOUT(Eval("document.querySelector('[data-page=\"4\"]').dataset.painted==='true'").toBool(),10000);
         if(!Evidence.isEmpty())QVERIFY(Write(Evidence+"/viewport-"+Format+".json",QJsonDocument(QJsonObject{{"firstPainted",true},{"lastUnpaintedBeforePrint",true},{"printedPages",5},{"navigation",Navigation},{"readyMaintained",true}}).toJson()));
+        QTRY_VERIFY_WITH_TIMEOUT(Document.Handle(Command("DocumentPrintPoll"))["printIdle"].toBool(),10000);
+        auto* InputWidget=View->focusProxy()?View->focusProxy():View;
+        QTest::keyClick(InputWidget,Qt::Key_End);
+        QTRY_VERIFY_WITH_TIMEOUT(Eval("window.scrollY>0 && Math.abs(window.scrollY+window.innerHeight-document.scrollingElement.scrollHeight)<2").toBool(),5000);
+        QTest::keyClick(InputWidget,Qt::Key_Home);QTRY_COMPARE_WITH_TIMEOUT(Eval("window.scrollY").toInt(),0,5000);
+        QTest::keyClick(InputWidget,Qt::Key_PageDown);QTRY_VERIFY_WITH_TIMEOUT(Eval("window.scrollY>0 && window.scrollY<window.innerHeight").toBool(),5000);
+        QTest::keyClick(InputWidget,Qt::Key_PageUp);QTRY_COMPARE_WITH_TIMEOUT(Eval("window.scrollY").toInt(),0,5000);
+        auto Navigate=Command("DocumentNavigate");Navigate["key"]="End";QVERIFY(Document.Handle(Navigate)["ok"].toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(Eval("Math.abs(window.scrollY+window.innerHeight-document.scrollingElement.scrollHeight)<2").toBool(),5000);
+        Navigate["key"]="Home";QVERIFY(Document.Handle(Navigate)["ok"].toBool());QTRY_COMPARE_WITH_TIMEOUT(Eval("window.scrollY").toInt(),0,5000);
+        Navigate["key"]="F4";QVERIFY(!Document.Handle(Navigate)["ok"].toBool());
+        Navigate["key"]="End";Navigate["identity"]=QJsonObject{};QVERIFY(Document.Handle(Navigate).contains("error"));
         Input.seek(0);QCOMPARE(Input.readAll(),Bytes);
     }
 

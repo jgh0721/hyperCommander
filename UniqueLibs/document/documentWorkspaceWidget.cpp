@@ -1,5 +1,6 @@
 ﻿#include "documentWorkspaceWidget.hpp"
 #include "imageAsync.hpp"
+#include "documentFocusRestore.hpp"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -345,7 +346,10 @@ namespace hc::document
             auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
         });
         connect(tabs_, &QTabWidget::currentChanged, this, [this] {
-            if(auto Tab=active())setFocusProxy(Tab->pane_->InputWidget());
+            if(auto Tab=active()){
+                setFocusProxy(Tab->pane_->InputWidget());
+                if(Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsHwp())Tab->pane_->Focus();
+            }
             update();
         });
         for (const auto& Item : {std::pair{QString("tab.next"), 1}, std::pair{QString("tab.previous"), -1}}) {
@@ -380,6 +384,7 @@ namespace hc::document
             {"printDocument", "file.print"}, {"previewDocument", "file.printPreview"}, {"cancelDocument", "file.cancel"},
             {"captureScreen", "capture.screen"}, {"workspaceDisplayOptions", "view.displayOptions"}, {"documentPreferences", "app.settings"}};
         qApp->installEventFilter(this);
+        new DocumentFocusRestore(this,[this]()->QWidget*{auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;});
         if (hosted_) {
             viewerEscape_ = new QShortcut(QKeySequence(Qt::Key_Escape), this);
             viewerEscape_->setAutoRepeat(false);

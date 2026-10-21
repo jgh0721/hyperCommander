@@ -4,17 +4,60 @@
 #include <QWebEngineView>
 #include <QWebEnginePage>
 #include <QJsonArray>
+#include <QApplication>
+#include <QKeyEvent>
+#include <QKeySequence>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <Windows.h>
 namespace hc::document
 {
+    namespace {
+        QString NavigationScript(const QString& Key)
+        {
+            const QString Options=QStringLiteral(",behavior:'instant'});");
+            if(Key=="Home")return "window.scrollTo({left:window.scrollX,top:0"+Options;
+            if(Key=="End")return "window.scrollTo({left:window.scrollX,top:document.scrollingElement.scrollHeight"+Options;
+            if(Key=="PgUp")return "window.scrollBy({left:0,top:-Math.max(1,window.innerHeight-40)"+Options;
+            if(Key=="PgDown")return "window.scrollBy({left:0,top:Math.max(1,window.innerHeight-40)"+Options;
+            if(Key=="Up")return "window.scrollBy({left:0,top:-40"+Options;
+            if(Key=="Down")return "window.scrollBy({left:0,top:40"+Options;
+            if(Key=="Left")return "window.scrollBy({left:-40,top:0"+Options;
+            if(Key=="Right")return "window.scrollBy({left:40,top:0"+Options;
+            return {};
+        }
+    }
+    bool HwpHelperDocument::navigate(const QString& Key)
+    {
+        if(editing_ || state_!="ready" || !view_ || !print_.Idle())return false;
+        const auto Script=NavigationScript(Key);if(Script.isEmpty())return false;
+        view_->View()->page()->runJavaScript(Script);return true;
+    }
+    bool HwpHelperDocument::eventFilter(QObject* Object,QEvent* Event)
+    {
+        if(!editing_ && view_ && state_=="ready" && print_.Idle()
+            && (Event->type()==QEvent::KeyPress || Event->type()==QEvent::ShortcutOverride)) {
+            auto* Widget=qobject_cast<QWidget*>(Object);auto* Key=static_cast<QKeyEvent*>(Event);
+            const auto Modifiers=Key->modifiers() & ~Qt::KeypadModifier;
+            if(Widget && (Widget==view_.get() || view_->isAncestorOf(Widget))
+                && (Modifiers==Qt::NoModifier || (Modifiers==Qt::ControlModifier
+                    && (Key->key()==Qt::Key_Home || Key->key()==Qt::Key_End)))) {
+                const auto Name=QKeySequence(Key->key()).toString(QKeySequence::PortableText);
+                if(!NavigationScript(Name).isEmpty()) {
+                    if(Event->type()==QEvent::KeyPress)navigate(Name);
+                    Event->accept();return true;
+                }
+            }
+        }
+        return QObject::eventFilter(Object,Event);
+    }
     HwpHelperDocument::HwpHelperDocument(std::shared_ptr<const HwpBundle> Bundle,
         std::uintptr_t ParentWindow, int LoadTimeoutMs, bool AllowEdit)
         : bundle_(std::move(Bundle)), input_(bool(bundle_)), allowEdit_(AllowEdit), parent_(ParentWindow), timeoutMs_(LoadTimeoutMs) {}
     HwpHelperDocument::~HwpHelperDocument()
     {
+        if(qApp)qApp->removeEventFilter(this);
         // QObject disconnects receivers only in its base destructor, after
         // derived members have died. Endpoint teardown can emit Failed while
         // the bridge is loading, so disconnect while our state is still alive.
@@ -59,6 +102,24 @@ namespace hc::document
         const auto Reject = [](const char* Code) { return QJsonObject{{"version", 1}, {"error", Code}}; };
         if(!bundle_) return Reject("rhwp-input-package-not-approved");
         const auto Type = Request["type"].toString();
+        if(Type=="DocumentFocus") {
+            if(Request.size()!=3 || Request["version"]!=QJsonValue(1) || identity_.isEmpty()
+                || Request["identity"]!=QJsonValue(identity_) || !editing_ || state_!="ready" || !view_)return Reject("rhwp-focus-unavailable");
+            const auto Root=GetAncestor(reinterpret_cast<HWND>(view_->winId()),GA_ROOT);
+            if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=Root)return {{"ok",false}};
+            auto* Input=view_->View()->focusProxy()?view_->View()->focusProxy():view_->View();
+            SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));Input->setFocus(Qt::OtherFocusReason);
+            view_->View()->page()->runJavaScript(R"JS((()=>{
+                if([...document.querySelectorAll('[role="dialog"],dialog')].some(e=>e.getClientRects().length))return;
+                document.querySelector('textarea[aria-label]')?.focus({preventScroll:true});
+            })())JS");
+            return {{"ok",true}};
+        }
+        if(Type=="DocumentNavigate") {
+            if(Request.size()!=4 || Request["version"]!=QJsonValue(1) || identity_.isEmpty()
+                || Request["identity"]!=QJsonValue(identity_) || !Request["key"].isString())return Reject("rhwp-navigation-schema");
+            return {{"ok",navigate(Request["key"].toString())}};
+        }
         const auto PrintReply = [this] {
             QJsonObject Out{{"printIdle",print_.Idle()},{"printRetired",print_.Retired()}};
             if(print_.TakeAction())Out["action"]="print";
@@ -143,6 +204,7 @@ namespace hc::document
             {"bindingOwner",identity_["bindingOwner"]},{"bindingGeneration",identity_["bindingGeneration"]},{"epoch",identity_["epoch"]}});
         view_ = HwpBundleView::Create(bundle_, Error, editing_ ? &editor_ : nullptr, &print_);
         if(!view_) { fail(Error); return status(); }
+        qApp->installEventFilter(this);
         auto* Bridge = view_->LoadBridge();
         connect(Bridge, &HwpLoadBridge::Ready, this, [this] { if(state_ != "failed") state_ = "ready"; });
         connect(Bridge, &HwpLoadBridge::ViewFailed, this, [this](const QString& Code) { fail(Code); });

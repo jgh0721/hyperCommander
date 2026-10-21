@@ -1,5 +1,6 @@
 ﻿#include "hwpStartupTrace.hpp"
 #include "hwpOpenWindow.hpp"
+#include "documentFocusRestore.hpp"
 #include "hwpInputSender.hpp"
 #include "hwpInputInspection.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -68,6 +69,10 @@ namespace hc::document
     {
         // Install the retirement filter before any owner decision filter.
         HwpProcessBackend::InitializeLifecycle();
+        if(!editable_)setFocusPolicy(Qt::StrongFocus);
+        if(editable_)new DocumentFocusRestore(this,[this]()->QWidget*{return document_&&!closing_?document_:nullptr;},[this]{
+            if(document_)if(auto* Backend=dynamic_cast<HwpProcessBackend*>(document_->focusProxy()))Backend->FocusInput();
+        });
         setWindowTitle(QFileInfo(path_).fileName() + tr(" — 불러오는 중")); resize(1000, 760);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
         status_ = new QLabel(tr("문서를 준비하고 있습니다…"), this);
@@ -236,7 +241,9 @@ namespace hc::document
             fail("rhwp-recovery-incompatible"); if (Guard) cleanup(); return;
         }
         recovery_.reset();
+        const bool HadFocus=hasFocus();
         document_->setParent(this); layout()->addWidget(document_); status_->hide(); document_->show();
+        if(!editable_){setFocusProxy(document_);if(HadFocus)document_->setFocus(Qt::OtherFocusReason);}
         connect(document_, &HwpSdiWindow::StateChanged, this, &HwpOpenWindow::StateChanged);
         connect(document_, &HwpSdiWindow::Closed, this, [this] {
             closing_ = true; stop_.request_stop();

@@ -70,6 +70,7 @@ namespace hc::document
         ImageReadingView* reading_ = nullptr;
         ImageFramePlayer* animation_ = nullptr;
         HwpOpenWindow* hwp_ = nullptr;
+        bool hwpFocusPending_ = false;
         WebProcessRuntime hwpRuntime_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;

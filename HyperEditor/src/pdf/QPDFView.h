@@ -163,6 +163,7 @@ private:
     };
 
     void setupUI();
+    bool handleNavigationKey(QKeyEvent* event);
     void renderCurrentPage();
     void renderCurrentPageNow();
     bool renderPending_ = false;

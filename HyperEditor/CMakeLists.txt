@@ -37,6 +37,7 @@ target_include_directories(hc_document_broker PRIVATE
 target_link_libraries(hc_document_broker PUBLIC hc_document_core Qt6::Core PRIVATE Qt6::ZlibPrivate Qt6::Widgets advapi32 shell32 ole32 bcrypt)
 target_compile_options(hc_document_broker PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_library(hc_document_sdi STATIC
+    ../UniqueLibs/document/documentFocusRestore.hpp
     ../UniqueLibs/document/hwpHostSession.cpp ../UniqueLibs/document/hwpHostSession.hpp
     ../UniqueLibs/document/hwpOpenWindow.cpp ../UniqueLibs/document/hwpOpenWindow.hpp
     ../UniqueLibs/nativeMaterializer.cpp ../commonLibs/operations/jobScheduler.cpp

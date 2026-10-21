@@ -13,6 +13,9 @@
 #include <QJsonObject>
 #include <QPointer>
 #include <QTimer>
+#include <QKeyEvent>
+#include <QKeySequence>
+#include <deque>
 #include <atomic>
 #include <chrono>
 #include <system_error>
@@ -34,6 +37,8 @@ namespace hc::document
         bool editable_ = false;
         std::mutex editorMutex_;
         QJsonObject command_, reply_;
+        std::deque<QString> navigation_;
+        bool focusRequested_=false;
         std::atomic<bool> documentReady_ = false;
         std::uintptr_t parent_ = 0;
         WebProcessSnapshot snapshot_;
@@ -183,6 +188,7 @@ namespace hc::document
         : runtime_(std::move(Runtime)), limits_(Limits), timer_(new QTimer(this)), loadTimeoutMs_(LoadTimeoutMs), editable_(Editable)
     {
         timer_->setInterval(10);
+        if(!editable_)setFocusPolicy(Qt::StrongFocus);
         connect(timer_, &QTimer::timeout, this, &HwpProcessBackend::collect);
     }
     HwpProcessBackend::~HwpProcessBackend()
@@ -255,6 +261,27 @@ namespace hc::document
         } else if(Binding == binding_ && work_) {
             work_->cancel_.store(true); Registry::Instance().Invalidate(native_);
         }
+    }
+    void HwpProcessBackend::keyPressEvent(QKeyEvent* Event)
+    {
+        const auto Modifiers=Event->modifiers() & ~Qt::KeypadModifier;
+        if(!editable_ && (Modifiers==Qt::NoModifier
+            || (Modifiers==Qt::ControlModifier && (Event->key()==Qt::Key_Home || Event->key()==Qt::Key_End)))
+            && QList<int>{Qt::Key_Home,Qt::Key_End,Qt::Key_PageUp,Qt::Key_PageDown,
+                Qt::Key_Up,Qt::Key_Down,Qt::Key_Left,Qt::Key_Right}.contains(Event->key())
+            && work_ && loadReported_ && IsCurrentBinding(work_->native_)
+            && !work_->cancel_.load() && !work_->done_.load()) {
+            std::lock_guard Lock(work_->editorMutex_);
+            work_->navigation_.push_back(QKeySequence(Event->key()).toString(QKeySequence::PortableText));
+            Event->accept();return;
+        }
+        HwpSdiBackend::keyPressEvent(Event);
+    }
+    void HwpProcessBackend::FocusInput()
+    {
+        if(!editable_ || !work_ || !loadReported_ || !IsCurrentBinding(work_->native_)
+            || work_->cancel_.load() || work_->done_.load())return;
+        std::lock_guard Lock(work_->editorMutex_);work_->focusRequested_=true;
     }
     bool HwpProcessBackend::EditorCommand(const QJsonObject& Request)
     {
@@ -398,11 +425,18 @@ namespace hc::document
                                         {
                                             std::lock_guard Lock(State->editorMutex_);
                                             CanPoll = State->reply_.isEmpty();
-                                            if (CanPoll) EditorRequest = std::exchange(State->command_, {});
+                                            if (CanPoll) {
+                                                EditorRequest = std::exchange(State->command_, {});
+                                                if(EditorRequest.isEmpty() && std::exchange(State->focusRequested_,false))EditorRequest={{"type","DocumentFocus"}};
+                                                if(EditorRequest.isEmpty() && !State->navigation_.empty()) {
+                                                    EditorRequest={{"type","DocumentNavigate"},{"key",State->navigation_.front()}};
+                                                    State->navigation_.pop_front();
+                                                }
+                                            }
                                         }
                                         if (CanPoll) {
                                             if (EditorRequest.isEmpty()) EditorRequest["type"] = State->editable_ ? "DocumentEditorPoll" : "DocumentPrintPoll";
-                                            const auto Action = EditorRequest["type"];
+                                            const auto Action = EditorRequest["type"].toString();
                                             EditorRequest["version"] = 1; EditorRequest["identity"] = Identity;
                                             if (!Owner->Exchange(QJsonDocument(EditorRequest).toJson(QJsonDocument::Compact), Reply, Budget(), Error)) {
                                                 State->error_ = Error.code_ + (Error.childExitCode_ ? "-exit-" + QString::number(*Error.childExitCode_) : QString{}); break;

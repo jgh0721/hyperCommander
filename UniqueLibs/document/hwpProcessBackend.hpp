@@ -26,6 +26,7 @@ namespace hc::document
         HwpNativeBinding NativeBinding() const;
         bool IsCurrentBinding(HwpNativeBinding Binding) const;
         void InvalidateBinding(HwpNativeBinding Binding);
+        void FocusInput();
         // GUI-thread shutdown gate. Keep processing events until IsDrained().
         // Normal application Quit events are deferred automatically; exit() is not.
         static void InitializeLifecycle();
@@ -35,6 +36,7 @@ namespace hc::document
         static bool IsDrained();
     protected:
         bool event(QEvent* Event) override;
+        void keyPressEvent(QKeyEvent* Event) override;
     private:
         struct Work;
         struct BindingState;

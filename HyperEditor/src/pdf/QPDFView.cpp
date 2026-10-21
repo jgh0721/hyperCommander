@@ -84,6 +84,7 @@ QPDFView::QPDFView(QWidget* parent)
     m_annotationColor = ThemeManager::instance().color(QStringLiteral("pdf.annotation"));
     m_annotationFont = QFont(QStringLiteral("Arial"));
     setupUI();
+    setFocusPolicy(Qt::StrongFocus);
     connect(m_formManager, &PDFFormManager::unsupportedFieldClicked, this,
             [this](const PDFFormManager::FieldInfo&) {
                 QMessageBox::information(this, tr("미지원 필드"),
@@ -108,6 +109,10 @@ void QPDFView::setupUI()
     m_bookmarkTree= new QTreeWidget(this);
     m_scrollArea  = new QScrollArea(this);
     m_scrollArea->setObjectName(QStringLiteral("canvasScrollArea"));
+    m_scrollArea->setFocusProxy(this);
+    m_scrollArea->installEventFilter(this);
+    m_scrollArea->verticalScrollBar()->installEventFilter(this);
+    m_scrollArea->horizontalScrollBar()->installEventFilter(this);
     m_pageLabel   = new QLabel(this);
 
     // 사이드바 탭 (썸네일 + 목차)
@@ -1978,6 +1983,11 @@ bool QPDFView::copySelection()
 
 bool QPDFView::eventFilter(QObject* watched, QEvent* event)
 {
+    if (m_scrollArea && (watched == m_scrollArea || watched == m_pageLabel
+        || watched == m_scrollArea->viewport() || watched == m_scrollArea->verticalScrollBar()
+        || watched == m_scrollArea->horizontalScrollBar())
+        && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)
+        && handleNavigationKey(static_cast<QKeyEvent*>(event))) return true;
     if ((watched == m_pageLabel || watched == (m_scrollArea ? m_scrollArea->viewport() : nullptr)) && m_scrollArea) {
         if (event->type() == QEvent::Leave) {
             updateHoverCursor(QPoint(-1, -1), Qt::NoButton);
@@ -2348,26 +2358,45 @@ void QPDFView::keyPressEvent(QKeyEvent* event)
         }
     }
 
-    if (m_document) {
+    if (m_document && m_formManager->handle()) {
         FPDF_PAGE page = FPDF_LoadPage(m_document, m_currentPage);
         if (page) {
-            if (!event->text().isEmpty())
-                m_formManager->handleChar(page, event->text().at(0));
-            else
-                m_formManager->handleKeyDown(page, event->key(), event->modifiers());
+            const bool handled = !event->text().isEmpty()
+                ? m_formManager->handleChar(page, event->text().at(0))
+                : m_formManager->handleKeyDown(page, event->key(), event->modifiers());
             FPDF_ClosePage(page);
-            renderCurrentPage();
-            return;
+            if (handled) { renderCurrentPage(); event->accept(); return; }
         }
     }
 
+    if (handleNavigationKey(event)) return;
+    QBaseView::keyPressEvent(event);
+}
+
+bool QPDFView::handleNavigationKey(QKeyEvent* event)
+{
+    const auto modifiers=event->modifiers() & ~Qt::KeypadModifier;
+    if (!m_document || (modifiers != Qt::NoModifier
+        && !(modifiers == Qt::ControlModifier
+            && (event->key() == Qt::Key_Home || event->key() == Qt::Key_End)))) return false;
+    switch (event->key()) {
+        case Qt::Key_PageDown: case Qt::Key_PageUp: case Qt::Key_Home: case Qt::Key_End:
+        case Qt::Key_Up: case Qt::Key_Down: case Qt::Key_Left: case Qt::Key_Right: break;
+        default: return false;
+    }
+    event->accept();
+    if (event->type() == QEvent::ShortcutOverride) return true;
     switch (event->key()) {
         case Qt::Key_PageDown: nextPage(); break;
         case Qt::Key_PageUp:   previousPage(); break;
         case Qt::Key_Home:     goToPage(0); break;
         case Qt::Key_End:      goToPage(m_pageCount - 1); break;
-        default: QBaseView::keyPressEvent(event);
+        case Qt::Key_Up: m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepSub); break;
+        case Qt::Key_Down: m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
+        case Qt::Key_Left: m_scrollArea->horizontalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepSub); break;
+        case Qt::Key_Right: m_scrollArea->horizontalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
     }
+    return true;
 }
 
 QList<QRectF> QPDFView::visiblePageRects(qreal& scaleRatio) const

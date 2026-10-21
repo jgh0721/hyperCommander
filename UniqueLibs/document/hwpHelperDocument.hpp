@@ -20,7 +20,10 @@ namespace hc::document
         QJsonObject Handle(const QJsonObject& Request);
         void Refresh();
         bool RendererCreated() const { return bool(view_); }
+    protected:
+        bool eventFilter(QObject* Object,QEvent* Event) override;
     private:
+        bool navigate(const QString& Key);
         QJsonObject status() const;
         void fail(const QString& Code);
         std::shared_ptr<const HwpBundle> bundle_;
