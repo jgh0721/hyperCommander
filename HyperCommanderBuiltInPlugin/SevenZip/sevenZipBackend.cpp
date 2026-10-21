@@ -1,5 +1,6 @@
 ﻿#include "sevenZipBackend.hpp"
 #include "Common/MyInitGuid.h"
+#include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include "7zip/Archive/IArchive.h"
 #include "7zip/IPassword.h"
 #include <QDir>
@@ -24,6 +25,7 @@ using namespace storage;
 namespace {
 Error Failure(std::string Code, ErrorCategory Category = ErrorCategory::Unavailable)
 { return {Category, std::move(Code), {"7zip"}}; }
+bool IsZipx(const QString& Path) { return Path.endsWith(".zipx", Qt::CaseInsensitive); }
 template<class T> struct Com {
     T* value_ = nullptr;
     ~Com() { if (value_) value_->Release(); }
@@ -39,6 +41,9 @@ struct State {
     std::string archive_;
     std::mutex mutex_;
     std::optional<Error> error_;
+    std::optional<Error> volumeError_;
+    QString selectedVolume_;
+    bool selectedSeen_ = false, volumeSet_ = false;
     unsigned attempts_ = 0;
     std::optional<storage::Password> password_;
     HRESULT Check(uint64_t Done = 0) noexcept {
@@ -81,20 +86,21 @@ public:
         if (Id == IID_IUnknown || Id == IID_IInStream || Id == IID_ISequentialInStream) *Value = static_cast<IInStream*>(this);
         if (!*Value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
-    bool Open(const QString& Path, bool Split = false) {
+    bool Open(const QString& Path, bool Split = false, unsigned RequiredPart = 1) {
         auto Name = Path; unsigned Number = 1;
+        const auto Width = QFileInfo(Path).suffix().size();
         do {
             if (state_->Check() != S_OK) return false;
             const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Name).utf16()), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-            if (Handle == INVALID_HANDLE_VALUE) return !parts_.empty() && GetLastError() == ERROR_FILE_NOT_FOUND;
+            if (Handle == INVALID_HANDLE_VALUE) return parts_.size() >= RequiredPart && GetLastError() == ERROR_FILE_NOT_FOUND;
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(Handle, &Info) || (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) { CloseHandle(Handle); return false; }
             const auto Size = (uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
             if (Size > INT64_MAX - size_) { CloseHandle(Handle); return false; }
             parts_.push_back({Handle, size_, Size}); size_ += Size;
             if (!Split) return true;
-            Name = Path.left(Path.size() - 3) + QString::number(++Number).rightJustified(3, '0');
+            Name = Path.left(Path.size() - Width) + QString::number(++Number).rightJustified(Width, '0');
         } while (Number);
         return false;
     }
@@ -116,6 +122,7 @@ public:
         position_ = Base + Offset; if (Position) *Position = position_; return S_OK;
     }
     uint64_t Size() const { return size_; }
+    uint64_t PartOffset(unsigned Number) const { return parts_.at(Number - 1).offset_; }
 private:
     struct Part { HANDLE handle_; uint64_t offset_, size_; };
     std::vector<Part> parts_;
@@ -125,6 +132,7 @@ private:
 class OpenCallback final : public IArchiveOpenCallback, public IArchiveOpenVolumeCallback, public ICryptoGetTextPassword {
 public:
     explicit OpenCallback(std::shared_ptr<State> State) : state_(std::move(State)) {}
+    void SetFormat(const QString& Format, bool Zipx) { zip_ = Format == "zip"; zipx_ = Zipx; }
     HC_COM_REFS;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID Id, void** Value) noexcept override {
         *Value = nullptr;
@@ -138,23 +146,55 @@ public:
     HRESULT STDMETHODCALLTYPE CryptoGetTextPassword(BSTR* Value) noexcept override { return state_->Password(Value); }
     HRESULT STDMETHODCALLTYPE GetProperty(PROPID Id, PROPVARIANT* Value) noexcept override {
         PropVariantInit(Value);
-        if (Id == kpidName) { const auto Name = QFileInfo(QString::fromStdString(state_->archive_)).fileName(); Value->vt = VT_BSTR; Value->bstrVal = SysAllocStringLen(reinterpret_cast<const wchar_t*>(Name.utf16()), UINT(Name.size())); }
+        if (Id == kpidName) {
+            auto Name = QFileInfo(QString::fromStdString(state_->archive_)).fileName();
+            // The ZIP reader understands .zip/.zNN. Keep the real ZIPX paths
+            // outside the SDK and translate only this archive's volume names.
+            if (zipx_) Name.chop(1);
+            Value->vt = VT_BSTR; Value->bstrVal = SysAllocStringLen(reinterpret_cast<const wchar_t*>(Name.utf16()), UINT(Name.size()));
+        }
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetStream(const wchar_t* Name, IInStream** Stream) noexcept override {
         *Stream = nullptr;
         try {
             if (state_->Check() != S_OK) return E_ABORT;
-            const auto Leaf = QString::fromWCharArray(Name);
+            auto Leaf = QString::fromWCharArray(Name);
             if (Leaf.isEmpty() || Leaf == "." || Leaf == ".." || Leaf.contains('/') || Leaf.contains('\\') || Leaf.contains(':'))
                 return state_->Fail(Failure("7zip-volume-path", ErrorCategory::InvalidRequest));
+            const auto Archive = QFileInfo(QString::fromStdString(state_->archive_));
+            bool RequiredVolume = false;
+            if (zipx_) {
+                const auto Stem = Archive.completeBaseName();
+                if (Leaf.left(Stem.size() + 1).compare(Stem + '.', Qt::CaseInsensitive)) return S_FALSE;
+                const auto Extension = Leaf.mid(Stem.size() + 1);
+                if (Extension.compare("zip", Qt::CaseInsensitive) == 0) Leaf = Archive.fileName();
+                else {
+                    static const QRegularExpression Volume("^[zZ]([0-9]{2,})$");
+                    const auto Match = Volume.match(Extension);
+                    if (!Match.hasMatch()) return S_FALSE;
+                    Leaf = Stem + ".zx" + Match.captured(1); RequiredVolume = true;
+                }
+            }
+            if (zip_ && !zipx_) {
+                const auto Volume = ParseArchiveVolumeName(Leaf);
+                RequiredVolume = Volume.kind_ == ArchiveVolumeKind::Zip
+                    && Volume.firstName_.compare(Archive.fileName(), Qt::CaseInsensitive) == 0;
+            }
             Com<Input> File{new Input(state_)};
-            if (!File->Open(QFileInfo(QString::fromStdString(state_->archive_)).dir().filePath(Leaf))) return S_FALSE;
+            const auto Path = Archive.dir().filePath(Leaf);
+            if (!File->Open(Path)) {
+                if (RequiredVolume && !state_->volumeError_) state_->volumeError_ = Failure("7zip-volume-unavailable:" + Leaf.toStdString(),
+                    QFileInfo::exists(Path) ? ErrorCategory::Unavailable : ErrorCategory::NotFound);
+                return S_FALSE;
+            }
+            if (Leaf.compare(state_->selectedVolume_, Qt::CaseInsensitive) == 0) state_->selectedSeen_ = true;
             *Stream = File.value_; File.value_ = nullptr; return S_OK;
         } catch (...) { return E_ABORT; }
     }
 private:
     std::shared_ptr<State> state_;
+    bool zip_ = false, zipx_ = false;
 };
 struct Property : PROPVARIANT {
     Property() { PropVariantInit(this); }
@@ -184,7 +224,7 @@ struct Archive {
         if (Anti.Boolean())
             return Failure("7zip-special-entry", ErrorCategory::Unsupported);
         Header.name_ = Name.toStdString(); Header.size_ = Size.Number(); Header.packedSize_ = Packed.Number(); Header.directory_ = Dir.Boolean();
-        Header.metadataRename_ = format_ == "7z" || format_ == "zip";
+        Header.metadataRename_ = (format_ == "7z" || format_ == "zip") && !state_->volumeSet_ && !IsZipx(QString::fromStdString(state_->archive_));
         Header.encrypted_ = Encrypted.Boolean(); Header.attributes_ = uint32_t(Attr.Number()); Header.crc_ = uint32_t(Crc.Number());
         Property Posix; if (!Read(kpidPosixAttrib, Posix)) return Failure("7zip-entry-properties");
         const auto Mode = Posix.Number() ? Posix.Number() : (Attr.Number() & 0x8000) ? Attr.Number() >> 16 : 0;
@@ -275,7 +315,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE PrepareOperation(Int32) noexcept override { return state_->Check(); }
     HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
-        if (Code) return state_->Fail(Failure("7zip-extract-result:"+std::to_string(Code), Code==NArchive::NExtract::NOperationResult::kWrongPassword ? ErrorCategory::AccessDenied : ErrorCategory::Unavailable));
+        if (Code) return state_->Fail(Failure("7zip-extract-result:"+std::to_string(Code), Code==NArchive::NExtract::NOperationResult::kWrongPassword
+            ? ErrorCategory::AccessDenied : Code==NArchive::NExtract::NOperationResult::kUnsupportedMethod ? ErrorCategory::Unsupported : ErrorCategory::Unavailable));
         try {
             if (output_ && (output_->written_ != headers_[index_].size_ || !file_->flush())) return state_->Fail(Failure("7zip-batch-output-size"));
             return state_->Check();
@@ -300,8 +341,26 @@ Result<Unit> Extract(Archive& Archive, UInt32 Index, const ArchiveHeader& Header
 }
 Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
-    const auto FilePath = QString::fromStdString(Path);
+    const auto SelectedPath = QString::fromStdString(Path);
+    auto FilePath = SelectedPath;
     if (!QFileInfo(FilePath).isAbsolute() || FilePath.contains(QChar::Null)) return Failure("7zip-absolute-path", ErrorCategory::InvalidRequest);
+    auto Volume = ParseArchiveVolumeName(QFileInfo(FilePath).fileName());
+    if (Volume.kind_ != ArchiveVolumeKind::None) {
+        const auto Selected = std::make_shared<State>(); Selected->context_ = Context; Selected->archive_ = Path;
+        Com<Input> Probe{new Input(Selected)};
+        if (!Probe->Open(FilePath)) return Selected->error_.value_or(Failure("7zip-input-open", ErrorCategory::NotFound));
+        const auto Directory = QFileInfo(FilePath).dir();
+        FilePath = Directory.filePath(Volume.firstName_);
+        if (!Volume.alternateName_.isEmpty()) {
+            const auto Alternate = Directory.filePath(Volume.alternateName_);
+            const bool HasMain = QFileInfo::exists(FilePath), HasAlternate = QFileInfo::exists(Alternate);
+            if (HasMain && HasAlternate) return Failure("7zip-ambiguous-volume-set", ErrorCategory::InvalidRequest);
+            if (HasAlternate) { FilePath = Alternate; if (Volume.kind_ == ArchiveVolumeKind::Zip) Volume.kind_ = ArchiveVolumeKind::Rar; }
+        }
+        Path = FilePath.toStdString();
+    }
+    // Every candidate is a sibling; native and Qt path separators may differ.
+    const bool Redirected = QFileInfo(FilePath).fileName().compare(QFileInfo(SelectedPath).fileName(), Qt::CaseInsensitive) != 0;
     const auto Create = reinterpret_cast<HRESULT(WINAPI*)(const GUID*, const GUID*, void**)>(GetProcAddress(Module, "CreateObject"));
     const auto Formats = reinterpret_cast<HRESULT(WINAPI*)(UInt32*)>(GetProcAddress(Module, "GetNumberOfFormats"));
     const auto Get = reinterpret_cast<HRESULT(WINAPI*)(UInt32, PROPID, PROPVARIANT*)>(GetProcAddress(Module, "GetHandlerProperty2"));
@@ -315,16 +374,38 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         if (!QStringList{"7z", "zip", "Rar", "Rar5"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
         auto Value = std::make_unique<Archive>(); Value->format_ = Name.Text().toLower(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
-        if (!Value->input_->Open(FilePath, FilePath.endsWith(".001"))) return Failure("7zip-input-open", ErrorCategory::NotFound);
+        Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None;
+        if (Redirected && Volume.kind_ != ArchiveVolumeKind::Numbered) Value->state_->selectedVolume_ = QFileInfo(SelectedPath).fileName();
+        Value->callback_->SetFormat(Value->format_, Value->format_ == "zip" && IsZipx(FilePath));
+        if (!Value->input_->Open(FilePath, Volume.kind_ == ArchiveVolumeKind::Numbered, Volume.number_))
+            return Value->state_->error_.value_or(Failure("7zip-volume-unavailable:" + QFileInfo(FilePath).fileName().toStdString(), ErrorCategory::NotFound));
         GUID Class{}; memcpy(&Class, Id.bstrVal, sizeof(Class));
         if (Create(&Class, &IID_IInArchive, reinterpret_cast<void**>(&Value->archive_.value_)) != S_OK) continue;
         const auto Code = Value->archive_->Open(Value->input_.value_, Scan ? nullptr : &StartOnly, Value->callback_.value_);
         if (Value->state_->error_) return Value->state_->Result(Code);
         if (Code != S_OK && Value->state_->attempts_) return Failure("7zip-password-or-header-error", ErrorCategory::AccessDenied);
         if (Code == S_FALSE) continue;
-        if (Code != S_OK) return Value->state_->Result(Code);
-        Property Errors; if (Value->archive_->GetArchiveProperty(kpidErrorFlags, &Errors) != S_OK || Errors.Number()) return Failure("7zip-archive-errors:" + std::to_string(Errors.Number()));
+        if (Code != S_OK) return Value->state_->volumeError_.value_or(Value->state_->Result(Code));
+        // The ZIP handler can return S_OK and a central-directory listing even
+        // when a data volume is missing. Do not expose such a partial ZIPX set.
+        if (Value->state_->volumeError_) return *Value->state_->volumeError_;
+        if (!Value->state_->selectedVolume_.isEmpty() && !Value->state_->selectedSeen_)
+            return Failure("7zip-volume-not-in-set:" + Value->state_->selectedVolume_.toStdString(), ErrorCategory::InvalidRequest);
+        Property Errors; if (Value->archive_->GetArchiveProperty(kpidErrorFlags, &Errors) != S_OK || Errors.Number())
+            return Value->state_->volumeError_.value_or(Failure("7zip-archive-errors:" + std::to_string(Errors.Number())));
         if (Value->archive_->GetNumberOfItems(&Value->count_) != S_OK) return Failure("7zip-item-count");
+        Property IsVolume; if (Value->archive_->GetArchiveProperty(kpidIsVolume, &IsVolume) == S_OK && IsVolume.Boolean()) Value->state_->volumeSet_ = true;
+        if (Value->state_->volumeSet_) {
+            Property Detail;
+            if (Value->archive_->GetArchiveProperty(kpidError, &Detail) == S_OK && !Detail.Text().isEmpty())
+                return Failure("7zip-archive-error:" + Detail.Text().toStdString());
+        }
+        if (Volume.kind_ == ArchiveVolumeKind::Numbered && Volume.number_ > 1) {
+            Property Offset, Size;
+            if (Value->archive_->GetArchiveProperty(kpidOffset, &Offset) != S_OK || Value->archive_->GetArchiveProperty(kpidPhySize, &Size) != S_OK
+                || Offset.Number() > UINT64_MAX - Size.Number() || Offset.Number() + Size.Number() <= Value->input_->PartOffset(Volume.number_))
+                return Failure("7zip-volume-not-in-set", ErrorCategory::InvalidRequest);
+        }
         if (Value->count_ > Context.EnumerationLimit()) return Failure("7zip-enumeration-budget", ErrorCategory::BudgetExceeded);
         return Value;
     }

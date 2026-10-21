@@ -39,6 +39,7 @@
 #include <fmwidgets/Button.h>
 #include "stdafx.h"
 #include <QtTest>
+#include <QCryptographicHash>
 #include "cmnHCUtils.hpp"
 #include "rhwpOpenTimingHarness.hpp"
 #include <QtConcurrent/QtConcurrentRun>
@@ -6779,13 +6780,17 @@ private slots:
             Panel->ChangeCurrentPath(unc_, {});
             hc::settings::AppSettings().Put(hc::settings::Section::Plugins, Original); TyStPlugInMgr::GetInstance()->Refresh();
         });
-        hc::settings::AppSettings().SetPlugins("wcx", QJsonArray{QJsonObject{{"path", "user-priority.wcx64"}, {"extensions", QJsonArray{"7z"}}}});
+        hc::settings::AppSettings().SetPlugins("wcx", QJsonArray{QJsonObject{{"path", "user-priority.wcx64"}, {"extensions", QJsonArray{"7z", "zipx", "zx03"}}}});
         TyStPlugInMgr::GetInstance()->Refresh();
         auto Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("7z"); QCOMPARE(Choices.size(), 2);
         QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
+        Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("ZIPX", "sample.ZIPX"); QCOMPARE(Choices.size(), 2);
+        QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
+        Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("ZX03", "sample.ZX03"); QCOMPARE(Choices.size(), 2);
+        QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
         hc::settings::AppSettings().SetPlugins("wcx", {}); TyStPlugInMgr::GetInstance()->Refresh();
-        for (const auto* Name : {"plain.7z", "plain.zip", "test_read_format_rar5_compressed.rar"}) {
-            QTemporaryDir Directory; QVERIFY(QFile::copy(QDir(Root).filePath(Name), Directory.filePath(Name)));
+        for (const auto* Name : {"plain.7z", "plain.zip", "plain.zipx", "test_read_format_rar5_compressed.rar"}) {
+            QTemporaryDir Directory; QVERIFY(QFile::copy(QDir(Root).filePath(QString(Name) == "plain.zipx" ? "plain.zip" : Name), Directory.filePath(Name)));
             Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
             QModelIndex Selected;
             for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) Selected = Model->index(Row, 0);
@@ -6794,8 +6799,65 @@ private slots:
             QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
             QVERIFY(!names(Model).empty());
             const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get()); QVERIFY(Pack);
-            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_); QCOMPARE(Pack->GetWCX()->WritePolicy().HasValue(), !QString(Name).endsWith(".rar"));
+            QCOMPARE(Pack->GetWCX()->PluginPath(), Options.binaryPath_);
+            QCOMPARE(Pack->GetWCX()->WritePolicy().HasValue(), !QString(Name).endsWith(".rar") && !QString(Name).endsWith(".zipx"));
             QVERIFY(!GetModuleHandleW(L"7z.dll"));
+            Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+        }
+        QFile Fixture(QFINDTESTDATA("fixtures/split-volumes.json")); QVERIFY(Fixture.open(QIODevice::ReadOnly));
+        const auto FixtureRoot = QJsonDocument::fromJson(Fixture.readAll()).object(); auto Cases = FixtureRoot["cases"].toArray();
+        QFile Zipx(QFINDTESTDATA("fixtures/zipx.json")); QVERIFY(Zipx.open(QIODevice::ReadOnly));
+        const auto ZipxRoot = QJsonDocument::fromJson(Zipx.readAll()).object(); Cases.append(ZipxRoot["cases"].toArray()[2]);
+        QCOMPARE(Cases.size(), 5); auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        for (const auto& Value : Cases) {
+            const auto Case = Value.toObject(); const auto Volumes = Case["volumes"].toArray(); QTemporaryDir Directory, Output;
+            for (const auto& Part : Volumes) {
+                const auto Volume = Part.toObject(); QFile File(Directory.filePath(Volume["name"].toString())); QVERIFY(File.open(QIODevice::WriteOnly));
+                const auto Bytes = QByteArray::fromBase64(Volume["data"].toString().toLatin1()); QCOMPARE(File.write(Bytes), Bytes.size());
+            }
+            const auto Name = Volumes[Volumes.size() / 2].toObject()["name"].toString();
+            Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Name).suffix(), Name); QVERIFY(!Choices.isEmpty());
+            QCOMPARE(Choices.front().FileFullPath, Options.binaryPath_);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading()); emit Panel->sig_NotifyPanelActivated();
+            const auto Find = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+            auto Selected = Find(); QVERIFY(Selected.isValid()); QSet<QString> Previous;
+            for (const auto& Job : Scheduler.Snapshots()) Previous.insert(QString::fromStdString(Job.id_));
+            bool Seen = false; QTimer Answer; Answer.setInterval(10);
+            connect(&Answer, &QTimer::timeout, main_, [&] {
+                auto* Dialog = static_cast<hc::ui::ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if (!Dialog) return;
+                Seen = true; Answer.stop(); Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText(Output.path());
+                Dialog->findChild<QCheckBox*>("hc.archive.extract.separate")->setChecked(false);
+                Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(false);
+                auto* Path = Dialog->findChild<QLineEdit*>("hc.archive.extract.path"); Path->setFocus(); QTest::keyClick(Path, Qt::Key_Return);
+            });
+            auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid); Grid->BaseView()->deselectAll();
+            bool Focused = false;
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Model->GetName(Index) == Name) { Focused = true; break; }
+            }
+            QVERIFY(Focused); Grid->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+            QTRY_VERIFY(Bridge->Action("hc.archive.extract")->isEnabled());
+            Answer.start(); QVERIFY(Bridge->ExecuteCommand("hc.archive.extract", Selected));
+            Answer.stop(); QVERIFY(Seen); std::string Job;
+            for (const auto& Item : Scheduler.Snapshots()) if (!Previous.contains(QString::fromStdString(Item.id_))) Job = Item.id_;
+            QVERIFY(!Job.empty()); QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(Job).HasValue() && hc::operations::IsTerminal(Scheduler.Snapshot(Job).Value().state_), 30000);
+            const auto Final = Scheduler.Snapshot(Job); QVERIFY2(Final.Value().state_ == hc::operations::JobState::Completed,
+                Final.Value().error_ ? Final.Value().error_->code_.c_str() : "split extraction failed");
+            const auto Expected = ZipxRoot["files"].toObject();
+            for (auto I = Expected.begin(); I != Expected.end(); ++I) {
+                QFile File(Output.filePath(I.key())); QVERIFY2(File.open(QIODevice::ReadOnly), qPrintable(File.fileName()));
+                QCOMPARE(QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256).toHex(), I.value().toObject()["sha256"].toString().toLatin1());
+            }
+            QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Job) && !Model->IsLoading()); Selected = Find(); QVERIFY(Selected.isValid());
+            Model->ChangeDirectory(Selected); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+            QVERIFY(names(Model).contains("payload.bin")); hc::workspace::TabState Tab;
+            Tab.location_ = Model->WorkspaceLocation(); Tab.provider_ = Options.manifestPath_;
+            Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+            RestoreWorkspaceLocation(Model, Tab); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("payload.bin"), 10000);
+            QVERIFY(names(Model).contains("payload.bin")); QCOMPARE(Model->WorkspaceLocation().root_, Tab.location_.root_);
             Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
         }
         QVERIFY(hc::settings::AppSettings().Plugins("wcx").isEmpty());

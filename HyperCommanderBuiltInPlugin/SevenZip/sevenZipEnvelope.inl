@@ -46,6 +46,8 @@ Result<Unit> CheckStub(Input& Source, uint64_t Size) {
 }
 Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationContext Context) {
     const auto Target = QString::fromStdString(Request.archive_);
+    if (IsZipx(Target)) return Failure("7zip-format-read-only", ErrorCategory::Unsupported);
+    if (IsArchiveVolumeName(QFileInfo(Target).fileName())) return Failure("7zip-split-update-unsupported", ErrorCategory::Unsupported);
     if (!QFileInfo::exists(Target) || Target.endsWith(".001", Qt::CaseInsensitive)) return UpdatePlainArchive(Module, std::move(Request), Context);
     auto Opened = Open(Module, Request.archive_, Context); if (!Opened.HasValue()) return Opened.Failure(); auto& Original = *Opened.Value();
     Property Offset, Size, Volume;

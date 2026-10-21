@@ -4,6 +4,7 @@
 #include "solTCPluginMgr.hpp"
 #include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
 #include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include "HyperCommanderBuiltInPlugin/AlzEgg/builtinUnEgg.hpp"
 
 #include "UniqueLibs/cmnHCUtils.hpp"
@@ -813,7 +814,7 @@ void CTCPlugInMgr::Refresh()
     if (SevenZip.approval_.approved_) {
         TyPlugInWCX Plugin;
         Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT | PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE;
-        Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
+        Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("zipx"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
         VecWCX.push_back(std::move(Plugin));
     }
@@ -941,6 +942,8 @@ QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext, const 
     {
         bool Supported = WCX.Exts.contains(Ext, Qt::CaseInsensitive);
         if (!FileName.isEmpty()) for (const auto& Registered : WCX.Exts) if (FileName.endsWith('.' + Registered, Qt::CaseInsensitive)) Supported = true;
+        if (!Supported && WCX.hostEnabled_ && WCX.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip)
+            Supported = hc::plugins::IsArchiveVolumeName(FileName.isEmpty() ? "file." + Ext : FileName);
         if (!Supported) continue;
 
         const auto Rule = hc::plugins::PluginApplicationRule::Parse(WCX.applicationRule_);

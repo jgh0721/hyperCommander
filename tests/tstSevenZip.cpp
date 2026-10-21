@@ -14,6 +14,7 @@
 #include <Windows.h>
 #include <winioctl.h>
 #include <set>
+#include <algorithm>
 
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -25,12 +26,251 @@ OperationContext PasswordContext(const QString& Password) {
         return hc::storage::Password(Password.toStdString());
     }; return Context;
 }
+QJsonObject ZipxFixtures() { return QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/zipx.json"))).object(); }
+QJsonArray SplitFixtures() {
+    auto Cases = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/split-volumes.json")))["cases"].toArray();
+    for (const auto& Value : ZipxFixtures()["cases"].toArray()) {
+        auto Case = Value.toObject(); if (!Case["name"].toString().contains("split")) continue;
+        Case["first"] = Case["name"].toString() + ".zipx"; Cases.append(Case);
+    }
+    return Cases;
+}
+QString SplitName(QString Name, bool Upper, bool Padded) {
+    if (Padded) {
+        const QRegularExpression Pattern("\\.part([0-9]+)\\.rar$"); const auto Match = Pattern.match(Name);
+        if (Match.hasMatch()) Name.replace(Match.capturedStart(1), Match.capturedLength(1), Match.captured(1).rightJustified(3, '0'));
+        const QRegularExpression Numbered("\\.([0-9]{3})$"); const auto Number = Numbered.match(Name);
+        if (Number.hasMatch()) Name.replace(Number.capturedStart(1), Number.capturedLength(1), Number.captured(1).rightJustified(4, '0'));
+    }
+    return Upper ? Name.toUpper() : Name;
+}
+bool WriteSplitFixture(const QJsonObject& Case, const QTemporaryDir& Directory, bool Upper = false, bool Padded = false) {
+    for (const auto& Value : Case["volumes"].toArray()) {
+        const auto Volume = Value.toObject(); const auto Bytes = QByteArray::fromBase64(Volume["data"].toString().toLatin1());
+        if (QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Volume["sha256"].toString().toLatin1()
+            || !Put(Directory.filePath(SplitName(Volume["name"].toString(), Upper, Padded)), Bytes)) return false;
+    }
+    return true;
+}
+QString WriteZipxFixture(const QJsonObject& Case, const QTemporaryDir& Directory, bool Upper = false) {
+    for (const auto& Value : Case["volumes"].toArray()) {
+        const auto Volume = Value.toObject(); const auto Bytes = QByteArray::fromBase64(Volume["data"].toString().toLatin1());
+        if (QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Volume["sha256"].toString().toLatin1()) return {};
+        auto Suffix = QFileInfo(Volume["name"].toString()).suffix(); if (Upper) Suffix = Suffix.toUpper();
+        if (!Put(Directory.filePath("MiX.Ed." + Suffix), Bytes)) return {};
+    }
+    return Directory.filePath(Upper ? "MiX.Ed.ZIPX" : "MiX.Ed.zipx");
+}
 }
 class SevenZipTests : public QObject {
     Q_OBJECT
     QJsonArray cases_;
     QString root_;
 private slots:
+    void splitVolumesRead_data() {
+        QTest::addColumn<QJsonObject>("Case"); QTest::addColumn<QString>("Name"); QTest::addColumn<bool>("Upper"); QTest::addColumn<bool>("Padded");
+        const auto Cases = SplitFixtures(); QCOMPARE(Cases.size(), 6);
+        for (const auto& Value : Cases) {
+            const auto Case = Value.toObject();
+            for (bool Upper : {false, true}) for (bool Padded : {false, true}) {
+                if (Padded && Case["name"].toString() != "rar5" && Case["name"].toString() != "seven") continue;
+                for (const auto& Part : Case["volumes"].toArray()) {
+                    const auto Name = SplitName(Part.toObject()["name"].toString(), Upper, Padded);
+                    QTest::newRow(qPrintable(Case["name"].toString() + '-' + Name)) << Case << Name << Upper << Padded;
+                }
+            }
+        }
+    }
+    void splitVolumesRead() {
+        QFETCH(QJsonObject, Case); QFETCH(QString, Name); QFETCH(bool, Upper); QFETCH(bool, Padded);
+        QTemporaryDir Directory, Individual, Batch; QVERIFY(WriteSplitFixture(Case, Directory, Upper, Padded));
+        const auto Path = Upper ? QDir::toNativeSeparators(Directory.filePath(Name)) : Directory.filePath(Name);
+        const auto Before = QDir(Directory.path()).entryList(QDir::Files);
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); const auto Context = PasswordContext(Case["password"].toString());
+        auto Listed = Backend->Enumerate(Path.toStdString(), true, Context); QVERIFY2(Listed.HasValue(), Listed.HasValue() ? "" : Listed.Failure().code_.c_str());
+        std::vector<ArchiveHeader> Headers;
+        for (;;) { auto Page = Listed.Value()->Next(2, Context); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+            for (const auto& Header : Page.Value().entries_) { QVERIFY(!Header.metadataRename_); Headers.push_back(Header); }
+            if (Page.Value().end_) break;
+        }
+        Listed.Value().reset(); const auto Expected = ZipxFixtures()["files"].toObject(); std::vector<std::uint32_t> Ordinals;
+        for (std::uint32_t I = 0; I < Headers.size(); ++I) {
+            const auto& Header = Headers[I]; if (Header.directory_) continue; Ordinals.push_back(I);
+            const auto Key = QString::fromStdString(Header.name_); QVERIFY2(Expected.contains(Key), qPrintable(Key));
+            const auto To = Individual.filePath(QString::number(I)); auto Done = Backend->Extract(Path.toStdString(), Header, To.toStdString(), Context);
+            QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            QCOMPARE(QCryptographicHash::hash(Read(To), QCryptographicHash::Sha256).toHex(), Expected[Key].toObject()["sha256"].toString().toLatin1());
+        }
+        QCOMPARE(qsizetype(Ordinals.size()), Expected.size());
+        auto All = Backend->ExtractAll(Path.toStdString(), Batch.path().toStdString(), Context); QVERIFY2(All.HasValue(), All.HasValue() ? "" : All.Failure().code_.c_str());
+        auto Stream = Backend->OpenReadSession(Path.toStdString(), Ordinals, Context); QVERIFY(Stream.HasValue());
+        for (const auto I : Ordinals) {
+            const auto ExpectedBytes = Read(Individual.filePath(QString::number(I))); QCOMPARE(Read(Batch.filePath(QString::number(I) + ".bin")), ExpectedBytes);
+            QByteArray Bytes; bool Eof = false;
+            while (!Eof) { auto Chunk = Stream.Value()->Read(I, 513, Context); QVERIFY2(Chunk.HasValue(), Chunk.HasValue() ? "" : Chunk.Failure().code_.c_str());
+                QVERIFY(Chunk.Value().eof_ || !Chunk.Value().bytes_.empty());
+                Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), qsizetype(Chunk.Value().bytes_.size())); Eof = Chunk.Value().eof_;
+            }
+            QCOMPARE(Bytes, ExpectedBytes);
+        }
+        Stream.Value().reset(); auto Change = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"payload.bin"}}, Context);
+        QVERIFY(!Change.HasValue()); QCOMPARE(Change.Failure().category_, ErrorCategory::Unsupported);
+        QCOMPARE(QDir(Directory.path()).entryList(QDir::Files), Before);
+        for (const auto& Part : Case["volumes"].toArray()) {
+            const auto Volume = Part.toObject();
+            QCOMPARE(QCryptographicHash::hash(Read(Directory.filePath(SplitName(Volume["name"].toString(), Upper, Padded))), QCryptographicHash::Sha256).toHex(), Volume["sha256"].toString().toLatin1());
+        }
+    }
+    void splitVolumesMissingAnchor_data() {
+        QTest::addColumn<QJsonObject>("Case");
+        for (const auto& Value : SplitFixtures()) { const auto Case = Value.toObject(); QTest::newRow(qPrintable(Case["name"].toString())) << Case; }
+    }
+    void splitVolumesMissingAnchor() {
+        QFETCH(QJsonObject, Case); QTemporaryDir Directory; QVERIFY(WriteSplitFixture(Case, Directory));
+        const auto Parts = Case["volumes"].toArray(); const auto Name = Parts[Parts.size() / 2].toObject()["name"].toString();
+        const auto First = Case["first"].toString(); QVERIFY(Name != First); QVERIFY(QFile::remove(Directory.filePath(First)));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Listed = Backend->Enumerate(Directory.filePath(Name).toStdString(), false, PasswordContext(Case["password"].toString()));
+        QVERIFY(!Listed.HasValue()); QCOMPARE(Listed.Failure().category_, ErrorCategory::NotFound);
+        QVERIFY2(QString::fromStdString(Listed.Failure().code_).contains(First), Listed.Failure().code_.c_str());
+    }
+    void splitVolumeUnrelatedAndAmbiguous() {
+        QTemporaryDir Directory; auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        const auto PlainZip = QByteArray::fromBase64(ZipxFixtures()["cases"].toArray()[0].toObject()["volumes"].toArray()[0].toObject()["data"].toString().toLatin1());
+        QVERIFY(Put(Directory.filePath("book.zip"), PlainZip)); QVERIFY(Put(Directory.filePath("book.z03"), "unrelated file"));
+        auto Listed = Backend->Enumerate(Directory.filePath("book.z03").toStdString(), false, {});
+        QVERIFY(!Listed.HasValue()); QCOMPARE(Listed.Failure().code_, "7zip-volume-not-in-set:book.z03");
+        QVERIFY(Put(Directory.filePath("book.rar"), "another candidate"));
+        Listed = Backend->Enumerate(Directory.filePath("book.z03").toStdString(), false, {});
+        QVERIFY(!Listed.HasValue()); QCOMPARE(Listed.Failure().code_, "7zip-ambiguous-volume-set");
+        QVERIFY(Put(Directory.filePath("plain.001"), PlainZip)); QVERIFY(Put(Directory.filePath("plain.002"), "unrelated file"));
+        Listed = Backend->Enumerate(Directory.filePath("plain.002").toStdString(), false, {}); QVERIFY(!Listed.HasValue());
+    }
+    void splitVolumesMissingData_data() { splitVolumesMissingAnchor_data(); }
+    void splitVolumesMissingData() {
+        QFETCH(QJsonObject, Case); QTemporaryDir Directory; QVERIFY(WriteSplitFixture(Case, Directory));
+        const auto Parts = Case["volumes"].toArray(); const auto First = Case["first"].toString();
+        const auto Missing = Parts[Parts.size() / 2].toObject()["name"].toString(); QVERIFY(Missing != First);
+        QVERIFY(QFile::remove(Directory.filePath(Missing))); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        const auto Context = PasswordContext(Case["password"].toString()); auto Listed = Backend->Enumerate(Directory.filePath(First).toStdString(), true, Context);
+        if (!Listed.HasValue()) return;
+        for (;;) { auto Page = Listed.Value()->Next(16, Context); if (!Page.HasValue()) return; QVERIFY(!Page.Value().end_); }
+    }
+    void numberedVolumeWidthBoundary() {
+        const auto Case = SplitFixtures()[1].toObject(); QByteArray Body;
+        for (const auto& Value : Case["volumes"].toArray()) Body += QByteArray::fromBase64(Value.toObject()["data"].toString().toLatin1());
+        QVERIFY(Body.size() > 1000); QTemporaryDir Directory;
+        for (qsizetype I = 0; I < Body.size(); ++I) QVERIFY(Put(Directory.filePath("wide.7z." + QString::number(I + 1).rightJustified(3, '0')), Body.mid(I, 1)));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); const auto Path = Directory.filePath("wide.7z.1000");
+        auto Listed = Backend->Enumerate(Path.toStdString(), true, {}); QVERIFY2(Listed.HasValue(), Listed.HasValue() ? "" : Listed.Failure().code_.c_str());
+        auto Page = Listed.Value()->Next(16, {}); QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+        QVERIFY(Page.Value().end_); QCOMPARE(Page.Value().entries_.size(), 4u); Listed.Value().reset();
+        QVERIFY(Put(Directory.filePath("wide.7z.0001"), Body));
+        Listed = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(!Listed.HasValue()); QCOMPARE(Listed.Failure().code_, "7zip-ambiguous-volume-set");
+    }
+    void zipxRead_data() {
+        QTest::addColumn<QJsonObject>("Case"); QTest::addColumn<bool>("Upper");
+        const auto Cases = ZipxFixtures()["cases"].toArray(); QCOMPARE(Cases.size(), 4);
+        for (const auto& Value : Cases) for (bool Upper : {false, true}) {
+            const auto Case = Value.toObject(); const auto Tag = Case["name"].toString() + (Upper ? "-upper" : "");
+            QTest::newRow(qPrintable(Tag)) << Case << Upper;
+        }
+    }
+    void zipxRead() {
+        QFETCH(QJsonObject, Case); QFETCH(bool, Upper); QTemporaryDir Directory;
+        const auto Path = WriteZipxFixture(Case, Directory, Upper); QVERIFY(!Path.isEmpty());
+        QMap<QString, QByteArray> Before;
+        for (const auto& Name : QDir(Directory.path()).entryList(QDir::Files)) Before[Name] = Read(Directory.filePath(Name));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Context = PasswordContext(Case["password"].toString());
+        auto Listing = Backend->Enumerate(Path.toStdString(), false, Context); QVERIFY2(Listing.HasValue(), Listing.HasValue() ? "" : Listing.Failure().code_.c_str());
+        std::vector<ArchiveHeader> Headers;
+        for (;;) { auto Page = Listing.Value()->Next(2, Context); QVERIFY(Page.HasValue());
+            for (const auto& Header : Page.Value().entries_) { QVERIFY(!Header.metadataRename_); Headers.push_back(Header); }
+            if (Page.Value().end_) break;
+        }
+        Listing.Value().reset(); const auto Expected = ZipxFixtures()["files"].toObject();
+        std::vector<std::uint32_t> Ordinals; QTemporaryDir Individual, Batch;
+        for (std::uint32_t I = 0; I < Headers.size(); ++I) {
+            const auto& Header = Headers[I]; if (Header.directory_) continue; Ordinals.push_back(I);
+            const auto Name = QString::fromStdString(Header.name_); QVERIFY(Expected.contains(Name));
+            QCOMPARE(Header.size_, std::uint64_t(Expected[Name].toObject()["size"].toInteger()));
+            const auto To = Individual.filePath(QString::number(I)); auto Done = Backend->Extract(Path.toStdString(), Header, To.toStdString(), Context);
+            QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            QCOMPARE(QCryptographicHash::hash(Read(To), QCryptographicHash::Sha256).toHex(), Expected[Name].toObject()["sha256"].toString().toLatin1());
+        }
+        QCOMPARE(qsizetype(Ordinals.size()), Expected.size());
+        auto All = Backend->ExtractAll(Path.toStdString(), Batch.path().toStdString(), Context);
+        QVERIFY2(All.HasValue(), All.HasValue() ? "" : All.Failure().code_.c_str());
+        for (const auto I : Ordinals) QCOMPARE(Read(Batch.filePath(QString::number(I) + ".bin")), Read(Individual.filePath(QString::number(I))));
+        auto Stream = Backend->OpenReadSession(Path.toStdString(), Ordinals, Context); QVERIFY(Stream.HasValue());
+        for (const auto I : Ordinals) {
+            QByteArray Bytes; bool Eof = false;
+            while (!Eof) { auto Chunk = Stream.Value()->Read(I, 257, Context); QVERIFY2(Chunk.HasValue(), Chunk.HasValue() ? "" : Chunk.Failure().code_.c_str());
+                QVERIFY(Chunk.Value().eof_ || !Chunk.Value().bytes_.empty());
+                Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), qsizetype(Chunk.Value().bytes_.size())); Eof = Chunk.Value().eof_;
+            }
+            QCOMPARE(Bytes, Read(Individual.filePath(QString::number(I))));
+        }
+        Stream.Value().reset(); auto Tested = Backend->Enumerate(Path.toStdString(), true, Context); QVERIFY(Tested.HasValue());
+        for (;;) { auto Page = Tested.Value()->Next(2, Context); QVERIFY(Page.HasValue()); if (Page.Value().end_) break; }
+        Tested.Value().reset();
+        QVERIFY(Put(Directory.filePath("added"), "new data"));
+        auto Changed = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {"added"}}, Context);
+        QVERIFY(!Changed.HasValue()); QCOMPARE(Changed.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Changed.Failure().code_, "7zip-format-read-only");
+        Changed = Backend->Update({Path.toStdString(), Directory.path().toStdString(), {}, {"payload.bin"}}, Context);
+        QVERIFY(!Changed.HasValue()); QCOMPARE(Changed.Failure().category_, ErrorCategory::Unsupported);
+        for (auto I = Before.cbegin(); I != Before.cend(); ++I) QCOMPARE(Read(Directory.filePath(I.key())), I.value());
+        std::stop_source Stop; Stop.request_stop(); OperationContext Cancelled; Cancelled.stopToken_ = Stop.get_token();
+        auto Stopped = Backend->Enumerate(Path.toStdString(), false, Cancelled); QVERIFY(!Stopped.HasValue()); QCOMPARE(Stopped.Failure().category_, ErrorCategory::Cancelled);
+        if (!Case["password"].toString().isEmpty()) {
+            const auto Header = *std::find_if(Headers.begin(), Headers.end(), [](const auto& H) { return H.name_ == "payload.bin"; });
+            auto Wrong = Backend->Extract(Path.toStdString(), Header, Individual.filePath("wrong").toStdString(), PasswordContext("wrong"));
+            QVERIFY(!Wrong.HasValue()); QCOMPARE(Wrong.Failure().category_, ErrorCategory::AccessDenied);
+        }
+    }
+    void zipxMissingVolumes_data() {
+        QTest::addColumn<QString>("Suffix"); QTest::newRow("first") << QString("zx01"); QTest::newRow("middle") << QString("zx03");
+    }
+    void zipxMissingVolumes() {
+        QFETCH(QString, Suffix); QTemporaryDir Directory;
+        const auto Path = WriteZipxFixture(ZipxFixtures()["cases"].toArray()[2].toObject(), Directory); QVERIFY(!Path.isEmpty());
+        const auto Missing = Directory.filePath("MiX.Ed." + Suffix); const auto Bytes = Read(Missing);
+        // A ZIP with the same stem must never supply a missing ZIPX volume.
+        QVERIFY(Put(Directory.filePath("MiX.Ed.z" + Suffix.mid(2)), Bytes));
+        QVERIFY(QFile::remove(Missing)); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Listing = Backend->Enumerate(Path.toStdString(), true, {});
+        QVERIFY(!Listing.HasValue()); QCOMPARE(Listing.Failure().category_, ErrorCategory::NotFound);
+        QVERIFY(QString::fromStdString(Listing.Failure().code_).contains(Suffix));
+    }
+    void zipxUnsupportedAndCorrupt() {
+        QTemporaryDir Directory; const auto Path = WriteZipxFixture(ZipxFixtures()["cases"].toArray()[0].toObject(), Directory); QVERIFY(!Path.isEmpty());
+        const auto Original = Read(Path); auto Bytes = Original; int DataStart = -1;
+        // Preserve a real Bandizip layout while substituting an absent JPEG decoder.
+        for (const auto& Signature : {QByteArray("PK\x03\x04", 4), QByteArray("PK\x01\x02", 4)}) {
+            const bool Central = Signature[2] == '\x01'; const int HeaderSize = Central ? 46 : 30;
+            for (qsizetype At = Bytes.indexOf(Signature); At >= 0; At = Bytes.indexOf(Signature, At + HeaderSize)) {
+                const auto NameSize = qFromLittleEndian<quint16>(Bytes.constData() + At + (Central ? 28 : 26));
+                if (Bytes.mid(At + HeaderSize, NameSize) != "payload.bin") continue;
+                qToLittleEndian<quint16>(96, Bytes.data() + At + (Central ? 10 : 8));
+                if (!Central) DataStart = int(At) + HeaderSize + NameSize + qFromLittleEndian<quint16>(Bytes.constData() + At + 28);
+            }
+        }
+        QVERIFY(DataStart >= 0); QVERIFY(Put(Path, Bytes)); auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Listing = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listing.HasValue()); auto Page = Listing.Value()->Next(16, {}); QVERIFY(Page.HasValue());
+        std::uint32_t Ordinal = 0; bool Found = false;
+        for (; Ordinal < Page.Value().entries_.size(); ++Ordinal) if (Page.Value().entries_[Ordinal].name_ == "payload.bin") { Found = true; break; }
+        QVERIFY(Found); const auto Header = Page.Value().entries_[Ordinal]; Listing.Value().reset(); QTemporaryDir Output, Batch;
+        auto One = Backend->Extract(Path.toStdString(), Header, Output.filePath("one").toStdString(), {});
+        QVERIFY(!One.HasValue()); QCOMPARE(One.Failure().category_, ErrorCategory::Unsupported);
+        auto All = Backend->ExtractAll(Path.toStdString(), Batch.path().toStdString(), {}); QVERIFY(!All.HasValue()); QCOMPARE(All.Failure().category_, ErrorCategory::Unsupported);
+        auto Stream = Backend->OpenReadSession(Path.toStdString(), {Ordinal}, {}); QVERIFY(Stream.HasValue()); auto Chunk = Stream.Value()->Read(Ordinal, 4096, {});
+        QVERIFY(!Chunk.HasValue()); QCOMPARE(Chunk.Failure().category_, ErrorCategory::Unsupported); Stream.Value().reset();
+        Bytes = Original; Bytes[DataStart + 32] = char(uchar(Bytes[DataStart + 32]) ^ 0x80); QVERIFY(Put(Path, Bytes));
+        auto Test = Backend->Enumerate(Path.toStdString(), true, {}); QVERIFY(Test.HasValue()); auto Bad = Test.Value()->Next(16, {}); QVERIFY(!Bad.HasValue()); Test.Value().reset();
+        QVERIFY(Put(Path, "This is not a ZIPX")); auto Fake = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(!Fake.HasValue());
+        const auto New = Directory.filePath("new.zipx"); QVERIFY(Put(Directory.filePath("added"), "new data"));
+        auto Create = Backend->Update({New.toStdString(), Directory.path().toStdString(), {"added"}}, {});
+        QVERIFY(!Create.HasValue()); QCOMPARE(Create.Failure().category_, ErrorCategory::Unsupported); QVERIFY(!QFileInfo::exists(New));
+    }
     void advancedCreation_data()
     {
         QTest::addColumn<QString>("Format"); QTest::addColumn<int>("Method"); QTest::addColumn<bool>("V2");

@@ -32,7 +32,8 @@ class StreamingRead final : public IArchiveReadSession {
         }
         HRESULT STDMETHODCALLTYPE PrepareOperation(Int32) noexcept override { return archive_.state_->Check(); }
         HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
-            if (Code) return archive_.state_->Fail(Failure("7zip-extract-result:"+std::to_string(Code),Code==NArchive::NExtract::NOperationResult::kWrongPassword?ErrorCategory::AccessDenied:ErrorCategory::Unavailable));
+            if (Code) return archive_.state_->Fail(Failure("7zip-extract-result:"+std::to_string(Code),Code==NArchive::NExtract::NOperationResult::kWrongPassword
+                ?ErrorCategory::AccessDenied:Code==NArchive::NExtract::NOperationResult::kUnsupportedMethod?ErrorCategory::Unsupported:ErrorCategory::Unavailable));
             if (!output_) return archive_.state_->Check();
             if (output_->written_!=size_) return archive_.state_->Fail(Failure("7zip-stream-output-size"));
             try { auto Done=owner_.push(ordinal_,{},true); return Done.HasValue()?archive_.state_->Check():archive_.state_->Fail(Done.Failure()); }

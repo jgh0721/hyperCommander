@@ -5,6 +5,7 @@
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "archive/creationDialog.hpp"
 #include "archive/creationJob.hpp"
+#include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
 #include "folderSize.hpp"
@@ -1108,7 +1109,7 @@ void CommandUiBridge::extractArchive() {
     } else {
         // Snapshot configured priority and review approvals before entering the
         // worker. A settings edit cannot redirect an already submitted job.
-        struct Choice { QString path_; QStringList extensions_; std::shared_ptr<hc::plugins::IArchiveBackend> backend_; QJsonValue applicationRule_; };
+        struct Choice { QString path_; QStringList extensions_; std::shared_ptr<hc::plugins::IArchiveBackend> backend_; QJsonValue applicationRule_; bool sevenZip_; };
         std::vector<Choice> Choices;
         for (const auto& Spec : TyStPlugInMgr::GetInstance()->RetrieveWCX()) {
             auto Plugin = Spec.FileFullPath; Plugin.replace("%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
@@ -1120,7 +1121,7 @@ void CommandUiBridge::extractArchive() {
                 Options.binaryPath_ = Plugin; Options.manifestPath_ = Spec.hostManifest_; Options.approval_ = Spec.hostApproval_; Options.passwordPrompt_ = hc::plugins::AskArchivePassword;
                 Backend = hc::plugins::MakeApprovedWcxBackend(std::move(Options));
             } else Backend = hc::plugins::MakeInProcessWcxBackend(Plugin.toStdString());
-            Choices.push_back({Plugin, Spec.Exts, std::move(Backend), Spec.applicationRule_});
+            Choices.push_back({Plugin, Spec.Exts, std::move(Backend), Spec.applicationRule_, Spec.hostEnabled_ && Spec.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip});
         }
         hc::operations::ExtractRequest Request; Request.archives_ = std::move(Sources); Request.selection_ = Context.selectionManifest_; Request.sourceRoot_ = Context.location_;
         Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.elevation_ = fileJobs_->ElevationService();
@@ -1130,6 +1131,7 @@ void CommandUiBridge::extractArchive() {
                 const auto Name = QString::fromStdString(Entry.name_);
                 bool Supported = Choice.extensions_.contains(Extension, Qt::CaseInsensitive);
                 for (const auto& Ext : Choice.extensions_) if (Name.endsWith('.' + Ext, Qt::CaseInsensitive)) Supported = true;
+                if (!Supported && Choice.sevenZip_) Supported = hc::plugins::IsArchiveVolumeName(Name);
                 if (!Supported) continue;
                 const auto Rule = hc::plugins::PluginApplicationRule::Parse(Choice.applicationRule_);
                 if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
