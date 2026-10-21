@@ -34,6 +34,9 @@ public:
     // CommonStyle paints some standard controls itself. Preserve its Qtitan
     // extensions while routing ordinary Qt controls through WatercolorStyle.
     void drawPrimitive(PrimitiveElement Element, const QStyleOption* Option, QPainter* Painter, const QWidget* Widget = nullptr) const override {
+        // Selection already identifies the current item; omit the dotted focus
+        // frame while preserving keyboard focus and navigation.
+        if (Element == PE_FrameFocusRect) return;
         if (Element >= PE_CustomBase) Qtitan::CommonStyle::drawPrimitive(Element, Option, Painter, Widget);
         else QProxyStyle::drawPrimitive(Element, Option, Painter, Widget);
     }
