@@ -110,6 +110,10 @@ private:
     QtColumnProfileEditor* columnEditor_ = nullptr;
     QCheckBox* focusPreviousDirectory_ = nullptr;
     QButtonGroup* iconModes_ = nullptr;
+    QCheckBox* specialFolderIcons_ = nullptr;
+    QCheckBox* virtualFolderIcons_ = nullptr;
+    QCheckBox* explorerDefaultIcons_ = nullptr;
+    QCheckBox* iconOverlays_ = nullptr;
     QButtonGroup* directoryStyles_ = nullptr;
     QPluginManagementPage* pluginManagement_ = nullptr;
 };

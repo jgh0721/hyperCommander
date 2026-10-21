@@ -58,8 +58,14 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     // The legacy display page used 22-pixel combo boxes at absolute positions.
     // Let font metrics drive every row and scroll the page on smaller screens.
     auto* DisplayLayout = new QVBoxLayout(ui.pgDisplay);
-    auto* DisplayScroll = new QScrollArea(ui.pgDisplay); DisplayScroll->setWidgetResizable(true);
-    DisplayScroll->setFrameShape(QFrame::NoFrame); DisplayLayout->addWidget(DisplayScroll);
+    auto* PanelTabs = new QTabWidget(ui.pgDisplay); PanelTabs->setObjectName("hc.settings.filePanelTabs");
+    DisplayLayout->addWidget(PanelTabs);
+    auto* DisplayScroll = new QScrollArea(PanelTabs); DisplayScroll->setWidgetResizable(true);
+    DisplayScroll->setObjectName("hc.settings.filePanelGeneral");
+    DisplayScroll->setFrameShape(QFrame::NoFrame); PanelTabs->addTab(DisplayScroll, tr("공통"));
+    auto* IconScroll = new QScrollArea(PanelTabs); IconScroll->setWidgetResizable(true);
+    IconScroll->setFrameShape(QFrame::NoFrame); PanelTabs->addTab(IconScroll, tr("아이콘"));
+    auto* IconBody = new QWidget; auto* IconRows = new QVBoxLayout(IconBody); IconScroll->setWidget(IconBody);
     auto* DisplayBody = new QWidget; auto* DisplayRows = new QVBoxLayout(DisplayBody);
     DisplayScroll->setWidget(DisplayBody);
     auto* Icons = new QVBoxLayout(ui.grpIconDisplay);
@@ -71,7 +77,25 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     directoryStyles_ = new QButtonGroup(this);
     int DirectoryIndex = 0;
     for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) directoryStyles_->addButton(Choice, DirectoryIndex++);
-    Icons->addWidget(ui.chkIsDimmedIconWhenHidden); DisplayRows->addWidget(ui.grpIconDisplay);
+    Icons->addWidget(ui.chkIsDimmedIconWhenHidden); IconRows->addWidget(ui.grpIconDisplay);
+    auto* ShellOptions = new QGroupBox(tr("Windows 탐색기 아이콘"), IconBody);
+    auto* ShellRows = new QVBoxLayout(ShellOptions);
+    specialFolderIcons_ = new QCheckBox(tr("특별한 폴더용 아이콘 보기: 파일 시스템 (예: 휴지통)(&W)"), ShellOptions);
+    specialFolderIcons_->setObjectName("hc.settings.specialFolderIcons");
+    virtualFolderIcons_ = new QCheckBox(tr("특별한 폴더용 아이콘 보기: 가상 폴더 (예: 네트워크)(&V)"), ShellOptions);
+    virtualFolderIcons_->setObjectName("hc.settings.virtualFolderIcons");
+    explorerDefaultIcons_ = new QCheckBox(tr("탐색기의 기본 폴더/파일 아이콘 보기(&F)"), ShellOptions);
+    explorerDefaultIcons_->setObjectName("hc.settings.explorerDefaultIcons");
+    iconOverlays_ = new QCheckBox(tr("아이콘 오버레이 보기 (예: 바로 가기의 화살표)(&C)"), ShellOptions);
+    iconOverlays_->setObjectName("hc.settings.iconOverlays");
+    for (auto* Check : {specialFolderIcons_, virtualFolderIcons_, explorerDefaultIcons_, iconOverlays_}) ShellRows->addWidget(Check);
+    specialFolderIcons_->setToolTip(tr("Windows에 등록된 폴더별 아이콘과 desktop.ini 사용자 지정 아이콘을 표시합니다."));
+    explorerDefaultIcons_->setToolTip(tr("일반 폴더와 파일에 Windows 기본 아이콘을 사용합니다. 끄면 현재 UI 스타일의 기본 아이콘을 사용합니다."));
+    IconRows->addWidget(ShellOptions); IconRows->addStretch();
+    connect(iconModes_, &QButtonGroup::idToggled, this, [this, ShellOptions](int, bool) {
+        const bool Enabled = iconModes_->checkedId() != 3;
+        ShellOptions->setEnabled(Enabled); ui.chkIsDimmedIconWhenHidden->setEnabled(Enabled);
+    });
     auto* Sizes = new QFormLayout;
     Sizes->addRow(ui.lblHeaderSizeDisplay, ui.cbxHeaderSizeDisplay);
     Sizes->addRow(ui.lblFooterSizeDisplay, ui.cbxFooterSizeDisplay); DisplayRows->addLayout(Sizes);
@@ -187,6 +211,10 @@ void QMainOpts::LoadSettings()
     iconModes_->button(qMax(0, QStringList{"all", "associated", "standard", "none"}.indexOf(General["iconMode"].toString())))->setChecked(true);
     directoryStyles_->button(qMax(0, QStringList{"plain", "brackets", "suffix"}.indexOf(General["directoryStyle"].toString())))->setChecked(true);
     ui.chkIsDimmedIconWhenHidden->setChecked(General["dimHiddenIcons"].toBool(true));
+    specialFolderIcons_->setChecked(General["specialFolderIcons"].toBool(true));
+    virtualFolderIcons_->setChecked(General["virtualFolderIcons"].toBool(true));
+    explorerDefaultIcons_->setChecked(General["explorerDefaultIcons"].toBool(true));
+    iconOverlays_->setChecked(General["iconOverlays"].toBool(true));
     ui.chkSortCaseSensitive->setChecked(General["sortCaseSensitive"].toBool());
     ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(true));
     ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(true));
@@ -347,6 +375,10 @@ bool QMainOpts::SaveSettings()
     General["iconMode"] = QStringList{"all", "associated", "standard", "none"}.value(iconModes_->checkedId(), "standard");
     General["directoryStyle"] = QStringList{"plain", "brackets", "suffix"}.value(directoryStyles_->checkedId(), "plain");
     General["dimHiddenIcons"] = ui.chkIsDimmedIconWhenHidden->isChecked();
+    General["specialFolderIcons"] = specialFolderIcons_->isChecked();
+    General["virtualFolderIcons"] = virtualFolderIcons_->isChecked();
+    General["explorerDefaultIcons"] = explorerDefaultIcons_->isChecked();
+    General["iconOverlays"] = iconOverlays_->isChecked();
     General["sortCaseSensitive"] = ui.chkSortCaseSensitive->isChecked();
     General["sortLocaleAware"] = ui.chkSortLocaleAware->isChecked();
     General["sortNumericAware"] = ui.chkSortNumericAware->isChecked();
@@ -852,7 +884,7 @@ void QMainOpts::initializeDesignPages()
     auto* TabPosition = new QComboBox(Tabs); TabPosition->setObjectName("hc.settings.newTabPosition"); TabPosition->addItems({tr("마지막"), tr("현재 탭 오른쪽"), tr("현재 탭 왼쪽"), tr("처음")}); TabForm->addRow(tr("새 탭 위치"), TabPosition);
     auto* TabNote = new QLabel(tr("보기·열 설정은 탭별로 기억합니다. 전체 기본값과 현재 탭의 예외는 ‘파일 패널’에서 구분합니다."), Tabs); TabNote->setWordWrap(true); TabForm->addRow(TabNote);
     GeneralGrid->setRowStretch(2, 1);
-    auto* DisplayBody = ui.pgDisplay->findChild<QScrollArea*>()->widget();
+    auto* DisplayBody = ui.pgDisplay->findChild<QScrollArea*>("hc.settings.filePanelGeneral")->widget();
     auto* DisplayRows = qobject_cast<QVBoxLayout*>(DisplayBody->layout());
     listCard_ = new fm::ui::Card(DisplayBody); listCard_->setObjectName("hc.settings.listPresentation");
     auto* ListColumns = new QHBoxLayout(listCard_); auto* ListControls = new QWidget(listCard_); ListColumns->addWidget(ListControls, 1);
@@ -862,7 +894,7 @@ void QMainOpts::initializeDesignPages()
     auto* One = new fm::filelist::RecordPreview(PreviewCard); auto* Two = new fm::filelist::RecordPreview(PreviewCard); One->setObjectName("hc.settings.oneLinePreview"); Two->setObjectName("hc.settings.twoLinePreview");
     const QList<fm::filelist::RecordPreview::Row> PreviewFiles{{"Projects", tr("폴더")}, {tr("긴 파일 이름과 확장자를 보존하는 자료.tar.gz"), "7.2 MB", true}, {"MainWindow.cpp", "24.1 KB", false, true}};
     One->SetRows(PreviewFiles); Two->SetRows(PreviewFiles); PreviewRows->addWidget(One); PreviewRows->addWidget(Two); PreviewRows->addStretch();
-    auto* Header = new fm::ui::DialogHeader(ui.pgDisplay); Header->setTitle(tr("파일 패널")); Header->setSubtitle(tr("보기·행 밀도·이름 줄임과 탭별 예외를 설정합니다.")); qobject_cast<QVBoxLayout*>(ui.pgDisplay->layout())->insertWidget(0, Header);
+    auto* Header = new fm::ui::DialogHeader(ui.pgDisplay); Header->setTitle(tr("파일 패널")); Header->setSubtitle(tr("공통 탭에서 목록 표시를, 아이콘 탭에서 폴더·파일 아이콘을 설정합니다.")); qobject_cast<QVBoxLayout*>(ui.pgDisplay->layout())->insertWidget(0, Header);
     auto* StateCard = new fm::ui::Card(PreviewCard); auto* StateRows = new QVBoxLayout(StateCard); PreviewRows->insertWidget(1, StateCard);
     StateRows->addWidget(new QLabel(tr("커서 · 선택"), StateCard));
     inverseCursor_ = new QCheckBox(StateCard); inverseCursor_->setObjectName("hc.settings.inverseCursor");

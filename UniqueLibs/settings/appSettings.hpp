@@ -310,6 +310,8 @@ protected:
         for (const auto* Key : {"sizeInHeader", "sizeInFooter"})
             if (!SizeFormats().contains(General[Key].toString())) { General[Key] = "bytes"; Report(QString("general.") + Key); }
         if (!QStringList{"all", "associated", "standard", "none"}.contains(General["iconMode"].toString())) { General["iconMode"] = "standard"; Report("general.iconMode"); }
+        for (const auto* Key : {"specialFolderIcons", "virtualFolderIcons", "explorerDefaultIcons", "iconOverlays"})
+            if (General.contains(Key) && !General[Key].isBool()) { General[Key] = true; Report(QString("general.") + Key); }
         if (!QStringList{"plain", "brackets", "suffix"}.contains(General["directoryStyle"].toString())) { General["directoryStyle"] = "plain"; Report("general.directoryStyle"); }
         if (General.contains("singleInstance") && !General["singleInstance"].isBool()) { General["singleInstance"] = false; Report("general.singleInstance"); }
         if (General.contains("newTabPosition") && !QStringList{"last", "right", "left", "first"}.contains(General["newTabPosition"].toString())) { General["newTabPosition"] = "last"; Report("general.newTabPosition"); }

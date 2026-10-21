@@ -9,6 +9,7 @@
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/itemSelectionController.hpp"
 #include <QRadioButton>
+#include <ShlObj.h>
 #include <QInputMethodEvent>
 #include <imm.h>
 #include "UniqueLibs/quickFindSettings.hpp"
@@ -2718,6 +2719,120 @@ private slots:
         PostMessageW(Handle, WM_NCLBUTTONUP, HTMAXBUTTON, MAKELPARAM(Native.x, Native.y)); QTRY_VERIFY(main_->isMaximized());
         main_->showNormal();
         qInfo() << "R2: independent tab search, identity reorder/close, history branching, missing-path retry, shell cwd/exit, workspace restoration and maximize/restore passed";
+    }
+
+    void todoBugFolderShellIconsUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Custom = QDir::toNativeSeparators(Directory.filePath("custom"));
+        const auto Restore = qScopeGuard([&] {
+            SetFileAttributesW(Custom.toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL);
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
+            auto* Colors = TyStColorSchemeMgr::GetInstance();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        QVERIFY(QDir(Directory.path()).mkdir("custom")); QVERIFY(QDir(Directory.path()).mkdir("plain"));
+        const auto Ini = Custom + "\\desktop.ini";
+        { QFile File(Ini); QVERIFY(File.open(QIODevice::WriteOnly));
+          QVERIFY(File.write("[.ShellClassInfo]\r\nIconResource=%SystemRoot%\\System32\\shell32.dll,15\r\n") > 0); }
+        QVERIFY(SetFileAttributesW(Ini.toStdWString().c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM));
+        QVERIFY(SetFileAttributesW(Custom.toStdWString().c_str(), FILE_ATTRIBUTE_READONLY));
+        for (int Index = 0; Index < 70; ++Index) {
+            QFile File(Directory.filePath(QString("item%1.tmp").arg(Index, 2, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly));
+        }
+        // A real Shell link exercises the overlay handler without changing any user files.
+        IShellLinkW* Link = nullptr; QVERIFY(SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Link))));
+        const auto FreeLink = qScopeGuard([&] { Link->Release(); });
+        QVERIFY(SUCCEEDED(Link->SetPath(QDir::toNativeSeparators(Directory.filePath("plain")).toStdWString().c_str())));
+        IPersistFile* Persist = nullptr; QVERIFY(SUCCEEDED(Link->QueryInterface(IID_PPV_ARGS(&Persist))));
+        const auto FreePersist = qScopeGuard([&] { Persist->Release(); });
+        QVERIFY(SUCCEEDED(Persist->Save(QDir::toNativeSeparators(Directory.filePath("link.lnk")).toStdWString().c_str(), TRUE)));
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["iconMode"] = "standard"; General["specialFolderIcons"] = true;
+        General["virtualFolderIcons"] = true; General["explorerDefaultIcons"] = true; General["iconOverlays"] = false;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Panel = panels_.front(); Panel->SetSearch({}); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("link.lnk")); Model->ApplyDisplaySettings();
+        const auto Find = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto Image = [&](const QString& Name) { return qvariant_cast<QPixmap>(Model->data(Find(Name), Qt::DecorationRole)).toImage(); };
+        QTRY_VERIFY_WITH_TIMEOUT(!Image("custom").isNull() && Image("custom") != Image("plain"), 10000);
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+        const auto Pages = Categories->findItems(QStringLiteral("파일 패널"), Qt::MatchExactly); QCOMPARE(Pages.size(), 1);
+        Categories->setCurrentItem(Pages.front());
+        auto* Tabs = Dialog.findChild<QTabWidget*>("hc.settings.filePanelTabs"); QVERIFY(Tabs);
+        QCOMPARE(Tabs->count(), 2); QCOMPARE(Tabs->tabText(0), QStringLiteral("공통")); QCOMPARE(Tabs->tabText(1), QStringLiteral("아이콘"));
+        const auto Check = [&](const char* Key) { return Dialog.findChild<QCheckBox*>("hc.settings." + QString::fromLatin1(Key)); };
+        auto* Special = Check("specialFolderIcons"); QVERIFY(Special);
+        Tabs->setCurrentIndex(1); QTRY_VERIFY(Special->isVisible());
+        QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_5")->isVisible());
+        QVERIFY(Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->isVisible());
+        QVERIFY(!Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
+        const auto NoOverlay = Image("link.lnk");
+        Check("iconOverlays")->setChecked(true); QVERIFY(Dialog.SaveSettings());
+        QTRY_VERIFY_WITH_TIMEOUT(Image("link.lnk") != NoOverlay, 10000);
+        QVERIFY(main_->grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("folder-shell-icons.png")));
+        Check("iconOverlays")->setChecked(false); Special->setChecked(false); QVERIFY(Dialog.SaveSettings());
+        QTRY_COMPARE(Image("custom"), Image("plain")); QTRY_COMPARE(Image("link.lnk"), NoOverlay);
+        Check("explorerDefaultIcons")->setChecked(false); Check("virtualFolderIcons")->setChecked(false); QVERIFY(Dialog.SaveSettings());
+        QTRY_COMPARE(Image("plain"), QApplication::style()->standardIcon(QStyle::SP_DirIcon).pixmap(QSize(Model->IconPixels(), Model->IconPixels()), 1.0)
+            .scaled(Model->IconPixels(), Model->IconPixels(), Qt::KeepAspectRatio, Qt::SmoothTransformation).toImage());
+        Check("explorerDefaultIcons")->setChecked(true); Special->setChecked(true); QVERIFY(Dialog.SaveSettings());
+        QTRY_VERIFY_WITH_TIMEOUT(Image("custom") != Image("plain"), 10000);
+        Dialog.findChild<QRadioButton*>("radioButton_4")->setChecked(true);
+        QVERIFY(!Special->isEnabled()); QVERIFY(Special->isChecked()); QVERIFY(Dialog.SaveSettings());
+        QVERIFY(!Model->data(Find("custom"), Qt::DecorationRole).isValid());
+        Dialog.findChild<QRadioButton*>("radioButton_5")->setChecked(true); QVERIFY(Special->isEnabled()); QVERIFY(Dialog.SaveSettings());
+        QTRY_VERIFY_WITH_TIMEOUT(!Image("custom").isNull() && Image("custom") != Image("plain"), 10000);
+        const auto Artifacts = QDir(QCoreApplication::applicationDirPath());
+        QVERIFY(Dialog.grab().save(Artifacts.filePath("file-panel-icons.png")));
+        Tabs->setCurrentIndex(0); QVERIFY(!Special->isVisible());
+        QVERIFY(Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
+        Dialog.resize(900, 650); QTest::qWait(80); QVERIFY(Dialog.grab().save(Artifacts.filePath("file-panel-common.png")));
+        Dialog.reject(); Settings.Reload();
+        { QMainOpts Reopen(main_); Reopen.show(); QTest::qWait(50); Reopen.LoadSettings();
+          QVERIFY(Reopen.findChild<QCheckBox*>("hc.settings.specialFolderIcons")->isChecked());
+          QVERIFY(!Reopen.findChild<QCheckBox*>("hc.settings.virtualFolderIcons")->isChecked());
+          QVERIFY(!Reopen.findChild<QCheckBox*>("hc.settings.iconOverlays")->isChecked());
+          Reopen.findChild<QCheckBox*>("hc.settings.specialFolderIcons")->setChecked(false); Reopen.reject(); }
+        QVERIFY(Settings.Read(hc::settings::Section::General).toObject()["specialFolderIcons"].toBool());
+        // Supply namespace entries through a fixture so the real Shell icon
+        // path is covered without depending on network discovery or its timing.
+        class IconProvider : public GatedProvider {
+        public:
+            QString custom_;
+            hc::storage::Task<std::unique_ptr<hc::storage::IEntryCursor>> Enumerate(hc::storage::Locator, hc::storage::OperationContext) override {
+                using namespace hc::storage;
+                std::vector<EntrySnapshot> Entries;
+                for (const auto* Name : {"virtual", "nested", "shell-local"}) {
+                    const auto Id = inner_.Add(inner_.Root(), Name, {}, true);
+                    auto Entry = inner_.Stat(Id, {}).get().Value(); Entry.attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+                    if (std::string_view(Name) == "virtual") Entry.locator_ = {LocatorKind::Shell, "::{645FF040-5081-101B-9F08-00AA002F954E}"};
+                    else if (std::string_view(Name) == "nested") Entry.locator_ = {LocatorKind::Local, custom_.toStdString(), {{"archive", "inner"}}};
+                    else { Entry.locator_ = {LocatorKind::Shell, "unused-parsing-name"}; Entry.hints_["filesystemPath"] = custom_.toStdString(); }
+                    Entries.push_back(std::move(Entry));
+                }
+                return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(new test::MemoryCursor(std::move(Entries), std::make_shared<test::FaultState>())));
+            }
+        };
+        auto Provider = std::make_shared<IconProvider>(); Provider->custom_ = Custom;
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\"); Model->Refresh();
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("virtual"));
+        const auto VirtualBase = Image("virtual"); QVERIFY(!VirtualBase.isNull());
+        QTRY_VERIFY_WITH_TIMEOUT(Image("shell-local") != VirtualBase, 10000);
+        QCOMPARE(Image("nested"), VirtualBase);
+        General = Settings.Read(hc::settings::Section::General).toObject(); General["virtualFolderIcons"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyDisplaySettings();
+        QTRY_VERIFY_WITH_TIMEOUT(Image("virtual") != VirtualBase, 10000);
+        General["virtualFolderIcons"] = false; QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyDisplaySettings();
+        QTRY_COMPARE(Image("virtual"), VirtualBase);
     }
 
     void displayAndNavigationSettingsUi()
