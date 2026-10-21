@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
 #include "nativeStorageRevision.hpp"
+#include "mappedDriveRecovery.hpp"
 #include <lm.h>
 #include <winnetwk.h>
 #include <shlobj.h>
@@ -107,8 +108,8 @@ namespace hc::storage
         class NativeMutationCursor final : public IEntryCursor
         {
         public:
-            NativeMutationCursor(Locator At, ProviderId Provider, std::string Prefix)
-                : at_(std::move(At)), provider_(std::move(Provider)), prefix_(std::move(Prefix)) {}
+            NativeMutationCursor(Locator At, ProviderId Provider, std::string Prefix, native::MappedDriveRecovery Recovery)
+                : at_(std::move(At)), provider_(std::move(Provider)), prefix_(std::move(Prefix)), recovery_(std::move(Recovery)) {}
             ~NativeMutationCursor() override { if (handle_ != INVALID_HANDLE_VALUE) FindClose(handle_); }
             Task<EntryPage> Next(std::size_t MaxItems, OperationContext Context) override
             {
@@ -121,9 +122,12 @@ namespace hc::storage
                         if (const auto Failure = Context.Check(provider_)) return *Failure;
                         if (!started_) {
                             started_ = true;
-                            handle_ = FindFirstFileExW((Wide(at_.root_) + L"\\*").c_str(), FindExInfoBasic, &found_, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                            handle_ = recovery_.Invoke([&] {
+                                return FindFirstFileExW((Wide(at_.root_) + L"\\*").c_str(), FindExInfoBasic, &found_, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                            }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);
                             if (handle_ == INVALID_HANDLE_VALUE) {
                                 const auto Code = GetLastError();
+                                if (const auto Failure = Context.Check(provider_)) return *Failure;
                                 if (Code != ERROR_FILE_NOT_FOUND) return NativeError(Code, provider_);
                                 ended_ = true; break;
                             }
@@ -148,6 +152,7 @@ namespace hc::storage
             }
         private:
             Locator at_; ProviderId provider_; std::string prefix_;
+            native::MappedDriveRecovery recovery_;
             HANDLE handle_ = INVALID_HANDLE_VALUE; WIN32_FIND_DATAW found_{};
             size_t count_ = 0; bool started_ = false, ended_ = false;
         };
@@ -339,16 +344,25 @@ namespace hc::storage
                     }
                     else
                     {
-                        const auto Attributes = GetFileAttributesW(Path.c_str());
-                        if (Attributes == INVALID_FILE_ATTRIBUTES) return NativeError(GetLastError(), Id);
+                        native::MappedDriveRecovery Recovery(Path);
+                        const auto Attributes = Recovery.Invoke([&] { return GetFileAttributesW(Path.c_str()); },
+                            [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; }, Context);
+                        if (Attributes == INVALID_FILE_ATTRIBUTES) {
+                            const auto Code = GetLastError();
+                            if (const auto Failure = Context.Check(Id)) return *Failure;
+                            return NativeError(Code, Id);
+                        }
                         if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY)) return Error{ErrorCategory::InvalidRequest, "not-directory", Id};
                         if (Context.incrementalEnumeration_)
-                            return std::unique_ptr<IEntryCursor>(new NativeMutationCursor(std::move(At), Id, Prefix));
+                            return std::unique_ptr<IEntryCursor>(new NativeMutationCursor(std::move(At), Id, Prefix, std::move(Recovery)));
                         WIN32_FIND_DATAW Found{};
-                        const auto Handle = FindFirstFileExW((Path + L"\\*").c_str(), FindExInfoBasic, &Found, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                        const auto Handle = Recovery.Invoke([&] {
+                            return FindFirstFileExW((Path + L"\\*").c_str(), FindExInfoBasic, &Found, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                        }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);
                         if (Handle == INVALID_HANDLE_VALUE)
                         {
                             const auto Code = GetLastError();
+                            if (const auto Failure = Context.Check(Id)) return *Failure;
                             if (Code != ERROR_FILE_NOT_FOUND) return NativeError(Code, Id);
                         }
                         else

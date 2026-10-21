@@ -2,6 +2,7 @@
 #include "commonLibs/storage/materializedContent.hpp"
 #include "memoryStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/mappedDriveRecovery.hpp"
 #include <QtTest>
 #include <Windows.h>
 #include <AclAPI.h>
@@ -13,6 +14,87 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void mappedDriveListing()
+    {
+        const auto Path = qEnvironmentVariable("HC_TEST_MAPPED_DRIVE");
+        if (Path.isEmpty()) QSKIP("Set HC_TEST_MAPPED_DRIVE to an existing mapped drive path; mappings are never disconnected by the test.");
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        for (int Attempt = 0; Attempt < 3; ++Attempt) {
+            auto Cursor = Provider->Enumerate({LocatorKind::Local, Path.toStdString()}, {}).get();
+            QVERIFY2(Cursor.HasValue(), Cursor.HasValue() ? "" : Cursor.Failure().code_.c_str());
+            for (;;) {
+                auto Page = Cursor.Value()->Next(128, {}).get();
+                QVERIFY2(Page.HasValue(), Page.HasValue() ? "" : Page.Failure().code_.c_str());
+                if (Page.Value().end_) break;
+            }
+        }
+    }
+    void healthyDriveNeedsNoRecovery()
+    {
+        int Queries = 0, Restores = 0;
+        native::MappedDriveRecovery Recovery(L"Z:\\", [&](const auto&) { ++Queries; return true; }, [&](const auto&) { ++Restores; });
+        const auto Value = Recovery.Invoke([] { return DWORD(FILE_ATTRIBUTE_DIRECTORY); },
+            [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; }, {});
+        QCOMPARE(Value, DWORD(FILE_ATTRIBUTE_DIRECTORY)); QCOMPARE(Queries, 0); QCOMPARE(Restores, 0);
+    }
+    void mappedDriveReconnect_data()
+    {
+        QTest::addColumn<QString>("Path");
+        QTest::addColumn<quint32>("Code");
+        QTest::addColumn<bool>("Mapped");
+        QTest::addColumn<bool>("Retry");
+        QTest::newRow("unexpected-network-error") << "Z:\\folder" << quint32(ERROR_UNEXP_NET_ERR) << true << true;
+        QTest::newRow("disconnected") << "Z:\\" << quint32(ERROR_CONNECTION_UNAVAIL) << true << true;
+        QTest::newRow("missing-mapped-root") << "Z:/" << quint32(ERROR_PATH_NOT_FOUND) << true << true;
+        QTest::newRow("extended-path") << "\\\\?\\Z:\\folder" << quint32(ERROR_NETNAME_DELETED) << true << true;
+        QTest::newRow("local-drive") << "C:\\missing" << quint32(ERROR_PATH_NOT_FOUND) << false << false;
+        QTest::newRow("access-denied") << "Z:\\private" << quint32(ERROR_ACCESS_DENIED) << true << false;
+        QTest::newRow("credentials") << "Z:\\" << quint32(ERROR_LOGON_FAILURE) << true << false;
+        QTest::newRow("unc") << "\\\\server\\share" << quint32(ERROR_UNEXP_NET_ERR) << true << false;
+        QTest::newRow("relative") << "Z:folder" << quint32(ERROR_UNEXP_NET_ERR) << true << false;
+    }
+    void mappedDriveReconnect()
+    {
+        QFETCH(QString, Path); QFETCH(quint32, Code); QFETCH(bool, Mapped); QFETCH(bool, Retry);
+        int Probes = 0, Restores = 0;
+        native::MappedDriveRecovery Recovery(Path.toStdWString(),
+            [&](const std::wstring& Device) { return Mapped; },
+            [&](const std::wstring& Root) { QCOMPARE(Root, std::wstring(L"Z:\\")); ++Restores; });
+        const auto Work = [&]() -> DWORD {
+            ++Probes;
+            if (Restores) return FILE_ATTRIBUTE_DIRECTORY;
+            SetLastError(Code); return INVALID_FILE_ATTRIBUTES;
+        };
+        const auto Failed = [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; };
+        const auto Value = Recovery.Invoke(Work, Failed, {});
+        QCOMPARE(Value, Retry ? DWORD(FILE_ATTRIBUTE_DIRECTORY) : INVALID_FILE_ATTRIBUTES);
+        QCOMPARE(Probes, Retry ? 2 : 1); QCOMPARE(Restores, Retry ? 1 : 0);
+        if (!Retry) QCOMPARE(GetLastError(), DWORD(Code));
+        // A subsequent failure in FindFirstFile shares the same recovery budget.
+        Recovery.Invoke([&] { SetLastError(Code); return INVALID_FILE_ATTRIBUTES; }, Failed, {});
+        QCOMPARE(Restores, Retry ? 1 : 0);
+    }
+    void mappedDriveRecoveryFailureAndCancellation()
+    {
+        const auto Failed = [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; };
+        int Probes = 0, Restores = 0;
+        std::stop_source Stop;
+        OperationContext Context; Context.stopToken_ = Stop.get_token();
+        native::MappedDriveRecovery Recovery(L"Z:\\", [](const auto&) { return true; },
+            [&](const auto&) { ++Restores; });
+        auto Value = Recovery.Invoke([&] { SetLastError(++Probes == 1 ? ERROR_UNEXP_NET_ERR : ERROR_BAD_NETPATH); return INVALID_FILE_ATTRIBUTES; }, Failed, Context);
+        QCOMPARE(Value, INVALID_FILE_ATTRIBUTES); QCOMPARE(GetLastError(), DWORD(ERROR_BAD_NETPATH));
+        QCOMPARE(Probes, 2); QCOMPARE(Restores, 1);
+        Stop.request_stop();
+        native::MappedDriveRecovery Cancelled(L"Z:\\", [](const auto&) { return true; }, [&](const auto&) { ++Restores; });
+        Cancelled.Invoke([&] { ++Probes; SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES; }, Failed, Context);
+        QCOMPARE(Probes, 3); QCOMPARE(Restores, 1);
+        std::stop_source During;
+        Context.stopToken_ = During.get_token();
+        native::MappedDriveRecovery Interrupted(L"Z:\\", [](const auto&) { return true; }, [&](const auto&) { ++Restores; During.request_stop(); });
+        Interrupted.Invoke([&] { ++Probes; SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES; }, Failed, Context);
+        QCOMPARE(Probes, 4); QCOMPARE(Restores, 2);
+    }
     void redirectedClientShares()
     {
         const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
