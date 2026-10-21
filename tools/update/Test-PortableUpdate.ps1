@@ -58,6 +58,8 @@ function Start-Child([string]$Image,[string]$Arguments){
 }
 # A real product process supplies the parent identity. Only this isolated test
 # instance is closed; the updater itself never terminates a product process.
+$null=Invoke-Probe @('process-policy',$Run)
+Proof 'restart-process-policy' 'Own background host allowed before restart; strict apply, visible/embedded viewers and other products still block'
 $Root=New-Installation 'native';$Tx=New-Transaction $Root
 $Config=Join-Path $Run 'parent-config';[IO.Directory]::CreateDirectory($Config)|Out-Null
 $Parent=Start-Process -FilePath (Join-Path $Root 'HyperCommander.exe') -ArgumentList ('--config-dir "'+$Config+'"') -WindowStyle Hidden -PassThru
@@ -169,7 +171,7 @@ Write-UpdateJson (Join-Path $ServiceRoot 'product-inventory.json') $Inventory
 $ServiceHashes=Original-Hashes $ServiceRoot
 $PreviousPlatform=$env:QT_QPA_PLATFORM;$env:QT_QPA_PLATFORM='offscreen'
 try{
-    foreach($Mode in @('success','restore','redirect','http-error','cancel','blocked')){
+    foreach($Mode in @('success','restart','restore','redirect','http-error','cancel','blocked')){
         $ServiceConfig=Join-Path $Run ('service-config-'+$Mode);[IO.Directory]::CreateDirectory($ServiceConfig)|Out-Null
         $Command=(@($ServiceRoot,$CandidatePackage,$Mode,'--config-dir',$ServiceConfig)|ForEach-Object{'"'+$_+'"'}) -join ' '
         $Process=Start-Child $Service $Command;$Out=$Process.StandardOutput.ReadToEndAsync();$Err=$Process.StandardError.ReadToEndAsync()

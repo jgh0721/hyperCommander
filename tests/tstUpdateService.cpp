@@ -1,5 +1,6 @@
 ﻿#include "HyperCommanderUpdater/stdafx.h"
 #include "HyperCommanderUpdater/updateController.hpp"
+#include "HyperCommanderUpdater/updateTransaction.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -8,6 +9,9 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QProgressDialog>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QScopeGuard>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QPushButton>
@@ -86,9 +90,27 @@ public:
         return 0;
     }
     static int Run(const QString& Root, const QString& Package, const QString& Mode) {
-        QWidget Window; QMenu Menu; UpdateController Controller(&Window, &Menu, [] { return false; });
+        QWidget Window; QMenu Menu; UpdateController Controller(&Window, &Menu, [&] { return Mode == "restart"; });
         Controller.root_ = Root; Controller.currentVersion_ = ParseInventory(ReadBounded(Path(Root.toStdWString()) / L"product-inventory.json", 1048576)).version_;
         delete Controller.network_; auto* Network = new FixtureNetwork(Package, Mode, &Controller); Controller.network_ = Network;
+        // Reproduce a normal background plugin host using an isolated copy of
+        // the probe. Restore the fixture's signed product bytes before returning.
+        QProcess Host; QByteArray OriginalHost; const auto HostImage = QDir(Root).filePath("hc-plugin-host-x64.exe");
+        const auto RestoreHost = qScopeGuard([&] {
+            if (Host.state() != QProcess::NotRunning) { Host.kill(); Host.waitForFinished(5000); }
+            if (!OriginalHost.isEmpty()) { QFile::remove(HostImage); QFile File(HostImage); if (!File.open(QIODevice::WriteOnly) || File.write(OriginalHost) != OriginalHost.size()) qFatal("fixture-host-restore"); }
+        });
+        if (Mode == "restart") {
+            QFile Original(HostImage); if (!Original.open(QIODevice::ReadOnly)) throw std::runtime_error("fixture-host-original");
+            OriginalHost = Original.readAll(); Original.close();
+            if (!QFile::remove(HostImage) || !QFile::copy(QCoreApplication::applicationDirPath() + "/hc_update_tests.exe", HostImage)) throw std::runtime_error("fixture-host-copy");
+            auto Environment = QProcessEnvironment::systemEnvironment();
+            Environment.insert("PATH", QCoreApplication::applicationDirPath() + ";" + Environment.value("PATH")); Host.setProcessEnvironment(Environment);
+            Host.start(HostImage, {"process-fixture", "hidden", "0"});
+            if (!Host.waitForStarted(5000) || !Host.waitForReadyRead(5000) || !Host.readAllStandardOutput().contains("ready")) throw std::runtime_error("fixture-host-start");
+            const Path NativeRoot(Root.toStdWString());
+            if (!OtherProductProcesses(NativeRoot) || OtherProductProcesses(NativeRoot, 0, ProductProcessCheck::BeforeRestart)) throw std::runtime_error("fixture-host-policy");
+        }
         int Heartbeats = 0, Offers = 0, Errors = 0; bool Finished = false, Blocked = false; QTimer Timer;
         QObject::connect(&Timer, &QTimer::timeout, &Window, [&] {
             ++Heartbeats;
@@ -102,7 +124,7 @@ public:
                 else ++Offers;
                 if (Message->text().contains("파일 작업·명령 실행")) Blocked = true;
                 for (auto* Button : Message->buttons()) {
-                    const bool Accept = Offers == 1 && !Controller.ready_ || Mode == "blocked" && Offers == 2 || Blocked;
+                    const bool Accept = Offers == 1 && !Controller.ready_ || (Mode == "blocked" || Mode == "restart") && Offers == 2 || Blocked;
                     if ((Accept && Message->buttonRole(Button) == QMessageBox::AcceptRole)
                         || ((!Accept || Errors) && Message->buttonRole(Button) == QMessageBox::RejectRole)
                         || Message->buttonRole(Button) == QMessageBox::AcceptRole && Errors) { Button->click(); break; }
@@ -111,9 +133,11 @@ public:
             if (!Controller.busy_ && !Controller.reply_ && (Controller.ready_ || Errors || Mode == "cancel" && Controller.stop_.stop_requested())) Finished = true;
         }); Timer.start(5); if (Mode == "restore") Controller.restore(); else Controller.Check();
         const auto Start = GetTickCount64(); while (!Finished && GetTickCount64() - Start < 120000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore";
+        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart";
         if (!Finished || (Prepared ? !Controller.ready_ || (Mode != "restore" && (Offers < 2 || Network->requests_ != 3 || Heartbeats < 5)) : Controller.ready_)) throw std::runtime_error("service-state-or-liveness");
-        if (Mode == "restore" && Network->requests_ != 0 || Mode == "blocked" && (!Blocked || Controller.restartRequested_)) throw std::runtime_error("service-restore-or-blocked-restart");
+        if (Mode == "restore" && (Network->requests_ != 0 || Offers != 1)
+            || Mode == "blocked" && (!Blocked || Controller.restartRequested_)) throw std::runtime_error("service-restore-or-blocked-restart");
+        if (Mode == "restart" && !Controller.restartRequested_) throw std::runtime_error("own-background-host-blocked-restart");
         if (Mode == "redirect" && Network->requests_ != 1) throw std::runtime_error("redirect-was-followed");
         std::cout << "Service " << Mode.toStdString() << ": PASS, requests=" << Network->requests_ << ", heartbeats=" << Heartbeats << '\n'; return 0;
     }

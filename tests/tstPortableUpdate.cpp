@@ -3,14 +3,80 @@
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QTemporaryDir>
+#include <QScopeGuard>
 #include <iostream>
+
+namespace {
+void ProcessPolicy(const QString& Directory) {
+    using namespace hc::update;
+    QTemporaryDir Fixture(QDir(Directory).absoluteFilePath("process-policy-XXXXXX"));
+    if (!Fixture.isValid()) throw std::runtime_error("process-fixture-directory");
+    const Path Root(Fixture.path().toStdWString());
+    const auto Check = [&](bool Expected, ProductProcessCheck Policy) {
+        if (OtherProductProcesses(Root, 0, Policy) != Expected) throw std::runtime_error("process-policy-mismatch");
+    };
+    Check(false, ProductProcessCheck::Strict);
+    unsigned Passed = 1;
+    for (const auto& Mode : {QString("hidden"), QString("visible"), QString("embedded"), QString("editor")}) {
+        const auto Image = QDir(Fixture.path()).filePath(Mode == "editor" ? "HyperEditor.exe" : "hc-plugin-host-x64.exe");
+        if (QFile::exists(Image) && !QFile::remove(Image)) throw std::runtime_error("process-fixture-remove");
+        if (!QFile::copy(QCoreApplication::applicationFilePath(), Image)) throw std::runtime_error("process-fixture-copy");
+        HWND Parent = nullptr;
+        if (Mode == "embedded") {
+            Parent = CreateWindowExW(0, L"STATIC", L"Update embedded viewer test", WS_OVERLAPPEDWINDOW,
+                0, 0, 120, 80, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (!Parent) throw std::runtime_error("process-fixture-parent");
+            ShowWindow(Parent, SW_SHOWNOACTIVATE);
+        }
+        const auto CloseParent = qScopeGuard([&] { if (Parent) DestroyWindow(Parent); });
+        QProcess Child;
+        const auto Reap = qScopeGuard([&] { if (Child.state() != QProcess::NotRunning) { Child.kill(); Child.waitForFinished(5000); } });
+        auto Environment = QProcessEnvironment::systemEnvironment();
+        Environment.insert("PATH", QCoreApplication::applicationDirPath() + ";" + Environment.value("PATH"));
+        Child.setProcessEnvironment(Environment);
+        Child.start(Image, {"process-fixture", Mode, QString::number(reinterpret_cast<quintptr>(Parent))});
+        if (!Child.waitForStarted(5000)) throw std::runtime_error("process-fixture-start");
+        // Creating an embedded native child sends messages to its owner thread.
+        // Keep that thread pumping while waiting for the fixture's ready signal.
+        QByteArray Ready; const auto Until = GetTickCount64() + 5000;
+        while (!Ready.contains("ready") && Child.state() != QProcess::NotRunning && GetTickCount64() < Until) {
+            Child.waitForReadyRead(10); Ready += Child.readAllStandardOutput(); QCoreApplication::processEvents();
+        }
+        if (!Ready.contains("ready")) throw std::runtime_error("process-fixture-ready: " + Mode.toStdString() + ": " + Child.readAllStandardError().toStdString());
+        Check(true, ProductProcessCheck::Strict);
+        Check(Mode != "hidden", ProductProcessCheck::BeforeRestart);
+        if (OtherProductProcesses(Root, unsigned(Child.processId()))) throw std::runtime_error("process-ignore-pid");
+        Child.kill(); if (!Child.waitForFinished(5000)) throw std::runtime_error("process-fixture-exit");
+        Check(false, ProductProcessCheck::Strict); ++Passed;
+    }
+    std::cout << "Process policy: " << Passed << " passed (strict, owned background, visible, embedded, other product)\n";
+}
+}
 
 int main(int Count, char** Arguments) {
     QCoreApplication App(Count, Arguments); const auto Args = App.arguments(); using namespace hc::update;
     const auto Native = [](const QString& Value) { return Path(Value.toStdWString()); };
     const auto Release = [&](const QString& Directory) { const auto Root = Native(Directory); return ParseManifest(AuthenticateManifest(Root / L"update-manifest.cat", Root / L"update-manifest.json")); };
     try {
-        if (Args.size() == 2 && Args[1] == "contract") {
+        if (Args.size() == 4 && Args[1] == "process-fixture") {
+            HWND Window = nullptr;
+            if (Args[2] == "visible" || Args[2] == "embedded") {
+                const auto Parent = reinterpret_cast<HWND>(Args[3].toULongLong());
+                Window = CreateWindowExW(0, L"STATIC", L"Update plugin window test",
+                    Parent ? WS_CHILD | WS_VISIBLE : WS_OVERLAPPEDWINDOW, 0, 0, 100, 60,
+                    Parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+                if (!Window) throw std::runtime_error("process-fixture-window");
+                ShowWindow(Window, SW_SHOWNOACTIVATE);
+            }
+            std::cout << "ready\n" << std::flush;
+            return App.exec();
+        } else if (Args.size() == 3 && Args[1] == "process-policy") ProcessPolicy(Args[2]);
+        else if (Args.size() == 2 && Args[1] == "contract") {
             unsigned Passed = 0;
             const auto Reject = [&](const auto& Action) { try { Action(); } catch (const std::exception&) { ++Passed; return; } throw std::runtime_error("negative-case-accepted"); };
             const auto Value = ParseJson("{\"n\":18446744073709551615,\"s\":\"\\ud83d\\ude00\",\"ok\":true,\"v\":[null,2]}");

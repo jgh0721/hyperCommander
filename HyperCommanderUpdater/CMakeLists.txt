@@ -29,7 +29,7 @@ target_compile_options(hc_update_core PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 if(MSVC)
     set_property(TARGET hc_update_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
-target_link_libraries(hc_update_core PUBLIC wintrust crypt32 bcrypt version advapi32)
+target_link_libraries(hc_update_core PUBLIC wintrust crypt32 bcrypt version advapi32 PRIVATE user32)
 add_executable(HyperCommanderUpdater WIN32 updaterMain.cpp)
 target_precompile_headers(HyperCommanderUpdater PRIVATE stdafx.h)
 set_target_properties(HyperCommanderUpdater PROPERTIES OUTPUT_NAME "HyperCommanderUpdater"

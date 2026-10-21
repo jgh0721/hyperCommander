@@ -172,7 +172,7 @@ void UpdateController::check(bool Automatic) {
     });
 }
 void UpdateController::offer() {
-    QMessageBox Box(QMessageBox::Information, tr("HyperCommander 업데이트"), ready_ ? tr("버전 %1의 검증과 설치 준비가 완료되었습니다.<br/>다른 HyperCommander·편집기 창을 닫고 재시작하십시오.").arg(Text(release_.version_))
+    QMessageBox Box(QMessageBox::Information, tr("HyperCommander 업데이트"), ready_ ? tr("버전 %1의 검증과 설치 준비가 완료되었습니다.<br/>다른 HyperCommander·편집기·플러그인 창을 닫은 뒤 ‘업데이트 후 재시작’을 누르면 적용됩니다.").arg(Text(release_.version_))
         : tr("새 버전 %1을 사용할 수 있습니다.<br/>현재 버전: %2<br/>다운로드 크기: %3 MiB<br/><a href=\"%4\">변경 사항 보기</a>").arg(Text(release_.version_), nsHC::CLIENT_VERSION).arg(release_.zipBytes_ / 1048576).arg(Text(release_.notes_)), QMessageBox::NoButton, window_);
     Box.setTextFormat(Qt::RichText); Box.setTextInteractionFlags(Qt::TextBrowserInteraction);
     auto* Accept = Box.addButton(ready_ ? tr("업데이트 후 재시작") : tr("다운로드"), QMessageBox::AcceptRole);
@@ -181,7 +181,9 @@ void UpdateController::offer() {
         automatic_ = false;
         if (!ready_) { download(); return; }
         try {
-            if (!canRestart_() || OtherProductProcesses(Native(root_))) { QMessageBox::information(window_, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.")); return; }
+            if (!canRestart_() || OtherProductProcesses(Native(root_), 0, ProductProcessCheck::BeforeRestart)) {
+                QMessageBox::information(window_, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 업데이트 메뉴에서 ‘업데이트 후 재시작’을 다시 선택하십시오.")); return;
+            }
         } catch (const std::exception& Error) { fail(Error.what()); return; }
         restartRequested_ = true; if (!window_->close()) restartRequested_ = false;
     } else if (Skip && Box.clickedButton() == Skip) { if (!SaveOption("skippedVersion", Text(release_.version_))) fail(tr("건너뛰기 설정을 저장하지 못했습니다.")); }
@@ -220,12 +222,15 @@ void UpdateController::restore() {
         return Result{Release, {}, QString::fromStdWString(Tx.wstring())};
     }, [this, Root](Result Value) {
         tx_ = std::move(Value.transaction_); release_ = std::move(Value.release_); ready_ = true;
-        // The user chooses restart through the same check command after startup.
+        // A normal exit after a blocked restart must not leave the verified
+        // update silently waiting for the user to rediscover the check command.
+        automatic_ = false; offer();
     });
 }
 bool UpdateController::LaunchPending() {
     try {
-        Require(ready_ && restartRequested_ && canRestart_() && !OtherProductProcesses(Native(root_)), "update-work-still-running");
+        Require(ready_ && restartRequested_ && canRestart_()
+            && !OtherProductProcesses(Native(root_), 0, ProductProcessCheck::BeforeRestart), "update-work-still-running");
         const auto Helper = Native(tx_) / L"HyperCommanderUpdater.exe"; VerifyProductSignature(Helper);
         const auto Config = hc::settings::Paths(); Require(Config.error_.isEmpty(), "update-config-directory");
         DurableWrite(Native(tx_) / L"restart.json", "{\"configDirectory\":" + QuoteJson(Config.directory_.toUtf8().toStdString()) + "}");

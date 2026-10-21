@@ -122,6 +122,35 @@ void WaitParent(const Path& Root, unsigned Pid, std::uint64_t Created) {
     Require(Queried && Same(Name, (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
     Require(WaitForSingleObject(Parent.value_, 30000) == WAIT_OBJECT_0, "update-parent-still-running");
 }
+struct ProcessWindows { DWORD pid_; bool visible_ = false; };
+BOOL CALLBACK FindVisibleProcessWindow(HWND Window, LPARAM Data) {
+    auto& Query = *reinterpret_cast<ProcessWindows*>(Data);
+    DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+    if (Pid == Query.pid_ && IsWindowVisible(Window)) Query.visible_ = true;
+    return !Query.visible_;
+}
+BOOL CALLBACK FindProcessWindows(HWND Window, LPARAM Data) {
+    auto& Query = *reinterpret_cast<ProcessWindows*>(Data);
+    if (IsWindowVisible(Window)) {
+        FindVisibleProcessWindow(Window, Data);
+        if (!Query.visible_) EnumChildWindows(Window, FindVisibleProcessWindow, Data);
+    }
+    return !Query.visible_;
+}
+bool HasVisibleWindows(DWORD Pid) {
+    ProcessWindows Query{Pid};
+    Require(EnumWindows(FindProcessWindows, reinterpret_cast<LPARAM>(&Query)) || Query.visible_, "update-window-list");
+    return Query.visible_;
+}
+void WaitProductExit(const Path& Root) {
+    // The parent's job handles close during shutdown. Give its plugin hosts
+    // time to exit, then retain the strict check before any file replacement.
+    const auto Until = GetTickCount64() + 5000;
+    while (OtherProductProcesses(Root)) {
+        Require(GetTickCount64() < Until, "update-close-product-processes");
+        Sleep(50);
+    }
+}
 void CleanAcknowledged(const Path& Root, const Path& Tx, bool Retire) {
     CheckTransaction(Root, Tx); const auto Journal = Load(Tx); Require(Journal.state_ == "completed", "update-clean-state");
     const auto Release = ParseManifest(AuthenticateManifest(Tx / L"update-manifest.cat", Tx / L"update-manifest.json"));
@@ -188,7 +217,7 @@ bool StartupAllowed(const Path& Root) {
         const auto State = Load(Active(Root)).state_; return State == "installed" || State == "completed" || State == "rolledBack";
     } catch (...) { return false; }
 }
-bool OtherProductProcesses(const Path& Root, unsigned IgnorePid) {
+bool OtherProductProcesses(const Path& Root, unsigned IgnorePid, ProductProcessCheck Check) {
     Handle Snapshot; Snapshot.value_ = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); Require(Snapshot.value_ != INVALID_HANDLE_VALUE, "update-process-list");
     PROCESSENTRY32W Entry{sizeof(Entry)};
     if (!Process32FirstW(Snapshot.value_, &Entry)) return false;
@@ -196,7 +225,15 @@ bool OtherProductProcesses(const Path& Root, unsigned IgnorePid) {
         if (Entry.th32ProcessID == GetCurrentProcessId() || Entry.th32ProcessID == IgnorePid) continue;
         Handle Process; Process.value_ = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Entry.th32ProcessID);
         wchar_t Name[32768]{}; DWORD Size = DWORD(std::size(Name));
-        if (Process.value_ && QueryFullProcessImageNameW(Process.value_, 0, Name, &Size)) { if (Under(Name, Root)) return true; }
+        if (Process.value_ && QueryFullProcessImageNameW(Process.value_, 0, Name, &Size)) {
+            if (!Under(Name, Root)) continue;
+            // Only our own windowless plugin host belongs to normal app
+            // shutdown. Other instances and visible/embedded viewers still block.
+            if (Check == ProductProcessCheck::BeforeRestart && Entry.th32ParentProcessID == GetCurrentProcessId()
+                && Same(Path(Name).lexically_normal().wstring(), (Root / L"hc-plugin-host-x64.exe").lexically_normal().wstring())
+                && !HasVisibleWindows(Entry.th32ProcessID)) continue;
+            return true;
+        }
         else if (Same(Entry.szExeFile, L"HyperCommander.exe") || Same(Entry.szExeFile, L"HyperCommanderAdmin.exe") || Same(Entry.szExeFile, L"HyperEditor.exe")) return true;
     } while (Process32NextW(Snapshot.value_, &Entry)); return false;
 }
@@ -213,7 +250,7 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
     Originals.emplace("product-inventory.json", ProductFile{"product-inventory.json", HashBytes(OriginalBytes), OriginalBytes.size()});
     const auto NextBytes = ReadBounded(Tx / L"staging/product-inventory.json", 1048576);
     Replacements.emplace("product-inventory.json", ProductFile{"product-inventory.json", Manifest.inventoryHash_, NextBytes.size()});
-    WaitParent(Root, ParentPid, ParentCreated); Require(!OtherProductProcesses(Root), "update-close-product-processes");
+    WaitParent(Root, ParentPid, ParentCreated); WaitProductExit(Root);
     std::map<std::string, int> Names;
     for (const auto& [Name, File] : Originals) Names.emplace(Name, 0);
     for (const auto& [Name, File] : Replacements) Names.emplace(Name, 0);
