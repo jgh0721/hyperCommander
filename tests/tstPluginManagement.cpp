@@ -2,8 +2,10 @@
 #include "pluginHost/pluginApplicationRule.hpp"
 #include "UniqueLibs/qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
+#include "UniqueLibs/tcPluginPackage.hpp"
 #include <QtTest>
 #include <QtWidgets>
+#include <QtCore/private/qzipwriter_p.h>
 
 using hc::plugins::PluginApplicationRule;
 namespace {
@@ -18,10 +20,134 @@ QTreeWidgetItem* external(QPluginManagementPage& Page) {
     }
     return nullptr;
 }
+QByteArray fixture(const QString& Name = "hc_wcx_fixture.wcx64") {
+    QFile File(QCoreApplication::applicationDirPath() + '/' + Name);
+    return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{};
+}
+bool package(const QString& Path, const QList<QPair<QString, QByteArray>>& Files) {
+    QZipWriter Zip(Path);
+    for (const auto& File : Files) Zip.addFile(File.first, File.second);
+    Zip.close(); return Zip.status() == QZipWriter::NoError;
+}
+auto install(const QString& Source, const QString& Root) {
+    return std::async(std::launch::async, [Source, Root] {
+        hc::storage::OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        return hc::plugins::InstallTcPluginPackage(Source, Root, Context);
+    }).get();
+}
 }
 class PluginManagementTests : public QObject {
     Q_OBJECT
 private slots:
+    void addTypesAreUnified() {
+        QPluginManagementPage Page; Page.LoadDocument({}); Page.show(); bool Seen = false;
+        QTimer Driver; Driver.setInterval(10);
+        connect(&Driver, &QTimer::timeout, &Page, [&] {
+            auto* Dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!Dialog || Dialog->objectName() != "pluginAddType") return;
+            auto* Types = Dialog->findChild<QComboBox*>("pluginAddFormat");
+            if (Types) {
+                Seen = Types->count() == 3 && Types->itemText(0) == QStringLiteral("토탈 커맨더 플러그인")
+                    && Types->itemData(0).toInt() == -1 && Types->itemData(1).toInt() == 2 && Types->itemData(2).toInt() == 4;
+                const auto Capture = qEnvironmentVariable("HC_PLUGIN_UI_CAPTURE");
+                if (!Capture.isEmpty()) Dialog->grab().save(QFileInfo(Capture).absolutePath() + "/plugin-add-types.png");
+            }
+            Dialog->reject(); Driver.stop();
+        }); Driver.start(); Page.findChild<QPushButton*>("pluginAdd")->click(); QVERIFY(Seen);
+    }
+    void directTcTypes_data() {
+        QTest::addColumn<QString>("Group");
+        for (const auto& Group : {QString("wcx"), QString("wlx"), QString("wfx"), QString("wdx")}) QTest::newRow(qPrintable(Group)) << Group;
+    }
+    void directTcTypes() {
+        QFETCH(QString, Group); QTemporaryDir Root;
+        const auto Path = Root.filePath("sample." + Group + "64");
+        QFile Binary(Path); QVERIFY(Binary.open(QIODevice::WriteOnly)); QVERIFY(Binary.write(fixture()) > 0); Binary.close();
+        QPluginManagementPage Page(nullptr, Root.path()); Page.LoadDocument({{"future", "keep"}});
+        QVERIFY(Page.AddTotalCommanderPlugin(Path, false));
+        QCOMPARE(Page.Document()["future"].toString(), QString("keep"));
+        QCOMPARE(Page.Document()[Group].toArray().size(), 1);
+        QCOMPARE(Page.Document()[Group].toArray()[0].toObject()["path"].toString(), Path);
+        if (Group == "wcx") Page.findChild<QLineEdit*>("pluginRegisteredExtensions")->setText("abc");
+        QVERIFY(Page.AddTotalCommanderPlugin(Path, false)); QCOMPARE(Page.Document()[Group].toArray().size(), 1);
+    }
+    void zipMetadataInstallsAndPreservesExisting() {
+        QTemporaryDir Root; const auto Path = Root.filePath("download.zip"); const auto Binary = fixture(); QVERIFY(!Binary.isEmpty());
+        QVERIFY(package(Path, {{"PLUGINST.INF", "[PluginInstall]\r\nTYPE=WCX\r\nFILE=sample.wcx\r\nDEFAULTDIR=Sample\r\nDEFAULTEXTENSION=abc,def\r\n"},
+            {"sample.wcx", "32-bit placeholder"}, {"sample.wcx64", Binary}, {"helper.dll", "dependency"}, {"language/ko.txt", "Korean"}, {"sample.ini", "original"}}));
+        auto Installed = install(Path, Root.path()); QVERIFY2(Installed.HasValue(), Installed.HasValue() ? "" : Installed.Failure().code_.c_str());
+        QCOMPARE(Installed.Value().group_, QString("wcx")); QCOMPARE(Installed.Value().extensions_, (QStringList{"abc", "def"}));
+        QCOMPARE(Installed.Value().binary_, Root.filePath("Addons/WCX/Sample/sample.wcx64"));
+        QVERIFY(!QFileInfo::exists(Root.filePath("Addons/WCX/Sample/PLUGINST.INF")));
+        QFile Out(Installed.Value().binary_); QVERIFY(Out.open(QIODevice::ReadOnly)); QCOMPARE(Out.readAll(), Binary); Out.close();
+        QVERIFY(QFileInfo::exists(Root.filePath("Addons/WCX/Sample/language/ko.txt")));
+        QFile Config(Root.filePath("Addons/WCX/Sample/sample.ini")); QVERIFY(Config.open(QIODevice::WriteOnly)); Config.write("user settings"); Config.close();
+        auto Again = install(Path, Root.path()); QVERIFY(Again.HasValue()); QCOMPARE(Again.Value().directory_, Root.filePath("Addons/WCX/Sample-2"));
+        QVERIFY(Config.open(QIODevice::ReadOnly)); QCOMPARE(Config.readAll(), QByteArray("user settings")); Config.close();
+        const auto Hidden = QDir(Root.filePath("Addons/WCX")).entryList({".install-*"}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot); QVERIFY(Hidden.isEmpty());
+    }
+    void zipRegistersIntoSettingsDraft() {
+        QTemporaryDir Root, Config; const auto Path = Root.filePath("viewer.zip");
+        QVERIFY(package(Path, {{"pluginst.inf", "[plugininstall]\ntype=wlx\nfile=viewer.wlx\nfile64=x64/viewer.wlx64\ndefaultdir=Viewer\n"}, {"x64/viewer.wlx64", fixture("hc_wlx_fixture.wlx64")}}));
+        hc::settings::Repository Settings(Config.path()); QVERIFY(Settings.Put(hc::settings::Section::Plugins, QJsonObject{{"future", true}}));
+        const auto Before = Settings.Object();
+        QPluginManagementPage Page(nullptr, Root.path()); Page.Load(Settings); QVERIFY(Page.AddTotalCommanderPlugin(Path, false));
+        QCOMPARE(Settings.Object(), Before);
+        const auto Items = Page.Document()["wlx"].toArray(); QCOMPARE(Items.size(), 1);
+        QCOMPARE(Items[0].toObject()["path"].toString(), Root.filePath("Addons/WLX/Viewer/x64/viewer.wlx64"));
+        QVERIFY(Items[0].toObject()["hostEnabled"].toBool()); QVERIFY(Items[0].toObject()["hostReviewed"].toObject().isEmpty());
+        QVERIFY(Page.Save(Settings)); QCOMPARE(Settings.Read(hc::settings::Section::Plugins).toObject()["wlx"].toArray().size(), 1);
+    }
+    void zipWithoutMetadataAndWrappedPackage() {
+        QTemporaryDir Root;
+        const auto Plain = Root.filePath("plain.zip"); QVERIFY(package(Plain, {{"viewer.wlx64", fixture("hc_wlx_fixture.wlx64")}, {"readme.txt", "notes"}}));
+        auto First = install(Plain, Root.path()); QVERIFY(First.HasValue()); QCOMPARE(First.Value().binary_, Root.filePath("Addons/WLX/plain/viewer.wlx64"));
+        const auto Wrapped = Root.filePath("wrapped.zip");
+        QVERIFY(package(Wrapped, {{"folder/pluginst.inf", "[plugininstall]\ntype=wdx\nfile=sample.wdx64\ndefaultdir=Content\n"}, {"folder/sample.wdx64", fixture()}}));
+        auto Second = install(Wrapped, Root.path()); QVERIFY2(Second.HasValue(), Second.HasValue() ? "" : Second.Failure().code_.c_str());
+        QCOMPARE(Second.Value().binary_, Root.filePath("Addons/WDX/Content/sample.wdx64"));
+    }
+    void unsafePackages_data() {
+        QTest::addColumn<QString>("Member"); QTest::addColumn<QByteArray>("Metadata");
+        const QByteArray Good("[plugininstall]\ntype=wcx\nfile=sample.wcx64\ndefaultdir=Sample\n");
+        QTest::newRow("parent-traversal") << "../outside.txt" << Good;
+        QTest::newRow("drive-path") << "C:/outside.txt" << Good;
+        QTest::newRow("alternate-stream") << "data.txt:stream" << Good;
+        QTest::newRow("device-name") << "CON.txt" << Good;
+        QTest::newRow("trailing-dot") << "data." << Good;
+        QTest::newRow("case-collision") << "SAMPLE.WCX64" << Good;
+        QTest::newRow("unsafe-defaultdir") << "safe.txt" << QByteArray("[plugininstall]\ntype=wcx\nfile=sample.wcx64\ndefaultdir=../outside\n");
+        QTest::newRow("unsupported-type") << "safe.txt" << QByteArray("[plugininstall]\ntype=prg\nfile=sample.wcx64\ndefaultdir=Sample\n");
+        QTest::newRow("missing-binary") << "safe.txt" << QByteArray("[plugininstall]\ntype=wcx\nfile=absent.wcx64\ndefaultdir=Sample\n");
+    }
+    void unsafePackages() {
+        QFETCH(QString, Member); QFETCH(QByteArray, Metadata); QTemporaryDir Root;
+        const auto Path = Root.filePath("bad.zip"); QVERIFY(package(Path, {{"pluginst.inf", Metadata}, {"sample.wcx64", fixture()}, {Member, "payload"}}));
+        auto Result = install(Path, Root.path()); QVERIFY(!Result.HasValue());
+        QVERIFY(!QFileInfo::exists(Root.filePath("Addons/WCX/Sample"))); QVERIFY(!QFileInfo::exists(Root.filePath("outside.txt")));
+    }
+    void ambiguousAndCancelledPackages() {
+        QTemporaryDir Root; const auto Path = Root.filePath("many.zip");
+        QVERIFY(package(Path, {{"one.wcx64", fixture()}, {"two.wlx64", fixture("hc_wlx_fixture.wlx64")}}));
+        auto Ambiguous = install(Path, Root.path()); QVERIFY(!Ambiguous.HasValue()); QCOMPARE(Ambiguous.Failure().code_, std::string("plugin-package-binary-ambiguous"));
+        std::stop_source Stop; Stop.request_stop(); hc::storage::OperationContext Context; Context.stopToken_ = Stop.get_token();
+        auto Cancelled = hc::plugins::InstallTcPluginPackage(Path, Root.path(), Context); QVERIFY(!Cancelled.HasValue()); QCOMPARE(Cancelled.Failure().category_, hc::storage::ErrorCategory::Cancelled);
+        QVERIFY(!QFileInfo::exists(Root.filePath("Addons")));
+    }
+    void damagedPayloadLeavesNoInstalledFolder() {
+        QTemporaryDir Root; const auto Path = Root.filePath("damaged.zip"); const auto Binary = fixture(); QVERIFY(Binary.size() > 1024);
+        {
+            QZipWriter Zip(Path); Zip.setCompressionPolicy(QZipWriter::NeverCompress);
+            Zip.addFile("pluginst.inf", QByteArray("[plugininstall]\ntype=wcx\nfile=sample.wcx64\ndefaultdir=Sample\n"));
+            Zip.addFile("sample.wcx64", Binary); Zip.close(); QCOMPARE(Zip.status(), QZipWriter::NoError);
+        }
+        QFile Zip(Path); QVERIFY(Zip.open(QIODevice::ReadWrite)); auto Bytes = Zip.readAll();
+        const auto Offset = Bytes.indexOf(Binary.first(64)); QVERIFY(Offset >= 0); Bytes[Offset + 100] = char(Bytes[Offset + 100] ^ 1);
+        QVERIFY(Zip.seek(0)); QCOMPARE(Zip.write(Bytes), Bytes.size()); Zip.close();
+        auto Result = install(Path, Root.path()); QVERIFY(!Result.HasValue());
+        const QDir Category(Root.filePath("Addons/WCX"));
+        QVERIFY(Category.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+    }
     void wcxUiGrantRequiresExplicitSelection_data()
     {
         QTest::addColumn<bool>("Allow"); QTest::newRow("preserve-old-grants") << false; QTest::newRow("explicit-ui-grant") << true;

@@ -1,5 +1,6 @@
 ﻿#include "qtPluginManagementPage.hpp"
 #include "qtPluginHostSettings.hpp"
+#include "tcPluginPackage.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "commonLibs/layout/productLayout.hpp"
@@ -33,6 +34,36 @@ QJsonObject ruleObject(bool Enabled, const QString& Mode, const QStringList& Ext
     if (Mode == "extensions") Result["extensions"] = QJsonArray::fromStringList(Extensions);
     if (Mode == "tc" || Mode == "pattern") Result["expression"] = Expression;
     return Result;
+}
+class PackageProgressDialog final : public QDialog {
+public:
+    std::stop_source stop_;
+    QLabel* label_;
+    QDialogButtonBox* buttons_;
+    explicit PackageProgressDialog(QWidget* Parent) : QDialog(Parent) {
+        setObjectName("pluginPackageProgress"); setWindowTitle(tr("플러그인 설치"));
+        auto* Layout = new QVBoxLayout(this); label_ = new QLabel(tr("ZIP에서 플러그인을 설치하고 있습니다."), this); Layout->addWidget(label_);
+        auto* Progress = new QProgressBar(this); Progress->setRange(0, 0); Layout->addWidget(Progress);
+        buttons_ = new QDialogButtonBox(QDialogButtonBox::Cancel, this); Layout->addWidget(buttons_);
+        connect(buttons_, &QDialogButtonBox::rejected, this, [this] { reject(); });
+    }
+    void reject() override {
+        stop_.request_stop(); label_->setText(tr("설치를 취소하고 있습니다…")); buttons_->setEnabled(false);
+    }
+};
+hc::storage::Result<hc::plugins::TcPluginInstallation> installPackage(QWidget* Parent, const QString& Path, const QString& Root) {
+    PackageProgressDialog Progress(Parent);
+    QFutureWatcher<hc::storage::Result<hc::plugins::TcPluginInstallation>> Watcher;
+    QObject::connect(&Watcher, &QFutureWatcherBase::finished, &Progress, [&Progress] { Progress.done(QDialog::Accepted); });
+    const auto Token = Progress.stop_.get_token();
+    Watcher.setFuture(QtConcurrent::run([Path, Root, Token] {
+        hc::storage::OperationContext Context; Context.stopToken_ = Token;
+        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+        return hc::plugins::InstallTcPluginPackage(Path, Root, Context);
+    }));
+    Progress.exec();
+    if (!Watcher.isFinished()) { Progress.stop_.request_stop(); Watcher.waitForFinished(); }
+    return Watcher.result();
 }
 }
 
@@ -144,6 +175,8 @@ struct QPluginManagementPage::State {
     void storeItem();
     bool validate(bool Show = true);
     void add();
+    bool addTc(const QString& Path, bool Review);
+    bool registerFile(const QString& Path, int Format, const QStringList& Extensions, bool Review);
     void remove();
     void move(int Direction);
     void testFiles();
@@ -215,19 +248,52 @@ bool QPluginManagementPage::State::validate(bool Show) {
 void QPluginManagementPage::State::add() {
     if (!validate()) return; storeHosts();
     QDialog Dialog(owner_); Dialog.setObjectName("pluginAddType"); Dialog.setWindowTitle(QStringLiteral("플러그인 추가")); auto* Form = new QFormLayout(&Dialog); QComboBox Format;
-    for (const auto& Kind : Formats) Format.addItem(QString::fromLatin1(Kind.token_) + " / " + (Kind.role_ == 1 ? QStringLiteral("압축") : Kind.role_ == 2 ? QStringLiteral("문서") : Kind.role_ == 3 ? QStringLiteral("파일 시스템") : QStringLiteral("파일 정보")));
+    Format.setObjectName("pluginAddFormat"); Format.setAccessibleName(QStringLiteral("플러그인 종류"));
+    Format.addItem(QStringLiteral("토탈 커맨더 플러그인"), -1);
+    Format.addItem(QStringLiteral("DOpus / 문서"), 2);
+    Format.addItem(QStringLiteral("DOpus / 파일 시스템"), 4);
     Form->addRow(QStringLiteral("종류"), &Format); QDialogButtonBox Buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel); Form->addRow(&Buttons);
     QObject::connect(&Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); QObject::connect(&Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
     if (Dialog.exec() != QDialog::Accepted) return;
-    const auto Index = Format.currentIndex(); const auto& Kind = Formats[Index];
-    const auto Filter = QStringLiteral("x64 플러그인 (*.%1);;모든 파일 (*)").arg(QString::fromLatin1(Kind.token_).startsWith("DOpus") ? "dll" : QString::fromLatin1(Kind.group_) + "64");
+    const auto Index = Format.currentData().toInt();
+    const auto Filter = Index < 0 ? QStringLiteral("토탈 커맨더 플러그인 및 ZIP (*.wcx *.wcx64 *.wlx *.wlx64 *.wfx *.wfx64 *.wdx *.wdx64 *.zip);;ZIP 패키지 (*.zip);;모든 파일 (*)")
+        : QStringLiteral("x64 플러그인 (*.dll);;모든 파일 (*)");
     const auto Path = QFileDialog::getOpenFileName(owner_, QStringLiteral("플러그인 파일 선택"), {}, Filter); if (Path.isEmpty()) return;
+    if (Index < 0) { addTc(Path, true); return; }
+    registerFile(Path, Index, {}, true);
+}
+bool QPluginManagementPage::State::registerFile(const QString& Path, int Index, const QStringList& Extensions, bool Review) {
+    const auto& Kind = Formats[Index];
     auto Items = plugins_.value(Kind.group_).toArray();
-    for (int At = 0; At < Items.size(); ++At) if (resolvedPath(Items[At].toObject().value("path").toString(), root_, Kind.group_).compare(Path, Qt::CaseInsensitive) == 0) { roles_->setCurrentRow(0); search_->clear(); rebuild(key(Index, At)); return; }
-    Items.append(QJsonObject{{"path", Path}, {"hostEnabled", true}}); plugins_[Kind.group_] = Items; loadHosts();
+    for (int At = 0; At < Items.size(); ++At) if (resolvedPath(Items[At].toObject().value("path").toString(), root_, Kind.group_).compare(Path, Qt::CaseInsensitive) == 0) { roles_->setCurrentRow(0); search_->clear(); rebuild(key(Index, At)); return true; }
+    if (Items.size() >= 1000) { QMessageBox::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("같은 종류의 플러그인은 최대 1000개까지 등록할 수 있습니다.")); return false; }
+    Items.append(QJsonObject{{"path", Path}, {"hostEnabled", true}, {"extensions", QJsonArray::fromStringList(Extensions)}}); plugins_[Kind.group_] = Items; loadHosts();
     roles_->setCurrentRow(Kind.role_); search_->clear(); rebuild(key(Index, Items.size() - 1));
     tabs_->setCurrentIndex(1);
-    hosts_[Index]->ReviewPlugin(Items.size() - 1);
+    if (Review) hosts_[Index]->ReviewPlugin(Items.size() - 1);
+    return true;
+}
+bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
+    if (!validate()) return false; storeHosts();
+    QString Path = QFileInfo(Source).absoluteFilePath(), Group; QStringList Extensions;
+    if (QFileInfo(Path).suffix().compare("zip", Qt::CaseInsensitive) == 0) {
+        auto Installed = installPackage(owner_, Path, root_);
+        if (!Installed.HasValue()) {
+            if (Installed.Failure().category_ != hc::storage::ErrorCategory::Cancelled)
+                QMessageBox::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(QString::fromStdString(Installed.Failure().code_)));
+            return false;
+        }
+        Path = Installed.Value().binary_; Group = Installed.Value().group_; Extensions = Installed.Value().extensions_;
+    } else {
+        Group = hc::plugins::TcPluginGroup(Path);
+        if (!Group.isEmpty() && Path.endsWith('.' + Group, Qt::CaseInsensitive)) Path += "64";
+        if (Group.isEmpty() || !hc::plugins::tcPackage::Binary64(Path)) {
+            QMessageBox::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("64비트 WCX·WLX·WFX·WDX 파일 또는 플러그인 ZIP 패키지를 선택하세요. 32비트 파일을 선택한 경우 같은 위치의 64비트 파일이 필요합니다.")); return false;
+        }
+    }
+    for (int Index = 0; Index < int(Formats.size()); ++Index)
+        if (Group == QLatin1String(Formats[Index].group_)) return registerFile(Path, Index, Extensions, Review);
+    return false;
 }
 void QPluginManagementPage::State::remove() {
     if (row_ < 0 || entries_[row_].builtin_) return;
@@ -328,6 +394,7 @@ void QPluginManagementPage::LoadDocument(const QJsonObject& Plugins) {
     auto& S = *state_; S.loading_ = true; S.plugins_ = Plugins; S.loadHosts(); const auto At = S.selection_->findData(Plugins.value("viewerSelection").toString("manual")); S.selection_->setCurrentIndex(qMax(At, 0)); S.rebuild(); S.loading_ = false;
 }
 bool QPluginManagementPage::Validate() { return state_->validate(); }
+bool QPluginManagementPage::AddTotalCommanderPlugin(const QString& Path, bool Review) { return state_->addTc(Path, Review); }
 QJsonObject QPluginManagementPage::Document() const { auto& S = *state_; S.storeItem(); S.storeHosts(); auto Result = S.plugins_; Result["viewerSelection"] = S.selection_->currentData().toString(); return Result; }
 bool QPluginManagementPage::SelectPlugin(const QString& Binary, bool Review) {
     auto& S = *state_; S.roles_->setCurrentRow(0); S.search_->clear();

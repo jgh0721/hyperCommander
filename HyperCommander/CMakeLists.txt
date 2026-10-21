@@ -157,6 +157,7 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/qtPluginHostSettings.hpp
         ../UniqueLibs/qtPluginManagementPage.cpp
         ../UniqueLibs/qtPluginManagementPage.hpp
+        ../UniqueLibs/tcPluginPackage.hpp
         ../pluginHost/pluginApplicationRule.hpp
         ../commonLibs/operations/jobScheduler.cpp
         ../commonLibs/operations/jobScheduler.hpp

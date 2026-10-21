@@ -6842,7 +6842,7 @@ private slots:
             const auto RestoreDialogs = qScopeGuard([&] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, Previous); });
             bool Chosen = false, TimedOut = false; QTimer Driver; Driver.setInterval(20); QElapsedTimer Wait; Wait.start();
             connect(&Driver, &QTimer::timeout, &Dialog, [&] {
-                if (auto* Kind = Dialog.findChild<QDialog*>("pluginAddType"); Kind && Kind->isVisible()) { Kind->findChild<QComboBox*>()->setCurrentIndex(1); Kind->accept(); return; }
+                if (auto* Kind = Dialog.findChild<QDialog*>("pluginAddType"); Kind && Kind->isVisible()) { Kind->findChild<QComboBox*>()->setCurrentIndex(0); Kind->accept(); return; }
                 for (auto* Picker : Dialog.findChildren<QFileDialog*>()) if (Picker->isVisible())
                 {
                     if (Wait.elapsed() > 5000)

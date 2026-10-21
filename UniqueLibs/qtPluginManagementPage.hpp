@@ -15,6 +15,7 @@ public:
     bool Save(hc::settings::Repository& Settings);
     QJsonObject Document() const;
     bool SelectPlugin(const QString& Binary, bool Review = false);
+    bool AddTotalCommanderPlugin(const QString& Path, bool Review = true);
 private:
     struct State;
     std::unique_ptr<State> state_;
