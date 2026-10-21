@@ -11,6 +11,7 @@
 #include <fmstyle/StylePaint.h>
 #include <fmstyle/WatercolorChrome.h>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QProcess>
 #include <QToolButton>
 #include "Components/cmpView.hpp"
@@ -37,6 +38,10 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     auto* Header = new QWidget(this); auto* HeaderLayout = new QVBoxLayout(Header);
     HeaderLayout->setContentsMargins(0, 0, 0, 0); HeaderLayout->setSpacing(0);
     HeaderLayout->addWidget(new fm::ui::WindowChrome(this, Header));
+    // Caption clicks must keep the input widget, just like native title buttons.
+    // Retain keyboard access to the custom caption controls through Tab.
+    for (const auto* Name : {"fm.window.minimize", "fm.window.maximize", "fm.window.close"})
+        if (auto* Button = Header->findChild<QToolButton*>(Name)) Button->setFocusPolicy(Qt::TabFocus);
     auto* MenuRow = new QWidget(Header);
     auto* MenuLayout = new QHBoxLayout(MenuRow);
     MenuLayout->setContentsMargins(0, 0, 0, 0); MenuLayout->setSpacing(4);
@@ -77,8 +82,6 @@ void QMainUI::changeEvent( QEvent* Event )
     QMainWindow::changeEvent(Event);
     if (Event->type() == QEvent::WindowStateChange)
         updateWindowFrame();
-    if (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowUnblocked)
-        requestInputFocusRestore();
 }
 
 void QMainUI::requestInputFocusRestore()
@@ -98,11 +101,17 @@ void QMainUI::restoreInputFocus()
     const auto Current = QApplication::focusWidget();
     const auto Native = GetFocus();
     const bool CurrentValid = Current && Current != this && Current->window() == this && Current->isVisible() && Current->isEnabled();
+    const auto Previous = lastInputFocus_.data();
+    const bool RestorePrevious = activationFocusRestorePending_ && Previous && Previous->window() == this
+        && Previous->isVisible() && Previous->isEnabled();
+    activationFocusRestorePending_ = false;
     if (Native && IsWindowVisible(Native) && (Native == Root || IsChild(Root, Native))) {
         DWORD Process = 0; GetWindowThreadProcessId(Native, &Process);
-        if (CurrentValid || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
+        if ((CurrentValid && !RestorePrevious) || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
     }
-    QPointer<QWidget> Target = CurrentValid ? Current : lastInputFocus_.data();
+    // Activation may have selected a valid fallback (the command line) while
+    // restoring a native panel child. Prefer the user's last input widget.
+    QPointer<QWidget> Target = RestorePrevious ? Previous : CurrentValid ? Current : Previous;
     if (Target && Target->window() == this && Target->isVisible() && Target->isEnabled()) {
         // setFocus alone can be a no-op when Qt remembers the widget but the
         // native input queue has lost its HWND after a dialog/host disappears.
@@ -559,9 +568,21 @@ void QMainUI::oo_notifyPanelActivated()
 
 bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 {
+    // QWidget dispatches activation/unblocking through event(), not changeEvent().
+    if (Object == this && (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowUnblocked)) {
+        if (Event->type() == QEvent::WindowActivate) activationFocusRestorePending_ = true;
+        requestInputFocusRestore();
+    }
     const auto Widget = qobject_cast<QWidget*>(Object);
     if (Event->type() == QEvent::FocusIn) {
-        if (Widget && Widget != this && Widget->window() == this) lastInputFocus_ = Widget;
+        if (Widget && Widget != this && Widget->window() == this) {
+            // Qt's activation fallback is not a user request to switch input.
+            const auto Reason = static_cast<QFocusEvent*>(Event)->reason();
+            if (Reason != Qt::ActiveWindowFocusReason || !lastInputFocus_) {
+                lastInputFocus_ = Widget;
+                activationFocusRestorePending_ = false;
+            }
+        }
         if (Widget && (Widget == ui.cmpLeftPanel || ui.cmpLeftPanel->isAncestorOf(Widget))) setActivePanel(0);
         else if (Widget && (Widget == ui.cmpRightPanel || ui.cmpRightPanel->isAncestorOf(Widget))) setActivePanel(1);
     }

@@ -103,6 +103,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     QProcess*             commandProcess_ = nullptr;
     QPointer<QWidget>     lastInputFocus_;
     bool                  inputFocusRestorePending_ = false;
+    bool                  activationFocusRestorePending_ = false;
     Ui::dlgMain           ui;
     hc::workspace::Loaded workspace_;
     bool                  workspaceLoaded_ = false;

@@ -3179,6 +3179,87 @@ private slots:
         QCOMPARE(QApplication::focusWidget(), Input.data()); QVERIFY(GetFocus());
     }
 
+    void todoBugWindowReactivationFocus_data()
+    {
+        QTest::addColumn<int>("Target");
+        QTest::addColumn<bool>("Minimize");
+        QTest::addColumn<bool>("Fallback");
+        for (int Target = 0; Target < 3; ++Target)
+            for (const bool Minimize : {false, true})
+                for (const bool Fallback : {false, true}) {
+                    if (Target == 2 && Fallback) continue;
+                    QTest::newRow(qPrintable(QString("%1-%2-%3").arg(Target).arg(Minimize ? "minimize" : "switch")
+                        .arg(Fallback ? "fallback" : "native"))) << Target << Minimize << Fallback;
+                }
+    }
+
+    void todoBugWindowReactivationFocus()
+    {
+        QFETCH(int, Target); QFETCH(bool, Minimize); QFETCH(bool, Fallback);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        for (int I = 0; I < 6; ++I) {
+            QFile File(Directory.filePath(QString("entry%1.txt").arg(I)));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("focus fixture");
+        }
+        auto* Panel = panels_[Target == 1 ? 1 : 0];
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 7);
+        auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->show();
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        main_->showNormal(); main_->activateWindow(); SetForegroundWindow(Root);
+        QTRY_COMPARE(GetForegroundWindow(), Root);
+        Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        View->BaseView()->setFocusedRowIndex(2);
+        if (Target == 2) { Command->lineEdit()->clear(); Command->lineEdit()->setFocus(); }
+        QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
+        QVERIFY(GetFocus());
+        const auto Row = View->BaseView()->focusedRowIndex();
+        const auto Trace = connect(qApp, &QApplication::focusChanged, this, [](QWidget* Before, QWidget* After) {
+            qInfo() << "Activation focus" << Before << "->" << After;
+        });
+        const auto DisconnectTrace = qScopeGuard([&] { disconnect(Trace); });
+        QProcess Peer;
+        Peer.start(QCoreApplication::applicationFilePath(), {"--focus-peer"});
+        QTRY_VERIFY(Peer.canReadLine());
+        const auto PeerWindow = reinterpret_cast<HWND>(Peer.readLine().trimmed().toULongLong()); QVERIFY(IsWindow(PeerWindow));
+        const auto StopPeer = qScopeGuard([&] {
+            SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0);
+            Peer.kill(); Peer.waitForFinished(); QTest::qWait(100);
+        });
+        for (int Cycle = 0; Cycle < 3; ++Cycle) {
+            if (Minimize) {
+                auto* Button = main_->findChild<QToolButton*>("fm.window.minimize"); QVERIFY(Button);
+                QTest::mouseClick(Button, Qt::LeftButton);
+                QTRY_VERIFY(main_->isMinimized());
+            }
+            QVERIFY(SetForegroundWindow(PeerWindow));
+            QTRY_COMPARE(GetForegroundWindow(), PeerWindow);
+            // Exercise a valid Qt fallback while the native panel is inactive.
+            // A fallback must not replace the user's last input destination.
+            if (Fallback) Command->lineEdit()->setFocus(Qt::ActiveWindowFocusReason);
+            QTest::qWait(100);
+            if (Minimize) ShowWindow(Root, SW_RESTORE);
+            // The foreground peer grants activation just as the taskbar does.
+            // Do not repair either Qt or native child focus from the harness.
+            QVERIFY(SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0));
+            QTRY_COMPARE(GetForegroundWindow(), Root);
+            QTest::qWait(150); // Let native activation and queued recovery complete without clicking a panel.
+            QCOMPARE(QApplication::focusWidget(), Input.data());
+            QVERIFY(GetFocus() && (GetFocus() == Root || IsChild(Root, GetFocus())));
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = Target == 2 ? 'X' : VK_DOWN;
+            Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+            if (Target == 2) {
+                auto* Editor = qobject_cast<QLineEdit*>(Input.data()); QVERIFY(Editor);
+                QTRY_COMPARE(Editor->text(), QString(Cycle + 1, 'x'));
+            } else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), Row + Cycle + 1);
+        }
+    }
+
     void dialogFocusReturnUi()
     {
         auto* Panel = panels_.front();
@@ -8803,6 +8884,21 @@ private:
 
 int main(int Argc, char** Argv)
 {
+    if (Argc == 2 && QByteArray(Argv[1]) == "--focus-peer") {
+        QApplication App(Argc, Argv); QWidget Window; QLineEdit Editor(&Window);
+        struct ActivationPeer : QAbstractNativeEventFilter {
+            bool nativeEventFilter(const QByteArray&, void* Message, qintptr* Result) override {
+                const auto* Native = static_cast<MSG*>(Message);
+                if (Native->message != WM_APP + 117) return false;
+                *Result = SetForegroundWindow(reinterpret_cast<HWND>(Native->wParam));
+                return true;
+            }
+        } Peer;
+        App.installNativeEventFilter(&Peer);
+        Window.setAttribute(Qt::WA_ShowWithoutActivating); Window.show();
+        std::cout << quintptr(Window.winId()) << std::endl;
+        return App.exec();
+    }
     if (Argc == 4 && QByteArray(Argv[1]) == "--quick-find-stream" && qEnvironmentVariableIsSet("HC_EVERYTHING_TEST_INPUT"))
         return EverythingStreamFixture(Argc, Argv);
     if (Argc >= 3 && QByteArray(Argv[1]) == "--r13-ipc-probe") {
