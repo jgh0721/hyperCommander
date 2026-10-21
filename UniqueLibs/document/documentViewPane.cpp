@@ -71,7 +71,7 @@ namespace hc::document
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
             reading_->OpenPath(Path,Entry,reading_->State()["mode"].toInt());
     }
-    bool DocumentViewPane::Load(const TextInput& Input,bool Traverse)
+    bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
         const QSignalBlocker Block(this),EditorBlock(editor_);
         viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;
@@ -148,12 +148,14 @@ namespace hc::document
             const auto Book=Input.book_;const auto Path=Input.path_;const auto First=Input.image_;
             connect(Mode,&QComboBox::activated,this,[this,Book,Path,First,Mode](int Value){
                 if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);QMessageBox::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
-                if(Value==0&&!Book&&reading_->State()["pageCount"].toInt()==0){reading_->hide();image_->show();return;}
+                auto* Edit=findChild<QAction*>("imageEditMode");
+                auto* EditBar=findChild<QToolBar*>("imageEditToolbar");
+                if(Value==0&&!Book&&reading_->State()["pageCount"].toInt()==0){reading_->hide();image_->show();Edit->setEnabled(true);EditBar->setVisible(Edit->isChecked());return;}
                 if(reading_->State()["pageCount"].toInt()==0){
                     if(Book)reading_->Load(Book,First);
                     else reading_->OpenPath(readingPath_.isEmpty()?Path:readingPath_,readingEntry_,Value);
                 }
-                animation_->Clear();image_->hide();if(auto* EditBar=findChild<QToolBar*>("imageEditToolbar"))EditBar->hide();reading_->show();reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
+                animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
             });
             connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
             const auto ReadingOptionsStart=toolbar_->actions().size();
@@ -171,6 +173,16 @@ namespace hc::document
             auto* OptionsButton=new QToolButton(toolbar_);OptionsButton->setText(tr("읽기 설정"));OptionsButton->setPopupMode(QToolButton::InstantPopup);OptionsButton->setMenu(ReadingOptions);toolbar_->addWidget(OptionsButton);
             connect(image_,&QImageView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(image_,&QImageView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             auto* EditToolbar=new QToolBar(tr("이미지 편집"),this);EditToolbar->setObjectName("imageEditToolbar");
+            auto* Edit=toolbar_->addAction(ToolbarIcons::iconByName("annotation-freetext"),tr("편집"));
+            Edit->setObjectName("imageEditMode");Edit->setProperty("documentIconName","annotation-freetext");
+            Edit->setToolTip(tr("이미지 편집 도구모음 표시/숨기기"));Edit->setCheckable(true);Edit->setChecked(ImageEditing);
+            if(auto* Button=qobject_cast<QToolButton*>(toolbar_->widgetForAction(Edit)))Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            connect(Edit,&QAction::toggled,this,[this,EditToolbar](bool Enabled){
+                EditToolbar->setVisible(Enabled);
+                // A hidden drawing toolbar must not leave an active canvas tool.
+                if(!Enabled)image_->setEditTool(QImageView::None);
+                emit ViewStateChanged();
+            });
             for(auto* Action:OriginalActions){
                 const auto Name=Action->objectName();
                 if(Name=="image.previous"||Name=="image.next"){
@@ -186,6 +198,7 @@ namespace hc::document
             auto* OpenBookmark=ReadingOptions->addAction(tr("책갈피 이동"));connect(OpenBookmark,&QAction::triggered,reading_,&ImageReadingView::OpenBookmark);
             auto* Private=ReadingOptions->addAction(tr("시크릿 읽기"));Private->setCheckable(true);connect(Private,&QAction::toggled,reading_,&ImageReadingView::SetPrivate);
             static_cast<QVBoxLayout*>(layout())->insertWidget(1,EditToolbar);
+            EditToolbar->setVisible(ImageEditing);
             auto* Filters=new QComboBox(toolbar_);Filters->setObjectName("imageDisplayFilter");Filters->addItem(tr("자동"),"auto");
             for(const auto& Filter:ImageFilterRegistry::Filters())Filters->addItem(Filter.label_,Filter.id_);
             auto* Quality=new QSpinBox(toolbar_);Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));EditToolbar->addWidget(Quality);

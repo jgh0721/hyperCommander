@@ -22,7 +22,7 @@ namespace hc::document
         ~DocumentViewPane() override;
         QPlainTextEdit* Editor() const { return editor_; }
         ViewUiContribution Contribution() const { return contribution_; }
-        bool Load(const TextInput& Input, bool Traverse);
+        bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }

@@ -685,7 +685,7 @@ namespace hc::document
                     Tab->temporarySource_.clear();Tab->recovered_=false;Tab->closeAfterSave_=false;
                     Tab->checkpointedRevision_=(std::numeric_limits<std::uint64_t>::max)();
                     Tab->loading_=true;Tab->pane_->SetReadingSource({},{});
-                    Tab->pane_->Load(Tab->input_,true);Tab->loading_=false;
+                    Tab->pane_->Load(Tab->input_,true,!hosted_);Tab->loading_=false;
                     SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),{},Tab->originalSave_};
                     Tab->session_->SetBinaryContent(true);
                     Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
@@ -742,7 +742,7 @@ namespace hc::document
                 Tab->loading_=true;
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
-                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_);
+                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty());
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}
                 else {

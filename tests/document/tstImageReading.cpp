@@ -7,6 +7,7 @@
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include <QTemporaryDir>
 #include <QToolBar>
+#include <QToolButton>
 #include <QScrollBar>
 #include <QImageReader>
 #include <QDataStream>
@@ -537,6 +538,50 @@ class ImageReadingTests : public QObject
         QVERIFY(!F.Active());
         QVERIFY(W.isVisible());
     }
+    void imageEditingToolbarDefaults_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::newRow("HyperEditor") << false;
+        QTest::newRow("HyperViewer") << true;
+    }
+    void imageEditingToolbarDefaults()
+    {
+        QFETCH(bool, Hosted);
+        QTemporaryDir Root; Fixture(Root.path(), 2);
+        DocumentWorkspaceWidget W(Root.filePath("recovery"), Hosted);
+        W.resize(1200, 700); W.show();
+        W.Handle({{"action", "open"}, {"path", Root.filePath("1.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"] == "ready", 20000);
+        const auto Id = Document(W)["documentId"].toString();
+        auto* Pane = W.findChild<DocumentViewPane*>(); QVERIFY(Pane);
+        auto* Toolbar = Pane->findChild<QToolBar*>("viewToolbar"); QVERIFY(Toolbar);
+        auto* EditBar = Pane->findChild<QToolBar*>("imageEditToolbar"); QVERIFY(EditBar);
+        auto* Edit = Pane->findChild<QAction*>("imageEditMode"); QVERIFY(Edit);
+        auto* Image = Pane->findChild<QImageView*>(); QVERIFY(Image);
+        QCOMPARE(EditBar->isHidden(), Hosted);
+        QCOMPARE(Edit->isChecked(), !Hosted);
+        QVERIFY(Toolbar->actions().contains(Edit));
+        QVERIFY(!Edit->icon().isNull());
+        QVERIFY(Image->isEnabled());
+        auto* Button = qobject_cast<QToolButton*>(Toolbar->widgetForAction(Edit)); QVERIFY(Button);
+        QCOMPARE(Button->toolButtonStyle(), Qt::ToolButtonTextBesideIcon);
+        if (Hosted) QTest::mouseClick(Button, Qt::LeftButton);
+        QVERIFY(Edit->isChecked()); QVERIFY(EditBar->isVisible());
+        QVERIFY(!Document(W)["dirty"].toBool());
+        Image->setEditTool(QImageView::Rectangle);
+        QTest::mouseClick(Button, Qt::LeftButton);
+        QVERIFY(EditBar->isHidden());
+        QCOMPARE(Image->currentEditTool(), QImageView::None);
+        QTest::mouseClick(Button, Qt::LeftButton);
+        QVERIFY(EditBar->isVisible());
+        emit Pane->OpenRequested(Root.filePath("2.png"));
+        QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(), Root.filePath("2.png"), 20000);
+        QCOMPARE(Document(W)["documentId"].toString(), Id);
+        QCOMPARE(Pane->findChild<QToolBar*>("imageEditToolbar")->isHidden(), Hosted);
+        QVERIFY(!Document(W)["dirty"].toBool());
+        W.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        W.RequestClose();
+    }
     void readingToolbarCopyAndEditGuard()
     {
         QTemporaryDir Root;
@@ -548,6 +593,8 @@ class ImageReadingTests : public QObject
         QVERIFY(Pane.Load(Input.Value(), false));
         Pane.show();
         QVERIFY(!Pane.Execute({{"action", "reading.mode"}, {"mode", 1}}).contains("error"));
+        QVERIFY(Pane.findChild<QToolBar*>("imageEditToolbar")->isHidden());
+        QVERIFY(!Pane.findChild<QAction*>("imageEditMode")->isEnabled());
         auto *Reader = Pane.findChild<ImageReadingView *>();
         QTRY_COMPARE(Reader->State()["pageCount"].toInt(), 2);
         Reader->GoTo(1);
