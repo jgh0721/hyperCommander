@@ -9,7 +9,7 @@
 #include "Components/cmpView.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
-namespace fm::ui { class PanelTabStrip; class BreadcrumbBar; class DriveButton; class SegmentedControl; class PanelStatusBar; }
+namespace fm::ui { class PanelTabStrip; class BreadcrumbBar; class DriveButton; class SegmentedControl; class PanelStatusBar; class ProgressBar; }
 class CFsModelT;
 class QMainUI;
 class CFSProxyModel;
@@ -54,6 +54,7 @@ class CmpPanel : public QWidget
         CViewT*                     QuickView = nullptr;
         CFsModelT*                  Model = nullptr;
         CFSProxyModel*              ProxyModel = nullptr;
+        QString                    navigationStatus_, navigationTarget_;
 
         quint64                     SelectedSize = 0;
         int                         SelectedFileCount = 0;
@@ -141,6 +142,7 @@ private:
     void                            navigateHistoryIndex(int Index);
     void                            restoreTab(int Index);
     void                            updateWorkspaceStatus();
+    void                            updateNavigationProgress();
 
     CViewT*                         createGridView();
     int                             retrieveCurrentIndex() const;
@@ -162,6 +164,7 @@ private:
     bool                            workspaceRestored_ = false;
     fm::ui::PanelTabStrip*           tabs_ = nullptr;
     fm::ui::BreadcrumbBar*           path_ = nullptr;
+    fm::ui::ProgressBar*             navigationProgress_ = nullptr;
     fm::ui::DriveButton*             drive_ = nullptr;
     fm::ui::SegmentedControl*        viewMode_ = nullptr;
     fm::ui::PanelStatusBar*          status_ = nullptr;

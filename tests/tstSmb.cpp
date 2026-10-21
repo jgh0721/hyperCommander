@@ -22,6 +22,7 @@
 #include <fmwidgets/RenameComparisonView.h>
 #include <fmwidgets/SegmentedControl.h>
 #include <fmwidgets/BreadcrumbBar.h>
+#include <fmwidgets/ProgressBar.h>
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmwidgets/CommandLine.h>
 #include <fmwidgets/WindowChrome.h>
@@ -141,6 +142,7 @@ public:
     std::promise<void> release_;
     std::shared_future<void> gate_ = release_.get_future().share();
     std::atomic<bool> started_{false};
+    bool fail_ = false;
     hc::storage::test::MemoryProvider inner_;
     hc::storage::ProviderId Id() const override { return inner_.Id(); }
     hc::storage::Task<hc::storage::SupportDecision> Supports(hc::storage::Operation Op, hc::storage::OperationContext Ctx) override { return inner_.Supports(Op, Ctx); }
@@ -148,6 +150,7 @@ public:
     {
         started_ = true;
         gate_.wait();
+        if (fail_) return hc::storage::Ready<std::unique_ptr<hc::storage::IEntryCursor>>(hc::storage::Error{hc::storage::ErrorCategory::Unavailable, "test-listing-failed"});
         return inner_.Enumerate(At, Ctx);
     }
     hc::storage::Task<hc::storage::EntrySnapshot> Stat(hc::storage::ResourceId Id, hc::storage::OperationContext Ctx) override { return inner_.Stat(Id, Ctx); }
@@ -239,7 +242,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -2929,6 +2932,41 @@ private slots:
                 QCOMPARE(TargetModel->GetName(Index), Enabled ? QString("zzPrevious") : QString(".."));
             }
         }
+    }
+    void navigationProgressUi_data()
+    {
+        QTest::addColumn<QString>("Outcome");
+        for (const auto& Outcome : {QString("complete"), QString("cancel"), QString("failure")}) QTest::newRow(qPrintable(Outcome)) << Outcome;
+    }
+    void navigationProgressUi()
+    {
+        QFETCH(QString, Outcome);
+        main_->resize(1400, 900); main_->show();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); QThreadPool::globalInstance()->waitForDone(); });
+        auto Provider = std::make_shared<GatedProvider>(); Provider->fail_ = Outcome == "failure";
+        bool Released = false; const auto Release = qScopeGuard([&] { if (!Released) Provider->release_.set_value(); });
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* Busy = Panel->findChild<fm::ui::ProgressBar*>("hc.navigation.progress"); QVERIFY(Busy);
+        auto* Path = Panel->findChild<fm::ui::BreadcrumbBar*>("hc.panelPath"); QVERIFY(Path);
+        const auto Size = Panel->size();
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\"); Model->Refresh();
+        QTRY_VERIFY(Provider->started_.load()); QVERIFY(Model->IsLoading()); QVERIFY(!Busy->isHidden());
+        QCOMPARE(Busy->minimum(), 0); QCOMPARE(Busy->maximum(), 0); QCOMPARE(Busy->focusPolicy(), Qt::NoFocus);
+        QVERIFY(Busy->testAttribute(Qt::WA_TransparentForMouseEvents)); QCOMPARE(Panel->size(), Size);
+        QVERIFY(Path->rect().contains(Busy->geometry()));
+        const auto Frame = Busy->grab().toImage(); QTest::qWait(150); QVERIFY(Frame != Busy->grab().toImage());
+        QVERIFY(Panel->grab(QRect(0, 0, Panel->width(), qMin(150, Panel->height()))).save(QCoreApplication::applicationDirPath() + "/navigation-progress-" + Outcome + ".png"));
+        bool Responsive = false; QTimer::singleShot(0, Panel, [&] { Responsive = true; }); QTRY_VERIFY(Responsive);
+        const int OldIndex = Panel->CurrentTabIndex(); Panel->AddTab(false); QVERIFY(Busy->isHidden());
+        Panel->findChild<QTabWidget*>("tabWidget")->setCurrentIndex(OldIndex); QTRY_VERIFY(!Busy->isHidden());
+        if (Outcome == "cancel") { Model->CancelNavigation(); QVERIFY(Busy->isHidden()); }
+        Provider->release_.set_value(); Released = true;
+        QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Busy->isHidden());
+        if (Outcome == "failure") {
+            QVERIFY(Model->LastNavigationError()); QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+            Panel->findChild<QMessageBox*>("hc.navigationError")->button(QMessageBox::Cancel)->click();
+        } else if (Outcome == "complete") QVERIFY(!Model->LastNavigationError());
     }
     void navigationRefreshSettingsUi()
     {

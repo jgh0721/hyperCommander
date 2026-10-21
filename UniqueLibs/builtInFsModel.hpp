@@ -142,6 +142,7 @@ public:
     std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return searchResults_ ? searchLocal_ : acceptedProvider_; }
 
 signals:
+    void DirectoryReadStarted(const QString& Path, bool Archive);
     void NavigationCancelled();
     void DirectoryReadFailed(const QString& Path, bool Local);
     void RetryRequested();

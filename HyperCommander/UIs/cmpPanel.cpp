@@ -8,6 +8,7 @@
 #include <fmwidgets/DriveButton.h>
 #include <fmwidgets/SegmentedControl.h>
 #include <fmwidgets/PanelStatusBar.h>
+#include <fmwidgets/ProgressBar.h>
 #include <fmstyle/ThemeManager.h>
 #include <QtConcurrent>
 #include <QGridLayout>
@@ -144,6 +145,11 @@ void CmpPanel::AddTab(bool Navigate)
         }
     });
     connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);
+    connect(Model, &CFSModel::DirectoryReadStarted, this, [this, State](const QString& Path, bool Archive) {
+        State->navigationStatus_ = Archive ? tr("압축 파일 여는 중…") : tr("목록 조회 중…");
+        State->navigationTarget_ = Path;
+        if (vecTabStates.value(ui.tabWidget->currentIndex()) == State) { updateNavigationProgress(); processPanelStatusText(); }
+    });
     connect(Model, &CFSModel::MetadataChanged, Proxy, [Proxy] { Proxy->SetSearch(Proxy->Search(), Proxy->SearchMatch()); });
     connect(Model, &CFSModel::RetryRequested, this, [this, Model] {
         for (int Index = 0; Index < vecTabStates.size(); ++Index)
@@ -366,6 +372,7 @@ void CmpPanel::restoreTab(int Index)
 
 void CmpPanel::updateWorkspaceStatus()
 {
+    updateNavigationProgress();
     if (!workspaceStatus_ || ui.tabWidget->currentIndex() < 0 || ui.tabWidget->currentIndex() >= vecTabStates.size()) return;
     const auto Model = static_cast<CFSModel*>(vecTabStates[ui.tabWidget->currentIndex()]->Model);
     const auto Location = Model->WorkspaceLocation();
@@ -971,7 +978,22 @@ void CmpPanel::resizeEvent( QResizeEvent* event )
 
 bool CmpPanel::eventFilter(QObject* Object, QEvent* Event)
 {
+    if (Object == path_ && (Event->type() == QEvent::Resize || Event->type() == QEvent::Show)) updateNavigationProgress();
     return QWidget::eventFilter(Object, Event);
+}
+
+void CmpPanel::updateNavigationProgress()
+{
+    if (!navigationProgress_ || !path_) return;
+    const auto State = vecTabStates.value(ui.tabWidget->currentIndex());
+    const bool Busy = State && State->Model->IsLoading();
+    navigationProgress_->setGeometry(2, qMax(0, path_->height() - 4), qMax(0, path_->width() - 4), 3);
+    navigationProgress_->setVisible(Busy);
+    if (Busy) {
+        navigationProgress_->setAccessibleName(State->navigationStatus_);
+        navigationProgress_->setToolTip(State->navigationStatus_ + "\n" + QDir::toNativeSeparators(State->navigationTarget_));
+        navigationProgress_->raise();
+    }
 }
 
 
@@ -1045,6 +1067,12 @@ void CmpPanel::initializeUIs()
         }
     });
     Layout->addWidget(path_, 1); Layout->addWidget(historyButton_);
+    navigationProgress_ = new fm::ui::ProgressBar(path_);
+    navigationProgress_->setObjectName("hc.navigation.progress");
+    navigationProgress_->setThickness(fm::ui::ProgressBar::ThinBar); navigationProgress_->setCompact(true);
+    navigationProgress_->setRange(0, 0); navigationProgress_->setTextVisible(false); navigationProgress_->setFixedHeight(3);
+    navigationProgress_->setFocusPolicy(Qt::NoFocus); navigationProgress_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    navigationProgress_->hide(); path_->installEventFilter(this);
     ui.verticalLayout->insertWidget(2, Controls);
     search_ = new QLineEdit(this); search_->setObjectName("hc.workspaceSearch"); search_->hide();
     connect(search_, &QLineEdit::textChanged, this, [this](const QString& Text) { SetSearch(Text); });
@@ -1422,7 +1450,7 @@ void CmpPanel::processPanelStatusText()
         const auto First = Model->rowCount() ? Model->GetFileInfo(Model->index(0, 0)) : nullptr;
         const int ParentCount = First && First->Name_ == ".." ? 1 : 0;
         const int FolderCount = std::max(0, State->footerDirectoryCount_ - ParentCount);
-        status_->setLeftText(Model->IsLoading() ? tr("목록 조회 중…") : Model->LastNavigationError() ? tr("목록 조회 실패 · 다시 시도하십시오") :
+        status_->setLeftText(Model->IsLoading() ? (State->navigationStatus_.isEmpty() ? tr("목록 조회 중…") : State->navigationStatus_) : Model->LastNavigationError() ? tr("목록 조회 실패 · 다시 시도하십시오") :
             tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
             .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));
         status_->setRightText(Search().isEmpty() ? tr("폴더 %1개").arg(FolderCount) : tr("검색 결과 %1개").arg(std::max(0, State->ProxyModel->rowCount() - ParentCount)));

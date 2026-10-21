@@ -730,6 +730,7 @@ void CFSModel::refreshProvider()
     navigationError_.reset();
     loading_ = true;
     tracker_.SetBusy(true);
+    emit DirectoryReadStarted(TargetFullPath, Location.kind_ == LocatorKind::Archive);
     OperationContext Context;
     Context.requestId_ = std::to_string(Generation);
     Context.stopToken_ = navigationStop_.get_token();
