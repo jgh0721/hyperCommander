@@ -1707,6 +1707,13 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (Event->type() == QEvent::ShortcutOverride && !IsEditing()
+        && (Watched == grid_ || Watched == grid_->viewport())) {
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        if (hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve()) == "hc.navigate.enterFile") {
+            Event->accept(); return true;
+        }
+    }
     if (Event->type() == QEvent::KeyRelease && (Watched == grid_ || Watched == grid_->viewport())) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
         if (!Key->isAutoRepeat() && Key->key() == selectionHeldKey_) finishSelectionInput();
@@ -1779,7 +1786,7 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     if (Event->type() == QEvent::FontChange || Event->type() == QEvent::Show || Event->type() == QEvent::DevicePixelRatioChange) requestPresentation();
     if (Watched == grid_->viewport() && Event->type() == QEvent::KeyPress) resetRenameClicks();
 
-    if( Event->type() == QEvent::KeyPress && Watched != grid_->viewport() )
+    if( Event->type() == QEvent::KeyPress )
     {
         resetRenameClicks();
         if( IsEditing() == true )

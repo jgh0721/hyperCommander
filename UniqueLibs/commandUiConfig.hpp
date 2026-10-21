@@ -86,10 +86,28 @@ inline QList<QKeySequence> CommandKeys(const TyMapShortcutToCMDStr& Values, cons
     return Keys;
 }
 
+inline QString ShortcutCommand(const QKeyEvent& Event, const TyMapShortcutToCMDStr& Values)
+{
+    auto Key = Event.keyCombination();
+    if (Values.contains(Key)) return CommandId(Values.value(Key));
+    // Windows marks navigation keys from a numeric keypad as KeypadModifier.
+    // Use the configured navigation shortcut unless the keypad has its own one.
+    if (Key.keyboardModifiers().testFlag(Qt::KeypadModifier)) {
+        switch (Key.key()) {
+        case Qt::Key_Home: case Qt::Key_End: case Qt::Key_PageUp: case Qt::Key_PageDown:
+        case Qt::Key_Left: case Qt::Key_Right: case Qt::Key_Up: case Qt::Key_Down:
+            Key = QKeyCombination(Key.keyboardModifiers() & ~Qt::KeypadModifier, Key.key());
+            break;
+        default: break;
+        }
+    }
+    return CommandId(Values.value(Key));
+}
+
 inline bool InvokeShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& Values,
     const std::function<bool(const QString&)>& Invoke)
 {
-    const auto Name = Values.value(Event.keyCombination());
-    return !Name.isEmpty() && Invoke(CommandId(Name));
+    const auto Command = ShortcutCommand(Event, Values);
+    return !Command.isEmpty() && Invoke(Command);
 }
 } // namespace hc::ui

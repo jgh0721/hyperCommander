@@ -155,6 +155,21 @@ private slots:
         }
         QVERIFY(EffectiveShortcuts({{"useBuiltInShortcuts", false}}, {}).isEmpty());
     }
+    void keypadNavigationShortcuts()
+    {
+        const QKeyCombination Plain(Qt::ControlModifier, Qt::Key_PageDown);
+        const QKeyCombination Keypad(Qt::ControlModifier | Qt::KeypadModifier, Qt::Key_PageDown);
+        const QKeyEvent Event(QEvent::KeyPress, Keypad.key(), Keypad.keyboardModifiers());
+        auto Keys = EffectiveShortcuts({}, {{"Ctrl+PgDown", "hc.navigate.enterFile"}});
+        QString Invoked;
+        const auto Invoke = [&](const QString& Id) { Invoked = Id; return true; };
+        QVERIFY(InvokeShortcut(Event, Keys, Invoke)); QCOMPARE(Invoked, QString("hc.navigate.enterFile"));
+        Keys[Keypad] = QLatin1String("hc.navigate.parent");
+        QVERIFY(InvokeShortcut(Event, Keys, Invoke)); QCOMPARE(Invoked, QString("hc.navigate.parent"));
+        Keys.remove(Keypad); Keys.remove(Plain); Invoked.clear();
+        QVERIFY(!InvokeShortcut(Event, Keys, Invoke)); QVERIFY(Invoked.isEmpty());
+        QVERIFY(!InvokeShortcut(Event, EffectiveShortcuts({{"useBuiltInShortcuts", false}}, {}), Invoke));
+    }
     void shellMenuDefaults()
     {
         QVERIFY(!FindCommand("hc.file.shellMenu").Name.isEmpty());
