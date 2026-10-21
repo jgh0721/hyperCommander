@@ -49,6 +49,10 @@ namespace hc::storage
         // These bounded operations execute on the scheduler worker. A session
         // has one owner and one outstanding call, never concurrent Append/Abort.
         virtual Result<Unit> Append(std::span<const std::byte> Bytes, OperationContext Context) = 0;
+        virtual bool CanProduceContent(OperationContext) const { return false; }
+        // Exclusive producer worker; the coordinator joins before any other call.
+        virtual Result<Unit> ProduceContent(ContentProducer, OperationContext)
+        { return Error{ErrorCategory::Unsupported, "produced-content-unavailable"}; }
         virtual Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) = 0;
         // Source identity is immutable. Each extra/verification advance is bounded.
         virtual Result<Unit> ConfigureCopy(EntrySnapshot, CopyOptions Options, OperationContext)
@@ -74,6 +78,7 @@ namespace hc::storage
         { return Error{ErrorCategory::Unsupported, "metadata-patch-unavailable", Id()}; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) = 0;
         virtual CopyCapabilities CopySupport() const { return {}; }
+        virtual bool CanProduceContent(OperationContext) const { return false; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context)
         {
             if (Options.verify_ || Options.acl_ || Options.streams_) return Error{ErrorCategory::Unsupported, "copy-options-unavailable", Id()};

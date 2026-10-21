@@ -1,5 +1,6 @@
 ﻿#include "wcxBackend.hpp"
 #include <QtCore>
+#include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
@@ -84,6 +85,12 @@ namespace hc::plugins
         int __stdcall Progress(wchar_t*, int Bytes)
         {
             if (!Current || Current->context_.Check({"wcx"})) return 0;
+            try {
+                while (Current->context_.pauseRequested_ && Current->context_.pauseRequested_()) {
+                    if (Current->context_.Check({"wcx"})) return 0;
+                    Sleep(10);
+                }
+            } catch (...) { Current->progressFailure_ = Error{ErrorCategory::Internal, "archive-pause-callback"}; return 0; }
             // WCX also encodes progress bars as -1..-100 / -1000..-1100.
             // Changed percentages are work signals, not byte counts. Repeated
             // values must not disguise a stalled plugin as advancing work.
@@ -271,6 +278,58 @@ namespace hc::plugins
                         return Invalid("archive-extracted-size-mismatch");
                     return Unit{};
                 }
+            }
+            Result<Unit> ExtractSelected(std::string Archive, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override
+            {
+                const auto To = QString::fromStdString(Directory);
+                const QFileInfo Info(To);
+                if (Context.workload_.IsAutomatic() || Indices.empty() || Indices.size() > Context.EnumerationLimit()
+                    || !std::is_sorted(Indices.begin(), Indices.end()) || std::adjacent_find(Indices.begin(), Indices.end()) != Indices.end()
+                    || !Absolute(Directory) || !Info.isDir() || Info.isSymLink()
+                    || !QDir(To).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty())
+                    return Invalid("wcx-selected-private-output");
+                const auto NativeDirectory = Native(Directory);
+                const auto DirectoryPin = CreateFileW(NativeDirectory.c_str(), FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (DirectoryPin == INVALID_HANDLE_VALUE) return Invalid("wcx-selected-directory-pin");
+                auto CloseDirectory = qScopeGuard([&] { CloseHandle(DirectoryPin); });
+                BY_HANDLE_FILE_INFORMATION DirectoryInfo{};
+                if (!GetFileInformationByHandle(DirectoryPin, &DirectoryInfo) || (DirectoryInfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                    return Invalid("wcx-selected-reparse-output");
+                auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
+                auto Plugin = std::make_shared<Module>(); std::lock_guard Lock(Plugin->mutex_);
+                auto Opened = open(Plugin, Archive, PK_OM_EXTRACT, Context); if (!Opened.HasValue()) return Opened.Failure();
+                const auto Handle = Opened.Value(); auto Cleanup = qScopeGuard([&] { Plugin->close_(Handle); });
+                Callback State{Context, {}, 0}; CallbackScope Scope(State);
+                std::vector<std::pair<QString, std::uint64_t>> Outputs; std::size_t Selected = 0;
+                ArchiveSelectionDigest Digest;
+                for (std::uint64_t Count = 0; Selected < Indices.size(); ++Count) {
+                    if (const auto Stop = Context.Check({"wcx"})) return *Stop;
+                    if (Count >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget", {"wcx"}};
+                    tHeaderDataExW Raw{}; const auto Code = Plugin->header_(Handle, &Raw);
+                    if (Code == E_END_ARCHIVE) return Invalid("wcx-selected-entry-missing");
+                    auto Checked = Check(Code, State); if (!Checked.HasValue()) return Checked;
+                    auto Header = Decode(Raw); if (!Header.HasValue()) return Header.Failure();
+                    State.attempts_ = 0; State.percent_ = 0; State.output_.clear(); State.limit_ = 0;
+                    if (Count != Indices[Selected]) {
+                        Checked = Check(Plugin->process_(Handle, PK_SKIP, nullptr, nullptr), State); if (!Checked.HasValue()) return Checked;
+                        continue;
+                    }
+                    if (Header.Value().directory_ || (Header.Value().attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) return Invalid("wcx-selected-file-required");
+                    Digest.Add(std::uint32_t(Count), Header.Value());
+                    const auto Output = QDir(To).filePath(QString::number(Count) + ".bin");
+                    State.output_ = Output.toStdString(); State.limit_ = Header.Value().size_;
+                    auto Target = Native(State.output_);
+                    Checked = Check(Plugin->process_(Handle, PK_EXTRACT, nullptr, Target.data()), State); if (!Checked.HasValue()) return Checked;
+                    Outputs.emplace_back(Output, Header.Value().size_); ++Selected;
+                }
+                auto Closed = Check(Plugin->close_(Handle), State); Cleanup.dismiss(); if (!Closed.HasValue()) return Closed;
+                for (const auto& [Output, Size] : Outputs) {
+                    const QFileInfo Produced(Output);
+                    if (!Produced.isFile() || Produced.isSymLink() || Produced.size() < 0 || std::uint64_t(Produced.size()) != Size)
+                        return Invalid("archive-extracted-size-mismatch");
+                }
+                return Digest.Save(To);
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {

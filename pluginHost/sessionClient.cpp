@@ -12,6 +12,10 @@ namespace hc::plugins
         const auto Io = [&] { OperationContext Value; Value.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(ResponseMs); return Value; };
         const auto Send = [&](WireKind Type, const QByteArray& Data) { return WriteFrame(Pipe, Process, Type, Sequence, Data, Io(), {2, 0}); };
         if (const auto Stop = Context.Check({"plugin-host"})) return *Stop;
+        const bool CanPause = Kind == WireKind::ArchiveExtract && Request.value("indices").isArray() && Request.value("output").isString() && bool(Context.pauseRequested_);
+        bool Paused = false;
+        try { Paused = CanPause && Context.pauseRequested_(); } catch (...) { return HostError("session-pause-query"); }
+        if (Paused) Request["initialPause"] = true;
         const auto Payload = EncodeSessionPayload({{"session", Epoch}, {"kind", int(Kind)}, {"request", Request}, {"context", EncodeContextV2(Context)}}, Binary);
         auto Sent = Send(WireKind::SessionInvoke, Payload); if (!Sent.HasValue()) return Sent.Failure();
         auto LastProgress = std::chrono::steady_clock::now(); auto CancelAt = LastProgress;
@@ -26,6 +30,15 @@ namespace hc::plugins
             if (!Cancel)
             {
                 Cancel = Context.Check({"plugin-host"});
+                bool RequestedPause = false;
+                try { RequestedPause = CanPause && Context.pauseRequested_(); } catch (...) { return HostError("session-pause-query"); }
+                if (!Cancel && RequestedPause != Paused) {
+                    Sent = Send(WireKind::SessionPause, QByteArray(1, RequestedPause ? '\1' : '\0')); if (!Sent.HasValue()) return Sent.Failure();
+                    Paused = RequestedPause; LastProgress = Now;
+                }
+                // Explicit deadlines and host liveness remain bounded during a
+                // user pause; only the work-progress watchdog is suspended.
+                if (Paused) LastProgress = Now;
                 if (!Cancel && !Pending && NoProgressMs && Now - LastProgress > std::chrono::milliseconds(NoProgressMs))
                     Cancel = HostError("session-no-progress");
                 if (Cancel) { CancelAt = Now; Sent = Send(WireKind::SessionCancel, {}); if (!Sent.HasValue()) return Sent.Failure(); }

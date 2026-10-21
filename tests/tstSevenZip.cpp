@@ -15,6 +15,7 @@
 #include <winioctl.h>
 #include <set>
 #include <algorithm>
+#include <atomic>
 
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -355,6 +356,55 @@ private slots:
         ArchiveUpdate Raw{Copy.toStdString(),Input.path().toStdString(),{"crc.bin"}};Raw.creation_=ArchiveCreationOptions{0,false};QVERIFY(Backend->Update(Raw,{}).HasValue());
         auto Damaged=Read(Copy);const auto At=Damaged.indexOf("STREAM-CRC-PAYLOAD");QVERIFY(At>=0);Damaged[At]^=1;QVERIFY(Put(Copy,Damaged));
         Stream=Backend->OpenReadSession(Copy.toStdString(),{0},{});QVERIFY(Stream.HasValue());auto Broken=Stream.Value()->Read(0,1024,{});QVERIFY(!Broken.HasValue());Stream.Value().reset();
+    }
+    void selectedDirectPause_data()
+    {
+        QTest::addColumn<bool>("Cancel"); QTest::newRow("resume") << false; QTest::newRow("cancel") << true;
+    }
+    void selectedDirectPause()
+    {
+        QFETCH(bool, Cancel); QTemporaryDir Input, Output; QVERIFY(Input.isValid() && Output.isValid());
+        auto Options = BuiltinSevenZipOptions(); Options.limits_.noProgressMs_ = 1000; Options.limits_.requestMs_ = 3000;
+        auto Backend = MakeApprovedWcxBackend(Options);
+        for (int I = 0; I < 3; ++I) QVERIFY(Put(Input.filePath(QString("member-%1").arg(I)), QByteArray(8192, char('a' + I))));
+        const auto Archive = Input.filePath("paused.7z");
+        ArchiveUpdate Create{Archive.toStdString(), Input.path().toStdString(), {"member-0", "member-1", "member-2"}};
+        Create.creation_ = ArchiveCreationOptions{5, true}; QVERIFY(Backend->Update(std::move(Create), {}).HasValue());
+        std::atomic<bool> Paused = true; std::stop_source Stop; OperationContext Context;
+        Context.pauseRequested_ = [&] { return Paused.load(); }; Context.stopToken_ = Stop.get_token();
+        auto Future = std::async(std::launch::async, [&] { return Backend->ExtractSelected(Archive.toStdString(), Output.path().toStdString(), {0, 2}, Context); });
+        const auto Unblock = qScopeGuard([&] { Paused = false; Stop.request_stop(); });
+        QTest::qWait(1500);
+        QVERIFY(Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready);
+        QVERIFY(QDir(Output.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty());
+        if (Cancel) Stop.request_stop(); else Paused = false;
+        QVERIFY(Future.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        auto Done = Future.get();
+        if (Cancel) { QVERIFY(!Done.HasValue()); QCOMPARE(Done.Failure().category_, ErrorCategory::Cancelled); }
+        else {
+            QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            QCOMPARE(Read(Output.filePath("0.bin")), QByteArray(8192, 'a'));
+            QCOMPARE(Read(Output.filePath("2.bin")), QByteArray(8192, 'c'));
+        }
+    }
+    void selectedDirectExtraction()
+    {
+        QTemporaryDir Input, Output; QVERIFY(Input.isValid() && Output.isValid());
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        for (int I = 0; I < 4; ++I) QVERIFY(Put(Input.filePath(QString("member-%1").arg(I)), QByteArray(65536, char('a' + I))));
+        const auto Archive = Input.filePath("selected.7z");
+        ArchiveUpdate Create{Archive.toStdString(), Input.path().toStdString(), {"member-0", "member-1", "member-2", "member-3"}};
+        Create.creation_ = ArchiveCreationOptions{5, true}; QVERIFY(Backend->Update(std::move(Create), {}).HasValue());
+        auto Done = Backend->ExtractSelected(Archive.toStdString(), Output.path().toStdString(), {1, 3}, {});
+        QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+        QCOMPARE(QDir(Output.path()).entryList(QDir::Files), (QStringList{"1.bin", "3.bin", "selection.sha256"}));
+        QCOMPARE(Read(Output.filePath("1.bin")), QByteArray(65536, 'b'));
+        QCOMPARE(Read(Output.filePath("3.bin")), QByteArray(65536, 'd'));
+        QTemporaryDir Invalid;
+        QVERIFY(!Backend->ExtractSelected(Archive.toStdString(), Invalid.path().toStdString(), {3, 1}, {}).HasValue());
+        QVERIFY(!Backend->ExtractSelected(Archive.toStdString(), Invalid.path().toStdString(), {1, 1}, {}).HasValue());
+        QVERIFY(!Backend->ExtractSelected(Archive.toStdString(), Invalid.path().toStdString(), {99}, {}).HasValue());
+        QVERIFY(QDir(Invalid.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
     }
     void bulkDecodeAndPrivateOutputGuards()
     {

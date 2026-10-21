@@ -169,6 +169,11 @@ namespace hc::storage
         std::function<bool()> pauseRequested_;
         // Coordinator-local selection session hint, never serialized or an authority grant.
         bool orderedBatchRead_ = false;
+        // Coordinator-only execution hints; neither grants access to a path.
+        bool directContent_ = true;
+        bool workerRead_ = false;
+        // The producer allocates its own output; do not reserve a second payload.
+        bool producingContent_ = false;
         bool freshEnumerationMetadata_ = false;
         // Mutation coordinators may yield native directory enumeration a page
         // at a time. Browsing keeps its immutable snapshot by default.
@@ -280,6 +285,21 @@ namespace hc::storage
         virtual Task<Unit> Seek(std::uint64_t Offset, OperationContext Context) = 0;
     };
     struct PresentationColumn { std::string key_, title_, valueKey_; std::uint32_t flags_ = 0; };
+    struct ProducedContent
+    {
+        std::string path_;
+        std::shared_ptr<void> lifetime_;
+    };
+    struct ContentProducer
+    {
+        // The writer supplies a nonexistent file in its pinned private directory.
+        // Success means fully validated contents; failure must never be published.
+        std::function<Result<Unit>(const std::string&, OperationContext)> produce_;
+        // A batch producer may instead transfer one regular file from its pinned
+        // private directory on the supplied destination volume. The lease keeps
+        // that directory pinned until the writer validates and adopts the file.
+        std::function<Result<ProducedContent>(const std::string&, OperationContext)> take_;
+    };
     class IStorageProvider
     {
     public:
@@ -297,6 +317,8 @@ namespace hc::storage
         virtual bool UsesOrderedReads() const { return false; }
         virtual Task<Unit> PrepareReadBatch(std::vector<EntrySnapshot>, OperationContext) { return Ready<Unit>(Unit{}); }
         virtual Task<Unit> FinishReadBatch(OperationContext) { return Ready<Unit>(Unit{}); }
+        virtual Task<std::optional<ContentProducer>> PrepareContent(ResourceId, OperationContext)
+        { return Ready<std::optional<ContentProducer>>(std::optional<ContentProducer>{}); }
 
         // Resolve a locator at a new operation boundary. Callers still compare
         // the captured revision before mutating or reading selected content.

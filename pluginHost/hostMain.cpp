@@ -320,7 +320,9 @@ int main(int Argc, char** Argv)
         // duplex pipe. Retire that control for the completed invocation; it
         // must neither cancel the next invocation nor poison its sequence.
         if (LastWasSession && Header.version_ == ProtocolVersion{2, 0} && Header.sequence_ == LastSequence
-            && (Header.kind_ == WireKind::InteractionReply || (Header.kind_ == WireKind::SessionCancel && Frame.Value().payload_.isEmpty())))
+            && (Header.kind_ == WireKind::InteractionReply || (Header.kind_ == WireKind::SessionCancel && Frame.Value().payload_.isEmpty())
+                || (Header.kind_ == WireKind::SessionPause && Frame.Value().payload_.size() == 1
+                    && (Frame.Value().payload_[0] == '\0' || Frame.Value().payload_[0] == '\1'))))
         { Frame.Value().payload_.fill(0); continue; }
         if (Header.sequence_ != LastSequence + 1) return 7; LastSequence = Header.sequence_;
         LastWasSession = false;

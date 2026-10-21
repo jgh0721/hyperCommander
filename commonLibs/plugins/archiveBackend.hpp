@@ -72,6 +72,10 @@ namespace hc::plugins
         // an archive-controlled path. Older adapters retain single-file reads.
         virtual storage::Result<storage::Unit> ExtractAll(std::string, std::string, storage::OperationContext)
         { return storage::Error{storage::ErrorCategory::Unsupported, "archive-batch-extract-unsupported"}; }
+        // Selected listing ordinals, ascending and unique: ordinal.bin and a
+        // selection.sha256 receipt binding each ordinal to its name/size/CRC/type.
+        virtual storage::Result<storage::Unit> ExtractSelected(std::string, std::string, std::vector<std::uint32_t>, storage::OperationContext)
+        { return storage::Error{storage::ErrorCategory::Unsupported, "archive-selected-extract-unsupported"}; }
         virtual storage::Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string, std::vector<std::uint32_t>, storage::OperationContext)
         { return storage::Error{storage::ErrorCategory::Unsupported, "archive-stream-unsupported"}; }
         virtual storage::Result<storage::Unit> Update(ArchiveUpdate Request, storage::OperationContext Context) = 0;

@@ -7,6 +7,7 @@
 #include "nativeStorageRevision.hpp"
 #include <Aclapi.h>
 #include <QCryptographicHash>
+#include <QScopeGuard>
 #include <objbase.h>
 #include <ShlObj.h>
 #include <wrl/client.h>
@@ -199,17 +200,22 @@ namespace hc::storage
             }
             Result<Unit> Initialize(OperationContext Context)
             {
+                expectedBytes_ = Context.expectedWriteBytes_;
                 checkpoint_ = std::move(Context.writeCheckpoint_);
                 record_.transaction_ = Utf8(std::filesystem::path(stagePath_).filename().wstring());
                 record_.destination_ = destination_; record_.stage_ = {destination_.kind_, Utf8(stagePath_)};
                 record_.backup_ = {destination_.kind_, Utf8(TemporaryName(std::filesystem::path(path_.path_).parent_path().wstring(), L"backup"))};
                 BY_HANDLE_FILE_INFORMATION Info{};
                 if (!GetFileInformationByHandle(file_.value_, &Info)) return Failure(GetLastError(), id_);
+                const auto Time = [](FILETIME Value) { return LONGLONG((uint64_t(Value.dwHighDateTime) << 32) | Value.dwLowDateTime); };
+                initialTimes_.CreationTime.QuadPart = Time(Info.ftCreationTime);
+                initialTimes_.LastAccessTime.QuadPart = Time(Info.ftLastAccessTime);
+                initialTimes_.LastWriteTime.QuadPart = Time(Info.ftLastWriteTime);
                 record_.stageIdentity_ = Identity(Info);
                 if (Context.expectedWriteBytes_) {
                     if (*Context.expectedWriteBytes_ > uint64_t(INT64_MAX)) return Error{ErrorCategory::Unsupported, "native-file-size-range", id_};
                     FILE_ALLOCATION_INFO Allocation{}; Allocation.AllocationSize.QuadPart = LONGLONG(*Context.expectedWriteBytes_);
-                    if (!SetFileInformationByHandle(file_.value_, FileAllocationInfo, &Allocation, sizeof(Allocation))) return Failure(GetLastError(), id_);
+                    if (!Context.producingContent_ && !SetFileInformationByHandle(file_.value_, FileAllocationInfo, &Allocation, sizeof(Allocation))) return Failure(GetLastError(), id_);
                 }
                 return checkpoint(WritePhase::Writing);
             }
@@ -223,6 +229,90 @@ namespace hc::storage
                 if (!WriteFile(file_.value_, Bytes.data(), static_cast<DWORD>(Bytes.size()), &Written, nullptr))
                 { failed_ = true; return Failure(GetLastError(), id_); }
                 if (Written != Bytes.size()) { failed_ = true; return Error{ErrorCategory::Unavailable, "short-write", id_}; }
+                return Unit{};
+            }
+            bool CanProduceContent(OperationContext Context) const override
+            {
+                // Path-based producers cannot journal their creation atomically.
+                return destination_.kind_ == LocatorKind::Local && expectedBytes_.has_value()
+                    && !sourceHash_ && !checkpoint_ && !Context.writeCheckpoint_;
+            }
+            Result<Unit> ProduceContent(ContentProducer Producer, OperationContext Context) override
+            {
+                if (!CanProduceContent(Context) || (!Producer.produce_ && !Producer.take_) || closed_ || failed_ || productionStarted_)
+                    return Error{ErrorCategory::InvalidRequest, "produced-content-state", id_};
+                if (const auto Stop = Context.Check(id_)) return *Stop;
+                productionStarted_ = true;
+                std::wstring Output;
+                std::shared_ptr<void> Lease;
+                if (Producer.take_) {
+                    Result<ProducedContent> Taken = Error{ErrorCategory::Unavailable, "content-producer-exception", id_};
+                    try { operations::OperationMetric Timing("payload.produce", *expectedBytes_);
+                        Taken = Producer.take_(Utf8(std::filesystem::path(stagePath_).parent_path().wstring()), Context); }
+                    catch (...) { failed_ = true; return Taken.Failure(); }
+                    if (!Taken.HasValue()) { failed_ = true; return Taken.Failure(); }
+                    if (Taken.Value().path_.empty() || !Taken.Value().lifetime_) { failed_ = true; return Error{ErrorCategory::InvalidRequest, "produced-content-lease", id_}; }
+                    Output = std::filesystem::u8path(Taken.Value().path_).wstring(); Lease = std::move(Taken.Value().lifetime_);
+                } else {
+                    productionDirectory_ = TemporaryName(std::filesystem::path(stagePath_).parent_path().wstring(), L"produce");
+                    if (!CreateDirectoryW(productionDirectory_.c_str(), nullptr)) { productionDirectory_.clear(); return Failure(GetLastError(), id_); }
+                    productionPin_ = Handle(CreateFileW(productionDirectory_.c_str(), FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                    BY_HANDLE_FILE_INFORMATION DirectoryInfo{};
+                    if (productionPin_.value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(productionPin_.value_, &DirectoryInfo)
+                        || !(DirectoryInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (DirectoryInfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                        return Error{ErrorCategory::Unavailable, "produced-directory-pin", id_};
+                    Output = productionDirectory_ + L"\\payload";
+                    Result<Unit> Produced = Error{ErrorCategory::Unavailable, "content-producer-exception", id_};
+                    try { operations::OperationMetric Timing("payload.produce", *expectedBytes_); Produced = Producer.produce_(Utf8(Output), Context); }
+                    catch (...) { failed_ = true; return Produced; }
+                    if (!Produced.HasValue()) { failed_ = true; return Produced; }
+                }
+                if (const auto Stop = Context.Check(id_)) { failed_ = true; return *Stop; }
+                Handle File(CreateFileW(Output.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE | WRITE_DAC,
+                    FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                BY_HANDLE_FILE_INFORMATION Before{}; bool Reopened = false;
+                if (File.value_ == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED) {
+                    // Read-only output needs a separate attribute handle. Normal
+                    // output is validated while holding its final exclusive handle.
+                    Handle Probe(CreateFileW(Output.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                    if (Probe.value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(Probe.value_, &Before)
+                        || (Before.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || Before.nNumberOfLinks != 1)
+                    { failed_ = true; return Error{ErrorCategory::StaleRevision, "produced-content-type", id_}; }
+                    FILE_BASIC_INFO Basic{}; Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                    if (!SetFileInformationByHandle(Probe.value_, FileBasicInfo, &Basic, sizeof(Basic))) { failed_ = true; return Failure(GetLastError(), id_); }
+                    Probe.Close(); Reopened = true;
+                    File = Handle(CreateFileW(Output.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE | WRITE_DAC,
+                        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                }
+                BY_HANDLE_FILE_INFORMATION Info{};
+                if (File.value_ == INVALID_HANDLE_VALUE) { failed_ = true; return Failure(GetLastError(), id_); }
+                if (!GetFileInformationByHandle(File.value_, &Info)
+                    || (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+                    || Info.nNumberOfLinks != 1 || (Reopened && Identity(Info) != Identity(Before))
+                    || ((uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow) != *expectedBytes_)
+                { failed_ = true; return Error{ErrorCategory::StaleRevision, "produced-content-size-or-type", id_}; }
+                auto Times = initialTimes_; Times.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                if (!SetFileInformationByHandle(File.value_, FileBasicInfo, &Times, sizeof(Times))) { failed_ = true; return Failure(GetLastError(), id_); }
+                PACL Dacl = nullptr; PSECURITY_DESCRIPTOR Descriptor = nullptr;
+                auto Security = GetSecurityInfo(file_.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &Dacl, nullptr, &Descriptor);
+                if (Security != ERROR_SUCCESS) { failed_ = true; return Failure(Security, id_); }
+                const auto FreeDescriptor = qScopeGuard([&] { LocalFree(Descriptor); });
+                const auto Removed = DeleteHandle(file_.value_, id_);
+                if (!Removed.HasValue()) { failed_ = true; return Removed; }
+                file_.Close();
+                const auto Renamed = RenameHandle(File.value_, stagePath_, id_);
+                if (!Renamed.HasValue()) { failed_ = true; return Renamed; }
+                file_ = std::move(File); record_.stageIdentity_ = Identity(Info);
+                // Recompute inheritance under the actual destination parent,
+                // not the producer's extra directory (NO_PROPAGATE differs).
+                SECURITY_DESCRIPTOR_CONTROL Control{}; DWORD Revision = 0;
+                Security = GetSecurityDescriptorControl(Descriptor, &Control, &Revision)
+                    ? SetSecurityInfo(file_.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION
+                        | (Control & SE_DACL_PROTECTED ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION),
+                        nullptr, nullptr, Dacl, nullptr) : GetLastError();
+                if (Security != ERROR_SUCCESS) { failed_ = true; return Failure(Security, id_); }
                 return Unit{};
             }
             Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) override
@@ -449,6 +539,8 @@ namespace hc::storage
                     backup_.Close();
                     backupPath_.clear();
                 }
+                auto ProductionCleaned = cleanupProduction();
+                if (!ProductionCleaned.HasValue()) Receipt.cleanupErrors_.push_back(ProductionCleaned.Failure());
                 parents_.clear();
                 auto Finished = checkpoint(WritePhase::Finished);
                 if (!Finished.HasValue()) Receipt.cleanupErrors_.push_back(Finished.Failure());
@@ -468,6 +560,8 @@ namespace hc::storage
                     { Error = Deleted.Failure(); Error->userAction_ = "preserved-stage:" + Utf8(stagePath_); }
                     file_.Close();
                 }
+                auto ProductionCleaned = cleanupProduction();
+                if (!ProductionCleaned.HasValue() && !Error) Error = ProductionCleaned.Failure();
                 parents_.clear();
                 closed_ = true;
                 if (Error) return *Error;
@@ -475,6 +569,33 @@ namespace hc::storage
                 return Unit{};
             }
         private:
+            Result<Unit> cleanupProduction()
+            {
+                if (productionDirectory_.empty()) return Unit{};
+                const auto Output = productionDirectory_ + L"\\payload";
+                Handle File(CreateFileW(Output.c_str(), DELETE | FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                if (File.value_ != INVALID_HANDLE_VALUE) {
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if (GetFileInformationByHandle(File.value_, &Info) && Info.nNumberOfLinks == 1
+                        && !(Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                        FILE_BASIC_INFO Basic{}; Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                        SetFileInformationByHandle(File.value_, FileBasicInfo, &Basic, sizeof(Basic));
+                    }
+                    auto Removed = DeleteHandle(File.value_, id_); if (!Removed.HasValue()) return Removed;
+                    File.Close();
+                } else if (GetLastError() != ERROR_FILE_NOT_FOUND) return Failure(GetLastError(), id_);
+                productionPin_.Close();
+                if (!RemoveDirectoryW(productionDirectory_.c_str())) {
+                    auto Error = Failure(GetLastError(), id_); Error.userAction_ = "preserved-production-directory:" + Utf8(productionDirectory_); return Error;
+                }
+                productionDirectory_.clear(); return Unit{};
+            }
+            std::optional<std::uint64_t> expectedBytes_;
+            FILE_BASIC_INFO initialTimes_{};
+            std::wstring productionDirectory_;
+            bool productionStarted_ = false;
+            Handle productionPin_;
             Error extraFailure(DWORD Code, const char* Phase)
             { auto Error = Failure(Code, id_); Error.code_ = Phase + Error.code_; return Error; }
             CopyOptions options_;
@@ -564,6 +685,8 @@ namespace hc::storage
                 return std::optional<EntrySnapshot>{std::move(Entry.Value())};
             }
             CopyCapabilities CopySupport() const override { return {true, true, true, true}; }
+            bool CanProduceContent(OperationContext Context) const override
+            { return kind_ == LocatorKind::Local && !Context.writeCheckpoint_; }
             Result<Unit> PatchMetadata(EntrySnapshot Entry, MetadataPatch Patch, OperationContext Context) override
             {
                 if (!Patch.Valid()) return Error{ErrorCategory::InvalidRequest, "invalid-metadata-patch", id_};
@@ -613,7 +736,7 @@ namespace hc::storage
                 auto Parents = PinParents(Path.Value(), id_);
                 if (!Parents.HasValue()) return Parents.Failure();
                 const auto Temp = TemporaryName(std::filesystem::path(Path.Value().path_).parent_path().wstring(), L"stage");
-                Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE | (Options.verify_ ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
+                Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE | (Options.verify_ ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
                     CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
                 if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
                 auto Session = std::make_unique<NativeWriteSession>(id_, At, std::move(Path.Value()), std::move(Expected),

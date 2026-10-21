@@ -1,5 +1,6 @@
 ﻿#include "wcxStorage.hpp"
 #include "operationMetrics.hpp"
+#include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #include "wcxBackend.hpp"
 #include "storageProviders.hpp"
 #include "nativeMaterializer.hpp"
@@ -164,25 +165,94 @@ namespace hc::storage
             bool UsesOrderedReads() const override { return !streamUnsupported_; }
             Task<Unit> PrepareReadBatch(std::vector<EntrySnapshot> Entries,OperationContext Context) override {
                 return run<Unit>(Context,[Entries=std::move(Entries)](WcxProvider& Self,OperationContext Context)->Result<Unit> {
-                    if (Entries.empty() || Context.workload_.IsAutomatic() || Self.streamUnsupported_) return Unit{};
+                    if (Entries.empty() || Context.workload_.IsAutomatic() || (Self.streamUnsupported_ && !Context.producingContent_)) return Unit{};
                     auto Mounted=Self.mount(Context); if (!Mounted.HasValue()) return Mounted.Failure();
                     std::vector<std::uint32_t> Ordinals;
+                    std::map<std::uint32_t, hc::plugins::ArchiveHeader> SelectedHeaders;
                     for (const auto& Entry:Entries) { auto Fresh=Self.stat(Entry.id_,Context); if (!Fresh.HasValue()) return Fresh.Failure();
-                        if (Fresh.Value().directory_) continue; Ordinals.push_back(std::uint32_t(std::stoul(Fresh.Value().hints_.at("ordinal")))); }
+                        if (Fresh.Value().directory_) continue;
+                        const auto Ordinal = std::uint32_t(std::stoul(Fresh.Value().hints_.at("ordinal"))); Ordinals.push_back(Ordinal);
+                        if (Context.producingContent_) {
+                            hc::plugins::ArchiveHeader Header; Header.name_ = Fresh.Value().hints_.at("wcxName"); Header.size_ = Fresh.Value().size_;
+                            Header.crc_ = std::uint32_t(std::stoul(Fresh.Value().hints_.at("crc"))); SelectedHeaders.emplace(Ordinal, std::move(Header));
+                        }
+                    }
                     if (Ordinals.empty()) return Unit{};
                     std::sort(Ordinals.begin(),Ordinals.end()); Ordinals.erase(std::unique(Ordinals.begin(),Ordinals.end()),Ordinals.end());
+                    auto Direct = [&]() -> Result<Unit> {
+                        hc::plugins::ArchiveSelectionDigest Digest;
+                        for (const auto& [Ordinal, Header] : SelectedHeaders) Digest.Add(Ordinal, Header);
+                        Self.directDigest_ = Digest.Result(); Self.directOrdinals_ = std::move(Ordinals); return Unit{};
+                    };
+                    if (Context.producingContent_ && Self.streamUnsupported_) return Direct();
                     auto Pinned=Context; Pinned.denyConcurrentMutation_=true; auto Pin=Self.native_->OpenRead(Self.archive_.id_,Pinned).get(); if (!Pin.HasValue()) return Pin.Failure();
-                    auto Opened=Self.backend_->OpenReadSession(Self.archivePath_,std::move(Ordinals),Context);
+                    // A native SDK stream already writes to the destination
+                    // session. Measured file adoption costs more than its IPC.
+                    auto Opened=Self.backend_->OpenReadSession(Self.archivePath_,Ordinals,Context);
                     if (!Opened.HasValue()) {
                         if (Opened.Failure().category_!=ErrorCategory::Unsupported || Opened.Failure().code_!="archive-stream-unsupported") return Opened.Failure();
-                        Self.streamUnsupported_=true; return Unit{};
+                        Self.streamUnsupported_=true;
+                        if (Context.producingContent_) { Self.directSourcePin_=std::move(Pin.Value()); return Direct(); }
+                        return Unit{};
                     }
                     Self.bulkPin_=std::move(Pin.Value()); Self.streamingBatch_=std::shared_ptr<hc::plugins::IArchiveReadSession>(std::move(Opened.Value())); return Unit{};
                 });
             }
             Task<Unit> FinishReadBatch(OperationContext Context) override {
                 return run<Unit>(Context,[](WcxProvider& Self,OperationContext)->Result<Unit> {
-                    Self.streamingBatch_.reset(); if (!Self.batchRead_) Self.bulkPin_.reset(); return Unit{};
+                    Self.streamingBatch_.reset(); Self.directPin_.reset(); Self.directBulk_.reset(); Self.directSourcePin_.reset(); Self.directOrdinals_.clear();
+                    if (!Self.batchRead_) Self.bulkPin_.reset(); return Unit{};
+                });
+            }
+            Task<std::optional<ContentProducer>> PrepareContent(ResourceId Id, OperationContext Context) override
+            {
+                return run<std::optional<ContentProducer>>(Context, [Id = std::move(Id)](WcxProvider& Self, OperationContext Context) -> Result<std::optional<ContentProducer>> {
+                    if (Context.workload_.IsAutomatic() || Self.streamingBatch_) return std::optional<ContentProducer>{};
+                    auto Entry = Self.stat(Id, Context); if (!Entry.HasValue()) return Entry.Failure();
+                    if (Entry.Value().directory_) return std::optional<ContentProducer>{};
+                    Context.denyConcurrentMutation_ = true;
+                    if (!Self.directSourcePin_) {
+                        auto Pin = Self.native_->OpenRead(Self.archive_.id_, Context).get(); if (!Pin.HasValue()) return Pin.Failure();
+                        Self.directSourcePin_ = std::move(Pin.Value());
+                    }
+                    ContentProducer Producer;
+                    Producer.take_ = [Owner = Self.shared_from_this(), Entry = std::move(Entry.Value()), Pin = Self.directSourcePin_]
+                        (const std::string& Parent, OperationContext Context) -> Result<ProducedContent> {
+                        return Owner->run<ProducedContent>(Context, [Entry, Parent](WcxProvider& Self, OperationContext Context) -> Result<ProducedContent> {
+                            if (!Self.directBulk_) {
+                                auto Directory = std::make_shared<QTemporaryDir>(QDir(QString::fromStdString(Parent)).filePath("hc-wcx-direct-XXXXXX"));
+                                if (!Directory->isValid()) return Error{ErrorCategory::Unavailable, "archive-direct-directory"};
+                                const auto Path = QDir::toNativeSeparators(Directory->path()).toStdWString();
+                                const auto Handle = CreateFileW(Path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+                                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                                if (Handle == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "archive-direct-directory-pin"};
+                                auto Pin = std::shared_ptr<void>(Handle, [](void* Value) { CloseHandle(Value); });
+                                if (!Self.directOrdinals_.empty() && !Self.directUnsupported_) {
+                                    operations::OperationMetric Timing("archive.direct.decode");
+                                    auto Extracted = Self.backend_->ExtractSelected(Self.archivePath_, Directory->path().toStdString(), Self.directOrdinals_, Context);
+                                    if (!Extracted.HasValue()) {
+                                        if (Extracted.Failure().category_ != ErrorCategory::Unsupported || Extracted.Failure().code_ != "archive-selected-extract-unsupported")
+                                            return Extracted.Failure();
+                                        Self.directUnsupported_ = true;
+                                    } else {
+                                        QFile Digest(QDir(Directory->path()).filePath("selection.sha256"));
+                                        if (!Digest.open(QIODevice::ReadOnly) || Digest.read(65) != Self.directDigest_)
+                                            return Error{ErrorCategory::StaleRevision, "archive-direct-selection-changed"};
+                                    }
+                                }
+                                Self.directBulk_ = std::move(Directory); Self.directPin_ = std::move(Pin);
+                            }
+                            const auto From = QDir(Self.directBulk_->path()).filePath(QString::fromStdString(Entry.hints_.at("ordinal")) + ".bin");
+                            if (Self.directOrdinals_.empty() || Self.directUnsupported_) {
+                                hc::plugins::ArchiveHeader Expected; Expected.name_ = Entry.hints_.at("wcxName"); Expected.size_ = Entry.size_;
+                                Expected.crc_ = std::uint32_t(std::stoul(Entry.hints_.at("crc")));
+                                auto Extracted = Self.backend_->Extract(Self.archivePath_, std::move(Expected), From.toStdString(), Context);
+                                if (!Extracted.HasValue()) return Extracted.Failure();
+                            }
+                            return ProducedContent{From.toStdString(), Self.shared_from_this()};
+                        }).get();
+                    };
+                    return std::optional<ContentProducer>{std::move(Producer)};
                 });
             }
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Context) override
@@ -405,6 +475,12 @@ namespace hc::storage
             EntrySnapshot archive_;
             std::map<std::string, EntrySnapshot> entries_;
             std::shared_ptr<QTemporaryDir> bulk_;
+            std::shared_ptr<QTemporaryDir> directBulk_;
+            std::shared_ptr<void> directPin_;
+            std::shared_ptr<IReadStream> directSourcePin_;
+            QByteArray directDigest_;
+            std::vector<std::uint32_t> directOrdinals_;
+            bool directUnsupported_ = false;
             std::shared_ptr<IReadStream> bulkPin_;
             bool batchRead_ = false, batchUnsupported_ = false, streamUnsupported_ = false;
             std::shared_ptr<hc::plugins::IArchiveReadSession> streamingBatch_;

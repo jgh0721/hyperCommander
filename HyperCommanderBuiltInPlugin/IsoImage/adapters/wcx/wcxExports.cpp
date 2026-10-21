@@ -10,6 +10,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -50,10 +51,54 @@ std::wstring Name(std::wstring Value)
     }
     return Value;
 }
-struct ImageDeleter { void operator()(HcIsoImage* Value) const { hcIsoClose(Value); } };
+struct FileInput {
+    fs::path path_;
+    HANDLE file_ = INVALID_HANDLE_VALUE;
+    BY_HANDLE_FILE_INFORMATION identity_{};
+    std::mutex mutex_;
+    ~FileInput() { if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_); }
+    bool Verify() const {
+        const auto Current = CreateFileW(path_.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (Current == INVALID_HANDLE_VALUE) return false;
+        BY_HANDLE_FILE_INFORMATION Info{};
+        const bool Read = GetFileInformationByHandle(Current, &Info) != FALSE;
+        CloseHandle(Current);
+        return Read && !(Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+            && Info.dwVolumeSerialNumber == identity_.dwVolumeSerialNumber
+            && Info.nFileIndexHigh == identity_.nFileIndexHigh && Info.nFileIndexLow == identity_.nFileIndexLow
+            && Info.nFileSizeHigh == identity_.nFileSizeHigh && Info.nFileSizeLow == identity_.nFileSizeLow
+            && CompareFileTime(&Info.ftLastWriteTime, &identity_.ftLastWriteTime) == 0;
+    }
+    static int ReadAt(void* Context, uint64_t Offset, void* Buffer, uint32_t Capacity, uint32_t* Read) {
+        auto& Input = *static_cast<FileInput*>(Context);
+        std::lock_guard Lock(Input.mutex_); *Read = 0;
+        if (Offset > uint64_t(INT64_MAX) || !Input.Verify()) return HC_ISO_IO;
+        LARGE_INTEGER Position; Position.QuadPart = LONGLONG(Offset); DWORD Count = 0;
+        if (!SetFilePointerEx(Input.file_, Position, nullptr, FILE_BEGIN)
+            || !ReadFile(Input.file_, Buffer, Capacity, &Count, nullptr) || !Input.Verify()) return HC_ISO_IO;
+        *Read = Count; return HC_ISO_OK;
+    }
+};
+struct ImageDeleter {
+    std::shared_ptr<FileInput> input_;
+    void operator()(HcIsoImage* Value) const { hcIsoClose(Value); }
+};
 using ImagePtr = std::unique_ptr<HcIsoImage, ImageDeleter>;
 ImagePtr Open(const fs::path& Path)
-{ HcIsoImage* Image = nullptr; Check(hcIsoOpen(Utf8(Path.wstring()).c_str(), HC_ISO_AUTO, &Image)); return ImagePtr(Image); }
+{
+    auto Input = std::make_shared<FileInput>(); Input->path_ = Path;
+    Input->file_ = CreateFileW(Path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    Require(Input->file_ != INVALID_HANDLE_VALUE, E_EOPEN);
+    Require(GetFileInformationByHandle(Input->file_, &Input->identity_)
+        && !(Input->identity_.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)), E_EOPEN);
+    HcIsoImage* Image = nullptr;
+    const HcIsoInput Source{sizeof(HcIsoInput), (uint64_t(Input->identity_.nFileSizeHigh) << 32) | Input->identity_.nFileSizeLow,
+        FileInput::ReadAt, Input.get()};
+    Check(hcIsoOpenInput(&Source, HC_ISO_AUTO, &Image));
+    return ImagePtr(Image, ImageDeleter{std::move(Input)});
+}
 struct State {
     ImagePtr image_;
     uint64_t count_ = 0, index_ = 0;

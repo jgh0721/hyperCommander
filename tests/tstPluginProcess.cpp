@@ -71,6 +71,10 @@ private slots:
         Broken = Encoded.Value(); Broken[23] = std::byte{0xff}; QVERIFY(!DecodeHeader(Broken).HasValue());
         QVERIFY(!EncodeHeader({{1, 0}, WireKind::Ping, 0, 0}).HasValue()); QVERIFY(!EncodeHeader({{1, 0}, WireKind(99), 1, 0}).HasValue());
         QVERIFY(!EncodeHeader({{1, 0}, WireKind::SessionInvoke, 1, 0}).HasValue());
+        QVERIFY(!EncodeHeader({{1, 0}, WireKind::SessionPause, 1, 1}).HasValue());
+        auto Pause = EncodeHeader({{2, 0}, WireKind::SessionPause, 7, 1}); QVERIFY(Pause.HasValue());
+        auto Paused = DecodeHeader(Pause.Value()); QVERIFY(Paused.HasValue());
+        QCOMPARE(Paused.Value().kind_, WireKind::SessionPause); QCOMPARE(Paused.Value().sequence_, std::uint64_t(7));
         auto V2 = EncodeHeader({{2, 0}, WireKind::SessionInvoke, UINT64_MAX, 0}); QVERIFY(V2.HasValue());
         QCOMPARE(DecodeHeader(V2.Value()).Value().sequence_, UINT64_MAX);
     }

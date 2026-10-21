@@ -42,6 +42,28 @@ private slots:
         QCOMPARE(Status, E_END_ARCHIVE); QVERIFY(Names.contains(QStringLiteral("한글\\test.txt")));
         for (const auto& Name : Names) QVERIFY(!Name.contains('/'));
     }
+    void replacedSourceIsRejected()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QVERIFY(Put(Directory.filePath("payload"), QByteArray(2 * 1024 * 1024, 'x')));
+        const auto Options = BuiltinIsoOptions(); const auto Archive = Directory.filePath("source.iso");
+        QVERIFY(MakeApprovedWcxBackend(Options)->Update({Archive.toStdString(), Directory.path().toStdString(), {"payload"}}, {}).HasValue());
+        QLibrary Library(Options.binaryPath_); QVERIFY(Library.load());
+        const auto Open = reinterpret_cast<HANDLE (__stdcall*)(tOpenArchiveDataW*)>(Library.resolve("OpenArchiveW"));
+        const auto Header = reinterpret_cast<int (__stdcall*)(HANDLE, tHeaderDataExW*)>(Library.resolve("ReadHeaderExW"));
+        const auto Process = reinterpret_cast<int (__stdcall*)(HANDLE, int, wchar_t*, wchar_t*)>(Library.resolve("ProcessFileW"));
+        const auto Close = reinterpret_cast<int (__stdcall*)(HANDLE)>(Library.resolve("CloseArchive"));
+        QVERIFY(Open && Header && Process && Close);
+        auto Path = Archive.toStdWString(); tOpenArchiveDataW Data{}; Data.ArcName = Path.data(); Data.OpenMode = PK_OM_EXTRACT;
+        const auto Handle = Open(&Data); QVERIFY(Handle); const auto Guard = qScopeGuard([&] { Close(Handle); });
+        QFile InPlace(Archive); QVERIFY(!InPlace.open(QIODevice::ReadWrite));
+        tHeaderDataExW Entry{}; QCOMPARE(Header(Handle, &Entry), 0);
+        QVERIFY(QFile::rename(Archive, Directory.filePath("old.iso")));
+        QVERIFY(QFile::copy(Directory.filePath("old.iso"), Archive));
+        auto Output = Directory.filePath("extracted").toStdWString();
+        QVERIFY(Process(Handle, PK_EXTRACT, nullptr, Output.data()) != 0);
+        QVERIFY(!QFileInfo::exists(QString::fromStdWString(Output)));
+    }
     void externalBridgeImage()
     {
         const auto Archive = qEnvironmentVariable("HC_ISO_REFERENCE_IMAGE");

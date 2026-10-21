@@ -15,6 +15,8 @@
 #include <ShlObj.h>
 #include <wrl/client.h>
 #include <QScopeGuard>
+#include <atomic>
+#include <thread>
 
 using namespace hc::storage;
 using namespace hc::operations;
@@ -263,6 +265,149 @@ private:
     QStringList artifacts()
     { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
 private slots:
+    void producedContent_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("success") << 0; QTest::newRow("short-output") << 1;
+        QTest::newRow("late-error") << 2; QTest::newRow("cancelled-output") << 3;
+        QTest::newRow("hardlink-rejected") << 4; QTest::newRow("readonly-output") << 5;
+        QTest::newRow("take-success") << 6; QTest::newRow("take-short") << 7;
+        QTest::newRow("take-late-error") << 8; QTest::newRow("take-cancelled") << 9;
+        QTest::newRow("take-hardlink-rejected") << 10; QTest::newRow("take-readonly") << 11;
+    }
+    void producedContent()
+    {
+        QFETCH(int, Mode); const auto Scenario = Mode % 6; QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        const Locator Target{LocatorKind::Local, Directory.filePath("target.bin").toStdString()};
+        QFile Existing(QString::fromStdString(Target.root_)); QVERIFY(Existing.open(QIODevice::WriteOnly));
+        QCOMPARE(Existing.write("prior!!"), qint64(7)); Existing.close();
+        auto Before = Writer->Inspect(Target, {}); QVERIFY(Before.HasValue() && Before.Value());
+        OperationContext Context; Context.expectedWriteBytes_ = 7;
+        std::stop_source Stop; Context.stopToken_ = Stop.get_token();
+        auto Session = Writer->BeginCopy(Target, {true, Before.Value()->id_.revision_}, {}, Context); QVERIFY(Session.HasValue());
+        QVERIFY(Session.Value()->ConfigureCopy({}, {}, Context).HasValue()); QVERIFY(Session.Value()->CanProduceContent(Context));
+        ContentProducer Producer;
+        Producer.produce_ = [&](const std::string& Output, OperationContext) -> Result<Unit> {
+            const auto Path = QString::fromStdString(Output);
+            if (Scenario == 4) {
+                if (!CreateHardLinkW(Path.toStdWString().c_str(), QString::fromStdString(Target.root_).toStdWString().c_str(), nullptr))
+                    return Error{ErrorCategory::Unavailable, "fixture-hardlink"};
+            } else {
+                QFile File(Path); if (!File.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return Error{ErrorCategory::Unavailable, "fixture-open"};
+                if (File.write(Scenario == 1 ? QByteArray("short") : QByteArray("payload")) < 0) return Error{ErrorCategory::Unavailable, "fixture-write"};
+                File.close();
+                if (Scenario == 5 && !SetFileAttributesW(Path.toStdWString().c_str(), FILE_ATTRIBUTE_READONLY)) return Error{ErrorCategory::Unavailable, "fixture-readonly"};
+            }
+            if (Scenario == 2) return Error{ErrorCategory::Unavailable, "fixture-crc-after-write"};
+            if (Scenario == 3) Stop.request_stop();
+            return Unit{};
+        };
+        if (Mode >= 6) {
+            Producer.take_ = [Generate = std::move(Producer.produce_)](const std::string& Parent, OperationContext Context) -> Result<ProducedContent> {
+                auto Lease = std::make_shared<QTemporaryDir>(QDir(QString::fromStdString(Parent)).filePath("take-XXXXXX"));
+                if (!Lease->isValid()) return Error{ErrorCategory::Unavailable, "fixture-lease"};
+                const auto Output = Lease->filePath("payload").toStdString(); auto Generated = Generate(Output, Context);
+                if (!Generated.HasValue()) return Generated.Failure();
+                return ProducedContent{Output, std::move(Lease)};
+            };
+        }
+        auto Produced = Session.Value()->ProduceContent(Producer, Context);
+        const bool Success = Scenario == 0 || Scenario == 5;
+        QCOMPARE(Produced.HasValue(), Success);
+        if (Success) { QVERIFY(Session.Value()->AdvanceCopyExtras(UINT64_MAX, Context).HasValue()); QVERIFY(Session.Value()->Commit(Context).HasValue()); }
+        QVERIFY(Session.Value()->Abort().HasValue()); Session.Value().reset();
+        QVERIFY(Existing.open(QIODevice::ReadOnly)); QCOMPARE(Existing.readAll(), Success ? QByteArray("payload") : QByteArray("prior!!")); Existing.close();
+        QCOMPARE(QDir(Directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System), QStringList{"target.bin"});
+    }
+    void producedContentVerificationFallback()
+    {
+        QTemporaryDir Directory; auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        OperationContext Context; Context.expectedWriteBytes_ = 7; CopyOptions Options; Options.verify_ = true;
+        auto Session = Writer->BeginCopy({LocatorKind::Local, Directory.filePath("verified").toStdString()}, {}, Options, Context);
+        QVERIFY(Session.HasValue()); QVERIFY(Session.Value()->ConfigureCopy({}, Options, Context).HasValue());
+        QVERIFY(!Session.Value()->CanProduceContent(Context)); QVERIFY(Session.Value()->Abort().HasValue());
+    }
+    void producedContentDestinationInheritance()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); const auto Parent = Directory.filePath("output"); QVERIFY(QDir().mkpath(Parent));
+        const auto Path = QDir::toNativeSeparators(Parent).toStdWString();
+        PSID Owner = nullptr; PSECURITY_DESCRIPTOR Original = nullptr; LPWSTR OwnerText = nullptr;
+        QCOMPARE(GetNamedSecurityInfoW(Path.c_str(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &Owner, nullptr, nullptr, nullptr, &Original), DWORD(ERROR_SUCCESS));
+        const auto FreeOriginal = qScopeGuard([&] { LocalFree(Original); });
+        QVERIFY(ConvertSidToStringSidW(Owner, &OwnerText)); const auto Sid = QString::fromWCharArray(OwnerText); LocalFree(OwnerText);
+        const auto Sddl = ("D:P(A;OICI;FA;;;" + Sid + ")(A;OINP;FR;;;BU)").toStdWString();
+        PSECURITY_DESCRIPTOR Policy = nullptr; QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(Sddl.c_str(), SDDL_REVISION_1, &Policy, nullptr));
+        const auto FreePolicy = qScopeGuard([&] { LocalFree(Policy); });
+        PACL Acl = nullptr; BOOL Present = FALSE, Defaulted = FALSE; QVERIFY(GetSecurityDescriptorDacl(Policy, &Present, &Acl, &Defaulted));
+        QCOMPARE(SetNamedSecurityInfoW(const_cast<wchar_t*>(Path.c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, Acl, nullptr), DWORD(ERROR_SUCCESS));
+        const auto DaclText = [](const QString& At) {
+            PSECURITY_DESCRIPTOR Sd = nullptr; LPWSTR Text = nullptr; QString Value;
+            if (GetNamedSecurityInfoW(At.toStdWString().c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &Sd) == ERROR_SUCCESS) {
+                if (ConvertSecurityDescriptorToStringSecurityDescriptorW(Sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &Text, nullptr)) { Value = QString::fromWCharArray(Text); LocalFree(Text); } LocalFree(Sd);
+            } return Value;
+        };
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        OperationContext Context; Context.expectedWriteBytes_ = 7; Context.producingContent_ = true;
+        auto Session = Writer->BeginCopy({LocatorKind::Local, QDir(Parent).filePath("target").toStdString()}, {}, {}, Context); QVERIFY(Session.HasValue());
+        QVERIFY(Session.Value()->ConfigureCopy({}, {}, Context).HasValue());
+        const auto Stages = QDir(Parent).entryList(QDir::Files | QDir::Hidden | QDir::System); QCOMPARE(Stages.size(), 1);
+        const auto Expected = DaclText(QDir(Parent).filePath(Stages.front())); QVERIFY(!Expected.isEmpty());
+        ContentProducer Producer; Producer.produce_ = [](const std::string& Output, OperationContext) -> Result<Unit> {
+            QFile File(QString::fromStdString(Output)); if (!File.open(QIODevice::WriteOnly | QIODevice::NewOnly) || File.write("payload") != 7)
+                return Error{ErrorCategory::Unavailable, "fixture-producer-write"}; return Unit{};
+        };
+        QVERIFY(Session.Value()->ProduceContent(Producer, Context).HasValue());
+        QVERIFY(Session.Value()->AdvanceCopyExtras(UINT64_MAX, Context).HasValue()); QVERIFY(Session.Value()->Commit(Context).HasValue());
+        QCOMPARE(DaclText(QDir(Parent).filePath("target")), Expected);
+    }
+    void producedContentCooperativeCancellation()
+    {
+        struct SlowProvider final : IStorageProvider {
+            std::shared_ptr<IStorageProvider> source_ = MakeNativeReadProvider(LocatorKind::Local);
+            std::atomic<bool> entered_ = false, finished_ = false;
+            ProviderId Id() const override { return source_->Id(); }
+            Task<SupportDecision> Supports(Operation Request, OperationContext Context) override { return source_->Supports(Request, Context); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override { return source_->Enumerate(std::move(At), Context); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Context) override { return source_->Stat(std::move(Id), Context); }
+            Task<EntrySnapshot> Resolve(Locator At, OperationContext Context) override { return source_->Resolve(std::move(At), Context); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Context) override { return source_->OpenRead(std::move(Id), Context); }
+            Task<std::optional<ContentProducer>> PrepareContent(ResourceId, OperationContext) override {
+                ContentProducer Producer;
+                Producer.produce_ = [this](const std::string& Output, OperationContext Context) -> Result<Unit> {
+                    QFile File(QString::fromStdString(Output));
+                    if (!File.open(QIODevice::WriteOnly | QIODevice::NewOnly) || File.write(QByteArray(512, 'p')) != 512)
+                        return Error{ErrorCategory::Unavailable, "fixture-producer-open"};
+                    entered_ = true; if (Context.progress_) Context.progress_(512);
+                    while (!Context.Check(Id())) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    File.close(); finished_ = true; return *Context.Check(Id());
+                };
+                return Ready<std::optional<ContentProducer>>(std::optional<ContentProducer>{std::move(Producer)});
+            }
+        };
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Source = Directory.filePath("source.bin"); QFile File(Source);
+        QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(QByteArray(2 * 1024 * 1024, 's')), qint64(2 * 1024 * 1024)); File.close();
+        QVERIFY(QDir().mkpath(Directory.filePath("output")));
+        QFile Old(Directory.filePath("output/source.bin")); QVERIFY(Old.open(QIODevice::WriteOnly)); QCOMPARE(Old.write("existing"), qint64(8)); Old.close();
+        auto Reader = std::make_shared<SlowProvider>(); auto Entry = Reader->Resolve({LocatorKind::Local, Source.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{Entry.Value(), Reader, {}}};
+        Request.destination_ = {LocatorKind::Local, Directory.filePath("output").toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Reader->source_); Request.conflict_ = ConflictPolicy::Replace;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        QTRY_VERIFY(Reader->entered_.load());
+        QTRY_VERIFY(Scheduler.Snapshot(Job.Value().id_).Value().progress_.bytesDone_ >= 512);
+        QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Cancelled);
+        QVERIFY(Reader->finished_.load()); QVERIFY(Done.cleanupErrors_.empty());
+        QVERIFY(Old.open(QIODevice::ReadOnly)); QCOMPARE(Old.readAll(), QByteArray("existing")); Old.close();
+        QCOMPARE(QDir(Directory.filePath("output")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System), QStringList{"source.bin"});
+    }
     void elevatedDirectoryListing()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());

@@ -1,5 +1,7 @@
 ﻿#include "sevenZipBackend.hpp"
 #include "Common/MyInitGuid.h"
+#include "commonLibs/plugins/archiveSelectionDigest.hpp"
+#include <thread>
 #include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include "7zip/Archive/IArchive.h"
 #include "7zip/IPassword.h"
@@ -48,6 +50,10 @@ struct State {
     std::optional<storage::Password> password_;
     HRESULT Check(uint64_t Done = 0) noexcept {
         try {
+            while (context_.pauseRequested_ && context_.pauseRequested_()) {
+                if (context_.Check({"7zip"})) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
             std::lock_guard Lock(mutex_);
             if (!error_) error_ = context_.Check({"7zip"});
             if (error_) return E_ABORT;
@@ -470,6 +476,14 @@ public:
         if (!File.flush()) return Failure("7zip-output-flush"); Cleanup.dismiss(); return Unit{};
     }
     Result<Unit> ExtractAll(std::string Path, std::string Directory, OperationContext Context) override {
+        return extractSelection(std::move(Path), std::move(Directory), {}, std::move(Context));
+    }
+    Result<Unit> ExtractSelected(std::string Path, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override {
+        if (Indices.empty() || Indices.size() > Context.EnumerationLimit() || !std::is_sorted(Indices.begin(), Indices.end())
+            || std::adjacent_find(Indices.begin(), Indices.end()) != Indices.end()) return Failure("7zip-selected-indices", ErrorCategory::InvalidRequest);
+        return extractSelection(std::move(Path), std::move(Directory), std::move(Indices), std::move(Context));
+    }
+    Result<Unit> extractSelection(std::string Path, std::string Directory, std::optional<std::vector<std::uint32_t>> Indices, OperationContext Context) {
         if (Context.workload_.IsAutomatic()) return Failure("archive-batch-extract-unsupported", ErrorCategory::Unsupported);
         const auto To = QString::fromStdString(Directory); const QFileInfo Info(To);
         if (!Info.isAbsolute() || !Info.isDir() || Info.isSymLink() || !QDir(To).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty())
@@ -483,12 +497,15 @@ public:
         if(!GetFileInformationByHandle(DirectoryPin,&DirectoryInfo) || !(DirectoryInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
             || (DirectoryInfo.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))return Failure("7zip-batch-private-directory",ErrorCategory::InvalidRequest);
         auto Value = Open(module_, std::move(Path), Context); if (!Value.HasValue()) return Value.Failure(); auto& Archive = *Value.Value();
+        if (Indices && Indices->back() >= Archive.count_) return Failure("7zip-selected-index-range", ErrorCategory::InvalidRequest);
         std::vector<ArchiveHeader> Headers; Headers.reserve(Archive.count_); std::uint64_t Required=0;
+        ArchiveSelectionDigest Digest;
         for (UInt32 Index=0; Index<Archive.count_; ++Index) {
             if (const auto Stop=Context.Check({"7zip"})) return *Stop;
             auto Header=Archive.Header(Index); if (!Header.HasValue()) return Header.Failure();
             if (Header.Value().attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Failure("7zip-link-extraction", ErrorCategory::Unsupported);
-            if (!Header.Value().directory_) {
+            if (!Header.Value().directory_ && (!Indices || std::binary_search(Indices->begin(), Indices->end(), Index))) {
+                if (Indices) Digest.Add(Index, Header.Value());
                 if(Header.Value().size_>UINT64_MAX-Required)return Failure("7zip-batch-size-budget",ErrorCategory::BudgetExceeded);
                 Required+=Header.Value().size_;
             }
@@ -499,9 +516,9 @@ public:
             return Failure("7zip-batch-staging-space",ErrorCategory::BudgetExceeded);
         Com<BulkExtractCallback> Callback{new BulkExtractCallback(Archive.state_, Headers, To)};
         // One SDK call preserves solid-block decoder state across all members.
-        const auto Code=Archive.archive_->Extract(nullptr, UINT32_MAX, 0, Callback.value_);
+        const auto Code=Archive.archive_->Extract(Indices ? Indices->data() : nullptr, Indices ? UInt32(Indices->size()) : UINT32_MAX, 0, Callback.value_);
         if (Code!=S_OK || Archive.state_->error_) return Archive.state_->Result(Code);
-        return Unit{};
+        return Indices ? Digest.Save(To) : Result<Unit>(Unit{});
     }
     Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string Path, std::vector<std::uint32_t> Ordinals, OperationContext Context) override {
         if (Ordinals.empty() || Ordinals.size()>Context.EnumerationLimit() || !std::is_sorted(Ordinals.begin(),Ordinals.end())

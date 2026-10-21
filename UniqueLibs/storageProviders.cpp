@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
+#include <thread>
+#include <atomic>
 #include "nativeStorageRevision.hpp"
 #include "mappedDriveRecovery.hpp"
 #include <lm.h>
@@ -30,12 +32,13 @@ namespace hc::storage
                 Category = ErrorCategory::AccessDenied;
             return {Category, "win32:" + std::to_string(Code), Provider, {}, Category == ErrorCategory::Unavailable, "refresh-or-reconnect"};
         }
-        template<class T, class F> Task<T> Run(F Work)
+        template<class T, class F> Task<T> Run(F Work, bool Inline = false)
         {
-            return std::async(std::launch::async, [Work = std::move(Work)]() mutable -> Result<T> {
+            auto Guarded = [Work = std::move(Work)]() mutable -> Result<T> {
                 try { return Work(); }
                 catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
-            });
+            };
+            return Inline ? Ready<T>(Guarded()) : std::async(std::launch::async, std::move(Guarded));
         }
         std::uint64_t Ticks(FILETIME Time)
         {
@@ -191,7 +194,7 @@ namespace hc::storage
             bool CanSeek() const override { return true; }
             Task<ReadChunk> Read(std::size_t MaxBytes, OperationContext Context) override
             {
-                return Run<ReadChunk>([State = state_, MaxBytes, Context]() -> Result<ReadChunk> {
+                auto Work = [State = state_, MaxBytes, Context]() -> Result<ReadChunk> {
                     std::lock_guard Lock(State->mutex_);
                     if (const auto Failure = Context.Check(State->provider_)) return *Failure;
                     if (!MaxBytes || !Context.maxReadBytes_) return Error{ErrorCategory::InvalidRequest, "zero-read-size", State->provider_};
@@ -204,7 +207,8 @@ namespace hc::storage
                     Chunk.bytes_.resize(Read);
                     Chunk.eof_ = Read == 0;
                     return Chunk;
-                });
+                };
+                return Run<ReadChunk>(std::move(Work), Context.workerRead_);
             }
             Task<Unit> Seek(std::uint64_t Offset, OperationContext Context) override
             {
@@ -423,6 +427,66 @@ namespace hc::storage
                     if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
                     return Value;
                 });
+            }
+            Task<std::optional<ContentProducer>> PrepareContent(ResourceId Resource, OperationContext Context) override
+            {
+                using Prepared = std::optional<ContentProducer>;
+                if (kind_ != LocatorKind::Local || Context.workload_.IsAutomatic() || !Resource.revision_) return Ready<Prepared>(Prepared{});
+                if (Context.expectedWriteBytes_ && *Context.expectedWriteBytes_ <= 1024 * 1024) return Ready<Prepared>(Prepared{});
+                // Some product targets use an older NTDDI header guard. The flag
+                // itself is available at runtime starting with Windows 10 19041.
+                static const bool CopyAvailable = [] {
+                    using VersionFunction = LONG(WINAPI*)(OSVERSIONINFOW*);
+                    const auto Version = reinterpret_cast<VersionFunction>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+                    OSVERSIONINFOW Info{}; Info.dwOSVersionInfoSize = sizeof(Info);
+                    return Version && Version(&Info) >= 0 && (Info.dwMajorVersion > 10 || (Info.dwMajorVersion == 10 && Info.dwBuildNumber >= 19041));
+                }();
+                if (!CopyAvailable) return Ready<Prepared>(Prepared{});
+                auto Entry = Stat(Resource, Context).get(); if (!Entry.HasValue()) return Ready<Prepared>(Entry.Failure());
+                // A single-buffer transfer avoids CopyFile2 setup and a second
+                // temporary file. Cold small/mixed trials favour this route.
+                if (Entry.Value().size_ <= 1024 * 1024) return Ready<Prepared>(Prepared{});
+                constexpr DWORD Special = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_COMPRESSED;
+                if (Entry.Value().directory_ || (Entry.Value().attributes_ & Special)) return Ready<Prepared>(Prepared{});
+                Context.denyConcurrentMutation_ = true;
+                auto Pin = OpenRead(Resource, Context).get(); if (!Pin.HasValue()) return Ready<Prepared>(Pin.Failure());
+                ContentProducer Producer;
+                Producer.produce_ = [Pin = std::move(Pin.Value()), Path = Wide(Entry.Value().locator_.root_), Id = id_, Revision = *Resource.revision_]
+                    (const std::string& Output, OperationContext Context) -> Result<Unit> {
+                    if (const auto Stop = Context.Check(Id)) return *Stop;
+                    COPYFILE2_EXTENDED_PARAMETERS Parameters{}; Parameters.dwSize = sizeof(Parameters);
+                    constexpr DWORD SkipAlternateStreams = 0x00008000;
+                    Parameters.dwCopyFlags = COPY_FILE_FAIL_IF_EXISTS | SkipAlternateStreams;
+                    struct CallbackState { OperationContext* context_; const ResourceRevision* revision_; std::atomic<bool> changed_ = false; };
+                    CallbackState Callback{&Context, &Revision};
+                    Parameters.pvCallbackContext = &Callback;
+                    Parameters.pProgressRoutine = [](const COPYFILE2_MESSAGE* Message, void* Opaque) -> COPYFILE2_MESSAGE_ACTION {
+                        auto& Callback = *static_cast<CallbackState*>(Opaque); const auto& Context = *Callback.context_;
+                        try {
+                            if (Message->Type == COPYFILE2_CALLBACK_STREAM_STARTED) {
+                                BY_HANDLE_FILE_INFORMATION Info{};
+                                if (!GetFileInformationByHandle(Message->Info.StreamStarted.hSourceFile, &Info)
+                                    || !native::MatchesRevision(*Callback.revision_, Info)) {
+                                    Callback.changed_ = true; return COPYFILE2_PROGRESS_CANCEL;
+                                }
+                            }
+                            while (Context.pauseRequested_ && Context.pauseRequested_()) {
+                                if (Context.Check({"local"})) return COPYFILE2_PROGRESS_CANCEL;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                            }
+                            if (Context.Check({"local"})) return COPYFILE2_PROGRESS_CANCEL;
+                            if (Context.progress_ && Message->Type == COPYFILE2_CALLBACK_CHUNK_FINISHED)
+                                Context.progress_(Message->Info.ChunkFinished.uliTotalBytesTransferred.QuadPart);
+                            return COPYFILE2_PROGRESS_CONTINUE;
+                        } catch (...) { return COPYFILE2_PROGRESS_CANCEL; }
+                    };
+                    const auto Code = CopyFile2(Path.c_str(), Wide(Output).c_str(), &Parameters);
+                    if (const auto Stop = Context.Check(Id)) return *Stop;
+                    if (Callback.changed_) return Error{ErrorCategory::StaleRevision, "native-copy-source-changed", Id};
+                    if (FAILED(Code)) return NativeError(HRESULT_CODE(Code), Id);
+                    return Unit{};
+                };
+                return Ready<Prepared>(Prepared{std::move(Producer)});
             }
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Resource, OperationContext Context) override
             {

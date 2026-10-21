@@ -1,5 +1,6 @@
 ﻿#include "fileOperation.hpp"
 #include <set>
+#include <atomic>
 #include "directoryPreparation.hpp"
 
 namespace hc::operations
@@ -109,6 +110,10 @@ namespace hc::operations
                 }
                 if (incrementalDelete_ && request_.confirmDelete_) phase_ = Phase::Confirm;
             }
+            ~FileTask() override
+            {
+                if (production_.valid()) production_.wait();
+            }
             JobStep Advance(JobStepContext Context) override
             {
                 jobId_ = Context.jobId_;
@@ -152,26 +157,82 @@ namespace hc::operations
                     auto ReadContext = Context.operation_;
                     ReadContext.denyConcurrentMutation_ = true;
                     ReadContext.orderedBatchRead_=current().source_.reader_->UsesOrderedReads();
-                    auto Opened = current().source_.reader_->OpenRead(current().source_.entry_.id_, ReadContext).get();
-                    if (!Opened.HasValue())
-                    {
-                        if (Opened.Failure().retryable_ && Context.retryAttempt_ < 3)
-                        { JobStep Step{JobState::Running}; Step.error_ = Opened.Failure(); Step.retry_ = true; return Step; }
-                        return failed(Opened.Failure());
+                    ReadContext.workerRead_ = true;
+                    ReadContext.expectedWriteBytes_ = current().source_.entry_.size_;
+                    if (Context.operation_.directContent_ && !request_.copyOptions_.verify_ && !request_.bytesPerSecondLimit_
+                        && request_.destinationWriter_->CanProduceContent(Context.operation_)) {
+                        auto Prepared = current().source_.reader_->PrepareContent(current().source_.entry_.id_, ReadContext).get();
+                        if (!Prepared.HasValue()) {
+                            if (Prepared.Failure().retryable_ && Context.retryAttempt_ < 3)
+                            { JobStep Step{JobState::Running}; Step.error_ = Prepared.Failure(); Step.retry_ = true; return Step; }
+                            return failed(Prepared.Failure());
+                        }
+                        producer_ = std::move(Prepared.Value());
+                        // Unordered/legacy archive providers can also acquire a
+                        // batch lease while producing directly. Always finish it.
+                        if (producer_ && std::none_of(batchReaders_.begin(), batchReaders_.end(),
+                            [&](const auto& Reader) { return Reader.get() == current().source_.reader_.get(); }))
+                            batchReaders_.push_back(current().source_.reader_);
                     }
-                    stream_ = std::move(Opened.Value());
+                    if (!producer_)
+                    {
+                        auto Opened = current().source_.reader_->OpenRead(current().source_.entry_.id_, ReadContext).get();
+                        if (!Opened.HasValue()) {
+                            if (Opened.Failure().retryable_ && Context.retryAttempt_ < 3)
+                            { JobStep Step{JobState::Running}; Step.error_ = Opened.Failure(); Step.retry_ = true; return Step; }
+                            return failed(Opened.Failure());
+                        }
+                        stream_ = std::move(Opened.Value());
+                    }
                     auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = current().source_.entry_.size_;
+                    WriteContext.producingContent_ = producer_.has_value();
                     auto Created = request_.destinationWriter_->BeginCopy(current().destination_, expected_, request_.copyOptions_, WriteContext);
                     if (!Created.HasValue()) return failed(Created.Failure());
                     session_ = std::move(Created.Value());
                     auto Configured = session_->ConfigureCopy(current().source_.entry_, request_.copyOptions_, WriteContext);
                     if (!Configured.HasValue()) return failed(Configured.Failure());
-                    phase_ = Phase::Read;
+                    phase_ = producer_ ? Phase::Produce : Phase::Read;
+                    return progress();
+                }
+                if (phase_ == Phase::Produce) {
+                    const auto Size = current().source_.entry_.size_;
+                    if (Size > request_.maxBytes_ - bytesDone_) return failed({ErrorCategory::BudgetExceeded, "copy-byte-budget"});
+                    Result<Unit> Produced = Unit{};
+                    const auto* Reader = current().source_.reader_.get();
+                    const bool Background = Size > 1024 * 1024 || (current().source_.entry_.locator_.kind_ == LocatorKind::Archive
+                        && !producedReaders_.contains(Reader));
+                    if (Background && !production_.valid()) {
+                        productionProgress_ = std::make_shared<std::atomic<std::uint64_t>>(0);
+                        auto WorkContext = Context.operation_;
+                        WorkContext.progress_ = [Progress = productionProgress_, Observer = WorkContext.progress_](std::uint64_t Bytes) {
+                            Progress->store(Bytes); if (Observer) Observer(Bytes);
+                        };
+                        production_ = std::async(std::launch::async, [Session = session_.get(), Producer = *producer_, WorkContext]() mutable {
+                            return Session->ProduceContent(std::move(Producer), WorkContext);
+                        });
+                    }
+                    if (production_.valid()) {
+                        if (production_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                            auto Step = progress(); Step.progress_->bytesDone_ += std::min(Size, productionProgress_->load());
+                            Step.deferFor_ = std::chrono::milliseconds(10); return Step;
+                        }
+                        Produced = production_.get(); productionProgress_.reset();
+                    } else Produced = session_->ProduceContent(*producer_, Context.operation_);
+                    if (!Produced.HasValue()) return failed(Produced.Failure());
+                    producedReaders_.insert(Reader);
+                    itemBytes_ = Size; bytesDone_ += Size;
+                    chunk_ = {}; chunk_.eof_ = true; phase_ = Phase::Write;
                     return progress();
                 }
                 if (phase_ == Phase::Read)
                 {
-                    auto Chunk = stream_->Read(request_.bytesPerSecondLimit_ ? std::min<std::size_t>(Context.operation_.maxReadBytes_, std::max<std::uint64_t>(1, request_.bytesPerSecondLimit_ / 10)) : Context.operation_.maxReadBytes_, Context.operation_).get();
+                    auto ReadContext = Context.operation_; ReadContext.workerRead_ = true;
+                    const auto Remaining = std::max<std::uint64_t>(1, current().source_.entry_.size_ - itemBytes_);
+                    // Archive sessions use read capacity as decoder credit too.
+                    // Keep the established window across small members and EOF.
+                    const auto Capacity = current().source_.entry_.locator_.kind_ == LocatorKind::Archive
+                        ? ReadContext.maxReadBytes_ : std::min<std::uint64_t>(ReadContext.maxReadBytes_, Remaining);
+                    auto Chunk = stream_->Read(request_.bytesPerSecondLimit_ ? std::min<std::uint64_t>(Capacity, std::max<std::uint64_t>(1, request_.bytesPerSecondLimit_ / 10)) : Capacity, ReadContext).get();
                     if (!Chunk.HasValue()) return failed(Chunk.Failure());
                     if (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_) return failed({ErrorCategory::Internal, "stream-no-progress"});
                     if (Chunk.Value().bytes_.size() > request_.maxBytes_ - bytesDone_)
@@ -202,6 +263,7 @@ namespace hc::operations
                         if (!Metadata.HasValue()) return failed(Metadata.Failure());
                     }
                     stream_.reset();
+                    producer_.reset();
                     phase_ = Phase::Extras;
                     return paced(chunk_.bytes_.size());
                 }
@@ -226,8 +288,15 @@ namespace hc::operations
             }
             std::vector<Error> Finalize(JobState) override
             {
+                // The producer is the session's only owner until it has stopped.
+                // Cancellation reaches its copied operation context before Abort.
+                if (production_.valid()) {
+                    try { production_.get(); }
+                    catch (...) { cleanup_.push_back({ErrorCategory::Internal, "content-producer-finalize"}); }
+                }
                 enumerations_.clear(); cursor_.reset();
                 stream_.reset();
+                producer_.reset();
                 if (elevatedSession_) {
                     elevatedSession_->Cancel(); auto Errors = elevatedSession_->Close();
                     cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); elevatedSession_.reset();
@@ -252,7 +321,7 @@ namespace hc::operations
                 std::size_t next_ = 0;
                 bool ended_ = false;
             };
-            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
+            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -358,7 +427,7 @@ namespace hc::operations
                     Step.item_ = ItemOutcome{itemLocator(), Status, {}, Destination, Removed, current().source_.entry_};
                 if (Step.item_) { if (partialOutcome_) Step.replaceItem_ = partialOutcome_; else ++outcomeIndex_; }
                 partialOutcome_.reset(); publishedDestination_.reset();
-                session_.reset(); stream_.reset(); chunk_ = {}; itemBytes_ = 0; destinationCommitted_ = false;
+                session_.reset(); stream_.reset(); producer_.reset(); chunk_ = {}; itemBytes_ = 0; destinationCommitted_ = false;
                 ++index_; readOnlyAnswered_ = false; sourceRemoveRetries_ = 0;
                 phase_ = Phase::Begin;
                 if (index_ == items_.size()) {
@@ -525,8 +594,14 @@ namespace hc::operations
                             const auto& Ah=A.source_.entry_.hints_; const auto& Bh=B.source_.entry_.hints_;
                             return Ah.contains("ordinal") && Bh.contains("ordinal") && std::stoull(Ah.at("ordinal"))<std::stoull(Bh.at("ordinal"));
                         });
-                        for (auto& [Reader,Entries]:Groups) if (Reader->UsesOrderedReads()) {
-                            auto Prepared=Reader->PrepareReadBatch(std::move(Entries),Context).get(); if (!Prepared.HasValue()) return failed(Prepared.Failure());
+                        const bool DirectBatch = Context.directContent_ && !request_.copyOptions_.verify_ && !request_.bytesPerSecondLimit_
+                            && request_.destinationWriter_->CanProduceContent(Context);
+                        for (auto& [Reader,Entries]:Groups) if (Reader->UsesOrderedReads()
+                            || (DirectBatch && !Entries.empty() && Entries.front().locator_.kind_ == LocatorKind::Archive)) {
+                            auto ReadContext = Context;
+                            ReadContext.directContent_ = DirectBatch;
+                            ReadContext.producingContent_ = ReadContext.directContent_;
+                            auto Prepared=Reader->PrepareReadBatch(std::move(Entries),ReadContext).get(); if (!Prepared.HasValue()) return failed(Prepared.Failure());
                             const auto Owner=std::find_if(items_.begin(),items_.end(),[&](const PlannedItem& Item){return Item.source_.reader_.get()==Reader;});
                             batchReaders_.push_back(Owner->source_.reader_);
                         }
@@ -773,6 +848,10 @@ namespace hc::operations
             std::vector<EnumerationFrame> enumerations_;
             std::vector<std::uint64_t> rootFiles_;
             std::shared_ptr<IReadStream> stream_;
+            std::optional<ContentProducer> producer_;
+            Task<Unit> production_;
+            std::shared_ptr<std::atomic<std::uint64_t>> productionProgress_;
+            std::set<const IStorageProvider*> producedReaders_;
             std::unique_ptr<IWriteSession> session_;
             DestinationExpectation expected_;
             ReadChunk chunk_;

@@ -1,6 +1,7 @@
 ﻿#include <QtTest>
 #include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/wcxMutation.hpp"
+#include "UniqueLibs/wcxBackend.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -146,6 +147,78 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void directBatchAfterMaterializedPreview()
+    {
+        using namespace hc::plugins;
+        struct CountingBackend final : IArchiveBackend {
+            std::shared_ptr<IArchiveBackend> real_ = MakeInProcessWcxBackend(Fixture().toStdString());
+            int singles_ = 0, batches_ = 0;
+            Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Path, bool Test, OperationContext Context) override
+            { return real_->Enumerate(std::move(Path), Test, Context); }
+            Result<Unit> Extract(std::string Path, ArchiveHeader Expected, std::string Output, OperationContext Context) override
+            { ++singles_; return real_->Extract(std::move(Path), std::move(Expected), std::move(Output), Context); }
+            Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override { return real_->Update(std::move(Request), Context); }
+            Result<Unit> ExtractSelected(std::string Path, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override
+            { ++batches_; return real_->ExtractSelected(std::move(Path), std::move(Directory), std::move(Indices), Context); }
+        };
+        QTemporaryDir Directory; const auto Path = Directory.filePath("preview.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        const auto Output = Directory.filePath("output"); QVERIFY(QDir().mkpath(Output));
+        auto Backend = std::make_shared<CountingBackend>();
+        auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString(), Backend);
+        auto Alpha = Reader->Resolve(Location(Path, "/alpha.txt"), {}).get(); QVERIFY(Alpha.HasValue());
+        auto Korean = Reader->Resolve(Location(Path, "/sub/한글.txt"), {}).get(); QVERIFY(Korean.HasValue());
+        auto Preview = Reader->OpenRead(Alpha.Value().id_, {}).get(); QVERIFY(Preview.HasValue());
+        auto Data = Preview.Value()->Read(64, {}).get(); QVERIFY(Data.HasValue());
+        const auto ExpectedAlpha = Bytes(Data.Value()); Preview.Value().reset();
+        QVERIFY(!Reader->UsesOrderedReads()); QCOMPARE(Backend->singles_, 1);
+        auto Native = MakeNativeReadProvider(LocatorKind::Local);
+        FileOperationRequest Request; Request.sources_ = {{Korean.Value(), Reader, {}}, {Alpha.Value(), Reader, {}}};
+        Request.destination_ = {LocatorKind::Local, Output.toStdString()}; Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Native);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Done = Job.Value().completion_.get();
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "incomplete");
+        QVERIFY(Done.cleanupErrors_.empty()); QCOMPARE(Backend->batches_, 1); QCOMPARE(Backend->singles_, 1);
+        QCOMPARE(FileBytes(QDir(Output).filePath("alpha.txt")), ExpectedAlpha);
+        QCOMPARE(FileBytes(QDir(Output).filePath("한글.txt")), QByteArray("한글!\r\n"));
+        QCOMPARE(QDir(Output).entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).size(), 0);
+        QVERIFY(Put(Path, "changed archive"));
+    }
+    void directSelectionReceiptRejectsChangedMapping()
+    {
+        using namespace hc::plugins;
+        struct ChangedMapping final : IArchiveBackend {
+            std::shared_ptr<IArchiveBackend> real_ = MakeInProcessWcxBackend(Fixture().toStdString());
+            Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Path, bool Test, OperationContext Context) override
+            { return real_->Enumerate(std::move(Path), Test, Context); }
+            Result<Unit> Extract(std::string Path, ArchiveHeader Expected, std::string Output, OperationContext Context) override
+            { return real_->Extract(std::move(Path), std::move(Expected), std::move(Output), Context); }
+            Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override { return real_->Update(std::move(Request), Context); }
+            Result<Unit> ExtractSelected(std::string Path, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override {
+                auto Done = real_->ExtractSelected(std::move(Path), Directory, std::move(Indices), Context); if (!Done.HasValue()) return Done;
+                if (!Put(QDir(QString::fromStdString(Directory)).filePath("selection.sha256"), QByteArray(64, '0')))
+                    return Error{ErrorCategory::Unavailable, "fixture-receipt-write"};
+                return Unit{};
+            }
+        };
+        QTemporaryDir Directory; const auto Path = Directory.filePath("mapping.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        const auto Output = Directory.filePath("output"); QVERIFY(QDir().mkpath(Output));
+        QVERIFY(Put(QDir(Output).filePath("alpha.txt"), "existing target"));
+        auto Backend = std::make_shared<ChangedMapping>();
+        auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString(), Backend);
+        auto Entry = Reader->Resolve(Location(Path, "/alpha.txt"), {}).get(); QVERIFY(Entry.HasValue());
+        auto Native = MakeNativeReadProvider(LocatorKind::Local);
+        FileOperationRequest Request; Request.sources_ = {{Entry.Value(), Reader, {}}};
+        Request.destination_ = {LocatorKind::Local, Output.toStdString()}; Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Native);
+        Request.conflict_ = ConflictPolicy::Replace;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Failed); QVERIFY(Done.snapshot_.error_);
+        QCOMPARE(Done.snapshot_.error_->code_, std::string("archive-direct-selection-changed")); QVERIFY(Done.cleanupErrors_.empty());
+        QCOMPARE(FileBytes(QDir(Output).filePath("alpha.txt")), QByteArray("existing target"));
+        QCOMPARE(QDir(Output).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System), QStringList{"alpha.txt"});
+    }
     void manifestArchiveCopyAndDelete()
     {
         QTemporaryDir Directory; const auto Path = Directory.filePath("target.hct"); QVERIFY(Put(Path, "HCWCX01"));

@@ -66,6 +66,14 @@ namespace hc::plugins
                 if (!Result.HasValue()) return Result.Failure();
                 return Result.Value().size() == 1 && Result.Value()["complete"].toBool() ? storage::Result<Unit>(Unit{}) : storage::Result<Unit>(Invalid());
             }
+            Result<Unit> ExtractSelected(std::string Archive, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override {
+                if (!process_) return Invalid();
+                QJsonArray Values; for (auto Index : Indices) Values.append(QString::number(Index));
+                auto Reply = process_->ArchiveCall(WireKind::ArchiveExtract, {{"archive", QString::fromStdString(Archive)},
+                    {"output", QString::fromStdString(Directory)}, {"indices", Values}, {"context", EncodeContext(Context)}}, Context);
+                if (!Reply.HasValue()) return Reply.Failure();
+                return Reply.Value().size() == 1 && Reply.Value()["complete"].toBool() ? storage::Result<Unit>(Unit{}) : storage::Result<Unit>(Invalid());
+            }
             Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string Archive,std::vector<std::uint32_t> Indices,OperationContext Context) override {
                 if (!process_ || process_->Session().epoch_.empty()) return Error{ErrorCategory::Unsupported,"archive-stream-unsupported"};
                 QJsonArray Values; for (auto Index:Indices) Values.append(QString::number(Index));

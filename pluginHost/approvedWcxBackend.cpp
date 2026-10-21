@@ -40,6 +40,11 @@ namespace hc::plugins
                 auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
                 return Host.Value()->ExtractAll(std::move(Archive), std::move(Directory), Context);
             }
+            Result<Unit> ExtractSelected(std::string Archive, std::string Directory, std::vector<std::uint32_t> Indices, OperationContext Context) override {
+                if (!Context.passwordPrompt_) Context.passwordPrompt_ = options_.passwordPrompt_;
+                auto Host = connect(Context); if (!Host.HasValue()) return Host.Failure();
+                return Host.Value()->ExtractSelected(std::move(Archive), std::move(Directory), std::move(Indices), std::move(Context));
+            }
             Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string Archive,std::vector<std::uint32_t> Indices,OperationContext Context) override {
                 if (!Context.passwordPrompt_) Context.passwordPrompt_=options_.passwordPrompt_;
                 auto Host=connect(Context); if (!Host.HasValue()) return Host.Failure();

@@ -2,6 +2,7 @@
 #include "archiveCodec.hpp"
 #include <QJsonDocument>
 #include <QUuid>
+#include <atomic>
 
 namespace hc::plugins
 {
@@ -37,6 +38,7 @@ namespace hc::plugins
         QByteArray binary_;
         OperationContext context_;
         std::stop_source stop_;
+        std::atomic<bool> paused_ = false;
         std::mutex mutex_;
         std::condition_variable changed_;
         std::optional<Result<QByteArray>> result_;
@@ -67,6 +69,7 @@ namespace hc::plugins
             std::shared_ptr<Work> Job;
             { std::unique_lock Lock(mutex_); changed_.wait(Lock, Stop, [&] { return bool(pending_); }); if (Stop.stop_requested()) break; Job = pending_; }
             auto Context = Job->context_; Context.stopToken_ = Job->stop_.get_token();
+            Context.pauseRequested_ = [Job] { return Job->paused_.load(); };
             Context.progress_ = [Job](std::uint64_t Value) { std::lock_guard Lock(Job->mutex_); Job->progress_ = std::max(Job->progress_, Value); };
             Context.interactionPrompt_ = [Job](const ProviderInteractionRequest& Request, const OperationContext& Operation) -> Result<ProviderInteractionReply> {
                 std::unique_lock Lock(Job->mutex_);
@@ -107,6 +110,11 @@ namespace hc::plugins
             return Fail({ErrorCategory::Unsupported, "session-command"});
         auto Context = DecodeContextV2(Envelope["context"].toObject()); if (!Context.HasValue()) return Fail(Context.Failure());
         auto Job = std::make_shared<Work>(); Job->kind_ = Kind; Job->request_ = Envelope["request"].toObject();
+        if (Job->request_.contains("initialPause")) {
+            if (Kind != WireKind::ArchiveExtract || !Job->request_["indices"].isArray() || !Job->request_["output"].isString()
+                || Job->request_["initialPause"] != QJsonValue(true)) return Fail(HostError("session-pause-request"));
+            Job->paused_ = true; Job->request_.remove("initialPause");
+        }
         Job->binary_ = std::move(Decoded.Value().second); Job->context_ = std::move(Context.Value());
         { std::lock_guard Lock(mutex_); if (pending_) return Fail(HostError("session-busy")); pending_ = Job; }
         changed_.notify_all();
@@ -144,6 +152,10 @@ namespace hc::plugins
                 if (Input.Value().header_.version_ != ProtocolVersion{2, 0} || Input.Value().header_.sequence_ != Frame.header_.sequence_)
                 { Job->stop_.request_stop(); return HostError("session-control-envelope"); }
                 if (Input.Value().header_.kind_ == WireKind::SessionCancel) { Job->stop_.request_stop(); Job->changed_.notify_all(); }
+                else if (Input.Value().header_.kind_ == WireKind::SessionPause && Input.Value().payload_.size() == 1
+                    && (Input.Value().payload_[0] == '\0' || Input.Value().payload_[0] == '\1')) {
+                    Job->paused_ = Input.Value().payload_[0] == '\1'; Job->changed_.notify_all();
+                }
                 else if (Input.Value().header_.kind_ == WireKind::InteractionReply)
                 {
                     auto Doc = QJsonDocument::fromJson(Input.Value().payload_); Input.Value().payload_.fill(0); auto Object = Doc.object(); Doc = {};

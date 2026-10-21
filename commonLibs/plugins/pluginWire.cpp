@@ -32,7 +32,8 @@ namespace hc::plugins
     {
         switch (Kind) { case WireKind::SessionInvoke: case WireKind::SessionCancel: case WireKind::SessionProgress:
         case WireKind::InteractionRequest: case WireKind::InteractionReply: case WireKind::StreamOpen: case WireKind::StreamRead:
-        case WireKind::StreamSeek: case WireKind::StreamClose: case WireKind::StreamData: case WireKind::ArchiveUpdateBinary: return true; default: return false; }
+        case WireKind::StreamSeek: case WireKind::StreamClose: case WireKind::StreamData: case WireKind::ArchiveUpdateBinary:
+        case WireKind::SessionPause: return true; default: return false; }
     }
     Result<std::vector<std::byte>> EncodeHeader(const WireHeader& Header)
     {

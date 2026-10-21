@@ -61,6 +61,14 @@ namespace hc::plugins
                 const auto Id=++serial_; readStreams_[Id]=std::move(Reader.Value()); return QJsonObject{{"archiveStream",QString::number(Id)}};
             }
 
+            if (Request.size() == 4 && Request["archive"].isString() && Request["output"].isString() && Request["indices"].isArray()) {
+                std::vector<std::uint32_t> Indices;
+                const auto Values = Request["indices"].toArray();
+                if (Values.isEmpty() || std::size_t(Values.size()) > Context.Value().EnumerationLimit()) return Invalid();
+                for (const auto& Value : Values) { auto Index = WireUnsigned(Value); if (!Index.HasValue() || Index.Value() > UINT32_MAX) return Invalid(); Indices.push_back(std::uint32_t(Index.Value())); }
+                auto Extracted = backend_->ExtractSelected(Request["archive"].toString().toStdString(), Request["output"].toString().toStdString(), std::move(Indices), Context.Value());
+                if (!Extracted.HasValue()) return Extracted.Failure(); return QJsonObject{{"complete", true}};
+            }
             if (Request.size() == 4 && Request["archive"].isString() && Request["output"].isString() && Request["all"] == QJsonValue(true)) {
                 auto Extracted = backend_->ExtractAll(Request["archive"].toString().toStdString(), Request["output"].toString().toStdString(), Context.Value());
                 if (!Extracted.HasValue()) return Extracted.Failure(); return QJsonObject{{"complete", true}};
