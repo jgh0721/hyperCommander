@@ -1,6 +1,10 @@
 ﻿#include "stdafx.h"
 #include "dialogShell.hpp"
-#include <fmwidgets/Banner.h>
+#include "nativePathCompletion.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
+#include <fmstyle/Glyphs.h>
+#include <fmstyle/StylePaint.h>
+#include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/renameSelection.hpp"
 #include <fmwidgets/Button.h>
 #include <fmwidgets/WrapCheckBox.h>
@@ -45,6 +49,32 @@
 #include "../../UniqueLibs/settings/appSettings.hpp"
 
 namespace hc::ui {
+class DialogMessage final : public hc::qt::ElidedLabel {
+public:
+    explicit DialogMessage(QWidget* Parent) : ElidedLabel(Parent) {
+        setContentsMargins(24, 0, 0, 0);
+        auto Policy = sizePolicy(); Policy.setRetainSizeWhenHidden(true); setSizePolicy(Policy);
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] { updateTone(); });
+        updateTone();
+    }
+    void SetError(bool Error) { error_ = Error; updateTone(); }
+    QSize sizeHint() const override { auto Size = ElidedLabel::sizeHint(); Size.setHeight(qMax(16, Size.height())); return Size; }
+protected:
+    void paintEvent(QPaintEvent* Event) override {
+        ElidedLabel::paintEvent(Event);
+        if (text().isEmpty()) return;
+        QPainter Painter(this);
+        fm::style::paintGlyph(&Painter, fm::style::Glyph::Info, QRectF(0, (height() - 16) / 2.0, 16, 16), palette().color(QPalette::WindowText));
+    }
+private:
+    void updateTone() {
+        const auto& Colors = fm::style::themeColorsFor(this);
+        auto Palette = palette(); Palette.setColor(QPalette::WindowText, Colors[error_ ? fm::style::Token::Danger : fm::style::Token::Fg2]);
+        setPalette(Palette); update();
+    }
+    bool error_ = false;
+};
+
 DialogShell::DialogShell(const QString& Title, QWidget* Parent)
     : QDialog(Parent)
 {
@@ -71,10 +101,6 @@ DialogShell::DialogShell(const QString& Title, QWidget* Parent)
     bodyLayout_ = new QVBoxLayout(Body);
     bodyLayout_->setContentsMargins(20, 12, 20, 12);
     bodyLayout_->setSpacing(12);
-    message_ = new fm::ui::Banner(Body);
-    message_->setObjectName(QStringLiteral("hc.dialog.message"));
-    message_->hide();
-    bodyLayout_->addWidget(message_);
     Scroll->setWidget(Body);
     Layout->addWidget(Scroll, 1);
     auto* Footer = new fm::ui::DialogFooter(this);
@@ -82,7 +108,10 @@ DialogShell::DialogShell(const QString& Title, QWidget* Parent)
     auto* Buttons = new QHBoxLayout(Footer);
     Buttons->setContentsMargins(20, 12, 20, 12);
     Buttons->setSpacing(8);
-    Buttons->addStretch();
+    message_ = new DialogMessage(Footer);
+    message_->setObjectName(QStringLiteral("hc.dialog.message"));
+    message_->hide();
+    Buttons->addWidget(message_, 1);
     accept_ = new fm::ui::Button(tr("확인(&O)"), Footer);
     accept_->setObjectName(QStringLiteral("hc.dialog.accept"));
     accept_->setRole(fm::ui::Button::Primary);
@@ -101,9 +130,8 @@ void DialogShell::SetTitle(const QString& Text) { setWindowTitle(Text); header_-
 void DialogShell::SetSummary(const QString& Text) { header_->setSubtitle(Text); }
 void DialogShell::SetMessage(const QString& Text, bool Error)
 {
-    message_->setTone(Error ? fm::ui::Banner::Danger : fm::ui::Banner::Info);
-    // Filenames and provider messages are data, never rich-text markup.
-    message_->setText(Text.toHtmlEscaped());
+    message_->SetError(Error);
+    message_->SetText(Text);
     message_->setVisible(!Text.isEmpty());
 }
 void DialogShell::SetAcceptEnabled(bool Enabled) { accept_->setEnabled(Enabled); if (auto* Queue = findChild<QPushButton*>("hc.operation.queue")) Queue->setEnabled(Enabled); }
@@ -145,7 +173,7 @@ void DialogShell::FitToContents()
 }
 void DialogShell::ResetBody()
 {
-    for (auto* Widget : body_->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) if (Widget != message_) Widget->hide();
+    for (auto* Widget : body_->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) Widget->hide();
     const auto Clear = [](auto&& Self, QLayout* Layout) -> void {
         while (auto* Item = Layout->takeAt(0)) {
             if (auto* Child = Item->layout()) Self(Self, Child);
@@ -153,7 +181,6 @@ void DialogShell::ResetBody()
         }
     };
     Clear(Clear, bodyLayout_);
-    bodyLayout_->addWidget(message_);
 }
 void DialogShell::showEvent(QShowEvent* Event)
 {
@@ -165,6 +192,8 @@ bool DialogShell::eventFilter(QObject* Watched, QEvent* Event)
 {
     if (Watched == initialInput_ && Event->type() == QEvent::KeyPress) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
+        if (initialInput_->property("hc.pathCompletion.composing").toBool()
+            && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter)) return true;
         if ((Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter)
             && (Key->modifiers() == Qt::NoModifier || Key->modifiers() == Qt::KeypadModifier)) {
             // Click the validated primary action, even if another button was
@@ -344,7 +373,6 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
             AcceptButton()->setRole(PermanentDelete ? fm::ui::Button::Danger : fm::ui::Button::Primary);
             SetMessage(PermanentDelete ? tr("선택한 항목과 하위 항목을 영구 삭제합니다. 복원할 수 없습니다.")
                 : recycle_->isEnabled() ? tr("Windows 휴지통에서 복원할 수 있습니다. 실패해도 영구 삭제로 전환하지 않습니다.") : tr("이 위치에서는 휴지통을 지원하지 않습니다. 영구 삭제는 직접 선택해야 합니다."), PermanentDelete);
-            FitToContents();
         };
         connect(Permanent, &QRadioButton::toggled, this, Update);
         connect(Recycle, &QRadioButton::toggled, this, Update);
@@ -372,7 +400,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     input_->setHistory(Request.nativeDestination_ ? RecentTargets(Request.providerKey_) : QStringList{});
     input_->setPath(Request.initialValue_);
     BodyLayout()->addWidget(input_);
-    preview_ = Label({});
+    preview_ = new hc::qt::ElidedLabel(this); BodyLayout()->addWidget(preview_);
     preview_->setObjectName(QStringLiteral("hc.operation.preview"));
     if (!Mkdir && !Rename) {
         Label(tr("최근 대상 — 이 공급자에서 사용한 경로 · Alt+1~3"));
@@ -475,7 +503,9 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         parents_->setObjectName("hc.operation.parents"); parents_->setEnabled(Request.nativeDestination_); BodyLayout()->addWidget(parents_);
         parents_->setToolTip(tr("끝이 \\ 또는 /인 경로, 폴더로 지정한 대상, 자동 모드의 여러 항목 대상은 필요한 폴더를 만듭니다. 이 옵션은 새 이름으로 지정한 파일의 상위 폴더도 만듭니다."));
     }
-    targetSummary_ = Label(Request.nativeDestination_ ? tr("대상 볼륨 조회 중…") : tr("공급자 대상은 실행 시 검사합니다."));
+    targetSummary_ = Mkdir ? Label({}) : new hc::qt::ElidedLabel(this);
+    if (!Mkdir) BodyLayout()->addWidget(targetSummary_);
+    targetSummary_->setText(Request.nativeDestination_ ? tr("대상 볼륨 조회 중…") : tr("공급자 대상은 실행 시 검사합니다."));
     targetSummary_->setObjectName("hc.operation.targetSummary");
     targetWatcher_ = new QFutureWatcher<QJsonObject>(this);
     probeTimer_ = new QTimer(this); probeTimer_->setSingleShot(true); probeTimer_->setInterval(150);
@@ -501,7 +531,6 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
             }
             plan_->setPlan(Nodes);
         }
-        FitToContents();
     });
     AcceptButton()->setText(Copy ? tr("복사(&C)") : Mkdir ? tr("만들기(&O)") : tr("확인(&O)"));
     BodyLayout()->addStretch();
@@ -511,6 +540,9 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         hc::ui::SelectRenameText(input_->lineEdit(), hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameSelectExtension"].toBool(false));
     }
     SetInitialInput(input_->lineEdit());
+    if (Request.nativeDestination_)
+        InstallNativePathCompletion(input_->lineEdit(), Request.relativeBase_.isEmpty() ? Request.source_ : Request.relativeBase_,
+            !Mkdir && (Rename || (!Request.manifestSelection_ && Request.names_.size() == 1)));
     validateInput();
     if (!Mkdir) { arrangeCompactOperation(); validateInput(); }
 }
@@ -550,7 +582,7 @@ void FileOperationDialog::arrangeCompactOperation()
         connect(Shortcut, &QShortcut::activated, this, [this, Target = Targets[Index]] { input_->setPath(Target); });
     }
     advancedToggle_ = new fm::ui::Button(tr("고급 옵션(&G) ▾"), this); advancedToggle_->setObjectName("hc.operation.advanced"); advancedToggle_->setAutoDefault(false);
-    optionSummary_ = new QLabel(this); optionSummary_->setObjectName("hc.operation.optionSummary"); optionSummary_->setTextFormat(Qt::PlainText); optionSummary_->setWordWrap(true);
+    optionSummary_ = new hc::qt::ElidedLabel(this); optionSummary_->setObjectName("hc.operation.optionSummary");
     auto* SummaryRow = new QHBoxLayout; SummaryRow->addWidget(advancedToggle_); SummaryRow->addWidget(optionSummary_, 1); BodyLayout()->addLayout(SummaryRow);
     advanced_ = new QWidget(this); advanced_->setObjectName("hc.operation.advancedBody"); auto* AdvancedLayout = new QVBoxLayout(advanced_); AdvancedLayout->setContentsMargins(0,0,0,0);
     advancedTabs_ = new QTabWidget(advanced_); advancedTabs_->setObjectName("hc.operation.advancedTabs"); AdvancedLayout->addWidget(advancedTabs_);
@@ -713,7 +745,7 @@ void FileOperationDialog::validateInput(bool RefreshProbe)
         } else preview_->setText(tr("대상: %1").arg(Target));
         preview_->show();
     } else preview_->setText(tr("대상: %1\n존재 여부·권한·충돌은 실행 시 다시 확인합니다.").arg(Target));
-    if (!Mkdir) preview_->setToolTip(Target);
+    preview_->setToolTip(preview_->text());
     if (plan_) {
         QList<fm::ui::FolderPlanView::Node> Nodes{{request_.source_, fm::ui::FolderPlanView::Node::Current}};
         for (const auto& Part : PathParts(Value)) Nodes.append({Part, Valid ? fm::ui::FolderPlanView::Node::New : fm::ui::FolderPlanView::Node::Invalid});
@@ -724,7 +756,7 @@ void FileOperationDialog::validateInput(bool RefreshProbe)
     }
     SetAcceptEnabled(Valid && !Pending);
     SetMessage(!Valid ? Error.isEmpty() ? tr("이름 또는 경로를 입력하세요.") : Error : Pending ? tr("대상 파일·폴더를 확인하고 있습니다.") : QString{}, !Valid);
-    updateOptionSummary(); FitToContents();
+    updateOptionSummary();
     if (RefreshProbe && (!NativeTransfer || !Inspected)) {
         ++generation_;
         if (probeTimer_ && request_.nativeDestination_ && !Target.isEmpty() && (!Rename || MovingName)) { targetSummary_->setText(tr("대상 볼륨 조회 중…")); probeTimer_->start(); }
@@ -778,7 +810,7 @@ void FileOperationDialog::summarizeSource()
     auto* Watcher = new QFutureWatcher<QJsonObject>(this);
     connect(Watcher, &QFutureWatcher<QJsonObject>::finished, this, [this, Watcher] {
         const auto Text = Watcher->result()["text"].toString(); sourceSummary_->setText(Text.section('\n',0,0)); sourceSummary_->setToolTip(Text);
-        Watcher->deleteLater(); FitToContents();
+        Watcher->deleteLater();
     });
     Watcher->setFuture(QtConcurrent::run([Source = request_.source_, Names = request_.names_, Stop = stop_.get_token()] {
         quint64 Files = 0, Folders = 0, Bytes = 0; bool Partial = false;
@@ -820,12 +852,13 @@ ArchiveExtractDialog::ArchiveExtractDialog(const QStringList& Names, const QStri
     separate_ = new QCheckBox(tr("압축 파일 이름으로 각각 하위 폴더 만들기(&F)"), Card); separate_->setObjectName("hc.archive.extract.separate"); separate_->setChecked(!InsideArchive); separate_->setEnabled(!InsideArchive); Form->addRow(separate_);
     conflict_ = new QComboBox(Card); conflict_->setObjectName("hc.archive.extract.conflict"); conflict_->addItem(tr("묻기"), "ask"); conflict_->addItem(tr("덮어쓰기"), "replace"); conflict_->addItem(tr("건너뛰기"), "skip"); Form->addRow(tr("같은 이름의 파일"), conflict_);
     queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), Card); queued_->setObjectName("hc.archive.extract.queued"); Form->addRow(queued_);
-    auto* Resolved = new QLabel(this); Resolved->setObjectName("hc.archive.extract.resolved"); Resolved->setWordWrap(true); Resolved->setTextFormat(Qt::PlainText); BodyLayout()->addWidget(Resolved);
-    const auto UpdateResolved = [this, Resolved] { Resolved->setText(tr("대상: %1").arg(this->Destination())); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(baseDirectory_,this->Destination())); Resolved->setVisible(!QDir::isAbsolutePath(QDir::fromNativeSeparators(destination_->text()))); };
+    auto* Resolved = new hc::qt::ElidedLabel(this); Resolved->setObjectName("hc.archive.extract.resolved"); BodyLayout()->addWidget(Resolved);
+    const auto UpdateResolved = [this, Resolved] { Resolved->SetText(tr("대상: %1").arg(this->Destination())); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(baseDirectory_,this->Destination())); };
     connect(destination_, &QLineEdit::textChanged, this, UpdateResolved); UpdateResolved();
     auto* Note = new QLabel(tr("원본은 유지하고 하위 폴더 구조를 보존합니다. 암호가 필요하면 작업 중 입력을 요청합니다."), this); Note->setWordWrap(true); BodyLayout()->addWidget(Note); BodyLayout()->addStretch();
     AcceptButton()->setText(tr("압축 해제(&S)")); connect(destination_, &QLineEdit::textChanged, this, [this] { validate(); });
     destination_->selectAll(); SetInitialInput(destination_); validate(); FitToContents();
+    InstallNativePathCompletion(destination_, baseDirectory_, false);
 }
 QString ArchiveExtractDialog::Destination() const { return ResolveNativeDestination(destination_->text(), baseDirectory_); }
 QString ArchiveExtractDialog::Conflict() const { return conflict_->currentData().toString(); }

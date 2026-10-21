@@ -27,11 +27,218 @@
 #include <QSpinBox>
 #include <QScrollArea>
 #include <QLabel>
+#include <QListView>
+#include <QInputMethodEvent>
 
 class DialogFoundationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void footerMessagesKeepGeometry_data()
+    {
+        QTest::addColumn<bool>("Dark"); QTest::addColumn<int>("Points");
+        for (const bool Dark : {false, true}) for (const int Points : {11, 18})
+            QTest::newRow(qPrintable(QString("%1-%2").arg(Dark ? "dark" : "light").arg(Points))) << Dark << Points;
+    }
+    void footerMessagesKeepGeometry()
+    {
+        QFETCH(bool, Dark); QFETCH(int, Points);
+        const auto Original = qApp->font(); const auto Restore = qScopeGuard([&] { qApp->setFont(Original); });
+        auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(fm::style::Design::Watercolor);
+        Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+        if (!Theme.isInstalled()) Theme.install(*qApp);
+        auto Font = Original; Font.setPointSize(Points); qApp->setFont(Font);
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        QFile Source(Root.filePath("source.txt")); QVERIFY(Source.open(QIODevice::WriteOnly)); Source.write("fixture"); Source.close();
+        for (const auto& Kind : {"copy", "move", "rename", "mkdir", "input", "extract", "new-file"}) {
+            std::unique_ptr<hc::ui::DialogShell> Dialog;
+            hc::ui::FileOperationDialog* Operation = nullptr;
+            if (QString(Kind) == "input") Dialog = std::make_unique<hc::ui::FileInputDialog>(hc::ui::FileDialogRequest{"입력", {}, "경로", Root.path(), true});
+            else if (QString(Kind) == "extract") Dialog = std::make_unique<hc::ui::ArchiveExtractDialog>(QStringList{"source.zip"}, Root.path(), false, nullptr, Root.path());
+            else if (QString(Kind) == "new-file") Dialog = std::make_unique<hc::ui::NewFileDialog>(Root.path(), true);
+            else {
+                hc::ui::FileOperationDialogRequest Request; Request.command_ = "hc.file." + QString::fromLatin1(Kind);
+                Request.source_ = Root.path(); Request.relativeBase_ = Root.path(); Request.names_ = {"source.txt"};
+                Request.initialValue_ = QString(Kind) == "rename" ? "source.txt" : QString(Kind) == "mkdir" ? "new-folder" : Root.path();
+                Request.nativeSource_ = Request.nativeDestination_ = true;
+                auto Value = std::make_unique<hc::ui::FileOperationDialog>(Request); Operation = Value.get(); Dialog = std::move(Value);
+            }
+            Dialog->show(); QVERIFY(QTest::qWaitForWindowExposed(Dialog.get()));
+            auto* Edit = Dialog->findChild<QLineEdit*>(Operation ? "hc.operation.editor" : QString(Kind) == "input" ? "hc.dialog.input.editor" : QString(Kind) == "extract" ? "hc.archive.extract.path" : "hc.newFile.name");
+            QVERIFY(Edit);
+            const auto Size = Dialog->size();
+            const auto ButtonRect = [&](QWidget* Widget) { return QRect(Widget->mapTo(Dialog.get(), QPoint()), Widget->size()); };
+            const auto Accept = ButtonRect(Dialog->AcceptButton()), Cancel = ButtonRect(Dialog->CancelButton());
+            const auto EditorTop = Edit->mapTo(Dialog.get(), QPoint()).y();
+            const QStringList Inputs{QString{}, ".\\", "bad?name", Root.path(), "new-file.txt", QString(".\\") + QString(220, 'a') + "\\"};
+            for (const auto& Input : Inputs) {
+                Edit->setText(Input); QCoreApplication::processEvents();
+                QCOMPARE(Dialog->size(), Size); QCOMPARE(ButtonRect(Dialog->AcceptButton()), Accept); QCOMPARE(ButtonRect(Dialog->CancelButton()), Cancel);
+                if (Operation && !Operation->ResolvedTarget().isEmpty()) {
+                    auto* Summary = Dialog->findChild<QLabel*>("hc.operation.targetSummary"); QVERIFY(Summary);
+                    if (!Summary->isHidden()) QTRY_COMPARE(Summary->property("target").toString(), Operation->ResolvedTarget());
+                }
+                QCoreApplication::processEvents(); QCOMPARE(Dialog->size(), Size);
+                QCOMPARE(ButtonRect(Dialog->AcceptButton()), Accept); QCOMPARE(ButtonRect(Dialog->CancelButton()), Cancel);
+                QCOMPARE(Edit->mapTo(Dialog.get(), QPoint()).y(), EditorTop);
+            }
+            auto* Message = Dialog->findChild<QLabel*>("hc.dialog.message"); QVERIFY(Message);
+            const auto Text = QString("<provider> & ") + QString(300, 'x') + "\n다음 줄 전체 안내";
+            Dialog->SetMessage(Text, true); QCoreApplication::processEvents();
+            QCOMPARE(Message->text(), Text); QCOMPARE(Message->toolTip(), Text); QCOMPARE(Message->textFormat(), Qt::PlainText);
+            QCOMPARE(Message->font(), Dialog->font()); QVERIFY(Message->isVisible());
+            const auto MessageRect = ButtonRect(Message);
+            QVERIFY(MessageRect.right() < Cancel.left()); QVERIFY(qAbs(MessageRect.center().y() - Cancel.center().y()) <= 1);
+            QCOMPARE(Dialog->size(), Size); QCOMPARE(ButtonRect(Dialog->AcceptButton()), Accept);
+            const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+            if (!Artifacts.isEmpty() && QString(Kind) == "move") {
+                QDir().mkpath(Artifacts);
+                Edit->clear();
+                Dialog->SetMessage("이름 또는 경로를 입력하세요.", true); QCoreApplication::processEvents();
+                QVERIFY(Dialog->grab().save(QDir(Artifacts).filePath(QString("footer-%1-%2-error.png").arg(Dark).arg(Points))));
+                Dialog->SetMessage({}); QCoreApplication::processEvents();
+                QVERIFY(Dialog->grab().save(QDir(Artifacts).filePath(QString("footer-%1-%2-clear.png").arg(Dark).arg(Points))));
+            }
+            Dialog->SetMessage({}); QCoreApplication::processEvents(); QVERIFY(!Message->isVisible());
+            QCOMPARE(Dialog->size(), Size); QCOMPARE(ButtonRect(Dialog->AcceptButton()), Accept); QCOMPARE(ButtonRect(Dialog->CancelButton()), Cancel);
+            Dialog->resize(Size + QSize(30, 20)); QCoreApplication::processEvents(); const auto UserSize = Dialog->size();
+            Edit->setText("changed-name.txt"); QTest::qWait(250); QCOMPARE(Dialog->size(), UserSize);
+        }
+    }
+    void nativeCompletionPaths_data()
+    {
+        QTest::addColumn<QString>("Input"); QTest::addColumn<QString>("Expected");
+        QTest::newRow("bare-relative") << "Fe" << "Feedback\\";
+        QTest::newRow("dot-backslash") << ".\\Fe" << ".\\Feedback\\";
+        QTest::newRow("dot-slash") << "./Fe" << "./Feedback/";
+        QTest::newRow("parent") << "..\\Fe" << "..\\Feedback\\";
+        QTest::newRow("absolute-slash") << "{root}/current/Fe" << "{root}/current/Feedback/";
+        QTest::newRow("absolute-backslash") << "{native}\\current\\Fe" << "{native}\\current\\Feedback\\";
+        QTest::newRow("case-insensitive") << "fe" << "Feedback\\";
+    }
+    void nativeCompletionPaths()
+    {
+        QFETCH(QString, Input); QFETCH(QString, Expected);
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        QVERIFY(QDir(Root.path()).mkpath("current/Feedback")); QVERIFY(QDir(Root.path()).mkdir("Feedback"));
+        Input.replace("{root}", Root.path()).replace("{native}", QDir::toNativeSeparators(Root.path()));
+        Expected.replace("{root}", Root.path()).replace("{native}", QDir::toNativeSeparators(Root.path()));
+        hc::ui::FileOperationDialogRequest Request; Request.command_ = "hc.file.move";
+        Request.source_ = Root.filePath("current"); Request.relativeBase_ = Request.source_;
+        Request.initialValue_ = "D:/different-target"; Request.names_ = {"source.txt"}; Request.nativeDestination_ = true;
+        hc::ui::FileOperationDialog Dialog(Request); Dialog.show(); Dialog.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&Dialog));
+        auto* Edit = Dialog.findChild<QLineEdit*>("hc.operation.editor"); QVERIFY(Edit);
+        auto* Popup = Edit->findChild<QListView*>("hc.pathCompletion.popup"); QVERIFY(Popup);
+        QTRY_VERIFY(Edit->hasFocus()); Edit->setText(Input.left(Input.size() - 1));
+        QTest::keyClicks(Edit, Input.right(1)); QTRY_VERIFY(Popup->isVisible());
+        QCOMPARE(Popup->currentIndex().data().toString(), Expected); QCOMPARE(Edit->text(), Input);
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted);
+        QTest::keyClick(Edit, Qt::Key_Return); QCOMPARE(Edit->text(), Expected); QCOMPARE(Accepted.count(), 0);
+        QTest::keyClick(Edit, Qt::Key_Escape); QVERIFY(Dialog.isVisible()); QVERIFY(!Popup->isVisible());
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QTest::keyClick(Edit, Qt::Key_Return);
+        QCOMPARE(Accepted.count(), 1);
+    }
+    void nativeCompletionKeyboardAndUndo()
+    {
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        QVERIFY(QDir(Root.path()).mkdir("Feedback")); QVERIFY(QDir(Root.path()).mkdir("Feedmore"));
+        hc::ui::FileOperationDialogRequest Request; Request.command_ = "hc.file.copy"; Request.source_ = Root.path();
+        Request.names_ = {"source.txt"}; Request.nativeDestination_ = true;
+        hc::ui::FileOperationDialog Dialog(Request); Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
+        auto* Edit = Dialog.findChild<QLineEdit*>("hc.operation.editor"); QVERIFY(Edit);
+        auto* Popup = Edit->findChild<QListView*>("hc.pathCompletion.popup"); QVERIFY(Popup);
+        QTest::keyClicks(Edit, "Fe"); QTRY_VERIFY(Popup->isVisible()); QCOMPARE(Popup->model()->rowCount(), 2);
+        QTest::keyClick(Edit, Qt::Key_Down); QCOMPARE(Popup->currentIndex().row(), 1); QCOMPARE(Edit->text(), QString("Fe"));
+        QTest::keyClick(Edit, Qt::Key_Up); QCOMPARE(Popup->currentIndex().row(), 0);
+        QTest::keyClick(Edit, Qt::Key_PageDown); QCOMPARE(Popup->currentIndex().row(), 1);
+        QTest::keyClick(Edit, Qt::Key_PageUp); QCOMPARE(Popup->currentIndex().row(), 0);
+        QTest::keyClick(Edit, Qt::Key_Tab); QCOMPARE(Edit->text(), QString("Feedback\\")); QVERIFY(Edit->hasFocus());
+        QTest::keyClick(Edit, Qt::Key_Z, Qt::ControlModifier); QCOMPARE(Edit->text(), QString("Fe"));
+        QTest::keyClick(Edit, Qt::Key_Down); QTRY_VERIFY(Popup->isVisible()); QTest::keyClick(Edit, Qt::Key_Escape);
+        QVERIFY(Dialog.isVisible()); QVERIFY(!Popup->isVisible()); QCOMPARE(Edit->text(), QString("Fe"));
+        QTest::keyClick(Edit, Qt::Key_Down); QTRY_VERIFY(Popup->isVisible());
+        QTest::keyClick(Edit, Qt::Key_Escape); QTest::keyClick(Edit, Qt::Key_Escape); QVERIFY(!Dialog.isVisible());
+    }
+    void nativeCompletionFilesSuffixAndTheme()
+    {
+        QTemporaryDir Root; QVERIFY(Root.isValid()); QVERIFY(QDir(Root.path()).mkdir("Feedback"));
+        QFile File(Root.filePath("Feedback.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.close();
+        hc::ui::FileOperationDialogRequest Request; Request.command_ = "hc.file.copy"; Request.source_ = Root.path();
+        Request.names_ = {"source.txt"}; Request.nativeDestination_ = true;
+        hc::ui::FileOperationDialog Dialog(Request); Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
+        auto* Edit = Dialog.findChild<QLineEdit*>("hc.operation.editor"); QVERIFY(Edit);
+        auto* Popup = Edit->findChild<QListView*>("hc.pathCompletion.popup"); QVERIFY(Popup);
+        QTest::keyClicks(Edit, "Fe"); QTRY_VERIFY(Popup->isVisible()); QCOMPARE(Popup->model()->rowCount(), 2);
+        QCOMPARE(Popup->model()->index(0, 0).data().toString(), QString("Feedback\\"));
+        QCOMPARE(Popup->model()->index(1, 0).data().toString(), QString("Feedback.txt"));
+        auto Font = Edit->font(); Font.setPointSize(19); Edit->setFont(Font); QCOMPARE(Popup->font(), Edit->font());
+        auto Palette = Edit->palette(); Palette.setColor(QPalette::Base, QColor(24, 30, 36)); Palette.setColor(QPalette::Text, Qt::white);
+        Edit->setPalette(Palette); QCOMPARE(Popup->palette().color(QPalette::Base), Edit->palette().color(QPalette::Base));
+        QCOMPARE(Popup->palette().color(QPalette::Text), Edit->palette().color(QPalette::Text));
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted); QTest::keyClick(Edit, Qt::Key_Down);
+        QTest::keyClick(Edit, Qt::Key_Enter, Qt::KeypadModifier); QCOMPARE(Edit->text(), QString("Feedback.txt")); QCOMPARE(Accepted.count(), 0);
+        Edit->setText("Fe\\keep.txt"); Edit->setCursorPosition(2); QTest::keyClick(Edit, Qt::Key_Space, Qt::ControlModifier);
+        QTRY_VERIFY(Popup->isVisible()); QCOMPARE(Popup->model()->rowCount(), 1); QTest::keyClick(Edit, Qt::Key_Return);
+        QCOMPARE(Edit->text(), QString("Feedback\\keep.txt")); QCOMPARE(Accepted.count(), 0);
+    }
+    void nativeCompletionDirectoriesAndStaleResults()
+    {
+        QTemporaryDir Root; QVERIFY(Root.isValid()); QVERIFY(QDir(Root.path()).mkpath("Feedback/Child"));
+        QFile File(Root.filePath("Feedback.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.close();
+        hc::ui::ArchiveExtractDialog Dialog({"source.zip"}, Root.path(), false, nullptr, Root.path());
+        Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
+        auto* Edit = Dialog.findChild<QLineEdit*>("hc.archive.extract.path"); QVERIFY(Edit);
+        auto* Popup = Edit->findChild<QListView*>("hc.pathCompletion.popup"); QVERIFY(Popup);
+        Edit->clear(); QTest::keyClicks(Edit, "Fe"); QTRY_VERIFY(Popup->isVisible()); QCOMPARE(Popup->model()->rowCount(), 1);
+        QTest::keyClick(Edit, Qt::Key_Return); QTRY_VERIFY(Popup->isVisible());
+        QCOMPARE(Popup->currentIndex().data().toString(), QString("Feedback\\Child\\"));
+        Edit->setText("missing-prefix"); QTest::qWait(200); QVERIFY(!Popup->isVisible());
+        Edit->setText("Fe"); QTest::keyClick(Edit, Qt::Key_Space, Qt::ControlModifier);
+        Edit->setText("missing-prefix"); QTest::qWait(200); QVERIFY(!Popup->isVisible());
+        Edit->setText("Fe"); QTest::keyClick(Edit, Qt::Key_Space, Qt::ControlModifier);
+        QTest::keyClick(Edit, Qt::Key_Escape); QTest::qWait(200); QVERIFY(!Popup->isVisible()); QVERIFY(Dialog.isVisible());
+        QInputMethodEvent Preedit(QString::fromUtf8("피"), {}); QApplication::sendEvent(Edit, &Preedit);
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted); QTest::keyClick(Edit, Qt::Key_Return); QCOMPARE(Accepted.count(), 0);
+        QInputMethodEvent Commit; Commit.setCommitString(QString::fromUtf8("피")); QApplication::sendEvent(Edit, &Commit);
+        QVERIFY(!Edit->property("hc.pathCompletion.composing").toBool());
+    }
+    void nativeCompletionThemeAndMouse_data()
+    {
+        QTest::addColumn<bool>("Watercolor"); QTest::addColumn<bool>("Dark");
+        QTest::newRow("standard-light") << false << false;
+        QTest::newRow("standard-dark") << false << true;
+        QTest::newRow("watercolor-light") << true << false;
+        QTest::newRow("watercolor-dark") << true << true;
+    }
+    void nativeCompletionThemeAndMouse()
+    {
+        QFETCH(bool, Watercolor); QFETCH(bool, Dark);
+        auto& Theme = fm::style::ThemeManager::instance();
+        const auto OldDesign = Theme.design(); const auto OldScheme = Theme.scheme();
+        const auto OldFamily = Theme.monoFontFamily(); const int OldSize = Theme.monoFontPx();
+        const auto Restore = qScopeGuard([&] { Theme.setDesign(OldDesign); Theme.setScheme(OldScheme); Theme.setMonoFont(OldFamily, OldSize); });
+        Theme.setDesign(Watercolor ? fm::style::Design::Watercolor : fm::style::Design::Standard);
+        Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+        if (!Theme.isInstalled()) Theme.install(*qApp);
+        QTemporaryDir Root; QVERIFY(Root.isValid()); QVERIFY(QDir(Root.path()).mkdir(QString::fromUtf8("피드백")));
+        hc::ui::ArchiveExtractDialog Dialog({"source.zip"}, Root.path(), false, nullptr, Root.path());
+        Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog));
+        auto* Edit = Dialog.findChild<QLineEdit*>("hc.archive.extract.path"); QVERIFY(Edit);
+        auto* Popup = Edit->findChild<QListView*>("hc.pathCompletion.popup"); QVERIFY(Popup);
+        Theme.setMonoFont("Consolas", 24); QTest::qWait(50); Edit->clear();
+        QInputMethodEvent Commit; Commit.setCommitString(QString::fromUtf8("피")); QApplication::sendEvent(Edit, &Commit);
+        QTRY_VERIFY(Popup->isVisible()); QCOMPARE(Popup->font(), Edit->font()); QCOMPARE(Edit->font().pointSizeF(), 18.0);
+        QVERIFY(Edit->font().families().contains("Consolas"));
+        QCOMPARE(Popup->palette().color(QPalette::Base), Theme.colors().toPalette().color(QPalette::Base));
+        QCOMPARE(Popup->palette().color(QPalette::Highlight), Theme.colors().toPalette().color(QPalette::Highlight));
+        QCOMPARE(Popup->currentIndex().data().toString(), QString::fromUtf8("피드백\\"));
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Artifacts.isEmpty()) { QDir().mkpath(Artifacts); QVERIFY(Popup->grab().save(QDir(Artifacts).filePath(QString::fromLatin1(QTest::currentDataTag()) + ".png"))); }
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted);
+        QTest::mouseClick(Popup->viewport(), Qt::LeftButton, {}, Popup->visualRect(Popup->currentIndex()).center());
+        QCOMPARE(Edit->text(), QString::fromUtf8("피드백\\")); QCOMPARE(Accepted.count(), 0);
+    }
     void transferTimeAxisRollsWithoutLosingProgress()
     {
         fm::ui::TransferGraph Graph; Graph.start(200000); Graph.setAxis(fm::ui::TransferGraph::Time);

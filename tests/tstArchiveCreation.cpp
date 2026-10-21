@@ -88,8 +88,15 @@ private slots:
         const auto* Creator = Dialog.findChild<QComboBox*>("hc.archive.create.creator");
         QVERIFY(Format->mapTo(&Dialog, QPoint{}).y() < Creator->mapTo(&Dialog, QPoint{}).y());
         QVERIFY(Queue->x() < Create->mapTo(&Dialog, QPoint{}).x());
+        const auto StableSize = Dialog.size(); const auto ButtonPosition = Create->mapTo(&Dialog, QPoint());
         auto* Path = Dialog.findChild<QLineEdit*>("hc.archive.create.path"); Path->setText(" "); QVERIFY(!Create->isEnabled()); QVERIFY(!Queue->isEnabled());
-        Path->setText("result.7z"); QVERIFY(Create->isEnabled());
+        QCoreApplication::processEvents(); QCOMPARE(Dialog.size(), StableSize); QCOMPARE(Create->mapTo(&Dialog, QPoint()), ButtonPosition);
+        auto* Error = Dialog.findChild<QLabel*>("hc.archive.create.error"); QVERIFY(Error);
+        QVERIFY(!Error->text().isEmpty()); QCOMPARE(Error->toolTip(), Error->text());
+        QVERIFY(qAbs(Error->mapTo(&Dialog, Error->rect().center()).y() - Create->mapTo(&Dialog, Create->rect().center()).y()) <= 1);
+        QVERIFY(Error->mapTo(&Dialog, Error->rect().topRight()).x() < ButtonPosition.x());
+        Path->setText("result.7z"); QVERIFY(Create->isEnabled()); QCoreApplication::processEvents();
+        QCOMPARE(Dialog.size(), StableSize); QCOMPARE(Create->mapTo(&Dialog, QPoint()), ButtonPosition);
         auto* Omit = Dialog.findChild<QCheckBox*>("hc.archive.create.omitRoot"); QVERIFY(!Omit->isEnabled());
         Dialog.findChild<QCheckBox*>("hc.archive.create.individual")->setChecked(true); QVERIFY(Omit->isEnabled());
         Dialog.findChild<QCheckBox*>("hc.archive.create.paths")->setChecked(false); QVERIFY(!Omit->isEnabled());
@@ -108,7 +115,15 @@ private slots:
             else { SevenZipCreateSettings S; if (Format == std::string("zip")) S.solid_ = ArchiveSolidMode::Off; Settings = S; }
             QTimer::singleShot(0, [&] {
                 auto* D = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(D);
-                if (Format == std::string("iso")) { auto* Share = D->findChild<QCheckBox*>("hc.archive.settings.share"); QVERIFY(Share); Share->setChecked(true); QVERIFY(D->findChild<QDateTimeEdit*>("hc.archive.settings.timestamp")); }
+                if (Format == std::string("iso")) {
+                    auto* Share = D->findChild<QCheckBox*>("hc.archive.settings.share"); QVERIFY(Share); Share->setChecked(true); QVERIFY(D->findChild<QDateTimeEdit*>("hc.archive.settings.timestamp"));
+                    const auto Size = D->size(); auto* Ok = D->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok); const auto Position = Ok->mapTo(D, QPoint());
+                    auto* Label = D->findChild<QLineEdit*>("hc.archive.settings.label"); QVERIFY(Label); Label->setText("invalid 한글");
+                    QCoreApplication::processEvents(); QVERIFY(!Ok->isEnabled()); QCOMPARE(D->size(), Size); QCOMPARE(Ok->mapTo(D, QPoint()), Position);
+                    auto* Error = D->findChild<QLabel*>("hc.archive.settings.error"); QVERIFY(Error); QCOMPARE(Error->toolTip(), Error->text()); QVERIFY(!Error->text().isEmpty());
+                    QVERIFY(qAbs(Error->mapTo(D, Error->rect().center()).y() - Ok->mapTo(D, Ok->rect().center()).y()) <= 1);
+                    Label->setText("VALID"); QCoreApplication::processEvents(); QVERIFY(Ok->isEnabled()); QCOMPARE(D->size(), Size); QCOMPARE(Ok->mapTo(D, QPoint()), Position);
+                }
                 else { auto* Method = D->findChild<QComboBox*>("hc.archive.settings.method"); Method->setCurrentIndex(Method->findData(int(SevenZipMethod::Lzma))); QCOMPARE(D->findChild<QSpinBox*>("hc.archive.settings.threads")->maximum(), Format == std::string("7z") ? 2 : 128); QVERIFY(D->findChild<QComboBox*>("hc.archive.settings.dictionary")->count() > 10); }
                 const auto Capture = qEnvironmentVariable("HC_ARCHIVE_CAPTURE_ROOT"); if (!Capture.isEmpty()) QVERIFY(D->grab().save(Capture + "/settings-" + Format + ".png"));
                 D->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();

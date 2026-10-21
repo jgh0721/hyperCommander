@@ -22,6 +22,7 @@ class QSpinBox;
 namespace fm::ui { class Banner; class Button; class DialogHeader; class PathEdit; class FolderPlanView; }
 
 namespace hc::ui {
+class DialogMessage;
 // Resolves against an explicit folder; never uses the process working directory.
 QString ResolveNativeDestination(const QString& Input, const QString& BaseDirectory);
 
@@ -49,7 +50,7 @@ protected:
 
 private:
     fm::ui::DialogHeader* header_ = nullptr;
-    fm::ui::Banner* message_ = nullptr;
+    DialogMessage* message_ = nullptr;
     QVBoxLayout* bodyLayout_ = nullptr;
     fm::ui::Button* accept_ = nullptr;
     fm::ui::Button* cancel_ = nullptr;

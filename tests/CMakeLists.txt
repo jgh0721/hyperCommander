@@ -455,7 +455,7 @@ add_test(NAME hc.attributes COMMAND hc_attribute_tests)
 set_tests_properties(hc.attributes PROPERTIES TIMEOUT 90)
 hc_enable_qt_deployment(hc_attribute_tests TEST)
 qt_add_executable(hc_attribute_ui_tests tstFileAttributesUi.cpp
-    ../HyperCommander/UIs/fileAttributesDialog.cpp ../HyperCommander/UIs/dialogShell.cpp
+    ../HyperCommander/UIs/fileAttributesDialog.cpp ../HyperCommander/UIs/dialogShell.cpp ../HyperCommander/UIs/nativePathCompletion.cpp
     ../UniqueLibs/nativeFileElevation.cpp ../UniqueLibs/nativeWritableStorage.cpp
     ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp
     ../commonLibs/operations/jobScheduler.cpp)
@@ -621,6 +621,7 @@ add_dependencies(hc_check hc_file_lock_tests)
 qt_add_executable(hc_file_lock_ui_tests tstFileLockUi.cpp
     ../HyperCommander/UIs/fileLockDialog.cpp
     ../HyperCommander/UIs/dialogShell.cpp
+    ../HyperCommander/UIs/nativePathCompletion.cpp
 )
 target_include_directories(hc_file_lock_ui_tests PRIVATE
     ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
@@ -676,6 +677,7 @@ qt_add_executable(hc_dialog_foundation_tests
     ../HyperCommander/UIs/fileToolsDialogs.hpp
     ../HyperCommander/UIs/dialogShell.cpp
     ../HyperCommander/UIs/dialogShell.hpp
+    ../HyperCommander/UIs/nativePathCompletion.cpp
     ../HyperCommander/UIs/settingsDraft.hpp
 )
 target_include_directories(hc_dialog_foundation_tests PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")

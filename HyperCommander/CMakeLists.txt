@@ -57,6 +57,8 @@ set(PROJECT_UI_SRC
         ../UniqueLibs/archiveExtractJob.hpp
         ../UniqueLibs/fileBatchOperations.hpp
         UIs/dialogShell.cpp
+        UIs/nativePathCompletion.cpp
+        UIs/nativePathCompletion.hpp
         UIs/fileLockDialog.cpp
         UIs/fileLockDialog.hpp
         UIs/dialogShell.hpp

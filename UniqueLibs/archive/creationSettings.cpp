@@ -2,6 +2,7 @@
 #include "creationSettings.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 #include "pluginHost/archiveCodec.hpp"
 #include <QtConcurrent>
 
@@ -127,8 +128,9 @@ bool EditBuiltinCreationSettings(QWidget* Parent, const std::string& Format, Arc
     QDialog Dialog(Parent); Dialog.setObjectName(QString("hc.archive.settings.") + QString::fromStdString(Format)); Dialog.setWindowTitle(Format == "iso" ? QObject::tr("ISO 플러그인 설정") : QObject::tr("7-Zip 플러그인 설정")); Dialog.resize(620, 550);
     auto* Layout = new QVBoxLayout(&Dialog); auto* Scroll = new QScrollArea(&Dialog); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame); Layout->addWidget(Scroll, 1);
     auto* Content = new QWidget(Scroll); Scroll->setWidget(Content); auto* Form = new QFormLayout(Content); Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    auto* ErrorLabel = new QLabel(&Dialog); ErrorLabel->setWordWrap(true); Layout->addWidget(ErrorLabel);
-    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Layout->addWidget(Buttons); Buttons->button(QDialogButtonBox::Ok)->setText(QObject::tr("확인")); Buttons->button(QDialogButtonBox::Cancel)->setText(QObject::tr("취소"));
+    auto* Footer = new QHBoxLayout; Layout->addLayout(Footer);
+    auto* ErrorLabel = new hc::qt::ElidedLabel(&Dialog); ErrorLabel->setObjectName("hc.archive.settings.error"); Footer->addWidget(ErrorLabel, 1);
+    auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Footer->addWidget(Buttons); Buttons->button(QDialogButtonBox::Ok)->setText(QObject::tr("확인")); Buttons->button(QDialogButtonBox::Cancel)->setText(QObject::tr("취소"));
     QObject::connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
     ArchiveCreateSettings Draft = Settings;
     if (auto* S = std::get_if<SevenZipCreateSettings>(&Draft)) {
@@ -167,7 +169,7 @@ bool EditBuiltinCreationSettings(QWidget* Parent, const std::string& Format, Arc
             S->wordSize_ = Word->isEnabled() && Word->value() ? std::optional<unsigned>(unsigned(Word->value())) : std::nullopt; S->threads_ = Threads->value() ? std::optional<unsigned>(unsigned(Threads->value())) : std::nullopt;
             S->solid_ = ArchiveSolidMode(Solid->currentIndex()); S->solidBlockBytes_ = S->solid_ == ArchiveSolidMode::BlockSize ? std::optional<uint64_t>(Block->currentData().toULongLong()) : std::nullopt;
             S->encrypt_ = Encrypt->isChecked(); S->encryptHeaders_ = Format == "7z" && Header->isChecked(); auto Checked = ValidateSevenZipSettings(Format, *S);
-            if (!Checked.HasValue()) { ErrorLabel->setText(QObject::tr("알고리즘에 맞는 사전 크기·워드 크기·스레드를 확인하십시오.")); return; } Dialog.accept();
+            if (!Checked.HasValue()) { ErrorLabel->SetText(QObject::tr("알고리즘에 맞는 사전 크기·워드 크기·스레드를 확인하십시오.")); return; } Dialog.accept();
         });
     } else if (auto* S = std::get_if<IsoCreateSettings>(&Draft)) {
         auto* Profile = new QComboBox(Content); Profile->setObjectName("hc.archive.settings.profile"); Profile->addItems({QObject::tr("ISO 9660"), QObject::tr("ISO 9660 + Joliet"), QObject::tr("ISO 9660 + Joliet + UDF 1.02"), QObject::tr("ISO 9660 + UDF 1.02 (긴 파일 이름)")}); Profile->setCurrentIndex(int(S->profile_)); Form->addRow(QObject::tr("파일 시스템(&F)"), Profile);
@@ -179,7 +181,7 @@ bool EditBuiltinCreationSettings(QWidget* Parent, const std::string& Format, Arc
         auto* Help = new QLabel(QObject::tr("중복 내용 공유는 모든 경로를 유지합니다. 작성 후에는 각 경로의 전체 내용을 원본과 대조합니다."), Content); Help->setWordWrap(true); Help->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Form->addRow(Help);
         QObject::connect(Fixed, &QCheckBox::toggled, Time, [Time](bool On) { Time->setEnabled(!On); });
         const auto Validate = [=] { IsoCreateSettings Value; Value.profile_ = IsoCreateProfile(Profile->currentIndex()); Value.volumeLabel_ = Label->text().toStdString(); Value.timestampUtc_ = Fixed->isChecked() ? 946684800 : Time->dateTime().toSecsSinceEpoch(); Value.maxImageBytes_ = uint64_t(Maximum->value() * double(1ull << 30));
-            const auto Valid = ValidateIsoSettings(Value).HasValue(); Buttons->button(QDialogButtonBox::Ok)->setEnabled(Valid); ErrorLabel->setText(Valid ? QString{} : QObject::tr("볼륨 이름은 ISO 32자, Joliet 16자, UDF 30자 이내의 ASCII 문자로 입력하십시오.")); };
+            const auto Valid = ValidateIsoSettings(Value).HasValue(); Buttons->button(QDialogButtonBox::Ok)->setEnabled(Valid); ErrorLabel->SetText(Valid ? QString{} : QObject::tr("볼륨 이름은 ISO 32자, Joliet 16자, UDF 30자 이내의 ASCII 문자로 입력하십시오.")); };
         QObject::connect(Profile, &QComboBox::currentIndexChanged, &Dialog, Validate); QObject::connect(Label, &QLineEdit::textChanged, &Dialog, Validate); QObject::connect(Time, &QDateTimeEdit::dateTimeChanged, &Dialog, Validate); QObject::connect(Maximum, &QDoubleSpinBox::valueChanged, &Dialog, Validate); Validate();
         QObject::connect(Buttons, &QDialogButtonBox::accepted, &Dialog, [&, S, Profile, Label, Share, Fixed, Time, Maximum] { S->profile_ = IsoCreateProfile(Profile->currentIndex()); S->volumeLabel_ = Label->text().toStdString(); S->shareDuplicateContents_ = Share->isChecked(); S->timestampUtc_ = Fixed->isChecked() ? 946684800 : Time->dateTime().toSecsSinceEpoch(); S->maxImageBytes_ = uint64_t(Maximum->value() * double(1ull << 30)); if (ValidateIsoSettings(*S).HasValue()) Dialog.accept(); });
     } else return false;

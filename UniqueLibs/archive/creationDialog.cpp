@@ -2,6 +2,7 @@
 #include "creationDialog.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 #include <QtConcurrent>
 
 namespace hc::archive {
@@ -50,9 +51,9 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
     recursive_ = new QCheckBox(tr("하위 폴더 재귀 압축(&R)"), Content); recursive_->setObjectName("hc.archive.create.recursive"); recursive_->setChecked(Options.includeSubdirectories_); Rows->addWidget(recursive_);
     individual_ = AddOption(tr("선택한 파일·폴더를 각각의 압축 파일로 만들기(&A)"), "hc.archive.create.individual", Options.separateArchives_);
     omitRoot_ = new QCheckBox(tr("폴더 압축 시 기본 폴더 빼기(&B)"), Content); omitRoot_->setObjectName("hc.archive.create.omitRoot"); omitRoot_->setChecked(Options.omitSelectedFolderRoot_); Rows->addWidget(omitRoot_); Rows->addStretch();
-    error_ = new QLabel(this); error_->setObjectName("hc.archive.create.error"); error_->setWordWrap(true); error_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Layout->addWidget(error_);
     auto* Footer = new QHBoxLayout; Layout->addLayout(Footer);
-    queue_ = new QPushButton(tr("대기열에 추가(&Q)"), this); queue_->setObjectName("hc.archive.create.queue"); queue_->setAutoDefault(false); Footer->addWidget(queue_); Footer->addStretch();
+    queue_ = new QPushButton(tr("대기열에 추가(&Q)"), this); queue_->setObjectName("hc.archive.create.queue"); queue_->setAutoDefault(false); Footer->addWidget(queue_);
+    error_ = new hc::qt::ElidedLabel(this); error_->setObjectName("hc.archive.create.error"); Footer->addWidget(error_, 1);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this); Footer->addWidget(Buttons);
     create_ = Buttons->button(QDialogButtonBox::Ok); create_->setObjectName("hc.archive.create.submit"); create_->setText(tr("생성(&S)")); create_->setDefault(true); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -141,7 +142,7 @@ void CreationDialog::validate()
     const auto Path = outputPath();
     if (Path.isEmpty()) { Valid = false; Error = tr("저장할 경로를 입력하십시오."); }
     else if (!individual_->isChecked() && QFileInfo(Path).suffix().compare(QString::fromStdString(format_), Qt::CaseInsensitive)) { Valid = false; Error = tr("선택한 형식의 확장자 .%1을 사용하십시오.").arg(QString::fromStdString(format_)); }
-    error_->setText(Error); create_->setEnabled(Valid); queue_->setEnabled(Valid);
+    error_->setText(Error); error_->setToolTip(Error); create_->setEnabled(Valid); queue_->setEnabled(Valid);
     configure_->setEnabled(creator_ >= 0 && checked_[creator_] && catalog_[creator_].available_ && !settingsUnsupported_
         && catalog_[creator_].descriptor_.configuration_ != ArchiveConfigurationKind::None && preferences_["schemaVersion"] == 1);
     summary_->setText(value_ ? CreationSettingsSummary(*value_, format_) : tr("설정을 확인하십시오."));
