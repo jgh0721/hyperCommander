@@ -627,6 +627,7 @@ void CGridView::applyPresentation()
     if (auto* Native = qobject_cast<CFSModel*>(model_))
         Native->SetColumnLayoutMode(columnAdapter_->Profile().mode_);
     listAppearance_ = Appearance; recordGeometry_ = NewGeometry;
+    columnAdapter_->SetTextPadding(16 + 2 * recordGeometry_.sideMargin, Two ? TwoLineTextIndent() : 0);
     // Load icons at the drawn size so 48–128 px icons are not upscaled from 16 px.
     if (auto* Native = qobject_cast<CFSModel*>(model_))
         Native->SetIconPixels(qCeil(ListIconSize() * grid_->devicePixelRatioF()));
@@ -645,9 +646,6 @@ void CGridView::applyPresentation()
     view_->options().setGroupPalette(0, GroupPalette);
     view_->options().setColumnHeight(std::max(QFontMetrics(grid_->font()).height() + 4,
         recordGeometry_.twoLine ? recordGeometry_.headerHeight / 2 : recordGeometry_.headerHeight));
-    for (int Index = 0; Index < model_->columnCount(); ++Index)
-        if (auto* Column = view_->getColumnByModelColumn(Index))
-            static_cast<Qtitan::GridTableColumn*>(Column)->setCaptionIndent(Two && (Index == 0 || Column->visualIndex() == 1) ? TwoLineTextIndent() : 0);
     view_->endUpdate();
     columnAdapter_->Apply();
     if (Changed) columnAdapter_->RestoreViewport(Anchor);

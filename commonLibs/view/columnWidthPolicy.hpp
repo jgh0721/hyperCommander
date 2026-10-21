@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 #include <optional>
 #include <string>
 
@@ -41,6 +43,46 @@ namespace hc::view
         const auto Maximum = Pixels(Policy.maximum_.value_or(Policy.unit_ == WidthUnit::Percent ? 100 : 1000000));
         const auto Width = std::clamp(Pixels(Policy.value_), Minimum, Maximum);
         return Policy.mode_ == WidthMode::Fixed ? ColumnWidthResult{Width, Width, Width} : ColumnWidthResult{Width, Minimum, Maximum};
+    }
+    struct ColumnWidthAllocation
+    {
+        ColumnWidthResult size_;
+        bool fixed_ = false;
+    };
+    // Fit one visual row without changing persisted policies. Bounds are
+    // preferences when the pane cannot accommodate them; fixed columns yield last.
+    inline std::vector<ColumnWidthResult> FitColumnWidths(const std::vector<ColumnWidthAllocation>& Columns, int Available, int Primary = -1)
+    {
+        std::vector<ColumnWidthResult> Result;
+        std::int64_t Total = 0;
+        for (const auto& Column : Columns) { Result.push_back(Column.size_); Total += Column.size_.width_; }
+        if (Available <= 0 || Result.empty()) return Result;
+        const auto Reduce = [&](bool RespectMinimum, bool IncludeFixed) {
+            if (Total <= Available) return;
+            std::int64_t Capacity = 0;
+            for (size_t Index = 0; Index < Result.size(); ++Index)
+                if (IncludeFixed || !Columns[Index].fixed_)
+                    Capacity += std::max(0, Result[Index].width_ - (RespectMinimum ? Result[Index].minimum_ : 1));
+            if (!Capacity) return;
+            const auto Needed = std::min(Total - Available, Capacity);
+            std::int64_t Accumulated = 0, Removed = 0;
+            for (size_t Index = 0; Index < Result.size(); ++Index) {
+                if (!IncludeFixed && Columns[Index].fixed_) continue;
+                Accumulated += std::max(0, Result[Index].width_ - (RespectMinimum ? Result[Index].minimum_ : 1));
+                const auto Next = Accumulated * Needed / Capacity;
+                Result[Index].width_ -= int(Next - Removed); Removed = Next;
+            }
+            Total -= Removed;
+        };
+        Reduce(true, false);
+        Reduce(false, false);
+        Reduce(false, true);
+        if (Primary >= 0 && Primary < int(Result.size()) && !Columns[Primary].fixed_ && Total < Available)
+            Result[Primary].width_ += int(std::min<std::int64_t>(Available - Total, Result[Primary].maximum_ - Result[Primary].width_));
+        for (auto& Width : Result) Width.minimum_ = std::min(Width.minimum_, Width.width_);
+        for (size_t Index = 0; Index < Result.size(); ++Index)
+            if (Columns[Index].fixed_) Result[Index].minimum_ = Result[Index].maximum_ = Result[Index].width_;
+        return Result;
     }
     inline ColumnWidthPolicy FromDrag(ColumnWidthPolicy Policy, int Pixels, int Available)
     {

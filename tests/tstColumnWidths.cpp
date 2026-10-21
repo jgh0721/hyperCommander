@@ -16,6 +16,37 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void fitColumnsToPane()
+    {
+        const std::vector<ColumnWidthAllocation> Columns{{{460, 200, 1000000}, false},
+            {{120, 88, 1000000}, false}, {{190, 190, 1000000}, false}, {{56, 56, 1000000}, false}};
+        const auto Wide = FitColumnWidths(Columns, 1200, 0);
+        QCOMPARE(Wide[0].width_, 834);
+        QCOMPARE(Wide[2].width_, 190);
+        QCOMPARE(Wide[3].width_, 56);
+        for (int Available : {128, 240, 350, 500, 799, 801, 1200}) {
+            const auto Fitted = FitColumnWidths(Columns, Available, 0);
+            int Total = 0;
+            for (const auto& Width : Fitted) {
+                QVERIFY(Width.width_ > 0);
+                QVERIFY(Width.minimum_ <= Width.width_ && Width.width_ <= Width.maximum_);
+                Total += Width.width_;
+            }
+            QCOMPARE(Total, Available);
+        }
+        QCOMPARE(Columns[0].size_.width_, 460);
+        const auto Fixed = FitColumnWidths({{{320, 320, 320}, true}, {{320, 320, 320}, true},
+            {{320, 320, 320}, true}, {{320, 320, 320}, true}}, 801);
+        int Total = 0;
+        for (const auto& Width : Fixed) {
+            QCOMPARE(Width.minimum_, Width.width_); QCOMPARE(Width.maximum_, Width.width_); Total += Width.width_;
+        }
+        QCOMPARE(Total, 801);
+        const auto Mixed = FitColumnWidths({{{200, 200, 200}, true}, {{900, 100, 1000}, false}}, 500);
+        QCOMPARE(Mixed[0].width_, 200); QCOMPARE(Mixed[1].width_, 300);
+        const auto Bounded = FitColumnWidths({{{100, 50, 250}, false}, {{80, 80, 80}, true}}, 1000, 0);
+        QCOMPARE(Bounded[0].width_, 250);
+    }
     void groupingDateBoundariesAndStorage()
     {
         using namespace hc::columns;

@@ -19,6 +19,11 @@ public:
     void Bind(const ColumnView& Columns);
     void Request();
     void Apply();
+    void SetTextPadding(int Horizontal, int Leading)
+    {
+        if (textPadding_ == Horizontal && leadingIndent_ == Leading) return;
+        textPadding_ = Horizontal; leadingIndent_ = Leading; Request();
+    }
     void Reload();
     hc::columns::ColumnProfile Profile() const;
     void UseProfileWidths();
@@ -51,7 +56,10 @@ private:
     void activateLayout(const QString& Mode);
     QString profileForLayout(const QString& Mode) const;
     QMap<QString, hc::view::ColumnWidthPolicy> defaultsForLayout(const QString& Mode) const;
-    std::optional<hc::view::ColumnWidthResult> resolveWidth(const QString& Id, int Available) const;
+    QMap<QString, hc::view::ColumnWidthResult> fittedWidths(int Available, bool OneLine = false) const;
+    int contentWidth(const QString& Id) const;
+    std::optional<hc::view::ColumnWidthResult> resolveWidth(const QString& Id, int Available,
+        const hc::view::ColumnWidthPolicy& Policy, const hc::view::ColumnWidthPolicy& Default, bool MetadataRow) const;
     std::function<void(const QString&)> layoutObserver_;
     std::function<QJsonObject()> captureViewport_;
     std::function<void(const QJsonObject&)> restoreViewport_;
@@ -82,6 +90,8 @@ private:
     bool workspaceOwned_ = false;
     QMap<QString, hc::view::ColumnWidthPolicy> inherited_;
     int lastWidth_ = 0;
+    int textPadding_ = 16;
+    int leadingIndent_ = 0;
     quint64 applyCount_ = 0;
     qint64 lastApplyNs_ = 0;
 };

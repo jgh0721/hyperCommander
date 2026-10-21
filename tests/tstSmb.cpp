@@ -239,7 +239,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -8755,6 +8755,125 @@ private slots:
         QVERIFY(QFile::exists(File.fileName()));
     }
 
+    void columnMetadataTextUi()
+    {
+        using namespace hc::columns;
+        auto* Panel = panels_.front();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Native = View->BaseView(); auto* Adapter = View->ColumnWidths();
+        const auto Workspace = main_->CaptureWorkspace(); const auto Font = Native->grid()->font(); const auto Size = main_->size();
+        const auto Restore = qScopeGuard([&] {
+            View->setMinimumWidth(0); View->setMaximumWidth(QWIDGETSIZE_MAX); Native->grid()->setFont(Font);
+            main_->resize(Size); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir(Directory.path()).mkdir("folder"));
+        for (const auto& Item : QList<QPair<QString, int>>{{"movie.mkv", 123456}, {"subtitle.srt", 1048575}}) {
+            QFile File(Directory.filePath(Item.first)); QVERIFY(File.open(QIODevice::WriteOnly)); QVERIFY(File.resize(Item.second));
+        }
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 4);
+        auto Profile = DefaultProfile();
+        Profile.id_ = QUuid::createUuid();
+        for (int Index = 0; Index < Profile.columns_.size(); ++Index)
+            for (auto& Width : Profile.columns_[Index].widths_) {
+                Width.hidden_ = Index > 3;
+                if (Index == 1) Width.value_ = 5; // Persisted narrow size ratio from the reported layout.
+            }
+        Profile.columns_[1].format_.size_ = SizeFormat::Adaptive;
+        Profile.columns_[1].format_.precision_ = 2; Profile.columns_[1].format_.providerDisplay_ = false;
+        QVERIFY(View->ApplyColumnProfile(Profile));
+        const auto FullValuesFit = [&] {
+            for (int Column = 1; Column <= 3; ++Column) {
+                const auto* Actual = Native->getColumnByModelColumn(Column);
+                int Padding = 16 + 2 * View->RecordGeometry().sideMargin;
+                if (View->IsTwoLine() && Actual->visualIndex() == 1) Padding += View->TwoLineTextIndent();
+                for (int Row = 0; Row < model(Panel)->rowCount(); ++Row) {
+                    const auto Index = model(Panel)->index(Row, Column); const auto Text = Index.data().toString();
+                    auto MetaFont = Index.data(Qt::FontRole).value<QFont>();
+                    if (MetaFont.family().isEmpty()) MetaFont = Native->grid()->font();
+                    MetaFont.setPixelSize(std::max(8, View->ListAppearance().fontPx - 1));
+                    const QFontMetrics Metrics(MetaFont);
+                    if (Metrics.elidedText(Text, Qt::ElideRight, Actual->width() - Padding) != Text) return false;
+                }
+            }
+            return Native->horizontalScrollBar()->maximum() == 0;
+        };
+        for (int Pixels : {13, 24}) {
+            auto Larger = Font; Larger.setPixelSize(Pixels); Native->grid()->setFont(Larger);
+            for (const auto* Mode : {"one-line", "two-line"}) {
+                const auto Count = Adapter->ApplyCount();
+                QVERIFY(View->SetListMode(Mode)); View->setFixedWidth(1400); Adapter->Request();
+                QTRY_VERIFY(Adapter->ApplyCount() > Count); QTRY_VERIFY(FullValuesFit());
+                if (Pixels == 24)
+                    QVERIFY(Native->grid()->grab().save(QCoreApplication::applicationDirPath() + "/column-metadata-" + Mode + ".png"));
+            }
+        }
+    }
+
+    void columnFitToPaneUi()
+    {
+        using namespace hc::columns;
+        using namespace hc::view;
+        auto* Panel = panels_.front();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Native = View->BaseView(); auto* Adapter = View->ColumnWidths();
+        const auto Original = main_->size(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Font = Native->grid()->font();
+        const auto Restore = qScopeGuard([&] {
+            View->setMinimumWidth(0); View->setMaximumWidth(QWIDGETSIZE_MAX);
+            Native->grid()->setFont(Font); main_->resize(Original); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int Index = 0; Index < 100; ++Index) {
+            QFile File(Directory.filePath(QString("long-movie-file-name-%1.mkv").arg(Index)));
+            QVERIFY(File.open(QIODevice::WriteOnly));
+        }
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QTRY_VERIFY(Native->verticalScrollBar()->isVisible());
+        Native->setFocusedRowIndex(5); Native->selectRow(5);
+        const auto Focus = View->CaptureFocus(); const auto Selection = View->CaptureSelection();
+        QSignalSpy Reset(model(Panel), &QAbstractItemModel::modelReset);
+        const auto Fits = [&] {
+            QMap<int, int> Rows;
+            for (int Index = 0; Index < model(Panel)->columnCount(); ++Index) {
+                auto* Column = static_cast<Qtitan::GridBandedTableColumn*>(Native->getColumnByModelColumn(Index));
+                if (Column->isVisible()) Rows[Column->rowIndex()] += Column->width();
+            }
+            for (int Width : Rows) if (Width > Adapter->AvailableWidth()) return false;
+            return Native->horizontalScrollBar()->maximum() == 0;
+        };
+        for (int Pixels : {13, 20}) {
+            auto Larger = Font; Larger.setPixelSize(Pixels); Native->grid()->setFont(Larger);
+            for (const auto& Mode : {QString("one-line"), QString("two-line")}) {
+                QVERIFY(View->SetListMode(Mode));
+                for (int Width : {1400, 800, 500, 280, 1400}) {
+                    const auto Count = Adapter->ApplyCount();
+                    View->setFixedWidth(Width); Adapter->Request();
+                    QTRY_VERIFY(Adapter->ApplyCount() > Count);
+                    QTRY_VERIFY(Fits());
+                    if (Mode == "one-line" && Width == 1400) {
+                        QVERIFY(Native->getColumnByModelColumn(0)->width() > Adapter->AvailableWidth() * 0.6);
+                        QVERIFY(Native->getColumnByModelColumn(2)->width() < Adapter->AvailableWidth() * 0.25);
+                        QVERIFY(Native->getColumnByModelColumn(3)->width() < Adapter->AvailableWidth() * 0.1);
+                    }
+                }
+            }
+        }
+        QCOMPARE(View->CaptureFocus(), Focus); QCOMPARE(View->CaptureSelection(), Selection); QCOMPARE(Reset.count(), 0);
+        QVERIFY(View->SetListMode("one-line"));
+        View->setFixedWidth(801);
+        for (int Index = 0; Index < 4; ++Index)
+            QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(Index), {WidthUnit::Percent, WidthMode::Fixed, 40}, false));
+        Adapter->Apply(); QTRY_VERIFY(Fits());
+        for (int Index = 0; Index < 4; ++Index) QCOMPARE(Adapter->Policies()[Adapter->ColumnId(Index)].value_, 40.0);
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
+        const auto Count = Adapter->ApplyCount();
+        View->setFixedWidth(1400); Adapter->Request(); QTRY_VERIFY(Adapter->ApplyCount() > Count); QTRY_VERIFY(Fits());
+        QVERIFY(Native->grid()->grab().save(QCoreApplication::applicationDirPath() + "/column-fit-wide.png"));
+    }
+
     void columnWidthLayoutAndSettings()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
@@ -8838,8 +8957,14 @@ private slots:
         QVERIFY(Adapter->SetPolicy(NameId, Hidden));
         QTRY_VERIFY(Native->getColumnByModelColumn(0)->isVisible());
         for (int Index = 0; Index < 4; ++Index) QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(Index), {WidthUnit::Percent, WidthMode::Fixed, 40}));
-        QTRY_VERIFY(Native->horizontalScrollBar()->maximum() > 0);
-        for (int Index = 0; Index < 4; ++Index) QCOMPARE(Native->getColumnByModelColumn(Index)->width(), 320);
+        Adapter->Apply();
+        QTRY_COMPARE(Native->horizontalScrollBar()->maximum(), 0);
+        int FittedTotal = 0;
+        for (int Index = 0; Index < 4; ++Index) {
+            FittedTotal += Native->getColumnByModelColumn(Index)->width();
+            QCOMPARE(Adapter->Policies()[Adapter->ColumnId(Index)].value_, 40.0);
+        }
+        QCOMPARE(FittedTotal, Adapter->AvailableWidth());
         QVERIFY(Adapter->SetPolicy(NameId, {WidthUnit::Percent, WidthMode::Fixed, 25}));
         QVERIFY(Adapter->SetPolicy(SizeId, {WidthUnit::Percent, WidthMode::Flexible, 30, 15, 45}));
         QVERIFY(Adapter->SetPolicy(Adapter->ColumnId(2), {WidthUnit::Pixels, WidthMode::Flexible, 120}));
@@ -8892,7 +9017,8 @@ private slots:
         QTRY_VERIFY(NewView->ColumnWidths()->Policies().contains(NewView->ColumnWidths()->ColumnId(0)));
         // A tab-only override does not replace the panel's new-tab default.
         QCOMPARE(NewView->ColumnWidths()->Policies()[NewView->ColumnWidths()->ColumnId(0)].value_, 46.0);
-        QTRY_COMPARE(NewView->BaseView()->getColumnByModelColumn(0)->width(), std::max(200, qRound(NewView->ColumnWidths()->AvailableWidth() * 0.46)));
+        QTRY_COMPARE(NewView->BaseView()->getColumnByModelColumn(0)->width(), NewView->ColumnWidths()->OneLineNameWidth(NewView->ColumnWidths()->AvailableWidth()));
+        QTRY_COMPARE(NewView->BaseView()->horizontalScrollBar()->maximum(), 0);
         Panel->CloseTab(); QTest::qWait(30); QTRY_VERIFY(Check());
         main_->resize(OriginalSize);
     }

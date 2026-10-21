@@ -219,14 +219,7 @@ void QtitanColumnAdapter::RestoreViewport(const ViewportAnchor& Anchor)
 
 int QtitanColumnAdapter::OneLineNameWidth(int Available) const
 {
-    const auto Id = ids_.value(nameColumn_);
-    auto Policy = defaultsForLayout("details").value(Id);
-    const auto Saved = layoutWidths_.value("details").toObject().value(Id).toObject();
-    if (layoutMode_ == "details") Policy = settings_.columns_.value(Id, Policy);
-    else if (const auto Override = DecodeWidth(Saved)) Policy = *Override;
-    const auto Width = Resolve(Policy, Available);
-    return Width ? (defaultPresentation_ && Policy == defaultsForLayout("details").value(Id)
-        ? std::max(Width->width_, readableFloors_.value(Id)) : Width->width_) : Available;
+    return fittedWidths(Available, true).value(ids_.value(nameColumn_), {Available, 1, Available}).width_;
 }
 
 void QtitanColumnAdapter::Request()
@@ -234,16 +227,100 @@ void QtitanColumnAdapter::Request()
     if (!applying_ && !timer_.isActive()) timer_.start();
 }
 
-std::optional<ColumnWidthResult> QtitanColumnAdapter::resolveWidth(const QString& Id, int Available) const
+int QtitanColumnAdapter::contentWidth(const QString& Id) const
 {
-    const auto Policy = settings_.columns_.value(Id);
+    const auto Definition = std::find_if(definition_.columns_.begin(), definition_.columns_.end(), [&](const auto& Column) {
+        return hc::columns::IdText(Column.id_) == Id;
+    });
+    if (Definition == definition_.columns_.end() || !Definition->template_.isEmpty()) return 0;
+    const auto& Field = Definition->fieldId_;
+    QStringList Samples;
+    if (Field == "file.created" || Field == "file.modified" || Field == "file.accessed")
+        Samples.append(hc::columns::Format(hc::columns::CellValue::Ready(QDateTime(QDate(2000, 12, 28), QTime(23, 59, 59))), Definition->format_));
+    else if (Field == "file.attributes") Samples.append("-----");
+    else if (Field == "file.size") {
+        // Include four-digit values around unit boundaries, not just 9.09 TiB.
+        for (quint64 Value : {9999999999999ULL, 1048575ULL, 1073741823ULL, 1099511627775ULL})
+            Samples.append(hc::columns::Format(hc::columns::CellValue::Ready(Value), Definition->format_));
+        Samples.append(QObject::tr("<폴더>")); Samples.append(QObject::tr("<링크>"));
+    } else return 0;
+    const QFontMetrics Metrics(grid_->font());
+    int TextWidth = 0;
+    for (const auto& Sample : Samples) TextWidth = std::max(TextWidth, Metrics.horizontalAdvance(Sample));
+    // These direct built-in metadata fields are already in the listing. Honor
+    // provider display strings too, without evaluating templates or plugin fields.
+    // Bound the work on large listings and include the focused area when scrolled.
+    if (const auto* Model = view_->model()) {
+        const int Column = ids_.key(Id, -1);
+        const int Count = std::min(128, Model->rowCount());
+        for (int Sample = 0; Column >= 0 && Sample < Count; ++Sample) {
+            const int Row = int(qint64(Sample) * Model->rowCount() / Count);
+            TextWidth = std::max(TextWidth, Metrics.horizontalAdvance(Model->index(Row, Column).data().toString()));
+        }
+        const int Focus = view_->focusedRowIndex();
+        for (int Row = std::max(0, Focus - 32); Column >= 0 && Row < std::min(view_->getRowCount(), Focus + 64); ++Row)
+            TextWidth = std::max(TextWidth, Metrics.horizontalAdvance(view_->getRow(Row).modelIndex(Column).data().toString()));
+    }
+    return std::max(Metrics.horizontalAdvance(Definition->title_) + 28, TextWidth + textPadding_);
+}
+
+std::optional<ColumnWidthResult> QtitanColumnAdapter::resolveWidth(const QString& Id, int Available,
+    const ColumnWidthPolicy& Policy, const ColumnWidthPolicy& Default, bool MetadataRow) const
+{
     auto Result = Resolve(Policy, Available);
-    // Defaults have a readable pixel floor on narrow panes. Explicit user
-    // policies retain their own units and bounds (including narrow columns).
-    if (Result && defaultPresentation_ && Policy == defaults_.value(Id)) {
-        Result->minimum_ = std::max(Result->minimum_, readableFloors_.value(Id));
-        Result->width_ = std::max(Result->width_, Result->minimum_);
-        Result->maximum_ = std::max(Result->maximum_, Result->minimum_);
+    if (Result && Policy.mode_ == WidthMode::Flexible) {
+        const bool DefaultWidth = Policy == Default;
+        if (const int Content = contentWidth(Id); Content > 0) {
+            // The separate metadata line has its own space budget. Give content
+            // its natural width before fitting, even if an older ratio was tiny.
+            if (DefaultWidth || (Policy.unit_ == WidthUnit::Percent && !Policy.minimum_ && !Policy.maximum_)
+                || (MetadataRow && !Policy.maximum_)) {
+                Result->minimum_ = std::clamp(Content, Result->minimum_, Result->maximum_);
+                Result->width_ = Result->minimum_;
+            }
+        } else if (defaultPresentation_ && DefaultWidth) {
+            Result->minimum_ = std::max(Result->minimum_, readableFloors_.value(Id));
+            Result->width_ = std::max(Result->width_, Result->minimum_);
+            Result->maximum_ = std::max(Result->maximum_, Result->minimum_);
+        }
+    }
+    return Result;
+}
+
+QMap<QString, ColumnWidthResult> QtitanColumnAdapter::fittedWidths(int Available, bool OneLine) const
+{
+    const bool Details = OneLine || layoutMode_ == "details";
+    const auto Defaults = OneLine ? defaultsForLayout("details") : defaults_;
+    QMap<QString, ColumnWidthResult> Result;
+    for (int Row = 0; Row < (Details ? 1 : 2); ++Row) {
+        QStringList Ids;
+        std::vector<ColumnWidthAllocation> Columns;
+        int Primary = -1;
+        for (auto It = ids_.begin(); It != ids_.end(); ++It) {
+            const auto* Column = view_->getColumnByModelColumn(It.key());
+            if (!Column) continue;
+            const auto& Id = It.value();
+            auto Policy = settings_.columns_.value(Id);
+            if (OneLine && layoutMode_ != "details") {
+                Policy = Defaults.value(Id);
+                if (const auto Saved = DecodeWidth(layoutWidths_.value("details").toObject().value(Id).toObject())) Policy = *Saved;
+            }
+            if (Policy.hidden_ || (!Details && (It.key() == nameColumn_ ? 0 : 1) != Row)) continue;
+            auto Width = resolveWidth(Id, Available, Policy, Defaults.value(Id), !Details && It.key() != nameColumn_);
+            if (!Width) continue;
+            if (!Details && It.key() != nameColumn_ && Column->visualIndex() == 1 && Policy.mode_ == WidthMode::Flexible) {
+                Width->width_ = std::min(Width->maximum_, Width->width_ + leadingIndent_);
+                Width->minimum_ = std::min(Width->width_, Width->minimum_ + leadingIndent_);
+            }
+            if (It.key() == nameColumn_) {
+                Primary = int(Columns.size());
+                if (!Details) Width = ColumnWidthResult{Available, 1, Available};
+            }
+            Ids.append(Id);
+            Columns.push_back({*Width, (Details || It.key() != nameColumn_) && Policy.mode_ == WidthMode::Fixed});
+        }
+        const auto Fitted = FitColumnWidths(Columns, Available, Primary);
+        for (int Index = 0; Index < Ids.size(); ++Index) Result[Ids[Index]] = Fitted[Index];
     }
     return Result;
 }
@@ -264,6 +341,12 @@ void QtitanColumnAdapter::Apply()
                 if (auto* Column = view_->getColumnByModelColumn(ModelColumn)) Column->setVisualIndex(Position++);
             }
     }
+    // Reordering metadata changes which cell shares the icon's horizontal slot.
+    // Size both the header and body after that order is established.
+    for (auto It = ids_.begin(); It != ids_.end(); ++It)
+        if (auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(It.key())))
+            Column->setCaptionIndent(layoutMode_ != "details" && (It.key() == nameColumn_ || Column->visualIndex() == 1) ? leadingIndent_ : 0);
+    const auto Widths = fittedWidths(Available);
     for (auto It = ids_.begin(); It != ids_.end(); ++It)
     {
         auto* Column = view_->getColumnByModelColumn(It.key());
@@ -272,11 +355,11 @@ void QtitanColumnAdapter::Apply()
         const int Row = layoutMode_ == "details" ? 0 : (It.key() == nameColumn_ ? (layoutMode_ == "name-first" ? 0 : 1) : (layoutMode_ == "name-first" ? 1 : 0));
         if (Banded->rowIndex() != Row) Banded->setRowIndex(Row);
         const auto& Policy = settings_.columns_[It.value()];
-        const auto Width = resolveWidth(It.value(), Available);
-        if (!Width) continue;
+        if (Column->isVisible() == Policy.hidden_) Column->setVisible(!Policy.hidden_);
+        const auto Width = Widths.constFind(It.value());
+        if (Width == Widths.end()) continue;
         Column->setAutoWidth(false);
         Column->setHorSizingEnabled(Policy.mode_ == WidthMode::Flexible && (layoutMode_ == "details" || It.key() != nameColumn_));
-        if (Column->isVisible() == Policy.hidden_) Column->setVisible(!Policy.hidden_);
         if (Column->minWidth() != Width->minimum_) Column->setMinWidth(Width->minimum_);
         if (Column->maxWidth() != Width->maximum_) Column->setMaxWidth(Width->maximum_);
     }
@@ -288,17 +371,8 @@ void QtitanColumnAdapter::Apply()
     {
         auto* Column = view_->getColumnByModelColumn(It.key());
         if (!Column || !settings_.columns_.contains(It.value())) continue;
-        auto Width = resolveWidth(It.value(), Available);
-        if (!Width) continue;
-        if (layoutMode_ != "details" && It.key() == nameColumn_) {
-            int MetaWidth = 0;
-            for (auto Meta = ids_.begin(); Meta != ids_.end(); ++Meta) {
-                if (Meta.key() == nameColumn_ || settings_.columns_.value(Meta.value()).hidden_) continue;
-                if (const auto Resolved = resolveWidth(Meta.value(), Available)) MetaWidth += Resolved->width_;
-            }
-            Width->width_ = std::max(Available, MetaWidth);
-            Column->setMaxWidth(std::max(Column->maxWidth(), Width->width_));
-        }
+        const auto Width = Widths.constFind(It.value());
+        if (Width == Widths.end()) continue;
         if (Column->width() != Width->width_) Column->setWidth(Width->width_);
         applied_[It.value()] = Column->width();
     }
