@@ -89,7 +89,7 @@ namespace hc::plugins
                 || !Object["id"].isString() || Object["id"].toString().isEmpty() || Object["id"].toString().size() > 32
                 || !Object["subject"].isString() || Object["subject"].toString().size() > 32768
                 || Object["kind"].toInt(-1) < 0 || Object["kind"].toInt(-1) > int(ProviderInteractionKind::Conflict)
-                || Object["attempt"].toInt() < 1 || Object["attempt"].toInt() > 16) return HostError("session-interaction-envelope");
+                || Object["attempt"].toInt() < 1 || Object["attempt"].toInt() > 104) return HostError("session-interaction-envelope");
             PromptId = Object["id"].toString();
             Waiting(true);
             ProviderInteractionRequest Query{ProviderInteractionKind(Object["kind"].toInt()), PromptId.toStdString(), Object["subject"].toString().toStdString(), unsigned(Object["attempt"].toInt())};

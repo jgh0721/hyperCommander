@@ -262,7 +262,7 @@ target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")
 set(HC_PROJECT_INVENTORY "")
-foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_archive_creation hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process hc_update_core hc_update_qt)
+foreach(HC_INVENTORY_TARGET IN ITEMS HyperCommander hc_archive_creation hc_passwords hc_script_runtime hc_builtin_iso hc_builtin_sevenzip hc_builtin_unegg hc_viewer_core hc_viewer_qt hc_plugin_viewer_qt hc_plugin_viewer_sessions hc_wcx_backend hc_plugin_contract hc_plugin_manifest hc_plugin_process hc_update_core hc_update_qt)
     get_target_property(HC_SOURCE_INPUTS ${HC_INVENTORY_TARGET} SOURCES)
     get_target_property(HC_SOURCE_DIRECTORY ${HC_INVENTORY_TARGET} SOURCE_DIR)
     get_target_property(HC_TARGET_BINARY_DIRECTORY ${HC_INVENTORY_TARGET} BINARY_DIR)
@@ -315,6 +315,7 @@ target_link_libraries(HyperCommander
         hc_plugin_process
         hc_builtin_iso
         hc_archive_creation
+        hc_passwords
         hc_builtin_sevenzip hc_builtin_unegg hc_update_qt
 )
 

@@ -6,6 +6,7 @@
 #include "themeSettingsPage.hpp"
 #include "keyboardSettingsPage.hpp"
 #include "legacySettingsPage.hpp"
+#include "UniqueLibs/passwords/passwordUi.hpp"
 #include <QStyleHints>
 #include <QTabWidget>
 #include "commonLibs/operations/fileOperation.hpp"
@@ -265,6 +266,7 @@ void QMainOpts::LoadSettings()
     TyStCommandMgr::GetInstance()->Refresh();
     RefreshShortcuts();
     if (keyboardSettings_) keyboardSettings_->Load();
+    if (passwordSettings_) passwordSettings_->Load();
     if (legacySettings_) legacySettings_->Load(hc::settings::AppSettings().Object(), hc::settings::WorkspaceSettings().Object()["workspace"].toObject());
     themeModeEdited_ = false;
 }
@@ -455,6 +457,11 @@ bool QMainOpts::SaveSettings()
         auto* Reload = Message.addButton(tr("디스크에서 다시 읽기"), QMessageBox::ResetRole);
         Message.exec();
         if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); committedSettings_ = hc::settings::AppSettings().Object(); hc::settings::AppSettings().BeginEdit(); SetListView(listView_); LoadSettings(); }
+        return false;
+    }
+    if (passwordSettings_ && !passwordSettings_->Apply()) {
+        if (!hc::settings::AppSettings().Replace(PreviousSettings) || !hc::settings::AppSettings().Commit())
+            QMessageBox::warning(this, tr("설정 복구 실패"), tr("비밀번호 저장 실패 후 기존 설정을 복구하지 못했습니다. 디스크에서 다시 읽어 주세요."));
         return false;
     }
     if (ColumnsChanged) {
@@ -1089,10 +1096,12 @@ void QMainOpts::initializeDesignPages()
     menuSettings_ = new hc::ui::MenuBarSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(menuSettings_);
     auto* Permissions=hc::ui::PermissionSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(Permissions);
     legacySettings_ = new hc::ui::LegacySettingsPage(ui.stkOpts); ui.stkOpts->addWidget(legacySettings_);
+    passwordSettings_ = new hc::passwords::SettingsPage(ui.stkOpts); ui.stkOpts->addWidget(passwordSettings_);
+    connect(passwordSettings_, &hc::passwords::SettingsPage::Changed, this, [this] { ui.btnApply->setEnabled(true); });
     const QSignalBlocker Block(ui.lstOptCate); ui.lstOptCate->clear();
     const QList<QPair<QString, int>> Pages{{tr("일반 · 모양"), ui.stkOpts->indexOf(General)}, {tr("테마 색상"), ui.stkOpts->indexOf(themeSettings_)}, {tr("파일 패널"), ui.stkOpts->indexOf(ui.pgDisplay)},
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
-        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
+        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
     auto* SaveStatus = new QLabel(this); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText); SaveStatus->setWordWrap(true); SaveStatus->setContentsMargins(12, 4, 12, 4);
     SaveStatus->setText(tr("초안 · 적용/확인으로 저장 · 취소로 이전 설정 유지\n%1").arg(hc::settings::AppSettings().FileName())); ui.verticalLayout->insertWidget(ui.verticalLayout->count() - 1, SaveStatus);

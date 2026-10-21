@@ -53,7 +53,7 @@ namespace hc::plugins
                 if (!Archive || wcsnlen_s(Archive, 32768) == 32768 || !Buffer || MaxLength <= 0 || MaxLength > 65536) return E_SMALL_BUF;
                 Buffer[0] = 0;
                 if (!State.context_.passwordPrompt_) { State.passwordFailure_ = Error{ErrorCategory::AccessDenied, "archive-password-required", {"wcx"}, {}, true}; return E_EABORTED; }
-                if (++State.attempts_ > 3) { State.passwordFailure_ = Error{ErrorCategory::AccessDenied, "archive-password-attempt-limit", {"wcx"}}; return E_EABORTED; }
+                if (++State.attempts_ > 104) { State.passwordFailure_ = Error{ErrorCategory::AccessDenied, "archive-password-attempt-limit", {"wcx"}}; return E_EABORTED; }
                 auto Reply = State.context_.passwordPrompt_(QString::fromWCharArray(Archive).toStdString(), State.attempts_, State.context_);
                 if (!Reply.HasValue()) { State.passwordFailure_ = Reply.Failure(); return E_EABORTED; }
                 if (const auto Stop = State.context_.Check({"wcx"})) { State.passwordFailure_ = *Stop; return E_EABORTED; }

@@ -10,6 +10,7 @@ struct TyColorScheme;
 class QPluginManagementPage;
 class CGridView;
 class QtColumnProfileEditor;
+namespace hc::passwords { class SettingsPage; }
 namespace hc::ui { class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; class LegacySettingsPage; }
 
 
@@ -74,6 +75,7 @@ private:
     hc::ui::ThemeSettingsPage* themeSettings_ = nullptr;
     hc::ui::KeyboardSettingsPage* keyboardSettings_ = nullptr;
     hc::ui::LegacySettingsPage* legacySettings_ = nullptr;
+    hc::passwords::SettingsPage* passwordSettings_ = nullptr;
 
     hc::ui::MenuBarSettingsPage* menuSettings_ = nullptr;
     hc::ui::ThumbnailSettingsPage* thumbnailSettings_ = nullptr;

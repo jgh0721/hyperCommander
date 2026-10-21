@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "fileJobUi.hpp"
+#include "UniqueLibs/qtArchivePassword.hpp"
 #include "folderSize.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/fileLockDialog.hpp"
@@ -778,6 +779,7 @@ void FileJobUi::updateJobs()
     {
         if (It->second.completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { ++It; continue; }
         const auto Stored = results_.insert_or_assign(It->first, It->second.completion_.get()).first;
+        if (auto Scope = passwordScopes_.find(It->first); Scope != passwordScopes_.end()) { Scope->second.request_stop(); passwordScopes_.erase(Scope); }
         It = pending_.erase(It);
         if (Stored->second.snapshot_.state_ != JobState::Failed || (Stored->second.snapshot_.failedItems_ == 0 && !preparedRetries_.contains(Stored->first)) || !Stored->second.cleanupErrors_.empty()) {
             retryRequests_.erase(Stored->first); retryContexts_.erase(Stored->first);
@@ -831,7 +833,23 @@ void FileJobUi::updateSelection()
     choices_.at(InteractionChoice::Confirm)->setText(Password ? tr("확인")
         : Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("허용")
         : Snapshot.interaction_ && Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("휴지통으로") : tr("영구 삭제"));
-    renamed_->setVisible(Password || choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
+    renamed_->setVisible(!Password && choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
+    if (Password) {
+        choices_.at(InteractionChoice::Confirm)->setText(tr("비밀번호 입력…"));
+        if (!passwordDialogOpen_ && passwordRequestId_ != Snapshot.interaction_->id_) {
+            passwordRequestId_ = Snapshot.interaction_->id_;
+            QTimer::singleShot(0, this, [this, Id = Snapshot.id_, Query = Snapshot.interaction_->id_] {
+                const auto Current = scheduler_.Snapshot(Id);
+                if (!passwordDialogOpen_ && selectedId() == Id && Current.HasValue() && !Current.Value().cancelRequested_
+                    && Current.Value().interaction_ && Current.Value().interaction_->id_ == Query) {
+                    hc::storage::OperationContext Context; Context.stopToken_ = passwordScopes_[Id].get_token();
+                    const auto& Request = *Current.Value().interaction_;
+                    if (auto Password = hc::passwords::TryAutomaticArchivePassword(Request.source_, Request.passwordAttempt_, Context))
+                        scheduler_.Reply(Id, {Query, InteractionChoice::Confirm, Password->Value()});
+                }
+            });
+        }
+    }
     const bool ShowRecords = hc::settings::AppSettings().CommittedObject()["options"].toObject()["showJobDetails"].toBool(false);
     details_->setVisible(ShowRecords);
     previousPage_->setVisible(ShowRecords); nextPage_->setVisible(ShowRecords);
@@ -1106,6 +1124,26 @@ void FileJobUi::answer(InteractionChoice Choice)
 {
     const auto Current = scheduler_.Snapshot(selectedId());
     if (!Current.HasValue() || !Current.Value().interaction_) return;
+    if (Choice == InteractionChoice::Confirm && Current.Value().interaction_->kind_ == InteractionKind::Password) {
+        if (passwordDialogOpen_) return;
+        passwordDialogOpen_ = true; auto Reset = qScopeGuard([this] { passwordDialogOpen_ = false; });
+        const auto Id = Current.Value().id_; const auto Query = *Current.Value().interaction_;
+        auto Source = passwordScopes_[Id];
+        hc::storage::OperationContext Context; Context.stopToken_ = Source.get_token();
+        QTimer Cancellation;
+        connect(&Cancellation, &QTimer::timeout, this, [this, Id, Query, Source]() mutable {
+            const auto Now = scheduler_.Snapshot(Id);
+            if (!Now.HasValue() || Now.Value().cancelRequested_ || !Now.Value().interaction_ || Now.Value().interaction_->id_ != Query.id_)
+                Source.request_stop();
+        });
+        Cancellation.start(50);
+        auto Reply = hc::plugins::PromptArchivePassword(Query.source_, Query.passwordAttempt_, Context);
+        auto Fresh = scheduler_.Snapshot(Id);
+        if (!Fresh.HasValue() || Fresh.Value().cancelRequested_ || !Fresh.Value().interaction_ || Fresh.Value().interaction_->id_ != Query.id_) return;
+        if (Reply.HasValue()) scheduler_.Reply(Id, {Query.id_, InteractionChoice::Confirm, Reply.Value().Value()});
+        else scheduler_.Reply(Id, {Query.id_, InteractionChoice::Cancel, {}});
+        updateSelection(); return;
+    }
     const auto Replied = scheduler_.Reply(selectedId(), {Current.Value().interaction_->id_, Choice, renamed_->text().toStdString()});
     if (!Replied.HasValue()) status_->setText(tr("응답을 적용할 수 없습니다: %1").arg(QString::fromStdString(Replied.Failure().code_)));
     else { renamed_->clear(); updateSelection(); }

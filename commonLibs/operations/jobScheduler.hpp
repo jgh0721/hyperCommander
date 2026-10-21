@@ -20,6 +20,7 @@ namespace hc::operations
         std::vector<InteractionChoice> choices_;
         std::optional<storage::ResourceId> resource_;
         std::string source_, destination_;
+        unsigned passwordAttempt_ = 1;
     };
     struct InteractionAnswer
     {

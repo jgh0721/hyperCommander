@@ -151,11 +151,11 @@ namespace hc::plugins
             while (Reply.HasValue() && Reply.Value().header_.kind_ == WireKind::ArchivePassword)
             {
                 if (!IsArchiveCommand(Kind) || Reply.Value().header_.sequence_ != Sequence
-                    || ++Prompts > (Kind == WireKind::ArchiveNext ? 384u : Kind == WireKind::ArchiveUpdateApply ? 6u : 3u))
+                    || ++Prompts > (Kind == WireKind::ArchiveNext ? 13312u : Kind == WireKind::ArchiveUpdateApply ? 208u : 104u))
                 { fail(HostError("host-password-envelope")); return *failure_; }
                 const auto Query = QJsonDocument::fromJson(Reply.Value().payload_).object();
                 if (Query.size() != 2 || !Query["archive"].isString() || Query["archive"].toString().size() > 32768
-                    || Query["archive"].toString().contains(QChar::Null) || Query["attempt"].toInt() < 1 || Query["attempt"].toInt() > 3)
+                    || Query["archive"].toString().contains(QChar::Null) || Query["attempt"].toInt() < 1 || Query["attempt"].toInt() > 104)
                 { fail(HostError("host-password-payload")); return *failure_; }
                 Result<Password> Answer = Error{ErrorCategory::AccessDenied, "archive-password-required", {"wcx"}, {}, true};
                 if (Context.passwordPrompt_) {

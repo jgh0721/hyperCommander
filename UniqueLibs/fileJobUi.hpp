@@ -132,4 +132,7 @@ private:
     uint64_t loadedOffset_ = UINT64_MAX;
     std::vector<hc::operations::ItemOutcome> resultPage_;
     bool pageLoading_ = false;
+    std::string passwordRequestId_;
+    bool passwordDialogOpen_ = false;
+    std::map<std::string, std::stop_source> passwordScopes_;
 };

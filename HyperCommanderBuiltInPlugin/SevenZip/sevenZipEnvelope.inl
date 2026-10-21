@@ -54,6 +54,7 @@ Result<Unit> UpdateArchive(HMODULE Module, ArchiveUpdate Request, OperationConte
     if (Original.archive_->GetArchiveProperty(kpidOffset, &Offset) != S_OK || Original.archive_->GetArchiveProperty(kpidPhySize, &Size) != S_OK || Original.archive_->GetArchiveProperty(kpidIsVolume, &Volume) != S_OK) return Failure("7zip-envelope-properties");
     const auto Prefix = Offset.Number(), Body = Size.Number(), Total = Original.input_->Size();
     if (Volume.Boolean() || (Original.format_ != "7z" && Original.format_ != "zip") || (!Prefix && Body == Total)) {
+        if (Original.state_->password_) { auto Shared = Original.state_; Context.passwordPrompt_ = [Shared](const std::string&, unsigned, const OperationContext&) -> Result<storage::Password> { return storage::Password(Shared->password_->Value()); }; }
         Opened.Value().reset(); return UpdatePlainArchive(Module, std::move(Request), Context);
     }
     if (Request.creation_ || !Body || Prefix > Total || Body > Total - Prefix) return Failure("7zip-envelope-layout", ErrorCategory::Unsupported);

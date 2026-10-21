@@ -345,7 +345,7 @@ Result<Unit> Extract(Archive& Archive, UInt32 Index, const ArchiveHeader& Header
     if (!Test && Output->written_ != Header.size_) return Failure("7zip-extracted-size");
     return Unit{};
 }
-Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context) {
+Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context, unsigned FirstAttempt = 0) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto SelectedPath = QString::fromStdString(Path);
     auto FilePath = SelectedPath;
@@ -380,7 +380,7 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         if (!QStringList{"7z", "zip", "Rar", "Rar5"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
         auto Value = std::make_unique<Archive>(); Value->format_ = Name.Text().toLower(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
-        Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None;
+        Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None; Value->state_->attempts_ = FirstAttempt;
         if (Redirected && Volume.kind_ != ArchiveVolumeKind::Numbered) Value->state_->selectedVolume_ = QFileInfo(SelectedPath).fileName();
         Value->callback_->SetFormat(Value->format_, Value->format_ == "zip" && IsZipx(FilePath));
         if (!Value->input_->Open(FilePath, Volume.kind_ == ArchiveVolumeKind::Numbered, Volume.number_))
@@ -388,8 +388,13 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
         GUID Class{}; memcpy(&Class, Id.bstrVal, sizeof(Class));
         if (Create(&Class, &IID_IInArchive, reinterpret_cast<void**>(&Value->archive_.value_)) != S_OK) continue;
         const auto Code = Value->archive_->Open(Value->input_.value_, Scan ? nullptr : &StartOnly, Value->callback_.value_);
+        if (Code != S_OK && Value->state_->attempts_ > FirstAttempt && Value->state_->attempts_ < 104
+            && (!Value->state_->error_ || Value->state_->error_->category_ == ErrorCategory::AccessDenied)) {
+            const auto Attempt = Value->state_->attempts_; Value.reset();
+            return Open(Module, SelectedPath.toStdString(), Context, Attempt);
+        }
         if (Value->state_->error_) return Value->state_->Result(Code);
-        if (Code != S_OK && Value->state_->attempts_) return Failure("7zip-password-or-header-error", ErrorCategory::AccessDenied);
+        if (Code != S_OK && Value->state_->attempts_ > FirstAttempt) return Failure("7zip-password-or-header-error", ErrorCategory::AccessDenied);
         if (Code == S_FALSE) continue;
         if (Code != S_OK) return Value->state_->volumeError_.value_or(Value->state_->Result(Code));
         // The ZIP handler can return S_OK and a central-directory listing even
@@ -417,10 +422,16 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     }
     return Failure("7zip-format-not-recognized", ErrorCategory::Unsupported);
 }
+bool RetryPassword(const Error& Error, unsigned Attempt, bool Encrypted) {
+    if (!Encrypted || !Attempt || Attempt >= 104) return false;
+    return Error.code_ == "7zip-extract-result:" + std::to_string(NArchive::NExtract::NOperationResult::kWrongPassword)
+        || Error.code_ == "7zip-extract-result:" + std::to_string(NArchive::NExtract::NOperationResult::kCRCError)
+        || Error.code_ == "7zip-extract-result:" + std::to_string(NArchive::NExtract::NOperationResult::kDataError);
+}
 #include "sevenZipStream.inl"
 class Listing final : public IArchiveListing {
 public:
-    Listing(std::unique_ptr<Archive> Archive, bool Test) : archive_(std::move(Archive)), test_(Test) {}
+    Listing(HMODULE Module, std::unique_ptr<Archive> Archive, bool Test) : module_(Module), archive_(std::move(Archive)), test_(Test) {}
     Result<ArchivePage> Next(size_t Count, OperationContext Context) override {
         if (!Count || !Context.maxPageItems_) return Failure("zero-page-size", ErrorCategory::InvalidRequest);
         archive_->state_->context_ = Context; ArchivePage Page;
@@ -431,9 +442,18 @@ public:
                 if (const auto Stop = Context.Check({"7zip"})) return *Stop;
                 auto Header = archive_->Header(Index); if (!Header.HasValue()) return Header.Failure();
             }
-            Com<ExtractCallback> Callback{new ExtractCallback(archive_->state_, nullptr, UINT32_MAX)};
-            const auto Code = archive_->archive_->Extract(nullptr, UINT32_MAX, 1, Callback.value_);
-            if (Code != S_OK || archive_->state_->error_) return archive_->state_->Result(Code);
+            bool Encrypted = false;
+            for (UInt32 Index = 0; Index < archive_->count_; ++Index) { auto H = archive_->Header(Index); if (!H.HasValue()) return H.Failure(); Encrypted |= H.Value().encrypted_; }
+            for (;;) {
+                HRESULT Code;
+                { Com<ExtractCallback> Callback{new ExtractCallback(archive_->state_, nullptr, UINT32_MAX)};
+                  Code = archive_->archive_->Extract(nullptr, UINT32_MAX, 1, Callback.value_); }
+                if (Code == S_OK && !archive_->state_->error_) break;
+                const auto Error = archive_->state_->Result(Code);
+                if (!RetryPassword(Error, archive_->state_->attempts_, Encrypted)) return Error;
+                const auto Attempt = archive_->state_->attempts_; const auto Path = archive_->state_->archive_; archive_.reset();
+                auto Reopened = Open(module_, Path, Context, Attempt); if (!Reopened.HasValue()) return Reopened.Failure(); archive_ = std::move(Reopened.Value());
+            }
             test_ = false;
         }
         while (index_ < archive_->count_ && Page.entries_.size() < std::min(Count, Context.maxPageItems_)) {
@@ -444,7 +464,7 @@ public:
         Page.end_ = index_ == archive_->count_; return Page;
     }
 private:
-    std::unique_ptr<Archive> archive_; UInt32 index_ = 0; bool test_;
+    HMODULE module_; std::unique_ptr<Archive> archive_; UInt32 index_ = 0; bool test_;
 };
 #include "sevenZipUpdate.inl"
 class Backend final : public IArchiveBackend {
@@ -452,10 +472,13 @@ public:
     explicit Backend(HMODULE Module) : module_(Module) {}
     Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Path, bool Test, OperationContext Context) override {
         auto Value = Open(module_, std::move(Path), Context); if (!Value.HasValue()) return Value.Failure();
-        return std::unique_ptr<IArchiveListing>(new Listing(std::move(Value.Value()), Test));
+        return std::unique_ptr<IArchiveListing>(new Listing(module_, std::move(Value.Value()), Test));
     }
     Result<Unit> Extract(std::string Path, ArchiveHeader Expected, std::string OutputPath, OperationContext Context) override {
-        auto Value = Open(module_, std::move(Path), Context); if (!Value.HasValue()) return Value.Failure(); auto& Archive = *Value.Value();
+        return extractOne(std::move(Path), std::move(Expected), std::move(OutputPath), std::move(Context), 0);
+    }
+    Result<Unit> extractOne(std::string Path, ArchiveHeader Expected, std::string OutputPath, OperationContext Context, unsigned FirstAttempt) {
+        auto Value = Open(module_, Path, Context, FirstAttempt); if (!Value.HasValue()) return Value.Failure(); auto& Archive = *Value.Value();
         std::optional<UInt32> Selected;
         for (UInt32 Index = 0; Index < Archive.count_; ++Index) {
             if (const auto Stop = Context.Check({"7zip"})) return *Stop;
@@ -472,7 +495,14 @@ public:
         if (!QFileInfo(PathTo).isAbsolute() || PathTo.contains(QChar::Null)) return Failure("7zip-output-path", ErrorCategory::InvalidRequest);
         QFile File(PathTo); if (!File.open(QIODevice::WriteOnly | QIODevice::Truncate)) return Failure("7zip-output-open");
         auto Cleanup = qScopeGuard([&] { File.close(); File.remove(); });
-        auto Done = hc::plugins::Extract(Archive, *Selected, Expected, &File, false); if (!Done.HasValue()) return Done;
+        auto Done = hc::plugins::Extract(Archive, *Selected, Expected, &File, false);
+        if (!Done.HasValue()) {
+            if (!RetryPassword(Done.Failure(), Archive.state_->attempts_, Expected.encrypted_)) return Done;
+            const auto Attempt = Archive.state_->attempts_; File.close();
+            if (!File.remove()) return Done;
+            Cleanup.dismiss(); Value.Value().reset();
+            return extractOne(std::move(Path), std::move(Expected), std::move(OutputPath), std::move(Context), Attempt);
+        }
         if (!File.flush()) return Failure("7zip-output-flush"); Cleanup.dismiss(); return Unit{};
     }
     Result<Unit> ExtractAll(std::string Path, std::string Directory, OperationContext Context) override {
@@ -483,7 +513,7 @@ public:
             || std::adjacent_find(Indices.begin(), Indices.end()) != Indices.end()) return Failure("7zip-selected-indices", ErrorCategory::InvalidRequest);
         return extractSelection(std::move(Path), std::move(Directory), std::move(Indices), std::move(Context));
     }
-    Result<Unit> extractSelection(std::string Path, std::string Directory, std::optional<std::vector<std::uint32_t>> Indices, OperationContext Context) {
+    Result<Unit> extractSelection(std::string Path, std::string Directory, std::optional<std::vector<std::uint32_t>> Indices, OperationContext Context, unsigned FirstAttempt = 0) {
         if (Context.workload_.IsAutomatic()) return Failure("archive-batch-extract-unsupported", ErrorCategory::Unsupported);
         const auto To = QString::fromStdString(Directory); const QFileInfo Info(To);
         if (!Info.isAbsolute() || !Info.isDir() || Info.isSymLink() || !QDir(To).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty())
@@ -496,7 +526,7 @@ public:
         BY_HANDLE_FILE_INFORMATION DirectoryInfo{};
         if(!GetFileInformationByHandle(DirectoryPin,&DirectoryInfo) || !(DirectoryInfo.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
             || (DirectoryInfo.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))return Failure("7zip-batch-private-directory",ErrorCategory::InvalidRequest);
-        auto Value = Open(module_, std::move(Path), Context); if (!Value.HasValue()) return Value.Failure(); auto& Archive = *Value.Value();
+        auto Value = Open(module_, Path, Context, FirstAttempt); if (!Value.HasValue()) return Value.Failure(); auto& Archive = *Value.Value();
         if (Indices && Indices->back() >= Archive.count_) return Failure("7zip-selected-index-range", ErrorCategory::InvalidRequest);
         std::vector<ArchiveHeader> Headers; Headers.reserve(Archive.count_); std::uint64_t Required=0;
         ArchiveSelectionDigest Digest;
@@ -514,10 +544,23 @@ public:
         const QStorageInfo Volume(To);
         if(Volume.isValid() && Volume.bytesAvailable()>=0 && std::uint64_t(Volume.bytesAvailable())<Required)
             return Failure("7zip-batch-staging-space",ErrorCategory::BudgetExceeded);
-        Com<BulkExtractCallback> Callback{new BulkExtractCallback(Archive.state_, Headers, To)};
         // One SDK call preserves solid-block decoder state across all members.
-        const auto Code=Archive.archive_->Extract(Indices ? Indices->data() : nullptr, Indices ? UInt32(Indices->size()) : UINT32_MAX, 0, Callback.value_);
-        if (Code!=S_OK || Archive.state_->error_) return Archive.state_->Result(Code);
+        HRESULT Code;
+        { Com<BulkExtractCallback> Callback{new BulkExtractCallback(Archive.state_, Headers, To)};
+          Code=Archive.archive_->Extract(Indices ? Indices->data() : nullptr, Indices ? UInt32(Indices->size()) : UINT32_MAX, 0, Callback.value_); }
+        if (Code!=S_OK || Archive.state_->error_) {
+            const auto Error = Archive.state_->Result(Code);
+            const bool Encrypted = std::any_of(Headers.begin(), Headers.end(), [](const ArchiveHeader& H) { return H.encrypted_; });
+            if (!RetryPassword(Error, Archive.state_->attempts_, Encrypted)) return Error;
+            const auto Attempt = Archive.state_->attempts_;
+            for (size_t Index = 0; Index < Headers.size(); ++Index) {
+                const auto File = QDir(To).filePath(QString::number(Index) + ".bin");
+                if (QFileInfo::exists(File) && !QFile::remove(File)) return Error;
+            }
+            std::vector<ArchiveHeader>().swap(Headers);
+            Value.Value().reset(); CloseDirectory.dismiss(); CloseHandle(DirectoryPin);
+            return extractSelection(std::move(Path), std::move(Directory), std::move(Indices), std::move(Context), Attempt);
+        }
         return Indices ? Digest.Save(To) : Result<Unit>(Unit{});
     }
     Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string Path, std::vector<std::uint32_t> Ordinals, OperationContext Context) override {
@@ -525,7 +568,18 @@ public:
             || std::adjacent_find(Ordinals.begin(),Ordinals.end())!=Ordinals.end()) return Failure("7zip-stream-indices",ErrorCategory::InvalidRequest);
         return std::unique_ptr<IArchiveReadSession>(new StreamingRead(module_,std::move(Path),std::move(Ordinals),std::move(Context)));
     }
-    Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override { return UpdateArchive(module_, std::move(Request), Context); }
+    Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override {
+        if (!Context.passwordPrompt_ || Request.createNew_ || QFileInfo(QString::fromStdString(Request.archive_)).size() <= 0)
+            return UpdateArchive(module_, std::move(Request), Context);
+        unsigned Attempt = 0; const auto Prompt = Context.passwordPrompt_;
+        Context.passwordPrompt_ = [&Attempt, Prompt](const std::string& Archive, unsigned, const OperationContext& Operation) {
+            return Prompt(Archive, ++Attempt, Operation);
+        };
+        for (;;) {
+            auto Done = UpdateArchive(module_, Request, Context);
+            if (Done.HasValue() || !RetryPassword(Done.Failure(), Attempt, true)) return Done;
+        }
+    }
 private:
     HMODULE module_;
 };

@@ -1,11 +1,8 @@
 ﻿#pragma once
 #include "commonLibs/storage/storage.hpp"
+#include "UniqueLibs/passwords/passwordUi.hpp"
 #include <QApplication>
-#include <QInputDialog>
-#include <QLabel>
-#include <QLineEdit>
 #include <QThread>
-#include <QTimer>
 #include <atomic>
 #include <future>
 namespace hc::plugins
@@ -26,33 +23,10 @@ inline hc::storage::Result<hc::storage::Password> PromptArchivePassword(const st
             Promise->set_value(Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}});
             return;
         }
-        QInputDialog Dialog(QApplication::activeWindow());
-        Dialog.setObjectName("hc.archive.password");
-        Dialog.setWindowTitle(QObject::tr("압축 파일 암호"));
-        Dialog.setTextEchoMode(QLineEdit::Password);
-        Dialog.setLabelText(
-            (Attempt > 1 ? QObject::tr("암호를 다시 입력하세요.\n") : QObject::tr("압축 파일의 암호를 입력하세요.\n")) +
-            QString::fromStdString(Archive));
-        if (auto *Label = Dialog.findChild<QLabel *>())
-            Label->setTextFormat(Qt::PlainText);
-        if (auto *Edit = Dialog.findChild<QLineEdit *>())
-            Edit->setMaxLength(4096);
-        QTimer Timer;
-        QObject::connect(&Timer, &QTimer::timeout, &Dialog,
-                         [&]
-                         {
-                             if (Abandoned->load() || Context.Check({"wcx"}))
-                                 Dialog.reject();
-                         });
-        Timer.start(50);
-        const bool Accepted = Dialog.exec() == QDialog::Accepted;
-        auto Text = Dialog.textValue();
-        Dialog.setTextValue({});
-        if (Accepted && !Abandoned->load() && !Context.Check({"wcx"}))
-            Promise->set_value(Password(Text.toStdString()));
-        else
+        auto Reply = hc::passwords::AcquireArchivePassword(Archive, Attempt, Context, QApplication::activeWindow());
+        if (Abandoned->load() || Context.Check({"wcx"}))
             Promise->set_value(Error{ErrorCategory::Cancelled, "archive-password-cancelled", {"wcx"}});
-        Text.fill(QChar::Null);
+        else Promise->set_value(std::move(Reply));
     };
     if (QThread::currentThread() == qApp->thread())
         Show();

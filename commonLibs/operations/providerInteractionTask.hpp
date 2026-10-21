@@ -64,6 +64,8 @@ namespace hc::operations
             }
             JobStep Step{JobState::WaitingForUser};
             Step.interaction_ = InteractionRequest{{}, InteractionKind::Password, "provider-password-required", {InteractionChoice::Confirm, InteractionChoice::Cancel}};
+            Step.interaction_->source_ = pending_->prompt_->subject_;
+            Step.interaction_->passwordAttempt_ = pending_->prompt_->attempt_;
             return Step;
         }
         std::vector<storage::Error> Finalize(JobState State) override

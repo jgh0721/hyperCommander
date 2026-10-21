@@ -97,7 +97,7 @@ struct Archive {
                 if (Value.attempt_ > 1) Self.password_.reset();
                 if (!Self.password_) {
                     if (!Self.context_.passwordPrompt_) return Self.Fail(Failure("archive-password-required", ErrorCategory::AccessDenied));
-                    if (++Self.attempts_ > 3) return Self.Fail(Failure("unegg-password-attempts", ErrorCategory::AccessDenied));
+                    if (++Self.attempts_ > 104) return Self.Fail(Failure("unegg-password-attempts", ErrorCategory::AccessDenied));
                     auto Reply = Self.context_.passwordPrompt_(Self.path_, Self.attempts_, Self.context_);
                     if (!Reply.HasValue()) return Self.Fail(Reply.Failure());
                     Self.password_.emplace(std::move(Reply.Value()));

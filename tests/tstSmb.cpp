@@ -46,6 +46,7 @@
 #include "HyperCommander.hpp"
 #include "UIs/dlgMain.hpp"
 #include "UIs/dlgOpts.hpp"
+#include "UniqueLibs/passwords/passwordUi.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
 #include "solFavoriteDirMgr.hpp"
 #include "UIs/menuBarSettingsPage.hpp"
@@ -247,6 +248,7 @@ private slots:
         {
             const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
+                || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
@@ -948,6 +950,46 @@ private slots:
         QWheelEvent Wheel(QPointF(30, 30), List->mapToGlobal(QPoint(30, 30)), {}, QPoint(0, 120), Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(List->viewport(), &Wheel); QTRY_COMPARE(Tiles->appearance().size, 160);
         if (!Artifacts.isEmpty()) { QTest::qWait(100); QVERIFY(main_->grab().save(QDir(Artifacts).filePath("r4-main-thumbnail-large.png"))); }
+    }
+
+    void passwordManagerSettingsUi()
+    {
+        QTemporaryDir PasswordDirectory;
+        const auto BeforePasswords = hc::passwords::RuntimeStore();
+        const auto BeforeSettings = hc::settings::AppSettings().Object();
+        auto& Theme = fm::style::ThemeManager::instance(); const auto Design = Theme.design(); const auto Scheme = Theme.scheme();
+        auto Restore = qScopeGuard([&] {
+            hc::passwords::RuntimeStore() = BeforePasswords; hc::passwords::ForgetSessionPasswords();
+            hc::settings::AppSettings().DiscardEdit(); hc::settings::AppSettings().Replace(BeforeSettings); hc::settings::AppSettings().Commit();
+            Theme.setDesign(Design); Theme.setScheme(Scheme);
+        });
+        hc::passwords::Store Passwords(PasswordDirectory.filePath("passwords")); QVERIFY(Passwords.Load());
+        QVERIFY(Passwords.Add("개인 백업", "sample-password")); QVERIFY(Passwords.Add("공유 자료", "sample-other")); QVERIFY(Passwords.Add("이전 백업", "sample-old", false)); QVERIFY(Passwords.Save());
+        hc::passwords::RuntimeStore() = Passwords;
+        {
+            QMainOpts Dialog(main_); Dialog.show();
+            auto* Navigation = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Navigation);
+            int Row = -1; for (int Index = 0; Index < Navigation->count(); ++Index) if (Navigation->item(Index)->text() == "비밀번호 관리") Row = Index;
+            QVERIFY(Row >= 0); Navigation->setCurrentRow(Row);
+            auto* Page = Dialog.findChild<hc::passwords::SettingsPage*>(); QVERIFY(Page);
+            QCOMPARE(Page->findChild<QTableWidget*>("hc.passwords.table")->rowCount(), 3);
+            auto* Search = Dialog.findChild<QLineEdit*>("hc.settings.search"); QVERIFY(Search); Search->setText("비밀번호"); QVERIFY(!Navigation->item(Row)->isHidden()); Search->clear();
+            const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+            if (!Out.isEmpty()) {
+                QVERIFY(QDir().mkpath(Out)); Theme.setDesign(fm::style::Design::Watercolor);
+                for (bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QTest::qWait(100);
+                    QVERIFY(Dialog.grab().save(QDir(Out).filePath(Dark ? "product-settings-dark.png" : "product-settings-light.png"))); }
+            }
+            Page->findChild<QCheckBox*>("hc.passwords.automatic")->setChecked(false); Dialog.reject();
+        }
+        QVERIFY(hc::passwords::RuntimeStore().Automatic());
+        {
+            QMainOpts Dialog(main_); Dialog.SetListView(qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex())));
+            Dialog.show(); QTest::qWait(80); Dialog.LoadSettings(); auto* Page = Dialog.findChild<hc::passwords::SettingsPage*>(); QVERIFY(Page);
+            Page->findChild<QCheckBox*>("hc.passwords.automatic")->setChecked(false); QVERIFY(Dialog.SaveSettings()); Dialog.reject();
+        }
+        QVERIFY(!hc::passwords::RuntimeStore().Automatic());
+        hc::passwords::Store Reloaded(Passwords.Path()); QVERIFY(Reloaded.Load()); QVERIFY(!Reloaded.Automatic()); QCOMPARE(Reloaded.Entries().size(), 3);
     }
 
     void r5SettingsUi()
@@ -7397,15 +7439,15 @@ private slots:
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         unsigned Prompts = 0; bool Cancel = false; QTimer Input;
         connect(&Input, &QTimer::timeout, this, [&] {
-            for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Dialog = qobject_cast<QInputDialog*>(Widget); Dialog && Dialog->isVisible() && Dialog->objectName() == "hc.archive.password") {
-                QCOMPARE(Dialog->textEchoMode(), QLineEdit::Password); ++Prompts;
-                if (Cancel) Dialog->reject(); else { Dialog->setTextValue(Prompts == 1 ? "wrong" : "비밀-pass"); Dialog->accept(); }
+            for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Dialog = qobject_cast<QDialog*>(Widget); Dialog && Dialog->isVisible() && Dialog->objectName() == "hc.archive.password") {
+                auto* Field = Dialog->findChild<QLineEdit*>("hc.archive.passwordValue"); QVERIFY(Field); QCOMPARE(Field->echoMode(), QLineEdit::Password); ++Prompts;
+                if (Cancel) Dialog->reject(); else { Field->setText(Prompts == 1 ? "wrong" : "비밀-pass"); Dialog->accept(); }
             }
         }); Input.start(30);
         QVERIFY(Index("encrypted.hcwcx").isValid()); Model->ChangeDirectory(Index("encrypted.hcwcx"));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000); QCOMPARE(Prompts, 2u);
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("encrypted.hcwcx"));
-        Cancel = true; Model->ChangeDirectory(Index("encrypted.hcwcx")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        hc::passwords::ForgetSessionPasswords(); Cancel = true; Model->ChangeDirectory(Index("encrypted.hcwcx")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
         QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->LastNavigationError()->category_, ErrorCategory::Cancelled); Input.stop();
         {
             Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
@@ -7419,8 +7461,8 @@ private slots:
             QCOMPARE(Scheduler.Snapshot(Job).Value().interaction_->kind_, InteractionKind::Password);
             auto* Field = main_->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Field);
             auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Confirm))); QVERIFY(Confirm);
-            QTRY_VERIFY(Field->isVisible() && Confirm->isVisible()); QCOMPARE(Field->echoMode(), QLineEdit::Password);
-            Field->setText("비밀-pass"); QTest::mouseClick(Confirm, Qt::LeftButton);
+            QTRY_VERIFY(!Field->isVisible() && Confirm->isVisible()); QCOMPARE(Field->echoMode(), QLineEdit::Password);
+            Cancel = false; Input.start(30); QTest::mouseClick(Confirm, Qt::LeftButton); Input.stop();
             QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Job).Value().state_), 10000);
             QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
             QFile Extracted(DataDirectory.filePath("alpha.txt")); QVERIFY(Extracted.open(QIODevice::ReadOnly)); QCOMPARE(Extracted.readAll(), QByteArray("alpha"));

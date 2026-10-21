@@ -108,16 +108,35 @@ private:
         Result<Unit> Result=Failure("7zip-stream-exception");
         try {
             context_.passwordPrompt_=[this](const std::string& Subject,unsigned Attempt,const OperationContext& Context){return password(Subject,Attempt,Context);};
-            auto Opened=module_?Open(module_,path_,context_):hc::storage::Result<std::unique_ptr<Archive>>(Failure("7zip-stream-module"));
-            if (!Opened.HasValue()) Result=Opened.Failure();
-            else {
+            unsigned Attempt = 0;
+            for (;;) {
+                auto Opened=module_?Open(module_,path_,context_,Attempt):hc::storage::Result<std::unique_ptr<Archive>>(Failure("7zip-stream-module"));
+                if (!Opened.HasValue()) { Result=Opened.Failure(); break; }
                 auto& Value=*Opened.Value();
-                if (ordinals_.back()>=Value.count_) Result=Failure("7zip-stream-indices",ErrorCategory::InvalidRequest);
-                else {
-                    Com<Callback> Output{new Callback(*this,Value)};
-                    const auto Code=Value.archive_->Extract(ordinals_.data(),UInt32(ordinals_.size()),0,Output.value_);
-                    Result=Code==S_OK && !Value.state_->error_?hc::storage::Result<Unit>(Unit{}):hc::storage::Result<Unit>(Value.state_->Result(Code));
+                if (ordinals_.back()>=Value.count_) { Result=Failure("7zip-stream-indices",ErrorCategory::InvalidRequest); break; }
+                bool Encrypted = false, HeadersValid = true;
+                for (const auto Ordinal : ordinals_) {
+                    auto Header = Value.Header(Ordinal);
+                    if (!Header.HasValue()) { Result = Header.Failure(); HeadersValid = false; break; }
+                    Encrypted |= Header.Value().encrypted_;
                 }
+                if (!HeadersValid) break;
+                // Authenticate encrypted content before exposing bytes to a reader.
+                // This also allows trying another stored password without replaying bytes.
+                if (Encrypted) {
+                    HRESULT Code;
+                    { Com<ExtractCallback> Verify{new ExtractCallback(Value.state_, nullptr, UINT32_MAX)};
+                      Code=Value.archive_->Extract(ordinals_.data(),UInt32(ordinals_.size()),1,Verify.value_); }
+                    if (Code!=S_OK || Value.state_->error_) {
+                        const auto Error=Value.state_->Result(Code);
+                        if (RetryPassword(Error,Value.state_->attempts_,true)) { Attempt=Value.state_->attempts_; continue; }
+                        Result=Error; break;
+                    }
+                }
+                Com<Callback> Output{new Callback(*this,Value)};
+                const auto Code=Value.archive_->Extract(ordinals_.data(),UInt32(ordinals_.size()),0,Output.value_);
+                Result=Code==S_OK && !Value.state_->error_?hc::storage::Result<Unit>(Unit{}):hc::storage::Result<Unit>(Value.state_->Result(Code));
+                break;
             }
         } catch (...) {}
         std::lock_guard Lock(mutex_); if (!Result.HasValue()) error_=Result.Failure(); done_=true; changed_.notify_all();
