@@ -150,12 +150,13 @@ namespace hc::document
                 if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);QMessageBox::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
                 auto* Edit=findChild<QAction*>("imageEditMode");
                 auto* EditBar=findChild<QToolBar*>("imageEditToolbar");
-                if(Value==0&&!Book&&reading_->State()["pageCount"].toInt()==0){reading_->hide();image_->show();Edit->setEnabled(true);EditBar->setVisible(Edit->isChecked());return;}
+                auto* Fit=findChild<QComboBox*>("imageReadingFit");
+                if(Value==0&&!Book&&reading_->State()["pageCount"].toInt()==0){reading_->hide();image_->show();if(Fit->count()==4)Fit->addItem(tr("늘림"));Edit->setEnabled(true);EditBar->setVisible(Edit->isChecked());return;}
                 if(reading_->State()["pageCount"].toInt()==0){
                     if(Book)reading_->Load(Book,First);
                     else reading_->OpenPath(readingPath_.isEmpty()?Path:readingPath_,readingEntry_,Value);
                 }
-                animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
+                animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();Fit->removeItem(4);reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
             });
             connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
             const auto ReadingOptionsStart=toolbar_->actions().size();
@@ -190,7 +191,7 @@ namespace hc::document
                     connect(Action,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Move(Direction);else if(Direction>0)image_->nextImage();else image_->previousImage();});
                 } else {toolbar_->removeAction(Action);EditToolbar->addAction(Action);}
             }
-            auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")});Fit->setCurrentIndex(1);toolbar_->addWidget(Fit);
+            auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")});Fit->setCurrentIndex(1);toolbar_->addWidget(Fit);
             connect(Fit,&QComboBox::activated,this,[this](int Value){if(!reading_->isHidden())reading_->SetFit(Value);else image_->setFitMode(static_cast<QImageView::FitMode>(Value));});
             for(int Direction:{-1,1}){auto* Zoom=toolbar_->addAction(Direction>0?tr("확대"):tr("축소"));connect(Zoom,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Zoom(Direction>0?1.25:.8);else if(Direction>0)image_->setZoomLevel(image_->zoomLevel()*1.25);else image_->setZoomLevel(image_->zoomLevel()*.8);});}
             auto* Gap=ReadingOptions->addAction(tr("페이지 간격"));connect(Gap,&QAction::triggered,this,[this]{bool Ok=false;const auto Value=QInputDialog::getInt(this,tr("페이지 간격"),tr("간격 (DIP)"),reading_->State()["gap"].toInt(),0,200,1,&Ok);if(Ok)reading_->SetGap(Value);});

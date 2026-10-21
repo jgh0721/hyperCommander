@@ -563,6 +563,10 @@ class ImageReadingTests : public QObject
         QVERIFY(Toolbar->actions().contains(Edit));
         QVERIFY(!Edit->icon().isNull());
         QVERIFY(Image->isEnabled());
+        auto* Fit = Pane->findChild<QComboBox*>("imageReadingFit"); QVERIFY(Fit);
+        QCOMPARE(Fit->count(), 5);
+        Fit->setCurrentIndex(4); emit Fit->activated(4);
+        QCOMPARE(Image->fitMode(), QImageView::StretchToWindow);
         auto* Button = qobject_cast<QToolButton*>(Toolbar->widgetForAction(Edit)); QVERIFY(Button);
         QCOMPARE(Button->toolButtonStyle(), Qt::ToolButtonTextBesideIcon);
         if (Hosted) QTest::mouseClick(Button, Qt::LeftButton);
@@ -595,6 +599,7 @@ class ImageReadingTests : public QObject
         QVERIFY(!Pane.Execute({{"action", "reading.mode"}, {"mode", 1}}).contains("error"));
         QVERIFY(Pane.findChild<QToolBar*>("imageEditToolbar")->isHidden());
         QVERIFY(!Pane.findChild<QAction*>("imageEditMode")->isEnabled());
+        QCOMPARE(Pane.findChild<QComboBox*>("imageReadingFit")->count(), 4);
         auto *Reader = Pane.findChild<ImageReadingView *>();
         QTRY_COMPARE(Reader->State()["pageCount"].toInt(), 2);
         Reader->GoTo(1);

@@ -810,21 +810,6 @@ QToolBar* QImageView::createToolBar()
             &QAction::triggered, this, &QImageView::previousImage);
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.next"),
             &QAction::triggered, this, &QImageView::nextImage);
-    tb->addSeparator();
-
-    auto* fitCombo = new QComboBox(tb);
-    fitCombo->addItem(tr("원본 크기"), OriginalSize);
-    fitCombo->addItem(tr("창에 맞춤"),  FitToWindow);
-    fitCombo->addItem(tr("너비 맞춤"),  FitWidth);
-    fitCombo->addItem(tr("높이 맞춤"),  FitHeight);
-    fitCombo->addItem(tr("늘림"),       StretchToWindow);
-    // 현재 fitMode에 맞는 항목 선택
-    int fitIdx = fitCombo->findData(static_cast<int>(m_fitMode));
-    if (fitIdx >= 0) fitCombo->setCurrentIndex(fitIdx);
-    connect(fitCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, fitCombo](int idx) { setFitMode(static_cast<FitMode>(fitCombo->itemData(idx).toInt())); });
-    tb->addWidget(fitCombo);
-    tb->addSeparator();
 
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.rotateCw"),
             &QAction::triggered, this, &QImageView::rotateClockwise);
