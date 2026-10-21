@@ -233,6 +233,10 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/globalCtx.hpp
         ../UniqueLibs/model_defs.cpp
         ../UniqueLibs/model_defs.hpp
+        ../UniqueLibs/fileIconService.cpp
+        ../UniqueLibs/fileIconService.hpp
+        ../UniqueLibs/nativeIconExtractor.cpp
+        ../UniqueLibs/nativeIconExtractor.hpp
         ../UniqueLibs/pixmapCacheEx.cpp
         ../UniqueLibs/pixmapCacheEx.hpp
         ../UniqueLibs/SHChangeNotify.cpp

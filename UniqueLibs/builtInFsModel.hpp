@@ -55,6 +55,8 @@ public:
     // 목록이 그리는 아이콘의 물리 px. 바뀌면 아이콘을 그 크기로 다시 읽는다.
     void SetIconPixels(int Pixels);
     int IconPixels() const { return iconPixels_; }
+    void SetIconViewport(const QModelIndexList& Entries, bool Enabled);
+    void ForceRefresh();
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void SetGrouping(const hc::columns::GroupingState& State);
@@ -169,6 +171,8 @@ private:
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
     void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
     void                            refreshDisplayIcons(int First = 0);
+    void applyRequestedIcons();
+    void invalidateDisplayIcons(bool All, int SettleMs = 0);
     void                            refreshNameSortRanks(int First = 0);
     void appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entries);
     nsHC::TySpFileSource makeDisplayItem(hc::storage::EntrySnapshot Entry, const QPixmap& FolderIcon, const QPixmap& FileIcon) const;
@@ -196,6 +200,11 @@ private:
     quint64                         iconGeneration_ = 0;
     int                             iconPixels_ = 32;
     std::stop_source                iconStop_;
+    QVector<int>                    iconVisibleRows_;
+    QTimer                          iconApplyTimer_;
+    bool                            iconViewportBound_ = false, iconViewportEnabled_ = true;
+    bool                            forceIconRefresh_ = false;
+    QString                         forceIconLocation_;
     std::stop_source                directorySizeStop_;
     QSet<QString>                   directorySizePending_;
     // Sizes carried over a refresh of the same folder: shown until re-measured, not "calculating".

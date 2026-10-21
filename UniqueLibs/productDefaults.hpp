@@ -111,6 +111,9 @@ DECLARE_CMD( BuiltInCMD_View_SwitchHidSys,        QObject::tr( "보기" ),    "h
 DECLARE_CMD( BuiltInCMD_View_RereadSource,        QObject::tr( "보기" ),    "hc.navigate.refresh",
              Qt::Key_F5,                                                QObject::tr( "원본 새로 고침" ) );
 
+DECLARE_CMD( BuiltInCMD_View_ForceRefresh, QObject::tr( "보기" ), "hc.navigate.forceRefresh",
+             Qt::ControlModifier | Qt::Key_F5, QObject::tr( "아이콘을 포함하여 강제 새로 고침" ) );
+
 DECLARE_CMD( BuiltInCMD_Nav_FavoriteDir,          QObject::tr( "탐색" ),    "hc.navigate.favorites",
              Qt::ControlModifier | Qt::Key_G,                           QObject::tr( "즐겨찾기 폴더 목록" ) );
 DECLARE_CMD( BuiltInCMD_Nav_GotoDrive,            QObject::tr( "탐색" ),    "hc.navigate.path",
@@ -272,6 +275,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
 
     BuiltInCMD_View_SwitchHidSys,
     BuiltInCMD_View_RereadSource,
+    BuiltInCMD_View_ForceRefresh,
 
     BuiltInCMD_Nav_FavoriteDir,
     BuiltInCMD_Nav_GotoDrive,
@@ -428,6 +432,7 @@ namespace hc::defaults
         std::vector<CommandDescriptor> Descriptors{ { "hc.navigate.path", 1, { { "path", { ParameterType::String } } } },
                  { "hc.navigate.parent" },
                  { "hc.navigate.refresh" },
+                 { "hc.navigate.forceRefresh" },
                  { "hc.navigate.cancel" },
                  { "hc.navigate.open" },
                  { "hc.navigate.enterFile" },
@@ -518,11 +523,11 @@ namespace hc::defaults
             return {};
         return { { QKeyCombination( Qt::ControlModifier, Qt::Key_C ), {} },
                  { QKeyCombination( Qt::ControlModifier, Qt::Key_K ), {} },
-                 { QKeyCombination( Qt::Key_F5 ), "hc.file.copy" },
+                 { QKeyCombination( Qt::Key_F5 ), "hc.navigate.refresh" },
                  { QKeyCombination( Qt::Key_F6 ), "hc.file.move" },
                  { QKeyCombination( Qt::Key_F7 ), "hc.file.mkdir" },
                  { QKeyCombination( Qt::Key_F8 ), "hc.file.delete" },
-                 { QKeyCombination( Qt::ControlModifier, Qt::Key_R ), "hc.navigate.refresh" } };
+                 { QKeyCombination( Qt::ControlModifier, Qt::Key_R ), "hc.file.rename" } };
     }
     inline QStringList FunctionCommands()
     {

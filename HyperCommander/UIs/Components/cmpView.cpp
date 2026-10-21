@@ -35,9 +35,9 @@
 namespace {
 using namespace fm::filelist;
 using namespace fm::filelist::detail;
-QIcon ProductIcon(const QVariant& Value)
+bool ProductHasIcon(const QVariant& Value)
 {
-    return Value.metaType() == QMetaType::fromType<QPixmap>() ? QIcon(Value.value<QPixmap>()) : Value.value<QIcon>();
+    return Value.metaType() == QMetaType::fromType<QPixmap>() ? !Value.value<QPixmap>().isNull() : !Value.value<QIcon>().isNull();
 }
 // Use the painted filename bounds for overlays as well as normal cell text.
 QRect ProductNameTextRect(const CGridView* Owner, const QRect& Cell, bool HasIcon)
@@ -133,15 +133,16 @@ public:
         Painter->save(); Painter->setFont(Font); Painter->setPen(Foreground);
         const QFontMetrics Metrics(Font);
         if (Name) {
-            const auto Icon = ProductIcon(Cell.data(Qt::DecorationRole));
-            if (!Geometry.twoLine && !Icon.isNull()) {
+            const auto Icon = Cell.data(Qt::DecorationRole);
+            const bool HasIcon = ProductHasIcon(Icon);
+            if (!Geometry.twoLine && HasIcon) {
                 const int Size = owner_->ListIconSize();
                 const auto Block = Geometry.block(Option.rect);
                 Painter->setOpacity(State.hidden ? 0.6 : 1.0);
-                PaintListIcon(Painter, Cell.data(Qt::DecorationRole), QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
+                PaintListIcon(Painter, Icon, QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
                 Painter->setOpacity(1.0);
             }
-            Rect = ProductNameTextRect(owner_, Option.rect, !Icon.isNull());
+            Rect = ProductNameTextRect(owner_, Option.rect, HasIcon);
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
             if (owner_->EverythingPresentation()) {
                 const auto Prefix = QStringLiteral("→ ");
@@ -396,6 +397,10 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     recordPainter_ = new ProductRecordPainter(this); view_->setRecordPainter(recordPainter_);
     selectionSummaryTimer_.setSingleShot(true);
     connect(&selectionSummaryTimer_, &QTimer::timeout, this, &CGridView::sigThumbnailSelectionChanged);
+    iconViewportTimer_.setSingleShot(true); iconViewportTimer_.setInterval(0);
+    connect(&iconViewportTimer_, &QTimer::timeout, this, &CGridView::updateIconViewport);
+    connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { requestIconViewport(); });
+    connect(view_->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this] { requestIconViewport(); });
     presentationTimer_.setSingleShot(true); presentationTimer_.setInterval(80);
     connect(&presentationTimer_, &QTimer::timeout, this, &CGridView::applyPresentation);
     columnAdapter_->SetLayoutObserver([this](const QString& Mode) {
@@ -484,11 +489,13 @@ void CGridView::ClearThumbnailCache() { thumbnailModel_->ClearCache(); }
 void CGridView::hideEvent(QHideEvent* Event)
 {
     CancelRename();
-    thumbnailModel_->SetEnabled(false); CViewT::hideEvent(Event);
+    thumbnailModel_->SetEnabled(false);
+    if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetIconViewport({}, false);
+    CViewT::hideEvent(Event);
 }
 void CGridView::showEvent(QShowEvent* Event)
 {
-    CViewT::showEvent(Event); requestPresentation();
+    CViewT::showEvent(Event); requestPresentation(); requestIconViewport();
 }
 void CGridView::applyThumbnailPresentation()
 {
@@ -573,8 +580,39 @@ void CGridView::restorePresentation(const QJsonObject& View)
     }
     requestPresentation();
 }
+void CGridView::requestIconViewport()
+{
+    if (!iconViewportTimer_.isActive()) iconViewportTimer_.start();
+}
+void CGridView::updateIconViewport()
+{
+    auto* Model = qobject_cast<CFSModel*>(model_); if (!Model || !view_) return;
+    if (!isVisible() || IsThumbnailMode()) { Model->SetIconViewport({}, false); return; }
+    auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); const int Count = view_->getRowCount();
+    if (!Count) { Model->SetIconViewport({}, true); return; }
+    const int Scroll = view_->verticalScrollBar()->value();
+    const int Height = std::max(1, grid_->viewport()->height());
+    const auto Position = [&](int Y) {
+        int Low = 0, High = Count;
+        while (Low + 1 < High) { const int Middle = (Low + High) / 2; if (Layout->getRowScrollPos(Middle) <= Y) Low = Middle; else High = Middle; }
+        return Low;
+    };
+    const int First = Position(Scroll), Last = Position(Scroll + Height);
+    QModelIndexList Entries;
+    const auto Append = [&](int Begin, int End) {
+        for (int At = Begin; At <= End && Entries.size() < 1024; ++At) {
+            const auto Row = view_->getRow(At); if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) continue;
+            auto Index = Row.modelIndex(0); if (proxy_) Index = proxy_->mapToSource(Index);
+            if (Index.isValid()) Entries.append(Index);
+        }
+    };
+    Append(First, Last); Append(Last + 1, std::min(Count - 1, Position(Scroll + 2 * Height)));
+    Append(Position(std::max(0, Scroll - Height)), First - 1);
+    Model->SetIconViewport(Entries, true);
+}
 void CGridView::requestPresentation()
 {
+    requestIconViewport();
     if (!presentationTimer_.isActive()) presentationTimer_.start();
 }
 void CGridView::applyPresentation()
@@ -658,6 +696,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     pendingSelectionKeys_.clear(); selectionHeldKey_ = 0;
     if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     CancelRename();
+    if (auto* Old = qobject_cast<CFSModel*>(model_); Old && Old != Source) Old->SetIconViewport({}, false);
     if (Source && !Source->QObject::parent()) Source->setParent(this);
     if (Proxy && !Proxy->QObject::parent()) Proxy->setParent(this);
     if( view_ == nullptr )
@@ -785,6 +824,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     if (!Source->property("hc.presentationSignals").toBool()) {
         Source->setProperty("hc.presentationSignals", true);
         const auto Schedule = [this] { requestPresentation(); };
+        connect(Source, &QAbstractItemModel::layoutChanged, this, [this] { requestIconViewport(); });
         connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
         connect(Source, &QAbstractItemModel::modelReset, this, [this] { groupingTimer_.start(0); });
         connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
@@ -966,7 +1006,7 @@ void CGridView::SetPanelActive(bool Active)
     if (!Active) { resetRenameClicks(); finishSelectionInput(); }
     panelActive_ = Active;
     thumbnails_->setPaneActive(Active);
-    grid_->viewport()->update();
+    grid_->viewport()->update(); requestIconViewport();
     // Keep the logical cursor and marks intact; only suppress cursor painting.
     if (view_ && view_->options().showFocusDecoration() != Active)
         view_->options().setShowFocusDecoration(Active);
@@ -1053,7 +1093,7 @@ void CGridView::positionRenameEditor()
     const auto Row = view_->getRow(Visible);
     for (const auto& Hit : grid_->hitInfoAll()) {
         if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.row().rowIndex() != Row.rowIndex() || Hit.modelIndex().column() != 0) continue;
-        auto Rect = ProductNameTextRect(this, Hit.rect(), !ProductIcon(Visible.data(Qt::DecorationRole)).isNull()).adjusted(0, 1, 0, -1);
+        auto Rect = ProductNameTextRect(this, Hit.rect(), ProductHasIcon(Visible.data(Qt::DecorationRole))).adjusted(0, 1, 0, -1);
         if (IsTwoLine()) Rect.setHeight(qMin(Rect.height(), renameEditor_->sizeHint().height()));
         Rect = Rect.intersected(grid_->viewport()->rect());
         if (!Rect.isValid()) { CancelRename(); return; }
@@ -1787,6 +1827,7 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
         const auto Info = grid_->hitInfo(grid_->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint())).info();
         if (Info == Qtitan::GridHitInfo::GroupRow || Info == Qtitan::GridHitInfo::GroupBranchButton) { Event->ignore(); return true; }
     }
+    if (Watched == grid_->viewport() && (Event->type() == QEvent::Paint || Event->type() == QEvent::Resize)) requestIconViewport();
     // Changing the main window frame stylesheet on maximize repolishes children,
     // which resets viewport auto-fill. Restore it after stylesheet processing.
     if (Watched == grid_ && Event->type() == QEvent::StyleChange)

@@ -363,7 +363,7 @@ std::shared_ptr<hc::script::IScriptHostApi> CommandUiBridge::ScriptApi(std::set<
 
 hc::automation::Host CommandUiBridge::AutomationHost()
 {
-    static const std::set<std::string> Exposed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.open",
+    static const std::set<std::string> Exposed{"hc.navigate.path", "hc.navigate.parent", "hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.open",
         "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new"};
     const auto Initial = captureFiles({}, false);
     const auto Guard = QPointer<CommandUiBridge>(this);
@@ -574,7 +574,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     }
     if (!NavigateToPath && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
-    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.cancel" && Model->IsSearchResults())
+    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.forceRefresh" && Id != "hc.navigate.cancel" && Model->IsSearchResults())
         Panel->StopEverythingSearch(false);
     if (Id == "hc.viewer.open" || Id == "hc.file.edit") return executeDocument(Invocation, Model);
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
@@ -589,7 +589,8 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         if (!Model->IsLoading() && Model->GetCurrentPathWithRoot().compare(Path, Qt::CaseInsensitive) != 0)
             return Error{ErrorCategory::NotFound, "path-not-available"};
     }
-    else if (Id == "hc.navigate.refresh") Model->Refresh();
+    else if (Id == "hc.navigate.refresh") { Model->setProperty("hc.explicitIconRefresh", true); Model->Refresh(); }
+    else if (Id == "hc.navigate.forceRefresh") Model->ForceRefresh();
     else if (Id == "hc.navigate.parent") Model->ChangeDirectory("..");
     else if (Id == "hc.navigate.cancel") Model->CancelNavigation();
     else if (Id == "hc.navigate.provider")
@@ -648,7 +649,7 @@ void CommandUiBridge::createActions()
     Toolbar->setIconSize(QSize(16, 16));
     const std::vector<std::pair<QString, QString>> Actions{
         {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
-        {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")},
+        {"hc.navigate.forceRefresh", tr("강제 새로 고침")}, {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")},
         {"hc.navigate.enterFile", tr("파일 내부로 들어가기")}
     };
     for (const auto& [Id, Label] : Actions)
@@ -963,7 +964,7 @@ void CommandUiBridge::createCommandUi()
     auto* Toolbar = Window->findChild<QToolBar*>("hc.navigationToolbar"); Toolbar->clear();
     const QList<QPair<QString, fm::style::Glyph>> Tools{
         {"hc.navigate.back", fm::style::Glyph::Back}, {"hc.navigate.forward", fm::style::Glyph::Forward},
-        {"hc.navigate.parent", fm::style::Glyph::ArrowUp}, {"hc.navigate.refresh", fm::style::Glyph::Refresh},
+        {"hc.navigate.parent", fm::style::Glyph::ArrowUp}, {"hc.navigate.forceRefresh", fm::style::Glyph::Refresh}, {"hc.navigate.refresh", fm::style::Glyph::Refresh},
         {"hc.file.mkdir", fm::style::Glyph::NewFolder}, {"hc.file.new", fm::style::Glyph::NewFile},
         {"hc.file.copy", fm::style::Glyph::Copy}, {"hc.file.move", fm::style::Glyph::Move},
         {"hc.file.rename", fm::style::Glyph::Rename}, {"hc.file.delete", fm::style::Glyph::Trash},

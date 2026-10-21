@@ -2,6 +2,7 @@
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
+#include "UniqueLibs/fileIconService.hpp"
 #include "HyperCommander/UIs/fileColorRulesPage.hpp"
 #include "UniqueLibs/settings/singleInstance.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
@@ -245,6 +246,7 @@ private slots:
         {
             const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -2726,6 +2728,54 @@ private slots:
         qInfo() << "R2: independent tab search, identity reorder/close, history branching, missing-path retry, shell cwd/exit, workspace restoration and maximize/restore passed";
     }
 
+    void fileIconRefreshUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto IconPath = Directory.filePath("!rebuild.ico");
+        QImage Red(32, 32, QImage::Format_ARGB32); Red.fill(Qt::red); QVERIFY(Red.save(IconPath, "ICO"));
+        for (int At = 0; At < 200; ++At) { QFile File(Directory.filePath(QString("file%1.txt").arg(At))); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["iconMode"] = "all"; General["iconOverlays"] = false; QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Panel = panels_.front(); Panel->SetSearch({}); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(View); View->SetListMode("one-line");
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("!rebuild.ico")); Model->ApplyDisplaySettings(); Model->SetWatchEnabled(false);
+        const auto Image = [&] {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "!rebuild.ico")
+                return qvariant_cast<QPixmap>(Model->data(Model->index(Row, 0), Qt::DecorationRole)).toImage();
+            return QImage{};
+        };
+        const auto Color = [&] { const auto Value = Image(); return Value.isNull() ? QColor{} : Value.pixelColor(Value.width() / 2, Value.height() / 2); };
+        const auto Near = [&](Qt::GlobalColor Expected) {
+            const auto Actual = Color(); const QColor Target(Expected);
+            return Actual.isValid() && std::abs(Actual.red() - Target.red()) <= 2 && std::abs(Actual.green() - Target.green()) <= 2
+                && std::abs(Actual.blue() - Target.blue()) <= 2 && std::abs(Actual.alpha() - Target.alpha()) <= 2;
+        };
+        // Windows resampling at non-integral icon sizes can round an 8-bit channel by one.
+        QTRY_VERIFY_WITH_TIMEOUT(Near(Qt::red), 10000);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        QVERIFY(Bridge->Action("hc.navigate.forceRefresh"));
+        auto Warm = Bridge->Dispatch("hc.navigate.refresh", {}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Warm.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QVERIFY(Warm.get().HasValue());
+        QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Near(Qt::red));
+        const QFileInfo Before(IconPath); const auto Modified = Before.lastModified(); const auto Size = Before.size();
+        QImage Blue(32, 32, QImage::Format_ARGB32); Blue.fill(Qt::blue); QVERIFY(Blue.save(IconPath, "ICO"));
+        { QFile File(IconPath); QVERIFY(File.open(QIODevice::ReadWrite)); QVERIFY(File.setFileTime(Modified, QFileDevice::FileModificationTime)); }
+        QCOMPARE(QFileInfo(IconPath).size(), Size);
+        auto Force = Bridge->Dispatch("hc.navigate.forceRefresh", {}, "test", Model->index(0, 0));
+        QTRY_VERIFY(Force.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QVERIFY(Force.get().HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Near(Qt::blue), 10000);
+        const auto& Stats = hc::icons::FileIconService::Instance().Stats();
+        QVERIFY(Stats.maxPending_ <= 1024);
+        qInfo() << "Icon service loads/hits/merged/conversions/maxApplyUs:" << Stats.loads_ << Stats.hits_ << Stats.merged_ << Stats.conversions_ << Stats.maxApplyUs_;
+    }
+
     void todoBugFolderShellIconsUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
@@ -2767,6 +2817,11 @@ private slots:
             return QModelIndex{};
         };
         const auto Image = [&](const QString& Name) { return qvariant_cast<QPixmap>(Model->data(Find(Name), Qt::DecorationRole)).toImage(); };
+        auto* IconView = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(IconView);
+        const auto ShowIcon = [&](const QString& Name) {
+            const auto Source = Find(Name); auto* Proxy = qobject_cast<QAbstractProxyModel*>(IconView->BaseView()->model());
+            IconView->BaseView()->scrollToIndex(Proxy ? Proxy->mapFromSource(Source) : Source, false);
+        };
         QTRY_VERIFY_WITH_TIMEOUT(!Image("custom").isNull() && Image("custom") != Image("plain"), 10000);
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
@@ -2780,12 +2835,17 @@ private slots:
         QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_5")->isVisible());
         QVERIFY(Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->isVisible());
         QVERIFY(!Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
+        ShowIcon("link.lnk");
+        hc::icons::Request GenericFile; GenericFile.pixels_ = Model->IconPixels();
+        QTRY_VERIFY(!hc::icons::FileIconService::Instance().Read(GenericFile).pixmap_.isNull());
+        QTRY_COMPARE(Image("link.lnk"), hc::icons::FileIconService::Instance().Read(GenericFile).pixmap_.toImage());
         const auto NoOverlay = Image("link.lnk");
         Check("iconOverlays")->setChecked(true); QVERIFY(Dialog.SaveSettings());
         QTRY_VERIFY_WITH_TIMEOUT(Image("link.lnk") != NoOverlay, 10000);
         QVERIFY(main_->grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("folder-shell-icons.png")));
         Check("iconOverlays")->setChecked(false); Special->setChecked(false); QVERIFY(Dialog.SaveSettings());
-        QTRY_COMPARE(Image("custom"), Image("plain")); QTRY_COMPARE(Image("link.lnk"), NoOverlay);
+        QTRY_COMPARE(Image("link.lnk"), NoOverlay);
+        ShowIcon("custom"); QTRY_COMPARE(Image("custom"), Image("plain"));
         Check("explorerDefaultIcons")->setChecked(false); Check("virtualFolderIcons")->setChecked(false); QVERIFY(Dialog.SaveSettings());
         QTRY_COMPARE(Image("plain"), QApplication::style()->standardIcon(QStyle::SP_DirIcon).pixmap(QSize(Model->IconPixels(), Model->IconPixels()), 1.0)
             .scaled(Model->IconPixels(), Model->IconPixels(), Qt::KeepAspectRatio, Qt::SmoothTransformation).toImage());

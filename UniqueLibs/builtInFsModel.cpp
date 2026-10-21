@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "fileIconService.hpp"
 #include "quickFindSettings.hpp"
 #include "everythingSearchSession.hpp"
 #include "directoryRefreshOrder.hpp"
@@ -180,14 +181,7 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
 
     endInsertRows();
 
-    if( FsIconGatherer_ == nullptr )
-    {
-        FsIconGatherer_ = new CFSIconGatherer( this, vecNode_, GetCurrentPathWithRoot(), &lock );
-        FsIconGatherer_->setAutoDelete( false );
-    }
-
-    FsIconGatherer_->clearInterruption();
-    QThreadPool::globalInstance()->start( FsIconGatherer_ );
+    refreshDisplayIcons(int(Row));
 
     return { TyOsError::OS_WIN32_ERROR, ERROR_SUCCESS };
 }
@@ -529,20 +523,16 @@ void CFSModel::doRefresh()
         endResetModel();
     }
 
-    if( FsIconGatherer_ == nullptr )
-    {
-        FsIconGatherer_ = new CFSIconGatherer( this, vecNode_, GetCurrentPathWithRoot(), &lock );
-        FsIconGatherer_->setAutoDelete( false );
-    }
-
-    FsIconGatherer_->clearInterruption();
-    QThreadPool::globalInstance()->start( FsIconGatherer_ );
+    refreshDisplayIcons();
 
 
 }
 
 CFSModel::CFSModel()
 {
+    iconApplyTimer_.setSingleShot(true); iconApplyTimer_.setInterval(0);
+    connect(&iconApplyTimer_, &QTimer::timeout, this, [this] { applyRequestedIcons(); });
+    hc::icons::FileIconService::Instance().Subscribe(this, [this] { if (!iconApplyTimer_.isActive()) iconApplyTimer_.start(); });
     columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     columnQueries_->Changed = [this](const QSet<QString>& Paths) { columnResultsReady(Paths); };
     connect(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed, this, [this] {
@@ -553,6 +543,7 @@ CFSModel::CFSModel()
     displaySettings_ = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     connect(&tracker_, &QtDirectoryTracker::RefreshRequired, this, [this] {
         if (!loading_ && watchEnabled_ && providerEnabled_ && !HasPlaceholder()) {
+            invalidateDisplayIcons(false, 500);
             carryDirectorySizes_ = true; autoRefreshRequested_ = true; Refresh();
         }
     });
@@ -560,6 +551,9 @@ CFSModel::CFSModel()
     connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
         const auto Settings = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
         tracker_.SetSuspended(Settings.pauseInBackground && State != Qt::ApplicationActive);
+        hc::icons::FileIconService::Instance().SetAutomaticRefresh(this, !Settings.Excludes(GetCurrentPathWithRoot())
+            && (!Settings.pauseInBackground || State == Qt::ApplicationActive));
+        if (State == Qt::ApplicationActive && !iconApplyTimer_.isActive()) iconApplyTimer_.start();
     });
     ApplyRefreshSettings();
 }
@@ -636,6 +630,7 @@ bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<Q
 
 CFSModel::~CFSModel()
 {
+    hc::icons::FileIconService::Instance().Unsubscribe(this);
     everythingSession_.reset();
     navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop(); directorySizeStop_.request_stop();
     if (FsIconGatherer_)
@@ -970,70 +965,52 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
 }
 
 namespace {
-// SHGFI_ICON only offers 16/32 px. Larger list icons come from the system image lists
-// (16/32/48/256) by image index and are scaled once to the drawn physical size.
-QImage ShellIconImage(const std::wstring& Name, bool UseAttributes, int Pixels, DWORD Attributes = FILE_ATTRIBUTE_NORMAL,
-    bool Overlays = false, bool Virtual = false, const QImage& Base = {})
-{
-    SHFILEINFOW Info{};
-    PIDLIST_ABSOLUTE Pidl = nullptr;
-    const auto FreePidl = qScopeGuard([&] { CoTaskMemFree(Pidl); });
-    if (Virtual && FAILED(SHParseDisplayName(Name.c_str(), nullptr, &Pidl, 0, nullptr))) return {};
-    UINT Flags = SHGFI_SYSICONINDEX | (Virtual ? SHGFI_PIDL : UseAttributes ? SHGFI_USEFILEATTRIBUTES : 0);
-    if (Overlays) Flags |= SHGFI_ICON | SHGFI_OVERLAYINDEX | SHGFI_ADDOVERLAYS;
-    const auto Target = Virtual ? reinterpret_cast<LPCWSTR>(Pidl) : Name.c_str();
-    if (!SHGetFileInfoW(Target, Attributes, &Info, sizeof(Info), Flags))
-        return {};
-    // SHGFI_OVERLAYINDEX packs the overlay slot into the high byte. The HICON
-    // returned for this query is owned even though we render from image lists.
-    const auto FreeIcon = qScopeGuard([&] { if (Info.hIcon) DestroyIcon(Info.hIcon); });
-    const UINT Overlay = Overlays ? (UINT(Info.iIcon) >> 24) : 0;
-    if (!Base.isNull() && !Overlay) return Base;
-    const auto Read = [&Info, Overlay, &Base](int List) {
-        QImage Image; IImageList* Images = nullptr;
-        if (FAILED(SHGetImageList(List, IID_PPV_ARGS(&Images))) || !Images) return Image;
-        int IconIndex = Info.iIcon & 0x00ffffff;
-        // A disabled special-icon option still permits an overlay on its
-        // generic base. Fetch the overlay image alone in that case.
-        if (!Base.isNull() && FAILED(Images->GetOverlayImage(Overlay, &IconIndex))) { Images->Release(); return Image; }
-        HICON Icon = nullptr;
-        const UINT Style = ILD_TRANSPARENT | (Base.isNull() ? INDEXTOOVERLAYMASK(Overlay) : 0);
-        if (SUCCEEDED(Images->GetIcon(IconIndex, Style, &Icon)) && Icon) { Image = QImage::fromHICON(Icon); DestroyIcon(Icon); }
-        Images->Release(); return Image;
-    };
-    // Icons without a 256 px image sit in the top-left 48 px of the jumbo list.
-    const auto Padded = [](const QImage& Image) {
-        const auto Argb = Image.convertToFormat(QImage::Format_ARGB32);
-        for (int Y = 0; Y < Argb.height(); ++Y) {
-            const auto* Line = reinterpret_cast<const QRgb*>(Argb.constScanLine(Y));
-            for (int X = 0; X < Argb.width(); ++X) if (qAlpha(Line[X]) && (X >= 48 || Y >= 48)) return false;
-        }
-        return true;
-    };
-    QImage Image;
-    for (const int List : {SHIL_SMALL, SHIL_LARGE, SHIL_EXTRALARGE, SHIL_JUMBO}) {
-        auto Next = Read(List);
-        if (Next.isNull()) continue;
-        if (List == SHIL_JUMBO && Padded(Next)) break;
-        Image = std::move(Next);
-        if (Image.width() >= Pixels) break;
-    }
-    if (!Image.isNull() && Image.width() != Pixels) Image = Image.scaled(Pixels, Pixels, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    if (!Base.isNull()) {
-        auto Composed = Base.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-        QPainter Painter(&Composed); Painter.drawImage(0, 0, Image); Painter.end(); return Composed;
-    }
-    return Image;
-}
-// Generic folder/file icons at exactly Pixels; QFileIconProvider stops at 32 px.
 QPixmap GenericIcon(bool Directory, int Pixels, bool Explorer = true)
 {
-    if (!Explorer) return QApplication::style()->standardIcon(Directory ? QStyle::SP_DirIcon : QStyle::SP_FileIcon)
-        .pixmap(QSize(Pixels, Pixels), 1.0).scaled(Pixels, Pixels, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    const auto Image = ShellIconImage(Directory ? L"hc-folder" : L"hc-file", true, Pixels,
-        Directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL);
-    if (!Image.isNull()) return QPixmap::fromImage(Image);
-    return QFileIconProvider().icon(Directory ? QFileIconProvider::Folder : QFileIconProvider::File).pixmap(QSize(Pixels, Pixels), 1.0);
+    return hc::icons::FileIconService::Instance().DefaultIcon(Directory, Pixels, Explorer);
+}
+struct DisplayIconQueries {
+    hc::icons::Request base_, overlay_;
+    bool overlayEnabled_ = false;
+};
+DisplayIconQueries IconQueries(const nsHC::TySpFileSource& Item, const QJsonObject& Settings, int Pixels, const QString& LegacyBase = {})
+{
+    using namespace hc::icons;
+    const bool Directory = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+    const auto Mode = Settings["iconMode"].toString("standard");
+    Request Base; Base.pixels_ = Pixels; Base.directory_ = Directory;
+    Base.kind_ = Directory ? Kind::Folder : Mode == "standard" ? Kind::File : Kind::Associated;
+    Base.extension_ = Base.kind_ == Kind::Associated ? QFileInfo(Item->Name_).suffix().toLower() : QString{};
+    Request Specific; Specific.kind_ = Kind::Item; Specific.pixels_ = Pixels; Specific.directory_ = Directory;
+    if (Item->storageEntry_ && Item->storageEntry_->locator_.nesting_.empty() && Item->Name_ != "..") {
+        const auto& Entry = *Item->storageEntry_;
+        Specific.remote_ = Entry.locator_.kind_ == hc::storage::LocatorKind::Smb;
+        if (Entry.locator_.kind_ == hc::storage::LocatorKind::Local || Entry.locator_.kind_ == hc::storage::LocatorKind::Smb)
+            Specific.path_ = QDir::toNativeSeparators(QString::fromStdString(Entry.locator_.root_));
+        else if (Entry.locator_.kind_ == hc::storage::LocatorKind::Shell) {
+            const auto File = Entry.hints_.find("filesystemPath"); Specific.virtual_ = File == Entry.hints_.end();
+            Specific.path_ = QString::fromStdString(Specific.virtual_ ? Entry.locator_.root_ : File->second);
+        }
+        Specific.revision_ = QString::number(Entry.modifiedUtcMs_) + ':' + QString::number(Entry.size_) + ':' + QString::number(Entry.attributes_);
+    }
+    if (!Item->storageEntry_ && !LegacyBase.isEmpty() && Item->Name_ != "..") {
+        Specific.path_ = QDir::toNativeSeparators(QDir(LegacyBase).filePath(Item->Name_));
+        Specific.revision_ = QString::number(Item->Modified_.toMSecsSinceEpoch()) + ':' + QString::number(Item->Size_) + ':' + QString::number(Item->Attributes_);
+    }
+    const auto Extension = QFileInfo(Item->Name_).suffix().toLower();
+    const bool Individual = !Specific.path_.isEmpty() && (Specific.virtual_ ? Settings["virtualFolderIcons"].toBool(true)
+        : Directory ? Settings["specialFolderIcons"].toBool(true)
+        : Mode == "all" && (Extension == "exe" || Extension == "lnk" || Extension == "ico"));
+    DisplayIconQueries Queries{Individual ? Specific : Base, Specific, Settings["iconOverlays"].toBool(true) && !Specific.path_.isEmpty()};
+    Queries.overlay_.kind_ = Kind::Overlay;
+    return Queries;
+}
+QString LegacyIconBase(const CFSModel* Model)
+{
+    if (Model->ProviderEnabled() || !Model->GetRoot()) return {};
+    const auto Location = Model->GetRoot()->ReadLocation(Model->GetCurrentPathWithRoot());
+    return Location.nesting_.empty() && (Location.kind_ == hc::storage::LocatorKind::Local || Location.kind_ == hc::storage::LocatorKind::Smb)
+        ? QString::fromStdString(Location.root_) : QString{};
 }
 }
 
@@ -1119,7 +1096,8 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
 {
     if (!searchResults_ || Entries.empty()) return;
     emit ColumnValuesChanging();
-    const auto FolderIcon = GenericIcon(true, iconPixels_), FileIcon = GenericIcon(false, iconPixels_);
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const auto FolderIcon = GenericIcon(true, iconPixels_, Explorer), FileIcon = GenericIcon(false, iconPixels_, Explorer);
     QVector<nsHC::TySpFileSource> Items; Items.reserve(Entries.size());
     for (const auto& Entry : Entries) Items.push_back(makeDisplayItem(Entry, FolderIcon, FileIcon));
     createBuiltFsValues(Items); index_.Append(Entries);
@@ -1139,6 +1117,12 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
 {
+    const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
+        return hc::workspace::SelectionKey(Entry) + ':' + QString::number(Entry.modifiedUtcMs_) + ':' + QString::number(Entry.size_) + ':' + QString::number(Entry.attributes_);
+    };
+    QHash<QString, QPixmap> PreviousIcons;
+    for (const int Row : iconVisibleRows_) if (Row >= 0 && Row < vecNode_.size() && vecNode_[Row]->storageEntry_ && !vecNode_[Row]->Icon.isNull())
+        PreviousIcons.insert(IconIdentity(*vecNode_[Row]->storageEntry_), vecNode_[Row]->Icon);
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
     requestOnlyValues_ = false; columnQueries_->Reset(); columnSortRanks_.clear();
     // The directory tracker re-lists the open folder on changes and on its periodic rescan. Keep each folder's
@@ -1158,8 +1142,9 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
         Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
         Items.push_back(Parent);
     }
-    const auto FolderIcon = GenericIcon(true, iconPixels_);
-    const auto FileIcon = GenericIcon(false, iconPixels_);
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const auto FolderIcon = GenericIcon(true, iconPixels_, Explorer);
+    const auto FileIcon = GenericIcon(false, iconPixels_, Explorer);
     for (auto& Entry : Entries)
     {
         nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
@@ -1179,7 +1164,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries)
             Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_PIDL;
         }
         // Generic icons avoid filesystem/network calls on the GUI thread.
-        Item->Icon = Entry.directory_ ? FolderIcon : FileIcon;
+        Item->Icon = PreviousIcons.value(IconIdentity(Entry), Entry.directory_ ? FolderIcon : FileIcon);
         Item->storageEntry_ = std::move(Entry);
         if (Item->storageEntry_->directory_) {
             const auto Key = QString::fromStdString(hc::storage::Serialize(Item->storageEntry_->id_));
@@ -1233,7 +1218,7 @@ void CFSModel::ApplyDisplaySettings()
     displaySettings_ = General;
     if (UsesIndexedOrder() && !loading_) requestPage(0, true);
     refreshNameSortRanks();
-    if (IconsChanged) refreshDisplayIcons();
+    if (IconsChanged) { setProperty("hc.resetIconAppearance", true); refreshDisplayIcons(); }
     refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
         {Qt::DisplayRole, Qt::DecorationRole, CFsModelT::USR_ROLE_HIDDENOPACITY, CFsModelT::USR_ROLE_SORT});
@@ -1405,83 +1390,111 @@ void CFSModel::SetIconPixels(int Pixels)
     Pixels = std::clamp(Pixels, 16, 512);
     if (iconPixels_ == Pixels) return;
     iconPixels_ = Pixels;
+    setProperty("hc.resetIconAppearance", true);
     if (!vecNode_.isEmpty()) refreshDisplayIcons();
 }
 
 void CFSModel::refreshDisplayIcons(int First)
 {
-    if (!First) { iconStop_.request_stop(); iconStop_ = std::stop_source{}; ++iconGeneration_; }
-    const auto Generation = iconGeneration_;
+    if (property("hc.explicitIconRefresh").toBool()) {
+        setProperty("hc.explicitIconRefresh", false); setProperty("hc.revalidateIconsOnce", true);
+    }
+    auto& Icons = hc::icons::FileIconService::Instance();
     const auto Mode = displaySettings_["iconMode"].toString("standard");
-    const int Pixels = iconPixels_;
-    const bool SpecialFolders = displaySettings_["specialFolderIcons"].toBool(true);
-    const bool VirtualFolders = displaySettings_["virtualFolderIcons"].toBool(true);
+    const bool ResetAppearance = property("hc.resetIconAppearance").toBool(); setProperty("hc.resetIconAppearance", false);
+    if (!First) { ++iconGeneration_; iconVisibleRows_.clear(); }
+    if (Mode == "none") {
+        forceIconRefresh_ = false;
+        Icons.BeginRequests(this);
+        for (int Row = First; Row < vecNode_.size(); ++Row) vecNode_[Row]->Icon = {};
+        return;
+    }
     const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
-    const bool Overlays = displaySettings_["iconOverlays"].toBool(true);
-    // Device ratio 1: the pixmap holds exactly Pixels physical pixels and the view paints it at the logical size.
-    const auto FolderIcon = GenericIcon(true, Pixels, Explorer);
-    const auto FileIcon = GenericIcon(false, Pixels, Explorer);
-    struct IconRequest { QString name_; QString path_; bool directory_; bool virtual_; };
-    QVector<IconRequest> Requests;
+    const auto Folder = Icons.DefaultIcon(true, iconPixels_, Explorer, this);
+    const auto File = Icons.DefaultIcon(false, iconPixels_, Explorer, this);
     for (int Row = First; Row < vecNode_.size(); ++Row) {
         auto& Item = vecNode_[Row];
-        const bool Directory = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
-        Item->Icon = Mode == "none" || Item->Name_ == ".." ? QPixmap{} : Directory ? FolderIcon : FileIcon;
-        QString Path;
-        bool Virtual = false;
-        if (Item->storageEntry_ && Item->storageEntry_->locator_.nesting_.empty()
-            && Item->Name_ != "..") {
-            const auto& Entry = *Item->storageEntry_;
-            if (Entry.locator_.kind_ == hc::storage::LocatorKind::Local || Entry.locator_.kind_ == hc::storage::LocatorKind::Smb)
-                Path = QString::fromStdString(Entry.locator_.root_);
-            else if (Entry.locator_.kind_ == hc::storage::LocatorKind::Shell) {
-                const auto FilePath = Entry.hints_.find("filesystemPath");
-                Virtual = FilePath == Entry.hints_.end();
-                Path = QString::fromStdString(Virtual ? Entry.locator_.root_ : FilePath->second);
-            }
-        }
-        Requests.push_back({Item->Name_, Virtual ? Path : QDir::toNativeSeparators(Path), Directory, Virtual});
+        if (ResetAppearance || Item->Icon.isNull()) Item->Icon = Item->Name_ == ".." ? QPixmap{} : Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY ? Folder : File;
     }
-    if (Mode == "none") return;
-    constexpr int BatchSize = 64;
-    auto* Watcher = new QFutureWatcher<QVector<QImage>>(this);
-    connect(Watcher, &QFutureWatcher<QVector<QImage>>::finished, Watcher, &QObject::deleteLater);
-    connect(Watcher, &QFutureWatcher<QVector<QImage>>::resultReadyAt, this, [this, Watcher, Generation, First](int Batch) {
-        const auto Images = Watcher->resultAt(Batch); const int Start = First + Batch * BatchSize;
-        if (Generation != iconGeneration_ || Start + Images.size() > vecNode_.size()) return;
-        for (int Row = 0; Row < Images.size(); ++Row) if (!Images[Row].isNull()) vecNode_[Start + Row]->Icon = QPixmap::fromImage(Images[Row]);
-        if (!Images.isEmpty()) emit dataChanged(index(Start, 0), index(Start + Images.size() - 1, 0), {Qt::DecorationRole});
-    });
-    const auto Stop = iconStop_.get_token();
-    const auto FolderBase = FolderIcon.toImage(), FileBase = FileIcon.toImage();
-    Watcher->setFuture(QtConcurrent::run([Requests, Mode, Stop, Pixels, SpecialFolders, VirtualFolders, Overlays, FolderBase, FileBase](QPromise<QVector<QImage>>& Promise) {
-        const auto Com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        const auto Release = qScopeGuard([&] { if (SUCCEEDED(Com)) CoUninitialize(); });
-        QHash<QString, QImage> Cache;
-        const auto Resolve = [&](const IconRequest& Request) -> QImage {
-            if (Request.name_ == "..") return {};
-            const auto Extension = QFileInfo(Request.name_).suffix().toLower();
-            const bool Specific = !Request.path_.isEmpty() && (Request.virtual_ ? VirtualFolders : Request.directory_ ? SpecialFolders :
-                Mode == "all" && (Extension == "exe" || Extension == "lnk" || Extension == "ico"));
-            if (Specific) return ShellIconImage(Request.path_.toStdWString(), false, Pixels, FILE_ATTRIBUTE_NORMAL, Overlays, Request.virtual_);
-            QImage Base = Request.directory_ ? FolderBase : FileBase;
-            if (!Request.directory_ && Mode != "standard") {
-                if (!Cache.contains(Extension)) Cache.insert(Extension, ShellIconImage(("hc-icon." + Extension).toStdWString(), true, Pixels));
-                if (!Cache[Extension].isNull()) Base = Cache[Extension];
-            }
-            if (Overlays && !Request.path_.isEmpty())
-                return ShellIconImage(Request.path_.toStdWString(), false, Pixels, FILE_ATTRIBUTE_NORMAL, true, Request.virtual_, Base);
-            return Base;
-        };
-        QVector<QImage> Images; Images.reserve(BatchSize);
-        for (const auto& Request : Requests) {
-            if (Stop.stop_requested()) return;
-            Images.append(Resolve(Request));
-            // Publish completed rows while later Shell handlers are still busy.
-            if (Images.size() == BatchSize) { Promise.addResult(std::move(Images)); Images.clear(); Images.reserve(BatchSize); }
+    if (std::exchange(forceIconRefresh_, false) && forceIconLocation_ == GetCurrentPathWithRoot()) invalidateDisplayIcons(true);
+    // A view supplies the sorted/filtered range on the next event loop. A model
+    // used without a view retains a small initial range for diagnostics/tests.
+    if (!iconViewportBound_) for (int Row = First; Row < std::min<int>(vecNode_.size(), First + 256); ++Row) iconVisibleRows_.append(Row);
+    if (!iconApplyTimer_.isActive()) iconApplyTimer_.start();
+}
+
+void CFSModel::SetIconViewport(const QModelIndexList& Entries, bool Enabled)
+{
+    iconViewportBound_ = true; iconViewportEnabled_ = Enabled;
+    QSet<int> Wanted; QVector<int> Rows;
+    for (const auto& Index : Entries) if (Enabled && Index.model() == this && Index.row() >= 0 && Index.row() < vecNode_.size() && !Wanted.contains(Index.row())) {
+        Wanted.insert(Index.row()); Rows.append(Index.row());
+    }
+    auto& Icons = hc::icons::FileIconService::Instance();
+    const bool Show = displaySettings_["iconMode"].toString("standard") != "none";
+    for (const int Row : iconVisibleRows_) if (Row >= 0 && Row < vecNode_.size() && !Wanted.contains(Row)) {
+        auto& Item = vecNode_[Row];
+        Item->Icon = Show && Item->Name_ != ".." ? Icons.DefaultIcon(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY, iconPixels_, displaySettings_["explorerDefaultIcons"].toBool(true)) : QPixmap{};
+    }
+    iconVisibleRows_ = std::move(Rows);
+    if (!Enabled) { Icons.BeginRequests(this); return; }
+    if (!iconApplyTimer_.isActive()) iconApplyTimer_.start();
+}
+
+void CFSModel::applyRequestedIcons()
+{
+    using namespace hc::icons;
+    auto& Icons = FileIconService::Instance(); Icons.BeginRequests(this);
+    const auto RefreshSettings = hc::refresh::Settings::FromJson(displaySettings_["refresh"].toObject());
+    Icons.SetAutomaticRefresh(this, !RefreshSettings.Excludes(GetCurrentPathWithRoot())
+        && (!RefreshSettings.pauseInBackground || qGuiApp->applicationState() == Qt::ApplicationActive));
+    if (!iconViewportEnabled_ || displaySettings_["iconMode"].toString("standard") == "none") return;
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const auto Folder = Icons.DefaultIcon(true, iconPixels_, Explorer, this), File = Icons.DefaultIcon(false, iconPixels_, Explorer, this);
+    const auto LegacyBase = LegacyIconBase(this);
+    const bool Explicit = property("hc.revalidateIconsOnce").toBool();
+    QVector<int> Changed;
+    for (const int Row : iconVisibleRows_) {
+        if (Row < 0 || Row >= vecNode_.size()) continue;
+        auto& Item = vecNode_[Row]; if (Item->Name_ == "..") continue;
+        const auto Queries = IconQueries(Item, displaySettings_, iconPixels_, LegacyBase);
+        auto Pixmap = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY ? Folder : File;
+        if (Queries.base_.kind_ == Kind::Associated || Queries.base_.kind_ == Kind::Item) {
+            const auto Value = Icons.Read(Queries.base_, this, Explicit);
+            if (!Value.pixmap_.isNull()) Pixmap = Value.pixmap_;
         }
-        if (!Images.isEmpty() && !Stop.stop_requested()) Promise.addResult(std::move(Images));
-    }));
+        if (Queries.overlayEnabled_) Pixmap = Icons.Compose(Pixmap, Icons.Read(Queries.overlay_, this, Explicit));
+        if (Item->Icon.cacheKey() != Pixmap.cacheKey()) { Item->Icon = Pixmap; Changed.append(Row); }
+    }
+    std::sort(Changed.begin(), Changed.end());
+    if (!iconVisibleRows_.isEmpty()) setProperty("hc.revalidateIconsOnce", false);
+    for (int At = 0; At < Changed.size();) {
+        const int First = Changed[At]; int Last = First; ++At;
+        while (At < Changed.size() && Changed[At] == Last + 1) Last = Changed[At++];
+        emit dataChanged(index(First, 0), index(Last, 0), {Qt::DecorationRole});
+    }
+}
+
+void CFSModel::invalidateDisplayIcons(bool All, int SettleMs)
+{
+    if (displaySettings_["iconMode"].toString("standard") == "none") return;
+    QSet<QString> Keys, Paths;
+    const auto LegacyBase = LegacyIconBase(this);
+    const auto Add = [&](int Row) {
+        if (Row < 0 || Row >= vecNode_.size() || vecNode_[Row]->Name_ == "..") return;
+        const auto Queries = IconQueries(vecNode_[Row], displaySettings_, iconPixels_, LegacyBase);
+        if (All || Queries.base_.kind_ == hc::icons::Kind::Item) Keys.insert(Queries.base_.Key());
+        if (Queries.overlayEnabled_) Keys.insert(Queries.overlay_.Key());
+        if (!Queries.overlay_.path_.isEmpty()) Paths.insert(Queries.overlay_.path_);
+    };
+    if (All) for (int Row = 0; Row < vecNode_.size(); ++Row) Add(Row);
+    else for (int Row : iconVisibleRows_) Add(Row);
+    auto& Icons = hc::icons::FileIconService::Instance(); Icons.Invalidate(Keys, SettleMs); Icons.InvalidatePaths(Paths, SettleMs);
+}
+
+void CFSModel::ForceRefresh()
+{
+    forceIconRefresh_ = true; forceIconLocation_ = GetCurrentPathWithRoot(); Refresh();
 }
 
 void CFSModel::SetColorScheme(const TyColorScheme& Scheme)

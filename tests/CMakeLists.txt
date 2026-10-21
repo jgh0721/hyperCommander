@@ -649,6 +649,20 @@ foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests 
 endforeach()
 
 
+qt_add_executable(hc_file_icon_tests
+    tstFileIcons.cpp
+    ../UniqueLibs/fileIconService.cpp
+    ../UniqueLibs/nativeIconExtractor.cpp
+)
+target_include_directories(hc_file_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_definitions(hc_file_icon_tests PRIVATE UNICODE _UNICODE)
+target_compile_options(hc_file_icon_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_file_icon_tests PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Test shell32 ole32)
+add_test(NAME hc.file_icons COMMAND hc_file_icon_tests)
+set_tests_properties(hc.file_icons PROPERTIES TIMEOUT 60)
+hc_enable_qt_deployment(hc_file_icon_tests TEST PLUGINS)
+add_dependencies(hc_check hc_file_icon_tests)
+
 qt_add_executable(hc_settings_tests tstSettings.cpp)
 target_include_directories(hc_settings_tests PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
 target_link_libraries(hc_settings_tests PRIVATE Qt6::Test)

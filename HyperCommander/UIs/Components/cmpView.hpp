@@ -197,6 +197,9 @@ private:
     QModelIndex                     retrieveCursorIndex() const;
     void syncViewportBackground();
     void requestPresentation();
+    void requestIconViewport();
+    void updateIconViewport();
+    QTimer iconViewportTimer_;
     void requestAutomaticColumns();
     bool manualColumns_ = false, applyingAutoColumns_ = false;
     QByteArray automaticColumnsSignature_;

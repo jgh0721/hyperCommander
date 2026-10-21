@@ -234,10 +234,15 @@ private:
             Palette.setColor(QPalette::Inactive, Role, Palette.color(QPalette::Active, Role));
         popup_->setPalette(Palette); popup_->setFont(editor_->font()); popup_->setStyle(editor_->style());
         const auto& Colors = fm::style::themeColorsFor(editor_);
+        const auto FolderColor = Colors[fm::style::Token::Folder], FileColor = Colors[fm::style::Token::Fg];
+        if (folderIcon_.isNull() || folderColor_ != FolderColor || fileColor_ != FileColor) {
+            folderColor_ = FolderColor; fileColor_ = FileColor;
+            folderIcon_ = fm::style::glyphIcon(fm::style::Glyph::Folder, FolderColor, 16);
+            fileIcon_ = fm::style::glyphIcon(fm::style::Glyph::File, FileColor, 16);
+        }
         for (int Row = 0; Row < model_->rowCount(); ++Row) {
             auto* Item = model_->item(Row); const bool Directory = Item->data(Qt::UserRole + 3).toBool();
-            Item->setIcon(fm::style::glyphIcon(Directory ? fm::style::Glyph::Folder : fm::style::Glyph::File,
-                Colors[Directory ? fm::style::Token::Folder : fm::style::Token::Fg], 16));
+            Item->setIcon(Directory ? folderIcon_ : fileIcon_);
         }
         if (popup_->isVisible()) positionPopup();
     }
@@ -254,6 +259,8 @@ private:
         Y = std::clamp(Y, Available.top(), Available.bottom() - Height + 1);
         popup_->setGeometry(X, Y, Width, Height);
     }
+    QIcon folderIcon_, fileIcon_;
+    QColor folderColor_, fileColor_;
     QLineEdit* editor_;
     QString base_, requestedText_;
     bool includeFiles_, composing_ = false, applying_ = false, pending_ = false, selectLast_ = false;

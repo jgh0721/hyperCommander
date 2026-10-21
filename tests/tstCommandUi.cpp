@@ -256,11 +256,17 @@ private slots:
         const auto General = New.Read(hc::settings::Section::General).toObject();
         QCOMPARE(General["shortcutPreset"].toString(), "prototype");
         const auto Values = EffectiveShortcuts(General, {});
-        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F5))), "hc.file.copy");
+        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F5))), "hc.navigate.refresh");
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F6))), "hc.file.move");
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F7))), "hc.file.mkdir");
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F8))), "hc.file.delete");
         QCOMPARE(CommandKeys(Values, "hc.file.batchRename").first().toString(QKeySequence::PortableText), "Ctrl+M");
+        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::ControlModifier, Qt::Key_F5))), "hc.navigate.forceRefresh");
+        const auto RefreshKeys = EffectiveShortcuts(General, {{"Ctrl+R", "hc.file.rename"}, {"F5", "hc.navigate.refresh"}, {"Shift+F5", "hc.navigate.forceRefresh"}});
+        QCOMPARE(CommandId(RefreshKeys.value(QKeyCombination(Qt::ControlModifier, Qt::Key_R))), "hc.file.rename");
+        QCOMPARE(CommandId(RefreshKeys.value(QKeyCombination(Qt::Key_F5))), "hc.navigate.refresh");
+        QCOMPARE(CommandId(RefreshKeys.value(QKeyCombination(Qt::ShiftModifier, Qt::Key_F5))), "hc.navigate.forceRefresh");
+        QVERIFY(!FindCommand("hc.navigate.forceRefresh").Name.isEmpty());
         auto OldDefaults = hc::settings::Defaults(); auto OldGeneral = OldDefaults["general"].toObject();
         OldGeneral.remove("shortcutPreset"); OldDefaults["general"] = OldGeneral;
         QVERIFY(Write(QDir(OldDirectory.path()).filePath("settings.json"), QJsonDocument(OldDefaults).toJson()));
