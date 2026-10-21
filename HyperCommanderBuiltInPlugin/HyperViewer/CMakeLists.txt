@@ -18,6 +18,8 @@ if(NOT EXISTS "${HC_DOPUS_SDK_DIRECTORY}/headers/viewer plugins.h")
 endif()
 # The SDK DLL owns a top-level viewer backed by the shared document widgets.
 qt_add_library(HyperViewer SHARED dopusViewerEntry.cpp viewerHostBridge.cpp viewerHostBridge.hpp HyperViewer.def)
+configure_file(HyperViewer.rc.in "${CMAKE_CURRENT_BINARY_DIR}/HyperViewer.rc" @ONLY NEWLINE_STYLE CRLF)
+target_sources(HyperViewer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/HyperViewer.rc")
 set_target_properties(HyperViewer PROPERTIES AUTOMOC OFF AUTOUIC OFF)
 target_include_directories(HyperViewer PRIVATE ${PROJECT_SOURCE_DIR} "${CMAKE_BINARY_DIR}/HyperEditor" "${HC_DOPUS_SDK_DIRECTORY}/headers")
 target_compile_definitions(HyperViewer PRIVATE UNICODE _UNICODE)

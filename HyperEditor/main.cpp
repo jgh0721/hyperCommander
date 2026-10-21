@@ -4,6 +4,7 @@
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
 #include <QApplication>
+#include <QIcon>
 #include <QCommandLineParser>
 #include <QTimer>
 #include <QCloseEvent>
@@ -16,6 +17,8 @@
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 #include <Windows.h>
+
+void InitializePortedViewResources();
 
 namespace
 {
@@ -36,6 +39,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor");
+    InitializePortedViewResources(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     QCommandLineParser Parser; Parser.addHelpOption();
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));

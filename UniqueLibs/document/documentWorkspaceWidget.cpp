@@ -46,6 +46,7 @@
 #include <QSignalBlocker>
 #include <QInputDialog>
 #include <QApplication>
+#include <QIcon>
 #include <QRegularExpression>
 #include <QBuffer>
 #include <QProcess>
@@ -184,6 +185,7 @@ namespace hc::document
         if (Hosted) { DocumentThemeAdapter::InstallLocal(*this); QImageReader::setAllocationLimit(0); }
         else DocumentThemeAdapter::Install(*qApp);
         InitializePortedViewResources();
+        setWindowIcon(QIcon(Hosted ? ":/icons/app/hyperviewer.svg" : ":/icons/app/hypereditor.svg"));
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
         setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(1000, 700);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
