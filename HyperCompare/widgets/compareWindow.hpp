@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "runtime/session.hpp"
+#include "runtime/mergeWork.hpp"
 #include <QMainWindow>
 #include <QFutureWatcher>
 #include <QFont>
@@ -21,10 +22,14 @@ namespace hc::compare
         explicit CompareWindow(Request Input);
         ~CompareWindow() override;
         int ExitCode() const { return exitCode_; }
+        void SaveWork(const QString& Path, bool ReplaceExisting = false);
+        void LoadWork(const QString& Path);
     protected:
         void closeEvent(QCloseEvent* Event) override;
     private:
         void start(bool Preserve = false);
+        bool busy() const { return watcher_.isRunning() || workWatcher_.isRunning(); }
+        void transferWork(const QString& Path, bool Loading, bool ReplaceExisting);
         void display();
         void refresh(Result Value);
         void showBlocks();
@@ -41,6 +46,10 @@ namespace hc::compare
         Request request_;
         Result result_;
         QFutureWatcher<Result> watcher_;
+        struct WorkTransfer { MergeWorkFile file_; QString path_, error_; bool loading_ = false; };
+        QFutureWatcher<WorkTransfer> workWatcher_;
+        QString workPath_;
+        std::optional<storage::DestinationExpectation> workExpected_;
         std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
         QVector<ScintillaEditBase*> editors_;
         ScintillaEditBase* output_ = nullptr;
@@ -49,6 +58,8 @@ namespace hc::compare
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
         QAction* save_ = nullptr;
+        QAction* saveWork_ = nullptr;
+        QAction* loadWork_ = nullptr;
         QAction* cancel_ = nullptr;
         QAction* undo_ = nullptr;
         QAction* redo_ = nullptr;

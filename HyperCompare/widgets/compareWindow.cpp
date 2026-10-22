@@ -70,7 +70,7 @@ namespace hc::compare
         wholeActions_.push_back(tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); }));
         wholeActions_.push_back(tools->addAction(tr("오른쪽 전체 선택"), this, [this] { chooseSide(1); }));
         wholeActions_.push_back(tools->addAction(tr("전체 수동 완료"), this, [this] {
-            if (!merge_ || watcher_.isRunning()) return;
+            if (!merge_ || busy()) return;
             try { merge_->ChooseAll(Resolution::Manual); }
             catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
         }));
@@ -86,9 +86,23 @@ namespace hc::compare
             blockActions_.push_back(action); action->setEnabled(false);
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
+        auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        saveWork_ = fileMenu->addAction(tr("작업 저장..."), this, [this] {
+            if (!merge_ || busy()) return;
+            QFileDialog dialog(this, tr("병합 작업 저장"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
+            dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix("hcmerge");
+            if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()) SaveWork(dialog.selectedFiles().front(), true);
+        });
+        loadWork_ = fileMenu->addAction(tr("작업 불러오기..."), this, [this] {
+            if (!merge_ || busy()) return;
+            const auto path = QFileDialog::getOpenFileName(this, tr("병합 작업 불러오기"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
+            if (!path.isEmpty()) LoadWork(path);
+        });
+        saveWork_->setShortcut(QKeySequence("Ctrl+Shift+S")); loadWork_->setShortcut(QKeySequence("Ctrl+Shift+O"));
+        saveWork_->setEnabled(false); loadWork_->setEnabled(false);
         auto* editMenu = menuBar()->addMenu(tr("편집"));
-        undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { if (output_ && !watcher_.isRunning()) output_->send(SCI_UNDO); });
-        redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !watcher_.isRunning()) output_->send(SCI_REDO); });
+        undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { if (output_ && !busy()) output_->send(SCI_UNDO); });
+        redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !busy()) output_->send(SCI_REDO); });
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
@@ -125,6 +139,29 @@ namespace hc::compare
             if (closing_) { close(); return; }
             display();
         });
+        connect(&workWatcher_, &QFutureWatcher<WorkTransfer>::finished, this, [this] {
+            cancel_->setEnabled(false); if (output_) output_->send(SCI_SETREADONLY, 0);
+            auto transfer = workWatcher_.result();
+            if (transfer.loading_ && transfer.error_.isEmpty() && canceled_->load()) transfer.error_ = "Canceled";
+            if (transfer.error_.isEmpty() && !closing_)
+            {
+                try
+                {
+                    if (transfer.loading_)
+                        merge_->RestoreWork(transfer.file_.work_.text_, transfer.file_.work_.state_, transfer.file_.work_.reviewRequired_);
+                    workPath_ = transfer.path_; workExpected_ = transfer.file_.expected_;
+                }
+                catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
+            }
+            updateMerge();
+            if (!transfer.error_.isEmpty()) state_->setText(tr("작업 파일 처리 중단: ") + transfer.error_);
+            else if (transfer.loading_) state_->setText(tr("작업 복원 완료 — 실행 취소로 이전 RESULT 복원 가능"));
+            else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
+                tr("작업 파일 저장 완료 — RESULT 저장 상태 유지") : tr("작업 파일 저장 완료 — 정리·파일 변경 확인 필요"));
+            state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
+                {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
+            if (closing_) close();
+        });
         connect(changes_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
             if (!Item || editors_.size() < 2 || result_.operation_ == "directory2") return;
             if (merge_) { selectBlock(); updateMerge(); return; }
@@ -135,10 +172,10 @@ namespace hc::compare
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
-    CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); }
+    CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); }
     void CompareWindow::openInputs()
     {
-        if (watcher_.isRunning()) return;
+        if (busy()) return;
         if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 파일을 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getOpenFileName(this, tr("왼쪽 파일")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getOpenFileName(this, tr("오른쪽 파일")); if (right.isEmpty()) return;
@@ -147,7 +184,7 @@ namespace hc::compare
     }
     void CompareWindow::start(bool Preserve)
     {
-        if (watcher_.isRunning() || request_.file1_.isEmpty()) return;
+        if (busy() || request_.file1_.isEmpty()) return;
         canceled_ = std::make_shared<std::atomic_bool>(false);
         refreshing_ = Preserve && merge_;
         if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
@@ -217,6 +254,7 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
+        workPath_.clear(); workExpected_.reset();
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
@@ -264,7 +302,7 @@ namespace hc::compare
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {
-        if (!merge_ || watcher_.isRunning() || !changes_->currentItem()) return;
+        if (!merge_ || busy() || !changes_->currentItem()) return;
         const auto* item = changes_->currentItem();
         try
         {
@@ -275,13 +313,14 @@ namespace hc::compare
     }
     void CompareWindow::chooseSide(int Index)
     {
-        if (!merge_ || watcher_.isRunning() || result_.inputs_.size() <= Index) return;
+        if (!merge_ || busy() || result_.inputs_.size() <= Index) return;
         try { merge_->ChooseAll(Index == 0 ? Resolution::Left : Resolution::Right, result_.inputs_[Index].utf8_); }
         catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
     }
     void CompareWindow::updateMerge()
     {
-        const bool ready = merge_ && !watcher_.isRunning();
+        const bool ready = merge_ && !busy();
+        saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
         for (auto* action : blockActions_) action->setEnabled(false);
         for (auto* action : wholeActions_) action->setEnabled(ready);
         undo_->setEnabled(ready && output_->send(SCI_CANUNDO)); redo_->setEnabled(ready && output_->send(SCI_CANREDO));
@@ -330,7 +369,7 @@ namespace hc::compare
     }
     void CompareWindow::save()
     {
-        if (!output_ || watcher_.isRunning()) return;
+        if (!output_ || busy()) return;
         if (unresolved_) { QMessageBox::information(this, tr("충돌 해결"), tr("충돌을 검토하고 ‘수동 해결 완료’를 선택하십시오.")); return; }
         const auto text = contents(output_);
         output_->send(SCI_SETREADONLY, 1); save_->setEnabled(false); saving_ = true; state_->setText(tr("저장 중…"));
@@ -340,6 +379,25 @@ namespace hc::compare
             return result;
         }));
         updateMerge();
+    }
+    void CompareWindow::SaveWork(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting); }
+    void CompareWindow::LoadWork(const QString& Path) { transferWork(Path, true, false); }
+    void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting)
+    {
+        if (!merge_ || busy() || Path.isEmpty()) return;
+        const auto absolute = QFileInfo(Path).absoluteFilePath();
+        const auto expected = absolute.compare(workPath_, Qt::CaseInsensitive) == 0 ? workExpected_ : std::nullopt;
+        const MergeWork work = Loading ? MergeWork{} : MergeWork{contents(output_), merge_->Model().State(), merge_->Model().ReviewRequired()};
+        canceled_ = std::make_shared<std::atomic_bool>(false);
+        output_->send(SCI_SETREADONLY, 1); cancel_->setEnabled(true);
+        workWatcher_.setFuture(QtConcurrent::run([path = absolute, input = request_, session = result_, work, expected, Loading, ReplaceExisting, cancel = canceled_] {
+            WorkTransfer transfer; transfer.path_ = path; transfer.loading_ = Loading;
+            Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
+            try { transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits); }
+            catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
+            return transfer;
+        }));
+        updateMerge(); state_->setText(Loading ? tr("작업 불러오는 중…") : tr("작업 저장 중…"));
     }
     void CompareWindow::applyAppearance()
     {
@@ -370,8 +428,8 @@ namespace hc::compare
     }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
-        if (watcher_.isRunning()) { canceled_->store(true); closing_ = true; Event->ignore(); return; }
-        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 닫으시겠습니까?")) != QMessageBox::Yes) { Event->ignore(); return; }
+        if (busy()) { canceled_->store(true); closing_ = true; Event->ignore(); return; }
+        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 닫으시겠습니까?")) != QMessageBox::Yes) { closing_ = false; Event->ignore(); return; }
         Event->accept();
     }
 }

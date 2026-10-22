@@ -8,6 +8,10 @@
 #include <QLabel>
 #include <QTreeWidget>
 #include <QAction>
+#include <QFileDialog>
+#include <QTimer>
+#include <QMenuBar>
+#include <QMenu>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
 
@@ -33,9 +37,93 @@ class CompareUiTests final : public QObject
 private slots:
     void initTestCase()
     {
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         QCoreApplication::setOrganizationName("HyperCompareTests"); QCoreApplication::setApplicationName("UI");
         QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
         auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(*qApp);
+    }
+    void workFileMenusRestoreAndUndo()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "head\na\nkeep\nz"); write(r.file2_, "head\nA\nkeep\nZ");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        auto* status = window.findChild<QLabel*>("compareStatus"); auto* cancel = action(window, "취소"); auto* save = action(window, "결과 저장");
+        auto* saveWork = action(window, "작업 저장..."); auto* loadWork = action(window, "작업 불러오기...");
+        QVERIFY(saveWork && loadWork); QCOMPARE(saveWork->shortcut(), QKeySequence("Ctrl+Shift+S"));
+        action(window, "블록 RIGHT")->trigger();
+        const auto prefix = QString::fromUtf8("수동😀\r\n").toUtf8(); output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>(prefix.constData()));
+        const auto text = contents(output); const auto before = output->send(SCI_GETUNDOCURRENT);
+        const auto path = dir.filePath("session.hcmerge");
+        QTimer::singleShot(50, &window, [&] {
+            auto* dialog = window.findChild<QFileDialog*>(); QVERIFY(dialog); dialog->selectFile(dir.filePath("session"));
+            QMetaObject::invokeMethod(dialog, "accept");
+        });
+        saveWork->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QVERIFY(QFile::exists(path)); QVERIFY(!QFile::exists(r.output_)); QCOMPARE(window.ExitCode(), 3);
+        QCOMPARE(output->send(SCI_GETUNDOCURRENT), before); QVERIFY(status->text().contains("작업 파일 저장 완료"));
+        action(window, "왼쪽 전체 선택")->trigger(); save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QTimer::singleShot(50, &window, [&] {
+            auto* dialog = window.findChild<QFileDialog*>(); QVERIFY(dialog); dialog->selectFile(path); QMetaObject::invokeMethod(dialog, "accept");
+        });
+        loadWork->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(contents(output), text); QCOMPARE(tree->topLevelItem(0)->text(3), QString("RIGHT"));
+        QCOMPARE(tree->topLevelItem(1)->text(3), QString("미해결")); QVERIFY(!save->isEnabled()); QCOMPARE(window.ExitCode(), 3);
+        output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("head\na\nkeep\nz")); QCOMPARE(window.ExitCode(), 0);
+        output->send(SCI_REDO); QCOMPARE(contents(output), text); QVERIFY(!save->isEnabled());
+        auto* fileMenu = window.menuBar()->actions().front()->menu(); fileMenu->popup(window.mapToGlobal(QPoint(8, 48))); QTest::qWait(70);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/work-light.png"));
+        QVERIFY(fileMenu->grab().save(QCoreApplication::applicationDirPath() + "/work-menu-light.png")); fileMenu->hide();
+        action(window, "Dark")->setChecked(true); QTest::qWait(70);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/work-dark.png"));
+        fileMenu->popup(window.mapToGlobal(QPoint(8, 48))); QTest::qWait(70);
+        QVERIFY(fileMenu->grab().save(QCoreApplication::applicationDirPath() + "/work-menu-dark.png")); fileMenu->hide();
+        // A malformed file, changed original, and stale checkpoint leave Undo and text intact.
+        const auto position = output->send(SCI_GETUNDOCURRENT); const auto bad = dir.filePath("bad.hcmerge"); write(bad, "{broken");
+        window.LoadWork(bad); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), position); QVERIFY(status->text().contains("처리 중단"));
+        window.LoadWork(path); cancel->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QVERIFY(status->text().contains("Canceled")); QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), position);
+        write(r.file2_, "external input"); window.LoadWork(path); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QVERIFY(status->text().contains("InputChangedBeforeWorkLoad")); QCOMPARE(output->send(SCI_GETUNDOCURRENT), position);
+        write(path, "external checkpoint"); window.SaveWork(path, true); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QVERIFY(status->text().contains("처리 중단")); QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), position);
+        QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("external checkpoint"));
+        output->send(SCI_UNDO); QCOMPARE(window.ExitCode(), 0); window.close();
+    }
+    void workReviewReopenAndOutputExpectation()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        write(r.file1_, "base\n"); write(r.file2_, "base\n"); write(r.base_, "base\n"); const auto path = dir.filePath("review.hcmerge");
+        {
+            CompareWindow window(r); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+            auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* cancel = action(window, "취소");
+            write(r.file2_, "new independent\n"); action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+            QVERIFY(!action(window, "결과 저장")->isEnabled()); window.SaveWork(path); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+            QVERIFY(QFile::exists(path)); QVERIFY(!QFile::exists(r.output_));
+        }
+        CompareWindow reopened(r); reopened.show(); QTRY_VERIFY_WITH_TIMEOUT(reopened.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = reopened.findChild<ScintillaEditBase*>("RESULT"); auto* cancel = action(reopened, "취소"); auto* save = action(reopened, "결과 저장");
+        QCOMPARE(contents(output), QByteArray("new independent\n")); reopened.LoadWork(path); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(contents(output), QByteArray("base\n")); QVERIFY(!save->isEnabled());
+        output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("new independent\n")); QVERIFY(save->isEnabled());
+        output->send(SCI_REDO); QVERIFY(!save->isEnabled()); action(reopened, "전체 수동 완료")->trigger(); QVERIFY(save->isEnabled());
+        // Loading a checkpoint must not refresh the output revision captured when comparison began.
+        write(r.output_, "external output"); save->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!output->send(SCI_GETREADONLY), 10000);
+        QCOMPARE(reopened.ExitCode(), 2); QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("external output"));
+    }
+    void workControllerRestoresReviewAndSavepoint()
+    {
+        ScintillaEditBase editor; setText(editor, "left\n");
+        auto plan = std::make_shared<MergePlan>(TwoWayPlan("left\n", "right\n", Diff("left\n", "right\n")));
+        MergeController controller(&editor, plan, nullptr); controller.ChooseAll(Resolution::Left, "left\n"); controller.MarkSaved();
+        auto states = controller.Model().State(); states[0] = {0, 0, Resolution::Manual, false};
+        controller.RestoreWork("manual\r\n", states, true); QVERIFY(!controller.Saved()); QVERIFY(controller.Model().ReviewRequired());
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray("left\n")); QVERIFY(controller.Saved());
+        editor.send(SCI_REDO); QCOMPARE(controller.Model().State(), states); QVERIFY(controller.Model().ReviewRequired());
     }
     void twoWayLightDark()
     {

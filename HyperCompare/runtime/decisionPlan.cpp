@@ -88,19 +88,19 @@ namespace hc::compare
             qsizetype at_ = 0;
             std::size_t nodes_ = 0;
         };
-        QJsonObject readJson(const QByteArray& Json, const Budget& Limits)
-        {
-            if (Json.size() > decisionPlanBytes) throw Failure("DecisionPlanSizeLimit");
-            const auto bytes = Json.startsWith("\xef\xbb\xbf") ? Json.mid(3) : Json;
-            JsonGuard(bytes, Limits).Check(); QJsonParseError error;
-            const auto doc = QJsonDocument::fromJson(bytes, &error);
-            if (error.error != QJsonParseError::NoError || !doc.isObject()) throw Failure("InvalidDecisionJson");
-            return doc.object();
-        }
     }
-    QJsonObject MakeDecisionPlan(const Request& Input, const Result& Session, const Budget& Limits)
+    QJsonObject ReadCompareJson(const QByteArray& Json, const Budget& Limits)
     {
-        if (!Session.plan_ || !Input.takeAll_.isEmpty()) throw Failure("InvalidDecisionSession");
+        if (Json.size() > decisionPlanBytes) throw Failure("DecisionPlanSizeLimit");
+        const auto bytes = Json.startsWith("\xef\xbb\xbf") ? Json.mid(3) : Json;
+        JsonGuard(bytes, Limits).Check(); QJsonParseError error;
+        const auto doc = QJsonDocument::fromJson(bytes, &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject()) throw Failure("InvalidDecisionJson");
+        return doc.object();
+    }
+    QJsonObject DecisionIdentity(const Request& Input, const Result& Session, const Budget& Limits)
+    {
+        if (!Session.plan_ || Session.inputs_.size() < 2) throw Failure("InvalidDecisionSession");
         if (Session.plan_->blocks_.size() > decisionBlockLimit) throw Failure("DecisionBlockLimit");
         QJsonArray inputs;
         for (qsizetype i = 0; i < Session.inputs_.size(); ++i)
@@ -114,6 +114,12 @@ namespace hc::compare
         QJsonObject result{{"schemaVersion", 1}, {"kind", "text-merge-decisions"}, {"engineVersion", "myers-bounded-1"},
             {"policyDigest", digest(QJsonDocument(policy).toJson(QJsonDocument::Compact))}, {"inputs", inputs}};
         const auto generation = digest(QJsonDocument(result).toJson(QJsonDocument::Compact)); result["generation"] = generation;
+        return result;
+    }
+    QJsonObject MakeDecisionPlan(const Request& Input, const Result& Session, const Budget& Limits)
+    {
+        if (!Input.takeAll_.isEmpty()) throw Failure("InvalidDecisionSession");
+        auto result = DecisionIdentity(Input, Session, Limits); const auto generation = result["generation"].toString();
         const auto initial = seed(Session); QJsonArray blocks;
         for (std::size_t i = 0; i < Session.plan_->blocks_.size(); ++i)
         {
@@ -128,7 +134,7 @@ namespace hc::compare
     }
     void ApplyDecisionPlan(const Request& Input, Result& Session, const QByteArray& Json, const Budget& Limits)
     {
-        auto document = readJson(Json, Limits); auto expected = MakeDecisionPlan(Input, Session, Limits);
+        auto document = ReadCompareJson(Json, Limits); auto expected = MakeDecisionPlan(Input, Session, Limits);
         if (document.keys() != expected.keys()) throw Failure("InvalidDecisionPlan");
         if (document["schemaVersion"] != QJsonValue(1)) throw Failure("UnsupportedDecisionSchema");
         if (!document["blocks"].isArray()) throw Failure("InvalidDecisionPlan");

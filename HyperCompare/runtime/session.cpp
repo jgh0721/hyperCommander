@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
 #include "decisionPlan.hpp"
+#include "mergeWork.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -295,6 +296,49 @@ namespace hc::compare
         catch (const std::exception& error)
         { result.error_ = QString::fromUtf8(error.what()); result.exitCode_ = 2; result.completion_ = "Failed"; }
         return result;
+    }
+    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
+    {
+        auto paths = Input; paths.planOut_ = Path; checkArtifactPaths(paths, Limits);
+        const auto snapshot = readSnapshot(Path, decisionPlanBytes, Limits); MergeWorkFile file;
+        file.work_ = DecodeMergeWork(Input, Session, snapshot.raw_, Limits);
+        for (const auto& input : Session.inputs_)
+        {
+            Limits.Check(); const auto current = require(reader(input.path_)->Resolve(locator(input.path_), context(Limits)).get());
+            if (current.id_.revision_ != input.entry_.id_.revision_) throw Failure("InputChangedBeforeWorkLoad");
+        }
+        file.expected_ = {true, snapshot.entry_.id_.revision_}; Limits.Check(); return file;
+    }
+    MergeWorkFile SaveMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
+        const std::optional<storage::DestinationExpectation>& Expected, bool ReplaceExisting, const Budget& Limits)
+    {
+        auto paths = Input; paths.planOut_ = Path; checkArtifactPaths(paths, Limits);
+        const auto provider = reader(Path); const auto writer = storage::MakeNativeWritableStorage(locator(Path).kind_, provider);
+        auto expected = Expected.value_or(storage::DestinationExpectation{});
+        if (!Expected && ReplaceExisting)
+        {
+            const auto entry = require(writer->Inspect(locator(Path), context(Limits)));
+            if (entry) expected = {true, entry->id_.revision_};
+        }
+        const auto data = EncodeMergeWork(Input, Session, Work, Limits); Limits.Check();
+        // A checkpoint may preserve work based on old inputs. Loading requires a
+        // matching live input generation; saving does not discard such work.
+        const auto receipt = require(document::SaveDocumentBytes(*writer, locator(Path), expected,
+            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, context(Limits)));
+        if (!receipt.destinationCommitted_) throw Failure("WorkNotCommitted");
+        MergeWorkFile file;
+        for (const auto& error : receipt.cleanupErrors_) file.warnings_.append(QString::fromStdString(error.code_));
+        for (const auto& artifact : receipt.preservedArtifacts_) file.recovery_.append(QString::fromStdString(artifact.root_));
+        // Re-read the committed bytes before adopting a revision for the next save.
+        // If another writer won the race, leave that revision untrusted.
+        try
+        {
+            const auto updated = readSnapshot(Path, decisionPlanBytes, Budget{});
+            if (updated.raw_ == data) file.expected_ = {true, updated.entry_.id_.revision_};
+            else file.warnings_.append("WorkChangedAfterSave");
+        }
+        catch (const std::exception& error) { file.warnings_.append(QString::fromUtf8(error.what())); }
+        return file;
     }
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8)
     {

@@ -77,6 +77,11 @@ namespace hc::compare
         auto next = model_; next.SelectAll(Choice);
         replace(0, std::size_t(editor_->send(SCI_GETLENGTH)), Text, std::move(next), Choice != Resolution::Manual);
     }
+    void MergeController::RestoreWork(const QByteArray& Text, const std::vector<BlockState>& State, bool ReviewRequired)
+    {
+        auto next = model_; next.Restore(State, ReviewRequired);
+        replace(0, std::size_t(editor_->send(SCI_GETLENGTH)), Text, std::move(next), true);
+    }
     void MergeController::Refresh(std::shared_ptr<const MergePlan> Plan)
     {
         MergeModel next(std::move(Plan)); next.Restore(next.State(), true);
