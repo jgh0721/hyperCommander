@@ -40,6 +40,8 @@
 #include <fmwidgets/Button.h>
 #include "stdafx.h"
 #include <QtTest>
+#include <mutex>
+#include <set>
 #include <QCryptographicHash>
 #include "cmnHCUtils.hpp"
 #include "rhwpOpenTimingHarness.hpp"
@@ -252,6 +254,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -9181,6 +9184,74 @@ private slots:
         for (auto* Button : Copy.AcceptButton()->parentWidget()->findChildren<QPushButton*>())
             QVERIFY2(Button->width() >= Button->sizeHint().width(), qPrintable(Button->text()));
         Copy.findChild<QLineEdit*>("hc.operation.editor")->setFocus(); QTest::keyClick(&Copy, Qt::Key_Escape); QVERIFY(!Copy.isVisible());
+    }
+    void nativeParallelSelectionUi()
+    {
+        using namespace hc::storage;
+        using namespace hc::operations;
+        const auto TargetBase = qEnvironmentVariable("HC_COPY_AUTO_TEST_TARGET");
+        if (TargetBase.isEmpty()) QSKIP("Set HC_COPY_AUTO_TEST_TARGET to an owned folder on a different NVMe device");
+        class ObservedReader final : public IStorageProvider {
+        public:
+            std::shared_ptr<IStorageProvider> inner_;
+            std::mutex mutex_;
+            std::set<std::thread::id> threads_;
+            ProviderId Id() const override { return inner_->Id(); }
+            bool SupportsParallelReads() const override { return inner_->SupportsParallelReads(); }
+            ProviderCapabilities Capabilities() const override { return inner_->Capabilities(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext Ctx) override { return inner_->Supports(Op, Ctx); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Ctx) override { return inner_->Enumerate(At, Ctx); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Ctx) override { return inner_->Stat(Id, Ctx); }
+            Task<EntrySnapshot> Resolve(Locator At, OperationContext Ctx) override { return inner_->Resolve(At, Ctx); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Ctx) override {
+                { std::lock_guard Lock(mutex_); threads_.insert(std::this_thread::get_id()); }
+                return inner_->OpenRead(Id, Ctx);
+            }
+        };
+        QTemporaryDir Source; QVERIFY(Source.isValid());
+        QTemporaryDir Targets(QDir(TargetBase).filePath("hc-parallel-ui-XXXXXX")); QVERIFY(Targets.isValid());
+        auto Reader = std::make_shared<ObservedReader>(); Reader->inner_ = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        auto SourceRoot = Reader->Resolve({LocatorKind::Local, QDir::toNativeSeparators(Source.path()).toStdString()}, {}).get(); QVERIFY(SourceRoot.HasValue());
+        auto Manifest = std::make_shared<R9Manifest>(); Manifest->provider_ = Reader;
+        for (int I = 0; I < 72; ++I) {
+            const auto Name = QStringLiteral("복사_%1_한글.bin").arg(I, 3, 10, QChar('0'));
+            QFile File(Source.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly));
+            QCOMPARE(File.write(QByteArray(4096, char(I))), qint64(4096)); File.close();
+            auto Entry = Reader->Resolve({LocatorKind::Local, QDir::toNativeSeparators(File.fileName()).toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+            Manifest->entries_.push_back(Entry.Value());
+        }
+        auto& Settings = hc::settings::AppSettings();
+        const auto Saved = Settings.CommittedObject()["options"].toObject();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.BeginEdit(); Settings.Put(hc::settings::Section::Options, Saved); Settings.Commit(); });
+        for (const bool Recovery : {false, true}) {
+            Settings.BeginEdit(); auto Options = Saved; Options["enableJobRecovery"] = Recovery;
+            Options["folderSizeBeforeOperations"] = true; Options["delayedFileWrites"] = true;
+            QVERIFY(Settings.Put(hc::settings::Section::Options, Options)); QVERIFY(Settings.Commit());
+            const auto Target = Targets.filePath(Recovery ? "recovery" : "parallel"); QVERIFY(QDir().mkpath(Target));
+            QCOMPARE(Writer->PreferredCopyWorkers({LocatorKind::Local, Source.path().toStdString()}, {LocatorKind::Local, Target.toStdString()}), std::size_t(4));
+            { std::lock_guard Lock(Reader->mutex_); Reader->threads_.clear(); }
+            Manifest->maxRead_ = 0;
+            QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+            FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+            FileOperationRequest Request; Request.selection_ = Manifest;
+            Request.selectionRoot_ = SourceRoot.Value().locator_;
+            Request.destination_ = {LocatorKind::Local, QDir::toNativeSeparators(Target).toStdString()}; Request.destinationWriter_ = Writer;
+            auto Started = Jobs.Submit(std::move(Request), {}); QVERIFY(Started.HasValue());
+            QTRY_VERIFY_WITH_TIMEOUT(Started.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 30000);
+            const auto Result = Started.Value().completion_.get();
+            QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "selection-copy-not-completed");
+            QVERIFY(Result.outcomes_); QCOMPARE(Result.outcomes_->Count(), std::uint64_t(72));
+            QCOMPARE(bool(Result.writes_), Recovery);
+            if (Recovery) QCOMPARE(Result.writes_->Count(), std::uint64_t(72));
+            QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
+            { std::lock_guard Lock(Reader->mutex_); if (Recovery) QCOMPARE(Reader->threads_.size(), std::size_t(1)); else QVERIFY(Reader->threads_.size() > 1); }
+            QCOMPARE(Manifest->maxRead_.load(), Recovery ? std::size_t(1) : std::size_t(64));
+            for (int I = 0; I < 72; ++I) {
+                QFile File(QDir(Target).filePath(QStringLiteral("복사_%1_한글.bin").arg(I, 3, 10, QChar('0'))));
+                QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray(4096, char(I)));
+            }
+        }
     }
     void backgroundJobManagerUi()
     {

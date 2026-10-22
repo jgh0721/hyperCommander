@@ -22,7 +22,9 @@ int CheckPassword(wchar_t* Archive)
     if (!PasswordCallback) return E_NOT_SUPPORTED;
     wchar_t Password[128]{};
     if (PasswordCallback(1, PK_CRYPT_LOAD_PASSWORD_NO_UI, Archive, Password, 128) != E_NO_FILES) return E_BAD_DATA;
-    for (int Attempt = 0; Attempt < 4; ++Attempt) {
+    // Let the host enforce its budget, including stored password candidates,
+    // instead of returning fixture BAD_DATA before that budget is exhausted.
+    for (int Attempt = 0; Attempt < 105; ++Attempt) {
         const auto Code = PasswordCallback(1, PK_CRYPT_LOAD_PASSWORD, Archive, Password, 128);
         const bool Correct = wcscmp(Password, L"비밀-pass") == 0; SecureZeroMemory(Password, sizeof(Password));
         if (Code) return Code; if (Correct) return 0;

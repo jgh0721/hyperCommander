@@ -1,6 +1,9 @@
 ﻿#include "fileOperation.hpp"
 #include <set>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include "directoryPreparation.hpp"
 
 namespace hc::operations
@@ -90,7 +93,56 @@ namespace hc::operations
             bool removeDirectory_ = false;
             bool readOnly_ = false, excluded_ = false;
             std::size_t root_ = 0;
+            std::shared_ptr<const Error> preparationError_;
         };
+        // A slot is retained through the serial commit: <=8 files/job and
+        // <=32/process, each with a <=1 MiB payload read window.
+        std::atomic<std::size_t> CopySlots{0};
+        // 32 small-copy slots * 2 MiB + 12 pipelines * 16 MiB <=256 MiB.
+        std::atomic<std::size_t> ReadAheadSlots{0};
+        class CopyExecutor final
+        {
+        public:
+            ~CopyExecutor()
+            {
+                { std::lock_guard Lock(mutex_); closing_ = true; }
+                changed_.notify_all(); workers_.clear();
+            }
+            template<class F> std::future<JobStep> Submit(F&& Work)
+            {
+                std::packaged_task<JobStep()> Task(std::forward<F>(Work));
+                auto Future = Task.get_future();
+                std::lock_guard Lock(mutex_);
+                // Reserve a worker before publishing the task. Allocation or
+                // thread creation failure must never orphan a queued callback.
+                if (workers_.size() < std::min<std::size_t>(32, active_ + pending_.size() + 1))
+                    workers_.emplace_back([this] { run(); });
+                pending_.push_back(std::move(Task)); changed_.notify_one();
+                return Future;
+            }
+        private:
+            void run()
+            {
+                for (;;) {
+                    std::packaged_task<JobStep()> Work;
+                    {
+                        std::unique_lock Lock(mutex_);
+                        changed_.wait(Lock, [this] { return closing_ || !pending_.empty(); });
+                        if (pending_.empty()) return;
+                        Work = std::move(pending_.front()); pending_.pop_front(); ++active_;
+                    }
+                    Work();
+                    { std::lock_guard Lock(mutex_); --active_; }
+                }
+            }
+            std::mutex mutex_;
+            std::condition_variable changed_;
+            std::deque<std::packaged_task<JobStep()>> pending_;
+            std::vector<std::jthread> workers_;
+            std::size_t active_ = 0;
+            bool closing_ = false;
+        };
+        CopyExecutor& CopyWorkers() { static CopyExecutor Workers; return Workers; }
         class FileTask final : public IJobTask
         {
         public:
@@ -112,10 +164,17 @@ namespace hc::operations
             }
             ~FileTask() override
             {
+                transferStop_.request_stop();
+                stopCopies();
+                if (readAhead_.valid()) readAhead_.wait();
+                if (readAheadSlot_) --ReadAheadSlots;
                 if (production_.valid()) production_.wait();
             }
             JobStep Advance(JobStepContext Context) override
             {
+                // Advance already belongs to a coordinator/continuation worker.
+                // Local metadata and file opens need no nested PPL dispatch.
+                Context.operation_.workerRead_ = true;
                 jobId_ = Context.jobId_;
                 if (const auto Error = Context.operation_.Check({})) return failed(*Error);
                 if (phase_ == Phase::LockPrompt) return lockQuestion(Context);
@@ -151,7 +210,10 @@ namespace hc::operations
                     readOnlyAnswered_ = true; phase_ = Phase::Begin; return progress();
                 }
                 if (phase_ == Phase::Conflict) return conflict(Context);
-                if (phase_ == Phase::Begin) return begin(Context.operation_);
+                if (phase_ == Phase::Begin) {
+                    if (!copies_.empty() || canStartCopies(Context.operation_)) return advanceCopies(std::move(Context));
+                    return begin(Context.operation_);
+                }
                 if (phase_ == Phase::OpenRead)
                 {
                     auto ReadContext = Context.operation_;
@@ -203,7 +265,7 @@ namespace hc::operations
                         && !producedReaders_.contains(Reader));
                     if (Background && !production_.valid()) {
                         productionProgress_ = std::make_shared<std::atomic<std::uint64_t>>(0);
-                        auto WorkContext = Context.operation_;
+                        auto WorkContext = transferContext(Context.operation_);
                         WorkContext.progress_ = [Progress = productionProgress_, Observer = WorkContext.progress_](std::uint64_t Bytes) {
                             Progress->store(Bytes); if (Observer) Observer(Bytes);
                         };
@@ -227,17 +289,37 @@ namespace hc::operations
                 if (phase_ == Phase::Read)
                 {
                     auto ReadContext = Context.operation_; ReadContext.workerRead_ = true;
+                    const bool NativeWindow = (ReadContext.nativeReadAhead_ || ReadContext.nativeCopyBufferBytes_ > 1024 * 1024) && !request_.bytesPerSecondLimit_
+                        && current().source_.entry_.locator_.kind_ == LocatorKind::Local
+                        && current().source_.entry_.size_ > 1024 * 1024 && current().source_.reader_->SupportsParallelReads();
+                    if (NativeWindow && !readAheadSlot_) {
+                        auto Slots = ReadAheadSlots.load();
+                        while (Slots < 12 && !ReadAheadSlots.compare_exchange_weak(Slots, Slots + 1)) {}
+                        readAheadSlot_ = Slots < 12;
+                    }
+                    ReadContext.nativeReadAhead_ &= NativeWindow && readAheadSlot_;
+                    ReadContext.nativeCopyBufferBytes_ = NativeWindow && readAheadSlot_
+                        ? std::clamp<std::size_t>(ReadContext.nativeCopyBufferBytes_, 1, 8 * 1024 * 1024) : 1024 * 1024;
+                    if (current().source_.entry_.locator_.kind_ == LocatorKind::Local)
+                        ReadContext.maxReadBytes_ = std::min(ReadContext.maxReadBytes_, ReadContext.nativeCopyBufferBytes_);
                     const auto Remaining = std::max<std::uint64_t>(1, current().source_.entry_.size_ - itemBytes_);
                     // Archive sessions use read capacity as decoder credit too.
                     // Keep the established window across small members and EOF.
                     const auto Capacity = current().source_.entry_.locator_.kind_ == LocatorKind::Archive
                         ? ReadContext.maxReadBytes_ : std::min<std::uint64_t>(ReadContext.maxReadBytes_, Remaining);
-                    auto Chunk = stream_->Read(request_.bytesPerSecondLimit_ ? std::min<std::uint64_t>(Capacity, std::max<std::uint64_t>(1, request_.bytesPerSecondLimit_ / 10)) : Capacity, ReadContext).get();
+                    auto Chunk = readAhead_.valid() ? readAhead_.get() : stream_->Read(request_.bytesPerSecondLimit_ ? std::min<std::uint64_t>(Capacity, std::max<std::uint64_t>(1, request_.bytesPerSecondLimit_ / 10)) : Capacity, ReadContext).get();
                     if (!Chunk.HasValue()) return failed(Chunk.Failure());
                     if (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_) return failed({ErrorCategory::Internal, "stream-no-progress"});
                     if (Chunk.Value().bytes_.size() > request_.maxBytes_ - bytesDone_)
                         return failed({ErrorCategory::BudgetExceeded, "copy-byte-budget"});
                     chunk_ = std::move(Chunk.Value());
+                    if (ReadContext.nativeReadAhead_ && !chunk_.eof_ && !request_.bytesPerSecondLimit_
+                        && current().source_.entry_.locator_.kind_ == LocatorKind::Local
+                        && current().source_.entry_.size_ > 1024 * 1024 && current().source_.reader_->SupportsParallelReads()) {
+                        auto AheadContext = transferContext(ReadContext); AheadContext.workerRead_ = false;
+                        const auto NextRemaining = Remaining > chunk_.bytes_.size() ? Remaining - chunk_.bytes_.size() : 1;
+                        readAhead_ = stream_->Read(std::min<std::uint64_t>(Capacity, NextRemaining), AheadContext);
+                    }
                     phase_ = Phase::Write;
                     return progress();
                 }
@@ -286,8 +368,19 @@ namespace hc::operations
                 if (!Context.committing_) return failed({ErrorCategory::Internal, "commit-boundary-required"});
                 return commit(Context.operation_);
             }
-            std::vector<Error> Finalize(JobState) override
+            std::vector<Error> Finalize(JobState State) override
             {
+                transferStop_.request_stop();
+                stopCopies();
+                for (auto& Copy : copies_) {
+                    auto Errors = Copy->task_->Finalize(State);
+                    cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end());
+                }
+                copies_.clear();
+                if (readAhead_.valid()) {
+                    try { readAhead_.get(); }
+                    catch (...) { cleanup_.push_back({ErrorCategory::Internal, "read-ahead-finalize"}); }
+                }
                 // The producer is the session's only owner until it has stopped.
                 // Cancellation reaches its copied operation context before Abort.
                 if (production_.valid()) {
@@ -314,6 +407,187 @@ namespace hc::operations
                 return cleanup_;
             }
         private:
+            OperationContext transferContext(OperationContext Context)
+            {
+                if (!transferStop_.stop_possible()) transferStop_ = std::stop_source{};
+                if (!transferCancellation_ && Context.stopToken_.stop_possible())
+                    transferCancellation_ = std::make_unique<std::stop_callback<std::function<void()>>>(Context.stopToken_,
+                        [Stop = transferStop_]() mutable { Stop.request_stop(); });
+                Context.stopToken_ = transferStop_.get_token();
+                return Context;
+            }
+            struct PreparedCopy
+            {
+                std::unique_ptr<FileTask> task_;
+                std::future<JobStep> work_;
+                std::optional<JobStep> barrier_;
+                std::atomic<std::uint64_t> bytes_{0};
+                bool reserved_ = false;
+                bool recheck_ = false;
+                ~PreparedCopy() { if (work_.valid()) work_.wait(); if (reserved_) --CopySlots; }
+            };
+            bool copyCandidate(std::size_t Index) const
+            {
+                if (Index >= items_.size()) return false;
+                const auto& Item = items_[Index];
+                return !Item.excluded_ && !Item.preparationError_ && !Item.source_.entry_.directory_ && !Item.removeDirectory_
+                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && Item.destination_.kind_ == LocatorKind::Local
+                    && Item.source_.entry_.size_ <= 1024 * 1024 && !(Item.source_.entry_.attributes_ & (0x400 | 0x200 | 0x800 | 0x4000))
+                    && Item.source_.reader_->SupportsParallelReads();
+            }
+            bool canStartCopies(const OperationContext& Context)
+            {
+                if (copyWorkers_ == 1 || Context.fileCopyWorkers_ == 1) return false;
+                if (request_.operation_ != FileOperation::Copy || request_.bytesPerSecondLimit_ || request_.copyOptions_.streams_
+                    || Context.writeCheckpoint_ || Context.workload_.IsAutomatic()
+                    || !request_.destinationWriter_->SupportsParallelCopies() || !copyCandidate(index_)) return false;
+                if (!copyWorkers_) {
+                    copyWorkers_ = std::min<std::size_t>(8, Context.fileCopyWorkers_ ? Context.fileCopyWorkers_
+                        : items_.size() >= 32 ? request_.destinationWriter_->PreferredCopyWorkers(current().source_.entry_.locator_, current().destination_) : 1);
+                }
+                return copyWorkers_ > 1 && (copyCandidate(index_ + 1) || !copies_.empty());
+            }
+            void stopCopies()
+            {
+                copyStop_.request_stop();
+                for (auto& Copy : copies_) if (Copy->work_.valid()) {
+                    try { Copy->work_.get(); }
+                    catch (...) { cleanup_.push_back({ErrorCategory::Internal, "copy-worker-finalize"}); }
+                }
+            }
+            void prepareCopy(PreparedCopy& Copy, const PlannedItem& Item)
+            {
+                // Never clone the complete selection into every worker.
+                FileOperationRequest Request;
+                Request.sources_ = {Item.source_}; Request.destination_ = Parent(Item.destination_);
+                Request.destinationWriter_ = request_.destinationWriter_;
+                Request.conflict_ = request_.conflict_; Request.copyOptions_ = request_.copyOptions_;
+                Request.approvedDestination_ = request_.approvedDestination_; Request.maxBytes_ = Item.source_.entry_.size_;
+                auto Task = std::make_unique<FileTask>(std::move(Request));
+                // The parent already checked this immutable source plan.
+                Task->pending_.clear(); Task->items_.push_back(Item); Task->items_.back().root_ = 0;
+                Task->bytesTotal_ = Item.source_.entry_.size_; Task->planningFinished_ = true;
+                Task->phase_ = Phase::Begin; Task->copyWorkers_ = 1;
+                Copy.task_ = std::move(Task); Copy.barrier_.reset(); Copy.recheck_ = false;
+            }
+            static void copyBytes(PreparedCopy& Copy, std::uint64_t Bytes)
+            {
+                // Rechecking a destination can discard a prepared stage. Keep
+                // logical progress monotonic while that same file is prepared again.
+                auto Previous = Copy.bytes_.load();
+                while (Bytes > Previous && !Copy.bytes_.compare_exchange_weak(Previous, Bytes)) {}
+            }
+            void runCopy(PreparedCopy& Copy, JobStepContext Context)
+            {
+                Context.committing_ = false; Context.operation_.fileCopyWorkers_ = 1;
+                Copy.work_ = CopyWorkers().Submit([this, &Copy, Context = std::move(Context)]() mutable {
+                    std::stop_callback Cancel(Context.operation_.stopToken_, [this] { copyStop_.request_stop(); });
+                    Context.operation_.stopToken_ = copyStop_.get_token();
+                    try {
+                        for (;;) {
+                            while (Context.operation_.pauseRequested_ && Context.operation_.pauseRequested_()) {
+                                if (const auto Error = Context.operation_.Check({})) {
+                                    JobStep Step{JobState::Failed}; Step.error_ = *Error; return Step;
+                                }
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            }
+                            auto Step = Copy.task_->Advance(Context); Context.answer_.reset();
+                            if (Step.progress_) copyBytes(Copy, Step.progress_->bytesDone_);
+                            if (Step.next_ == JobState::Committing || Step.next_ == JobState::WaitingForUser
+                                || IsTerminal(Step.next_) || Step.item_ || Step.retry_ || Step.deferFor_.count()) return Step;
+                        }
+                    } catch (...) { JobStep Step{JobState::Failed}; Step.error_ = Error{ErrorCategory::Internal, "copy-worker-exception"}; return Step; }
+                });
+            }
+            JobStep copyProgress()
+            {
+                auto Step = progress();
+                for (const auto& Copy : copies_) Step.progress_->bytesDone_ += Copy->bytes_.load();
+                return Step;
+            }
+            JobStep advanceCopies(JobStepContext Context)
+            {
+                // The coordinator alone consumes answers and enters commit.
+                if (!Context.committing_ && !Context.answer_) {
+                    while (copies_.size() < copyWorkers_ && copyCandidate(index_ + copies_.size())) {
+                        const auto& Item = items_[index_ + copies_.size()];
+                        if (std::any_of(copies_.begin(), copies_.end(), [&](const auto& Pending) {
+                            return NativeKey(Pending->task_->items_.front().destination_.root_) == NativeKey(Item.destination_.root_);
+                        })) break;
+                        auto Copy = std::make_unique<PreparedCopy>();
+                        auto Slots = CopySlots.load();
+                        while (Slots < 32 && !CopySlots.compare_exchange_weak(Slots, Slots + 1)) {}
+                        if (Slots >= 32) break;
+                        Copy->reserved_ = true;
+                        prepareCopy(*Copy, Item);
+                        auto WorkContext = Context; WorkContext.answer_.reset();
+                        WorkContext.operation_.maxReadBytes_ = std::min<std::size_t>(1024 * 1024, WorkContext.operation_.maxReadBytes_);
+                        copies_.push_back(std::move(Copy)); runCopy(*copies_.back(), std::move(WorkContext));
+                    }
+                }
+                if (copies_.empty()) return begin(Context.operation_);
+                auto& Copy = *copies_.front();
+                if (Copy.work_.valid()) {
+                    if (Copy.work_.wait_for(std::chrono::microseconds(100)) != std::future_status::ready) {
+                        auto Step = copyProgress();
+                        Step.deferFor_ = std::chrono::milliseconds(1); return Step;
+                    }
+                    Copy.barrier_ = Copy.work_.get();
+                }
+                if (Copy.recheck_ && !Context.committing_) {
+                    auto Errors = Copy.task_->Finalize(JobState::Cancelled);
+                    cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end());
+                    if (Errors.empty()) {
+                        prepareCopy(Copy, current()); runCopy(Copy, std::move(Context)); return copyProgress();
+                    }
+                    Copy.recheck_ = false; Copy.barrier_ = JobStep{JobState::Failed}; Copy.barrier_->error_ = Errors.front();
+                }
+                if (!Copy.barrier_) { runCopy(Copy, std::move(Context)); return copyProgress(); }
+                auto& Barrier = *Copy.barrier_;
+                if ((Barrier.next_ == JobState::Committing && Context.committing_)
+                    || (Barrier.next_ == JobState::WaitingForUser && Context.answer_)) {
+                    Barrier = Copy.task_->Advance(Context);
+                    if (Barrier.progress_) copyBytes(Copy, Barrier.progress_->bytesDone_);
+                    // A user's rename/replace can change the meaning of another
+                    // queued path, including aliases. Inspect those paths again
+                    // after this file completes, before showing their questions.
+                    if (Context.answer_) for (auto& Pending : copies_) if (Pending.get() != &Copy) Pending->recheck_ = true;
+                }
+                if (IsTerminal(Barrier.next_) && Barrier.next_ != JobState::Completed) {
+                    const auto Error = Barrier.error_.value_or(storage::Error{ErrorCategory::Internal, "copy-worker-failed"});
+                    expected_ = Copy.task_->expected_;
+                    destinationCommitted_ = Copy.task_->destinationCommitted_;
+                    current().destination_ = Copy.task_->current().destination_;
+                    if (request_.continueSelectedFiles_ && !(Error.category_ == ErrorCategory::AccessDenied && request_.elevation_)) {
+                        itemBytes_ = Copy.bytes_.load(); bytesDone_ += itemBytes_;
+                        auto Errors = Copy.task_->Finalize(JobState::Failed);
+                        cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); copies_.pop_front();
+                        return failed(Error);
+                    }
+                    stopCopies();
+                    for (auto& Pending : copies_) {
+                        auto Errors = Pending->task_->Finalize(JobState::Failed);
+                        cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end());
+                    }
+                    copies_.clear(); copyStop_ = std::stop_source{};
+                    return failed(Error);
+                }
+                if (Barrier.item_) {
+                    const auto Item = *Barrier.item_; bytesDone_ += Copy.bytes_.load();
+                    auto Errors = Copy.task_->Finalize(Barrier.next_);
+                    cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); copies_.pop_front();
+                    auto Step = done(Item.status_, Item.destinationCommitted_, Item.sourceRemoved_);
+                    for (const auto& Pending : copies_) Step.progress_->bytesDone_ += Pending->bytes_.load();
+                    if (!cleanup_.empty()) { Step.next_ = JobState::Failed; Step.error_ = cleanup_.front(); }
+                    return Step;
+                }
+                auto Step = copyProgress();
+                Step.next_ = Barrier.next_ == JobState::Preparing ? JobState::Running : Barrier.next_;
+                Step.interaction_ = Barrier.interaction_; Step.error_ = Barrier.error_;
+                Step.retry_ = Barrier.retry_; Step.deferFor_ = Barrier.deferFor_;
+                if (Step.next_ != JobState::Committing && Step.next_ != JobState::WaitingForUser) Copy.barrier_.reset();
+                return Step;
+            }
             struct EnumerationFrame {
                 PlannedItem parent_;
                 std::unique_ptr<IEntryCursor> cursor_;
@@ -409,6 +683,16 @@ namespace hc::operations
                     && (phase_ == Phase::Remove || phase_ == Phase::Rename)
                     && (Error.code_ == "win32:5" || Error.code_ == "win32:32" || Error.code_ == "win32:33" || Error.code_ == "win32:1224"))
                     Error.nativePath_ = current().source_.entry_.locator_.root_;
+                if (request_.continueSelectedFiles_ && Error.category_ != ErrorCategory::Cancelled && Error.code_ != "deadline-exceeded"
+                    && phase_ != Phase::Preparing && index_ < items_.size()) {
+                    if (session_) {
+                        auto Aborted = session_->Abort(); if (!Aborted.HasValue()) cleanup_.push_back(Aborted.Failure());
+                    }
+                    auto Step = done(ItemOutcome::Status::Failed, destinationCommitted_);
+                    for (const auto& Pending : copies_) Step.progress_->bytesDone_ += Pending->bytes_.load();
+                    Step.error_ = Error; Step.item_->error_ = Error;
+                    return Step;
+                }
                 JobStep Step{JobState::Failed}; Step.error_ = Error;
                 if (phase_ != Phase::Preparing && index_ < items_.size())
                     Step.item_ = ItemOutcome{itemLocator(), ItemOutcome::Status::Failed, Error, destinationCommitted_, false, current().source_.entry_};
@@ -635,18 +919,24 @@ namespace hc::operations
                 Frame.entries_ = std::move(Page.Value().entries_); Frame.next_ = 0; Frame.ended_ = Page.Value().end_;
                 return progress();
             }
+            JobStep preparationFailure(PlannedItem Item, Error Error)
+            {
+                if (!request_.continueSelectedFiles_) return failed(std::move(Error));
+                Item.preparationError_ = std::make_shared<const storage::Error>(std::move(Error));
+                items_.push_back(std::move(Item)); return progress();
+            }
             JobStep prepareItem(PlannedItem Item, OperationContext Context)
             {
                 if (Item.depth_ > request_.maxDepth_ || seen_.size() >= request_.maxEntries_)
                     return failed({ErrorCategory::BudgetExceeded, "operation-tree-budget"});
                 if (!seen_.insert(Serialize(Item.source_.entry_.locator_)).second) return failed({ErrorCategory::InvalidRequest, "overlapping-selection"});
                 auto Fresh = Item.source_.reader_->Stat(Item.source_.entry_.id_, Context).get();
-                if (!Fresh.HasValue()) return failed(Fresh.Failure());
+                if (!Fresh.HasValue()) return preparationFailure(std::move(Item), Fresh.Failure());
                 if (Fresh.Value().locator_ != Item.source_.entry_.locator_ || Fresh.Value().id_.providerId_ != Item.source_.reader_->Id()
                     || Fresh.Value().id_.key_ != Item.source_.entry_.id_.key_ || !SafeName(Fresh.Value().name_))
-                    return failed({ErrorCategory::Internal, "provider-returned-different-entry"});
+                    return preparationFailure(std::move(Item), {ErrorCategory::Internal, "provider-returned-different-entry"});
                 Item.source_.entry_ = std::move(Fresh.Value());
-                if (Item.source_.entry_.attributes_ & 0x400) return failed({ErrorCategory::Unsupported, "reparse-entry-denied"});
+                if (Item.source_.entry_.attributes_ & 0x400) return preparationFailure(std::move(Item), {ErrorCategory::Unsupported, "reparse-entry-denied"});
                 ++verifiedItems_;
                 if (!Item.source_.entry_.directory_)
                 {
@@ -680,6 +970,7 @@ namespace hc::operations
             JobStep begin(OperationContext Context)
             {
                 if (index_ == items_.size()) return JobStep{JobState::Completed};
+                if (current().preparationError_) return terminalFailure(*current().preparationError_);
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
                 expected_ = {};
                 destinationCommitted_ = request_.operation_ == FileOperation::Move && current().removeDirectory_;
@@ -836,6 +1127,9 @@ namespace hc::operations
                 return done(ItemOutcome::Status::Completed, request_.operation_ == FileOperation::Move, true);
             }
             FileOperationRequest request_;
+            std::deque<std::unique_ptr<PreparedCopy>> copies_;
+            std::stop_source copyStop_;
+            std::size_t copyWorkers_ = 0;
             Phase phase_ = Phase::Preparing;
             Phase resumePhase_ = Phase::Remove;
             Error lockError_;
@@ -848,6 +1142,10 @@ namespace hc::operations
             std::vector<EnumerationFrame> enumerations_;
             std::vector<std::uint64_t> rootFiles_;
             std::shared_ptr<IReadStream> stream_;
+            Task<ReadChunk> readAhead_;
+            bool readAheadSlot_ = false;
+            std::stop_source transferStop_{std::nostopstate};
+            std::unique_ptr<std::stop_callback<std::function<void()>>> transferCancellation_;
             std::optional<ContentProducer> producer_;
             Task<Unit> production_;
             std::shared_ptr<std::atomic<std::uint64_t>> productionProgress_;
@@ -929,6 +1227,9 @@ namespace hc::operations
                     // operations still coordinate independent root batches.
                     if (request_.operation_ != FileOperation::Delete) Step.progress_->plannedItems_.reset();
                 }
+                if (Step.next_ == JobState::Failed && Step.error_ && Step.error_->category_ == ErrorCategory::Cancelled) {
+                    Step.next_ = JobState::Cancelled; return Step;
+                }
                 if (request_.operation_ == FileOperation::Delete) return Step;
                 if (Step.next_ == JobState::Completed || Step.next_ == JobState::Failed) {
                     auto Errors = inner_->Finalize(Step.next_); cleanup_.insert(cleanup_.end(), Errors.begin(), Errors.end()); inner_.reset();
@@ -941,6 +1242,35 @@ namespace hc::operations
                 return Step;
             }
             if (offset_ == request_.selection_->Count()) return JobStep{JobState::Completed};
+            const auto SelectedReader = request_.selection_->Provider();
+            const bool CopyPage = request_.operation_ == FileOperation::Copy && Context.operation_.fileCopyWorkers_ != 1
+                && request_.selectionRoot_.kind_ == LocatorKind::Local && request_.destination_.kind_ == LocatorKind::Local
+                && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max() && !request_.bytesPerSecondLimit_
+                && !request_.copyOptions_.streams_ && !Context.operation_.writeCheckpoint_ && !Context.operation_.workload_.IsAutomatic()
+                && SelectedReader->SupportsParallelReads() && request_.destinationWriter_->SupportsParallelCopies();
+            if (CopyPage && request_.selection_->Count() - offset_ >= 2) {
+                auto Page = request_.selection_->Read(offset_, 64, Context.operation_);
+                if (!Page.HasValue()) return failed(Page.Failure());
+                if (Page.Value().entries_.empty() || Page.Value().entries_.size() > 64
+                    || Page.Value().entries_.size() > request_.selection_->Count() - offset_) return failed({ErrorCategory::Internal, "selection-no-progress"});
+                std::set<std::string> Names;
+                bool Regular = true;
+                for (const auto& Entry : Page.Value().entries_) {
+                    if (Entry.id_.providerId_ != SelectedReader->Id() || !SafeName(Entry.name_) || Child(request_.selectionRoot_, Entry.name_) != Entry.locator_)
+                        return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
+                    Regular &= !Entry.directory_ && Entry.size_ <= 1024 * 1024 && !(Entry.attributes_ & (0x400 | 0x200 | 0x800 | 0x4000))
+                        && Names.insert(NativeKey(Entry.locator_.root_)).second;
+                }
+                if (Regular) {
+                    auto Request = request_; Request.selection_.reset(); Request.sources_.clear(); Request.continueSelectedFiles_ = true;
+                    for (const auto& Entry : Page.Value().entries_) Request.sources_.push_back({Entry, SelectedReader, request_.selectionWriter_});
+                    current_ = Page.Value().entries_.front();
+                    auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
+                    if (!Prepared.HasValue()) return failed(Prepared.Failure());
+                    offset_ += Page.Value().entries_.size(); inner_ = std::move(Prepared.Value().task_); outcomeBase_ = emitted_;
+                    return JobStep{JobState::Running};
+                }
+            }
             auto Page = request_.selection_->Read(offset_, 1, Context.operation_);
             if (!Page.HasValue()) return failed(Page.Failure());
             if (Page.Value().entries_.size() != 1) return failed({ErrorCategory::Internal, "selection-no-progress"});
@@ -977,6 +1307,9 @@ namespace hc::operations
     }
     Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)
     {
+        if (Request.continueSelectedFiles_ && (Request.selection_ || Request.operation_ != FileOperation::Copy || Request.sources_.size() > 64
+                || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return Source.entry_.directory_; })))
+            return Error{ErrorCategory::InvalidRequest, "invalid-selected-file-page"};
         if (Request.elevation_ && !Request.elevationApproval_) Request.elevationApproval_ = std::make_shared<FileElevationApproval>();
         if (Request.approvedDestination_ && (Request.selection_ || Request.sources_.size() != 1 || Request.sources_.front().entry_.directory_
                 || Request.operation_ != FileOperation::Copy

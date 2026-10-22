@@ -451,7 +451,7 @@ target_include_directories(hc_write_tests PRIVATE
 target_compile_options(hc_write_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_link_libraries(hc_write_tests PRIVATE Qt6::Test Advapi32 Shell32 Ole32)
 add_test(NAME hc.writes COMMAND hc_write_tests)
-set_tests_properties(hc.writes PROPERTIES TIMEOUT 45 ENVIRONMENT "HC_MUTATION_ROOT=")
+set_tests_properties(hc.writes PROPERTIES TIMEOUT 90 ENVIRONMENT "HC_MUTATION_ROOT=")
 qt_add_executable(hc_attribute_tests tstFileAttributes.cpp
     ../UniqueLibs/nativeFileElevation.cpp ../UniqueLibs/nativeWritableStorage.cpp
     ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp

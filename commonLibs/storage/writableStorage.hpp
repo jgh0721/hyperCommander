@@ -78,6 +78,8 @@ namespace hc::storage
         { return Error{ErrorCategory::Unsupported, "metadata-patch-unavailable", Id()}; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) = 0;
         virtual CopyCapabilities CopySupport() const { return {}; }
+        virtual bool SupportsParallelCopies() const { return false; }
+        virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
         virtual bool CanProduceContent(OperationContext) const { return false; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context)
         {

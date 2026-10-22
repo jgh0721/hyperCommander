@@ -547,6 +547,11 @@ namespace hc::operations
                 }
                 Value->readyAt_ = std::chrono::steady_clock::now() + Step.deferFor_;
                 Snapshot.error_ = Step.error_;
+                // A cooperative worker may observe cancellation during this
+                // Advance, before the scheduler gets another admission turn.
+                if (Step.next_ == JobState::Failed && Snapshot.state_ != JobState::Committing
+                    && Snapshot.error_ && Snapshot.error_->category_ == ErrorCategory::Cancelled)
+                    Step.next_ = JobState::Cancelled;
                 // Entering commit is a safe point. Cancellation received while
                 // preparing must win before a task gains the uncancellable phase.
                 if (Step.next_ == JobState::Committing && Snapshot.state_ != JobState::Committing)

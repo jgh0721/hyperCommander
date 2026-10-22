@@ -50,6 +50,9 @@ namespace hc::operations
         // Product UI opts in; headless callers retain terminal failure semantics.
         bool fileLockInteractions_ = false;
         bool calculateSizeBefore_ = true;
+        // Internal composition of a bounded manifest page of regular files.
+        // Preserve independent selected-root failures while sharing workers.
+        bool continueSelectedFiles_ = false;
         bool deleteWhileListing_ = true;
         DeleteMode deleteMode_ = DeleteMode::Permanent;
         ReadOnlyPolicy readOnly_ = ReadOnlyPolicy::Ask;

@@ -15,7 +15,11 @@ if(NOT HC_UNEGG_USE STREQUAL "NONE")
     if(NOT PACKAGE_HASH STREQUAL "90e8cc6d5df08eec11b4408b79f525a836e522ed94a8eac13f37e07f786c654f")
         message(FATAL_ERROR "UnEGG SDK identity mismatch")
     endif()
-    file(ARCHIVE_EXTRACT INPUT "${HC_UNEGG_ARCHIVE}" DESTINATION "${HC_UNEGG_SOURCE}")
+    # Reconfiguration must not replace SDK DLLs that another build may have
+    # loaded. Packaging independently verifies the x64 DLL's pinned SHA-256.
+    if(NOT EXISTS "${HC_UNEGG_SOURCE}/bin/UnEGG64.dll" OR NOT EXISTS "${HC_UNEGG_SOURCE}/doc/UnEGG.txt")
+        file(ARCHIVE_EXTRACT INPUT "${HC_UNEGG_ARCHIVE}" DESTINATION "${HC_UNEGG_SOURCE}")
+    endif()
 endif()
 qt_add_library(hc_unegg_backend STATIC unEggBackend.cpp unEggBackend.hpp unEggAbi.hpp)
 target_link_libraries(hc_unegg_backend PUBLIC hc_plugin_contract PRIVATE Qt6::Core)

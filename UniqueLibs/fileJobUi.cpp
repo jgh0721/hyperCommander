@@ -455,6 +455,10 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
         Request.calculateSizeBefore_ = false;
     Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(true);
     Context.providerInteractions_ = true;
+    if (Request.operation_ == hc::operations::FileOperation::Copy && Request.selection_ && Request.calculateSizeBefore_
+        && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local
+        && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(false))
+        Context.fileCopyWorkers_ = 0;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;

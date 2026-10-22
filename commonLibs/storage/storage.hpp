@@ -172,6 +172,13 @@ namespace hc::storage
         // Coordinator-only execution hints; neither grants access to a path.
         bool directContent_ = true;
         bool workerRead_ = false;
+        // Local coordinator policy. One preserves sequential execution; zero
+        // selects the destination's measured device policy. Never serialized.
+        std::size_t fileCopyWorkers_ = 1;
+        // Experimental bounded native read/write overlap; stays off unless a
+        // measured profile is selected. Two buffers, each <=8 MiB.
+        bool nativeReadAhead_ = false;
+        std::size_t nativeCopyBufferBytes_ = 1024 * 1024;
         // The producer allocates its own output; do not reserve a second payload.
         bool producingContent_ = false;
         bool freshEnumerationMetadata_ = false;
@@ -307,6 +314,8 @@ namespace hc::storage
         // A copied mount-time schema; this accessor performs no I/O.
         virtual std::vector<PresentationColumn> Columns() const { return {}; }
         virtual ProviderId Id() const = 0;
+        // Independent read sessions may be owned by different copy workers.
+        virtual bool SupportsParallelReads() const { return false; }
         virtual ProviderCapabilities Capabilities() const { return {}; }
         virtual Task<SupportDecision> Supports(Operation Request, OperationContext Context) = 0;
         virtual Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) = 0;

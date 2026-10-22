@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
+#include "operationMetrics.hpp"
 #include <thread>
 #include <atomic>
 #include "nativeStorageRevision.hpp"
@@ -34,8 +35,14 @@ namespace hc::storage
         }
         template<class T, class F> Task<T> Run(F Work, bool Inline = false)
         {
-            auto Guarded = [Work = std::move(Work)]() mutable -> Result<T> {
-                try { return Work(); }
+            const bool Detailed = !Inline && operations::OperationMetrics::Instance().DetailedEnabled();
+            const auto Queued = Detailed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            auto Guarded = [Work = std::move(Work), Detailed, Queued]() mutable -> Result<T> {
+                try {
+                    if (Detailed) operations::OperationMetrics::Instance().Add("native.dispatch.wait", Queued,
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Queued).count());
+                    return Work();
+                }
                 catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
             };
             return Inline ? Ready<T>(Guarded()) : std::async(std::launch::async, std::move(Guarded));
@@ -198,12 +205,15 @@ namespace hc::storage
                     std::lock_guard Lock(State->mutex_);
                     if (const auto Failure = Context.Check(State->provider_)) return *Failure;
                     if (!MaxBytes || !Context.maxReadBytes_) return Error{ErrorCategory::InvalidRequest, "zero-read-size", State->provider_};
-                    const auto Count = (std::min)({MaxBytes, Context.maxReadBytes_, std::size_t{1024 * 1024}});
+                    const auto Count = (std::min)({MaxBytes, Context.maxReadBytes_,
+                        std::clamp<std::size_t>(Context.nativeCopyBufferBytes_, 1, 8 * 1024 * 1024)});
                     ReadChunk Chunk;
-                    Chunk.bytes_.resize(Count);
+                    { operations::OperationMetric Timing("native.read.allocate", Count, true); Chunk.bytes_.resize(Count); }
                     DWORD Read = 0;
-                    if (!ReadFile(State->handle_, Chunk.bytes_.data(), static_cast<DWORD>(Count), &Read, nullptr))
-                        return NativeError(GetLastError(), State->provider_);
+                    { operations::OperationMetric Timing("native.read.io", 0, true);
+                        if (!ReadFile(State->handle_, Chunk.bytes_.data(), static_cast<DWORD>(Count), &Read, nullptr))
+                            return NativeError(GetLastError(), State->provider_);
+                        Timing.SetBytes(Read); }
                     Chunk.bytes_.resize(Read);
                     Chunk.eof_ = Read == 0;
                     return Chunk;
@@ -232,6 +242,7 @@ namespace hc::storage
         public:
             explicit NativeProvider(LocatorKind Kind) : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, session_(Session()) {}
             ProviderId Id() const override { return id_; }
+            bool SupportsParallelReads() const override { return kind_ == LocatorKind::Local; }
             Result<EntrySnapshot> BindSnapshot(EntrySnapshot Entry) const {
                 if (Entry.locator_.kind_ != kind_ || !Entry.locator_.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "native-snapshot-kind"};
                 Entry.id_.providerId_ = id_; Entry.id_.key_ = session_ + Serialize(Entry.locator_);
@@ -414,6 +425,7 @@ namespace hc::storage
             Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) override
             {
                 return Run<EntrySnapshot>([Resource = std::move(Resource), Context, Id = id_, Prefix = session_]() -> Result<EntrySnapshot> {
+                    operations::OperationMetric Timing("native.stat", 0, true);
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (!(Resource.providerId_ == Id) || !Resource.key_.starts_with(Prefix)) return Error{ErrorCategory::NotFound, "foreign-session", Id, Resource};
                     const auto At = ParseLocator(std::string_view(Resource.key_).substr(Prefix.size()));
@@ -426,7 +438,7 @@ namespace hc::storage
                     Value.id_.revision_ = std::move(ActualRevision);
                     if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
                     return Value;
-                });
+                }, Context.workerRead_ && kind_ == LocatorKind::Local);
             }
             Task<std::optional<ContentProducer>> PrepareContent(ResourceId Resource, OperationContext Context) override
             {
@@ -491,6 +503,7 @@ namespace hc::storage
             Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Resource, OperationContext Context) override
             {
                 return Run<std::shared_ptr<IReadStream>>([Resource = std::move(Resource), Context, Id = id_, Prefix = session_]() -> Result<std::shared_ptr<IReadStream>> {
+                    operations::OperationMetric Timing("native.open-read", 0, true);
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (!(Resource.providerId_ == Id) || !Resource.key_.starts_with(Prefix)) return Error{ErrorCategory::NotFound, "foreign-session", Id, Resource};
                     const auto At = ParseLocator(std::string_view(Resource.key_).substr(Prefix.size()));
@@ -506,7 +519,7 @@ namespace hc::storage
                     if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource};
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     return std::shared_ptr<IReadStream>(new FileStream(std::move(State)));
-                });
+                }, Context.workerRead_ && kind_ == LocatorKind::Local);
             }
         private:
             LocatorKind kind_;

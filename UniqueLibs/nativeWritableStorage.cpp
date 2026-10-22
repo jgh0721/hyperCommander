@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <winioctl.h>
 #include "nativeStorageRevision.hpp"
 #include <Aclapi.h>
 #include <QCryptographicHash>
@@ -121,6 +122,7 @@ namespace hc::storage
         }
         Result<std::vector<Handle>> PinParents(const NativePath& Path, const ProviderId& Id)
         {
+            operations::OperationMetric Timing("native.parent-pin", 0, true);
             std::vector<Handle> Parents;
             const auto Parent = std::filesystem::path(Path.path_).parent_path().wstring();
             if (Path.path_ == Path.root_) return Error{ErrorCategory::InvalidRequest, "root-mutation-denied", Id};
@@ -221,14 +223,17 @@ namespace hc::storage
             }
             Result<Unit> Append(std::span<const std::byte> Bytes, OperationContext Context) override
             {
+                operations::OperationMetric Timing("native.append", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
                 if (closed_ || failed_) return Error{ErrorCategory::InvalidRequest, "write-session-closed", id_};
-                if (Bytes.empty() || Bytes.size() > (std::min)(Context.maxReadBytes_, std::size_t{1024 * 1024}))
+                if (Bytes.empty() || Bytes.size() > (std::min)(Context.maxReadBytes_,
+                    std::clamp<std::size_t>(Context.nativeCopyBufferBytes_, 1, 8 * 1024 * 1024)))
                     return Error{ErrorCategory::InvalidRequest, "write-chunk-budget", id_};
                 DWORD Written = 0;
                 if (!WriteFile(file_.value_, Bytes.data(), static_cast<DWORD>(Bytes.size()), &Written, nullptr))
                 { failed_ = true; return Failure(GetLastError(), id_); }
                 if (Written != Bytes.size()) { failed_ = true; return Error{ErrorCategory::Unavailable, "short-write", id_}; }
+                Timing.SetBytes(Written);
                 return Unit{};
             }
             bool CanProduceContent(OperationContext Context) const override
@@ -438,6 +443,7 @@ namespace hc::storage
             }
             Result<WriteReceipt> Commit(OperationContext Context) override
             {
+                operations::OperationMetric Timing("native.commit.total", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
                 if (closed_ || failed_) return Error{ErrorCategory::InvalidRequest, "write-session-closed", id_};
                 if (sourceHash_ && !verified_) return Error{ErrorCategory::InvalidRequest, "copy-verification-required", id_};
@@ -650,6 +656,31 @@ namespace hc::storage
             bool committed_ = false;
             bool failed_ = false;
         };
+        std::optional<DWORD> CopyNvmeDisk(const NativePath& Path)
+        {
+            wchar_t Root[32768]{}, Volume[128]{}, FileSystem[32]{};
+            if (!GetVolumePathNameW(Path.path_.c_str(), Root, DWORD(std::size(Root))) || GetDriveTypeW(Root) != DRIVE_FIXED
+                || !GetVolumeInformationW(Root, nullptr, 0, nullptr, nullptr, nullptr, FileSystem, DWORD(std::size(FileSystem)))
+                || (_wcsicmp(FileSystem, L"NTFS") && _wcsicmp(FileSystem, L"ReFS"))
+                || !GetVolumeNameForVolumeMountPointW(Root, Volume, DWORD(std::size(Volume)))) return {};
+            std::wstring Name(Volume); if (Name.ends_with(L'\\')) Name.pop_back();
+            Handle Device(CreateFileW(Name.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+            if (Device.value_ == INVALID_HANDLE_VALUE) return {};
+            DWORD Returned = 0; VOLUME_DISK_EXTENTS Extents{};
+            if (!DeviceIoControl(Device.value_, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, nullptr, 0, &Extents, sizeof(Extents), &Returned, nullptr)
+                || Returned < sizeof(Extents) || Extents.NumberOfDiskExtents != 1) return {};
+            STORAGE_PROPERTY_QUERY Query{}; Query.PropertyId = StorageDeviceSeekPenaltyProperty; Query.QueryType = PropertyStandardQuery;
+            DEVICE_SEEK_PENALTY_DESCRIPTOR Seek{};
+            if (!DeviceIoControl(Device.value_, IOCTL_STORAGE_QUERY_PROPERTY, &Query, sizeof(Query), &Seek, sizeof(Seek), &Returned, nullptr)
+                || Returned < sizeof(Seek) || Seek.Size < sizeof(Seek) || Seek.Version < sizeof(Seek) || Seek.IncursSeekPenalty) return {};
+            Query.PropertyId = StorageDeviceProperty;
+            alignas(STORAGE_DEVICE_DESCRIPTOR) std::byte Storage[4096]{};
+            if (!DeviceIoControl(Device.value_, IOCTL_STORAGE_QUERY_PROPERTY, &Query, sizeof(Query), Storage, sizeof(Storage), &Returned, nullptr)
+                || Returned < sizeof(STORAGE_DEVICE_DESCRIPTOR)) return {};
+            const auto Descriptor = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR*>(Storage);
+            if (Descriptor->BusType != BusTypeNvme) return {};
+            return Extents.Extents[0].DiskNumber;
+        }
         class NativeWritableStorage final : public IWritableStorage
         {
         public:
@@ -671,6 +702,7 @@ namespace hc::storage
             }
             Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override
             {
+                operations::OperationMetric Timing("native.inspect", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
                 auto Path = Normalize(At, kind_, id_);
                 if (!Path.HasValue()) return Path.Failure();
@@ -685,6 +717,15 @@ namespace hc::storage
                 return std::optional<EntrySnapshot>{std::move(Entry.Value())};
             }
             CopyCapabilities CopySupport() const override { return {true, true, true, true}; }
+            bool SupportsParallelCopies() const override { return kind_ == LocatorKind::Local; }
+            std::size_t PreferredCopyWorkers(Locator Source, Locator Destination) const override
+            {
+                if (kind_ != LocatorKind::Local || Source.kind_ != LocatorKind::Local || Destination.kind_ != LocatorKind::Local) return 1;
+                const auto From = Normalize(Source, kind_, id_), To = Normalize(Destination, kind_, id_);
+                if (!From.HasValue() || !To.HasValue()) return 1;
+                const auto SourceDisk = CopyNvmeDisk(From.Value()), DestinationDisk = CopyNvmeDisk(To.Value());
+                return SourceDisk && DestinationDisk && *SourceDisk != *DestinationDisk ? 4 : 1;
+            }
             bool CanProduceContent(OperationContext Context) const override
             { return kind_ == LocatorKind::Local && !Context.writeCheckpoint_; }
             Result<Unit> PatchMetadata(EntrySnapshot Entry, MetadataPatch Patch, OperationContext Context) override
@@ -729,6 +770,7 @@ namespace hc::storage
             { return BeginCopy(std::move(At), std::move(Expected), {}, Context); }
             Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context) override
             {
+                operations::OperationMetric Timing("native.begin-copy.total", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
                 if (Expected.exists_ != Expected.revision_.has_value()) return Error{ErrorCategory::InvalidRequest, "destination-expectation", id_};
                 auto Path = Normalize(At, kind_, id_);

@@ -184,6 +184,108 @@ private slots:
         QVERIFY(Ready(First.Value())); QCOMPARE(First.Value().completion_.get().snapshot_.state_, Cancel ? JobState::Cancelled : JobState::Completed);
         QCOMPARE(Accepted.load(), !Cancel); QCOMPARE(A->finalizations_.load(), 1);
     }
+    void cancellationReportedInsideAdvance_data()
+    { QTest::addColumn<bool>("Ui"); QTest::newRow("direct") << false; QTest::newRow("ui-wrapper") << true; }
+    void cancellationReportedInsideAdvance()
+    {
+        QFETCH(bool, Ui);
+        auto Probe = std::make_shared<struct Probe>();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        JobRequest Request; Request.operation_.providerInteractions_ = Ui;
+        auto Job = Scheduler.Submit(Request, std::make_unique<ScriptTask>(Probe, [&](JobStepContext Context) {
+            const auto Cancelled = Scheduler.Cancel(Context.jobId_);
+            JobStep Step{JobState::Failed}; Step.error_ = Cancelled.HasValue() ? Error{ErrorCategory::Cancelled, "cancelled"} : Cancelled.Failure(); return Step;
+        }));
+        QVERIFY(Job.HasValue()); QVERIFY(Ready(Job.Value()));
+        const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Cancelled);
+        QVERIFY(Done.snapshot_.error_); QCOMPARE(Done.snapshot_.error_->category_, ErrorCategory::Cancelled); QCOMPARE(Probe->finalizedAs_.load(), JobState::Cancelled);
+    }
+    void providerContinuationKeepsWorkerState()
+    {
+        auto Events = std::make_shared<hc::commands::EventHub>(); JobScheduler Scheduler(Events, 1);
+        auto Value = std::make_shared<Probe>(); std::optional<unsigned> First;
+        auto Inner = std::make_unique<ScriptTask>(Value, [&](JobStepContext) {
+            static std::atomic<unsigned> Next{0}; thread_local const unsigned Cookie = ++Next;
+            if (!First) First = Cookie;
+            if (*First != Cookie) { JobStep Failed{JobState::Failed}; Failed.error_ = Error{ErrorCategory::Internal, "continuation-worker-state-lost"}; return Failed; }
+            return JobStep{Value->calls_ >= 4 ? JobState::Completed : JobState::Running};
+        });
+        JobRequest Request; Request.operation_.providerInteractions_ = true;
+        auto Job = Scheduler.Submit(Request, std::move(Inner)); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(3s) == std::future_status::ready);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed); QCOMPARE(Value->calls_.load(), 4);
+    }
+    void backgroundProviderPromptSurvivesAdvance_data()
+    {
+        QTest::addColumn<bool>("Cancel"); QTest::addColumn<bool>("Overwrite");
+        QTest::newRow("reply") << false << false; QTest::newRow("cancel") << true << false;
+        QTest::newRow("password-posted-during-overwrite-question") << false << true;
+    }
+    void backgroundProviderPromptSurvivesAdvance()
+    {
+        QFETCH(bool, Cancel); QFETCH(bool, Overwrite);
+        struct State { std::atomic<bool> allow_{false}, emergency_{false}, accepted_{false}, prompted_{false}, decision_{false}; bool overlap_ = false; };
+        class Continuation final : public IJobTask {
+        public:
+            explicit Continuation(std::shared_ptr<State> State) : state_(std::move(State)) {}
+            JobStep Advance(JobStepContext Context) override {
+                if (!work_.valid()) {
+                    work_ = std::async(std::launch::async, [State = state_, Context]() -> Result<ProviderInteractionReply> {
+                        while (!State->allow_) {
+                            if (const auto Error = Context.operation_.Check({})) return *Error;
+                            if (State->emergency_) return Error{ErrorCategory::Cancelled, "fixture-emergency"};
+                            std::this_thread::sleep_for(1ms);
+                        }
+                        auto Reply = Context.operation_.interactionStart_({ProviderInteractionKind::Password, "later", "archive", 1}, Context.operation_);
+                        State->prompted_ = true;
+                        while (Reply.wait_for(1ms) != std::future_status::ready) {
+                            if (const auto Error = Context.operation_.Check({})) return *Error;
+                            if (State->emergency_) return Error{ErrorCategory::Cancelled, "fixture-emergency"};
+                        }
+                        return Reply.get();
+                    });
+                    JobStep Step{state_->overlap_ ? JobState::WaitingForUser : JobState::Running};
+                    if (state_->overlap_) Step.interaction_ = InteractionRequest{"", InteractionKind::Overwrite, "fixture-overwrite", {InteractionChoice::Replace, InteractionChoice::Cancel}};
+                    Step.progress_ = JobProgress{}; Step.progress_->bytesDone_ = 1; return Step;
+                }
+                if (state_->overlap_ && !state_->decision_) {
+                    if (!Context.answer_ || Context.answer_->choice_ != InteractionChoice::Replace) { JobStep Step{JobState::Failed}; Step.error_ = Error{ErrorCategory::InvalidRequest, "overwrite-answer-not-delivered"}; return Step; }
+                    state_->decision_ = true;
+                }
+                if (work_.wait_for(0ms) != std::future_status::ready) { JobStep Step{JobState::Running}; Step.deferFor_ = 1ms; return Step; }
+                auto Reply = work_.get(); state_->accepted_ = Reply.HasValue() && Reply.Value().accepted_ && Reply.Value().value_.Value() == "future-secret";
+                return JobStep{state_->accepted_ ? JobState::Completed : JobState::Cancelled};
+            }
+            std::vector<Error> Finalize(JobState) override { state_->emergency_ = true; if (work_.valid()) work_.get(); return {}; }
+        private:
+            std::shared_ptr<State> state_; std::future<Result<ProviderInteractionReply>> work_;
+        };
+        auto State = std::make_shared<struct State>();
+        State->overlap_ = Overwrite;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        JobRequest Request; Request.operation_.providerInteractions_ = true;
+        auto Job = Scheduler.Submit(Request, std::make_unique<Continuation>(State)); QVERIFY(Job.HasValue());
+        QTRY_VERIFY(Scheduler.Snapshot(Job.Value().id_).Value().progress_.bytesDone_ == 1);
+        State->allow_ = true;
+        if (Overwrite) {
+            QTRY_VERIFY(State->prompted_.load());
+            auto Snapshot = Scheduler.Snapshot(Job.Value().id_).Value(); QVERIFY(Snapshot.interaction_); QCOMPARE(Snapshot.interaction_->kind_, InteractionKind::Overwrite);
+            QVERIFY(Scheduler.Reply(Job.Value().id_, {Snapshot.interaction_->id_, InteractionChoice::Replace, {}}).HasValue());
+        }
+        const auto Until = std::chrono::steady_clock::now() + 2s;
+        const auto PromptReady = [&] { auto S = Scheduler.Snapshot(Job.Value().id_).Value(); return S.state_ == JobState::WaitingForUser && S.interaction_ && S.interaction_->kind_ == InteractionKind::Password; };
+        while (!PromptReady() && std::chrono::steady_clock::now() < Until) QTest::qWait(5);
+        const bool Prompted = PromptReady();
+        if (!Prompted || Cancel) {
+            if (!IsTerminal(Scheduler.Snapshot(Job.Value().id_).Value().state_)) QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
+        }
+        else { auto Snapshot = Scheduler.Snapshot(Job.Value().id_).Value(); QVERIFY(Scheduler.Reply(Job.Value().id_, {Snapshot.interaction_->id_, InteractionChoice::Confirm, "future-secret"}).HasValue()); }
+        QVERIFY(Ready(Job.Value()));
+        const auto Done = Job.Value().completion_.get();
+        QVERIFY2(Prompted, "A background provider prompt was lost after the earlier Advance returned");
+        QCOMPARE(Done.snapshot_.state_, Cancel ? JobState::Cancelled : JobState::Completed); QCOMPARE(State->accepted_.load(), !Cancel);
+        if (Overwrite) QVERIFY(State->decision_.load());
+    }
     void itemUpdatesPreserveEffectsAndCounts_data()
     {
         QTest::addColumn<int>("Kind");

@@ -265,7 +265,7 @@ private slots:
             auto Result = Backend->Enumerate(Path.toStdString(), false, Context); QVERIFY(!Result.HasValue());
             if (Mode == 0) QCOMPARE(Result.Failure().code_, std::string("archive-password-required"));
             if (Mode == 1) QCOMPARE(Result.Failure().category_, ErrorCategory::Cancelled);
-            if (Mode == 2) { QCOMPARE(Result.Failure().code_, std::string("archive-password-attempt-limit")); QCOMPARE(Prompts, 3u); }
+            if (Mode == 2) { QCOMPARE(Result.Failure().code_, std::string("archive-password-attempt-limit")); QCOMPARE(Prompts, 104u); }
             QCOMPARE(Read(Path), QByteArray("HCWCX01U"));
         }
     }

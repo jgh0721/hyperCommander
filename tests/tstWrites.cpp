@@ -67,6 +67,85 @@ namespace
         std::unique_ptr<IWriteSession> session_;
         WriteFault fault_;
     };
+    struct ParallelProbe
+    {
+        std::atomic<int> active_{0}, peak_{0}, calls_{0}, commits_{0};
+        std::atomic<bool> wrongCommitThread_{false}, hold_{false};
+        std::thread::id owner_ = std::this_thread::get_id();
+        bool fail_ = false;
+        std::string failName_;
+    };
+    class ParallelSession final : public IWriteSession
+    {
+    public:
+        ParallelSession(std::unique_ptr<IWriteSession> Inner, std::shared_ptr<ParallelProbe> Probe)
+            : inner_(std::move(Inner)), probe_(std::move(Probe)) {}
+        Result<Unit> Append(std::span<const std::byte> Bytes, OperationContext Context) override
+        {
+            ++probe_->calls_; const auto Active = ++probe_->active_; auto Peak = probe_->peak_.load();
+            while (Active > Peak && !probe_->peak_.compare_exchange_weak(Peak, Active)) {}
+            const auto Exit = qScopeGuard([&] { --probe_->active_; });
+            do {
+                if (const auto Error = Context.Check({})) return *Error;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            } while (probe_->hold_);
+            if (probe_->fail_ || (!probe_->failName_.empty() && probe_->failName_ == name_)) return Error{ErrorCategory::Unavailable, "parallel-disk-full"};
+            return inner_->Append(Bytes, Context);
+        }
+        Result<Unit> SetMetadata(FileMetadata Value, OperationContext Context) override { return inner_->SetMetadata(Value, Context); }
+        Result<Unit> ConfigureCopy(EntrySnapshot Source, CopyOptions Options, OperationContext Context) override { name_ = Source.name_; return inner_->ConfigureCopy(std::move(Source), Options, Context); }
+        Result<Unit> RecordSourceBytes(std::span<const std::byte> Bytes, OperationContext Context) override { return inner_->RecordSourceBytes(Bytes, Context); }
+        Result<CopyExtraProgress> AdvanceCopyExtras(std::uint64_t Left, OperationContext Context) override { return inner_->AdvanceCopyExtras(Left, Context); }
+        Result<bool> VerifyContent(OperationContext Context) override { return inner_->VerifyContent(Context); }
+        Result<WriteReceipt> Commit(OperationContext Context) override
+        {
+            ++probe_->commits_; if (std::this_thread::get_id() != probe_->owner_) probe_->wrongCommitThread_ = true;
+            return inner_->Commit(Context);
+        }
+        Result<Unit> Abort() override { return inner_->Abort(); }
+    private:
+        std::unique_ptr<IWriteSession> inner_;
+        std::shared_ptr<ParallelProbe> probe_;
+        std::string name_;
+    };
+    class ParallelWriter final : public IWritableStorage
+    {
+    public:
+        ParallelWriter(std::shared_ptr<IWritableStorage> Inner, std::shared_ptr<ParallelProbe> Probe)
+            : inner_(std::move(Inner)), probe_(std::move(Probe)) {}
+        ProviderId Id() const override { return inner_->Id(); }
+        bool SupportsParallelCopies() const override { return true; }
+        CopyCapabilities CopySupport() const override { return inner_->CopySupport(); }
+        Result<SupportDecision> Supports(Mutation Kind, Locator At, OperationContext Context) override { return inner_->Supports(Kind, At, Context); }
+        Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return inner_->Inspect(At, Context); }
+        Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override { return BeginCopy(At, Expected, {}, Context); }
+        Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context) override
+        {
+            auto Made = inner_->BeginCopy(At, Expected, Options, Context); if (!Made.HasValue()) return Made.Failure();
+            return std::unique_ptr<IWriteSession>(new ParallelSession(std::move(Made.Value()), probe_));
+        }
+        Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { return inner_->MakeDirectory(At, Context); }
+        Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override { return inner_->Remove(Entry, Context); }
+        Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override { return inner_->Rename(Entry, To, Context); }
+    private:
+        std::shared_ptr<IWritableStorage> inner_;
+        std::shared_ptr<ParallelProbe> probe_;
+    };
+    class CopySelection final : public ISelectionManifest
+    {
+    public:
+        std::vector<EntrySnapshot> entries_;
+        std::shared_ptr<IStorageProvider> reader_;
+        mutable std::size_t largestPage_ = 0;
+        std::uint64_t Count() const override { return entries_.size(); }
+        std::shared_ptr<IStorageProvider> Provider() const override { return reader_; }
+        Result<EntryPage> Read(std::uint64_t Offset, std::size_t Count, const OperationContext&) const override
+        {
+            largestPage_ = std::max(largestPage_, Count); EntryPage Page;
+            const auto End = std::min<std::uint64_t>(entries_.size(), Offset + Count);
+            Page.entries_.assign(entries_.begin() + Offset, entries_.begin() + End); Page.end_ = End == entries_.size(); return Page;
+        }
+    };
     class ImmediateExecutor final : public hc::commands::IExecutor
     {
     public:
@@ -265,6 +344,309 @@ private:
     QStringList artifacts()
     { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
 private slots:
+    void parallelCopy_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("serial-commit-parallel-transfer") << 0;
+        QTest::newRow("cancel-joins-workers") << 1;
+        QTest::newRow("late-destination-preserved") << 2;
+        QTest::newRow("overwrite-answers") << 3;
+        QTest::newRow("failed-transfer-preserves-destinations") << 4;
+        QTest::newRow("verified-copy") << 5;
+        QTest::newRow("byte-budget-before-writes") << 6;
+        QTest::newRow("pause-before-publish") << 7;
+        QTest::newRow("eight-worker-cap") << 8;
+        QTest::newRow("same-name-selected-roots") << 9;
+        QTest::newRow("journal-keeps-serial-path") << 10;
+        QTest::newRow("throttle-keeps-serial-path") << 11;
+        QTest::newRow("alternate-streams-keep-serial-path") << 12;
+        QTest::newRow("deadline-joins-workers") << 13;
+    }
+    void parallelCopy()
+    {
+        QFETCH(int, Mode);
+        if (kind_ != LocatorKind::Local) QSKIP("Local parallel-copy contract");
+        const QString From = QString("parallel-from-%1").arg(Mode), To = QString("parallel-to-%1").arg(Mode);
+        QVERIFY(QDir().mkpath(root_->filePath(From))); QVERIFY(QDir().mkpath(root_->filePath(To)));
+        auto Probe = std::make_shared<ParallelProbe>(); Probe->fail_ = Mode == 4;
+        Probe->hold_ = Mode == 1 || Mode == 7 || Mode == 13;
+        FileOperationRequest Request; Request.destination_ = at(To);
+        Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, Probe);
+        Request.copyOptions_.verify_ = Mode == 5;
+        if (Mode == 4) Request.conflict_ = ConflictPolicy::Replace;
+        if (Mode == 11) Request.bytesPerSecondLimit_ = 64 * 1024 * 1024;
+        Request.copyOptions_.streams_ = Mode == 12;
+        for (int I = 0; I < 24; ++I) {
+            const auto Name = Mode == 9 ? QString("same.bin") : QString::number(I).rightJustified(2, '0') + ".bin";
+            const auto SourceFolder = Mode == 9 ? From + '/' + QString::number(I) : From;
+            QVERIFY(QDir().mkpath(root_->filePath(SourceFolder)));
+            QVERIFY(write(SourceFolder + '/' + Name, QByteArray(4096, char(I))));
+            auto Entry = reader_->Resolve(at(SourceFolder + '/' + Name), {}).get(); QVERIFY(Entry.HasValue());
+            Request.sources_.push_back({Entry.Value(), reader_, {}});
+            if (Mode == 3 || Mode == 4) QVERIFY(write(To + '/' + Name, "original"));
+        }
+        if (Mode == 6) Request.maxBytes_ = 4096;
+        OperationContext Context; Context.fileCopyWorkers_ = Mode == 8 ? 100 : 4;
+        Context.flushFileContents_ = false;
+        std::uint64_t Checkpoints = 0;
+        if (Mode == 10) Context.writeCheckpoint_ = [&](const WriteRecoveryRecord&, std::optional<std::uint64_t>) -> Result<std::uint64_t> { return ++Checkpoints; };
+        std::atomic<bool> Paused{false}; Context.pauseRequested_ = [&] { return Paused.load(); };
+        std::stop_source Stop; Context.stopToken_ = Stop.get_token();
+        if (Mode == 13) Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        auto Task = std::move(Prepared.Value().task_);
+        JobStepContext StepContext; StepContext.operation_ = Context;
+        JobState State = JobState::Preparing; int Outcomes = 0, Skipped = 0, Questions = 0;
+        bool Injected = false; std::uint64_t Previous = 0; std::string FailureCode;
+        const auto Start = std::chrono::steady_clock::now();
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(10)) {
+            auto Step = Task->Advance(StepContext); StepContext.answer_.reset(); State = Step.next_;
+            if (Step.error_) FailureCode = Step.error_->code_;
+            if (Step.progress_) { QVERIFY(Step.progress_->bytesDone_ >= Previous); Previous = Step.progress_->bytesDone_; }
+            if (Step.item_) { ++Outcomes; Skipped += Step.item_->status_ == ItemOutcome::Status::Skipped; }
+            if (Mode == 1 && Probe->active_ > 0) { Stop.request_stop(); Injected = true; }
+            if (Mode == 7 && Probe->active_ > 0 && !Injected) {
+                Paused = true; Probe->hold_ = false; std::this_thread::sleep_for(std::chrono::milliseconds(15));
+                QCOMPARE(Probe->commits_.load(), 0); Paused = false; Injected = true;
+            }
+            if (State == JobState::Committing && Mode == 2 && !Injected) { QVERIFY(write(To + "/00.bin", "late")); Injected = true; }
+            if (State == JobState::WaitingForUser) {
+                ++Questions; QVERIFY(Step.interaction_);
+                StepContext.answer_ = InteractionAnswer{"", Questions == 1 ? InteractionChoice::Skip : InteractionChoice::Replace};
+            }
+            StepContext.committing_ = State == JobState::Committing;
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        QVERIFY(IsTerminal(State)); const auto Errors = Task->Finalize(State); QVERIFY(Errors.empty()); Task.reset();
+        QCOMPARE(Probe->active_.load(), 0); QVERIFY(!Probe->wrongCommitThread_);
+        if (Mode == 0 || Mode == 3 || Mode == 5 || Mode == 7 || (Mode >= 8 && Mode <= 12)) {
+            QCOMPARE(State, JobState::Completed); QCOMPARE(Outcomes, 24);
+            if (Mode != 3 && Mode != 9 && Mode < 10) QVERIFY(Probe->peak_ > 1);
+            if (Mode >= 10) QCOMPARE(Probe->peak_.load(), 1);
+            QVERIFY(Probe->peak_ <= (Mode == 8 ? 8 : 4));
+            for (int I = 0; I < 24 && Mode != 9; ++I) {
+                const auto Name = QString::number(I).rightJustified(2, '0') + ".bin";
+                QCOMPARE(read(To + '/' + Name), Mode == 3 && I == 0 ? QByteArray("original") : QByteArray(4096, char(I)));
+            }
+            if (Mode == 3) { QCOMPARE(Questions, 24); QCOMPARE(Skipped, 1); }
+            if (Mode == 9) { QCOMPARE(Questions, 23); QCOMPARE(Skipped, 1); QCOMPARE(read(To + "/same.bin"), QByteArray(4096, char(23))); }
+            if (Mode == 10) QVERIFY(Checkpoints > 0);
+        } else {
+            QCOMPARE(State, JobState::Failed); QCOMPARE(Probe->commits_.load(), Mode == 2 ? 1 : 0);
+            if (Mode == 2) QCOMPARE(read(To + "/00.bin"), QByteArray("late"));
+            if (Mode == 4) for (int I = 0; I < 24; ++I) QCOMPARE(read(To + '/' + QString::number(I).rightJustified(2, '0') + ".bin"), QByteArray("original"));
+            if (Mode == 13) QCOMPARE(FailureCode, std::string("deadline-exceeded"));
+        }
+        QCOMPARE(QDir(root_->filePath(To)).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
+    void parallelRenameAffectsPending()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local parallel overwrite decisions");
+        QVERIFY(QDir().mkpath(root_->filePath("parallel-rename/from"))); QVERIFY(QDir().mkpath(root_->filePath("parallel-rename/to")));
+        auto Probe = std::make_shared<ParallelProbe>();
+        FileOperationRequest Request; Request.destination_ = at("parallel-rename/to"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, Probe);
+        for (const auto Name : {"a", "b", "c"}) {
+            const auto File = QString("parallel-rename/from/%1.bin").arg(Name); QVERIFY(write(File, QByteArray(4096, Name[0])));
+            auto Entry = reader_->Resolve(at(File), {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back({Entry.Value(), reader_, {}});
+        }
+        QVERIFY(write("parallel-rename/to/a.bin", "original"));
+        OperationContext Context; Context.fileCopyWorkers_ = 3; Context.flushFileContents_ = false;
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        auto Task = std::move(Prepared.Value().task_); JobStepContext StepContext; StepContext.operation_ = Context;
+        JobState State = JobState::Preparing; int Questions = 0, Completed = 0, Skipped = 0; std::uint64_t Previous = 0;
+        const auto Start = std::chrono::steady_clock::now();
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(10)) {
+            auto Step = Task->Advance(StepContext); State = Step.next_; StepContext.answer_.reset();
+            if (Step.progress_) { QVERIFY(Step.progress_->bytesDone_ >= Previous); Previous = Step.progress_->bytesDone_; }
+            if (Step.item_) { Completed += Step.item_->status_ == ItemOutcome::Status::Completed; Skipped += Step.item_->status_ == ItemOutcome::Status::Skipped; }
+            if (State == JobState::WaitingForUser) {
+                ++Questions;
+                if (Questions == 1) {
+                    QTRY_VERIFY_WITH_TIMEOUT(Probe->calls_ >= 2, 5000);
+                    StepContext.answer_ = InteractionAnswer{"", InteractionChoice::Rename, "b.bin"};
+                } else StepContext.answer_ = InteractionAnswer{"", InteractionChoice::Skip};
+            }
+            StepContext.committing_ = State == JobState::Committing; std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        const auto Errors = Task->Finalize(State); Task.reset();
+        QCOMPARE(State, JobState::Completed); QCOMPARE(Questions, 2); QCOMPARE(Completed, 2); QCOMPARE(Skipped, 1); QVERIFY(Errors.empty());
+        QCOMPARE(read("parallel-rename/to/a.bin"), QByteArray("original")); QCOMPARE(read("parallel-rename/to/b.bin"), QByteArray(4096, 'a'));
+        QCOMPARE(read("parallel-rename/to/c.bin"), QByteArray(4096, 'c'));
+        QCOMPARE(QDir(root_->filePath("parallel-rename/to")).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
+    void parallelSelection_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("manifest-pages") << 0;
+        QTest::newRow("stale-selected-file") << 1;
+        QTest::newRow("failed-file-keeps-next-selections") << 2;
+    }
+    void parallelSelection()
+    {
+        QFETCH(int, Mode);
+        if (kind_ != LocatorKind::Local) QSKIP("Local selected files");
+        const auto Prefix = QString("selection-copy-%1").arg(Mode);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/from"))); QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/to")));
+        auto Selection = std::make_shared<CopySelection>(); Selection->reader_ = reader_;
+        for (int I = 0; I < 72; ++I) {
+            const auto Name = Prefix + "/from/" + QString::number(I) + ".bin";
+            QVERIFY(write(Name, QByteArray(4096, char(I)))); auto Entry = reader_->Resolve(at(Name), {}).get(); QVERIFY(Entry.HasValue());
+            Selection->entries_.push_back(Entry.Value());
+        }
+        if (Mode == 1) QVERIFY(write(Prefix + "/from/7.bin", "changed"));
+        if (Mode == 2) QVERIFY(write(Prefix + "/to/7.bin", "original"));
+        auto Probe = std::make_shared<ParallelProbe>(); if (Mode == 2) Probe->failName_ = "7.bin";
+        FileOperationRequest Request; Request.selection_ = Selection; Request.selectionRoot_ = at(Prefix + "/from");
+        Request.destination_ = at(Prefix + "/to"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, Probe); Request.conflict_ = ConflictPolicy::Replace;
+        OperationContext Context; Context.fileCopyWorkers_ = 4; Context.flushFileContents_ = false;
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        auto Task = std::move(Prepared.Value().task_); JobStepContext StepContext; StepContext.operation_ = Context;
+        JobState State = JobState::Preparing; int Completed = 0, Failed = 0; std::uint64_t Previous = 0;
+        const auto Start = std::chrono::steady_clock::now();
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(10)) {
+            auto Step = Task->Advance(StepContext); State = Step.next_;
+            if (Step.item_) { Completed += Step.item_->status_ == ItemOutcome::Status::Completed; Failed += Step.item_->status_ == ItemOutcome::Status::Failed; }
+            if (Step.progress_) { QVERIFY(Step.progress_->bytesDone_ >= Previous); Previous = Step.progress_->bytesDone_; }
+            StepContext.committing_ = State == JobState::Committing; std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        QCOMPARE(State, JobState::Completed); QVERIFY(Task->Finalize(State).empty()); Task.reset();
+        QCOMPARE(Completed, Mode == 0 ? 72 : 71); QCOMPARE(Failed, Mode == 0 ? 0 : 1);
+        QCOMPARE(Selection->largestPage_, std::size_t(64)); QVERIFY(Probe->peak_ > 1); QVERIFY(!Probe->wrongCommitThread_);
+        for (int I = 0; I < 72; ++I) {
+            const auto Name = Prefix + "/to/" + QString::number(I) + ".bin";
+            if (I == 7 && Mode == 1) QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
+            else QCOMPARE(read(Name), I == 7 && Mode == 2 ? QByteArray("original") : QByteArray(4096, char(I)));
+        }
+        QCOMPARE(QDir(root_->filePath(Prefix + "/to")).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
+    void parallelGlobalBudget()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local worker budget");
+        QVERIFY(QDir().mkpath(root_->filePath("global-copy-from")));
+        std::vector<OperationSource> Sources;
+        for (int I = 0; I < 8; ++I) {
+            const auto Name = "global-copy-from/" + QString::number(I) + ".bin";
+            QVERIFY(write(Name, QByteArray(4096, char(I))));
+            auto Entry = reader_->Resolve(at(Name), {}).get(); QVERIFY(Entry.HasValue()); Sources.push_back({Entry.Value(), reader_, {}});
+        }
+        auto Probe = std::make_shared<ParallelProbe>(); Probe->hold_ = true;
+        OperationContext Context; Context.fileCopyWorkers_ = 8; Context.flushFileContents_ = false;
+        std::stop_source Stop; Context.stopToken_ = Stop.get_token();
+        std::vector<std::unique_ptr<IJobTask>> Tasks;
+        for (int I = 0; I < 5; ++I) {
+            const auto Folder = "global-copy-to/" + QString::number(I); QVERIFY(QDir().mkpath(root_->filePath(Folder)));
+            FileOperationRequest Request; Request.sources_ = Sources; Request.destination_ = at(Folder);
+            Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, Probe);
+            auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue()); Tasks.push_back(std::move(Prepared.Value().task_));
+        }
+        JobStepContext StepContext; StepContext.operation_ = Context;
+        const auto Start = std::chrono::steady_clock::now();
+        while (Probe->active_ < 32 && std::chrono::steady_clock::now() - Start < std::chrono::seconds(5)) {
+            for (int I = 0; I < 4; ++I) {
+                const auto Step = Tasks[I]->Advance(StepContext); QVERIFY(!IsTerminal(Step.next_));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const auto Active = Probe->active_.load();
+        // Eight planning steps, then planning completion and a denied slot.
+        for (int I = 0; I < 10; ++I) Tasks[4]->Advance(StepContext);
+        const auto Peak = Probe->peak_.load(); const auto Committed = Probe->commits_.load();
+        Stop.request_stop();
+        std::vector<Error> Errors;
+        for (auto& Task : Tasks) { auto Found = Task->Finalize(JobState::Cancelled); Errors.insert(Errors.end(), Found.begin(), Found.end()); }
+        Tasks.clear();
+        QCOMPARE(Active, 32); QCOMPARE(Peak, 32); QCOMPARE(Committed, 0); QCOMPARE(Probe->active_.load(), 0); QVERIFY(Errors.empty());
+        for (int I = 0; I < 5; ++I) QCOMPARE(QDir(root_->filePath("global-copy-to/" + QString::number(I))).entryList(QDir::Files | QDir::Hidden).size(), 0);
+    }
+    void parallelSchedulerControls_data()
+    {
+        QTest::addColumn<bool>("SharedLane");
+        QTest::addColumn<bool>("Ui");
+        QTest::newRow("retain-volume-lane") << false << false;
+        QTest::newRow("two-admitted-jobs") << true << false;
+        QTest::newRow("ui-retain-volume-lane") << false << true;
+        QTest::newRow("ui-two-admitted-jobs") << true << true;
+    }
+    void parallelSchedulerControls()
+    {
+        QFETCH(bool, SharedLane); QFETCH(bool, Ui);
+        if (kind_ != LocatorKind::Local) QSKIP("Local scheduler controls");
+        const auto Prefix = QString(SharedLane ? "parallel-shared-%1" : "parallel-lane-%1").arg(Ui);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/from")));
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/first"))); QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/second")));
+        FileOperationRequest Request;
+        for (int I = 0; I < 24; ++I) {
+            const auto Name = Prefix + "/from/" + QString::number(I) + ".bin"; QVERIFY(write(Name, QByteArray(4096, char(I))));
+            auto Entry = reader_->Resolve(at(Name), {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back({Entry.Value(), reader_, {}});
+        }
+        auto FirstProbe = std::make_shared<ParallelProbe>(); FirstProbe->hold_ = true;
+        auto SecondProbe = std::make_shared<ParallelProbe>();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
+        if (SharedLane) QVERIFY(Scheduler.SetLaneLimit(FileOperationLane(at(Prefix)), 2).HasValue());
+        OperationContext Context; Context.fileCopyWorkers_ = 4; Context.flushFileContents_ = false;
+        Context.providerInteractions_ = Ui;
+        Request.destination_ = at(Prefix + "/first"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, FirstProbe);
+        auto First = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(First.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(FirstProbe->active_ == 4, 5000);
+        Request.destination_ = at(Prefix + "/second"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, SecondProbe);
+        auto Second = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(Second.HasValue());
+        QVERIFY(Scheduler.Pause(First.Value().id_, true).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(First.Value().id_).Value().state_ == JobState::Paused, 5000);
+        FirstProbe->hold_ = false;
+        QTest::qWait(20); QCOMPARE(FirstProbe->commits_.load(), 0);
+        if (SharedLane) QCOMPARE(Second.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        else { QCOMPARE(Second.Value().completion_.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout); QCOMPARE(SecondProbe->calls_.load(), 0); }
+        QVERIFY(Scheduler.Cancel(First.Value().id_).HasValue());
+        QCOMPARE(First.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        const auto Cancelled = First.Value().completion_.get(); QCOMPARE(Cancelled.snapshot_.state_, JobState::Cancelled); QVERIFY(Cancelled.cleanupErrors_.empty());
+        QCOMPARE(FirstProbe->active_.load(), 0); QCOMPARE(FirstProbe->commits_.load(), 0);
+        QCOMPARE(Second.Value().completion_.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        const auto Done = Second.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Completed); QCOMPARE(Done.snapshot_.completedItems_, std::uint64_t(24));
+        QCOMPARE(Done.snapshot_.progress_.bytesDone_, std::uint64_t(24 * 4096)); QVERIFY(Done.cleanupErrors_.empty());
+        for (int I = 0; I < 24; ++I) QCOMPARE(read(Prefix + "/second/" + QString::number(I) + ".bin"), QByteArray(4096, char(I)));
+        QCOMPARE(QDir(root_->filePath(Prefix + "/first")).entryList(QDir::Files | QDir::Hidden).size(), 0);
+    }
+    void nativeReadAhead_data()
+    {
+        QTest::addColumn<int>("MiB"); QTest::addColumn<int>("Mode");
+        for (int MiB : {1, 4, 8}) {
+            QTest::newRow(qPrintable(QString("tail-%1").arg(MiB))) << MiB << 0;
+            QTest::newRow(qPrintable(QString("cancel-%1").arg(MiB))) << MiB << 1;
+            QTest::newRow(qPrintable(QString("disk-full-%1").arg(MiB))) << MiB << 2;
+            QTest::newRow(qPrintable(QString("verify-%1").arg(MiB))) << MiB << 3;
+        }
+    }
+    void nativeReadAhead()
+    {
+        QFETCH(int, MiB); QFETCH(int, Mode);
+        if (kind_ != LocatorKind::Local) QSKIP("Native pipeline contract");
+        const QByteArray Content(9 * 1024 * 1024 + 37, 'p');
+        QVERIFY(write("pipeline.bin", Content)); QVERIFY(QDir().mkpath(root_->filePath("pipeline-target")));
+        QVERIFY(write("pipeline-target/pipeline.bin", "original"));
+        auto Source = reader_->Resolve(at("pipeline.bin"), {}).get(); QVERIFY(Source.HasValue());
+        auto Probe = std::make_shared<ParallelProbe>(); Probe->fail_ = Mode == 2;
+        FileOperationRequest Request; Request.sources_ = {{Source.Value(), reader_, {}}};
+        Request.destination_ = at("pipeline-target"); Request.conflict_ = ConflictPolicy::Replace;
+        Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, Probe); Request.copyOptions_.verify_ = Mode == 3;
+        OperationContext Context; Context.directContent_ = false; Context.nativeReadAhead_ = true;
+        Context.maxReadBytes_ = MiB * 1024 * 1024; Context.flushFileContents_ = false;
+        Context.nativeCopyBufferBytes_ = Context.maxReadBytes_;
+        std::stop_source Stop; Context.stopToken_ = Stop.get_token();
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        auto Task = std::move(Prepared.Value().task_); JobStepContext StepContext; StepContext.operation_ = Context;
+        JobState State = JobState::Preparing;
+        for (int StepNo = 0; StepNo < 1000 && !IsTerminal(State); ++StepNo) {
+            auto Step = Task->Advance(StepContext); State = Step.next_;
+            if (Mode == 1 && Probe->calls_ > 0) Stop.request_stop();
+            StepContext.committing_ = State == JobState::Committing;
+        }
+        QVERIFY(IsTerminal(State)); QVERIFY(Task->Finalize(State).empty()); Task.reset();
+        QCOMPARE(Probe->active_.load(), 0);
+        if (Mode == 0 || Mode == 3) { QCOMPARE(State, JobState::Completed); QCOMPARE(read("pipeline-target/pipeline.bin"), Content); }
+        else { QCOMPARE(State, JobState::Failed); QCOMPARE(read("pipeline-target/pipeline.bin"), QByteArray("original")); }
+        QVERIFY(!Probe->wrongCommitThread_);
+        QCOMPARE(QDir(root_->filePath("pipeline-target")).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
     void producedContent_data()
     {
         QTest::addColumn<int>("Mode");
@@ -364,11 +746,22 @@ private slots:
         QVERIFY(Session.Value()->AdvanceCopyExtras(UINT64_MAX, Context).HasValue()); QVERIFY(Session.Value()->Commit(Context).HasValue());
         QCOMPARE(DaclText(QDir(Parent).filePath("target")), Expected);
     }
+    void producedContentCooperativeCancellation_data()
+    {
+        QTest::addColumn<bool>("Ui"); QTest::addColumn<bool>("Paused"); QTest::addColumn<bool>("DirectFinalize");
+        QTest::newRow("scheduler") << false << false << false;
+        QTest::newRow("paused-scheduler") << false << true << false;
+        QTest::newRow("ui-wrapper") << true << false << false;
+        QTest::newRow("paused-ui-wrapper") << true << true << false;
+        QTest::newRow("direct-finalization") << false << false << true;
+    }
     void producedContentCooperativeCancellation()
     {
+        QFETCH(bool, Ui); QFETCH(bool, Paused); QFETCH(bool, DirectFinalize);
         struct SlowProvider final : IStorageProvider {
             std::shared_ptr<IStorageProvider> source_ = MakeNativeReadProvider(LocatorKind::Local);
             std::atomic<bool> entered_ = false, finished_ = false;
+            std::atomic<bool> emergency_ = false;
             ProviderId Id() const override { return source_->Id(); }
             Task<SupportDecision> Supports(Operation Request, OperationContext Context) override { return source_->Supports(Request, Context); }
             Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override { return source_->Enumerate(std::move(At), Context); }
@@ -382,8 +775,8 @@ private slots:
                     if (!File.open(QIODevice::WriteOnly | QIODevice::NewOnly) || File.write(QByteArray(512, 'p')) != 512)
                         return Error{ErrorCategory::Unavailable, "fixture-producer-open"};
                     entered_ = true; if (Context.progress_) Context.progress_(512);
-                    while (!Context.Check(Id())) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    File.close(); finished_ = true; return *Context.Check(Id());
+                    while (!Context.Check(Id()) && !emergency_) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    File.close(); finished_ = true; return Context.Check(Id()).value_or(Error{ErrorCategory::Cancelled, "fixture-emergency"});
                 };
                 return Ready<std::optional<ContentProducer>>(std::optional<ContentProducer>{std::move(Producer)});
             }
@@ -397,13 +790,29 @@ private slots:
         FileOperationRequest Request; Request.sources_ = {{Entry.Value(), Reader, {}}};
         Request.destination_ = {LocatorKind::Local, Directory.filePath("output").toStdString()};
         Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, Reader->source_); Request.conflict_ = ConflictPolicy::Replace;
+        if (DirectFinalize) {
+            auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue()); auto Task = std::move(Prepared.Value().task_);
+            for (int I = 0; I < 100 && !Reader->entered_; ++I) { Task->Advance({}); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+            QVERIFY(Reader->entered_);
+            auto Cleanup = std::async(std::launch::async, [&] { return Task->Finalize(JobState::Cancelled); });
+            const bool Stopped = Cleanup.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+            if (!Stopped) Reader->emergency_ = true;
+            QVERIFY(Cleanup.wait_for(std::chrono::seconds(5)) == std::future_status::ready); QVERIFY(Cleanup.get().empty()); Task.reset();
+            QVERIFY2(Stopped, "Finalize did not cancel its owned background producer");
+            QVERIFY(Old.open(QIODevice::ReadOnly)); QCOMPARE(Old.readAll(), QByteArray("existing")); return;
+        }
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
-        auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        OperationContext Context; Context.providerInteractions_ = Ui;
+        auto Job = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(Job.HasValue());
         QTRY_VERIFY(Reader->entered_.load());
         QTRY_VERIFY(Scheduler.Snapshot(Job.Value().id_).Value().progress_.bytesDone_ >= 512);
+        if (Paused) { QVERIFY(Scheduler.Pause(Job.Value().id_, true).HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::Paused); }
         QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
+        const bool Stopped = Job.Value().completion_.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        if (!Stopped) Reader->emergency_ = true;
         QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
         const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Cancelled);
+        QVERIFY2(Stopped, "Cancellation was disconnected after an Advance returned");
         QVERIFY(Reader->finished_.load()); QVERIFY(Done.cleanupErrors_.empty());
         QVERIFY(Old.open(QIODevice::ReadOnly)); QCOMPARE(Old.readAll(), QByteArray("existing")); Old.close();
         QCOMPARE(QDir(Directory.filePath("output")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System), QStringList{"source.bin"});

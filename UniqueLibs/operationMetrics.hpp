@@ -18,9 +18,10 @@ class OperationMetrics final {
 public:
     struct Bucket { std::uint64_t count_ = 0, nanos_ = 0, minimum_ = UINT64_MAX, maximum_ = 0, bytes_ = 0; std::array<std::uint64_t, 11> distribution_{}; };
     static OperationMetrics& Instance() { static OperationMetrics Value; return Value; }
-    void Reset() { std::lock_guard Lock(mutex_); buckets_.clear(); recoveryIntervals_.clear(); epoch_=std::chrono::steady_clock::now(); failed_=false; enabled_ = true; }
+    void Reset(bool Detailed = false) { std::lock_guard Lock(mutex_); buckets_.clear(); recoveryIntervals_.clear(); epoch_=std::chrono::steady_clock::now(); failed_=false; detailed_=Detailed; enabled_ = true; }
     void MarkFailed() noexcept { failed_=true; }
     bool Enabled() const { return enabled_; }
+    bool DetailedEnabled() const { return detailed_; }
     void Add(const char* Name, std::chrono::steady_clock::time_point Started, std::uint64_t Nanos, std::uint64_t Bytes = 0) {
         std::lock_guard Lock(mutex_); auto& Value = buckets_[Name]; ++Value.count_; Value.nanos_ += Nanos; Value.bytes_ += Bytes;
         Value.minimum_ = std::min(Value.minimum_, Nanos); Value.maximum_ = std::max(Value.maximum_, Nanos);
@@ -45,12 +46,12 @@ public:
         return File.write(Bytes)==Bytes.size() && File.flush();
     }
 private:
-    std::atomic<bool> enabled_{false},failed_{false}; std::mutex mutex_; std::map<std::string,Bucket> buckets_;
+    std::atomic<bool> enabled_{false},failed_{false},detailed_{false}; std::mutex mutex_; std::map<std::string,Bucket> buckets_;
     std::chrono::steady_clock::time_point epoch_; std::vector<std::pair<std::uint64_t,std::uint64_t>> recoveryIntervals_;
 };
 class OperationMetric final {
 public:
-    explicit OperationMetric(const char* Name, std::uint64_t Bytes = 0) : name_(Name), bytes_(Bytes), active_(OperationMetrics::Instance().Enabled()) { if (active_) started_=std::chrono::steady_clock::now(); }
+    explicit OperationMetric(const char* Name, std::uint64_t Bytes = 0, bool Detailed = false) : name_(Name), bytes_(Bytes), active_(OperationMetrics::Instance().Enabled() && (!Detailed || OperationMetrics::Instance().DetailedEnabled())) { if (active_) started_=std::chrono::steady_clock::now(); }
     void SetBytes(std::uint64_t Bytes) { bytes_=Bytes; }
     ~OperationMetric() { if (active_) { try { OperationMetrics::Instance().Add(name_,started_,std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started_).count(),bytes_); } catch (...) { OperationMetrics::Instance().MarkFailed(); } } }
 private:
