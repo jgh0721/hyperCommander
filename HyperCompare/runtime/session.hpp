@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "core/compare.hpp"
+#include "core/mergeModel.hpp"
 #include "commonLibs/storage/storage.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
 #include <QByteArray>
@@ -32,6 +33,7 @@ namespace hc::compare
         QVector<Snapshot> inputs_;
         std::vector<Edit> edits_;
         MergeResult merged_;
+        std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;
         QJsonArray entries_, comparisons_, warnings_, recovery_;
         storage::DestinationExpectation expected_;

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "mergeController.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -67,11 +68,29 @@ namespace hc::compare
         cancel_ = tools->addAction(tr("취소"), this, [this] { canceled_->store(true); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
         save_ = tools->addAction(tr("결과 저장"), this, &CompareWindow::save); save_->setEnabled(false);
-        tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); });
-        tools->addAction(tr("오른쪽 전체 선택"), this, [this] { chooseSide(1); });
-        tools->addAction(tr("수동 해결 완료"), this, [this] {
-            if (output_ && !watcher_.isRunning()) { unresolved_ = false; state_->setText(tr("수동 해결 완료 — 결과를 저장하십시오.")); }
-        });
+        wholeActions_.push_back(tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); }));
+        wholeActions_.push_back(tools->addAction(tr("오른쪽 전체 선택"), this, [this] { chooseSide(1); }));
+        wholeActions_.push_back(tools->addAction(tr("전체 수동 완료"), this, [this] {
+            if (!merge_ || watcher_.isRunning()) return;
+            try { merge_->ChooseAll(Resolution::Manual); }
+            catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+        }));
+        for (auto* action : wholeActions_) action->setEnabled(false);
+        addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합"));
+        mergeTools->addAction(tr("이전 차이"), this, [this] { navigateBlock(-1); });
+        mergeTools->addAction(tr("다음 차이"), this, [this] { navigateBlock(1); });
+        for (const auto& choice : {std::pair{tr("블록 LEFT"), Resolution::Left}, {tr("블록 RIGHT"), Resolution::Right},
+            {tr("블록 BASE"), Resolution::Base}, {tr("LEFT → RIGHT"), Resolution::LeftThenRight},
+            {tr("RIGHT → LEFT"), Resolution::RightThenLeft}, {tr("블록 수동 완료"), Resolution::Manual}})
+        {
+            auto* action = mergeTools->addAction(choice.first, this, [this, value = choice.second] { chooseBlock(value); });
+            blockActions_.push_back(action); action->setEnabled(false);
+            if (choice.second == Resolution::Base) baseChoice_ = action;
+        }
+        auto* editMenu = menuBar()->addMenu(tr("편집"));
+        undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { if (output_ && !watcher_.isRunning()) output_->send(SCI_UNDO); });
+        redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !watcher_.isRunning()) output_->send(SCI_REDO); });
+        undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
         connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
@@ -86,15 +105,15 @@ namespace hc::compare
             {
                 saving_ = false;
                 if (output_) output_->send(SCI_SETREADONLY, 0);
+                updateMerge();
                 if (result_.exitCode_ == 0)
                 {
-                    if (output_) output_->send(SCI_SETSAVEPOINT);
+                    if (merge_) merge_->MarkSaved();
                     dirty_ = false; exitCode_ = 0;
                     state_->setText(result_.warnings_.isEmpty() && result_.recovery_.isEmpty() ? tr("저장 완료") : tr("저장 완료 — 임시 파일 정리 확인 필요"));
                     state_->setToolTip(QString::fromUtf8(QJsonDocument(result_.Json()).toJson()));
                 }
                 else { exitCode_ = 2; state_->setText(tr("저장 실패: ") + result_.error_); }
-                save_->setEnabled(true);
                 if (closing_) close();
                 return;
             }
@@ -103,6 +122,7 @@ namespace hc::compare
         });
         connect(changes_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
             if (!Item || editors_.size() < 2 || result_.operation_ == "directory2") return;
+            if (merge_) { selectBlock(); updateMerge(); return; }
             editors_[0]->send(SCI_GOTOLINE, uptr_t(Item->data(1, Qt::UserRole).toULongLong()));
             editors_[1]->send(SCI_GOTOLINE, uptr_t(Item->data(2, Qt::UserRole).toULongLong()));
         });
@@ -128,11 +148,12 @@ namespace hc::compare
         cancel_->setEnabled(true);
         if (output_) output_->send(SCI_SETREADONLY, 1);
         watcher_.setFuture(QtConcurrent::run([input = request_, cancel = canceled_] { return Execute(input, cancel, false); }));
+        updateMerge();
     }
     ScintillaEditBase* CompareWindow::addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly)
     {
         auto* pane = new QWidget(panes_); auto* box = new QVBoxLayout(pane); box->setContentsMargins(2, 2, 2, 2);
-        auto* label = new QLabel(Title + " — " + Path, pane); label->setTextFormat(Qt::PlainText); label->setToolTip(Path);
+        auto* label = new QLabel(Title + " — " + QFileInfo(Path).fileName(), pane); label->setTextFormat(Qt::PlainText); label->setToolTip(Path);
         label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); box->addWidget(label);
         auto* editor = new ScintillaEditBase(pane); editor->setObjectName(Title); box->addWidget(editor); editors_.push_back(editor);
         panes_->addWidget(pane); pane->setMinimumWidth(120);
@@ -148,7 +169,8 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
-        output_ = nullptr; editors_.clear(); changes_->clear();
+        delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
+        changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
         if (result_.completion_ != "Complete") { state_->setText(result_.error_); return; }
@@ -162,7 +184,8 @@ namespace hc::compare
             for (int i = 0; i < result_.inputs_.size(); ++i)
             {
                 const auto& input = result_.inputs_[i];
-                const auto name = i == 2 && !request_.base_.isEmpty() ? "BASE" : QString("FILE %1").arg(i + 1);
+                const auto name = i == 2 && !request_.base_.isEmpty() ? "BASE" : request_.mode_ == "merge" ?
+                    QString(i == 0 ? "LEFT" : "RIGHT") : QString("FILE %1").arg(i + 1);
                 addPane(name, input.path_, input.utf8_, true);
             }
             for (std::size_t i = 0; i < result_.edits_.size(); ++i)
@@ -177,12 +200,15 @@ namespace hc::compare
             {
                 const auto initial = result_.error_ == "DecisionsRequired" ? result_.inputs_[0].utf8_ : result_.output_;
                 output_ = addPane("RESULT", request_.output_, initial, false); save_->setEnabled(true);
-                connect(output_, &ScintillaEditBase::modified, this, [this](Scintilla::ModificationFlags Type, Scintilla::Position,
-                    Scintilla::Position, Scintilla::Position, const QByteArray&, Scintilla::Position, Scintilla::FoldLevel, Scintilla::FoldLevel) {
-                    if (settingText_ || !(static_cast<int>(Type) & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) return;
-                    dirty_ = true; exitCode_ = 3;
-                    if (!result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired") unresolved_ = true;
-                });
+                changes_->clear();
+                merge_ = new MergeController(output_, result_.plan_, this);
+                merge_->changed_ = [this] { updateMerge(); };
+                for (const auto& block : result_.plan_->blocks_)
+                {
+                    auto* item = new QTreeWidgetItem(changes_, {QString::number(block.id_), QString::number(block.leftLine_ + 1), QString::number(block.rightLine_ + 1)});
+                    item->setData(0, Qt::UserRole, qulonglong(block.id_));
+                }
+                if (changes_->topLevelItemCount()) changes_->setCurrentItem(changes_->topLevelItem(0));
             }
         }
         state_->setText(QString("%1 — %2, conflicts: %3").arg(result_.operation_, result_.outcome_).arg(result_.merged_.conflicts_.size()));
@@ -191,17 +217,73 @@ namespace hc::compare
         panes_->setSizes(widths);
         auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->setSizes({560, 140});
         applyAppearance();
+        updateMerge();
     }
-    void CompareWindow::replaceResult(const QByteArray& Text)
+    void CompareWindow::chooseBlock(Resolution Choice)
     {
-        if (!output_ || watcher_.isRunning()) return;
-        settingText_ = true; output_->send(SCI_BEGINUNDOACTION); output_->send(SCI_SETTARGETSTART, 0);
-        output_->send(SCI_SETTARGETEND, uptr_t(output_->send(SCI_GETLENGTH)));
-        output_->send(SCI_REPLACETARGET, uptr_t(Text.size()), reinterpret_cast<sptr_t>(Text.constData()));
-        output_->send(SCI_ENDUNDOACTION); settingText_ = false; dirty_ = true; unresolved_ = false; exitCode_ = 3;
+        if (!merge_ || watcher_.isRunning() || !changes_->currentItem()) return;
+        const auto* item = changes_->currentItem();
+        try
+        {
+            merge_->Choose(item->data(0, Qt::UserRole).toULongLong(), item->data(3, Qt::UserRole).toULongLong(), Choice);
+            selectBlock();
+        }
+        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
     }
     void CompareWindow::chooseSide(int Index)
-    { if (result_.inputs_.size() > Index) replaceResult(result_.inputs_[Index].utf8_); }
+    {
+        if (!merge_ || watcher_.isRunning() || result_.inputs_.size() <= Index) return;
+        try { merge_->ChooseAll(Index == 0 ? Resolution::Left : Resolution::Right, result_.inputs_[Index].utf8_); }
+        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+    }
+    void CompareWindow::updateMerge()
+    {
+        const bool ready = merge_ && !watcher_.isRunning();
+        for (auto* action : blockActions_) action->setEnabled(false);
+        for (auto* action : wholeActions_) action->setEnabled(ready);
+        undo_->setEnabled(ready && output_->send(SCI_CANUNDO)); redo_->setEnabled(ready && output_->send(SCI_CANREDO));
+        if (!merge_) return;
+        const auto& model = merge_->Model();
+        for (std::size_t i = 0; i < model.State().size(); ++i)
+        {
+            auto* item = changes_->topLevelItem(int(i)); const auto& block = model.State()[i];
+            const auto label = block.resolution_ == Resolution::Unresolved ? tr("미해결") : block.resolution_ == Resolution::Left ? "LEFT" :
+                block.resolution_ == Resolution::Right ? "RIGHT" : block.resolution_ == Resolution::Base ? "BASE" :
+                block.resolution_ == Resolution::LeftThenRight ? "LEFT → RIGHT" : block.resolution_ == Resolution::RightThenLeft ? "RIGHT → LEFT" : tr("수동 완료");
+            item->setText(3, label + (block.mapped_ ? QString{} : tr(" · 위치 재검토")));
+            item->setToolTip(3, block.mapped_ ? QString{} : tr("블록 경계를 넘는 편집입니다. Undo로 복원하거나 전체 결과 검토 후 ‘전체 수동 완료’를 선택하십시오."));
+            item->setData(3, Qt::UserRole, qulonglong(model.Revision()));
+        }
+        if (ready && changes_->currentItem())
+        {
+            const auto index = changes_->indexOfTopLevelItem(changes_->currentItem());
+            const bool mapped = index >= 0 && model.State()[std::size_t(index)].mapped_;
+            for (auto* action : blockActions_) action->setEnabled(mapped);
+            baseChoice_->setEnabled(mapped && model.Plan().hasBase_);
+        }
+        save_->setEnabled(ready && model.UnresolvedCount() == 0);
+        if (ready)
+        {
+            unresolved_ = model.UnresolvedCount() != 0; dirty_ = merge_->Dirty();
+            exitCode_ = merge_->Saved() ? 0 : 3;
+            state_->setText(tr("미해결: %1 / %2 — %3").arg(model.UnresolvedCount()).arg(model.State().size()).arg(merge_->Saved() ? tr("저장 완료") : tr("결과 저장 필요")));
+        }
+    }
+    void CompareWindow::selectBlock()
+    {
+        if (!merge_ || !changes_->currentItem()) return;
+        const auto at = changes_->indexOfTopLevelItem(changes_->currentItem()); if (at < 0) return;
+        const auto& block = merge_->Model().Plan().blocks_[std::size_t(at)];
+        const auto& state = merge_->Model().State()[std::size_t(at)];
+        editors_[0]->send(SCI_GOTOLINE, block.leftLine_); editors_[1]->send(SCI_GOTOLINE, block.rightLine_);
+        if (state.mapped_) { output_->send(SCI_SETSEL, state.begin_, sptr_t(state.end_)); output_->send(SCI_SCROLLCARET); }
+    }
+    void CompareWindow::navigateBlock(int Direction)
+    {
+        const auto count = changes_->topLevelItemCount(); if (!count) return;
+        const auto at = changes_->indexOfTopLevelItem(changes_->currentItem());
+        changes_->setCurrentItem(changes_->topLevelItem((at + Direction + count) % count));
+    }
     void CompareWindow::save()
     {
         if (!output_ || watcher_.isRunning()) return;
@@ -213,6 +295,7 @@ namespace hc::compare
             catch (const std::exception& error) { result.exitCode_ = 2; result.error_ = QString::fromUtf8(error.what()); }
             return result;
         }));
+        updateMerge();
     }
     void CompareWindow::applyAppearance()
     {

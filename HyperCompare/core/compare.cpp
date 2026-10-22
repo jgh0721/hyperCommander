@@ -39,6 +39,19 @@ namespace hc::compare
             { append(result, Base, cursor, edit->begin_); result += edit->replacement_; cursor = edit->end_; }
             append(result, Base, cursor, End); return result;
         }
+        std::size_t sideLine(std::size_t Line, bool Gap, const std::vector<Edit>& Edits)
+        {
+            const auto at = std::lower_bound(Edits.begin(), Edits.end(), Line,
+                [](const Edit& Edit, std::size_t Value) { return Edit.begin_ < Value; });
+            if (at != Edits.end() && at->begin_ == Line)
+            {
+                // A separate insertion at a nonempty range's beginning precedes it.
+                return Gap || at->end_ > Line ? at->otherBegin_ : at->otherEnd_;
+            }
+            if (at == Edits.begin()) return Line;
+            const auto& previous = *std::prev(at);
+            return previous.end_ > Line ? previous.otherBegin_ : previous.otherEnd_ + Line - previous.end_;
+        }
     }
     std::vector<Edit> Diff(std::string_view Left, std::string_view Right, const Budget& Limits)
     {
@@ -145,6 +158,8 @@ namespace hc::compare
             else
             {
                 Conflict conflict; conflict.baseBegin_ = beginLine; conflict.baseEnd_ = endLine;
+                conflict.leftBegin_ = sideLine(beginLine, beginLine == endLine, l);
+                conflict.rightBegin_ = sideLine(beginLine, beginLine == endLine, r);
                 conflict.resultBegin_ = result.text_.size(); append(conflict.base_, base, beginLine, endLine);
                 conflict.left_ = left; conflict.right_ = right; result.text_ += conflict.base_;
                 conflict.resultEnd_ = result.text_.size(); result.conflicts_.push_back(std::move(conflict));

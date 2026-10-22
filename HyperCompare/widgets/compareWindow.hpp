@@ -14,6 +14,7 @@ class QCloseEvent;
 
 namespace hc::compare
 {
+    class MergeController;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -30,21 +31,30 @@ namespace hc::compare
         void chooseFont(const QString& Role);
         void save();
         void chooseSide(int Index);
+        void chooseBlock(Resolution Choice);
+        void updateMerge();
+        void navigateBlock(int Direction);
+        void selectBlock();
         ScintillaEditBase* addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly);
-        void replaceResult(const QByteArray& Text);
         Request request_;
         Result result_;
         QFutureWatcher<Result> watcher_;
         std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
         QVector<ScintillaEditBase*> editors_;
         ScintillaEditBase* output_ = nullptr;
+        MergeController* merge_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
         QAction* save_ = nullptr;
         QAction* cancel_ = nullptr;
+        QAction* undo_ = nullptr;
+        QAction* redo_ = nullptr;
+        QAction* baseChoice_ = nullptr;
+        QVector<QAction*> blockActions_;
+        QVector<QAction*> wholeActions_;
         QFont uiFont_, listFont_, textFont_;
-        bool dark_ = false, dirty_ = false, unresolved_ = false, settingText_ = false, closing_ = false, saving_ = false;
+        bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         int exitCode_ = 3;
     };
 }

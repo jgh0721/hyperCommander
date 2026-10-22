@@ -177,6 +177,7 @@ namespace hc::compare
     {
         return {{"schemaVersion", 1}, {"phase", "foundation"}, {"textCompare2", true}, {"textCompare3", true},
             {"textMerge3", true}, {"textMerge2", "explicit-whole-side"}, {"directoryCompare2", true},
+            {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"directoryMerge", false}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
@@ -221,11 +222,14 @@ namespace hc::compare
                     inspectOutput(Input, result, limits);
                     if (Input.base_.isEmpty())
                     {
+                        const auto seed = Input.takeAll_ == "right" ? Resolution::Right : Input.takeAll_ == "left" ? Resolution::Left : Resolution::Unresolved;
+                        result.plan_ = std::make_shared<MergePlan>(TwoWayPlan(left, right, result.edits_, seed));
                         if (left != right && Input.takeAll_.isEmpty()) { result.exitCode_ = 1; result.outcome_ = "Conflicted"; result.error_ = "DecisionsRequired"; }
                         else { result.output_ = Input.takeAll_ == "right" ? result.inputs_[1].utf8_ : result.inputs_[0].utf8_; result.exitCode_ = 0; result.outcome_ = "Planned"; }
                     }
                     else
                     {
+                        result.plan_ = std::make_shared<MergePlan>(ThreeWayPlan(view(result.inputs_[2].utf8_), left, right, result.merged_));
                         result.output_ = QByteArray::fromStdString(result.merged_.text_);
                         result.exitCode_ = result.merged_.conflicts_.empty() ? 0 : 1;
                         result.outcome_ = result.exitCode_ == 0 ? "Planned" : "Conflicted";

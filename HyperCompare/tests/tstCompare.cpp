@@ -71,6 +71,56 @@ private slots:
         std::atomic_bool cancel(true); budget.canceled_ = &cancel; QVERIFY_EXCEPTION_THROWN(Diff("a", "b", budget), Failure);
         budget.canceled_ = nullptr; budget.deadline_ = std::chrono::steady_clock::now(); QVERIFY_EXCEPTION_THROWN(Diff("a", "a", budget), Failure);
     }
+    void blockDecisions()
+    {
+        const std::string left = "a\nkeep\nlast\n", right = "A\nextra\nkeep\nLAST\n";
+        auto plan = std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right)));
+        MergeModel model(plan); QCOMPARE(model.UnresolvedCount(), std::size_t(2));
+        std::string text = left;
+        const auto old = model.Prepare(2, model.Revision(), Resolution::Right);
+        MergeModel anotherSession(plan); QVERIFY_EXCEPTION_THROWN(anotherSession.Apply(old), Failure);
+        auto change = model.Prepare(1, model.Revision(), Resolution::Right);
+        text.replace(change.begin_, change.end_ - change.begin_, change.replacement_); model.Apply(change);
+        QVERIFY_EXCEPTION_THROWN(model.Apply(old), Failure);
+        change = model.Prepare(2, model.Revision(), Resolution::Right);
+        text.replace(change.begin_, change.end_ - change.begin_, change.replacement_); model.Apply(change);
+        QCOMPARE(text, right); QCOMPARE(model.UnresolvedCount(), std::size_t(0));
+        const auto state = model.State(); const auto revision = model.Revision();
+        model.TextChanged(0, 0, 3); QCOMPARE(model.UnresolvedCount(), std::size_t(1));
+        model.Restore(state); QCOMPARE(model.State(), state); QVERIFY(model.Revision() > revision);
+        QVERIFY_EXCEPTION_THROWN(model.Prepare(1, revision, Resolution::Left), Failure);
+        QVERIFY_EXCEPTION_THROWN(model.Prepare(1, model.Revision(), Resolution::Base), Failure);
+        QVERIFY_EXCEPTION_THROWN(model.Prepare(999, model.Revision(), Resolution::Right), Failure);
+    }
+    void threeWayBlockLocations()
+    {
+        std::mt19937 random(88117);
+        for (int trial = 0; trial < 2000; ++trial)
+        {
+            const auto sample = [&] {
+                std::string value;
+                for (int i = 0, count = int(random() % 18); i < count; ++i)
+                { value += char('a' + random() % 6); value += random() % 2 ? "\r\n" : "\n"; }
+                if (!value.empty() && random() % 3 == 0) value.pop_back();
+                return value;
+            };
+            const auto base = sample(), left = sample(), right = sample();
+            const auto merged = Merge(base, left, right);
+            auto plan = std::make_shared<MergePlan>(ThreeWayPlan(base, left, right, merged));
+            MergeModel model(plan); auto text = merged.text_;
+            for (const auto& block : plan->blocks_)
+            {
+                const auto change = model.Prepare(block.id_, model.Revision(), Resolution::Right);
+                text.replace(change.begin_, change.end_ - change.begin_, change.replacement_); model.Apply(change);
+            }
+            for (std::size_t i = 0; i < plan->blocks_.size(); ++i)
+            {
+                const auto& at = model.State()[i];
+                QCOMPARE(text.substr(at.begin_, at.end_ - at.begin_), plan->blocks_[i].right_);
+            }
+            QCOMPARE(model.UnresolvedCount(), std::size_t(0));
+        }
+    }
     void commandLine()
     {
         const auto parse = [](QStringList Args) { Args.prepend("HyperCompare.exe"); return Parse(Args, true); };

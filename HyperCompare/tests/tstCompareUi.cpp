@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include "widgets/mergeController.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -19,6 +20,16 @@ class CompareUiTests final : public QObject
     { QFile file(Path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(Text), Text.size()); }
     static QAction* action(CompareWindow& Window, const QString& Text)
     { for (auto* item : Window.findChildren<QAction*>()) if (item->text() == Text) return item; return nullptr; }
+    static QByteArray contents(ScintillaEditBase* Editor)
+    {
+        QByteArray text(qsizetype(Editor->send(SCI_GETLENGTH)) + 1, '\0');
+        Editor->send(SCI_GETTEXT, uptr_t(text.size()), reinterpret_cast<sptr_t>(text.data())); text.chop(1); return text;
+    }
+    static void setText(ScintillaEditBase& Editor, const std::string& Text)
+    {
+        Editor.send(SCI_SETCODEPAGE, SC_CP_UTF8); Editor.send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(Text.c_str()));
+        Editor.send(SCI_EMPTYUNDOBUFFER); Editor.send(SCI_SETSAVEPOINT);
+    }
 private slots:
     void initTestCase()
     {
@@ -53,6 +64,126 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("left\n"));
         window.close();
+    }
+    void nativeUndoRestoresDecisions()
+    {
+        const std::string left = "a\nkeep\nz\n", right = "A\nextra\nkeep\nZ\n";
+        ScintillaEditBase editor; setText(editor, left);
+        auto plan = std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right)));
+        MergeController controller(&editor, plan, nullptr);
+        const auto initial = controller.Model().State();
+        controller.Choose(1, controller.Model().Revision(), Resolution::Right);
+        const auto chosen = controller.Model().State(); QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(1));
+        QCOMPARE(contents(&editor), QByteArray("A\nextra\nkeep\nz\n"));
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray::fromStdString(left)); QCOMPARE(controller.Model().State(), initial);
+        editor.send(SCI_REDO); QCOMPARE(controller.Model().State(), chosen);
+        editor.send(SCI_INSERTTEXT, 1, reinterpret_cast<sptr_t>("manual"));
+        QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(2));
+        editor.send(SCI_UNDO); QCOMPARE(controller.Model().State(), chosen);
+        editor.send(SCI_REDO); QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(2));
+        controller.Choose(1, controller.Model().Revision(), Resolution::Manual);
+        controller.Choose(2, controller.Model().Revision(), Resolution::Left);
+        controller.MarkSaved(); QVERIFY(controller.Saved());
+        editor.send(SCI_UNDO); QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(1)); QVERIFY(!controller.Saved());
+        editor.send(SCI_REDO); QVERIFY(controller.Saved());
+        editor.send(SCI_UNDO); editor.send(SCI_UNDO);
+        QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(2));
+        // Branching after Undo must discard the old decision states as well as native Redo.
+        controller.ChooseAll(Resolution::Left, QByteArray::fromStdString(left)); QVERIFY(!editor.send(SCI_CANREDO));
+        editor.send(SCI_UNDO); QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(2));
+        editor.send(SCI_REDO); QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(0));
+    }
+    void manualCrossBoundaryAndUtf8()
+    {
+        const auto left = QString::fromUtf8("가\r\n유지\r\n끝").toUtf8().toStdString();
+        const auto right = QString::fromUtf8("나\r\n추가\r\n유지\r\n마침").toUtf8().toStdString();
+        ScintillaEditBase editor; setText(editor, left);
+        MergeController controller(&editor, std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right))), nullptr);
+        controller.Choose(1, controller.Model().Revision(), Resolution::Right);
+        const auto before = controller.Model().State(); const auto text = contents(&editor);
+        // Remove across both block boundaries; no remaining block may overwrite ambiguous text.
+        editor.send(SCI_SETTARGETSTART, 3); editor.send(SCI_SETTARGETEND, uptr_t(editor.send(SCI_GETLENGTH)));
+        editor.send(SCI_REPLACETARGET, 0, reinterpret_cast<sptr_t>(""));
+        QVERIFY(!controller.Model().State()[0].mapped_); QVERIFY(!controller.Model().State()[1].mapped_);
+        QVERIFY_EXCEPTION_THROWN(controller.Choose(1, controller.Model().Revision(), Resolution::Right), Failure);
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), text); QCOMPARE(controller.Model().State(), before);
+        controller.Choose(2, controller.Model().Revision(), Resolution::Right);
+        QCOMPARE(contents(&editor), QByteArray::fromStdString(right));
+    }
+    void twoWayBlockWindow()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "a\nkeep\nz\n"); write(r.file2_, "A\nextra\nkeep\nZ\n");
+        CompareWindow window(r); window.show(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->topLevelItemCount(), 2, 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); QVERIFY(output);
+        auto* save = action(window, QString::fromUtf8("결과 저장")); QVERIFY(save); QVERIFY(!save->isEnabled());
+        action(window, QString::fromUtf8("블록 RIGHT"))->trigger();
+        tree->setCurrentItem(tree->topLevelItem(1)); action(window, QString::fromUtf8("블록 LEFT"))->trigger();
+        QCOMPARE(contents(output), QByteArray("A\nextra\nkeep\nz\n")); QVERIFY(save->isEnabled()); save->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        output->setFocus(); QTest::keyClick(output, Qt::Key_Z, Qt::ControlModifier);
+        QTRY_VERIFY(!save->isEnabled()); QCOMPARE(window.ExitCode(), 3);
+        output->send(SCI_REDO); QVERIFY(save->isEnabled()); QCOMPARE(window.ExitCode(), 0);
+        QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("A\nextra\nkeep\nz\n"));
+        window.close();
+    }
+    void emptyBlocksAndPrefixEdits()
+    {
+        const std::string left = "head\nkeep\nend", right = "head\ninsert\nkeep\nEND";
+        ScintillaEditBase editor; setText(editor, left);
+        MergeController controller(&editor, std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right))), nullptr);
+        const auto initial = controller.Model().State();
+        QCOMPARE(initial[0].begin_, initial[0].end_);
+        editor.send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("prefix\n"));
+        QCOMPARE(controller.Model().State()[0].begin_, initial[0].begin_ + 7);
+        controller.Choose(1, controller.Model().Revision(), Resolution::Right);
+        controller.Choose(2, controller.Model().Revision(), Resolution::Right);
+        QCOMPARE(contents(&editor), QByteArray("prefix\nhead\ninsert\nkeep\nEND"));
+        controller.Choose(1, controller.Model().Revision(), Resolution::Left);
+        QCOMPARE(contents(&editor), QByteArray("prefix\nhead\nkeep\nEND"));
+        editor.send(SCI_UNDO); editor.send(SCI_UNDO); editor.send(SCI_UNDO); editor.send(SCI_UNDO);
+        QCOMPARE(contents(&editor), QByteArray::fromStdString(left)); QCOMPARE(controller.Model().State(), initial);
+        // Joining both sides at an empty BASE must preserve missing final newlines.
+        const auto merged = Merge("", "left", "right");
+        ScintillaEditBase gap; setText(gap, "");
+        MergeController gapController(&gap, std::make_shared<MergePlan>(ThreeWayPlan("", "left", "right", merged)), nullptr);
+        gapController.Choose(1, gapController.Model().Revision(), Resolution::RightThenLeft);
+        QCOMPARE(contents(&gap), QByteArray("rightleft")); gap.send(SCI_UNDO);
+        QCOMPARE(contents(&gap), QByteArray{}); QCOMPARE(gapController.Model().UnresolvedCount(), std::size_t(1));
+    }
+    void boundedDecisionHistory()
+    {
+        const std::string left = "old\n", right = "new\n";
+        ScintillaEditBase editor; setText(editor, left);
+        MergeController controller(&editor, std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right))), nullptr, 1);
+        controller.Choose(1, controller.Model().Revision(), Resolution::Right);
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray::fromStdString(left));
+        QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(1)); QVERIFY(!controller.Model().State()[0].mapped_);
+        QVERIFY_EXCEPTION_THROWN(controller.Choose(1, controller.Model().Revision(), Resolution::Right), Failure);
+        controller.ChooseAll(Resolution::Manual); QCOMPARE(contents(&editor), QByteArray::fromStdString(left));
+        QCOMPARE(controller.Model().UnresolvedCount(), std::size_t(0));
+    }
+    void threeWayBlockWindow()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.base_ = dir.filePath("base.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.base_, "head\nbase1\nmiddle\nbase2\nend\n"); write(r.file1_, "head\nleft1\nmiddle\nleft2\nend\n");
+        write(r.file2_, "head\nright1\nmiddle\nright2\nend\n");
+        CompareWindow window(r); window.show(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->topLevelItemCount(), 2, 10000);
+        action(window, "LEFT → RIGHT")->trigger();
+        tree->setCurrentItem(tree->topLevelItem(1)); action(window, QString::fromUtf8("블록 BASE"))->trigger();
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); QVERIFY(output);
+        QCOMPARE(contents(output), QByteArray("head\nleft1\nright1\nmiddle\nbase2\nend\n"));
+        auto* save = action(window, QString::fromUtf8("결과 저장")); QVERIFY(save->isEnabled());
+        output->send(SCI_UNDO); QVERIFY(!save->isEnabled()); output->send(SCI_REDO); QVERIFY(save->isEnabled());
+        auto* dark = action(window, "Dark"); dark->setChecked(false); QTest::qWait(60);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/merge-blocks-light.png"));
+        dark->setChecked(true); QTest::qWait(60);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/merge-blocks-dark.png"));
+        save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
     }
 };
 QTEST_MAIN(CompareUiTests)

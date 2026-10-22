@@ -36,6 +36,7 @@ namespace hc::compare
     struct Conflict
     {
         std::size_t baseBegin_ = 0, baseEnd_ = 0, resultBegin_ = 0, resultEnd_ = 0;
+        std::size_t leftBegin_ = 0, rightBegin_ = 0;
         std::string base_, left_, right_;
     };
     struct MergeResult { std::string text_; std::vector<Conflict> conflicts_; };
