@@ -83,6 +83,90 @@ private slots:
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
     }
+    void threeFilePairSelectionAndSnapshots()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("one.cpp"); r.file2_ = dir.filePath("two.cpp"); r.file3_ = dir.filePath("three.cpp"); r.theme_ = "light";
+        const auto a = lines(0, 120), b = lines(0, 30) + QString::fromUtf8("value B 한글😀\r\n").toUtf8() + lines(31, 120);
+        const auto c = QByteArray("prefix\r\nsecond\r\n") + lines(0, 30) + QString::fromUtf8("value C 한굴😃\r\n").toUtf8() + lines(31, 120) + "tail\r\n";
+        write(r.file1_, a); write(r.file2_, b); write(r.file3_, c);
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 3"), 10000);
+        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); QVERIFY(selector->isVisible()); QCOMPARE(selector->count(), 3);
+        const std::array<ScintillaEditBase*, 3> editors{window.findChild<ScintillaEditBase*>("FILE 1"), window.findChild<ScintillaEditBase*>("FILE 2"), window.findChild<ScintillaEditBase*>("FILE 3")};
+        auto* bar = window.findChild<OverviewBar*>(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        editors[0]->setFocus(); QTest::qWait(50);
+        for (auto* editor : editors) editor->send(SCI_SETSEL, 2, 4);
+        write(r.file1_, "external one"); write(r.file2_, "external two"); write(r.file3_, "external three");
+        const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};
+        for (const auto index : {1, 2, 0, 2, 1})
+        {
+            selector->setFocus(); selector->setCurrentIndex(index); QTest::qWait(20);
+            const auto first = pairs[index][0], second = pairs[index][1], inactive = 3 - first - second;
+            QCOMPARE(tree->headerItem()->text(1), editors[first]->objectName()); QCOMPARE(tree->headerItem()->text(2), editors[second]->objectName());
+            QVERIFY(bar->accessibleName().contains(QString::number(second + 1)));
+            for (auto* editor : editors)
+            {
+                QCOMPARE(editor->send(SCI_GETANCHOR), sptr_t(2)); QCOMPARE(editor->send(SCI_GETCURRENTPOS), sptr_t(4));
+                QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0));
+            }
+            QCOMPARE(editors[inactive]->send(GetLeadingRows), sptr_t(0));
+            for (sptr_t line = 0; line < editors[inactive]->send(SCI_GETLINECOUNT); ++line)
+            {
+                QVERIFY(!(editors[inactive]->send(SCI_MARKERGET, uptr_t(line)) & (1 << 8)));
+                const auto position = editors[inactive]->send(SCI_POSITIONFROMLINE, uptr_t(line));
+                QCOMPARE(editors[inactive]->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, position), sptr_t(0));
+            }
+            const auto inactiveTop = editors[inactive]->send(SCI_GETFIRSTVISIBLELINE);
+            editors[first]->send(SCI_SETFIRSTVISIBLELINE, 45);
+            QTRY_COMPARE(editors[second]->send(SCI_GETFIRSTVISIBLELINE), sptr_t(45));
+            QCOMPARE(editors[inactive]->send(SCI_GETFIRSTVISIBLELINE), inactiveTop);
+            QCOMPARE(contents(editors[0]), a); QCOMPARE(contents(editors[1]), b); QCOMPARE(contents(editors[2]), c);
+        }
+        // Actual keyboard pair selection, then F7 navigation on the selected pair only.
+        selector->setFocus(); QTest::keyClick(selector, Qt::Key_Down); QCOMPARE(selector->currentIndex(), 2);
+        editors[0]->send(SCI_SETFIRSTVISIBLELINE, 65); const auto inactiveTop = editors[0]->send(SCI_GETFIRSTVISIBLELINE);
+        action(window, "다음 차이")->trigger(); QCOMPARE(editors[0]->send(SCI_GETFIRSTVISIBLELINE), inactiveTop);
+        QVERIFY(tree->currentItem());
+        QCOMPARE(editors[1]->send(SCI_LINEFROMPOSITION, uptr_t(editors[1]->send(SCI_GETCURRENTPOS))), sptr_t(tree->currentItem()->data(1, Qt::UserRole).toULongLong()));
+        QCOMPARE(editors[2]->send(SCI_LINEFROMPOSITION, uptr_t(editors[2]->send(SCI_GETCURRENTPOS))), sptr_t(tree->currentItem()->data(2, Qt::UserRole).toULongLong()));
+        bar->setFocus(); QTest::keyClick(bar, Qt::Key_End); QCOMPARE(editors[0]->send(SCI_GETFIRSTVISIBLELINE), inactiveTop);
+        action(window, "왼쪽·오른쪽 표시 줄 정렬")->setChecked(false); action(window, "왼쪽·오른쪽 스크롤 동기화")->setChecked(false);
+        const auto thirdTop = editors[2]->send(SCI_GETFIRSTVISIBLELINE); editors[1]->send(SCI_SETFIRSTVISIBLELINE, 10);
+        QCOMPARE(editors[2]->send(SCI_GETFIRSTVISIBLELINE), thirdTop);
+        action(window, "왼쪽·오른쪽 스크롤 동기화")->setChecked(true);
+        editors[1]->send(SCI_SETFIRSTVISIBLELINE, 25); QTRY_VERIFY(editors[2]->send(SCI_GETFIRSTVISIBLELINE) < 40);
+        QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/three-pair-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/three-pair-dark.png"));
+        // Recompare adopts new disk snapshots and retains the selected pair.
+        write(r.file1_, "same"); write(r.file2_, "different"); write(r.file3_, "same");
+        QPointer<ScintillaEditBase> previous = editors[0]; action(window, "다시 비교")->trigger(); QVERIFY(!selector->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000); QVERIFY(!previous);
+        QCOMPARE(selector->currentIndex(), 2); selector->setCurrentIndex(1);
+        QCOMPARE(tree->topLevelItemCount(), 0); QCOMPARE(window.ExitCode(), 1);
+        QCOMPARE(contents(window.findChild<ScintillaEditBase*>("FILE 3")), QByteArray("same"));
+        window.close();
+    }
+    void threeFilePairFailureAndBaseIsolation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b"); r.file3_ = dir.filePath("c");
+        write(r.file1_, ""); write(r.file2_, "x"); write(r.file3_, ""); CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 3"), 10000);
+        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); selector->setCurrentIndex(1);
+        QCOMPARE(window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 0);
+        QVERIFY(QFile::remove(r.file3_)); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QVERIFY(selector->isHidden()); QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty());
+        QVERIFY(window.findChild<OverviewBar*>()->isHidden());
+        write(r.file3_, "z"); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 3"), 10000); QVERIFY(selector->isVisible()); window.close();
+        r.base_ = r.file3_; r.file3_.clear(); r.mode_ = "merge"; r.output_ = dir.filePath("out");
+        CompareWindow merge(r); merge.show(); QTRY_VERIFY_WITH_TIMEOUT(merge.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        QVERIFY(merge.findChild<QComboBox*>("comparePairSelector")->isHidden());
+        action(merge, "왼쪽 전체 선택")->trigger(); action(merge, "결과 저장")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(merge.ExitCode(), 0, 10000); merge.close();
+    }
     void overviewNavigationAndAppearance()
     {
         QSettings{}.setValue("view/alignSourceRows", true);

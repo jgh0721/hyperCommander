@@ -16,6 +16,7 @@ namespace hc::compare
         void SetSession(ScintillaEditBase* Left, ScintillaEditBase* Right, std::shared_ptr<const AlignmentMap> Map);
         void SetAligned(bool Aligned);
         void SetDark(bool Dark);
+        void SetSourceNumbers(unsigned First, unsigned Second);
         void FocusSource();
         QSize sizeHint() const override;
     protected:
@@ -37,6 +38,7 @@ namespace hc::compare
         std::shared_ptr<const AlignmentMap> map_;
         OverviewRaster raster_;
         unsigned active_ = 0;
+        std::array<unsigned, 2> numbers_{1, 2};
         bool aligned_ = false, dark_ = false;
     };
 }

@@ -19,6 +19,19 @@ namespace hc::compare
     namespace
     {
         constexpr qsizetype textLimit = 16 * 1024 * 1024;
+        std::shared_ptr<PairComparison> pairView(int First, int Second, const QVector<Snapshot>& Inputs,
+            const std::vector<Edit>& Changes, const Budget& Limits)
+        {
+            auto result = std::make_shared<PairComparison>(); result->inputs_ = {First, Second};
+            result->changes_.reserve(Changes.size());
+            for (const auto& change : Changes)
+                result->changes_.push_back({change.begin_, change.end_, change.otherBegin_, change.otherEnd_});
+            const auto& a = Inputs[First].utf8_; const auto& b = Inputs[Second].utf8_;
+            result->alignment_ = std::make_shared<AlignmentMap>(AlignmentMap::Build(
+                SplitLines({a.constData(), std::size_t(a.size())}).size(),
+                SplitLines({b.constData(), std::size_t(b.size())}).size(), Changes, Limits));
+            return result;
+        }
         storage::Locator locator(const QString& Path)
         { return {Path.startsWith("//") || Path.startsWith("\\\\") ? storage::LocatorKind::Smb : storage::LocatorKind::Local, Path.toUtf8().toStdString()}; }
         std::shared_ptr<storage::IStorageProvider> reader(const QString& Path)
@@ -227,6 +240,7 @@ namespace hc::compare
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
     {
         Result result; Budget limits; limits.canceled_ = Canceled.get();
+        std::array<std::shared_ptr<PairComparison>, 3> views;
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
@@ -251,8 +265,7 @@ namespace hc::compare
                 else if (!Input.file3_.isEmpty()) result.inputs_.push_back(load(Input.file3_, Input.encoding_, limits));
                 const auto left = view(result.inputs_[0].utf8_), right = view(result.inputs_[1].utf8_);
                 result.edits_ = Diff(left, right, limits);
-                if (!Input.headless_) result.alignment_ = std::make_shared<AlignmentMap>(
-                    AlignmentMap::Build(SplitLines(left).size(), SplitLines(right).size(), result.edits_, limits));
+                if (!Input.headless_) views[0] = pairView(0, 1, result.inputs_, result.edits_, limits);
                 bool different = !result.edits_.empty() || result.inputs_[0].raw_ != result.inputs_[1].raw_;
                 if (result.inputs_.size() == 3)
                 {
@@ -261,8 +274,14 @@ namespace hc::compare
                     {
                         for (const auto& pair : {std::pair{0, 1}, std::pair{1, 2}, std::pair{0, 2}})
                         {
-                            const auto changes = Diff(view(result.inputs_[pair.first].utf8_), view(result.inputs_[pair.second].utf8_), limits);
-                            result.comparisons_.append(QJsonObject{{"fromFile", pair.first + 1}, {"toFile", pair.second + 1}, {"changeCount", double(changes.size())}});
+                            if (pair.first == 0 && pair.second == 1)
+                                result.comparisons_.append(QJsonObject{{"fromFile", 1}, {"toFile", 2}, {"changeCount", double(result.edits_.size())}});
+                            else
+                            {
+                                const auto changes = Diff(view(result.inputs_[pair.first].utf8_), view(result.inputs_[pair.second].utf8_), limits);
+                                result.comparisons_.append(QJsonObject{{"fromFile", pair.first + 1}, {"toFile", pair.second + 1}, {"changeCount", double(changes.size())}});
+                                if (!Input.headless_) views[pair.first == 0 ? 1 : 2] = pairView(pair.first, pair.second, result.inputs_, changes, limits);
+                            }
                         }
                     }
                     different |= result.inputs_[2].raw_ != result.inputs_[0].raw_;
@@ -297,7 +316,18 @@ namespace hc::compare
                 // A small cooperative deadline falls back to line highlights.
                 auto decoration = limits;
                 decoration.deadline_ = std::min(limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
-                result.inline_ = BuildInlineDiff(view(result.inputs_[0].utf8_), view(result.inputs_[1].utf8_), result.edits_, decoration);
+                decoration.steps_ = std::min<std::uint64_t>(decoration.steps_, 4'000'000);
+                for (std::size_t i = 0; i < views.size(); ++i)
+                {
+                    if (!views[i]) continue;
+                    std::vector<Edit> ranges; ranges.reserve(views[i]->changes_.size());
+                    for (const auto& change : views[i]->changes_)
+                        ranges.push_back({change.begin_, change.end_, change.otherBegin_, change.otherEnd_, {}});
+                    views[i]->inline_ = BuildInlineDiff(view(result.inputs_[views[i]->inputs_[0]].utf8_),
+                        view(result.inputs_[views[i]->inputs_[1]].utf8_), ranges, decoration);
+                    decoration.steps_ -= views[i]->inline_.cells_;
+                    result.pairViews_[i] = std::move(views[i]);
+                }
             }
             result.completion_ = "Complete";
         }

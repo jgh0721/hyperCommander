@@ -12,6 +12,7 @@ class QLabel;
 class QSplitter;
 class QAction;
 class QCloseEvent;
+class QComboBox;
 
 namespace hc::compare
 {
@@ -37,6 +38,9 @@ namespace hc::compare
         bool busy() const { return watcher_.isRunning() || workWatcher_.isRunning(); }
         void transferWork(const QString& Path, bool Loading, bool ReplaceExisting);
         void display();
+        void applyPairView();
+        const PairComparison* currentPair() const
+        { return result_.completion_ == "Complete" ? result_.pairViews_[std::size_t(pairIndex_)].get() : nullptr; }
         void refresh(Result Value);
         void showBlocks();
         void openInputs();
@@ -79,6 +83,9 @@ namespace hc::compare
         QAction* alignRows_ = nullptr;
         QAction* inlineHighlights_ = nullptr;
         QAction* showOverview_ = nullptr;
+        QAction* pairSelectorAction_ = nullptr;
+        QComboBox* pairSelector_ = nullptr;
+        int pairIndex_ = 0;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QVector<QAction*> findActions_;

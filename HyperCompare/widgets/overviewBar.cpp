@@ -12,9 +12,7 @@ namespace hc::compare
     {
         setObjectName("compareOverview"); setFocusPolicy(Qt::StrongFocus);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        setAccessibleName(tr("첫 두 원본의 차이 개요"));
-        setAccessibleDescription(tr("왼쪽 열은 원본 1, 오른쪽 열은 원본 2입니다. 좌우 키로 대상을 선택하고 위아래·PageUp·PageDown·Home·End로 이동합니다."));
-        setToolTip(tr("1: 첫 번째 원본 · 2: 두 번째 원본\n노랑: 변경 · 초록: 오른쪽에 추가 · 빨강: 왼쪽에서 삭제 · 파랑: 대응 여백\n테두리: 현재 화면 범위\n클릭·드래그로 이동, 좌우 키로 대상 전환, 위아래·PageUp/Down·Home/End로 스크롤"));
+        SetSourceNumbers(1, 2);
         hide();
     }
     QSize OverviewBar::sizeHint() const { return {std::max(48, fontMetrics().horizontalAdvance("00") * 2 + 16), 160}; }
@@ -41,6 +39,14 @@ namespace hc::compare
     }
     void OverviewBar::SetAligned(bool Aligned) { if (aligned_ != Aligned) { aligned_ = Aligned; rebuild(); } }
     void OverviewBar::SetDark(bool Dark) { dark_ = Dark; update(); }
+    void OverviewBar::SetSourceNumbers(unsigned First, unsigned Second)
+    {
+        numbers_ = {First, Second};
+        setAccessibleName(tr("원본 %1 / 원본 %2 차이 개요").arg(First).arg(Second));
+        setAccessibleDescription(tr("왼쪽 열은 원본 %1, 오른쪽 열은 원본 %2입니다. 좌우 키로 대상을 선택하고 위아래·PageUp·PageDown·Home·End로 이동합니다.").arg(First).arg(Second));
+        setToolTip(tr("왼쪽: 원본 %1 · 오른쪽: 원본 %2\n노랑: 변경 · 초록: 오른쪽에 추가 · 빨강: 왼쪽에서 삭제 · 파랑: 대응 여백\n양옆 괄호선: 현재 화면 범위\n클릭·드래그로 이동, 좌우 키로 대상 전환, 위아래·PageUp/Down·Home/End로 스크롤").arg(First).arg(Second));
+        update();
+    }
     void OverviewBar::FocusSource() { if (editors_[active_]) editors_[active_]->setFocus(Qt::OtherFocusReason); }
     void OverviewBar::rebuild()
     {
@@ -66,7 +72,7 @@ namespace hc::compare
         {
             const auto area = track(side); const auto& bands = raster_.bands_[side];
             painter.setPen(side == active_ && hasFocus() ? palette().highlight().color() : palette().windowText().color());
-            painter.drawText(QRect(area.left(), 0, area.width(), area.top()), Qt::AlignCenter, QString::number(side + 1));
+            painter.drawText(QRect(area.left(), 0, area.width(), area.top()), Qt::AlignCenter, QString::number(numbers_[side]));
             painter.fillRect(area, palette().base());
             for (std::size_t begin = 0; begin < bands.size();)
             {

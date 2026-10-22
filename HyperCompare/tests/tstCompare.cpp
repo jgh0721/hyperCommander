@@ -208,13 +208,13 @@ private slots:
         write(r.file1_, "same\naXb\n"); write(r.file2_, "same\naYb\n");
         const auto canceled = std::make_shared<std::atomic_bool>(false);
         const auto gui = Execute(r, canceled, false); QCOMPARE(gui.completion_, QString("Complete"));
-        QCOMPARE(gui.inline_.ranges_[0], (std::vector<ByteRange>{{6, 7}}));
+        QVERIFY(gui.pairViews_[0]); QCOMPARE(gui.pairViews_[0]->inline_.ranges_[0], (std::vector<ByteRange>{{6, 7}}));
         r.headless_ = true; const auto cli = Execute(r, canceled, false);
-        QVERIFY(cli.inline_.ranges_[0].empty()); QCOMPARE(cli.Json(), gui.Json());
+        QVERIFY(!cli.pairViews_[0]); QCOMPARE(cli.Json(), gui.Json());
         r.headless_ = false; write(r.file1_, QByteArray(20000, 'a')); write(r.file2_, QByteArray(20000, 'b'));
         const auto limited = Execute(r, canceled, false);
         QCOMPARE(limited.completion_, QString("Complete")); QCOMPARE(limited.exitCode_, 1);
-        QCOMPARE(limited.inline_.skippedLines_, std::size_t(1)); QVERIFY(!limited.edits_.empty());
+        QCOMPARE(limited.pairViews_[0]->inline_.skippedLines_, std::size_t(1)); QVERIFY(!limited.edits_.empty());
     }
     void alignmentBoundaries()
     {
@@ -713,6 +713,54 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(SaveResult(request, result, result.output_), Failure); QCOMPARE(read(out), QByteArray("a\nR\n"));
         request.dryRun_ = true; result = Execute(request, cancel, true); QCOMPARE(result.commit_, QString("NotRequested"));
         QVERIFY_EXCEPTION_THROWN(SaveResult(request, result, result.output_), Failure); QCOMPARE(read(out), QByteArray("a\nR\n"));
+    }
+    void threePairViewsAndHeadlessContract()
+    {
+        QTemporaryDir dir; auto cancel = std::make_shared<std::atomic_bool>(false); Request r;
+        r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b"); r.file3_ = dir.filePath("c");
+        const std::array<std::string, 3> text{"head\none A\r\n한글😀\nend", "head\none B\r\n한굴😃\nend", "prefix\nhead\none A\r\n한글😀\nend\ntail"};
+        write(r.file1_, QByteArray::fromStdString(text[0])); write(r.file2_, QByteArray::fromStdString(text[1])); write(r.file3_, QByteArray::fromStdString(text[2]));
+        const auto gui = Execute(r, cancel, false); QCOMPARE(gui.completion_, QString("Complete"));
+        const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};
+        for (std::size_t slot = 0; slot < pairs.size(); ++slot)
+        {
+            const auto& item = gui.pairViews_[slot]; QVERIFY(item); QCOMPARE(item->inputs_, pairs[slot]);
+            const auto first = pairs[slot][0], second = pairs[slot][1]; const auto changes = Diff(text[first], text[second]);
+            QCOMPARE(item->changes_.size(), changes.size());
+            for (std::size_t i = 0; i < changes.size(); ++i)
+            {
+                QCOMPARE(item->changes_[i].begin_, changes[i].begin_); QCOMPARE(item->changes_[i].end_, changes[i].end_);
+                QCOMPARE(item->changes_[i].otherBegin_, changes[i].otherBegin_); QCOMPARE(item->changes_[i].otherEnd_, changes[i].otherEnd_);
+            }
+            QCOMPARE(item->alignment_->LineCount(0), SplitLines(text[first]).size());
+            QCOMPARE(item->alignment_->LineCount(1), SplitLines(text[second]).size());
+            QCOMPARE(item->inline_.ranges_, BuildInlineDiff(text[first], text[second], changes).ranges_);
+        }
+        r.headless_ = true; const auto cli = Execute(r, cancel, false); QCOMPARE(cli.Json(), gui.Json());
+        for (const auto& item : cli.pairViews_) QVERIFY(!item);
+        // Captured metadata and decoded inputs remain tied to their original snapshot.
+        write(r.file3_, "external change"); QCOMPARE(gui.inputs_[2].utf8_, QByteArray::fromStdString(text[2]));
+        r.headless_ = false; r.base_ = r.file3_; r.file3_.clear(); r.mode_ = "merge"; r.output_ = dir.filePath("out");
+        const auto merge = Execute(r, cancel, false); QCOMPARE(merge.completion_, QString("Complete"));
+        QVERIFY(merge.pairViews_[0]); QVERIFY(!merge.pairViews_[1]); QVERIFY(!merge.pairViews_[2]);
+    }
+    void threePairBudgetsAndEmptyInputs()
+    {
+        QTemporaryDir dir; auto cancel = std::make_shared<std::atomic_bool>(false); Request r;
+        r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b"); r.file3_ = dir.filePath("c");
+        write(r.file1_, ""); write(r.file2_, "x"); write(r.file3_, "");
+        auto result = Execute(r, cancel, false); QCOMPARE(result.completion_, QString("Complete"));
+        QCOMPARE(result.exitCode_, 1); QVERIFY(result.pairViews_[1]->changes_.empty());
+        QCOMPARE(result.pairViews_[1]->alignment_->RowCount(), std::size_t(0));
+        QByteArray a, b, c;
+        for (int i = 0; i < 20; ++i)
+        { a += QByteArray(400, 'a') + '\n'; b += QByteArray(400, 'b') + '\n'; c += QByteArray(400, 'c') + '\n'; }
+        write(r.file1_, a); write(r.file2_, b); write(r.file3_, c);
+        result = Execute(r, cancel, false); QCOMPARE(result.completion_, QString("Complete"));
+        std::uint64_t total = 0; std::size_t skipped = 0;
+        for (const auto& item : result.pairViews_) { QVERIFY(item); total += item->inline_.cells_; skipped += item->inline_.skippedLines_; }
+        QVERIFY(total <= 4'000'000); QVERIFY(skipped > 0);
+        cancel->store(true); QCOMPARE(Execute(r, cancel, false).completion_, QString("Canceled"));
     }
     void threeFilesAreNotAncestors()
     {

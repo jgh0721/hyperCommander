@@ -6,6 +6,7 @@
 #include "overviewBar.hpp"
 #include <QApplication>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFontDialog>
 #include <QLabel>
@@ -74,6 +75,16 @@ namespace hc::compare
         cancel_ = tools->addAction(tr("취소"), this, [this] { canceled_->store(true); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
         save_ = tools->addAction(tr("결과 저장"), this, &CompareWindow::save); save_->setEnabled(false);
+        pairSelector_ = new QComboBox(tools); pairSelector_->setObjectName("comparePairSelector");
+        pairSelector_->setAccessibleName(tr("비교 쌍"));
+        pairSelector_->addItems({tr("FILE 1 ↔ FILE 2"), tr("FILE 1 ↔ FILE 3"), tr("FILE 2 ↔ FILE 3")});
+        pairSelector_->setToolTip(tr("선택한 두 원본에 차이 강조·정렬·개요·탐색을 적용합니다. 열린 입력 내용으로 전환하며 파일을 다시 읽으려면 ‘다시 비교’를 사용합니다."));
+        pairSelectorAction_ = tools->addWidget(pairSelector_); pairSelectorAction_->setVisible(false);
+        connect(pairSelector_, &QComboBox::currentIndexChanged, this, [this](int Index) {
+            if (busy() || result_.operation_ != "compare3" || Index < 0 || Index > 2 || !result_.pairViews_[std::size_t(Index)]) return;
+            pairIndex_ = Index; applyPairView(); applyAppearance(); updateMerge();
+            state_->setText(tr("%1 — 차이 %2개 · 전체 3파일: %3").arg(pairSelector_->currentText()).arg(currentPair()->changes_.size()).arg(result_.outcome_));
+        });
         wholeActions_.push_back(tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); }));
         wholeActions_.push_back(tools->addAction(tr("오른쪽 전체 선택"), this, [this] { chooseSide(1); }));
         wholeActions_.push_back(tools->addAction(tr("전체 수동 완료"), this, [this] {
@@ -137,12 +148,12 @@ namespace hc::compare
             if (scroll_)
             {
                 scroll_->SetEnabled(Enabled && !busy());
-                if (Enabled) scroll_->Synchronize(editors_[1]->hasFocus() ? 1 : 0);
+                if (Enabled) scroll_->Synchronize(editors_[currentPair()->inputs_[1]]->hasFocus() ? 1 : 0);
             }
         });
         inlineHighlights_ = viewMenu->addAction(tr("줄 내부 차이 강조")); inlineHighlights_->setCheckable(true);
         inlineHighlights_->setChecked(settings.value("view/inlineHighlights", true).toBool());
-        inlineHighlights_->setToolTip(tr("첫 번째와 두 번째 원본의 변경 줄을 순서대로 짝지어 문자 차이를 표시합니다. 긴 줄은 줄 단위 표시를 유지합니다."));
+        inlineHighlights_->setToolTip(tr("선택한 두 원본의 변경 줄을 순서대로 짝지어 문자 차이를 표시합니다. 긴 줄은 줄 단위 표시를 유지합니다."));
         connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
             QSettings{}.setValue("view/inlineHighlights", Enabled); applyInlineHighlights();
         });
@@ -265,14 +276,8 @@ namespace hc::compare
                 editor->send(SCI_EMPTYUNDOBUFFER); editor->send(SCI_SETSAVEPOINT); editor->send(SCI_SETREADONLY, 1);
                 editor->send(SCI_MARKERDELETEALL, 8);
             }
-            for (const auto& edit : result_.edits_)
-            {
-                for (auto line = edit.begin_; line < edit.end_; ++line) editors_[0]->send(SCI_MARKERADD, uptr_t(line), 8);
-                for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) editors_[1]->send(SCI_MARKERADD, uptr_t(line), 8);
-            }
             // Rebuild rows before the controller emits changed_ with the new plan.
-            if (scroll_) scroll_->SetMap(result_.alignment_);
-            overview_->SetSession(editors_[0], editors_[1], result_.alignment_);
+            applyPairView();
             showBlocks(); merge_->Refresh(result_.plan_); applyAppearance();
         }
         updateMerge();
@@ -307,6 +312,8 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
+        if (result_.operation_ != "compare3") pairIndex_ = 0;
+        { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
@@ -331,23 +338,7 @@ namespace hc::compare
                     QString(i == 0 ? "LEFT" : "RIGHT") : QString("FILE %1").arg(i + 1);
                 addPane(name, input.path_, input.utf8_, true);
             }
-            if (result_.alignment_)
-            {
-                scroll_ = new ScrollSynchronizer(editors_[0], editors_[1], result_.alignment_, this);
-                scroll_->SetAligned(alignRows_->isChecked());
-                overview_->SetAligned(alignRows_->isChecked());
-                overview_->SetSession(editors_[0], editors_[1], result_.alignment_);
-                // Initial view includes any leading insertion gap.
-                editors_[0]->send(SCI_SETFIRSTVISIBLELINE, 0); editors_[1]->send(SCI_SETFIRSTVISIBLELINE, 0);
-            }
-            for (std::size_t i = 0; i < result_.edits_.size(); ++i)
-            {
-                const auto& edit = result_.edits_[i];
-                auto* item = new QTreeWidgetItem(changes_, {QString::number(i + 1), QString::number(edit.begin_ + 1), QString::number(edit.otherBegin_ + 1)});
-                item->setData(1, Qt::UserRole, qulonglong(edit.begin_)); item->setData(2, Qt::UserRole, qulonglong(edit.otherBegin_));
-                for (auto line = edit.begin_; line < edit.end_; ++line) editors_[0]->send(SCI_MARKERADD, uptr_t(line), 8);
-                for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) editors_[1]->send(SCI_MARKERADD, uptr_t(line), 8);
-            }
+            applyPairView();
             if (request_.mode_ == "merge")
             {
                 const auto initial = result_.error_ == "DecisionsRequired" ? result_.inputs_[0].utf8_ : result_.output_;
@@ -366,6 +357,38 @@ namespace hc::compare
         find_->SetEditors(editors_);
         applyAppearance();
         updateMerge();
+    }
+    void CompareWindow::applyPairView()
+    {
+        overview_->SetSession(nullptr, nullptr, {});
+        if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); delete scroll_; scroll_ = nullptr; }
+        for (auto* editor : editors_) editor->send(SCI_MARKERDELETEALL, 8);
+        const auto* pair = currentPair(); if (!pair) return;
+        auto* first = editors_[pair->inputs_[0]]; auto* second = editors_[pair->inputs_[1]];
+        const QSignalBlocker blocker(changes_);
+        if (!merge_)
+        {
+            changes_->clear();
+            changes_->setHeaderLabels({tr("차이"), first->objectName(), second->objectName(), tr("해결")});
+        }
+        for (std::size_t i = 0; i < pair->changes_.size(); ++i)
+        {
+            const auto& edit = pair->changes_[i];
+            if (!merge_)
+            {
+                auto* item = new QTreeWidgetItem(changes_, {QString::number(i + 1), QString::number(edit.begin_ + 1), QString::number(edit.otherBegin_ + 1)});
+                item->setData(1, Qt::UserRole, qulonglong(edit.begin_)); item->setData(2, Qt::UserRole, qulonglong(edit.otherBegin_));
+            }
+            for (auto line = edit.begin_; line < edit.end_; ++line) first->send(SCI_MARKERADD, uptr_t(line), 8);
+            for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) second->send(SCI_MARKERADD, uptr_t(line), 8);
+        }
+        scroll_ = new ScrollSynchronizer(first, second, pair->alignment_, this);
+        scroll_->SetAligned(alignRows_->isChecked()); overview_->SetAligned(alignRows_->isChecked());
+        overview_->SetSourceNumbers(unsigned(pair->inputs_[0] + 1), unsigned(pair->inputs_[1] + 1));
+        overview_->SetSession(first, second, pair->alignment_);
+        // Include initial insertion gaps without changing caret/selection bytes.
+        first->send(SCI_SETFIRSTVISIBLELINE, 0); second->send(SCI_SETFIRSTVISIBLELINE, 0);
+        syncScroll_->setToolTip(tr("%1 / %2의 대응 줄과 가로 위치를 함께 이동합니다.").arg(first->objectName(), second->objectName()));
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {
@@ -387,6 +410,8 @@ namespace hc::compare
     void CompareWindow::updateMerge()
     {
         const bool searchable = !editors_.isEmpty() && !busy();
+        const bool pairSelection = result_.operation_ == "compare3" && result_.completion_ == "Complete";
+        pairSelectorAction_->setVisible(pairSelection); pairSelector_->setEnabled(pairSelection && !busy());
         find_->SetBusy(busy()); for (auto* action : findActions_) action->setEnabled(searchable);
         syncScroll_->setEnabled(scroll_ && !busy());
         alignRows_->setEnabled(scroll_ && !busy());
@@ -482,13 +507,14 @@ namespace hc::compare
     }
     void CompareWindow::applyInlineHighlights()
     {
-        const bool enabled = inlineHighlights_->isChecked() && editors_.size() >= 2;
-        inlineHighlights_->setEnabled(editors_.size() >= 2);
-        inlineStatus_->setVisible(enabled && result_.inline_.skippedLines_ != 0);
-        inlineStatus_->setText(tr("문자 강조 일부 생략 (%1줄)").arg(result_.inline_.skippedLines_));
-        for (qsizetype side = 0; side < std::min<qsizetype>(2, editors_.size()); ++side)
+        const auto* pair = currentPair();
+        const bool enabled = inlineHighlights_->isChecked() && pair;
+        inlineHighlights_->setEnabled(pair != nullptr);
+        inlineStatus_->setVisible(enabled && pair->inline_.skippedLines_ != 0);
+        inlineStatus_->setText(tr("문자 강조 일부 생략 (%1줄)").arg(pair ? pair->inline_.skippedLines_ : 0));
+        for (qsizetype index = 0; index < editors_.size(); ++index)
         {
-            auto* editor = editors_[side];
+            auto* editor = editors_[index];
             const auto current = editor->send(SCI_GETINDICATORCURRENT), value = editor->send(SCI_GETINDICATORVALUE);
             editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator);
             editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH));
@@ -498,8 +524,9 @@ namespace hc::compare
             editor->send(SCI_INDICSETOUTLINEALPHA, sourceDifferenceIndicator, 160);
             editor->send(SCI_INDICSETUNDER, sourceDifferenceIndicator, 1);
             editor->send(SCI_SETINDICATORVALUE, 1);
-            if (enabled)
-                for (const auto& range : result_.inline_.ranges_[std::size_t(side)])
+            const int side = pair && index == pair->inputs_[0] ? 0 : pair && index == pair->inputs_[1] ? 1 : -1;
+            if (enabled && side >= 0)
+                for (const auto& range : pair->inline_.ranges_[std::size_t(side)])
                     editor->send(SCI_INDICATORFILLRANGE, uptr_t(range.begin_), sptr_t(range.end_ - range.begin_));
             editor->send(SCI_SETINDICATORCURRENT, uptr_t(current)); editor->send(SCI_SETINDICATORVALUE, uptr_t(value));
         }

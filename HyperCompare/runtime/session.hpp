@@ -28,6 +28,19 @@ namespace hc::compare
         QString path_, encoding_; QByteArray raw_, utf8_; bool bom_ = false;
         storage::EntrySnapshot entry_;
     };
+    struct PairChange
+    {
+        std::size_t begin_ = 0, end_ = 0, otherBegin_ = 0, otherEnd_ = 0;
+    };
+    // Immutable GUI metadata for one pair of already decoded input snapshots.
+    // No replacement payloads or extra copies of source text are retained.
+    struct PairComparison
+    {
+        std::array<int, 2> inputs_{0, 1};
+        std::vector<PairChange> changes_;
+        std::shared_ptr<const AlignmentMap> alignment_;
+        InlineDiff inline_;
+    };
     struct Result
     {
         int exitCode_ = 2;
@@ -37,8 +50,8 @@ namespace hc::compare
         std::optional<Snapshot> decisionsSnapshot_;
         QString planWritten_;
         std::vector<Edit> edits_;
-        std::shared_ptr<const AlignmentMap> alignment_;
-        InlineDiff inline_;
+        // Slots: FILE1/2, FILE1/3, FILE2/3. BASE/merge sessions use slot 0 only.
+        std::array<std::shared_ptr<const PairComparison>, 3> pairViews_;
         MergeResult merged_;
         std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;
