@@ -135,12 +135,21 @@ namespace hc::compare
                 if (Enabled) scroll_->Synchronize(editors_[1]->hasFocus() ? 1 : 0);
             }
         });
+        inlineHighlights_ = viewMenu->addAction(tr("줄 내부 차이 강조")); inlineHighlights_->setCheckable(true);
+        inlineHighlights_->setChecked(settings.value("view/inlineHighlights", true).toBool());
+        inlineHighlights_->setToolTip(tr("첫 번째와 두 번째 원본의 변경 줄을 순서대로 짝지어 문자 차이를 표시합니다. 긴 줄은 줄 단위 표시를 유지합니다."));
+        connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
+            QSettings{}.setValue("view/inlineHighlights", Enabled); applyInlineHighlights();
+        });
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
         connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
         for (const auto& role : {QString("ui"), QString("list"), QString("text")})
             viewMenu->addAction(role.toUpper() + tr(" 글꼴"), this, [this, role] { chooseFont(role); });
         state_ = new QLabel(this); statusBar()->addWidget(state_, 1);
         state_->setObjectName("compareStatus");
+        inlineStatus_ = new QLabel(this); inlineStatus_->setObjectName("compareInlineStatus");
+        inlineStatus_->setToolTip(tr("일부 변경 줄은 문자 강조 계산 한도를 넘었습니다. 해당 줄의 줄 단위 차이 표시와 비교·병합 결과는 유지됩니다."));
+        statusBar()->addPermanentWidget(inlineStatus_); inlineStatus_->hide();
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
             cancel_->setEnabled(false);
             if (refreshing_)
@@ -288,6 +297,7 @@ namespace hc::compare
         find_->SetEditors({});
         delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
+        inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
@@ -451,6 +461,30 @@ namespace hc::compare
         }));
         updateMerge(); state_->setText(Loading ? tr("작업 불러오는 중…") : tr("작업 저장 중…"));
     }
+    void CompareWindow::applyInlineHighlights()
+    {
+        const bool enabled = inlineHighlights_->isChecked() && editors_.size() >= 2;
+        inlineHighlights_->setEnabled(editors_.size() >= 2);
+        inlineStatus_->setVisible(enabled && result_.inline_.skippedLines_ != 0);
+        inlineStatus_->setText(tr("문자 강조 일부 생략 (%1줄)").arg(result_.inline_.skippedLines_));
+        for (qsizetype side = 0; side < std::min<qsizetype>(2, editors_.size()); ++side)
+        {
+            auto* editor = editors_[side];
+            const auto current = editor->send(SCI_GETINDICATORCURRENT), value = editor->send(SCI_GETINDICATORVALUE);
+            editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator);
+            editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH));
+            editor->send(SCI_INDICSETSTYLE, sourceDifferenceIndicator, INDIC_ROUNDBOX);
+            editor->send(SCI_INDICSETFORE, sourceDifferenceIndicator, color(dark_ ? QColor("#ef947e") : QColor("#b84b32")));
+            editor->send(SCI_INDICSETALPHA, sourceDifferenceIndicator, dark_ ? 70 : 50);
+            editor->send(SCI_INDICSETOUTLINEALPHA, sourceDifferenceIndicator, 160);
+            editor->send(SCI_INDICSETUNDER, sourceDifferenceIndicator, 1);
+            editor->send(SCI_SETINDICATORVALUE, 1);
+            if (enabled)
+                for (const auto& range : result_.inline_.ranges_[std::size_t(side)])
+                    editor->send(SCI_INDICATORFILLRANGE, uptr_t(range.begin_), sptr_t(range.end_ - range.begin_));
+            editor->send(SCI_SETINDICATORCURRENT, uptr_t(current)); editor->send(SCI_SETINDICATORVALUE, uptr_t(value));
+        }
+    }
     void CompareWindow::applyAppearance()
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
@@ -479,6 +513,7 @@ namespace hc::compare
             editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
             editor->send(SCI_COLOURISE, 0, -1);
         }
+        applyInlineHighlights();
         QSettings settings; settings.setValue("theme/dark", dark_); settings.setValue("fonts/ui", uiFont_.toString());
         settings.setValue("fonts/list", listFont_.toString()); settings.setValue("fonts/text", textFont_.toString());
     }

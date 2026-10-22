@@ -30,6 +30,116 @@ private:
         return row.back();
     }
 private slots:
+    void inlineRangesUnicodeAndLineEndings()
+    {
+        const std::string a = "head\r\naXbcYd\r\n한글😀 끝\r\ntail\n", b = "head\r\naQbcRd\r\n한굴😃 끝\r\ntail\n";
+        const auto diff = BuildInlineDiff(a, b, Diff(a, b));
+        const std::vector<ByteRange> expected{{7, 8}, {10, 11}, {17, 24}};
+        QCOMPARE(diff.ranges_[0], expected); QCOMPARE(diff.ranges_[1], expected);
+        QCOMPARE(diff.pairedLines_, std::size_t(2)); QCOMPARE(diff.skippedLines_, std::size_t(0));
+        const auto insert = BuildInlineDiff("ab", "a한😀b", Diff("ab", "a한😀b"));
+        QVERIFY(insert.ranges_[0].empty()); QCOMPARE(insert.ranges_[1], (std::vector<ByteRange>{{1, 8}}));
+        const auto remove = BuildInlineDiff("a한😀b", "ab", Diff("a한😀b", "ab"));
+        QCOMPARE(remove.ranges_[0], insert.ranges_[1]); QVERIFY(remove.ranges_[1].empty());
+        for (const auto& [left, right] : std::vector<std::pair<std::string, std::string>>{
+            {"x\r\ny\r", "x\ny\n"}, {"\r\n", "\n"}, {"x", "x\n"}, {"", "new\n"}, {"old", ""}, {"", ""}})
+        {
+            const auto endings = BuildInlineDiff(left, right, Diff(left, right));
+            QVERIFY(endings.ranges_[0].empty()); QVERIFY(endings.ranges_[1].empty());
+            QCOMPARE(endings.skippedLines_, std::size_t(0));
+        }
+        // Only ordinal pairs in a replacement block receive character ranges.
+        const auto unequal = BuildInlineDiff("aX\nbY\n", "aQ\nbR\ncS\n", {{0, 2, 0, 3, {}}});
+        QCOMPARE(unequal.pairedLines_, std::size_t(2));
+        QCOMPARE(unequal.ranges_[1], (std::vector<ByteRange>{{1, 2}, {4, 5}}));
+    }
+    void inlineRandomizedCommonSubsequence()
+    {
+        std::mt19937 rng(0x1a11ce);
+        const std::vector<std::string> alphabet{"a", "b", "c", "한", "😀", "\xcc\x81"};
+        for (int iteration = 0; iteration < 1500; ++iteration)
+        {
+            std::array<std::string, 2> texts;
+            std::array<std::vector<std::string_view>, 2> scalars;
+            for (auto& text : texts) for (auto n = rng() % 24; n > 0; --n) text += alphabet[rng() % alphabet.size()];
+            for (std::size_t side = 0; side < 2; ++side)
+                for (std::size_t i = 0; i < texts[side].size();)
+                {
+                    const auto begin = i++;
+                    while (i < texts[side].size() && (static_cast<unsigned char>(texts[side][i]) & 0xc0) == 0x80) ++i;
+                    scalars[side].push_back(std::string_view(texts[side]).substr(begin, i - begin));
+                }
+            // Explicit one-line pairing includes empty sides, unlike a whole-line insertion.
+            const std::array<std::string, 2> lines{texts[0] + '\n', texts[1] + '\n'};
+            const auto diff = BuildInlineDiff(lines[0], lines[1], {{0, 1, 0, 1, {}}});
+            QCOMPARE(diff.skippedLines_, std::size_t(0));
+            std::array<std::string, 2> common;
+            std::size_t commonScalars = 0;
+            for (std::size_t side = 0; side < 2; ++side)
+            {
+                std::size_t previous = 0;
+                for (const auto& range : diff.ranges_[side])
+                {
+                    QVERIFY(range.begin_ >= previous && range.begin_ < range.end_ && range.end_ <= texts[side].size());
+                    for (auto offset : {range.begin_, range.end_})
+                        QVERIFY(offset == texts[side].size() || (static_cast<unsigned char>(texts[side][offset]) & 0xc0) != 0x80);
+                    common[side] += texts[side].substr(previous, range.begin_ - previous); previous = range.end_;
+                }
+                common[side] += texts[side].substr(previous);
+            }
+            QCOMPARE(common[0], common[1]);
+            for (auto byte : common[0]) if ((static_cast<unsigned char>(byte) & 0xc0) != 0x80) ++commonScalars;
+            QCOMPARE(commonScalars, lcs(scalars[0], scalars[1]));
+        }
+    }
+    void inlineBudgetsAndCancellation()
+    {
+        const auto run = [](const std::string& A, const std::string& B, const Budget& Limits = Budget{}) {
+            return BuildInlineDiff(A, B, {{0, SplitLines(A).size(), 0, SplitLines(B).size(), {}}}, Limits);
+        };
+        const auto huge = run(std::string(16385, 'a'), std::string(16385, 'b'));
+        QCOMPARE(huge.skippedLines_, std::size_t(1)); QCOMPARE(huge.cells_, std::uint64_t(0));
+        const auto dense = run(std::string(1000, 'a'), std::string(1000, 'b'));
+        QCOMPARE(dense.skippedLines_, std::size_t(1)); QVERIFY(dense.ranges_[0].empty());
+        Budget low; low.steps_ = 0;
+        QCOMPARE(run("abc", "xyz", low).skippedLines_, std::size_t(1));
+        low = {}; low.traceBytes_ = 1;
+        QCOMPARE(run("abc", "xyz", low).skippedLines_, std::size_t(1));
+        low = {}; low.deadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        QCOMPARE(run("abc", "xyz", low).skippedLines_, std::size_t(1));
+        std::atomic_bool cancel{true}; low = {}; low.canceled_ = &cancel;
+        QVERIFY_EXCEPTION_THROWN(run("a", "b", low), Failure);
+        QVERIFY_EXCEPTION_THROWN(BuildInlineDiff("a", "b", {{0, 2, 0, 1, {}}}), Failure);
+        std::string a, b;
+        for (int i = 0; i < 5000; ++i) { a += "a\n"; b += "b\n"; }
+        auto many = run(a, b); QCOMPARE(many.pairedLines_, std::size_t(5000)); QCOMPARE(many.skippedLines_, std::size_t(904));
+        QCOMPARE(many.ranges_[0].size(), std::size_t(4096));
+        a.clear(); b.clear();
+        for (int i = 0; i < 40; ++i) { a += std::string(400, 'a') + '\n'; b += std::string(400, 'b') + '\n'; }
+        QElapsedTimer timer; timer.start(); const auto bounded = run(a, b);
+        QVERIFY(bounded.cells_ <= 4'000'000); QVERIFY(bounded.skippedLines_ > 0);
+        qInfo("Inline dense corpus: %lld ms, %llu cells, %zu skipped pairs", timer.elapsed(), bounded.cells_, bounded.skippedLines_);
+        // A pair is either complete or omitted when the output-range cap is hit.
+        a.clear(); b.clear();
+        for (int i = 0; i < 900; ++i) { for (int j = 0; j < 20; ++j) { a += "Xa"; b += "Ya"; } a += '\n'; b += '\n'; }
+        const auto fragmented = run(a, b);
+        QCOMPARE(fragmented.ranges_[0].size() + fragmented.ranges_[1].size(), std::size_t(32760));
+        QCOMPARE(fragmented.ranges_[0].size(), fragmented.ranges_[1].size()); QVERIFY(fragmented.skippedLines_ > 0);
+    }
+    void inlineRuntimePresentationOnly()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        write(r.file1_, "same\naXb\n"); write(r.file2_, "same\naYb\n");
+        const auto canceled = std::make_shared<std::atomic_bool>(false);
+        const auto gui = Execute(r, canceled, false); QCOMPARE(gui.completion_, QString("Complete"));
+        QCOMPARE(gui.inline_.ranges_[0], (std::vector<ByteRange>{{6, 7}}));
+        r.headless_ = true; const auto cli = Execute(r, canceled, false);
+        QVERIFY(cli.inline_.ranges_[0].empty()); QCOMPARE(cli.Json(), gui.Json());
+        r.headless_ = false; write(r.file1_, QByteArray(20000, 'a')); write(r.file2_, QByteArray(20000, 'b'));
+        const auto limited = Execute(r, canceled, false);
+        QCOMPARE(limited.completion_, QString("Complete")); QCOMPARE(limited.exitCode_, 1);
+        QCOMPARE(limited.inline_.skippedLines_, std::size_t(1)); QVERIFY(!limited.edits_.empty());
+    }
     void alignmentBoundaries()
     {
         const std::string left = "a\r\nkeep\nz", right = "prefix\na\r\ninsert\nkeep\nZ\nend";

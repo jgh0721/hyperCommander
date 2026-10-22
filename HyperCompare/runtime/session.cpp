@@ -291,6 +291,14 @@ namespace hc::compare
                     if (result.exitCode_ == 0 && Save && !Input.dryRun_) { limits.Check(); SaveResult(Input, result, result.output_); }
                 }
             }
+            if (!Input.headless_ && result.inputs_.size() >= 2)
+            {
+                // Optional decoration follows all primary compare/merge work.
+                // A small cooperative deadline falls back to line highlights.
+                auto decoration = limits;
+                decoration.deadline_ = std::min(limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
+                result.inline_ = BuildInlineDiff(view(result.inputs_[0].utf8_), view(result.inputs_[1].utf8_), result.edits_, decoration);
+            }
             result.completion_ = "Complete";
         }
         catch (const Failure& error)

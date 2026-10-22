@@ -2,6 +2,7 @@
 #include "core/compare.hpp"
 #include "core/mergeModel.hpp"
 #include "core/alignmentMap.hpp"
+#include "core/inlineDiff.hpp"
 #include "commonLibs/storage/storage.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
 #include <QByteArray>
@@ -37,6 +38,7 @@ namespace hc::compare
         QString planWritten_;
         std::vector<Edit> edits_;
         std::shared_ptr<const AlignmentMap> alignment_;
+        InlineDiff inline_;
         MergeResult merged_;
         std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;

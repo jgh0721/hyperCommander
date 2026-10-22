@@ -77,7 +77,78 @@ private slots:
     void init()
     {
         QSettings settings; settings.setValue("view/alignSourceRows", false);
+        settings.setValue("view/inlineHighlights", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void inlineHighlightsThemeSearchAndToggle()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
+        const QByteArray a = QString::fromUtf8("int count = 10;\r\n// 한글😀 keep\r\nreturn count;\r\n").toUtf8();
+        const QByteArray b = QString::fromUtf8("int count = 20;\r\n// 한굴😃 keep\r\nreturn count;\r\n").toUtf8();
+        write(r.file1_, a); write(r.file2_, b);
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        const auto marked = [](ScintillaEditBase* Editor, int Position) { return Editor->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, Position); };
+        for (auto* editor : {left, right})
+        {
+            QCOMPARE(marked(editor, 12), sptr_t(1)); QCOMPARE(marked(editor, 13), sptr_t(0));
+            for (int i = 23; i < 30; ++i) QCOMPARE(marked(editor, i), sptr_t(1));
+            QCOMPARE(marked(editor, 22), sptr_t(0)); QCOMPARE(marked(editor, 30), sptr_t(0));
+            QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0));
+            QVERIFY(editor->send(SCI_MARKERGET, 0) & (1 << 8));
+            editor->send(SCI_SETINDICATORCURRENT, 7); editor->send(SCI_SETINDICATORVALUE, 9);
+        }
+        auto* toggle = action(window, "줄 내부 차이 강조"); QVERIFY(toggle);
+        toggle->setChecked(false); QCOMPARE(marked(left, 12), sptr_t(0));
+        toggle->setChecked(true); QCOMPARE(marked(left, 12), sptr_t(1));
+        QCOMPARE(left->send(SCI_GETINDICATORCURRENT), sptr_t(7)); QCOMPARE(left->send(SCI_GETINDICATORVALUE), sptr_t(9));
+        left->setFocus(); left->send(SCI_SETSEL, 0, 0); action(window, "찾기")->trigger();
+        auto* bar = window.findChild<FindBar*>(); auto* query = bar->findChild<QLineEdit*>("compareFindText");
+        query->setText("10"); bar->Find(false); QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(12));
+        QCOMPARE(left->send(SCI_GETSELECTIONEND), sptr_t(14)); QCOMPARE(marked(left, 12), sptr_t(1));
+        QTest::qWait(60); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/inline-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(60);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/inline-dark.png"));
+        QCOMPARE(marked(left, 12), sptr_t(1)); QCOMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(12));
+        QCOMPARE(contents(left), a); QCOMPARE(contents(right), b);
+        QCOMPARE(left->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(left->send(SCI_CANUNDO), sptr_t(0));
+        QCOMPARE(window.ExitCode(), 1); window.close();
+    }
+    void inlineRecompareFallbackAndMergePreservation()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.base_ = dir.filePath("base.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "head\naXb\nend"); write(r.file2_, "head\naYb\nend"); write(r.base_, "head\naZb\nend");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("LEFT"); auto* output = window.findChild<ScintillaEditBase*>("RESULT");
+        auto* base = window.findChild<ScintillaEditBase*>("BASE"); auto* status = window.findChild<QLabel*>("compareInlineStatus");
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, 6), sptr_t(1));
+        QCOMPARE(base->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, 6), sptr_t(0));
+        QVERIFY(status->isHidden()); action(window, "왼쪽 전체 선택")->trigger();
+        output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n"));
+        const auto before = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        action(window, "줄 내부 차이 강조")->setChecked(false); action(window, "줄 내부 차이 강조")->setChecked(true);
+        QCOMPARE(contents(output), before); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        for (sptr_t i = 0; i < before.size(); ++i) QCOMPARE(output->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, i), sptr_t(0));
+        write(r.file1_, "prefix\nhead\naQb\nend"); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, 6), sptr_t(0));
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, 13), sptr_t(1));
+        QCOMPARE(contents(output), before); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        write(r.file1_, QByteArray(20000, 'a')); write(r.file2_, QByteArray(20000, 'b'));
+        action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QVERIFY(!status->isHidden()); QVERIFY(status->text().contains("1줄"));
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, 13), sptr_t(0));
+        QVERIFY(left->send(SCI_MARKERGET, 0) & (1 << 8)); QCOMPARE(contents(output), before);
+        write(r.file1_, QByteArray(20000, 'b')); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QVERIFY(status->isHidden()); QCOMPARE(contents(output), before); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
     }
     void findNavigationOptionsAndUnicode()
     {

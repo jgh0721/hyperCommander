@@ -15,6 +15,9 @@ class QCloseEvent;
 
 namespace hc::compare
 {
+    // Application-owned indicator; separate from lexer styles, line marker 8,
+    // and Scintilla's selection elements. Reserve other IDs for future search.
+    inline constexpr int sourceDifferenceIndicator = 20;
     class MergeController;
     class ScrollSynchronizer;
     class FindBar;
@@ -37,6 +40,7 @@ namespace hc::compare
         void showBlocks();
         void openInputs();
         void applyAppearance();
+        void applyInlineHighlights();
         void chooseFont(const QString& Role);
         void save();
         void chooseSide(int Index);
@@ -61,6 +65,7 @@ namespace hc::compare
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
+        QLabel* inlineStatus_ = nullptr;
         QAction* save_ = nullptr;
         QAction* saveWork_ = nullptr;
         QAction* loadWork_ = nullptr;
@@ -70,6 +75,7 @@ namespace hc::compare
         QAction* baseChoice_ = nullptr;
         QAction* syncScroll_ = nullptr;
         QAction* alignRows_ = nullptr;
+        QAction* inlineHighlights_ = nullptr;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QVector<QAction*> findActions_;
