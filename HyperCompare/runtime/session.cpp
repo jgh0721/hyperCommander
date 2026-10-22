@@ -251,6 +251,8 @@ namespace hc::compare
                 else if (!Input.file3_.isEmpty()) result.inputs_.push_back(load(Input.file3_, Input.encoding_, limits));
                 const auto left = view(result.inputs_[0].utf8_), right = view(result.inputs_[1].utf8_);
                 result.edits_ = Diff(left, right, limits);
+                if (!Input.headless_) result.alignment_ = std::make_shared<AlignmentMap>(
+                    AlignmentMap::Build(SplitLines(left).size(), SplitLines(right).size(), result.edits_, limits));
                 bool different = !result.edits_.empty() || result.inputs_[0].raw_ != result.inputs_[1].raw_;
                 if (result.inputs_.size() == 3)
                 {

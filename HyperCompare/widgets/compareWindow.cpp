@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
 #include "mergeController.hpp"
+#include "scrollSynchronizer.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -76,8 +77,9 @@ namespace hc::compare
         }));
         for (auto* action : wholeActions_) action->setEnabled(false);
         addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합"));
-        mergeTools->addAction(tr("이전 차이"), this, [this] { navigateBlock(-1); });
-        mergeTools->addAction(tr("다음 차이"), this, [this] { navigateBlock(1); });
+        auto* previous = mergeTools->addAction(tr("이전 차이"), this, [this] { navigateBlock(-1); });
+        auto* next = mergeTools->addAction(tr("다음 차이"), this, [this] { navigateBlock(1); });
+        previous->setShortcut(QKeySequence("Shift+F7")); next->setShortcut(QKeySequence("F7"));
         for (const auto& choice : {std::pair{tr("블록 LEFT"), Resolution::Left}, {tr("블록 RIGHT"), Resolution::Right},
             {tr("블록 BASE"), Resolution::Base}, {tr("LEFT → RIGHT"), Resolution::LeftThenRight},
             {tr("RIGHT → LEFT"), Resolution::RightThenLeft}, {tr("블록 수동 완료"), Resolution::Manual}})
@@ -105,6 +107,17 @@ namespace hc::compare
         redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !busy()) output_->send(SCI_REDO); });
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
+        syncScroll_ = viewMenu->addAction(tr("왼쪽·오른쪽 스크롤 동기화")); syncScroll_->setCheckable(true);
+        syncScroll_->setChecked(settings.value("view/synchronizeSources", true).toBool()); syncScroll_->setEnabled(false);
+        syncScroll_->setToolTip(tr("첫 번째와 두 번째 원본 패널의 대응 줄과 가로 위치를 함께 이동합니다."));
+        connect(syncScroll_, &QAction::toggled, this, [this](bool Enabled) {
+            QSettings{}.setValue("view/synchronizeSources", Enabled);
+            if (scroll_)
+            {
+                scroll_->SetEnabled(Enabled && !busy());
+                if (Enabled) scroll_->Synchronize(editors_[1]->hasFocus() ? 1 : 0);
+            }
+        });
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
         connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
         for (const auto& role : {QString("ui"), QString("list"), QString("text")})
@@ -164,9 +177,7 @@ namespace hc::compare
         });
         connect(changes_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
             if (!Item || editors_.size() < 2 || result_.operation_ == "directory2") return;
-            if (merge_) { selectBlock(); updateMerge(); return; }
-            editors_[0]->send(SCI_GOTOLINE, uptr_t(Item->data(1, Qt::UserRole).toULongLong()));
-            editors_[1]->send(SCI_GOTOLINE, uptr_t(Item->data(2, Qt::UserRole).toULongLong()));
+            selectBlock(); if (merge_) updateMerge();
         });
         applyAppearance();
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { start(); });
@@ -207,6 +218,7 @@ namespace hc::compare
         const bool changed = Value.inputsChanged_; result_ = std::move(Value);
         if (changed)
         {
+            if (scroll_) scroll_->SetEnabled(false);
             for (qsizetype i = 0; i < result_.inputs_.size(); ++i)
             {
                 auto* editor = editors_[i]; editor->send(SCI_SETREADONLY, 0);
@@ -220,6 +232,7 @@ namespace hc::compare
                 for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) editors_[1]->send(SCI_MARKERADD, uptr_t(line), 8);
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
+            if (scroll_) scroll_->SetMap(result_.alignment_);
             showBlocks(); merge_->Refresh(result_.plan_); applyAppearance();
         }
         updateMerge();
@@ -255,11 +268,12 @@ namespace hc::compare
     void CompareWindow::display()
     {
         workPath_.clear(); workExpected_.reset();
+        delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
-        if (result_.completion_ != "Complete") { state_->setText(result_.error_); return; }
+        if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
         if (result_.operation_ == "directory2")
         {
             for (const auto& value : result_.entries_)
@@ -274,6 +288,7 @@ namespace hc::compare
                     QString(i == 0 ? "LEFT" : "RIGHT") : QString("FILE %1").arg(i + 1);
                 addPane(name, input.path_, input.utf8_, true);
             }
+            if (result_.alignment_) scroll_ = new ScrollSynchronizer(editors_[0], editors_[1], result_.alignment_, this);
             for (std::size_t i = 0; i < result_.edits_.size(); ++i)
             {
                 const auto& edit = result_.edits_[i];
@@ -319,6 +334,8 @@ namespace hc::compare
     }
     void CompareWindow::updateMerge()
     {
+        syncScroll_->setEnabled(scroll_ && !busy());
+        if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
         for (auto* action : blockActions_) action->setEnabled(false);
@@ -354,18 +371,25 @@ namespace hc::compare
     }
     void CompareWindow::selectBlock()
     {
-        if (!merge_ || !changes_->currentItem()) return;
+        if (busy() || !changes_->currentItem()) return;
+        if (!merge_)
+        {
+            const auto* item = changes_->currentItem();
+            if (scroll_) scroll_->Reveal(item->data(1, Qt::UserRole).toULongLong(), item->data(2, Qt::UserRole).toULongLong());
+            return;
+        }
         const auto at = changes_->indexOfTopLevelItem(changes_->currentItem()); if (at < 0) return;
         const auto& block = merge_->Model().Plan().blocks_[std::size_t(at)];
         const auto& state = merge_->Model().State()[std::size_t(at)];
-        editors_[0]->send(SCI_GOTOLINE, block.leftLine_); editors_[1]->send(SCI_GOTOLINE, block.rightLine_);
+        if (scroll_) scroll_->Reveal(block.leftLine_, block.rightLine_);
         if (state.mapped_) { output_->send(SCI_SETSEL, state.begin_, sptr_t(state.end_)); output_->send(SCI_SCROLLCARET); }
     }
     void CompareWindow::navigateBlock(int Direction)
     {
-        const auto count = changes_->topLevelItemCount(); if (!count) return;
+        const auto count = changes_->topLevelItemCount(); if (!count || busy()) return;
         const auto at = changes_->indexOfTopLevelItem(changes_->currentItem());
-        changes_->setCurrentItem(changes_->topLevelItem((at + Direction + count) % count));
+        auto* target = changes_->topLevelItem(at < 0 ? (Direction > 0 ? 0 : count - 1) : (at + Direction + count) % count);
+        if (target == changes_->currentItem()) selectBlock(); else changes_->setCurrentItem(target);
     }
     void CompareWindow::save()
     {

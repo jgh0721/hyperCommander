@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "core/compare.hpp"
 #include "core/mergeModel.hpp"
+#include "core/alignmentMap.hpp"
 #include "commonLibs/storage/storage.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
 #include <QByteArray>
@@ -35,6 +36,7 @@ namespace hc::compare
         std::optional<Snapshot> decisionsSnapshot_;
         QString planWritten_;
         std::vector<Edit> edits_;
+        std::shared_ptr<const AlignmentMap> alignment_;
         MergeResult merged_;
         std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;

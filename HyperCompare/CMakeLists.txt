@@ -1,4 +1,5 @@
-qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp)
+qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
+    core/alignmentMap.cpp core/alignmentMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
@@ -17,7 +18,7 @@ target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core PRIVAT
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/compareWindow.cpp widgets/compareWindow.hpp
-    widgets/mergeController.cpp widgets/mergeController.hpp)
+    widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
 target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 
@@ -46,5 +47,6 @@ if(BUILD_TESTING)
     target_compile_definitions(hc_compare_ui_tests PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(hc_compare_ui_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     add_test(NAME hypercompare.ui COMMAND hc_compare_ui_tests -o "${CMAKE_CURRENT_BINARY_DIR}/ui-results.txt,txt")
+    set_tests_properties(hypercompare.ui PROPERTIES TIMEOUT 60)
     hc_enable_qt_deployment(hc_compare_ui_tests TEST PLUGINS)
 endif()

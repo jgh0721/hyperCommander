@@ -30,6 +30,74 @@ private:
         return row.back();
     }
 private slots:
+    void alignmentBoundaries()
+    {
+        const std::string left = "a\r\nkeep\nz", right = "prefix\na\r\ninsert\nkeep\nZ\nend";
+        const auto map = AlignmentMap::Build(3, 6, Diff(left, right));
+        QCOMPARE(map.MapLine(0, 0), std::size_t(1)); QCOMPARE(map.MapLine(0, 1), std::size_t(3));
+        QCOMPARE(map.MapLine(0, 2), std::size_t(4)); QCOMPARE(map.MapLine(0, 3), std::size_t(6));
+        QCOMPARE(map.MapLine(1, 0), std::size_t(0)); QCOMPARE(map.MapLine(1, 2), std::size_t(1));
+        QCOMPARE(map.MapLine(1, 5), std::size_t(2)); QCOMPARE(map.MapLine(1, 6), std::size_t(3));
+        const auto empty = AlignmentMap::Build(0, 0, {}); QVERIFY(empty.Runs().empty()); QCOMPARE(empty.MapLine(0, 0), std::size_t(0));
+        const auto inserted = AlignmentMap::Build(0, 3, Diff("", left));
+        QCOMPARE(inserted.MapLine(0, 0), std::size_t(3)); QCOMPARE(inserted.MapLine(1, 1), std::size_t(0));
+        const auto deleted = AlignmentMap::Build(3, 0, Diff(left, ""));
+        QCOMPARE(deleted.MapLine(0, 2), std::size_t(0)); QCOMPARE(deleted.MapLine(1, 0), std::size_t(3));
+        const auto eof = AlignmentMap::Build(1, 2, Diff("keep\n", "keep\nextra\n"));
+        QCOMPARE(eof.MapLine(0, 0), std::size_t(0)); QCOMPARE(eof.MapLine(0, 1), std::size_t(2));
+        QVERIFY_EXCEPTION_THROWN(map.MapLine(2, 0), Failure);
+    }
+    void alignmentRandomCorrespondence()
+    {
+        std::mt19937 random(10959);
+        for (int trial = 0; trial < 4000; ++trial)
+        {
+            std::string left, right;
+            for (auto* text : {&left, &right})
+            {
+                const auto count = random() % 24;
+                for (unsigned i = 0; i < count; ++i) { *text += char('a' + random() % 8); *text += random() % 3 ? "\n" : "\r\n"; }
+                if (!text->empty() && random() % 2) text->pop_back();
+            }
+            const auto a = SplitLines(left), b = SplitLines(right); const auto edits = Diff(left, right);
+            const auto map = AlignmentMap::Build(a.size(), b.size(), edits);
+            QVERIFY(map.Runs().size() <= edits.size() * 2 + 1);
+            for (unsigned side = 0; side < 2; ++side)
+            {
+                std::size_t previous = 0;
+                for (std::size_t line = 0; line <= map.LineCount(side); ++line)
+                {
+                    const auto target = map.MapLine(side, line); QVERIFY(target >= previous); QVERIFY(target <= map.LineCount(1 - side)); previous = target;
+                }
+            }
+            std::array<std::size_t, 2> end{};
+            for (const auto& run : map.Runs())
+            {
+                QCOMPARE(run.begin_, end); end = run.end_;
+                if (run.changed_) continue;
+                for (auto line = run.begin_[0]; line < run.end_[0]; ++line)
+                {
+                    const auto other = map.MapLine(0, line); QCOMPARE(a[line], b[other]); QCOMPARE(map.MapLine(1, other), line);
+                }
+            }
+            QCOMPARE(end[0], a.size()); QCOMPARE(end[1], b.size());
+        }
+    }
+    void alignmentLimitsAndCompactRuns()
+    {
+        const auto map = AlignmentMap::Build(290000, 300000, {{150000, 150000, 150000, 160000, {}}});
+        QCOMPARE(map.Runs().size(), std::size_t(3));
+        for (std::size_t line = 0; line < 290000; ++line) QCOMPARE(map.MapLine(0, line), line < 150000 ? line : line + 10000);
+        const std::vector<std::vector<Edit>> invalid{
+            {{1, 0, 1, 1, {}}}, {{0, 1, 0, 9, {}}}, {{1, 1, 1, 1, {}}}, {{1, 2, 0, 1, {}}},
+            {{0, 1, 0, 1, {}}, {0, 1, 0, 1, {}}}, {{0, 1, 0, 2, {}}}};
+        for (const auto& edits : invalid) QVERIFY_EXCEPTION_THROWN(AlignmentMap::Build(4, 4, edits), Failure);
+        QVERIFY_EXCEPTION_THROWN(AlignmentMap::Build(2'000'001, 0, {}), Failure);
+        std::atomic_bool stop{true}; Budget limits; limits.canceled_ = &stop;
+        QVERIFY_EXCEPTION_THROWN(AlignmentMap::Build(1, 1, {}, limits), Failure);
+        limits.canceled_ = nullptr; limits.deadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        QVERIFY_EXCEPTION_THROWN(AlignmentMap::Build(1, 1, {}, limits), Failure);
+    }
     void mergeWorkRoundTrip()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");

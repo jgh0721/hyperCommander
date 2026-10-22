@@ -16,6 +16,7 @@ class QCloseEvent;
 namespace hc::compare
 {
     class MergeController;
+    class ScrollSynchronizer;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -54,6 +55,7 @@ namespace hc::compare
         QVector<ScintillaEditBase*> editors_;
         ScintillaEditBase* output_ = nullptr;
         MergeController* merge_ = nullptr;
+        ScrollSynchronizer* scroll_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
@@ -64,6 +66,7 @@ namespace hc::compare
         QAction* undo_ = nullptr;
         QAction* redo_ = nullptr;
         QAction* baseChoice_ = nullptr;
+        QAction* syncScroll_ = nullptr;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QFont uiFont_, listFont_, textFont_;

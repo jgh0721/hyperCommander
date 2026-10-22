@@ -12,6 +12,9 @@
 #include <QTimer>
 #include <QMenuBar>
 #include <QMenu>
+#include <QScrollBar>
+#include <QWheelEvent>
+#include <QLineEdit>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
 
@@ -34,6 +37,30 @@ class CompareUiTests final : public QObject
         Editor.send(SCI_SETCODEPAGE, SC_CP_UTF8); Editor.send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(Text.c_str()));
         Editor.send(SCI_EMPTYUNDOBUFFER); Editor.send(SCI_SETSAVEPOINT);
     }
+    static QByteArray lines(int Begin, int End, const QByteArray& Prefix = "common")
+    {
+        QByteArray text;
+        for (int i = Begin; i < End; ++i) text += Prefix + QByteArray::number(i) + "\t" + QByteArray(120, 'x') + "\r\n";
+        return text;
+    }
+    static void chooseFile(QAction* Action, const QString& Path)
+    {
+        // QFileSystemModel fills directories asynchronously. One early accept
+        // can be ignored; retry the active dialog and bound the modal wait.
+        QTimer timer; int tries = 0;
+        QObject::connect(&timer, &QTimer::timeout, &timer, [&] {
+            auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (++tries > 100) { if (active) active->reject(); return; }
+            auto* dialog = qobject_cast<QFileDialog*>(active);
+            if (!dialog) return;
+            dialog->selectFile(Path);
+            // selectFile can preserve a focused filename field; enter the path
+            // through that field as the user would before accepting the dialog.
+            if (auto* name = dialog->findChild<QLineEdit*>("fileNameEdit")) name->setText(QDir::toNativeSeparators(Path));
+            QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
+        });
+        timer.start(50); Action->trigger(); timer.stop();
+    }
 private slots:
     void initTestCase()
     {
@@ -41,6 +68,85 @@ private slots:
         QCoreApplication::setOrganizationName("HyperCompareTests"); QCoreApplication::setApplicationName("UI");
         QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
         auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(*qApp);
+    }
+    void sourceScrollCorrespondenceAndNavigation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");
+        const auto leftText = lines(0, 260);
+        const auto rightText = lines(0, 17, "prefix") + lines(0, 80) + lines(0, 7, "replacement") + lines(83, 160) + lines(170, 260) + lines(0, 9, "tail");
+        write(r.file1_, leftText); write(r.file2_, rightText);
+        CompareWindow window(r); window.show(); window.activateWindow();
+        auto* tree = window.findChild<QTreeWidget*>("compareChanges"); QTRY_COMPARE_WITH_TIMEOUT(tree->topLevelItemCount(), 4, 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        QVERIFY(left && right); auto* sync = action(window, "왼쪽·오른쪽 스크롤 동기화"); QVERIFY(sync && sync->isEnabled());
+        sync->setChecked(true); left->send(SCI_SETSEL, 2, 8); right->send(SCI_SETSEL, 4, 12);
+        left->verticalScrollBar()->setValue(30);
+        QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(47)); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(30));
+        left->send(SCI_SETXOFFSET, 240); QTRY_COMPARE(right->send(SCI_GETXOFFSET), sptr_t(240));
+        right->horizontalScrollBar()->setValue(120); QTRY_COMPARE(left->send(SCI_GETXOFFSET), sptr_t(120));
+        QCOMPARE(left->send(SCI_GETCURRENTPOS), sptr_t(8)); QCOMPARE(right->send(SCI_GETCURRENTPOS), sptr_t(12));
+        left->verticalScrollBar()->setValue(50); right->verticalScrollBar()->setValue(110);
+        QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(89)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(110));
+        // The reverse map of 81 is 99; delayed target notifications must not move 100 back to 99.
+        right->verticalScrollBar()->setValue(100); QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(81));
+        for (int i = 0; i < 3; ++i) { left->repaint(); right->repaint(); QTest::qWait(20); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(100)); }
+        right->verticalScrollBar()->setValue(5); QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QTest::qWait(30); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(5));
+        sync->setChecked(false); left->verticalScrollBar()->setValue(60); QTest::qWait(30);
+        QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(5));
+        left->setFocus(); sync->setChecked(true); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(77));
+        // Navigation anchors both starts explicitly, including a zero-length BOF insertion.
+        QTest::keyClick(&window, Qt::Key_F7, Qt::ShiftModifier); QTRY_COMPARE(tree->indexOfTopLevelItem(tree->currentItem()), 3);
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(260)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(271));
+        QTest::keyClick(&window, Qt::Key_F7); QTRY_COMPARE(tree->indexOfTopLevelItem(tree->currentItem()), 0);
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QTest::qWait(30); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QTest::keyClick(&window, Qt::Key_F7); QTRY_COMPARE(tree->indexOfTopLevelItem(tree->currentItem()), 1);
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(80)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(97));
+        QTest::keyClick(&window, Qt::Key_F7, Qt::ShiftModifier); QTRY_COMPARE(tree->indexOfTopLevelItem(tree->currentItem()), 0);
+        action(window, "다음 차이")->trigger(); left->setFocus(); QTest::keyClick(left, Qt::Key_PageDown);
+        const auto map = AlignmentMap::Build(260, 280, Diff(leftText.toStdString(), rightText.toStdString()));
+        QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(map.MapLine(0, std::size_t(left->send(SCI_GETFIRSTVISIBLELINE)))));
+        const auto oldTop = left->send(SCI_GETFIRSTVISIBLELINE); const QPoint point(80, 80);
+        QWheelEvent wheel(point, left->viewport()->mapToGlobal(point), {}, QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(left->viewport(), &wheel); QTRY_VERIFY(left->send(SCI_GETFIRSTVISIBLELINE) > oldTop);
+        QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(map.MapLine(0, std::size_t(left->send(SCI_GETFIRSTVISIBLELINE)))));
+        left->verticalScrollBar()->setValue(259); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(270));
+        left->verticalScrollBar()->setValue(260); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(280));
+        left->verticalScrollBar()->setValue(120); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(141));
+        action(window, "Dark")->setChecked(false); QTest::qWait(50);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/scroll-sync-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/scroll-sync-dark.png"));
+        QCOMPARE(contents(left), leftText); QCOMPARE(contents(right), rightText);
+        left->send(SCI_SELECTALL); QByteArray selection(leftText.size() + 1, '\0');
+        left->send(SCI_GETSELTEXT, 0, reinterpret_cast<sptr_t>(selection.data())); selection.chop(1); QCOMPARE(selection, leftText);
+        QVERIFY(!left->send(SCI_GETMODIFY)); QVERIFY(!left->send(SCI_CANUNDO)); window.close();
+    }
+    void sourceScrollEmptyAndRecompare()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, {}); write(r.file2_, lines(0, 100));
+        CompareWindow window(r); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("LEFT"); auto* right = window.findChild<ScintillaEditBase*>("RIGHT");
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* cancel = action(window, "취소");
+        right->verticalScrollBar()->setValue(50); QTest::qWait(50); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(50)); QCOMPARE(contents(left), QByteArray());
+        action(window, "오른쪽 전체 선택")->trigger(); const auto resultText = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        output->verticalScrollBar()->setValue(40); const auto resultTop = output->send(SCI_GETFIRSTVISIBLELINE);
+        right->verticalScrollBar()->setValue(60); QTest::qWait(30); QCOMPARE(output->send(SCI_GETFIRSTVISIBLELINE), resultTop);
+        action(window, "다음 차이")->trigger(); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        write(r.file1_, lines(0, 100)); write(r.file2_, lines(0, 20, "inserted") + lines(0, 100));
+        action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        left->verticalScrollBar()->setValue(40); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(60));
+        QCOMPARE(contents(output), resultText); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo); QVERIFY(!action(window, "결과 저장")->isEnabled());
+        // Failed recompare retains the old map, original documents and RESULT.
+        QVERIFY(QFile::rename(r.file2_, r.file2_ + ".away")); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000); left->verticalScrollBar()->setValue(50);
+        QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(70)); QCOMPARE(contents(output), resultText);
+        QVERIFY(QFile::rename(r.file2_ + ".away", r.file2_)); action(window, "전체 수동 완료")->trigger();
+        action(window, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), resultText); window.close();
     }
     void workFileMenusRestoreAndUndo()
     {
@@ -57,18 +163,12 @@ private slots:
         const auto prefix = QString::fromUtf8("수동😀\r\n").toUtf8(); output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>(prefix.constData()));
         const auto text = contents(output); const auto before = output->send(SCI_GETUNDOCURRENT);
         const auto path = dir.filePath("session.hcmerge");
-        QTimer::singleShot(50, &window, [&] {
-            auto* dialog = window.findChild<QFileDialog*>(); QVERIFY(dialog); dialog->selectFile(dir.filePath("session"));
-            QMetaObject::invokeMethod(dialog, "accept");
-        });
-        saveWork->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
-        QVERIFY(QFile::exists(path)); QVERIFY(!QFile::exists(r.output_)); QCOMPARE(window.ExitCode(), 3);
+        chooseFile(saveWork, dir.filePath("session")); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QVERIFY2(QFile::exists(path), qPrintable(status->text() + " files: " + QDir(dir.path()).entryList(QDir::Files).join(',')));
+        QVERIFY(!QFile::exists(r.output_)); QCOMPARE(window.ExitCode(), 3);
         QCOMPARE(output->send(SCI_GETUNDOCURRENT), before); QVERIFY(status->text().contains("작업 파일 저장 완료"));
         action(window, "왼쪽 전체 선택")->trigger(); save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
-        QTimer::singleShot(50, &window, [&] {
-            auto* dialog = window.findChild<QFileDialog*>(); QVERIFY(dialog); dialog->selectFile(path); QMetaObject::invokeMethod(dialog, "accept");
-        });
-        loadWork->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        chooseFile(loadWork, path); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
         QCOMPARE(contents(output), text); QCOMPARE(tree->topLevelItem(0)->text(3), QString("RIGHT"));
         QCOMPARE(tree->topLevelItem(1)->text(3), QString("미해결")); QVERIFY(!save->isEnabled()); QCOMPARE(window.ExitCode(), 3);
         output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("head\na\nkeep\nz")); QCOMPARE(window.ExitCode(), 0);
