@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "core/compare.hpp"
 #include "runtime/session.hpp"
+#include "runtime/decisionPlan.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -28,6 +29,142 @@ private:
         return row.back();
     }
 private slots:
+    void decisionPlanRoundTrip()
+    {
+        QTemporaryDir dir; Request r; r.headless_ = true; r.mode_ = "merge"; r.file1_ = dir.filePath("왼쪽.cpp");
+        r.file2_ = dir.filePath("오른쪽.cpp"); r.output_ = dir.filePath("결과.cpp"); r.planOut_ = dir.filePath("선택.json");
+        const auto left = QString::fromUtf8("가\r\n유지\r\n끝").toUtf8(), right = QString::fromUtf8("나\r\n추가\r\n유지\r\n마침").toUtf8();
+        write(r.file1_, QByteArray::fromHex("efbbbf") + left); write(r.file2_, right);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); r.dryRun_ = true;
+        auto result = Execute(r, cancel, true); QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.exitCode_, 1);
+        QVERIFY(!QFile::exists(r.output_)); QCOMPARE(result.planWritten_, r.planOut_);
+        auto plan = QJsonDocument::fromJson(read(r.planOut_)).object(); auto blocks = plan["blocks"].toArray(); QCOMPARE(blocks.size(), 2);
+        auto first = blocks[0].toObject(); first["choice"] = "right"; blocks[0] = first;
+        auto second = blocks[1].toObject(); second["choice"] = "manual"; second["replacement"] = QString::fromUtf8("수동😀"); blocks[1] = second;
+        plan["blocks"] = blocks; r.decisions_ = r.planOut_; r.planOut_.clear(); write(r.decisions_, QJsonDocument(plan).toJson());
+        const auto expected = QString::fromUtf8("나\r\n추가\r\n유지\r\n수동😀").toUtf8();
+        result = Execute(r, cancel, true); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.output_, expected); QVERIFY(!QFile::exists(r.output_));
+        r.dryRun_ = false; result = Execute(r, cancel, true); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.commit_, QString("Committed"));
+        QCOMPARE(read(r.output_), QByteArray::fromHex("efbbbf") + expected); QCOMPARE(result.Json()["unresolvedCount"].toInt(), 0);
+        r.overwrite_ = true; write(r.file1_, "changed input");
+        result = Execute(r, cancel, true); QCOMPARE(result.error_, QString("StalePlan"));
+        QCOMPARE(read(r.output_), QByteArray::fromHex("efbbbf") + expected);
+    }
+    void decisionPlanThreeWayChoices()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left");
+        r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        write(r.base_, "a\nb\nc\n"); write(r.file1_, "L\nb\nlc\n"); write(r.file2_, "R\nrb\nc\n");
+        const auto initial = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(initial.completion_, QString("Complete")); QCOMPARE(initial.plan_->blocks_.size(), std::size_t(1));
+        const auto templatePlan = MakeDecisionPlan(r, initial, {});
+        const std::vector<std::pair<QString, QByteArray>> cases{{"left", "L\nb\nlc\n"}, {"right", "R\nrb\nlc\n"},
+            {"base", "a\nb\nlc\n"}, {"leftThenRight", "L\nb\nR\nrb\nlc\n"}, {"rightThenLeft", "R\nrb\nL\nb\nlc\n"}, {"manual", "lc\n"}};
+        for (const auto& [name, expected] : cases)
+        {
+            auto plan = templatePlan; auto blocks = plan["blocks"].toArray(); auto block = blocks[0].toObject(); block["choice"] = name;
+            blocks[0] = block; plan["blocks"] = blocks; auto result = initial;
+            ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {});
+            QCOMPARE(result.exitCode_, 0); QCOMPARE(result.output_, expected);
+        }
+        auto partial = initial; ApplyDecisionPlan(r, partial, QJsonDocument(templatePlan).toJson(), {});
+        QCOMPARE(partial.exitCode_, 1); QVERIFY(!QFile::exists(r.output_));
+    }
+    void decisionPlanStrictValidation()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, "a\nkeep\nz\n"); write(r.file2_, "A\nkeep\nZ\n");
+        const auto initial = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        const auto plan = MakeDecisionPlan(r, initial, {}); const auto json = QJsonDocument(plan).toJson(QJsonDocument::Compact);
+        QVector<QByteArray> invalid;
+        auto duplicate = json; duplicate.insert(1, "\"schemaVersion\":1,"); invalid.push_back(duplicate);
+        duplicate = json; duplicate.insert(1, "\"schem\\u0061Version\":1,"); invalid.push_back(duplicate);
+        auto mutated = plan; mutated["schemaVersion"] = 2; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["policyDigest"] = "wrong"; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["generation"] = "old"; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["unknown"] = true; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["blocks"] = QJsonArray{}; invalid.push_back(QJsonDocument(mutated).toJson());
+        for (const auto& field : {QString("choice"), QString("expectedSpanDigest"), QString("changeId"), QString("unknown")})
+        {
+            mutated = plan; auto blocks = mutated["blocks"].toArray(); auto block = blocks[1].toObject(); block[field] = "invalid";
+            blocks[1] = block; mutated["blocks"] = blocks; invalid.push_back(QJsonDocument(mutated).toJson());
+        }
+        for (const auto& value : {QByteArray("\\ud800"), QByteArray("\\udc00"), QByteArray("\\u0000"), QByteArray(1, char(0xff))})
+        {
+            auto bytes = json; bytes.replace("\"choice\":\"unresolved\"", "\"choice\":\"manual\"");
+            bytes.replace("\"replacement\":\"\"", "\"replacement\":\"" + value + '"'); invalid.push_back(bytes);
+        }
+        mutated = plan; auto blocks = mutated["blocks"].toArray(); auto block = blocks[0].toObject(); block["choice"] = "base";
+        blocks[0] = block; mutated["blocks"] = blocks; invalid.push_back(QJsonDocument(mutated).toJson());
+        block["choice"] = "manual"; block["replacement"] = QString(1048577, 'x'); blocks[0] = block; mutated["blocks"] = blocks;
+        invalid.push_back(QJsonDocument(mutated).toJson());
+        invalid.push_back("{\"x\":" + QByteArray(12, '[') + '0' + QByteArray(12, ']') + '}');
+        for (const auto& bytes : invalid)
+        {
+            auto result = initial; QVERIFY_EXCEPTION_THROWN(ApplyDecisionPlan(r, result, bytes, {}), Failure);
+            QCOMPARE(result.output_, initial.output_); QCOMPARE(result.plan_, initial.plan_);
+        }
+        auto result = initial; Budget canceled; std::atomic_bool stop{true}; canceled.canceled_ = &stop;
+        QVERIFY_EXCEPTION_THROWN(ApplyDecisionPlan(r, result, json, canceled), Failure);
+        QVERIFY_EXCEPTION_THROWN(ApplyDecisionPlan(r, result, QByteArray(decisionPlanBytes + 1, ' '), {}), Failure);
+    }
+    void decisionPlanManyBlocks()
+    {
+        Request r; r.mode_ = "merge"; Result initial; std::string left, right; std::vector<Edit> edits;
+        for (std::size_t i = 0; i < 5000; ++i)
+        {
+            left += "a\nkeep\n"; right += "B\nkeep\n";
+            edits.push_back({i * 2, i * 2 + 1, i * 2, i * 2 + 1, "B\n"});
+        }
+        Snapshot l, rr; l.path_ = "left"; rr.path_ = "right"; l.encoding_ = rr.encoding_ = "UTF-8";
+        l.raw_ = l.utf8_ = QByteArray::fromStdString(left); rr.raw_ = rr.utf8_ = QByteArray::fromStdString(right); initial.inputs_ = {l, rr};
+        initial.plan_ = std::make_shared<MergePlan>(TwoWayPlan(left, right, edits));
+        auto plan = MakeDecisionPlan(r, initial, {}); auto blocks = plan["blocks"].toArray();
+        for (qsizetype i = 0; i < blocks.size(); ++i) { auto block = blocks[i].toObject(); block["choice"] = "right"; blocks[i] = block; }
+        plan["blocks"] = blocks; const auto json = QJsonDocument(plan).toJson(QJsonDocument::Compact);
+        QElapsedTimer timer; timer.start(); ApplyDecisionPlan(r, initial, json, {});
+        qInfo("5000 decisions: %lld ms, JSON %lld bytes", qlonglong(timer.elapsed()), qlonglong(json.size()));
+        QCOMPARE(initial.output_, QByteArray::fromStdString(right)); QCOMPARE(initial.exitCode_, 0);
+        for (const auto& state : initial.plan_->initial_) QCOMPARE(state.resolution_, Resolution::Right);
+    }
+    void decisionPlanArtifactProtection()
+    {
+        QTemporaryDir dir; Request r; r.headless_ = true; r.mode_ = "merge"; r.file1_ = dir.filePath("left");
+        r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json"); r.dryRun_ = true;
+        write(r.file1_, "a\n"); write(r.file2_, "b\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        QCOMPARE(Execute(r, cancel, true).exitCode_, 1); const auto original = read(r.planOut_);
+        r.overwrite_ = true; QCOMPARE(Execute(r, cancel, true).error_, QString("PlanAlreadyExists")); QCOMPARE(read(r.planOut_), original);
+        const auto alias = dir.filePath("input-link"); QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(alias.utf16()), reinterpret_cast<LPCWSTR>(r.file1_.utf16()), nullptr));
+        const auto planPath = r.planOut_; r.planOut_ = alias;
+        QCOMPARE(Execute(r, cancel, true).error_, QString("ArtifactPathAlias")); QCOMPARE(read(r.file1_), QByteArray("a\n"));
+        r.planOut_.clear(); r.decisions_ = planPath; r.dryRun_ = false;
+        // Unresolved decisions must not replace an existing RESULT.
+        write(r.output_, "keep output"); QCOMPARE(Execute(r, cancel, true).exitCode_, 1); QCOMPARE(read(r.output_), QByteArray("keep output"));
+        auto plan = QJsonDocument::fromJson(original).object(); auto blocks = plan["blocks"].toArray(); auto block = blocks[0].toObject();
+        block["choice"] = "right"; blocks[0] = block; plan["blocks"] = blocks; write(planPath, QJsonDocument(plan).toJson());
+        auto result = Execute(r, cancel, false); QCOMPARE(result.exitCode_, 0);
+        write(planPath, "changed decision file"); QVERIFY_EXCEPTION_THROWN(SaveResult(r, result, result.output_), Failure);
+        QCOMPARE(read(r.output_), QByteArray("keep output"));
+        const auto report = dir.filePath("report-link"); QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(report.utf16()), reinterpret_cast<LPCWSTR>(planPath.utf16()), nullptr));
+        r.report_ = report; result = Execute(r, cancel, true); QCOMPARE(result.error_, QString("ArtifactPathAlias"));
+        QCOMPARE(WriteReport(r, result), 2); QCOMPARE(read(planPath), QByteArray("changed decision file"));
+    }
+    void decisionPlanProcesses()
+    {
+        QTemporaryDir dir; const auto a = dir.filePath("왼쪽 a"), b = dir.filePath("오른쪽 b"), out = dir.filePath("결과"), plan = dir.filePath("결정.json");
+        write(a, "left\n"); write(b, "right\n");
+        const QStringList args{"-mode", "merge", "-file1", a, "-file2", b, "-output", out, "-format", "json"};
+        QProcess process; const auto cli = QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe";
+        process.start(cli, args + QStringList{"-planout", plan, "-dryrun"}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 1);
+        QCOMPARE(QJsonDocument::fromJson(process.readAllStandardOutput()).object()["planWritten"].toString(), plan); QVERIFY(!QFile::exists(out));
+        auto doc = QJsonDocument::fromJson(read(plan)).object(); auto blocks = doc["blocks"].toArray(); auto block = blocks[0].toObject();
+        block["choice"] = "right"; blocks[0] = block; doc["blocks"] = blocks; write(plan, QJsonDocument(doc).toJson());
+        process.start(cli, args + QStringList{"-decisions", plan}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        QCOMPARE(read(out), QByteArray("right\n")); QCOMPARE(QJsonDocument::fromJson(process.readAllStandardOutput()).object()["unresolvedCount"].toInt(), 0);
+        process.start(QCoreApplication::applicationDirPath() + "/HyperCompare.exe", args + QStringList{"-headless", "-decisions", plan, "-overwrite"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0); QCOMPARE(read(out), QByteArray("right\n"));
+        QVERIFY(process.readAllStandardError().isEmpty());
+    }
     void recompareDecisionsAndDestination()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
@@ -187,6 +324,13 @@ private slots:
         QVERIFY(parse({"-file1", "a", "-file2", "b", "-file3", "c"}).error_.isEmpty());
         const auto invalidHeadless = Parse({"HyperCompare.exe", "-headless", "-unknown"}, false);
         QVERIFY(invalidHeadless.request_.headless_); QVERIFY(!invalidHeadless.error_.isEmpty());
+        const QStringList merge{"-file1", "a", "-file2", "b", "-mode", "merge", "-output", "out"};
+        QVERIFY(parse(merge + QStringList{"-planout", "plan", "-dryrun"}).error_.isEmpty());
+        QVERIFY(parse(merge + QStringList{"-decisions", "plan"}).error_.isEmpty());
+        for (const auto& extra : {QStringList{"-decisions", "plan", "-takeall", "right"}, QStringList{"-planout", "plan", "-decisions", "plan2"},
+            QStringList{"-planout", "out"}, QStringList{"-planout", "a"}, QStringList{"-decisions", "plan", "-report", "plan"},
+            QStringList{"-planout", ""}, QStringList{"-planout", "-"}, QStringList{"-planout", "plan", "-gui"}})
+            QVERIFY(!parse(merge + extra).error_.isEmpty());
     }
     void sessionAndSave()
     {

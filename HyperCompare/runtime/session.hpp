@@ -7,13 +7,14 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
+#include <optional>
 
 namespace hc::compare
 {
     struct Request
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
-        QString format_ = "text", report_, takeAll_, theme_;
+        QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool help_ = false, version_ = false;
         int timeoutMs_ = 60000;
@@ -31,6 +32,8 @@ namespace hc::compare
         QString operation_, error_, outcome_ = "Unknown", completion_ = "Failed";
         QString commit_ = "NotRequested";
         QVector<Snapshot> inputs_;
+        std::optional<Snapshot> decisionsSnapshot_;
+        QString planWritten_;
         std::vector<Edit> edits_;
         MergeResult merged_;
         std::shared_ptr<const MergePlan> plan_;

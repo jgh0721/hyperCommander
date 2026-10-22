@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
+#include "decisionPlan.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -40,25 +41,30 @@ namespace hc::compare
             result.incrementalEnumeration_ = true; result.maxEnumerationEntries_ = 100000;
             return result;
         }
-        Snapshot load(const QString& Path, const QString& Encoding, const Budget& Limits)
+        Snapshot readSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits)
         {
             Limits.Check(); const auto provider = reader(Path); auto ctx = context(Limits);
             Snapshot result; result.path_ = Path;
             result.entry_ = require(provider->Resolve(locator(Path), ctx).get());
             if (result.entry_.directory_) throw Failure("ExpectedFile");
             if (result.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseInputUnsupported");
-            if (result.entry_.size_ > std::uint64_t(textLimit)) throw Failure("InputSizeLimit");
+            if (result.entry_.size_ > std::uint64_t(MaxBytes)) throw Failure("InputSizeLimit");
             const auto stream = require(provider->OpenRead(result.entry_.id_, ctx).get());
             for (;;)
             {
                 Limits.Check(); const auto chunk = require(stream->Read(1024 * 1024, ctx).get());
-                if (chunk.bytes_.size() > std::size_t(textLimit - result.raw_.size())) throw Failure("InputSizeLimit");
+                if (chunk.bytes_.size() > std::size_t(MaxBytes - result.raw_.size())) throw Failure("InputSizeLimit");
                 result.raw_.append(reinterpret_cast<const char*>(chunk.bytes_.data()), qsizetype(chunk.bytes_.size()));
                 if (chunk.eof_) break;
                 if (chunk.bytes_.empty()) throw Failure("ReadMadeNoProgress");
             }
             const auto after = require(provider->Stat(result.entry_.id_, ctx).get());
             if (after.id_.revision_ != result.entry_.id_.revision_) throw Failure("ChangedDuringRead");
+            return result;
+        }
+        Snapshot load(const QString& Path, const QString& Encoding, const Budget& Limits)
+        {
+            auto result = readSnapshot(Path, textLimit, Limits);
             auto encoding = Encoding;
             if (encoding.isEmpty())
             {
@@ -76,6 +82,38 @@ namespace hc::compare
             return result;
         }
         std::string_view view(const QByteArray& Text) { return {Text.constData(), std::size_t(Text.size())}; }
+        void checkArtifactPaths(const Request& Input, const Budget& Limits)
+        {
+            if (Input.planOut_.isEmpty() && Input.decisions_.isEmpty()) return;
+            struct Path { QString path_, identity_; bool write_; };
+            QVector<Path> paths;
+            for (const auto& entry : {std::pair{Input.file1_, false}, {Input.file2_, false}, {Input.file3_, false}, {Input.base_, false},
+                {Input.decisions_, false}, {Input.output_, true}, {Input.planOut_, true}, {Input.report_ == "-" ? QString{} : Input.report_, true}})
+            {
+                if (entry.first.isEmpty()) continue; Limits.Check(); const QFileInfo info(entry.first);
+                const auto canonical = info.canonicalFilePath();
+                Path path{canonical.isEmpty() ? info.absoluteFilePath() : canonical, {}, entry.second};
+                if (info.exists()) path.identity_ = identity(require(reader(entry.first)->Resolve(locator(entry.first), context(Limits)).get()));
+                for (const auto& previous : paths)
+                    if ((previous.write_ || path.write_) && (previous.path_.compare(path.path_, Qt::CaseInsensitive) == 0 ||
+                        (!path.identity_.isEmpty() && path.identity_ == previous.identity_))) throw Failure("ArtifactPathAlias");
+                paths.push_back(std::move(path));
+            }
+        }
+        void writePlan(const Request& Input, Result& Value, const Budget& Limits)
+        {
+            auto data = QJsonDocument(MakeDecisionPlan(Input, Value, Limits)).toJson(); data.replace("\n", "\r\n");
+            if (data.size() > decisionPlanBytes) throw Failure("DecisionPlanSizeLimit");
+            const auto provider = reader(Input.planOut_); const auto writer = storage::MakeNativeWritableStorage(locator(Input.planOut_).kind_, provider);
+            if (require(writer->Inspect(locator(Input.planOut_), context(Limits)))) throw Failure("PlanAlreadyExists");
+            // Plan export never inherits -overwrite, which authorizes RESULT only.
+            const auto receipt = require(document::SaveDocumentBytes(*writer, locator(Input.planOut_), {},
+                {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, context(Limits)));
+            if (!receipt.destinationCommitted_) throw Failure("PlanNotCommitted");
+            Value.planWritten_ = Input.planOut_;
+            for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
+            for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
+        }
         void inspectOutput(const Request& Request, Result& Result, const Budget& Limits)
         {
             const auto provider = reader(Request.output_);
@@ -88,6 +126,7 @@ namespace hc::compare
                 for (const auto& input : Result.inputs_)
                     if (Request.output_.compare(input.path_, Qt::CaseInsensitive) == 0 ||
                         (!identity(*existing).isEmpty() && identity(*existing) == identity(input.entry_))) throw Failure("InPlaceNotSupported");
+                if (Result.decisionsSnapshot_ && identity(*existing) == identity(Result.decisionsSnapshot_->entry_)) throw Failure("ArtifactPathAlias");
                 Result.expected_ = {true, existing->id_.revision_};
             }
             Result.hasOutputExpectation_ = true;
@@ -176,7 +215,9 @@ namespace hc::compare
     QJsonObject Capabilities()
     {
         return {{"schemaVersion", 1}, {"phase", "foundation"}, {"textCompare2", true}, {"textCompare3", true},
-            {"textMerge3", true}, {"textMerge2", "explicit-whole-side"}, {"directoryCompare2", true},
+            {"textMerge3", true}, {"textMerge2", "explicit-block-decisions-or-whole-side"}, {"directoryCompare2", true},
+            {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
+            {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryMerge", false}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
@@ -188,6 +229,13 @@ namespace hc::compare
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
+            if (!Input.planOut_.isEmpty() || !Input.decisions_.isEmpty())
+            {
+                if (!Input.headless_ || Input.mode_ != "merge" || !Input.takeAll_.isEmpty() ||
+                    (!Input.planOut_.isEmpty() && !Input.decisions_.isEmpty())) throw Failure("InvalidDecisionOptions");
+                checkArtifactPaths(Input, limits);
+                if (!Input.decisions_.isEmpty()) result.decisionsSnapshot_ = readSnapshot(Input.decisions_, decisionPlanBytes, limits);
+            }
             const auto first = require(reader(Input.file1_)->Resolve(locator(Input.file1_), context(limits)).get());
             const auto second = require(reader(Input.file2_)->Resolve(locator(Input.file2_), context(limits)).get());
             if (first.directory_ != second.directory_) throw Failure("MixedInputKinds");
@@ -235,6 +283,8 @@ namespace hc::compare
                         result.exitCode_ = result.merged_.conflicts_.empty() ? 0 : 1;
                         result.outcome_ = result.exitCode_ == 0 ? "Planned" : "Conflicted";
                     }
+                    if (result.decisionsSnapshot_) ApplyDecisionPlan(Input, result, result.decisionsSnapshot_->raw_, limits);
+                    if (!Input.planOut_.isEmpty()) writePlan(Input, result, limits);
                     if (result.exitCode_ == 0 && Save && !Input.dryRun_) { limits.Check(); SaveResult(Input, result, result.output_); }
                 }
             }
@@ -249,6 +299,8 @@ namespace hc::compare
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8)
     {
         if (!Value.hasOutputExpectation_ || Value.inputs_.isEmpty()) throw Failure("MissingOutputExpectation");
+        if (Value.decisionsSnapshot_ && (Value.exitCode_ != 0 || !Value.plan_ || std::any_of(Value.plan_->initial_.begin(), Value.plan_->initial_.end(),
+            [](const auto& Block) { return Block.resolution_ == Resolution::Unresolved; }))) throw Failure("DecisionsRequired");
         if (Input.dryRun_) throw Failure("DryRunCannotSave");
         if (Utf8.size() > 32 * 1024 * 1024) throw Failure("ResultSizeLimit");
         Budget limits; limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
@@ -257,6 +309,12 @@ namespace hc::compare
         {
             const auto current = require(reader(input.path_)->Resolve(locator(input.path_), ctx).get());
             if (current.id_.revision_ != input.entry_.id_.revision_) throw Failure("InputChangedBeforeSave");
+        }
+        if (Value.decisionsSnapshot_)
+        {
+            const auto& decision = *Value.decisionsSnapshot_;
+            const auto current = require(reader(decision.path_)->Resolve(locator(decision.path_), ctx).get());
+            if (current.id_.revision_ != decision.entry_.id_.revision_) throw Failure("DecisionsChangedBeforeSave");
         }
         const auto decoded = require(document::DecodeDocumentText(Utf8, "UTF-8"));
         const auto& format = Value.inputs_[Input.takeAll_ == "right" ? 1 : 0];
@@ -268,7 +326,7 @@ namespace hc::compare
             {reinterpret_cast<const std::byte*>(encoded.constData()), std::size_t(encoded.size())}, ctx));
         if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
         Value.commit_ = "Committed"; Value.outcome_ = "Saved"; Value.exitCode_ = 0;
-        Value.warnings_ = {}; Value.recovery_ = {};
+        if (Value.planWritten_.isEmpty()) { Value.warnings_ = {}; Value.recovery_ = {}; }
         for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
         for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
         const auto updated = require(writer->Inspect(locator(Input.output_), ctx));
@@ -276,16 +334,27 @@ namespace hc::compare
     }
     QJsonObject Result::Json() const
     {
-        QJsonArray changes, conflicts, inputs;
+        QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
         for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"encoding", input.encoding_},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(input.raw_, QCryptographicHash::Sha256).toHex())}});
         for (const auto& edit : edits_) changes.append(QJsonObject{{"begin", double(edit.begin_)}, {"end", double(edit.end_)},
             {"otherBegin", double(edit.otherBegin_)}, {"otherEnd", double(edit.otherEnd_)}});
         for (const auto& conflict : merged_.conflicts_) conflicts.append(QJsonObject{{"baseBegin", double(conflict.baseBegin_)}, {"baseEnd", double(conflict.baseEnd_)}});
+        if (plan_)
+        {
+            const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual"};
+            for (std::size_t i = 0; i < plan_->initial_.size(); ++i)
+            {
+                const auto resolution = plan_->initial_[i].resolution_; unresolved += resolution == Resolution::Unresolved;
+                resolutions.append(QJsonObject{{"block", qint64(i + 1)}, {"choice", names.at(int(resolution))}});
+            }
+        }
         return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_},
+            {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
+            {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}};
     }
     int WriteReport(const Request& Input, const Result& Value)
@@ -296,6 +365,7 @@ namespace hc::compare
         { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || output.write(data) != data.size() || !output.flush()) return 2; }
         else
         {
+            try { checkArtifactPaths(Input, Budget{}); } catch (...) { return 2; }
             // Never replace a report that aliases source content through a hard link.
             if (QFileInfo::exists(Input.report_))
             {

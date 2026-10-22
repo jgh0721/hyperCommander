@@ -25,6 +25,8 @@ namespace hc::compare
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
+        value("planout", "Export a text merge decision template to a new JSON file (headless only).");
+        value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
         value("timeout-ms", "Request deadline in milliseconds (100..3600000).");
         value("theme", "GUI theme: light or dark.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
@@ -44,12 +46,19 @@ namespace hc::compare
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");
         request.takeAll_ = parser.value("takeall"); request.theme_ = parser.value("theme");
+        request.planOut_ = parser.value("planout"); request.decisions_ = parser.value("decisions");
+        for (const auto& name : {"planout", "decisions"})
+            if (parser.isSet(name) && parser.value(name).isEmpty()) return fail("Empty path: " + QString(name));
         if (parser.isSet("mode")) request.mode_ = parser.value("mode");
         if (parser.isSet("format")) request.format_ = parser.value("format");
         if (parser.isSet("headless") && parser.isSet("gui")) return fail("-gui and -headless are mutually exclusive.");
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);
         request.wait_ = parser.isSet("wait") || Console;
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
+        const bool decisionOptions = !request.planOut_.isEmpty() || !request.decisions_.isEmpty();
+        if (decisionOptions && (!request.headless_ || request.mode_ != "merge")) return fail("-planout/-decisions require headless -mode merge.");
+        if (decisionOptions && !request.takeAll_.isEmpty()) return fail("-takeall cannot be combined with decision plan options.");
+        if (!request.planOut_.isEmpty() && !request.decisions_.isEmpty()) return fail("Use -planout and -decisions in separate requests.");
         if (!request.headless_ && (request.dryRun_ || parser.isSet("report") || parser.isSet("format")))
             return fail("-dryrun/-report/-format require headless mode in this version.");
         if (parser.isSet("exitcode") && !request.wait_ && !request.headless_) return fail("-exitcode requires -wait in GUI mode.");
@@ -72,13 +81,20 @@ namespace hc::compare
             if (!request.takeAll_.isEmpty() && (!request.base_.isEmpty() || (request.takeAll_ != "left" && request.takeAll_ != "right"))) return fail("-takeall left|right is only valid for two-way merge.");
         }
         else if (!request.output_.isEmpty() || !request.takeAll_.isEmpty() || request.overwrite_ || request.dryRun_) return fail("Output/write options require -mode merge.");
-        for (auto* path : {&request.file1_, &request.file2_, &request.file3_, &request.base_, &request.output_})
+        for (auto* path : {&request.file1_, &request.file2_, &request.file3_, &request.base_, &request.output_, &request.planOut_, &request.decisions_})
         { if (!path->isEmpty()) *path = QDir::cleanPath(QFileInfo(*path).absoluteFilePath()); }
         if (!request.report_.isEmpty() && request.report_ != "-") request.report_ = QFileInfo(request.report_).absoluteFilePath();
         if (request.output_ == "-" || QFileInfo(request.output_).fileName() == "-") return fail("Merge output must be a file path.");
         if (!request.report_.isEmpty() && request.report_ != "-")
-            for (const auto& path : {request.file1_, request.file2_, request.file3_, request.base_, request.output_})
+            for (const auto& path : {request.file1_, request.file2_, request.file3_, request.base_, request.output_, request.planOut_, request.decisions_})
                 if (!path.isEmpty() && request.report_.compare(path, Qt::CaseInsensitive) == 0) return fail("Report path aliases an input/output.");
+        for (const auto& artifact : {request.planOut_, request.decisions_})
+        {
+            if (artifact.isEmpty()) continue;
+            if (QFileInfo(artifact).fileName() == "-") return fail("Decision plan requires a file path.");
+            for (const auto& path : {request.file1_, request.file2_, request.file3_, request.base_, request.output_})
+                if (!path.isEmpty() && artifact.compare(path, Qt::CaseInsensitive) == 0) return fail("Decision plan aliases an input/output.");
+        }
         return result;
     }
 }
