@@ -187,9 +187,11 @@ private:
     hc::settings::FileRuleResult fileRuleStyle(int Row) const;
     void pumpFileRules();
     void resetFileRules();
-    struct FileRuleJob { QString key_; hc::settings::FileRuleInput input_; int row_; };
+    struct FileRuleJob { hc::settings::FileRuleKey key_; hc::settings::FileRuleInput input_; int row_; nsHC::TySpFileSource item_; };
     mutable QList<FileRuleJob> fileRuleQueue_;
-    mutable QSet<QString> fileRulePending_;
+    mutable QSet<hc::settings::FileRuleKey> fileRulePending_;
+    mutable QSet<int> fileRuleDeferredRows_;
+    std::shared_ptr<hc::settings::FileColorRules::EvaluationContext> fileRuleContext_ = std::make_shared<hc::settings::FileColorRules::EvaluationContext>();
     mutable QTimer fileRulePump_;
     std::stop_source fileRuleStop_;
     quint64 fileRuleEpoch_ = 0;

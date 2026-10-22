@@ -15,6 +15,8 @@
 #include <fmfilelist/RecordPainting.h>
 #include "UniqueLibs/settings/fileColorExamples.hpp"
 #include <functional>
+#include <QtConcurrent/QtConcurrentRun>
+#include <QFutureWatcher>
 
 namespace hc::ui {
 class FileRulePreviewDelegate final : public QStyledItemDelegate
@@ -101,7 +103,7 @@ public:
         Button(tr("가져오기"), Files, [this] {
             const auto Path = QFileDialog::getOpenFileName(this, tr("파일 색상 규칙 가져오기"), {}, "JSON (*.json)"); if (Path.isEmpty()) return;
             QFile File(Path); if (!File.open(QIODevice::ReadOnly) || File.size() > 1024 * 1024) { error_->setText(tr("1MB 이하 JSON 파일을 읽을 수 없습니다.")); return; }
-            const auto Doc = QJsonDocument::fromJson(File.readAll()).object(); const auto Error = settings::FileColorRules::Validate(Doc);
+            const auto Doc = QJsonDocument::fromJson(File.readAll()).object(); const auto Error = settings::FileColorRules::Validate(Doc, false);
             if (!Error.isEmpty()) { error_->setText(Error); return; } Load(Doc);
         })->setObjectName("hc.rules.import");
         Button(tr("내보내기"), Files, [this] {
@@ -130,6 +132,9 @@ public:
         conditions_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch); conditions_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed); conditions_->setColumnWidth(3, 40); conditions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         conditions_->setColumnWidth(0, qMax(105, QFontMetrics(conditions_->font()).horizontalAdvance(tr("파일명 정규화")) + 36)); conditions_->setColumnWidth(1, 110);
         conditions_->setSelectionBehavior(QAbstractItemView::SelectRows); Definition->addWidget(conditions_);
+        auto* PatternHelp = new QLabel(tr("확장자는 마지막 . 뒤, 파일명은 확장자를 포함한 전체 이름입니다.\n와일드카드: 전체 일치(*, ?) · 정규표현식: 부분 일치(전체는 \\A…\\z)"), editor_);
+        PatternHelp->setObjectName("hc.rules.patternHelp"); PatternHelp->setWordWrap(true);
+        PatternHelp->setFixedHeight(PatternHelp->fontMetrics().lineSpacing() * 2 + 6); Definition->addWidget(PatternHelp);
         auto* ConditionButtons = new QHBoxLayout; Definition->addLayout(ConditionButtons);
         auto* AddCondition = Button(tr("조건 추가(&D)"), ConditionButtons, [this] { if (conditionRows_.size() >= 32) return; ensureVersion2(); appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); storeForm(); });
         AddCondition->setObjectName("hc.rules.addCondition"); ConditionButtons->addStretch();
@@ -214,6 +219,8 @@ public:
         connect(previewFolder_, &QCheckBox::toggled, this, [this] { updatePreview(); });
         connect(previewDark_, &QCheckBox::toggled, this, [this] { updatePreview(); });
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] { const bool WasLoading = loading_; loading_ = true; updateGroupItems(); loading_ = WasLoading; updatePreview(); });
+        previewTimer_.setSingleShot(true); previewTimer_.setInterval(150);
+        connect(&previewTimer_, &QTimer::timeout, this, [this] { startPreview(); });
         Load(settings::FileColorRules::Empty());
     }
     void Load(const QJsonObject& Document) { document_ = Document.isEmpty() ? settings::FileColorRules::Empty() : Document; supported_ = settings::FileColorRules::Supported(document_); setEnabled(supported_); refreshList(0); if (!supported_) error_->setText(tr("다른 버전의 파일 색상 규칙은 원본 그대로 보존합니다.")); }
@@ -236,7 +243,7 @@ public:
             if (Flags & (FILE_SET_EXP_SIZE_EQUAL | FILE_SET_EXP_SIZE_LESS | FILE_SET_EXP_SIZE_MORE)) Review = true;
             if (Conditions.isEmpty()) Add("pattern", "*");
             QString Label = Name; int N = 1; while (Names.contains(Label.toCaseFolded())) Label = Name + tr(" (기존 %1)").arg(N++); Names.insert(Label.toCaseFolded());
-            if (document_["version"] == QJsonValue(2)) { QJsonArray Upgraded; for (const auto C : Conditions) Upgraded.append(settings::FileColorRules::NormalizeCondition(C.toObject(), 1)); Conditions = Upgraded; }
+            if (document_["version"].toInt() >= 2) { QJsonArray Upgraded; for (const auto C : Conditions) Upgraded.append(settings::FileColorRules::NormalizeCondition(C.toObject(), 1)); Conditions = Upgraded; }
             QJsonObject G{{"id", Id}, {"name", Label}, {"enabled", !Review}, {"join", "all"}, {"conditions", Conditions}, {"legacySource", F}};
             for (const auto& Mode : {QString("light"), QString("dark")}) {
                 const auto Default = Mode == "dark" ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
@@ -250,7 +257,15 @@ public:
         error_->setText(tr("기존 파일집합과 색 구성표 원본을 초안에 백업했습니다. 적용 전 순서와 조건을 확인하세요. 기존 엔진에서 미지원이던 파일명·크기 조건은 비활성으로 이관합니다."));
     }
     QJsonObject Document() const { return document_; }
-    bool Validate() { if (!supported_) return true; const auto Error = settings::FileColorRules::Validate(document_); error_->setText(Error); return Error.isEmpty(); }
+    bool Validate() {
+        if (!supported_) return true;
+        if (settings::FileColorRules::HasRegex(document_)) {
+            if (validatedDocument_ != document_ || validationPending_) { error_->setText(tr("조건을 검증하고 있습니다. 잠시 후 적용하세요.")); return false; }
+            error_->setText(validationError_); return validationError_.isEmpty();
+        }
+        const auto Error = settings::FileColorRules::Validate(document_); error_->setText(Error); return Error.isEmpty();
+    }
+    bool IsValidationPending() const { return validationPending_; }
 private:
     void ensureVersion2() {
         if (document_["version"] == QJsonValue(1)) { document_ = settings::FileColorRules::Upgrade(document_); for (auto* Row : conditionRows_) Row->Upgrade(); }
@@ -277,7 +292,15 @@ private:
                 if (C["type"] == "normalization") Text = C["value"] == "decomposed" ? tr("자소 분리 있음 (NFD·혼합)") : tr("분리 없음 (NFC)");
                 if (C["value"].isArray()) { QStringList Parts; for (const auto P : C["value"].toArray()) Parts.append(P.toString()); Text = Parts.join("; "); }
                 const QMap<QString, QString> Comparisons{{"gt", ">"}, {"ge", "≥"}, {"lt", "<"}, {"le", "≤"}, {"eq", "="}, {"ne", "≠"}, {"any", tr("하나라도")}, {"all", tr("모두")}, {"within", tr("최근")}, {"before", tr("이전")}, {"after", tr("이후")}, {"notMatches", tr("불일치")}, {"notIn", tr("제외")}};
-                QString Label = Types.value(typeKeys_.indexOf(C["type"].toString())); if (Comparisons.contains(C["op"].toString())) Label += " " + Comparisons[C["op"].toString()];
+                QString Label = Types.value(typeKeys_.indexOf(C["type"].toString()));
+                if (C["type"] == "extension" || C["type"] == "pattern") {
+                    const auto Syntax = settings::FileColorRules::Syntax(C, document_["version"].toInt());
+                    if (Syntax == "regex") Label += tr(" 정규식");
+                    else if (Syntax == "wildcard") Label += tr(" 와일드카드");
+                    if (C["op"] == "contains") Label += tr(" 포함");
+                    else if (C["op"] == "notContains") Label += tr(" 포함 아님");
+                }
+                if (Comparisons.contains(C["op"].toString())) Label += " " + Comparisons[C["op"].toString()];
                 if (C["unit"].isString()) { const QMap<QString, QString> Units{{"hours", tr("시간")}, {"days", tr("일")}, {"minutes", tr("분")}}; Text += " " + Units.value(C["unit"].toString(), C["unit"].toString()); }
                 Conditions.append(Label + ": " + Text);
             }
@@ -313,6 +336,7 @@ private:
         if (loading_ || list_->currentRow() < 0) return;
         auto Groups = document_["groups"].toArray(); auto G = Groups[list_->currentRow()].toObject(); G["name"] = name_->text(); G["join"] = join_->checkedId() == 1 ? "all" : "any";
         QJsonArray Conditions; for (auto* Row : conditionRows_) Conditions.append(Row->Record()); G["conditions"] = Conditions;
+        for (const auto C : Conditions) if (C.toObject().contains("syntax")) { document_["version"] = 3; break; }
         auto Light = G["light"].toObject(), Dark = G["dark"].toObject(), Font = G["font"].toObject();
         for (int I = 0; I < 4; ++I) {
             if (I % 2 && (autoDark_->isChecked() || G["autoDark"].toBool())) continue;
@@ -338,7 +362,7 @@ private:
     void addGroup(bool Copy) {
         auto Groups = document_["groups"].toArray(); if (Groups.size() >= 256) return;
         QJsonObject G = Copy && list_->currentRow() >= 0 ? Groups[list_->currentRow()].toObject() : QJsonObject{{"enabled", true}, {"join", "any"}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}}};
-        if (!Copy && document_["version"] == QJsonValue(2)) G["conditions"] = QJsonArray{settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)};
+        if (!Copy && document_["version"].toInt() >= 2) G["conditions"] = QJsonArray{settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)};
         G["id"] = QUuid::createUuid().toString(QUuid::WithoutBraces); G["name"] = tr("새 그룹 %1").arg(G["id"].toString().left(8)); Groups.append(G); document_["groups"] = Groups; refreshList(Groups.size() - 1);
     }
     TyColorScheme recordScheme(bool Dark) const {
@@ -375,21 +399,66 @@ private:
             contrast_[I]->setToolTip(tr("현재 그룹과 목록 기본색을 기준으로 계산합니다. 4.5:1 이상을 충족으로 표시합니다. 선택 상태는 목록의 선택색을 우선합니다. 수동 색은 자동 보정하지 않습니다."));
         }
     }
+    struct PreviewWork {
+        QJsonObject document_; settings::FileRuleInput input_; QList<settings::FileRuleInput> samples_;
+        quint64 generation_ = 0;
+    };
+    struct PreviewOutput {
+        QString error_; settings::FileRuleResult custom_; QList<settings::FileRuleResult> samples_;
+    };
+    static PreviewOutput evaluatePreview(const PreviewWork& Work) {
+        PreviewOutput Output; settings::FileColorRules Rules;
+        Output.error_ = Rules.Load(Work.document_); if (!Output.error_.isEmpty()) return Output;
+        settings::FileColorRules::EvaluationContext Context;
+        for (const auto& Input : Work.samples_) {
+            auto Style = Rules.Evaluate(Input, &Context);
+            if (Output.error_.isEmpty()) Output.error_ = Style.error_;
+            Output.samples_.append(std::move(Style));
+        }
+        Output.custom_ = Rules.Evaluate(Work.input_, &Context);
+        if (Output.error_.isEmpty()) Output.error_ = Output.custom_.error_;
+        return Output;
+    }
+    void startPreview() {
+        if (previewRunning_ || !pendingPreview_) return;
+        const auto Work = std::exchange(pendingPreview_, {}); previewRunning_ = true;
+        auto* Watcher = new QFutureWatcher<PreviewOutput>(this);
+        connect(Watcher, &QFutureWatcher<PreviewOutput>::finished, this, [this, Watcher, Work] {
+            auto Output = Watcher->future().takeResult(); Watcher->deleteLater(); previewRunning_ = false;
+            if (Work->generation_ == previewGeneration_) applyPreview(*Work, Output);
+            if (pendingPreview_ && !previewTimer_.isActive()) startPreview();
+        });
+        Watcher->setFuture(QtConcurrent::run([Work] { return evaluatePreview(*Work); }));
+    }
     void updatePreview() {
         if (!preview_ || !error_) return;
-        updateContrast(); updateSampleTable();
-        const auto Error = settings::FileColorRules::Validate(document_); error_->setText(Error);
+        ++previewGeneration_; pendingPreview_.reset(); previewTimer_.stop();
+        updateContrast();
         bool SizeOk = false, AttributesOk = false; const auto Size = previewSize_->text().toULongLong(&SizeOk); const auto Attributes = previewAttributes_->text().toULongLong(&AttributesOk);
-        if (!SizeOk || !AttributesOk || Attributes > 0xFFFFFFFFULL) { error_->setText(tr("크기는 0 이상 정수, 속성은 0~4294967295 정수로 입력하세요.")); preview_->setText(tr("미리보기 입력을 확인하세요.")); return; }
-        settings::FileColorRules Rules; Rules.Load(document_); settings::FileRuleInput Input{previewName_->text(), quint32(Attributes) | (previewFolder_->isChecked() ? 0x10u : 0u), Size, previewDark_->isChecked()};
+        if (!SizeOk || !AttributesOk || Attributes > 0xFFFFFFFFULL) {
+            validationPending_ = false; validatedDocument_ = {}; error_->setText(tr("크기는 0 이상 정수, 속성은 0~4294967295 정수로 입력하세요.")); preview_->setText(tr("미리보기 입력을 확인하세요.")); return;
+        }
+        auto Work = std::make_shared<PreviewWork>(); Work->document_ = document_; Work->generation_ = previewGeneration_;
+        auto& Input = Work->input_; Input = settings::FileRuleInput{previewName_->text(), quint32(Attributes) | (previewFolder_->isChecked() ? 0x10u : 0u), Size, previewDark_->isChecked()};
         if (previewModifiedKnown_->isChecked()) Input.modifiedUtcMs_ = previewModified_->dateTime().toMSecsSinceEpoch();
         if (previewLink_->currentIndex()) { Input.attributes_ |= 0x400; if (previewLink_->currentIndex() < 3) Input.reparseTag_ = previewLink_->currentIndex() == 1 ? 0xa000000cu : 0xa0000003u; }
-        const auto Result = Rules.Evaluate(Input);
-        const auto Pair = recordPair(Input.dark_, Result, previewSelected_->isChecked()); auto Palette = palette(); Palette.setColor(QPalette::WindowText, Pair.first); Palette.setColor(QPalette::Window, Pair.second);
-        preview_->setPalette(Palette); preview_->setFont(Result.Font(recordScheme(Input.dark_).FileList_Font)); preview_->setText(previewName_->text());
+        Work->samples_ = settings::FileColorExamples::Samples(); for (auto& Sample : Work->samples_) Sample.dark_ = Input.dark_;
+        validationPending_ = true;
+        if (settings::FileColorRules::HasRegex(document_)) {
+            error_->setText(tr("조건을 검증하고 있습니다…"));
+            pendingPreview_ = std::move(Work); previewTimer_.start();
+        } else applyPreview(*Work, evaluatePreview(*Work));
+    }
+    void applyPreview(const PreviewWork& Work, const PreviewOutput& Output) {
+        validationPending_ = false; validatedDocument_ = Work.document_; validationError_ = Output.error_;
+        error_->setText(validationError_); previewStyles_ = Output.samples_; updateSampleTable();
+        const auto& Result = Output.custom_;
+        const auto Pair = recordPair(Work.input_.dark_, Result, previewSelected_->isChecked()); auto Palette = palette(); Palette.setColor(QPalette::WindowText, Pair.first); Palette.setColor(QPalette::Window, Pair.second);
+        preview_->setPalette(Palette); preview_->setFont(Result.Font(recordScheme(Work.input_.dark_).FileList_Font)); preview_->setText(previewName_->text());
         QStringList Owners; for (auto It = Result.owners_.begin(); It != Result.owners_.end(); ++It) Owners.append(It.key() + ": " + It.value());
         owners_->setText(tr("일치 그룹: %1\n%2\n크기·속성은 위 미리보기 입력을 사용합니다.").arg(Result.groups_.join(", "), Owners.join(" · ")));
     }
+
     void addExamples() {
         auto Groups = document_["groups"].toArray(); QSet<QString> Ids, Names;
         for (const auto Value : Groups) { Ids.insert(Value.toObject()["id"].toString()); Names.insert(Value.toObject()["name"].toString().toCaseFolded()); }
@@ -402,11 +471,11 @@ private:
         for (const auto Value : Added) Groups.append(Value); document_["groups"] = Groups; refreshList(First);
     }
     void updateSampleTable() {
-        settings::FileColorRules Rules; Rules.Load(document_); previewStyles_.clear(); const auto Samples = settings::FileColorExamples::Samples();
+        const auto Samples = settings::FileColorExamples::Samples();
         const auto BaseFont = recordScheme(previewDark_->isChecked()).FileList_Font;
         const QMap<QString, QString> Labels{{"foreground", tr("글자색")}, {"background", tr("배경색")}, {"bold", tr("굵게")}, {"italic", tr("기울임")}, {"underline", tr("밑줄")}, {"strike", tr("취소선")}};
         int Height = previewTable_->horizontalHeader()->height() + 2 * previewTable_->frameWidth(); int SizeWidth = previewTable_->fontMetrics().horizontalAdvance(tr("크기")) + 20;
-        for (int Row = 0; Row < Samples.size(); ++Row) { auto Input = Samples[Row]; Input.dark_ = previewDark_->isChecked(); const auto Style = Rules.Evaluate(Input); previewStyles_.append(Style);
+        for (int Row = 0; Row < Samples.size(); ++Row) { auto Input = Samples[Row]; Input.dark_ = previewDark_->isChecked(); const auto Style = previewStyles_.value(Row);
             QStringList Owners; for (auto It = Style.owners_.begin(); It != Style.owners_.end(); ++It) Owners.append(Labels.value(It.key(), It.key()) + ": " + It.value());
             const QStringList Values{Input.name_, QLocale().formattedDataSize(Input.size_, 1, QLocale::DataSizeTraditionalFormat), Style.groups_.isEmpty() ? tr("목록 기본값") : Style.groups_.join(" + ")};
             for (int Col = 0; Col < 3; ++Col) { auto* Item = previewTable_->item(Row, Col); if (!Item) { Item = new QTableWidgetItem; previewTable_->setItem(Row, Col, Item); }
@@ -420,6 +489,12 @@ private:
         }
         previewTable_->setColumnWidth(1, SizeWidth); previewTable_->setFixedHeight(Height); previewTable_->viewport()->update();
     }
+    QTimer previewTimer_;
+    quint64 previewGeneration_ = 0;
+    bool previewRunning_ = false, validationPending_ = false;
+    std::shared_ptr<PreviewWork> pendingPreview_;
+    QJsonObject validatedDocument_;
+    QString validationError_;
     QJsonObject document_;
     bool loading_ = false, supported_ = true;
     QWidget* editor_ = nullptr;

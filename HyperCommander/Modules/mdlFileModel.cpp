@@ -4,6 +4,8 @@
 #include "fileSetMgr.hpp"
 #include "solTCPluginMgr.hpp"
 #include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
+#include <QFutureWatcher>
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -279,7 +281,22 @@ void CFsModelT::SetColorScheme( const TyColorScheme& ColorScheme )
 {
     colorScheme_ = ColorScheme;
     fileColorCache_.clear();
-    fileColorRules_.Load(hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileColorRules"].toObject());
+    const auto Document = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileColorRules"].toObject();
+    if (fileRuleDocument_ != Document) {
+        fileRuleDocument_ = Document; const auto Generation = ++fileRuleLoadGeneration_;
+        if (hc::settings::FileColorRules::HasRegex(Document)) {
+            auto Previous = fileColorRules_;
+            fileColorRules_.Load(hc::settings::FileColorRules::Empty());
+            auto* Watcher = new QFutureWatcher<hc::settings::FileColorRules>(this);
+            connect(Watcher, &QFutureWatcher<hc::settings::FileColorRules>::finished, this, [this, Watcher, Generation] {
+                auto Rules = Watcher->future().takeResult(); Watcher->deleteLater();
+                if (Generation != fileRuleLoadGeneration_) return;
+                fileColorRules_ = std::move(Rules); fileColorCache_.clear();
+                if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
+            });
+            Watcher->setFuture(QtConcurrent::run([Document, Previous]() mutable { Previous.Load(Document); return Previous; }));
+        } else fileColorRules_.Load(Document);
+    }
     fileRuleClock_->stop(); fileRuleExpiry_.reset();
 
     decltype( vecFileSetColors_ ) VecFileSetColors;

@@ -7,6 +7,9 @@
 #include <QFileInfo>
 #include <QDateTime>
 #include <QSet>
+#include <QCache>
+#include <memory>
+#include "commonLibs/fileNameGlob.hpp"
 #include <limits>
 #include <optional>
 
@@ -24,6 +27,7 @@ struct FileRuleInput
 struct FileRuleResult
 {
     bool matched_ = false;
+    QString error_;
     QColor foreground_, background_;
     QJsonObject font_;
     QStringList groups_;
@@ -35,6 +39,20 @@ struct FileRuleResult
         if (font_.contains("underline")) Base.setUnderline(font_["underline"].toBool());
         if (font_.contains("strike")) Base.setStrikeOut(font_["strike"].toBool());
         return Base;
+    }
+};
+struct FileRuleKey
+{
+    QString name_;
+    quint32 attributes_ = 0;
+    quint64 size_ = 0;
+    std::optional<qint64> modified_;
+    std::optional<quint32> tag_;
+    quintptr identity_ = 0;
+    static FileRuleKey From(const FileRuleInput& Input, quintptr Identity = 0) { return {Input.name_, Input.attributes_, Input.size_, Input.modifiedUtcMs_, Input.reparseTag_, Identity}; }
+    bool operator==(const FileRuleKey&) const = default;
+    friend size_t qHash(const FileRuleKey& Key, size_t Seed = 0) noexcept {
+        return qHashMulti(Seed, Key.name_, Key.attributes_, Key.size_, Key.modified_.has_value(), Key.modified_.value_or(0), Key.tag_.has_value(), Key.tag_.value_or(0), Key.identity_);
     }
 };
 class FileColorRules
@@ -54,7 +72,23 @@ public:
         return Result;
     }
     static QJsonObject Empty() { return {{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{}}}; }
-    static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2); }
+    static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2) || Document["version"] == QJsonValue(3); }
+    static QString Syntax(const QJsonObject& C, int Version = 3) {
+        return Version >= 3 && C.contains("syntax") ? C["syntax"].toString()
+            : C["type"] == "pattern" ? QStringLiteral("wildcard") : QStringLiteral("literal");
+    }
+    static bool HasRegex(const QJsonObject& Document) {
+        if (Document["version"].toInt() < 3) return false;
+        for (const auto G : Document["groups"].toArray()) for (const auto C : G.toObject()["conditions"].toArray())
+            if (C.toObject()["syntax"] == "regex") return true;
+        return false;
+    }
+    static QRegularExpression Regex(const QString& Pattern) {
+        // PCRE2 keeps the lower limit even if the expression supplies another.
+        // This bounds engine work, not wall time; callers still run off the GUI.
+        return QRegularExpression(QStringLiteral("(*LIMIT_MATCH=100000)(*LIMIT_DEPTH=1000)") + Pattern,
+            QRegularExpression::CaseInsensitiveOption);
+    }
     // Derived colors are never persisted over the user's manual dark palette.
     // Keep hue, saturation and alpha; bound inverted lightness for dark surfaces.
     static QJsonObject Colors(const QJsonObject& Group, bool Dark) {
@@ -95,7 +129,7 @@ public:
         }
         Document["groups"] = Groups; Document["version"] = 2; return Document;
     }
-    static QString Validate(const QJsonObject& Document) {
+    static QString Validate(const QJsonObject& Document, bool CompilePatterns = true) {
         if (!Supported(Document)) return QObject::tr("지원하지 않는 파일 색상 규칙 버전입니다.");
         if (Document["mode"] != "first" && Document["mode"] != "merge") return QObject::tr("그룹 합성 정책이 올바르지 않습니다.");
         if (!Document["groups"].isArray() || Document["groups"].toArray().size() > 256) return QObject::tr("그룹은 최대 256개입니다.");
@@ -112,7 +146,9 @@ public:
             if (Group["join"] != "any" && Group["join"] != "all") return QObject::tr("조건 결합 방식이 올바르지 않습니다.");
             const auto Conditions = Group["conditions"].toArray();
             if (Conditions.isEmpty() || Conditions.size() > 32) return QObject::tr("그룹마다 조건을 1~32개 입력하세요.");
+            int ConditionIndex = 0;
             for (const auto C : Conditions) {
+                ++ConditionIndex;
                 if (!C.isObject()) return QObject::tr("조건 형식이 올바르지 않습니다.");
                 auto Condition = C.toObject(); const auto LegacyType = Condition["type"].toString();
                 if (Document["version"] == QJsonValue(1)) {
@@ -120,14 +156,31 @@ public:
                     Condition = NormalizeCondition(Condition, 1);
                 }
                 const auto Type = Condition["type"].toString(), Op = Condition["op"].toString(), Text = Condition["value"].toString();
-                if (Type == "pattern") {
+                const auto Mode = Syntax(Condition, Document["version"].toInt());
+                if ((Type == "extension" || Type == "pattern") && !QStringList{"literal", "wildcard", "regex"}.contains(Mode)) return QObject::tr("조건의 비교 방식을 확인하세요.");
+                if ((Type == "extension" || Type == "pattern") && Mode == "regex") {
+                    if ((Op != "matches" && Op != "notMatches") || !Condition["value"].isString() || Text.isEmpty() || Text.size() > 512 || Text.contains(QChar::Null)) return QObject::tr("정규표현식은 1~512자로 입력하세요.");
+                    if (CompilePatterns) {
+                        const auto Re = Regex(Text);
+                        if (!Re.isValid()) return QObject::tr("%1 · 조건 %2: 정규표현식 %3번째 위치 · %4").arg(Name).arg(ConditionIndex)
+                            .arg(qMax<qsizetype>(1, Re.patternErrorOffset() - (Re.pattern().size() - Text.size()) + 1)).arg(Re.errorString());
+                    }
+                    continue;
+                }
+                if ((Type == "pattern" || Type == "extension") && Mode == "wildcard") {
                     const auto Patterns = Condition["value"].toArray();
                     if ((Op != "matches" && Op != "notMatches") || !Condition["value"].isArray() || Patterns.isEmpty() || Patterns.size() > 32) return QObject::tr("파일명 패턴은 1~32개입니다.");
                     for (const auto P : Patterns) if (!P.isString() || P.toString().trimmed().isEmpty() || P.toString().size() > 512 || P.toString().contains('/') || P.toString().contains('\\') || P.toString().contains(QChar::Null)) return QObject::tr("파일명 패턴에는 경로 없이 1~512자를 입력하세요.");
+                    if (CompilePatterns && Document["version"].toInt() >= 3 && Condition.contains("syntax")) for (const auto P : Patterns) {
+                        hc::text::FileNameGlob Glob; const auto Error = Glob.Compile(P.toString());
+                        if (!Error.isEmpty()) return QObject::tr("%1 · 조건 %2: %3").arg(Name).arg(ConditionIndex).arg(Error);
+                    }
                     continue;
                 }
-                if (!Condition["value"].isString() || Text.size() > 512 || Text.trimmed().isEmpty()) return QObject::tr("조건은 1~512자로 입력하세요.");
-                if (Type == "extension") {
+                if (!Condition["value"].isString() || Text.size() > 512 || (Type == "pattern" ? Text.isEmpty() : Text.trimmed().isEmpty())) return QObject::tr("조건은 1~512자로 입력하세요.");
+                if (Type == "pattern") {
+                    if ((Op != "contains" && Op != "notContains") || Text.contains(QChar::Null)) return QObject::tr("파일명 문자열의 포함 방법을 확인하세요.");
+                } else if (Type == "extension") {
                     const auto Parts = Extensions(Text);
                     if ((Op != "in" && Op != "notIn") || Parts.isEmpty()) return QObject::tr("확장자 목록과 비교 방법을 확인하세요.");
                     for (const auto& Part : Parts) if (Part != "<none>" && !QRegularExpression("^[\\p{L}\\p{N}_+-]+$").match(Part).hasMatch()) return QObject::tr("단순 확장자를 입력하세요. 무확장자는 <none>, 파일명 패턴은 별도 조건을 사용합니다.");
@@ -153,77 +206,226 @@ public:
         }
         return {};
     }
-    void Load(const QJsonObject& Document) {
-        groups_.clear(); relativeDates_ = false; merge_ = Document["mode"] == "merge";
-        if (!Validate(Document).isEmpty()) return;
-        for (const auto Value : Document["groups"].toArray()) {
-            const auto Object = Value.toObject(); if (!Object["enabled"].toBool(true)) continue;
-            Group G; G.object_ = Object;
-            for (const auto C : Object["conditions"].toArray()) {
-                const auto O = NormalizeCondition(C.toObject(), Document["version"].toInt());
-                Condition Item; Item.type_ = O["type"].toString(); Item.op_ = O["op"].toString(); Item.value_ = O["value"].toString();
-                if (Item.type_ == "extension") Item.extensions_ = Extensions(Item.value_);
-                if (Item.type_ == "pattern") for (const auto Pattern : O["value"].toArray()) Item.patterns_.append(QRegularExpression(QRegularExpression::wildcardToRegularExpression(Pattern.toString()), QRegularExpression::CaseInsensitiveOption));
-                Item.number_ = number(O).value_or(0); Item.date_ = utcDate(Item.value_).value_or(0);
-                relativeDates_ |= Item.type_ == "modified" && Item.op_ == "within";
-                G.conditions_.append(Item);
-            }
-            groups_.append(G);
+    struct CachedExtension {
+        QList<qint8> conditions_;
+        QList<int> groups_;
+        bool complete_ = false;
+    };
+    struct EvaluationContext {
+        // One serialized worker owns a context. Compiled rules remain immutable.
+        std::shared_ptr<const int> revision_;
+        QCache<QString, CachedExtension> extensions_{4 * 1024 * 1024};
+        quint64 hits_ = 0, misses_ = 0;
+    };
+    QString Load(const QJsonObject& Document) {
+        QJsonObject ConditionDocument = Document; QJsonArray ConditionGroups;
+        for (const auto V : Document["groups"].toArray()) {
+            auto G = V.toObject(); for (const auto* Key : {"name", "light", "dark", "font", "autoDark"}) G.remove(Key);
+            ConditionGroups.append(G);
         }
-    }
-    bool HasRelativeDates() const { return relativeDates_; }
-    FileRuleResult Evaluate(const QString& Name, quint32 Attributes, quint64 Size, bool Dark) const { return Evaluate(FileRuleInput{Name, Attributes, Size, Dark}); }
-    FileRuleResult Evaluate(const FileRuleInput& Input) const {
-        FileRuleResult Result; if (Input.name_ == "..") return Result;
-        const bool Folder = (Input.attributes_ & 0x10) != 0;
-        auto Ext = QFileInfo(Input.name_).suffix().toLower(); if (Ext.isEmpty()) Ext = "<none>";
-        for (const auto& G : groups_) {
-            const bool All = G.object_["join"] == "all"; bool Match = All;
-            for (const auto& C : G.conditions_) {
-                bool Hit = false;
-                if (C.type_ == "extension") Hit = !Folder && (C.extensions_.contains(Ext) != (C.op_ == "notIn"));
-                else if (C.type_ == "pattern") { for (const auto& Pattern : C.patterns_) Hit |= Pattern.match(Input.name_).hasMatch(); if (C.op_ == "notMatches") Hit = !Hit; }
-                else if (C.type_ == "folder") Hit = Folder == (C.value_ == "true");
-                else if (C.type_ == "normalization") Hit = HasDecomposedName(Input.name_) == (C.value_ == "decomposed");
-                else if (C.type_ == "attributes") Hit = C.op_ == "any" ? (Input.attributes_ & C.number_) != 0 : (Input.attributes_ & C.number_) == C.number_;
-                else if (C.type_ == "size" && !Folder) {
-                    if (C.op_ == "gt") Hit = Input.size_ > C.number_; else if (C.op_ == "ge") Hit = Input.size_ >= C.number_;
-                    else if (C.op_ == "lt") Hit = Input.size_ < C.number_; else if (C.op_ == "le") Hit = Input.size_ <= C.number_;
-                    else if (C.op_ == "eq") Hit = Input.size_ == C.number_; else Hit = Input.size_ != C.number_;
-                } else if (C.type_ == "modified" && Input.modifiedUtcMs_) {
-                    if (C.op_ == "before") Hit = *Input.modifiedUtcMs_ < C.date_; else if (C.op_ == "after") Hit = *Input.modifiedUtcMs_ > C.date_;
-                    else {
-                        Hit = *Input.modifiedUtcMs_ <= Input.referenceUtcMs_ && quint64(Input.referenceUtcMs_) - quint64(*Input.modifiedUtcMs_) <= C.number_;
-                        std::optional<qint64> Change;
-                        if (*Input.modifiedUtcMs_ > Input.referenceUtcMs_) Change = *Input.modifiedUtcMs_;
-                        else if (C.number_ < quint64(std::numeric_limits<qint64>::max()) - quint64(*Input.modifiedUtcMs_)) Change = qint64(quint64(*Input.modifiedUtcMs_) + C.number_ + 1);
-                        if (Change && *Change > Input.referenceUtcMs_ && (!Result.validUntilUtcMs_ || *Change < *Result.validUntilUtcMs_)) Result.validUntilUtcMs_ = Change;
+        ConditionDocument["groups"] = ConditionGroups;
+        if (conditionDocument_ != ConditionDocument) revision_ = std::make_shared<const int>(0);
+        conditionDocument_ = ConditionDocument;
+        groups_.clear(); relativeDates_ = false; needsExtension_ = false; extensionOnly_ = true;
+        cacheConditions_ = 0; merge_ = Document["mode"] == "merge";
+        const auto Error = Validate(Document, false); if (!Error.isEmpty()) return Error;
+        const int Version = Document["version"].toInt();
+        for (const auto Value : Document["groups"].toArray()) {
+            const auto Object = Value.toObject();
+            if (!Object["enabled"].toBool(true)) {
+                // Disabled groups still have to round-trip as valid settings.
+                auto Disabled = Document; Disabled["groups"] = QJsonArray{Object};
+                const auto Failure = Validate(Disabled); if (!Failure.isEmpty()) { groups_.clear(); return Failure; }
+                continue;
+            }
+            Group G; G.all_ = Object["join"] == "all"; G.label_ = Object["name"].toString();
+            G.font_ = Object["font"].toObject();
+            for (int Dark = 0; Dark < 2; ++Dark) {
+                const auto Palette = Colors(Object, Dark);
+                G.foreground_[Dark] = QColor(Palette["foreground"].toString());
+                G.background_[Dark] = QColor(Palette["background"].toString());
+            }
+            for (const auto C : Object["conditions"].toArray()) {
+                const auto O = NormalizeCondition(C.toObject(), Version);
+                Condition Item; const auto Type = O["type"].toString(), Op = O["op"].toString();
+                Item.type_ = Field(typeNames().indexOf(Type)); Item.value_ = O["value"].toString();
+                Item.op_ = Operator(opNames().indexOf(Op));
+                const auto Mode = Syntax(O, Version);
+                Item.syntax_ = Mode == "regex" ? RegexSyntax : Mode == "wildcard" ? GlobSyntax : LiteralSyntax;
+                Item.negate_ = Op == "notIn" || Op == "notMatches" || Op == "notContains";
+                if (Item.type_ == Extension || Item.type_ == Pattern) {
+                    if (Item.syntax_ == GlobSyntax) for (const auto P : O["value"].toArray()) {
+                        hc::text::FileNameGlob Glob; const auto Failure = Glob.Compile(P.toString());
+                        // v1/v2 accepted malformed globs: preserve their no-match
+                        // behavior on read; edited v3 conditions report the error.
+                        if (!Failure.isEmpty() && Version >= 3 && O.contains("syntax")) { groups_.clear(); return QObject::tr("%1 · 조건 %2: %3").arg(G.label_).arg(G.conditions_.size() + 1).arg(Failure); }
+                        Item.globs_.append(std::move(Glob));
                     }
-                } else if (C.type_ == "link") {
-                    const bool Shortcut = !Folder && (Ext == "lnk" || Ext == "url");
-                    const bool Reparse = (Input.attributes_ & 0x400) != 0;
-                    // Cloud placeholders and unknown reparse tags are not proof
-                    // of a symbolic link. Never stat a file on the UI thread.
-                    const bool Known = !Reparse || Input.reparseTag_.value_or(0) != 0;
-                    const bool Symbolic = Reparse && (Input.reparseTag_ == 0xa000000cu || Input.reparseTag_ == 0xa0000003u);
-                    if (C.value_ == "shortcut") Hit = Shortcut; else if (C.value_ == "symbolic") Hit = Symbolic;
-                    else if (C.value_ == "any") Hit = Shortcut || Symbolic; else Hit = Known && !Shortcut && !Symbolic;
+                    else if (Item.syntax_ == RegexSyntax) {
+                        Item.regex_ = Regex(Item.value_);
+                        if (!Item.regex_.isValid()) { groups_.clear(); return Validate(Document); }
+                        Item.regex_.optimize();
+                    } else if (Item.type_ == Extension) {
+                        const auto Parts = Extensions(Item.value_); Item.extensions_ = QSet<QString>(Parts.cbegin(), Parts.cend());
+                    }
                 }
-                Match = All ? Match && Hit : Match || Hit;
+                Item.number_ = number(O).value_or(0); Item.date_ = utcDate(Item.value_).value_or(0);
+                if (Item.type_ == Modified && Item.op_ == Within) relativeDates_ = true;
+                needsExtension_ |= Item.type_ == Extension || Item.type_ == Link;
+                extensionOnly_ &= Item.type_ == Extension || Item.type_ == Folder;
+                if (Item.type_ == Extension) Item.cacheIndex_ = cacheConditions_++;
+                G.conditions_.append(std::move(Item));
             }
-            if (!Match) continue;
-            Result.matched_ = true; const auto Label = G.object_["name"].toString(); Result.groups_.append(Label);
-            const auto Colors = FileColorRules::Colors(G.object_, Input.dark_);
-            for (const auto& Key : {"foreground", "background"}) if (Colors.contains(Key) && !Result.owners_.contains(Key)) {
-                (QString(Key) == "foreground" ? Result.foreground_ : Result.background_) = QColor(Colors[Key].toString()); Result.owners_[Key] = Label;
+            groups_.append(std::move(G));
+        }
+        return {};
+    }
+    bool HasRules() const { return !groups_.isEmpty(); }
+    bool HasRelativeDates() const { return relativeDates_; }
+    bool SameConditions(const FileColorRules& Other) const { return revision_ == Other.revision_; }
+    FileRuleResult Evaluate(const QString& Name, quint32 Attributes, quint64 Size, bool Dark) const { return Evaluate(FileRuleInput{Name, Attributes, Size, Dark}); }
+    FileRuleResult EvaluateStyle(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, false, true); }
+    FileRuleResult Matches(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, false, false); }
+    FileRuleResult Evaluate(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, true, true); }
+private:
+    enum Field { Extension, Pattern, Folder, Normalization, Attributes, Size, Modified, Link };
+    enum Operator { In, NotIn, MatchesOp, NotMatches, Contains, NotContains, Is, Any, All, Gt, Ge, Lt, Le, Eq, Ne, Before, After, Within };
+    enum SyntaxKind { LiteralSyntax, GlobSyntax, RegexSyntax };
+    struct Condition {
+        Field type_ = Extension; Operator op_ = In; SyntaxKind syntax_ = LiteralSyntax;
+        QString value_; QSet<QString> extensions_; QList<hc::text::FileNameGlob> globs_;
+        QRegularExpression regex_; quint64 number_ = 0; qint64 date_ = 0;
+        int cacheIndex_ = -1; bool negate_ = false;
+    };
+    struct Group {
+        QString label_; bool all_ = false; QList<Condition> conditions_;
+        QColor foreground_[2], background_[2]; QJsonObject font_;
+    };
+    static const QStringList& typeNames() {
+        static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link"}; return Names;
+    }
+    static const QStringList& opNames() {
+        static const QStringList Names{"in", "notIn", "matches", "notMatches", "contains", "notContains", "is", "any", "all", "gt", "ge", "lt", "le", "eq", "ne", "before", "after", "within"}; return Names;
+    }
+    static qint8 textHit(const Condition& C, const QString& Text) {
+        bool Hit = false;
+        if (C.syntax_ == GlobSyntax) {
+            for (const auto& Glob : C.globs_) if (Glob.Matches(Text)) { Hit = true; break; }
+        } else if (C.syntax_ == RegexSyntax) {
+            const auto Match = C.regex_.match(Text);
+            if (!Match.isValid()) return 2; // Never negate an execution error.
+            Hit = Match.hasMatch();
+        } else Hit = Text.contains(C.value_, Qt::CaseInsensitive);
+        return Hit != C.negate_;
+    }
+    static qint8 conditionHit(const Condition& C, const FileRuleInput& Input, const QString& Ext, bool IsFolder, std::optional<bool>& Decomposed) {
+        switch (C.type_) {
+        case Extension:
+            if (IsFolder) return 0;
+            if (C.syntax_ == LiteralSyntax) return C.extensions_.contains(Ext.isEmpty() ? QStringLiteral("<none>") : Ext.toLower()) != C.negate_;
+            return textHit(C, Ext);
+        case Pattern: return textHit(C, Input.name_);
+        case Folder: return IsFolder == (C.value_ == "true");
+        case Normalization:
+            if (!Decomposed) Decomposed = HasDecomposedName(Input.name_);
+            return *Decomposed == (C.value_ == "decomposed");
+        case Attributes: return C.op_ == Any ? (Input.attributes_ & C.number_) != 0 : (Input.attributes_ & C.number_) == C.number_;
+        case Size:
+            if (IsFolder) return 0;
+            switch (C.op_) {
+            case Gt: return Input.size_ > C.number_; case Ge: return Input.size_ >= C.number_;
+            case Lt: return Input.size_ < C.number_; case Le: return Input.size_ <= C.number_;
+            case Eq: return Input.size_ == C.number_; default: return Input.size_ != C.number_;
             }
-            const auto Font = G.object_["font"].toObject();
-            for (const auto& Key : {"bold", "italic", "underline", "strike"}) if (Font.contains(Key) && !Result.owners_.contains(Key)) { Result.font_[Key] = Font[Key]; Result.owners_[Key] = Label; }
-            if (!merge_) break;
+        case Modified:
+            if (!Input.modifiedUtcMs_) return 0;
+            if (C.op_ == Before) return *Input.modifiedUtcMs_ < C.date_;
+            if (C.op_ == After) return *Input.modifiedUtcMs_ > C.date_;
+            return *Input.modifiedUtcMs_ <= Input.referenceUtcMs_ && quint64(Input.referenceUtcMs_) - quint64(*Input.modifiedUtcMs_) <= C.number_;
+        case Link: {
+            const bool Shortcut = !IsFolder && (Ext.compare("lnk", Qt::CaseInsensitive) == 0 || Ext.compare("url", Qt::CaseInsensitive) == 0);
+            const bool Reparse = (Input.attributes_ & 0x400) != 0;
+            const bool Known = !Reparse || Input.reparseTag_.value_or(0) != 0;
+            const bool Symbolic = Reparse && (Input.reparseTag_ == 0xa000000cu || Input.reparseTag_ == 0xa0000003u);
+            if (C.value_ == "shortcut") return Shortcut; if (C.value_ == "symbolic") return Symbolic;
+            if (C.value_ == "any") return Shortcut || Symbolic;
+            return Known && !Shortcut && !Symbolic;
+        }
+        }
+        return 0;
+    }
+    FileRuleResult evaluate(const FileRuleInput& Input, EvaluationContext* Context, bool Diagnostics, bool Style) const {
+        FileRuleResult Result;
+        if (Input.name_ == ".." || groups_.isEmpty()) return Result;
+        const bool IsFolder = (Input.attributes_ & 0x10) != 0;
+        const auto Ext = needsExtension_ ? QFileInfo(Input.name_).suffix() : QString{};
+        std::optional<bool> Decomposed;
+        // Deadlines are independent of Boolean short circuiting. An earlier
+        // currently false group may acquire precedence when its date changes.
+        if (relativeDates_ && Input.modifiedUtcMs_) for (const auto& G : groups_) for (const auto& C : G.conditions_) {
+            if (C.type_ != Modified || C.op_ != Within) continue;
+            std::optional<qint64> Change;
+            if (*Input.modifiedUtcMs_ > Input.referenceUtcMs_) Change = *Input.modifiedUtcMs_;
+            else if (C.number_ < quint64(std::numeric_limits<qint64>::max()) - quint64(*Input.modifiedUtcMs_)) Change = qint64(quint64(*Input.modifiedUtcMs_) + C.number_ + 1);
+            if (Change && *Change > Input.referenceUtcMs_ && (!Result.validUntilUtcMs_ || *Change < *Result.validUntilUtcMs_)) Result.validUntilUtcMs_ = Change;
+        }
+        CachedExtension* Cached = nullptr;
+        if (Context && cacheConditions_) {
+            if (Context->revision_ != revision_) { Context->extensions_.clear(); Context->revision_ = revision_; }
+            // Keep original spelling: regex inline case-sensitive options can
+            // deliberately distinguish suffixes even with default caseless mode.
+            const auto Key = QString(IsFolder ? u'D' : u'F') + Ext;
+            Cached = Context->extensions_.object(Key);
+            if (Cached) ++Context->hits_;
+            else {
+                ++Context->misses_; Cached = new CachedExtension;
+                Cached->conditions_.fill(-1, cacheConditions_);
+                const int Cost = qMax(1024, int(sizeof(CachedExtension) + cacheConditions_ + groups_.size() * sizeof(int) + Key.size() * sizeof(QChar)));
+                Context->extensions_.insert(Key, Cached, Cost);
+            }
+        }
+        QList<int> Matched;
+        if (Cached && extensionOnly_ && Cached->complete_) Matched = Cached->groups_;
+        else {
+            for (qsizetype Index = 0; Index < groups_.size(); ++Index) {
+                const auto& G = groups_[Index]; bool Hit = G.all_, Failed = false;
+                for (const auto& C : G.conditions_) {
+                    qint8 Value = Cached && C.cacheIndex_ >= 0 ? Cached->conditions_[C.cacheIndex_] : -1;
+                    if (Value < 0) {
+                        Value = conditionHit(C, Input, Ext, IsFolder, Decomposed);
+                        if (Cached && C.cacheIndex_ >= 0) Cached->conditions_[C.cacheIndex_] = Value;
+                    }
+                    if (Value == 2) { Failed = true; continue; }
+                    if ((G.all_ && !Value) || (!G.all_ && Value)) { Hit = Value; Failed = false; break; }
+                }
+                if (Failed) { if (Result.error_.isEmpty()) Result.error_ = QObject::tr("%1: 정규표현식 실행 한도를 초과했거나 평가할 수 없습니다.").arg(G.label_); continue; }
+                if (!Hit) continue;
+                Matched.append(int(Index)); if (!merge_) break;
+            }
+            if (Cached && extensionOnly_ && Result.error_.isEmpty()) { Cached->groups_ = Matched; Cached->complete_ = true; }
+        }
+        Result.matched_ = !Matched.isEmpty();
+        if (!Style && !Diagnostics) return Result;
+        quint8 FontOwners = 0;
+        for (const auto Index : Matched) {
+            const auto& G = groups_[Index]; if (Diagnostics) Result.groups_.append(G.label_);
+            if (!Result.foreground_.isValid() && G.foreground_[Input.dark_].isValid()) {
+                Result.foreground_ = G.foreground_[Input.dark_]; if (Diagnostics) Result.owners_["foreground"] = G.label_;
+            }
+            if (!Result.background_.isValid() && G.background_[Input.dark_].isValid()) {
+                Result.background_ = G.background_[Input.dark_]; if (Diagnostics) Result.owners_["background"] = G.label_;
+            }
+            quint8 Bit = 1;
+            for (const auto* Key : {"bold", "italic", "underline", "strike"}) {
+                if (!(FontOwners & Bit) && G.font_.contains(Key)) {
+                    FontOwners |= Bit; Result.font_[Key] = G.font_[Key]; if (Diagnostics) Result.owners_[Key] = G.label_;
+                }
+                Bit <<= 1;
+            }
         }
         return Result;
     }
-private:
+
     static std::optional<quint64> number(const QJsonObject& C) {
         bool Ok = false; const auto Value = C["value"].toString().toULongLong(&Ok); if (!Ok) return {};
         quint64 Factor = 1; const auto Type = C["type"].toString(), Unit = C["unit"].toString();
@@ -237,9 +439,10 @@ private:
         if (!Date.isValid() || (Date.timeSpec() != Qt::UTC && Date.timeSpec() != Qt::OffsetFromUTC)) return {};
         return Date.toMSecsSinceEpoch();
     }
-    struct Condition { QString type_, op_, value_; QStringList extensions_; QList<QRegularExpression> patterns_; quint64 number_ = 0; qint64 date_ = 0; };
-    struct Group { QJsonObject object_; QList<Condition> conditions_; };
     QList<Group> groups_;
-    bool merge_ = false, relativeDates_ = false;
+    bool merge_ = false, relativeDates_ = false, needsExtension_ = false, extensionOnly_ = true;
+    int cacheConditions_ = 0;
+    std::shared_ptr<const int> revision_ = std::make_shared<const int>(0);
+    QJsonObject conditionDocument_;
 };
 } // namespace hc::settings

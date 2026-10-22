@@ -555,7 +555,7 @@ namespace hc::defaults
         // Value는 숫자·참/거짓도 문자열로 쓴다. 빈 값은 허용하지 않으며 최대 512자다.
         // Unit은 size와 modified/within에서 필수이고, 나머지 조건에서는 생략한다.
         // 숫자는 0 이상 10진 정수이며, 단위 환산 결과까지 quint64 범위 안이어야 한다.
-        // 지원 형식은 FileColorRules::Validate()/Evaluate()의 버전 2 규칙과 같다.
+        // 아래 기본 예제는 버전 2이며, 버전 3 비교 문법은 아래 설명을 참고한다.
         //
         // Type="extension" (파일만): Op="in"(목록에 포함), "notIn"(목록에 없음).
         //   Value="cpp,hpp,txt"처럼 확장자를 나열한다. 쉼표·세미콜론·|·공백으로 구분하며
@@ -591,6 +591,14 @@ namespace hc::defaults
         //   "symbolic"(확인된 심볼릭 링크·정션), "any"(둘 중 하나), "none"(링크 아님).
         //   재분석 태그가 불명인 항목은 symbolic/none으로 판정하지 않는다.
         //   예: C("link", "is", "any").
+        // v3에서는 extension/pattern에 syntax="literal"/"wildcard"/"regex"를 지정한다.
+        // extension literal: 기존 in/notIn 목록 문자열, pattern literal: contains/notContains 부분 문자열.
+        // wildcard: matches/notMatches와 문자열 배열. 전용 glob 비교기로 전체 이름 또는 점 없는 suffix를 비교한다.
+        // regex: matches/notMatches와 원문 문자열 하나. 부분 일치이며 전체 비교는 \A...\z를 사용한다.
+        // 예: {"type":"extension","syntax":"wildcard","op":"matches","value":["jp*","h??"]}
+        // 예: {"type":"pattern","syntax":"regex","op":"matches","value":"\\Areport_\\d+\\.txt\\z"}
+        // 정규식의 세미콜론/세로줄/공백/역슬래시는 보존한다. 무확장자는 패턴 방식에서 빈 suffix다.
+        // v1/v2 또는 syntax 없는 기존 조건은 아래 의미를 그대로 유지한다.
         // Type="pattern": Op="matches"(패턴 중 하나와 일치),
         //   "notMatches"(모든 패턴과 불일치). 파일·폴더 이름 전체를 대소문자 무시로 비교한다.
         //   Value는 경로 없는 와일드카드(*, ?, [abc] 등) 문자열의 QJsonArray이며,

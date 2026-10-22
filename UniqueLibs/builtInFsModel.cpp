@@ -1554,12 +1554,11 @@ void CFSModel::ForceRefresh()
 hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
 {
     const auto& Item = vecNode_[Row];
-    if (Item->Name_ == "..") return {};
+    if (Item->Name_ == ".." || !fileColorRules_.HasRules()) return {};
     hc::settings::FileRuleInput Input{Item->Name_, Item->Attributes_, quint64(qMax<qint64>(0, Item->Size_)), colorScheme_.IsDarkMode};
     if (Item->Modified_.isValid()) Input.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Item->Modified_.toMSecsSinceEpoch());
     if (Item->Reserved0_) Input.reparseTag_ = Item->Reserved0_;
-    const auto Key = Item->Name_ + QChar::Null + QString::number(Item->Attributes_) + ':' + QString::number(Item->Size_)
-        + ':' + (Input.modifiedUtcMs_ ? QString::number(*Input.modifiedUtcMs_) : QStringLiteral("unknown")) + ':' + QString::number(Item->Reserved0_);
+    const auto Key = hc::settings::FileRuleKey::From(Input, reinterpret_cast<quintptr>(Item.get()));
     if (auto* Cached = fileColorCache_.object(Key)) {
         if (!Cached->style_.validUntilUtcMs_ || Input.referenceUtcMs_ < *Cached->style_.validUntilUtcMs_) {
             Cached->row_ = Row;
@@ -1569,8 +1568,10 @@ hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
         fileColorCache_.remove(Key);
     }
     if (fileRulePending_.size() < 256 && !fileRulePending_.contains(Key)) {
-        fileRulePending_.insert(Key); fileRuleQueue_.append({Key, std::move(Input), Row});
+        fileRulePending_.insert(Key); fileRuleQueue_.append({Key, std::move(Input), Row, Item});
         if (!fileRulePump_.isActive()) fileRulePump_.start(0);
+    } else if (!fileRulePending_.contains(Key)) {
+        fileRuleDeferredRows_.insert(Row);
     }
     return {};
 }
@@ -1578,7 +1579,7 @@ hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
 void CFSModel::resetFileRules()
 {
     fileRuleStop_.request_stop(); fileRuleStop_ = std::stop_source{}; ++fileRuleEpoch_;
-    fileRuleQueue_.clear(); fileRulePending_.clear(); fileRulePump_.stop();
+    fileRuleQueue_.clear(); fileRulePending_.clear(); fileRuleDeferredRows_.clear(); fileRulePump_.stop();
     fileColorCache_.clear(); fileRuleClock_->stop(); fileRuleExpiry_.reset();
 }
 
@@ -1597,7 +1598,15 @@ void CFSModel::pumpFileRules()
             QList<int> Rows;
             for (auto& Result : Results) {
                 auto& Job = Result.first; fileRulePending_.remove(Job.key_);
-                fileColorCache_.insert(Job.key_, new CachedFileRule{std::move(Result.second), Job.row_}); Rows.append(Job.row_);
+                const int Row = Job.row_ >= 0 && Job.row_ < vecNode_.size() && vecNode_[Job.row_] == Job.item_ ? Job.row_ : vecNode_.indexOf(Job.item_);
+                if (Row < 0) continue;
+                const auto& Item = vecNode_[Row];
+                hc::settings::FileRuleInput Current{Item->Name_, Item->Attributes_, quint64(qMax<qint64>(0, Item->Size_)), colorScheme_.IsDarkMode};
+                if (Item->Modified_.isValid()) Current.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Item->Modified_.toMSecsSinceEpoch());
+                if (Item->Reserved0_) Current.reparseTag_ = Item->Reserved0_;
+                if (hc::settings::FileRuleKey::From(Current, reinterpret_cast<quintptr>(Item.get())) != Job.key_) { fileRuleDeferredRows_.insert(Row); continue; }
+                if (Result.second.validUntilUtcMs_) scheduleFileRuleExpiry(*Result.second.validUntilUtcMs_);
+                fileColorCache_.insert(Job.key_, new CachedFileRule{std::move(Result.second), Row}); Rows.append(Row);
             }
             std::sort(Rows.begin(), Rows.end());
             for (int At = 0; At < Rows.size();) {
@@ -1607,15 +1616,19 @@ void CFSModel::pumpFileRules()
                     {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole});
             }
         }
+        while (!fileRuleDeferredRows_.isEmpty() && fileRulePending_.size() < 256) {
+            const int Row = *fileRuleDeferredRows_.begin(); fileRuleDeferredRows_.remove(Row);
+            if (Row >= 0 && Row < rowCount()) fileRuleStyle(Row);
+        }
         if (!fileRuleQueue_.isEmpty()) fileRulePump_.start(16);
     });
     const auto Rules = fileColorRules_;
-    Watcher->setFuture(QtConcurrent::run([Rules, Jobs = std::move(Jobs), Token] {
+    Watcher->setFuture(QtConcurrent::run([Rules, Jobs = std::move(Jobs), Token, Context = fileRuleContext_] {
         Batch Results;
         for (const auto& Job : Jobs) {
             if (Token.stop_requested()) break;
             auto Input = Job.input_; Input.referenceUtcMs_ = QDateTime::currentMSecsSinceEpoch();
-            Results.append({Job, Rules.Evaluate(Input)});
+            Results.append({Job, Rules.EvaluateStyle(Input, Context.get())});
         }
         return Results;
     }));

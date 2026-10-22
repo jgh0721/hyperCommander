@@ -21,6 +21,7 @@ struct Criteria {
     bool minimumSize_ = true;
     QDate modified_;
     QJsonObject group_;
+    int groupVersion_ = 2;
 
     QJsonObject Save() const {
         return {{"operation", int(operation_)}, {"syntax", int(syntax_)}, {"scope", int(scope_)},
@@ -45,15 +46,15 @@ struct Criteria {
     }
 };
 
-struct Group { QString id_, name_; QJsonObject rule_; };
+struct Group { QString id_, name_; QJsonObject rule_; int version_ = 2; };
 inline QList<Group> Groups(const QJsonObject& UserRules) {
     QList<Group> Result;
     const auto Rules = settings::FileColorRules::Upgrade(UserRules);
-    if (settings::FileColorRules::Validate(Rules).isEmpty())
+    if (settings::FileColorRules::Validate(Rules, false).isEmpty())
         for (const auto& Value : Rules["groups"].toArray()) {
             const auto Rule = Value.toObject();
             if (Rule["enabled"].toBool(true))
-                Result.append({"user:" + Rule["id"].toString(), Rule["name"].toString(), Rule});
+                Result.append({"user:" + Rule["id"].toString(), Rule["name"].toString(), Rule, Rules["version"].toInt()});
         }
     return Result;
 }
@@ -66,10 +67,10 @@ public:
             return QObject::tr("이름 조건은 4096자 이내로 입력하십시오.");
         if (!Criteria.groupId_.isEmpty()) {
             if (Criteria.group_.isEmpty()) return QObject::tr("파일 그룹이 삭제되었거나 사용할 수 없습니다.");
-            const QJsonObject Document{{"version", 2}, {"mode", "merge"}, {"groups", QJsonArray{Criteria.group_}}};
-            const auto Error = settings::FileColorRules::Validate(Document);
+            const QJsonObject Document{{"version", Criteria.groupVersion_}, {"mode", "merge"}, {"groups", QJsonArray{Criteria.group_}}};
+            const auto Error = group_.Load(Document);
             if (!Error.isEmpty()) return Error;
-            group_.Load(Document); hasGroup_ = true;
+            hasGroup_ = true;
         }
         auto Error = compile(Criteria.pattern_, Criteria.syntax_, include_);
         if (!Error.isEmpty()) return Error;
@@ -84,12 +85,16 @@ public:
         date_ = Criteria.modified_.isValid() ? std::optional<qint64>(Criteria.modified_.startOfDay().toMSecsSinceEpoch()) : std::nullopt;
         return {};
     }
-    bool Matches(const settings::FileRuleInput& Input) const {
+    bool Matches(const settings::FileRuleInput& Input, QString* Error = nullptr, settings::FileColorRules::EvaluationContext* Context = nullptr) const {
         if (Input.name_ == "..") return false;
         const bool Folder = (Input.attributes_ & 0x10u) != 0;
         if ((criteria_.scope_ == Scope::Files && Folder) || (criteria_.scope_ == Scope::Folders && !Folder)) return false;
         if (hit(exclude_, Input.name_)) return false;
-        if (hasGroup_ && !group_.Evaluate(Input).matched_) return false;
+        if (hasGroup_) {
+            const auto Result = group_.Matches(Input, Context);
+            if (!Result.error_.isEmpty()) { if (Error) *Error = Result.error_; return false; }
+            if (!Result.matched_) return false;
+        }
         bool Any = false, All = true, Present = false;
         const auto Add = [&](bool Value) { Present = true; Any |= Value; All &= Value; };
         if (!include_.isEmpty()) Add(hit(include_, Input.name_));

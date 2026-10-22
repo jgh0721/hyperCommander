@@ -22,7 +22,7 @@ public:
         rebuildOperators(); rebuildValue();
         connect(field_, &QComboBox::currentIndexChanged, this, [this] {
             if (loading_) return;
-            const auto Type = field_->currentData().toString(); draft_["type"] = Type; draft_.remove("unit");
+            const auto Type = field_->currentData().toString(); draft_["type"] = Type; draft_.remove("unit"); draft_.remove("syntax");
             if (Type == "extension") { draft_["op"] = "in"; draft_["value"] = "txt"; }
             else if (Type == "pattern") { draft_["op"] = "matches"; draft_["value"] = QJsonArray{"*.txt"}; }
             else if (Type == "folder") { draft_["op"] = "is"; draft_["value"] = "true"; }
@@ -35,7 +35,16 @@ public:
         });
         connect(op_, &QComboBox::currentIndexChanged, this, [this] {
             if (loading_) return;
-            const auto Old = draft_["op"].toString(), Next = op_->currentData().toString(); draft_["op"] = Next;
+            const auto Old = draft_["op"].toString(), Next = op_->currentData().toString();
+            const auto Type = draft_["type"].toString();
+            if (Type == "extension" || Type == "pattern") {
+                const auto Before = settings::FileColorRules::Syntax(draft_);
+                modeValues_[Type + ':' + Before] = draft_["value"];
+                const QString Mode = Next.startsWith("regex") ? "regex" : Next.startsWith("glob") || Next == "matches" || Next == "notMatches" ? "wildcard" : "literal";
+                const QString Op = Next.startsWith("regex") || Next.startsWith("glob") ? Next.endsWith("NotMatches") ? "notMatches" : "matches" : Next;
+                draft_["syntax"] = Mode; draft_["op"] = Op;
+                if (Before != Mode) draft_["value"] = modeValues_.value(Type + ':' + Mode, Mode == "wildcard" ? QJsonValue(QJsonArray{}) : QJsonValue(QString{}));
+            } else draft_["op"] = Next;
             if (draft_["type"] == "modified" && (Old == "within") != (Next == "within")) {
                 if (Next == "within") { draft_["value"] = "24"; draft_["unit"] = "hours"; }
                 else { draft_["value"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs); draft_.remove("unit"); }
@@ -52,13 +61,21 @@ private:
     void rebuildOperators() {
         loading_ = true; op_->clear(); const auto Type = draft_["type"].toString();
         const auto Add = [this](const QString& Text, const char* Key) { op_->addItem(Text, Key); };
-        if (Type == "extension") { Add(tr("포함"), "in"); Add(tr("제외"), "notIn"); }
-        else if (Type == "pattern") { Add(tr("일치"), "matches"); Add(tr("불일치"), "notMatches"); }
+        if (Type == "extension") { Add(tr("목록 포함"), "in"); Add(tr("목록 포함 아님"), "notIn"); Add(tr("와일드카드 일치"), "globMatches"); Add(tr("와일드카드 불일치"), "globNotMatches"); Add(tr("정규표현식 일치"), "regexMatches"); Add(tr("정규표현식 불일치"), "regexNotMatches"); }
+        else if (Type == "pattern") { Add(tr("문자열 포함"), "contains"); Add(tr("문자열 포함 아님"), "notContains"); Add(tr("와일드카드 일치"), "matches"); Add(tr("와일드카드 불일치"), "notMatches"); Add(tr("정규표현식 일치"), "regexMatches"); Add(tr("정규표현식 불일치"), "regexNotMatches"); }
         else if (Type == "attributes") { Add(tr("하나라도"), "any"); Add(tr("모두"), "all"); }
         else if (Type == "size") { Add(tr("이상 (≥)"), "ge"); Add(tr("초과 (>)"), "gt"); Add(tr("이하 (≤)"), "le"); Add(tr("미만 (<)"), "lt"); Add(tr("같음 (=)"), "eq"); Add(tr("다름 (≠)"), "ne"); }
         else if (Type == "modified") { Add(tr("최근 기간"), "within"); Add(tr("이전 (<)"), "before"); Add(tr("이후 (>)"), "after"); }
         else Add(tr("같음"), "is");
-        op_->setCurrentIndex(op_->findData(draft_["op"].toString())); loading_ = false;
+        auto Key = draft_["op"].toString();
+        const auto Mode = settings::FileColorRules::Syntax(draft_);
+        if (Type == "extension" || Type == "pattern") {
+            if (Mode == "regex") Key = Key == "notMatches" ? "regexNotMatches" : "regexMatches";
+            else if (Mode == "wildcard" && Type == "extension") Key = Key == "notMatches" ? "globNotMatches" : "globMatches";
+        }
+        op_->setCurrentIndex(op_->findData(Key));
+        int Width = 0; for (int I = 0; I < op_->count(); ++I) Width = qMax(Width, op_->fontMetrics().horizontalAdvance(op_->itemText(I)));
+        table_->setColumnWidth(1, qMax(table_->columnWidth(1), Width + 40)); loading_ = false;
     }
     static QString patternText(const QJsonArray& Patterns) {
         QStringList Parts; for (const auto P : Patterns) { auto Text = P.toString(); Text.replace(";", "\\;"); Parts.append(Text); } return Parts.join("; ");
@@ -76,6 +93,8 @@ private:
         loading_ = true; const int CurrentRow = Row(); if (CurrentRow < 0) { loading_ = false; return; }
         auto* Panel = new QWidget(table_); auto* Fields = new QHBoxLayout(Panel); Fields->setContentsMargins(0, 0, 0, 0); Fields->setSpacing(4);
         const auto Type = draft_["type"].toString();
+        const auto Mode = settings::FileColorRules::Syntax(draft_);
+        const bool List = (Type == "extension" || Type == "pattern") && Mode == "wildcard";
         if (Type == "folder" || Type == "link" || Type == "normalization") {
             auto* Choice = new QComboBox(Panel); Choice->setObjectName("hc.condition.value"); Choice->setAccessibleName(tr("조건 값")); Choice->setMinimumContentsLength(1); Choice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Fields->addWidget(Choice);
             if (Type == "folder") { Choice->addItem(tr("폴더"), "true"); Choice->addItem(tr("파일"), "false"); }
@@ -92,11 +111,13 @@ private:
             Date->setDateTime(QDateTime::fromString(draft_["value"].toString(), Qt::ISODateWithMs)); Fields->addWidget(Date);
             connect(Date, &QDateTimeEdit::dateTimeChanged, this, [this, Date] { if (loading_) return; draft_["value"] = Date->dateTime().toUTC().toString(Qt::ISODateWithMs); edited(); });
         } else {
-            auto* Value = new QLineEdit(Panel); Value->setObjectName("hc.condition.value"); Value->setAccessibleName(tr("조건 값")); Value->setMaxLength(Type == "pattern" ? 16384 : 512); Fields->addWidget(Value, 1);
-            Value->setText(Type == "pattern" ? patternText(draft_["value"].toArray()) : draft_["value"].toString());
-            if (Type == "pattern") Value->setToolTip(tr("여러 패턴은 ;로 구분합니다. 예: CMakeLists.txt; *.cmake\n이름에 포함된 ;는 \\;로 입력합니다."));
+            auto* Value = new QLineEdit(Panel); Value->setObjectName("hc.condition.value"); Value->setAccessibleName(tr("조건 값")); Value->setMaxLength(List ? 16446 : 512); Fields->addWidget(Value, 1);
+            Value->setText(List ? patternText(draft_["value"].toArray()) : draft_["value"].toString());
+            if (List) { Value->setPlaceholderText(Type == "extension" ? tr("예: jp*; h??") : tr("예: report_*.txt; image_??.png")); Value->setToolTip(tr("와일드카드는 전체 문자열과 비교합니다. * 여러 글자 · ? 한 글자\n여러 패턴은 ;로 구분하고 이름에 포함된 ;는 \\;로 입력합니다.")); }
+            else if (Mode == "regex" && (Type == "pattern" || Type == "extension")) { Value->setPlaceholderText(Type == "extension" ? "\\A(?:jpe?g|png)\\z" : "\\Areport_\\d{4}\\.txt\\z"); Value->setToolTip(tr("정규표현식은 일치하는 부분을 찾습니다. 전체 비교: \\A…\\z\n;, |, 공백과 역슬래시를 원문 그대로 입력합니다. 기본은 대소문자 무시입니다.")); }
+            else if (Type == "pattern") { Value->setPlaceholderText(tr("예: report")); Value->setToolTip(tr("입력한 문자열을 문자 그대로 포함하는지 비교합니다. 대소문자를 구분하지 않습니다.")); }
             else if (Type == "extension") Value->setToolTip(tr("예: txt, cpp, hpp · 확장자가 없으면 <none>"));
-            connect(Value, &QLineEdit::textChanged, this, [this, Type](const QString& Text) { if (loading_) return; draft_["value"] = Type == "pattern" ? QJsonValue(patterns(Text)) : QJsonValue(Text); edited(); });
+            connect(Value, &QLineEdit::textChanged, this, [this, List](const QString& Text) { if (loading_) return; draft_["value"] = List ? QJsonValue(patterns(Text)) : QJsonValue(Text); edited(); });
             if (Type == "size" || Type == "modified") {
                 auto* Unit = new QComboBox(Panel); Unit->setObjectName("hc.condition.unit"); Unit->setAccessibleName(tr("조건 값의 단위")); Fields->addWidget(Unit);
                 if (Type == "size") for (const auto& Key : {"B", "KiB", "MiB", "GiB"}) Unit->addItem(Key, Key);
@@ -125,6 +146,7 @@ private:
     QTableWidget* table_;
     QComboBox *field_, *op_;
     QJsonObject original_, draft_;
+    QMap<QString, QJsonValue> modeValues_;
     int version_;
     bool loading_ = false, edited_ = false;
     const QStringList keys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization"};

@@ -126,7 +126,7 @@ public:
     Criteria Read() const {
         Criteria C; C.operation_ = Operation(operation_->currentIndex()); C.syntax_ = Syntax(syntax_->currentIndex());
         C.scope_ = Scope(scope_->currentIndex()); C.pattern_ = pattern_->text(); C.exclude_ = exclude_->text();
-        C.groupId_ = group_->currentData().toString(); if (const auto G = selectedGroup()) C.group_ = G->rule_;
+        C.groupId_ = group_->currentData().toString(); if (const auto G = selectedGroup()) { C.group_ = G->rule_; C.groupVersion_ = G->version_; }
         C.caseSensitive_ = case_->isChecked(); C.advanced_ = tabs_->currentIndex() == 1; C.all_ = combine_->currentIndex() == 0;
         C.size_ = size_->text(); C.minimumSize_ = sizeOp_->currentIndex() == 0;
         if (useDate_->isChecked()) C.modified_ = date_->date(); return C;
@@ -188,6 +188,7 @@ struct Scan {
     QString command_, location_; QSet<QString> restoreKeys_;
     bool grouped_ = false; int sourceRows_ = 0;
     QModelIndexList entries_; QStringList afterKeys_;
+    std::shared_ptr<settings::FileColorRules::EvaluationContext> ruleContext_ = std::make_shared<settings::FileColorRules::EvaluationContext>();
 };
 }
 
@@ -226,8 +227,6 @@ struct ItemSelectionController::State {
         }
         if (loading()) { message(Text("파일 목록을 읽는 중에는 선택을 변경할 수 없습니다.")); return; }
         auto Work = std::make_shared<Scan>(); Work->criteria_ = Criteria; Work->command_ = Command;
-        const auto Error = Work->matcher_.Compile(Criteria);
-        if (!Error.isEmpty()) { if (dialog_) dialog_->Result({}, false, hasPrevious_, Error); else message(Error); return; }
         Work->generation_ = generation_; Work->selection_ = selection_; Work->rows_ = view_->BaseView()->getRowCount(); Work->location_ = locationKey();
         Work->grouped_ = view_->GroupingActive(); Work->sourceRows_ = model_->rowCount();
         if (Work->grouped_) { Work->entries_ = view_->SelectionCandidates(); Work->rows_ = Work->entries_.size(); }
@@ -235,7 +234,14 @@ struct ItemSelectionController::State {
         if (Command == "restore") Work->restoreKeys_ = QSet<QString>(previous_.begin(), previous_.end());
         if (Command == "recall") Work->restoreKeys_ = QSet<QString>(remembered_.begin(), remembered_.end());
         scan_ = Work; if (dialog_) dialog_->Result(Text("일치 항목 확인 중…"), false, hasPrevious_);
-        QTimer::singleShot(0, owner_, [this, Work] { step(Work); });
+        using Prepared = QPair<Matcher, QString>;
+        auto* Watcher = new QFutureWatcher<Prepared>(owner_);
+        QObject::connect(Watcher, &QFutureWatcher<Prepared>::finished, owner_, [this, Work, Watcher] {
+            auto Prepared = Watcher->future().takeResult(); Watcher->deleteLater(); if (!valid(Work)) return;
+            if (!Prepared.second.isEmpty()) { if (dialog_) dialog_->Result({}, false, hasPrevious_, Prepared.second); else message(Prepared.second); return; }
+            Work->matcher_ = std::move(Prepared.first); step(Work);
+        });
+        Watcher->setFuture(QtConcurrent::run([Criteria] { Matcher Prepared; const auto Error = Prepared.Compile(Criteria); return QPair<Matcher, QString>{std::move(Prepared), Error}; }));
     }
     void step(const std::shared_ptr<Scan>& Work) {
         if (!valid(Work)) return;
@@ -258,9 +264,12 @@ struct ItemSelectionController::State {
             if (Item->Reserved0_) Input.rule_.reparseTag_ = Item->Reserved0_;
             Input.row_ = At; Input.selected_ = Work->grouped_ ? view_->IsSourceSelected(Index) : Grid->modelController()->isRowSelected(Row); Batch.append(std::move(Input));
         }
-        auto* Watcher = new QFutureWatcher<QList<bool>>(owner_);
+        using BatchResult = QPair<QList<bool>, QString>;
+        auto* Watcher = new QFutureWatcher<BatchResult>(owner_);
         QObject::connect(Watcher, &QFutureWatcherBase::finished, owner_, [this, Work, Watcher, Batch] {
-            const auto Matches = Watcher->result(); Watcher->deleteLater(); if (!valid(Work)) return;
+            const auto Result = Watcher->result(); Watcher->deleteLater(); if (!valid(Work)) return;
+            if (!Result.second.isEmpty()) { Work->ready_ = false; if (dialog_) dialog_->Result({}, false, hasPrevious_, Result.second); else message(Result.second); return; }
+            const auto& Matches = Result.first;
             for (qsizetype I = 0; I < Batch.size(); ++I) {
                 const auto& Input = Batch[I]; bool Match = Matches[I]; bool After;
                 if (Work->command_ == "invertAll") Match = !Input.selected_;
@@ -278,8 +287,10 @@ struct ItemSelectionController::State {
             if (!Work->command_.isEmpty()) { apply(false); return; }
             updatePreview();
         });
-        Watcher->setFuture(QtConcurrent::run([Matcher = Work->matcher_, Batch] {
-            QList<bool> Result; Result.reserve(Batch.size()); for (const auto& Input : Batch) Result.append(Matcher.Matches(Input.rule_)); return Result;
+        Watcher->setFuture(QtConcurrent::run([Matcher = Work->matcher_, Batch, Context = Work->ruleContext_] {
+            BatchResult Result; Result.first.reserve(Batch.size());
+            for (const auto& Input : Batch) { Result.first.append(Matcher.Matches(Input.rule_, &Result.second, Context.get())); if (!Result.second.isEmpty()) break; }
+            return Result;
         }));
     }
     void updatePreview() {

@@ -45,10 +45,14 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
         for (const auto& G : Colors["groups"].toArray()) if (G.toObject()["id"] == QJsonValue(Group)) {
             auto Document = hc::settings::FileColorRules::Empty(); Document["groups"] = QJsonArray{G};
             Document["version"] = Colors["version"];
-            Groups[Group].Load(Document); break;
+            const auto Error = Groups[Group].Load(Document);
+            if (!Error.isEmpty()) return hc::storage::Error{ErrorCategory::InvalidRequest, "invalid-auto-column-group", {}, {}, false, Error.toStdString()};
+            break;
         }
     }
     QMap<QString, quint64> Hits; quint64 Files = 0; const auto ReferenceTime = QDateTime::currentMSecsSinceEpoch();
+    QMap<QString, std::shared_ptr<hc::settings::FileColorRules::EvaluationContext>> Contexts;
+    for (auto It = Groups.cbegin(); It != Groups.cend(); ++It) Contexts[It.key()] = std::make_shared<hc::settings::FileColorRules::EvaluationContext>();
     if (!Groups.isEmpty() && Index) {
         for (std::uint64_t Offset = 0; Offset < Index->Count();) {
             if (Context.stopToken_.stop_requested()) return Error{ErrorCategory::Cancelled, "auto-columns-cancelled"};
@@ -60,8 +64,11 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
                 hc::settings::FileRuleInput Input{QString::fromStdString(Entry.name_), Entry.attributes_, Entry.size_, false}; Input.referenceUtcMs_ = ReferenceTime;
                 Input.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Entry.modifiedUtcMs_);
                 if (const auto Tag = Entry.hints_.find("reparseTag"); Tag != Entry.hints_.end()) { bool Ok = false; const auto Value = QString::fromStdString(Tag->second).toUInt(&Ok); if (Ok) Input.reparseTag_ = Value; }
-                for (auto It = Groups.begin(); It != Groups.end(); ++It)
-                    if (It.value().Evaluate(Input).matched_) ++Hits[It.key()];
+                for (auto It = Groups.begin(); It != Groups.end(); ++It) {
+                    const auto Match = It.value().Matches(Input, Contexts[It.key()].get());
+                    if (!Match.error_.isEmpty()) return Error{ErrorCategory::InvalidRequest, "auto-column-group-evaluation", {}, {}, false, Match.error_.toStdString()};
+                    if (Match.matched_) ++Hits[It.key()];
+                }
             }
             Offset += Page.Value().entries_.size();
         }

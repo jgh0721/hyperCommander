@@ -125,11 +125,13 @@ protected:
     TyColorScheme                   colorScheme_;
     QVector< QPair< TyFileSet, TyPrFGWithBG > > vecFileSetColors_;
     hc::settings::FileColorRules fileColorRules_;
+    QJsonObject fileRuleDocument_;
+    quint64 fileRuleLoadGeneration_ = 0;
     QTimer* fileRuleClock_ = nullptr;
     void scheduleFileRuleExpiry(qint64 Deadline) const;
     mutable std::optional<qint64> fileRuleExpiry_;
     struct CachedFileRule { hc::settings::FileRuleResult style_; int row_ = 0; };
-    mutable QCache<QString, CachedFileRule> fileColorCache_{2048};
+    mutable QCache<hc::settings::FileRuleKey, CachedFileRule> fileColorCache_{2048};
 
     mutable nsCmn::nsConcurrent::CCmnMutex  lock;
     QVector< nsHC::TySpFileSystem > vecFs_;         // 어떠한 FS 에서 PACKER 를 호출하면 PACKER FS 가 추가된다.

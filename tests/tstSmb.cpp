@@ -9,6 +9,7 @@
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/itemSelectionController.hpp"
+#include "UniqueLibs/itemSelection.hpp"
 #include <QRadioButton>
 #include <ShlObj.h>
 #include <QInputMethodEvent>
@@ -246,7 +247,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -2381,6 +2382,24 @@ private slots:
         const auto SetV2Condition = [&](const QJsonObject& Condition) { auto Groups = V2Colors["groups"].toArray(); auto G = Groups[0].toObject(); G["conditions"] = QJsonArray{Condition}; Groups[0] = G; V2Colors["groups"] = Groups; };
         SetV2Condition({{"type", "pattern"}, {"op", "matches"}, {"value", QJsonArray{"data.txt", "*.json"}}});
         const auto V2Match = SelectAutomaticColumns(Policy, Library, V2Colors, Directory.path(), std::make_shared<Entries>()); QVERIFY(V2Match.HasValue() && V2Match.Value());
+        auto V3Colors = V2Colors; V3Colors["version"] = 3;
+        const auto SetV3Condition = [&](const QString& Syntax, const QString& Op, const QJsonValue& Value) {
+            auto Groups = V3Colors["groups"].toArray(); auto G = Groups[0].toObject();
+            G["conditions"] = QJsonArray{QJsonObject{{"type", "pattern"}, {"syntax", Syntax}, {"op", Op}, {"value", Value}}}; Groups[0] = G; V3Colors["groups"] = Groups;
+        };
+        SetV3Condition("regex", "matches", "\\Adata\\.txt\\z");
+        const auto V3Match = SelectAutomaticColumns(Policy, Library, V3Colors, Directory.path(), std::make_shared<Entries>()); QVERIFY(V3Match.HasValue() && V3Match.Value());
+        SetV3Condition("wildcard", "matches", QJsonArray{"data.t?t"});
+        const auto V3Glob = SelectAutomaticColumns(Policy, Library, V3Colors, Directory.path(), std::make_shared<Entries>()); QVERIFY(V3Glob.HasValue() && V3Glob.Value());
+        SetV3Condition("regex", "matches", "(");
+        QVERIFY(!SelectAutomaticColumns(Policy, Library, V3Colors, Directory.path(), std::make_shared<Entries>()).HasValue());
+        class PathologicalEntries final : public IEntryIndex {
+        public:
+            std::uint64_t Count() const override { return 1; }
+            Result<EntryPage> Read(std::uint64_t, std::size_t, const OperationContext&) const override { EntryPage Page; EntrySnapshot E; E.name_ = std::string(500, 'a') + '!'; Page.entries_.push_back(E); return Page; }
+        };
+        SetV3Condition("regex", "notMatches", "(a+)+$");
+        QVERIFY(!SelectAutomaticColumns(Policy, Library, V3Colors, Directory.path(), std::make_shared<PathologicalEntries>()).HasValue());
         class MetadataEntries final : public IEntryIndex {
         public:
             bool missing_ = false, links_ = false;
@@ -8233,9 +8252,9 @@ private slots:
         QVERIFY(Dialog.SaveSettings()); const auto Saved = Page->Document();
         auto* Model = static_cast<CFSModel*>(model(panels_.front()));
         for (int Row = 0; Row < Model->rowCount(); ++Row) { const auto Index = Model->index(Row, 0); const auto Name = Model->GetName(Index);
-            if (Name == "BandedPanelView.cpp") { QVERIFY(Index.data(Qt::FontRole).value<QFont>().bold()); QVERIFY(Index.data(Qt::BackgroundRole).value<QColor>().isValid()); }
-            if (Name == "placeholder-notes.txt") QVERIFY(Index.data(Qt::FontRole).value<QFont>().strikeOut());
-            if (Name == "Qt Creator 18.lnk") QVERIFY(Index.data(Qt::FontRole).value<QFont>().underline());
+            if (Name == "BandedPanelView.cpp") { QTRY_VERIFY(Index.data(Qt::FontRole).value<QFont>().bold()); QVERIFY(Index.data(Qt::BackgroundRole).value<QColor>().isValid()); }
+            if (Name == "placeholder-notes.txt") QTRY_VERIFY(Index.data(Qt::FontRole).value<QFont>().strikeOut());
+            if (Name == "Qt Creator 18.lnk") QTRY_VERIFY(Index.data(Qt::FontRole).value<QFont>().underline());
         }
         auto* Groups = Page->findChild<QListWidget*>("hc.rules.groups"); Groups->setCurrentRow(6);
         auto* Dark = Page->findChild<QCheckBox*>("hc.rules.previewDark");
@@ -8332,6 +8351,65 @@ private slots:
         QCOMPARE(Choice->currentData().toString(), QString("composed"));
         for (const auto& Name : Names) { QVERIFY(QFileInfo::exists(Directory.filePath(Name))); QCOMPARE(Model->GetName(Model->index(RowOf(Name), 0)), Name); }
         QVERIFY(QFileInfo(Directory.filePath(Folder)).isDir()); Dialog.reject();
+    }
+
+    void fileColorPatternModesUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 400; ++I) { QFile F(Directory.filePath(QString("report_%1.txt").arg(I, 4, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("data"); }
+        QFile Other(Directory.filePath("notes.dat")); QVERIFY(Other.open(QIODevice::WriteOnly)); Other.write("data"); Other.close();
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() >= 401);
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50);
+        auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
+        const QJsonObject Group{{"id", "pattern-modes"}, {"name", "패턴 조건"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}}},
+            {"light", QJsonObject{{"foreground", "#2266AA"}}}, {"dark", QJsonObject{{"foreground", "#88BBEE"}}}};
+        Page->Load({{"version", 2}, {"mode", "first"}, {"groups", QJsonArray{Group}}});
+        auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions");
+        auto* Op = qobject_cast<QComboBox*>(Table->cellWidget(0, 1)); QCOMPARE(Op->count(), 6);
+        Op->setCurrentIndex(Op->findData("globMatches"));
+        Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value")->setText("t?t");
+        QCOMPARE(Page->Document()["version"], QJsonValue(3)); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
+        const auto ExpectedColor = Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#88BBEE") : QColor("#2266AA");
+        // Request more rows than the pending cap once. Completion must retry
+        // deferred rows without requiring another user scroll or key event.
+        for (int Row = 0; Row < Model->rowCount(); ++Row) Model->index(Row, 0).data(Qt::ForegroundRole);
+        QTest::qWait(800);
+        const auto AllColored = [&] {
+            bool Ready = true;
+            // Request every row before yielding, including after an async rule
+            // reload. Returning on the first miss would serialize 400 requests
+            // at the test polling interval instead of exercising the queue.
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+                if (Model->GetName(Model->index(Row, 0)).endsWith(".txt")) Ready &= Model->index(Row, 0).data(Qt::ForegroundRole).value<QColor>() == ExpectedColor;
+            return Ready;
+        };
+        QTRY_VERIFY(AllColored());
+        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); Field->setCurrentIndex(Field->findData("pattern"));
+        Op->setCurrentIndex(Op->findData("regexMatches"));
+        auto* Value = Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value");
+        Value->setText("("); QVERIFY(!Page->Validate()); QTRY_VERIFY(!Page->IsValidationPending()); QVERIFY(!Page->Validate());
+        Value->setText("\\Areport_\\d{4}\\.txt\\z"); QTRY_VERIFY(!Page->IsValidationPending()); QVERIFY(Page->Validate());
+        const auto Saved = Page->Document(); QVERIFY(Dialog.SaveSettings());
+        QTRY_VERIFY(AllColored());
+        const auto Groups = hc::selection::Groups(Saved); QCOMPARE(Groups.size(), 1); QCOMPARE(Groups[0].version_, 3);
+        hc::selection::Criteria Criteria; Criteria.groupId_ = Groups[0].id_; Criteria.group_ = Groups[0].rule_; Criteria.groupVersion_ = Groups[0].version_;
+        hc::selection::Matcher Matcher; QVERIFY(Matcher.Compile(Criteria).isEmpty()); QVERIFY(Matcher.Matches(FileRuleInput{"report_0012.txt"})); QVERIFY(!Matcher.Matches(FileRuleInput{"notes.dat"}));
+        Repository Reload(QFileInfo(Settings.FileName()).absolutePath()); QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
+        // Invalidated preview results must not overwrite a newer edit.
+        Value->setText("(a+)+$"); Value->setText("\\Anotes\\.dat\\z");
+        QTRY_VERIFY(!Page->IsValidationPending()); QVERIFY(Page->Validate());
+        if (const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); !Out.isEmpty()) {
+            const auto Category = Dialog.findChild<QListWidget*>("lstOptCate");
+            for (int I = 0; I < Category->count(); ++I) if (Category->item(I)->text().contains("색상")) Category->setCurrentRow(I);
+            QTest::qWait(80); QVERIFY(Dialog.grab().save(QDir(Out).filePath("file-rule-pattern-modes.png")));
+        }
+        Dialog.reject(); QCOMPARE(Settings.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
     }
 
     void fileColorConditionsUi()
