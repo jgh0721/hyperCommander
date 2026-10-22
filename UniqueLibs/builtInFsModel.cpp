@@ -8,6 +8,8 @@
 #include "folderSize.hpp"
 #include "nativeFileElevation.hpp"
 #include <QPromise>
+#include <QPointer>
+#include <QThreadPool>
 #include <QScopeGuard>
 #include <QPainter>
 #include <QStyle>
@@ -245,19 +247,12 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
         return;
     }
 
-    // TODO: 항목이름을 나타나는 컬럼을 찾아낼 방법이 필요하다. 지금은 0 으로 하드코딩... 
-    const auto& RuleItem = vecNode_[Row];
-    hc::settings::FileRuleInput RuleInput{RuleItem->Name_, RuleItem->Attributes_, quint64(qMax<qint64>(0, RuleItem->Size_)), colorScheme_.IsDarkMode};
-    if (RuleItem->Modified_.isValid()) RuleInput.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(RuleItem->Modified_.toMSecsSinceEpoch());
-    if (RuleItem->Reserved0_) RuleInput.reparseTag_ = RuleItem->Reserved0_;
-    const auto RuleKey = RuleItem->Name_ + QChar::Null + QString::number(RuleItem->Attributes_) + ':' + QString::number(RuleItem->Size_)
-        + ':' + (RuleInput.modifiedUtcMs_ ? QString::number(*RuleInput.modifiedUtcMs_) : QStringLiteral("unknown")) + ':' + QString::number(RuleItem->Reserved0_);
-    auto* Cached = fileColorCache_.object(RuleKey);
-    if (Cached && Cached->style_.validUntilUtcMs_ && RuleInput.referenceUtcMs_ >= *Cached->style_.validUntilUtcMs_) { fileColorCache_.remove(RuleKey); Cached = nullptr; }
-    if (!Cached) { fileColorCache_.insert(RuleKey, new CachedFileRule{fileColorRules_.Evaluate(RuleInput), Row}); Cached = fileColorCache_.object(RuleKey); }
-    Cached->row_ = Row;
-    if (Cached->style_.validUntilUtcMs_) scheduleFileRuleExpiry(*Cached->style_.validUntilUtcMs_);
-    const auto& RuleStyle = Cached->style_;
+    // Sorting, measuring columns and reading names must never evaluate colors.
+    const bool NeedsStyle = std::any_of(roleDataSpan.begin(), roleDataSpan.end(), [](const auto& Role) {
+        return Role.role() == Qt::ForegroundRole || Role.role() == Qt::BackgroundRole
+            || Role.role() == Qt::FontRole || Role.role() == FileColorOverrideRole;
+    });
+    const auto RuleStyle = NeedsStyle ? fileRuleStyle(Row) : hc::settings::FileRuleResult{};
     for( QModelRoleData& RoleWith : roleDataSpan )
     {
         const int Role = RoleWith.role();
@@ -530,6 +525,9 @@ void CFSModel::doRefresh()
 
 CFSModel::CFSModel()
 {
+    fileRulePump_.setSingleShot(true);
+    connect(&fileRulePump_, &QTimer::timeout, this, &CFSModel::pumpFileRules);
+    connect(this, &QAbstractItemModel::modelAboutToBeReset, this, &CFSModel::resetFileRules);
     iconApplyTimer_.setSingleShot(true); iconApplyTimer_.setInterval(0);
     connect(&iconApplyTimer_, &QTimer::timeout, this, [this] { applyRequestedIcons(); });
     hc::icons::FileIconService::Instance().Subscribe(this, [this] { if (!iconApplyTimer_.isActive()) iconApplyTimer_.start(); });
@@ -630,6 +628,7 @@ bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<Q
 
 CFSModel::~CFSModel()
 {
+    fileRuleStop_.request_stop();
     hc::icons::FileIconService::Instance().Unsubscribe(this);
     everythingSession_.reset();
     navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop(); directorySizeStop_.request_stop();
@@ -965,6 +964,14 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
 }
 
 namespace {
+QThreadPool* DirectorySizePool()
+{
+    // Slow traversal/index I/O must not occupy the workers that read a new folder.
+    static QPointer<QThreadPool> Pool;
+    if (!Pool) { Pool = new QThreadPool(qApp); Pool->setMaxThreadCount(2); Pool->setObjectName("hc.directorySizePool"); }
+    return Pool;
+}
+
 QPixmap GenericIcon(bool Directory, int Pixels, bool Explorer = true)
 {
     return hc::icons::FileIconService::Instance().DefaultIcon(Directory, Pixels, Explorer);
@@ -1251,13 +1258,25 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     if (IndexOnly && !UseIndex) return;
     std::vector<EntrySnapshot> Targets;
     QHash<QString, int> Rows;
+    const QSet<QModelIndex> Requested(Entries.begin(), Entries.end());
+    QHash<QString, bool> NetworkRoots;
+    const auto IsNetwork = [&](const Locator& At) {
+        if (At.kind_ != LocatorKind::Local) return hc::folders::IsNetwork(At);
+        auto Root = QDir::toNativeSeparators(QString::fromStdString(At.root_));
+        if (Root.startsWith("\\\\?\\")) Root = Root.mid(4);
+        if (Root.startsWith("\\\\") || Root.startsWith("UNC\\", Qt::CaseInsensitive)) return true;
+        Root = Root.left(3).toUpper();
+        if (const auto Found = NetworkRoots.constFind(Root); Found != NetworkRoots.cend()) return *Found;
+        // Drive type is shared by its children; do not call Windows for every row.
+        const bool Network = hc::folders::IsNetwork(At); NetworkRoots.insert(Root, Network); return Network;
+    };
     bool HadSizes = false;
     for (int Row = 0; Row < rowCount(); ++Row) {
-        if (!Entries.isEmpty() && !Entries.contains(index(Row, 0))) continue;
+        if (!Entries.isEmpty() && !Requested.contains(index(Row, 0))) continue;
         const auto& Item = vecNode_[Row];
         if (!Item->storageEntry_ || Item->Name_ == ".." || !Item->storageEntry_->directory_
             || (Item->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-        if (hc::folders::IsNetwork(Item->storageEntry_->locator_)) continue;
+        if (IsNetwork(Item->storageEntry_->locator_)) continue;
         const auto Key = QString::fromStdString(Serialize(Item->storageEntry_->id_));
         // Automatic passes re-measure only carried-over sizes, and keep showing them meanwhile.
         const bool Refresh = Automatic && directorySizeStale_.contains(Key);
@@ -1268,49 +1287,38 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         }
         directorySizePending_.insert(Key); Targets.push_back(*Item->storageEntry_); Rows.insert(Key, Row);
     }
-    if (Targets.empty()) {
-        if (!Automatic && rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
-        return;
-    }
+    if (Targets.empty()) return;
+    // Poll ready results in bounded batches. A fast index can finish thousands
+    // of folders at once; per-result queued signals otherwise monopolize input.
     const auto Generation = generation_;
     const auto Token = directorySizeStop_.get_token();
-    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
+    const auto SizePresentation = [this] {
+        QVector<int> Columns;
+        QHash<QString, bool> Dependencies;
+        const std::function<bool(const QString&)> UsesField = [&](const QString& Field) {
+            if (Field == "file.size") return true;
+            if (const auto Found = Dependencies.constFind(Field); Found != Dependencies.cend()) return *Found;
+            Dependencies.insert(Field, false);
+            bool Uses = false;
+            if (const auto* Script = hc::columns::FindScript(columnView_.profile_, Field))
+                Uses = std::any_of(Script->dependencies_.begin(), Script->dependencies_.end(), UsesField);
+            Dependencies.insert(Field, Uses); return Uses;
+        };
+        const auto UsesSize = [&](const Column& Binding) {
+            const auto Fields = Binding.definition_.template_.isEmpty() ? QStringList{Binding.definition_.fieldId_} : Binding.compiled_.dependencies_;
+            return std::any_of(Fields.begin(), Fields.end(), UsesField);
+        };
+        for (int Col = 0; Col < columnView_.VecColumns.size(); ++Col) if (UsesSize(columnView_.VecColumns[Col])) Columns.append(Col);
+        bool Sorts = false;
+        for (const auto& Sort : columnSorts_) for (const auto& Binding : columnView_.VecColumns)
+            if (Binding.definition_.id_ == Sort.columnId_ && (UsesSize(Binding) || UsesField(Binding.definition_.sortField_))) Sorts = true;
+        return std::pair{Columns, Sorts};
+    };
+    if (rowCount()) for (const int Col : SizePresentation().first) emit dataChanged(index(0, Col), index(rowCount() - 1, Col), {Qt::DisplayRole});
     if (HadSizes) emit DirectorySizesChanged();
     struct SizeResult { ResourceId id_; Result<std::uint64_t> bytes_; };
-    auto* Watcher = new QFutureWatcher<SizeResult>(this);
-    connect(Watcher, &QFutureWatcher<SizeResult>::resultReadyAt, this, [this, Watcher, Generation, Token, Rows](int ResultIndex) {
-        if (Generation != generation_ || Token.stop_requested()) return;
-        const auto Result = Watcher->resultAt(ResultIndex);
-        const auto Key = QString::fromStdString(Serialize(Result.id_));
-        directorySizePending_.remove(Key); directorySizeStale_.remove(Key);
-        const auto Row = Rows.value(Key, -1);
-        if (Row >= 0 && Row < vecNode_.size()) {
-            const auto& Item = vecNode_[Row];
-            if (!Item->storageEntry_ || Item->storageEntry_->id_ != Result.id_) return;
-            if (!Result.bytes_.HasValue()) { emit dataChanged(index(Row, 0), index(Row, columnCount() - 1)); return; }
-            const auto Previous = Item->directorySize_.value_or(0);
-            Item->directorySize_ = Result.bytes_.Value();
-            totalSize_ -= Previous;
-            totalSize_ += qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<quint64>::max)() - totalSize_);
-            Item->Size_ = qint64(qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<qint64>::max)()));
-            createBuiltFsValues(Item, -1);
-            emit dataChanged(index(Row, 0), index(Row, columnCount() - 1));
-            // Coalesce fast index results so one batch does not repeatedly sort
-            // the full grid or recount the same selected rows on the GUI thread.
-            if (!directorySizeNotifyPending_) {
-                directorySizeNotifyPending_ = true;
-                QTimer::singleShot(30, this, [this] {
-                    directorySizeNotifyPending_ = false; refreshColumnSortRanks(); emit DirectorySizesChanged();
-                });
-            }
-        }
-    });
-    connect(Watcher, &QFutureWatcher<SizeResult>::finished, this, [this, Watcher, Generation, Token, Automatic] {
-        Watcher->deleteLater();
-        if (!Automatic && Generation == generation_ && !Token.stop_requested()) RequestDirectorySizes({}, true);
-    });
     const auto Parent = QString::fromStdString(Location.root_);
-    Watcher->setFuture(QtConcurrent::run([Targets = std::move(Targets), Provider, Parent, Token, UseIndex, IndexOnly, Automatic](QPromise<SizeResult>& Promise) {
+    auto Future = QtConcurrent::run(DirectorySizePool(), [Targets = std::move(Targets), Provider, Parent, Token, UseIndex, IndexOnly, Automatic](QPromise<SizeResult>& Promise) {
         OperationContext Context; Context.stopToken_ = Token;
         if (Automatic) { Context.maxEnumerationEntries_ = 1000000; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::minutes(2); }
         Result<QMap<QString, quint64>> Indexed = Error{ErrorCategory::Unavailable, "folder-size-index-disabled"};
@@ -1325,7 +1333,53 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
             } catch (const std::exception&) { Bytes = Error{ErrorCategory::Internal, "folder-size-provider-exception"}; }
             Promise.addResult(SizeResult{Entry.id_, std::move(Bytes)});
         }
-    }));
+    });
+    auto* Apply = new QTimer(this); Apply->setInterval(16);
+    connect(Apply, &QTimer::timeout, this, [this, Apply, Future, Next = 0, Generation, Token, Rows, SizePresentation, Automatic]() mutable {
+        if (Generation != generation_ || Token.stop_requested()) { Apply->stop(); Apply->deleteLater(); return; }
+        const int Ready = Future.resultCount();
+        const int End = std::min(Ready, Next + 32);
+        if (Next < End) {
+            // Profiles and sort rules can change while the worker is running.
+            const auto [SizeColumns, SortSizes] = SizePresentation();
+            QElapsedTimer Budget; Budget.start();
+            QVector<int> Changed;
+            if (SortSizes) emit ColumnValuesChanging();
+            for (; Next < End; ++Next) {
+                const auto Result = Future.resultAt(Next);
+                const auto Key = QString::fromStdString(Serialize(Result.id_));
+                directorySizePending_.remove(Key); directorySizeStale_.remove(Key);
+                const auto Row = Rows.value(Key, -1);
+                if (Row < 0 || Row >= vecNode_.size()) continue;
+                const auto& Item = vecNode_[Row];
+                if (!Item->storageEntry_ || Item->storageEntry_->id_ != Result.id_) continue;
+                Changed.append(Row);
+                if (Result.bytes_.HasValue()) {
+                    totalSize_ -= Item->directorySize_.value_or(0);
+                    Item->directorySize_ = Result.bytes_.Value();
+                    totalSize_ += qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<quint64>::max)() - totalSize_);
+                    Item->Size_ = qint64(qMin<quint64>(Result.bytes_.Value(), (std::numeric_limits<qint64>::max)()));
+                    for (const int Col : SizeColumns) createBuiltFsValues(Item, Col);
+                }
+                if (Budget.elapsed() >= 4) { ++Next; break; }
+            }
+            if (!Changed.isEmpty()) {
+                for (int At = 0; At < Changed.size();) {
+                    const int First = Changed[At]; int Last = First; ++At;
+                    while (At < Changed.size() && Changed[At] == Last + 1) Last = Changed[At++];
+                    for (const int Col : SizeColumns) emit dataChanged(index(First, Col), index(Last, Col), {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole});
+                }
+                if (SortSizes) refreshColumnSortRanks();
+                emit DirectorySizesChanged();
+            }
+            if (SortSizes) emit ColumnValuesChanged();
+        }
+        if (Future.isFinished() && Next == Future.resultCount()) {
+            Apply->stop(); Apply->deleteLater();
+            if (!Automatic && Generation == generation_ && !Token.stop_requested()) RequestDirectorySizes({}, true);
+        }
+    });
+    Apply->start();
 }
 
 void CFSModel::refreshNameSortRanks(int First)
@@ -1497,8 +1551,79 @@ void CFSModel::ForceRefresh()
     forceIconRefresh_ = true; forceIconLocation_ = GetCurrentPathWithRoot(); Refresh();
 }
 
+hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
+{
+    const auto& Item = vecNode_[Row];
+    if (Item->Name_ == "..") return {};
+    hc::settings::FileRuleInput Input{Item->Name_, Item->Attributes_, quint64(qMax<qint64>(0, Item->Size_)), colorScheme_.IsDarkMode};
+    if (Item->Modified_.isValid()) Input.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Item->Modified_.toMSecsSinceEpoch());
+    if (Item->Reserved0_) Input.reparseTag_ = Item->Reserved0_;
+    const auto Key = Item->Name_ + QChar::Null + QString::number(Item->Attributes_) + ':' + QString::number(Item->Size_)
+        + ':' + (Input.modifiedUtcMs_ ? QString::number(*Input.modifiedUtcMs_) : QStringLiteral("unknown")) + ':' + QString::number(Item->Reserved0_);
+    if (auto* Cached = fileColorCache_.object(Key)) {
+        if (!Cached->style_.validUntilUtcMs_ || Input.referenceUtcMs_ < *Cached->style_.validUntilUtcMs_) {
+            Cached->row_ = Row;
+            if (Cached->style_.validUntilUtcMs_) scheduleFileRuleExpiry(*Cached->style_.validUntilUtcMs_);
+            return Cached->style_;
+        }
+        fileColorCache_.remove(Key);
+    }
+    if (fileRulePending_.size() < 256 && !fileRulePending_.contains(Key)) {
+        fileRulePending_.insert(Key); fileRuleQueue_.append({Key, std::move(Input), Row});
+        if (!fileRulePump_.isActive()) fileRulePump_.start(0);
+    }
+    return {};
+}
+
+void CFSModel::resetFileRules()
+{
+    fileRuleStop_.request_stop(); fileRuleStop_ = std::stop_source{}; ++fileRuleEpoch_;
+    fileRuleQueue_.clear(); fileRulePending_.clear(); fileRulePump_.stop();
+    fileColorCache_.clear(); fileRuleClock_->stop(); fileRuleExpiry_.reset();
+}
+
+void CFSModel::pumpFileRules()
+{
+    if (fileRuleRunning_ || fileRuleQueue_.isEmpty()) return;
+    QList<FileRuleJob> Jobs;
+    while (!fileRuleQueue_.isEmpty() && Jobs.size() < 32) Jobs.append(fileRuleQueue_.takeFirst());
+    fileRuleRunning_ = true;
+    const auto Epoch = fileRuleEpoch_; const auto Token = fileRuleStop_.get_token();
+    using Batch = QList<QPair<FileRuleJob, hc::settings::FileRuleResult>>;
+    auto* Watcher = new QFutureWatcher<Batch>(this);
+    connect(Watcher, &QFutureWatcher<Batch>::finished, this, [this, Watcher, Epoch] {
+        auto Results = Watcher->future().takeResult(); Watcher->deleteLater(); fileRuleRunning_ = false;
+        if (Epoch == fileRuleEpoch_) {
+            QList<int> Rows;
+            for (auto& Result : Results) {
+                auto& Job = Result.first; fileRulePending_.remove(Job.key_);
+                fileColorCache_.insert(Job.key_, new CachedFileRule{std::move(Result.second), Job.row_}); Rows.append(Job.row_);
+            }
+            std::sort(Rows.begin(), Rows.end());
+            for (int At = 0; At < Rows.size();) {
+                const int First = Rows[At]; int Last = First; ++At;
+                while (At < Rows.size() && Rows[At] <= Last + 1) Last = std::max(Last, Rows[At++]);
+                if (First >= 0 && Last < rowCount() && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1),
+                    {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole});
+            }
+        }
+        if (!fileRuleQueue_.isEmpty()) fileRulePump_.start(16);
+    });
+    const auto Rules = fileColorRules_;
+    Watcher->setFuture(QtConcurrent::run([Rules, Jobs = std::move(Jobs), Token] {
+        Batch Results;
+        for (const auto& Job : Jobs) {
+            if (Token.stop_requested()) break;
+            auto Input = Job.input_; Input.referenceUtcMs_ = QDateTime::currentMSecsSinceEpoch();
+            Results.append({Job, Rules.Evaluate(Input)});
+        }
+        return Results;
+    }));
+}
+
 void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
 {
+    resetFileRules();
     CFsModelT::SetColorScheme(Scheme);
     // Recolor the existing snapshot without an I/O refresh or selection reset.
     const auto Manager = TyStColorSchemeMgr::GetInstance();

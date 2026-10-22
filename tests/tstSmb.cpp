@@ -249,6 +249,7 @@ private slots:
             const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
@@ -3816,6 +3817,98 @@ private slots:
         QCOMPARE(QDir(Directory.path()).entryList(QDir::Files).size(), 3);
     }
 
+    void backgroundMetadataNavigationUi()
+    {
+        using namespace hc::settings;
+        using namespace hc::storage;
+        auto* Workers = QThreadPool::globalInstance(); const int BeforeWorkers = Workers->maxThreadCount(); Workers->setMaxThreadCount(1);
+        const auto RestoreWorkers = qScopeGuard([&] { Workers->setMaxThreadCount(BeforeWorkers); });
+        auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit();
+            Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            main_->RestoreWorkspace(Workspace);
+        });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeMode"] = "local"; Options["folderSizeUseEverything"] = false;
+        auto Rules = FileColorRules::Empty(); Rules["groups"] = QJsonArray{QJsonObject{{"id", "async-folders"}, {"name", "폴더"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "folder"}, {"value", "true"}}}},
+            {"light", QJsonObject{{"foreground", "#3182ce"}}}, {"dark", QJsonObject{{"foreground", "#3182ce"}}}}};
+        Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+        class SizeProvider final : public GatedProvider {
+        public:
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) override {
+                if (At != inner_.Root()) {
+                    started_ = true;
+                    while (gate_.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready)
+                        if (const auto Error = Context.Check(Id())) return Ready<std::unique_ptr<IEntryCursor>>(*Error);
+                }
+                auto Cursor = inner_.Enumerate(At, Context).get(); if (!Cursor.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Cursor.Failure());
+                auto Page = Cursor.Value()->Next(512, Context).get(); if (!Page.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(Page.Failure());
+                for (auto& Entry : Page.Value().entries_) if (Entry.directory_) Entry.attributes_ |= FILE_ATTRIBUTE_DIRECTORY;
+                return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(new test::MemoryCursor(std::move(Page.Value().entries_), std::make_shared<test::FaultState>())));
+            }
+        };
+        auto Provider = std::make_shared<SizeProvider>();
+        for (int At = 0; At < 256; ++At) {
+            const auto Id = Provider->inner_.Add(Provider->inner_.Root(), QString("folder-%1").arg(At, 3, 10, QChar('0')).toStdString(), {}, true);
+            Provider->inner_.Add(Provider->inner_.Stat(Id, {}).get().Value().locator_, "content", std::vector<std::byte>(3));
+        }
+        bool Released = false; const auto Release = qScopeGuard([&] { if (!Released) Provider->release_.set_value(); });
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        View->SetListMode("one-line");
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\"); Model->Refresh();
+        QTRY_VERIFY(!Model->IsLoading() && Model->PendingDirectorySizes() == 256 && Provider->started_.load()); Model->SetWatchEnabled(false);
+        const auto First = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "folder-000") return Model->index(Row, 0); return QModelIndex{}; }();
+        QVERIFY(First.isValid());
+        const auto FirstKey = hc::workspace::SelectionKey(*Model->GetFileInfo(First)->storageEntry_);
+        View->RestoreSelection({FirstKey}, FirstKey); Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        QTest::keyClick(Grid, Qt::Key_Down); QVERIFY(View->CaptureFocus() != FirstKey);
+        const auto Moved = View->CaptureFocus(); QVERIFY(!Moved.isEmpty()); QCOMPARE(Model->PendingDirectorySizes(), 256);
+        // A color cache miss must return immediately, then update in a later turn.
+        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        QSignalSpy Painted(Model, &QAbstractItemModel::dataChanged);
+        QVERIFY(Model->data(First, Qt::ForegroundRole).value<QColor>() != QColor("#3182ce")); QCOMPARE(Painted.count(), 0);
+        QTRY_COMPARE(Model->data(First, Qt::ForegroundRole).value<QColor>(), QColor("#3182ce"));
+        QCOMPARE(Model->PendingDirectorySizes(), 256); QCOMPARE(View->CaptureFocus(), Moved); QVERIFY(View->CaptureSelection().contains(FirstKey));
+        auto Profile = View->ColumnProfile(); int SizeColumn = -1;
+        for (int Col = 0; Col < Profile.columns_.size(); ++Col) if (Profile.columns_[Col].fieldId_ == "file.size") SizeColumn = Col;
+        QVERIFY(SizeColumn > 0 && Profile.columns_.size() > 2);
+        const int OtherColumn = SizeColumn == 1 ? 2 : 1;
+        std::swap(Profile.columns_[SizeColumn], Profile.columns_[OtherColumn]); SizeColumn = OtherColumn;
+        QVERIFY(View->ApplyColumnProfile(Profile)); QCOMPARE(Model->PendingDirectorySizes(), 256);
+        bool MovedDuringPublication = false; int FirstRemaining = -1;
+        QSignalSpy Sizes(Model, &CFSModel::DirectorySizesChanged);
+        const auto Progress = connect(Model, &CFSModel::DirectorySizesChanged, this, [&] {
+            if (FirstRemaining < 0) FirstRemaining = Model->PendingDirectorySizes();
+            if (!MovedDuringPublication && Model->PendingDirectorySizes() > 0) {
+                const auto Focus = View->CaptureFocus(); QTest::keyClick(Grid, Qt::Key_Down);
+                MovedDuringPublication = View->CaptureFocus() != Focus;
+            }
+        });
+        Painted.clear(); Provider->release_.set_value(); Released = true;
+        QTRY_COMPARE_WITH_TIMEOUT(Model->PendingDirectorySizes(), 0, 10000); disconnect(Progress);
+        QVERIFY(FirstRemaining >= 224); QVERIFY(MovedDuringPublication); QVERIFY(Sizes.count() >= 8);
+        QCOMPARE(Model->GetTotalSize(), 256u * 3u); QVERIFY(View->CaptureSelection().contains(FirstKey));
+        for (const auto& Signal : Painted) if (Signal[2].value<QList<int>>().contains(Qt::DisplayRole))
+            QCOMPARE(Signal[0].value<QModelIndex>().column(), SizeColumn);
+        // Leaving while a provider is still calculating cancels without joining it.
+        auto Pending = std::make_shared<SizeProvider>();
+        const auto Id = Pending->inner_.Add(Pending->inner_.Root(), "waiting", {}, true);
+        Pending->inner_.Add(Pending->inner_.Stat(Id, {}).get().Value().locator_, "late", std::vector<std::byte>(7));
+        const auto ReleasePending = qScopeGuard([&] { Pending->release_.set_value(); });
+        Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Pending))); Model->SetCurrentPath("\\"); Model->Refresh();
+        QTRY_VERIFY(!Model->IsLoading() && Pending->started_.load());
+        QTemporaryDir Destination; QVERIFY(Destination.isValid());
+        { QFile File(Destination.filePath("arrived.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("new"); }
+        QElapsedTimer Leave; Leave.start(); Panel->ChangeCurrentPath(Destination.path(), {});
+        QVERIFY2(Leave.elapsed() < 250, "Leaving joined a background metadata worker");
+        QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("arrived.txt"));
+        QTest::qWait(80); QVERIFY(!names(Model).contains("waiting")); QCOMPARE(Model->GetTotalSize(), 3u);
+    }
+
     void folderSizesUi()
     {
         using namespace hc::settings;
@@ -4259,7 +4352,7 @@ private slots:
             QCOMPARE(qApp->style()->property("hc.theme").toString(), Name);
             QCOMPARE(QApplication::palette().color(QPalette::Window), Colors->GetColorScheme(Name).Dialog_BGColor);
             const auto Scheme = Colors->GetColorScheme(Name);
-            QCOMPARE(Model->index(0, 0).data(Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
+            QTRY_COMPARE(Model->index(0, 0).data(Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
             QCOMPARE(Model->index(0, 0).data(Qt::BackgroundRole).value<QColor>(), Scheme.FileList_BGColor);
             auto* View = qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
             auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
@@ -8225,13 +8318,13 @@ private slots:
             const auto Item = Model->GetFileInfo(Model->index(Row, 0));
             QCOMPARE(bool(Item->Flags_ & nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD), Decomposed);
             for (int Col = 0; Col < Model->columnCount(); ++Col) {
-                QCOMPARE(Model->index(Row, Col).data(Qt::ForegroundRole).value<QColor>() == QColor("#d15c00"), Decomposed);
+                QTRY_COMPARE(Model->index(Row, Col).data(Qt::ForegroundRole).value<QColor>() == QColor("#d15c00"), Decomposed);
                 if (Decomposed) QVERIFY(Model->index(Row, Col).data(Qt::FontRole).value<QFont>().bold());
             }
         }
         QVERIFY(SaveR9Dialog(Dialog, "file-color-normalization"));
         Choice->setCurrentIndex(Choice->findData("composed")); QVERIFY(Dialog.SaveSettings());
-        QCOMPARE(Model->index(RowOf(Nfc), 0).data(Qt::ForegroundRole).value<QColor>(), QColor("#d15c00"));
+        QTRY_COMPARE(Model->index(RowOf(Nfc), 0).data(Qt::ForegroundRole).value<QColor>(), QColor("#d15c00"));
         QVERIFY(Model->index(RowOf(Nfd), 0).data(Qt::ForegroundRole).value<QColor>() != QColor("#d15c00"));
         const auto Saved = Page->Document(); Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
         QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
@@ -8268,24 +8361,24 @@ private slots:
         qobject_cast<QPushButton*>(Table->cellWidget(1, 3))->click(); QCOMPARE(Table->rowCount(), 1); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
         const auto SavedPattern = Page->Document();
         auto* Model = static_cast<CFSModel*>(model(panels_.front())); const auto RowOf = [&](const QString& Name) { for (int I = 0; I < Model->rowCount(); ++I) if (Model->GetName(Model->index(I, 0)) == Name) return I; return -1; };
-        QCOMPARE(Model->index(RowOf("example.cmake"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
+        QTRY_COMPARE(Model->index(RowOf("example.cmake"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
         auto Links = SavedPattern; auto LinkGroups = Links["groups"].toArray(); auto LinkGroup = LinkGroups[0].toObject(); LinkGroup["conditions"] = QJsonArray{QJsonObject{{"type", "link"}, {"op", "is"}, {"value", "any"}}}; LinkGroups[0] = LinkGroup; Links["groups"] = LinkGroups;
         Page->Load(Links); QVERIFY(Dialog.SaveSettings());
         const auto CurrentScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); const auto ExplicitColor = CurrentScheme.IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800");
-        QCOMPARE(Model->index(RowOf("launcher.lnk"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
-        QCOMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), CurrentScheme.FileList_FGColor);
+        QTRY_COMPARE(Model->index(RowOf("launcher.lnk"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
+        QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), CurrentScheme.FileList_FGColor);
         auto Recent = SavedPattern; auto Groups = Recent["groups"].toArray(); auto Group = Groups[0].toObject();
         Group["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "24"}, {"unit", "hours"}}}; Groups[0] = Group; Recent["groups"] = Groups;
-        Page->Load(Recent); QVERIFY(Dialog.SaveSettings()); QCOMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
+        Page->Load(Recent); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
         auto Expiring = Recent; auto ExpiringGroups = Expiring["groups"].toArray(); auto ExpiringGroup = ExpiringGroups[0].toObject(); ExpiringGroup["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "1"}, {"unit", "minutes"}}}; ExpiringGroups[0] = ExpiringGroup; Expiring["groups"] = ExpiringGroups;
-        Page->Load(Expiring); QVERIFY(Dialog.SaveSettings()); QCOMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
+        Page->Load(Expiring); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
         // An idle visible row must lose its relative-date color at expiry;
         // changing no files or settings exercises the model's cache clock.
         QSignalSpy Expiry(Model, &QAbstractItemModel::dataChanged);
         const auto Expired = [&] { for (const auto& Signal : Expiry) if (Signal[2].value<QList<int>>() == QList<int>{Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole}
             && Signal[0].value<QModelIndex>().row() <= RowOf("plain.txt") && Signal[1].value<QModelIndex>().row() >= RowOf("plain.txt")) return true; return false; };
         QTRY_VERIFY_WITH_TIMEOUT(Expired(), 8000);
-        QCOMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), CurrentScheme.FileList_FGColor);
+        QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), CurrentScheme.FileList_FGColor);
         Page->Load(Recent); QVERIFY(Dialog.SaveSettings());
         const auto Before = Page->Document(); auto* Sample = Page->findChild<QLineEdit*>("hc.rules.sample"); Sample->setText("plain.txt");
         Page->findChild<QCheckBox*>("hc.rules.sampleModifiedKnown")->setChecked(true); Page->findChild<QDateTimeEdit*>("hc.rules.sampleModified")->setDateTime(QDateTime::currentDateTimeUtc().addSecs(-3600));
@@ -9039,6 +9132,8 @@ private slots:
         auto* Toggle = Window.findChild<QPushButton*>("hc.jobs.toggleDetails");
         auto* Graph = Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph");
         QVERIFY(Progress && Background && Pause && Toggle && Graph);
+        if (!Graph->isVisible()) Toggle->click();
+        QTRY_VERIFY(Graph->isVisible());
         Pause->click(); QTRY_COMPARE(Jobs.Scheduler().Snapshot(A.Value().id_).Value().state_, JobState::Paused);
         QTRY_VERIFY(Graph->bytesDone() > 0);
         QTRY_VERIFY(Window.findChild<QLabel*>("hc.jobs.status")->text().startsWith(QStringLiteral("일시 정지")));
@@ -9054,8 +9149,8 @@ private slots:
             }
         };
         Save(Progress, "p3-progress-paused");
-        Toggle->click(); QVERIFY(!Graph->isVisible()); Save(Progress, "p3-progress-compact");
-        Toggle->click(); QVERIFY(Graph->isVisible());
+        Toggle->click(); QTRY_VERIFY(!Graph->isVisible()); Save(Progress, "p3-progress-compact");
+        Toggle->click(); QTRY_VERIFY(Graph->isVisible());
         Background->click(); QVERIFY(!Progress->isVisible());
         QCOMPARE(Jobs.Scheduler().Snapshot(A.Value().id_).Value().state_, JobState::Paused);
         PreparedJob Second; Second.request_.resourceLanes_ = {"p3-fixture-second"}; Second.task_ = std::make_unique<MeasuredTask>(true);

@@ -828,7 +828,10 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
         connect(Source, &QAbstractItemModel::modelReset, this, [this] { groupingTimer_.start(0); });
         connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
-        connect(Source, &QAbstractItemModel::dataChanged, this, Schedule);
+        connect(Source, &QAbstractItemModel::dataChanged, this, [this](const QModelIndex&, const QModelIndex&, const QList<int>& Roles) {
+            // Icons and colors repaint cells; they do not change layout or text widths.
+            if (Roles.isEmpty() || Roles.contains(Qt::DisplayRole) || Roles.contains(Qt::EditRole)) requestPresentation();
+        });
         if (Proxy) {
             connect(Proxy, &QAbstractItemModel::modelReset, this, Schedule);
             connect(Proxy, &QAbstractItemModel::layoutChanged, this, Schedule);

@@ -184,6 +184,16 @@ private:
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
+    hc::settings::FileRuleResult fileRuleStyle(int Row) const;
+    void pumpFileRules();
+    void resetFileRules();
+    struct FileRuleJob { QString key_; hc::settings::FileRuleInput input_; int row_; };
+    mutable QList<FileRuleJob> fileRuleQueue_;
+    mutable QSet<QString> fileRulePending_;
+    mutable QTimer fileRulePump_;
+    std::stop_source fileRuleStop_;
+    quint64 fileRuleEpoch_ = 0;
+    bool fileRuleRunning_ = false;
     std::unique_ptr<hc::columns::QueryEngine> columnQueries_;
     QMap<QUuid, QString> scriptRevisions_;
     mutable bool requestOnlyValues_ = false;
@@ -210,7 +220,6 @@ private:
     // Sizes carried over a refresh of the same folder: shown until re-measured, not "calculating".
     QSet<QString>                   directorySizeStale_;
     bool                            carryDirectorySizes_ = false;
-    bool                            directorySizeNotifyPending_ = false;
     bool                            providerEnabled_ = true;
     QtDirectoryTracker              tracker_;
     bool                            watchEnabled_ = false;
