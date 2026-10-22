@@ -16,6 +16,23 @@ if(MSVC)
 endif()
 # qt_add_executable applies the selected kit's Hybrid CRT policy.
 
+option(HC_BUILD_HYPERCOMPARE_ONLY "Configure only the standalone compare utility" OFF)
+if(HC_BUILD_HYPERCOMPARE_ONLY)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent Network)
+    qt_standard_project_setup(REQUIRES 6.12)
+    include(CTest)
+    set(FMSTYLE_WITH_QTITAN OFF CACHE BOOL "" FORCE)
+    foreach(Option IN ITEMS DEMO LABS GALLERY DESIGNER_PLUGIN EXAMPLES TESTS)
+        set(FMSTYLE_BUILD_${Option} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    add_subdirectory(externalLibs/waterColorStyle watercolor EXCLUDE_FROM_ALL)
+    include(cmake/TextEditorEngines.cmake)
+    include(cmake/QtDeployment.cmake)
+    add_subdirectory(HyperCompare)
+    hc_finalize_qt_deployment()
+    return()
+endif()
+
 find_package(Qt6 6.12 REQUIRED COMPONENTS
     Core
     CorePrivate
@@ -156,6 +173,7 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+add_subdirectory(HyperCompare)
 hc_finalize_qt_deployment()
 add_dependencies(hc_deploy hc_iso_package hc_hyperviewer_package)
 

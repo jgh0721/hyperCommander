@@ -32,6 +32,7 @@ documentation/source/images/watercolor_ui_plan
 
 tools/**/*.ps1
 !tools/imagePerformance/*.ps1
+!tools/hypercompare/*.ps1
 tools/**/__pycache__/
 UniqueLibs/solTypeDefs_Ver.hpp
 

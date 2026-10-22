@@ -1,0 +1,47 @@
+qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp)
+target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
+
+qt_add_library(hc_compare_runtime STATIC
+    cli/cliParser.cpp runtime/session.cpp runtime/session.hpp
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/storageProviders.cpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/nativeWritableStorage.cpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentTextCodec.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/documentSaveCoordinator.cpp"
+)
+target_include_directories(hc_compare_runtime BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
+target_include_directories(hc_compare_runtime PUBLIC "${PROJECT_SOURCE_DIR}")
+target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core PRIVATE advapi32 shell32 ole32 uuid netapi32 mpr shlwapi)
+target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
+
+qt_add_library(hc_compare_widgets STATIC widgets/compareWindow.cpp widgets/compareWindow.hpp)
+target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
+target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
+
+qt_add_executable(HyperCompare WIN32 main.cpp)
+target_link_libraries(HyperCompare PRIVATE hc_compare_widgets fmstyle)
+qt_add_executable(HyperCompareCli cliMain.cpp)
+target_link_libraries(HyperCompareCli PRIVATE hc_compare_runtime)
+foreach(target IN ITEMS hc_compare_core hc_compare_runtime hc_compare_widgets HyperCompare HyperCompareCli)
+    target_compile_definitions(${target} PRIVATE NOMINMAX UNICODE _UNICODE)
+    target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+endforeach()
+hc_enable_qt_deployment(HyperCompare PLUGINS)
+hc_enable_qt_deployment(HyperCompareCli)
+
+if(BUILD_TESTING)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+    qt_add_executable(hc_compare_tests tests/tstCompare.cpp)
+    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime Qt6::Test)
+    target_compile_definitions(hc_compare_tests PRIVATE NOMINMAX UNICODE _UNICODE)
+    target_compile_options(hc_compare_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    add_dependencies(hc_compare_tests HyperCompareCli HyperCompare)
+    add_test(NAME hypercompare.core COMMAND hc_compare_tests -o "${CMAKE_CURRENT_BINARY_DIR}/core-results.txt,txt")
+    hc_enable_qt_deployment(hc_compare_tests TEST)
+    qt_add_executable(hc_compare_ui_tests tests/tstCompareUi.cpp)
+    target_link_libraries(hc_compare_ui_tests PRIVATE hc_compare_widgets hc_scintilla fmstyle Qt6::Test)
+    target_compile_definitions(hc_compare_ui_tests PRIVATE NOMINMAX UNICODE _UNICODE)
+    target_compile_options(hc_compare_ui_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    add_test(NAME hypercompare.ui COMMAND hc_compare_ui_tests -o "${CMAKE_CURRENT_BINARY_DIR}/ui-results.txt,txt")
+    hc_enable_qt_deployment(hc_compare_ui_tests TEST PLUGINS)
+endif()
