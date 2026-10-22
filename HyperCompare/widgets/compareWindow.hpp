@@ -17,6 +17,7 @@ namespace hc::compare
 {
     class MergeController;
     class ScrollSynchronizer;
+    class FindBar;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -56,6 +57,7 @@ namespace hc::compare
         ScintillaEditBase* output_ = nullptr;
         MergeController* merge_ = nullptr;
         ScrollSynchronizer* scroll_ = nullptr;
+        FindBar* find_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
@@ -70,6 +72,7 @@ namespace hc::compare
         QAction* alignRows_ = nullptr;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
+        QVector<QAction*> findActions_;
         QFont uiFont_, listFont_, textFont_;
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         bool refreshing_ = false;

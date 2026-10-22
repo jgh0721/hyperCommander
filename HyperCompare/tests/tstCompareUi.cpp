@@ -3,6 +3,7 @@
 #include "widgets/mergeController.hpp"
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
+#include "widgets/findBar.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -17,6 +18,8 @@
 #include <QScrollBar>
 #include <QWheelEvent>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QCheckBox>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
 
@@ -71,7 +74,130 @@ private slots:
         QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
         auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(*qApp);
     }
-    void init() { QSettings{}.setValue("view/alignSourceRows", false); }
+    void init()
+    {
+        QSettings settings; settings.setValue("view/alignSourceRows", false);
+        settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void findNavigationOptionsAndUnicode()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
+        const QByteArray text = QString::fromUtf8("Alpha alphabet alpha\r\n한글😀 Straße\r\nalpha .*").toUtf8();
+        write(r.file1_, text); write(r.file2_, "prefix\n" + text);
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        auto* bar = window.findChild<FindBar*>(); auto* query = bar->findChild<QLineEdit*>("compareFindText");
+        auto* scope = bar->findChild<QComboBox*>("compareFindScope"); auto* status = bar->findChild<QLabel*>("compareFindFeedback");
+        auto* matchCase = bar->findChild<QCheckBox*>("compareFindCase"); auto* word = bar->findChild<QCheckBox*>("compareFindWord");
+        QVERIFY(!bar->isVisible()); left->setFocus(); left->send(SCI_SETSEL, 0, 0);
+        left->send(SCI_SETTARGETRANGE, 2, 5); left->send(SCI_SETSEARCHFLAGS, SCFIND_MATCHCASE);
+        QTest::keyClick(left, Qt::Key_F, Qt::ControlModifier); QTRY_VERIFY(query->hasFocus());
+        QCOMPARE(scope->currentText(), QString("FILE 1")); query->setText("alpha");
+        QTest::keyClick(query, Qt::Key_Return); QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(0));
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONEND), sptr_t(5));
+        QTest::keyClick(query, Qt::Key_F3); QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(6));
+        word->setChecked(true); QTest::keyClick(query, Qt::Key_F3);
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.indexOf(" alpha\r") + 1));
+        matchCase->setChecked(true); left->send(SCI_SETSEL, 0, 0); QTest::keyClick(query, Qt::Key_F3);
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.indexOf(" alpha\r") + 1));
+        left->send(SCI_SETSEL, 0, 0); QTest::keyClick(query, Qt::Key_Return, Qt::ShiftModifier);
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.lastIndexOf("alpha"))); QCOMPARE(status->text(), QString("끝에서 계속 찾음"));
+        matchCase->setChecked(false); QTest::keyClick(query, Qt::Key_F3);
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(0)); QCOMPARE(status->text(), QString("처음부터 계속 찾음"));
+        word->setChecked(false); query->setText(QString::fromUtf8("한글😀")); QTest::keyClick(query, Qt::Key_Return);
+        const auto unicode = QString::fromUtf8("한글😀").toUtf8();
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.indexOf(unicode)));
+        QCOMPARE(left->send(SCI_GETSELECTIONEND), sptr_t(text.indexOf(unicode) + unicode.size()));
+        query->setText("STRASSE"); QTest::keyClick(query, Qt::Key_Return);
+        const auto street = QString::fromUtf8("Straße").toUtf8();
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.indexOf(street)));
+        QCOMPARE(left->send(SCI_GETSELECTIONEND), sptr_t(text.indexOf(street) + street.size()));
+        query->setText(".*"); QTest::keyClick(query, Qt::Key_Return);
+        QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.indexOf(".*")));
+        const auto selection = left->send(SCI_GETSELECTIONSTART);
+        query->setText("not-present"); QTest::keyClick(query, Qt::Key_Return); QTRY_COMPARE(status->text(), QString("일치 없음"));
+        QCOMPARE(left->send(SCI_GETSELECTIONSTART), selection); QCOMPARE(left->send(SCI_GETTARGETSTART), sptr_t(2));
+        QCOMPARE(left->send(SCI_GETTARGETEND), sptr_t(5)); QCOMPARE(left->send(SCI_GETSEARCHFLAGS), sptr_t(SCFIND_MATCHCASE));
+        QTest::keyClick(query, Qt::Key_Escape); QTRY_VERIFY(!bar->isVisible()); QTRY_VERIFY(left->hasFocus());
+        right->setFocus(); right->send(SCI_SETSEL, 0, 0); QTRY_COMPARE(scope->currentText(), QString("FILE 2"));
+        query->setText(QString::fromUtf8("한글😀")); QTest::keyClick(right, Qt::Key_F3);
+        QTRY_COMPARE(right->send(SCI_GETSELECTIONSTART), sptr_t(7 + text.indexOf(unicode)));
+        QCOMPARE(left->send(SCI_GETSELECTIONSTART), selection);
+        QVERIFY(bar->isVisible()); window.repaint(); QTest::qWait(40); QVERIFY(window.grab().save("find-light.png"));
+        action(window, "Dark")->setChecked(true); window.repaint(); QTest::qWait(40); QVERIFY(window.grab().save("find-dark.png"));
+        QTest::keyClick(right, Qt::Key_Escape); QTRY_VERIFY(!bar->isVisible());
+        QCOMPARE(contents(left), text); QCOMPARE(contents(right), "prefix\n" + text);
+        QVERIFY(!left->send(SCI_CANUNDO)); QVERIFY(!right->send(SCI_GETMODIFY)); window.close();
+    }
+    void findChunkBoundariesCancellationAndEmpty()
+    {
+        QMainWindow window; auto* editor = new ScintillaEditBase(&window); editor->setObjectName("TEXT"); window.setCentralWidget(editor);
+        auto* bar = new FindBar(&window); window.addToolBar(Qt::BottomToolBarArea, bar);
+        bar->SetEditors({editor}); window.resize(1000, 500); window.show();
+        auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* status = bar->findChild<QLabel*>("compareFindFeedback");
+        const auto pattern = QString::fromUtf8("한글😀").toUtf8(); const int chunk = 262144 / pattern.size();
+        QByteArray text(3 * chunk, 'x'); for (int i = 79; i < text.size(); i += 80) text[i] = '\n';
+        const int first = chunk - 3, last = 2 * chunk - 3; text.replace(first, pattern.size(), pattern); text.replace(last, pattern.size(), pattern);
+        setText(*editor, text.toStdString()); query->setText(QString::fromUtf8(pattern)); bar->Find(false);
+        QTRY_COMPARE(editor->send(SCI_GETSELECTIONSTART), sptr_t(first));
+        editor->send(SCI_SETSEL, text.size(), text.size()); bar->Find(true);
+        QTRY_COMPARE(editor->send(SCI_GETSELECTIONSTART), sptr_t(last));
+        // A caret inside a match must still find it when wrapping in either direction.
+        setText(*editor, "hello"); editor->send(SCI_SETSEL, 0, 5);
+        editor->send(SCI_SETSELECTIONNCARETVIRTUALSPACE, 0, 4096); bar->Open();
+        QCOMPARE(query->text(), QString("hello")); // Only document bytes seed the query.
+        editor->send(SCI_SETSEL, 2, 2); bar->Find(false);
+        QTRY_COMPARE(editor->send(SCI_GETSELECTIONEND), sptr_t(5)); QCOMPARE(status->text(), QString("처음부터 계속 찾음"));
+        editor->send(SCI_SETSEL, 2, 2); bar->Find(true); QTRY_COMPARE(editor->send(SCI_GETSELECTIONSTART), sptr_t(0));
+        QCOMPARE(status->text(), QString("끝에서 계속 찾음"));
+        setText(*editor, ""); bar->Find(false); QTRY_COMPARE(status->text(), QString("일치 없음"));
+        QByteArray large(4 * 1024 * 1024, 'a'); for (int i = 2047; i < large.size(); i += 2048) large[i] = '\n';
+        setText(*editor, large.toStdString()); query->setText("retained"); editor->send(SCI_SELECTALL); bar->Open();
+        QCOMPARE(query->text(), QString("retained")); // Large selection is not used as the query.
+        editor->send(SCI_SETSEL, 0, 0); query->setText(QString(255, 'a') + 'b'); bar->Find(false);
+        bool yielded = false; QElapsedTimer elapsed; elapsed.start();
+        const auto connection = connect(bar->findChild<QTimer*>(), &QTimer::timeout, bar, [&] { yielded = true; bar->Close(); });
+        QTRY_VERIFY(yielded); QVERIFY(!bar->isVisible()); QCOMPARE(editor->send(SCI_GETCURRENTPOS), sptr_t(0));
+        disconnect(connection); qInfo("Search first chunk and close on 4 MiB repetitive text / 256-character query: %lld ms", elapsed.elapsed());
+        query->setText("a"); bar->Find(false); editor->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("changed"));
+        QTest::qWait(30); QVERIFY(status->text().isEmpty());
+        bar->Find(false); bar->SetBusy(true); QTest::qWait(20); QCOMPARE(status->text(), QString("검색 중단"));
+        bar->SetBusy(false); bar->Find(false); bar->SetEditors({}); delete window.takeCentralWidget();
+        QTest::qWait(30); QVERIFY(!bar->isVisible()); bar->Find(false); // Deleted target is never dereferenced.
+    }
+    void findMergeResultAndRecompare()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.base_ = dir.filePath("base.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "head\nleft needle\nend"); write(r.file2_, "head\nright needle\nend"); write(r.base_, "head\nbase needle\nend");
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* left = window.findChild<ScintillaEditBase*>("LEFT");
+        auto* base = window.findChild<ScintillaEditBase*>("BASE"); auto* bar = window.findChild<FindBar*>();
+        auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* scope = bar->findChild<QComboBox*>("compareFindScope");
+        auto* feedback = bar->findChild<QLabel*>("compareFindFeedback"); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        QCOMPARE(scope->count(), 4); action(window, "왼쪽 전체 선택")->trigger();
+        output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual needle\n")); output->send(SCI_SETSEL, 0, 0); output->setFocus();
+        QTRY_COMPARE(scope->currentText(), QString("RESULT"));
+        const auto before = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT); const auto resolution = tree->topLevelItem(0)->text(3);
+        query->setText("needle"); bar->Find(false); QTRY_COMPARE(output->send(SCI_GETSELECTIONSTART), sptr_t(7));
+        QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo); QCOMPARE(tree->topLevelItem(0)->text(3), resolution); QCOMPARE(contents(output), before);
+        scope->setCurrentIndex(2); bar->Find(false); QTRY_COMPARE(base->send(SCI_GETSELECTIONSTART), sptr_t(10));
+        QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        scope->setCurrentIndex(0); query->setText("missing"); bar->Find(false);
+        write(r.file1_, "new needle\nhead\nleft needle\nend"); action(window, "다시 비교")->trigger();
+        QVERIFY(!action(window, "다음 찾기")->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QCOMPARE(contents(output), before); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo); QVERIFY(feedback->text() != "검색 중…");
+        left->send(SCI_SETSEL, 0, 0); query->setText("new needle"); bar->Find(false); QTRY_COMPARE(left->send(SCI_GETSELECTIONEND), sptr_t(10));
+        action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        scope->setCurrentIndex(3); query->setText("needle"); bar->Find(false);
+        QTRY_COMPARE(output->send(SCI_GETSELECTIONSTART), sptr_t(before.lastIndexOf("needle"))); QCOMPARE(window.ExitCode(), 0);
+        QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
+    }
     void alignedSourceRowsAndEngineBoundaries()
     {
         const std::vector<std::pair<std::string, std::string>> cases{

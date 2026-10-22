@@ -2,6 +2,7 @@
 #include "compareWindow.hpp"
 #include "mergeController.hpp"
 #include "scrollSynchronizer.hpp"
+#include "findBar.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -106,6 +107,15 @@ namespace hc::compare
         undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { if (output_ && !busy()) output_->send(SCI_UNDO); });
         redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !busy()) output_->send(SCI_REDO); });
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
+        find_ = new FindBar(this); addToolBar(Qt::BottomToolBarArea, find_);
+        editMenu->addSeparator();
+        auto* find = editMenu->addAction(tr("찾기"), find_, &FindBar::Open); find->setShortcut(QKeySequence::Find);
+        auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { find_->Find(false); }); findNext->setShortcut(QKeySequence("F3"));
+        auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { find_->Find(true); }); findPrevious->setShortcut(QKeySequence("Shift+F3"));
+        findActions_ = {find, findNext, findPrevious}; for (auto* action : findActions_) action->setEnabled(false);
+        auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(Qt::Key_Escape)); closeFind->setEnabled(false); addAction(closeFind);
+        connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
+        connect(find_, &QToolBar::visibilityChanged, closeFind, &QAction::setEnabled);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
         alignRows_ = viewMenu->addAction(tr("왼쪽·오른쪽 표시 줄 정렬")); alignRows_->setCheckable(true);
         alignRows_->setChecked(settings.value("view/alignSourceRows", true).toBool()); alignRows_->setEnabled(false);
@@ -275,6 +285,7 @@ namespace hc::compare
     void CompareWindow::display()
     {
         workPath_.clear(); workExpected_.reset();
+        find_->SetEditors({});
         delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
@@ -325,6 +336,7 @@ namespace hc::compare
         QList<int> widths; for (int i = 0; i < panes_->count(); ++i) widths.push_back(1);
         panes_->setSizes(widths);
         auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->setSizes({560, 140});
+        find_->SetEditors(editors_);
         applyAppearance();
         updateMerge();
     }
@@ -347,6 +359,8 @@ namespace hc::compare
     }
     void CompareWindow::updateMerge()
     {
+        const bool searchable = !editors_.isEmpty() && !busy();
+        find_->SetBusy(busy()); for (auto* action : findActions_) action->setEnabled(searchable);
         syncScroll_->setEnabled(scroll_ && !busy());
         alignRows_->setEnabled(scroll_ && !busy());
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
@@ -453,6 +467,15 @@ namespace hc::compare
             editor->send(SCI_STYLESETFORE, 6, color(dark_ ? QColor("#edc38a") : QColor("#945410")));
             editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(background));
             editor->send(SCI_SETCARETFORE, color(foreground));
+            // Search keeps focus in the find bar. Both active and inactive
+            // selections must remain readable against Light/Dark syntax colors.
+            for (const auto element : {SC_ELEMENT_SELECTION_TEXT, SC_ELEMENT_SELECTION_ADDITIONAL_TEXT,
+                SC_ELEMENT_SELECTION_INACTIVE_TEXT, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_TEXT})
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#ffffff") : QColor("#142236")) | 0xff000000u);
+            for (const auto element : {SC_ELEMENT_SELECTION_BACK, SC_ELEMENT_SELECTION_ADDITIONAL_BACK})
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#395d83") : QColor("#bdd5f6")) | 0xff000000u);
+            for (const auto element : {SC_ELEMENT_SELECTION_INACTIVE_BACK, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_BACK})
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#344252") : QColor("#dae5f3")) | 0xff000000u);
             editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
             editor->send(SCI_COLOURISE, 0, -1);
         }
