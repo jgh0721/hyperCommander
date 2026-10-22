@@ -476,7 +476,7 @@ private slots:
     void nativeSourcePreparation_data()
     {
         QTest::addColumn<QString>("Mode");
-        for (const auto* Mode : {"missing", "cancelled", "deadline", "unsupported", "oversized", "stale", "protected-copy"})
+        for (const auto* Mode : {"missing", "cancelled", "deadline", "unsupported", "metadata-size-mismatch", "stale", "protected-copy"})
             QTest::newRow(Mode) << QString::fromLatin1(Mode);
     }
     void nativeSourcePreparation()
@@ -490,7 +490,7 @@ private slots:
         auto Entry = Provider->Resolve({LocatorKind::Local, Path.toUtf8().toStdString()}, {}).get();
         QVERIFY(Entry.HasValue());
         auto Store = MakeNativeMaterializer(Dir.path().toUtf8().toStdString()); QVERIFY(Store.HasValue());
-        if (Mode == "oversized") Entry.Value().size_ = 64ULL * 1024 * 1024 + 1;
+        if (Mode == "metadata-size-mismatch") Entry.Value().size_ = 64ULL * 1024 * 1024 + 1;
         MaterializationRequest Request;
         if (Mode != "missing") Request.source_ = std::make_shared<ProviderContentSource>(Provider, Entry.Value());
         OperationContext Context; std::stop_source Stop;
@@ -513,7 +513,7 @@ private slots:
             if (Mode == "cancelled") QCOMPARE(Prepared.Failure().category_, ErrorCategory::Cancelled);
             if (Mode == "deadline") QCOMPARE(Prepared.Failure().code_, std::string("deadline-exceeded"));
             if (Mode == "unsupported") QCOMPARE(Prepared.Failure().code_, std::string("rhwp-source-format"));
-            if (Mode == "oversized") QCOMPARE(Prepared.Failure().code_, std::string("rhwp-input-budget"));
+            if (Mode == "metadata-size-mismatch") QCOMPARE(Prepared.Failure().code_, std::string("content-changed"));
             if (Mode == "stale") QCOMPARE(Prepared.Failure().category_, ErrorCategory::StaleRevision);
         }
         const auto Cleanup = Store.Value()->DrainCleanup(); QVERIFY(Cleanup.errors_.empty());
@@ -973,7 +973,10 @@ private slots:
         QVERIFY(Expired.Handle(Chunk(0, "x")).contains("error")); QVERIFY(!Expired.Take());
         HwpInputTransfer SizeGate(true);
         Bad = Begin; Bad["byteLength"] = 0; QVERIFY(SizeGate.Handle(Bad).contains("error"));
-        Bad["byteLength"] = 64 * 1024 * 1024 + 1; QVERIFY(SizeGate.Handle(Bad).contains("error"));
+        Bad["byteLength"] = 9007199254740992.0; QVERIFY(SizeGate.Handle(Bad).contains("error"));
+        Bad["byteLength"] = 64 * 1024 * 1024 + 1;
+        QCOMPARE(SizeGate.Handle(Bad)["type"].toString(), QString("InputAccepted"));
+        QCOMPARE(SizeGate.Handle(Command("InputCancel"))["type"].toString(), QString("InputDiscarded"));
         HwpInputTransfer Missing(true); Missing.Handle(Begin);
         QCOMPARE(Missing.Handle(Command("InputCommit"))["error"].toString(), QString("rhwp-input-integrity"));
         HwpInputTransfer VerifiedExpiry(true, 10);
