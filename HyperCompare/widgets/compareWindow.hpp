@@ -24,8 +24,10 @@ namespace hc::compare
     protected:
         void closeEvent(QCloseEvent* Event) override;
     private:
-        void start();
+        void start(bool Preserve = false);
         void display();
+        void refresh(Result Value);
+        void showBlocks();
         void openInputs();
         void applyAppearance();
         void chooseFont(const QString& Role);
@@ -55,6 +57,7 @@ namespace hc::compare
         QVector<QAction*> wholeActions_;
         QFont uiFont_, listFont_, textFont_;
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
+        bool refreshing_ = false;
         int exitCode_ = 3;
     };
 }

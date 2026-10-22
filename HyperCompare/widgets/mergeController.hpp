@@ -16,6 +16,7 @@ namespace hc::compare
         const MergeModel& Model() const { return model_; }
         void Choose(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         void ChooseAll(Resolution Choice, const QByteArray& Text = {});
+        void Refresh(std::shared_ptr<const MergePlan> Plan);
         void MarkSaved();
         bool Dirty() const;
         bool Saved() const;
@@ -26,7 +27,8 @@ namespace hc::compare
         void replace(std::size_t Begin, std::size_t End, const QByteArray& Text, MergeModel Next, bool TextChange);
         ScintillaEditBase* editor_;
         MergeModel model_;
-        std::map<int, std::vector<BlockState>> history_;
+        struct History { std::vector<BlockState> state_; bool reviewRequired_ = false; };
+        std::map<int, History> history_;
         std::size_t historyBytes_ = 0;
         std::size_t historyLimit_;
         bool applying_ = false, saved_ = false;

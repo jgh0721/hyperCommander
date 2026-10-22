@@ -38,9 +38,12 @@ namespace hc::compare
         QJsonArray entries_, comparisons_, warnings_, recovery_;
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;
+        bool inputsChanged_ = false;
         QJsonObject Json() const;
     };
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save);
+    Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,
+        std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled);
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8);
     int WriteReport(const Request& Input, const Result& Value);
     QJsonObject Capabilities();

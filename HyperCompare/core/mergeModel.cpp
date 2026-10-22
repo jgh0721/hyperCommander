@@ -90,7 +90,10 @@ namespace hc::compare
         {
             const auto removed = target.end_ - target.begin_, inserted = Edit.replacement_.size();
             for (std::size_t i = at + 1; i < state_.size(); ++i)
-            { state_[i].begin_ = shift(state_[i].begin_, removed, inserted); state_[i].end_ = shift(state_[i].end_, removed, inserted); }
+            {
+                auto& following = state_[i]; if (!following.mapped_) continue;
+                following.begin_ = shift(following.begin_, removed, inserted); following.end_ = shift(following.end_, removed, inserted);
+            }
             target.end_ = target.begin_ + inserted;
         }
         target.resolution_ = Edit.resolution_; revision_ = nextRevision();
@@ -100,6 +103,7 @@ namespace hc::compare
         const auto end = Position + Removed;
         for (auto& block : state_)
         {
+            if (!block.mapped_) continue;
             if (end <= block.begin_ && !(Removed == 0 && Position == block.begin_))
             { block.begin_ = shift(block.begin_, Removed, Inserted); block.end_ = shift(block.end_, Removed, Inserted); }
             else if (Position >= block.end_ && !(Position == block.begin_ && block.begin_ == block.end_)) continue;
@@ -120,12 +124,14 @@ namespace hc::compare
             }
         }
         for (std::size_t i = 1; i < state_.size(); ++i)
-            if (state_[i - 1].end_ > state_[i].begin_) { state_[i - 1].mapped_ = false; state_[i].mapped_ = false; }
+            if (state_[i - 1].mapped_ && state_[i].mapped_ && state_[i - 1].end_ > state_[i].begin_)
+            { state_[i - 1].mapped_ = false; state_[i].mapped_ = false; }
         revision_ = nextRevision();
     }
     void MergeModel::SelectAll(Resolution Choice)
     {
         if (Choice != Resolution::Left && Choice != Resolution::Right && Choice != Resolution::Manual) throw Failure("InvalidMergeChoice");
+        reviewRequired_ = false;
         for (std::size_t i = 0; i < state_.size(); ++i)
         {
             auto& state = state_[i]; const auto& block = plan_->blocks_[i]; state.resolution_ = Choice;
@@ -135,11 +141,11 @@ namespace hc::compare
         }
         revision_ = nextRevision();
     }
-    void MergeModel::Restore(const std::vector<BlockState>& State)
+    void MergeModel::Restore(const std::vector<BlockState>& State, bool ReviewRequired)
     {
         if (State.size() != state_.size()) throw Failure("InvalidMergeHistory");
-        state_ = State; revision_ = nextRevision();
+        state_ = State; reviewRequired_ = ReviewRequired; revision_ = nextRevision();
     }
     void MergeModel::Invalidate()
-    { for (auto& state : state_) { state.mapped_ = false; state.resolution_ = Resolution::Unresolved; } revision_ = nextRevision(); }
+    { for (auto& state : state_) { state.mapped_ = false; state.resolution_ = Resolution::Unresolved; } reviewRequired_ = true; revision_ = nextRevision(); }
 }

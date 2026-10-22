@@ -28,6 +28,60 @@ private:
         return row.back();
     }
 private slots:
+    void recompareDecisionsAndDestination()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp");
+        const QByteArray middle = QByteArray("unchanged line\n").repeated(20);
+        const auto left = "a\n" + middle + "z\n", right = "A\n" + middle + "Z\n";
+        write(r.file1_, left); write(r.file2_, right); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto previous = Execute(r, cancel, false); QCOMPARE(previous.completion_, QString("Complete"));
+        MergeModel model(previous.plan_); model.SelectAll(Resolution::Right);
+        SaveResult(r, previous, right); QVERIFY(previous.expected_.exists_);
+        const auto same = Recompare(r, previous, model.State(), std::size_t(right.size()), cancel);
+        QCOMPARE(same.completion_, QString("Complete")); QVERIFY(!same.inputsChanged_); QCOMPARE(same.plan_, previous.plan_);
+        write(r.file1_, "a\n" + middle + "new tail\n");
+        auto changed = Recompare(r, previous, model.State(), std::size_t(right.size()), cancel);
+        QCOMPARE(changed.completion_, QString("Complete")); QVERIFY(changed.inputsChanged_);
+        QCOMPARE(changed.plan_->initial_.size(), std::size_t(2));
+        QCOMPARE(changed.plan_->initial_[0], model.State()[0]); QVERIFY(!changed.plan_->initial_[1].mapped_);
+        QCOMPARE(changed.expected_.revision_, previous.expected_.revision_);
+        // An external output must never become an implicitly approved overwrite on refresh.
+        write(r.output_, "external output\n");
+        changed = Recompare(r, previous, model.State(), std::size_t(right.size()), cancel);
+        QCOMPARE(changed.completion_, QString("Complete")); QCOMPARE(changed.expected_.revision_, previous.expected_.revision_);
+        QVERIFY_EXCEPTION_THROWN(SaveResult(r, changed, right), Failure); QCOMPARE(read(r.output_), QByteArray("external output\n"));
+        cancel->store(true); QCOMPARE(Recompare(r, previous, model.State(), std::size_t(right.size()), cancel).completion_, QString("Canceled"));
+    }
+    void recompareDuplicateContexts()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left");
+        r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        const auto padding = QByteArray("padding\n").repeated(20);
+        const auto left = padding + "a\n" + padding + "a\n" + padding;
+        const auto right = padding + "A\n" + padding + "A\n" + padding;
+        write(r.file1_, left); write(r.file2_, right); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto previous = Execute(r, cancel, false); MergeModel model(previous.plan_); model.SelectAll(Resolution::Right);
+        write(r.file1_, left + "new common tail\n"); write(r.file2_, right + "new common tail\n");
+        const auto result = Recompare(r, previous, model.State(), std::size_t(right.size()), cancel);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.plan_->initial_.size(), std::size_t(2));
+        for (const auto& state : result.plan_->initial_) { QVERIFY(!state.mapped_); QCOMPARE(state.resolution_, Resolution::Unresolved); }
+    }
+    void recompareReorderedBlocks()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left");
+        r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        const auto padding = QByteArray("padding\n").repeated(20);
+        const auto leftA = padding + "a\n" + padding, leftB = padding + "b\n" + padding;
+        const auto rightA = padding + "A\n" + padding, rightB = padding + "B\n" + padding;
+        write(r.file1_, leftA + leftB); write(r.file2_, rightA + rightB);
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto previous = Execute(r, cancel, false); MergeModel model(previous.plan_); model.SelectAll(Resolution::Right);
+        write(r.file1_, leftB + leftA); write(r.file2_, rightB + rightA);
+        const auto result = Recompare(r, previous, model.State(), std::size_t(rightA.size() + rightB.size()), cancel);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.plan_->initial_.size(), std::size_t(2));
+        for (const auto& state : result.plan_->initial_) QVERIFY(!state.mapped_);
+    }
     void randomizedReconstruction()
     {
         std::mt19937 rng(17021);

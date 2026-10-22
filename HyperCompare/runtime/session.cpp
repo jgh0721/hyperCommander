@@ -178,6 +178,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"phase", "foundation"}, {"textCompare2", true}, {"textCompare3", true},
             {"textMerge3", true}, {"textMerge2", "explicit-whole-side"}, {"directoryCompare2", true},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
+            {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryMerge", false}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }

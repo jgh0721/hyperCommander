@@ -11,6 +11,7 @@
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QToolBar>
@@ -62,9 +63,7 @@ namespace hc::compare
         layout->setStretchFactor(0, 4); layout->setStretchFactor(1, 1); layout->setSizes({560, 140}); setCentralWidget(layout);
         auto* tools = addToolBar(tr("비교"));
         tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
-        tools->addAction(tr("다시 비교"), this, [this] {
-            if (!dirty_ || QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 다시 비교하시겠습니까?")) == QMessageBox::Yes) start();
-        });
+        tools->addAction(tr("다시 비교"), this, [this] { start(true); });
         cancel_ = tools->addAction(tr("취소"), this, [this] { canceled_->store(true); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
         save_ = tools->addAction(tr("결과 저장"), this, &CompareWindow::save); save_->setEnabled(false);
@@ -100,6 +99,12 @@ namespace hc::compare
         state_->setObjectName("compareStatus");
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
             cancel_->setEnabled(false);
+            if (refreshing_)
+            {
+                refreshing_ = false; refresh(watcher_.result());
+                if (closing_) close();
+                return;
+            }
             result_ = watcher_.result();
             if (saving_)
             {
@@ -140,15 +145,58 @@ namespace hc::compare
         request_.file1_ = left; request_.file2_ = right; request_.base_.clear(); request_.file3_.clear();
         request_.output_.clear(); request_.mode_ = "compare"; start();
     }
-    void CompareWindow::start()
+    void CompareWindow::start(bool Preserve)
     {
         if (watcher_.isRunning() || request_.file1_.isEmpty()) return;
-        canceled_ = std::make_shared<std::atomic_bool>(false); dirty_ = false; exitCode_ = 3;
+        canceled_ = std::make_shared<std::atomic_bool>(false);
+        refreshing_ = Preserve && merge_;
+        if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
         save_->setEnabled(false); state_->setText(tr("비교 중…"));
         cancel_->setEnabled(true);
         if (output_) output_->send(SCI_SETREADONLY, 1);
-        watcher_.setFuture(QtConcurrent::run([input = request_, cancel = canceled_] { return Execute(input, cancel, false); }));
+        if (refreshing_)
+            watcher_.setFuture(QtConcurrent::run([input = request_, previous = result_, states = merge_->Model().State(),
+                bytes = std::size_t(output_->send(SCI_GETLENGTH)), cancel = canceled_] { return Recompare(input, previous, states, bytes, cancel); }));
+        else watcher_.setFuture(QtConcurrent::run([input = request_, cancel = canceled_] { return Execute(input, cancel, false); }));
         updateMerge();
+    }
+    void CompareWindow::refresh(Result Value)
+    {
+        output_->send(SCI_SETREADONLY, 0);
+        if (Value.completion_ != "Complete")
+        {
+            updateMerge(); state_->setText(tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
+        }
+        const bool changed = Value.inputsChanged_; result_ = std::move(Value);
+        if (changed)
+        {
+            for (qsizetype i = 0; i < result_.inputs_.size(); ++i)
+            {
+                auto* editor = editors_[i]; editor->send(SCI_SETREADONLY, 0);
+                editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(result_.inputs_[i].utf8_.constData()));
+                editor->send(SCI_EMPTYUNDOBUFFER); editor->send(SCI_SETSAVEPOINT); editor->send(SCI_SETREADONLY, 1);
+                editor->send(SCI_MARKERDELETEALL, 8);
+            }
+            for (const auto& edit : result_.edits_)
+            {
+                for (auto line = edit.begin_; line < edit.end_; ++line) editors_[0]->send(SCI_MARKERADD, uptr_t(line), 8);
+                for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) editors_[1]->send(SCI_MARKERADD, uptr_t(line), 8);
+            }
+            // Rebuild rows before the controller emits changed_ with the new plan.
+            showBlocks(); merge_->Refresh(result_.plan_); applyAppearance();
+        }
+        updateMerge();
+        if (!changed) state_->setText(tr("입력 내용 동일 — RESULT·Undo·해결 상태 보존"));
+    }
+    void CompareWindow::showBlocks()
+    {
+        const QSignalBlocker blocker(changes_); changes_->clear();
+        for (const auto& block : result_.plan_->blocks_)
+        {
+            auto* item = new QTreeWidgetItem(changes_, {QString::number(block.id_), QString::number(block.leftLine_ + 1), QString::number(block.rightLine_ + 1)});
+            item->setData(0, Qt::UserRole, qulonglong(block.id_));
+        }
+        if (changes_->topLevelItemCount()) changes_->setCurrentItem(changes_->topLevelItem(0));
     }
     ScintillaEditBase* CompareWindow::addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly)
     {
@@ -203,12 +251,7 @@ namespace hc::compare
                 changes_->clear();
                 merge_ = new MergeController(output_, result_.plan_, this);
                 merge_->changed_ = [this] { updateMerge(); };
-                for (const auto& block : result_.plan_->blocks_)
-                {
-                    auto* item = new QTreeWidgetItem(changes_, {QString::number(block.id_), QString::number(block.leftLine_ + 1), QString::number(block.rightLine_ + 1)});
-                    item->setData(0, Qt::UserRole, qulonglong(block.id_));
-                }
-                if (changes_->topLevelItemCount()) changes_->setCurrentItem(changes_->topLevelItem(0));
+                showBlocks();
             }
         }
         state_->setText(QString("%1 — %2, conflicts: %3").arg(result_.operation_, result_.outcome_).arg(result_.merged_.conflicts_.size()));
@@ -251,7 +294,7 @@ namespace hc::compare
                 block.resolution_ == Resolution::Right ? "RIGHT" : block.resolution_ == Resolution::Base ? "BASE" :
                 block.resolution_ == Resolution::LeftThenRight ? "LEFT → RIGHT" : block.resolution_ == Resolution::RightThenLeft ? "RIGHT → LEFT" : tr("수동 완료");
             item->setText(3, label + (block.mapped_ ? QString{} : tr(" · 위치 재검토")));
-            item->setToolTip(3, block.mapped_ ? QString{} : tr("블록 경계를 넘는 편집입니다. Undo로 복원하거나 전체 결과 검토 후 ‘전체 수동 완료’를 선택하십시오."));
+            item->setToolTip(3, block.mapped_ ? QString{} : tr("RESULT의 블록 위치를 확정할 수 없습니다. 전체 결과 검토 후 ‘전체 수동 완료’를 선택하거나 전체 방향을 다시 선택하십시오."));
             item->setData(3, Qt::UserRole, qulonglong(model.Revision()));
         }
         if (ready && changes_->currentItem())
@@ -261,12 +304,13 @@ namespace hc::compare
             for (auto* action : blockActions_) action->setEnabled(mapped);
             baseChoice_->setEnabled(mapped && model.Plan().hasBase_);
         }
-        save_->setEnabled(ready && model.UnresolvedCount() == 0);
+        save_->setEnabled(ready && model.UnresolvedCount() == 0 && !model.ReviewRequired());
         if (ready)
         {
-            unresolved_ = model.UnresolvedCount() != 0; dirty_ = merge_->Dirty();
+            unresolved_ = model.UnresolvedCount() != 0 || model.ReviewRequired(); dirty_ = merge_->Dirty();
             exitCode_ = merge_->Saved() ? 0 : 3;
             state_->setText(tr("미해결: %1 / %2 — %3").arg(model.UnresolvedCount()).arg(model.State().size()).arg(merge_->Saved() ? tr("저장 완료") : tr("결과 저장 필요")));
+            if (model.ReviewRequired()) state_->setText(tr("RESULT 보존 · 전체 재검토 필요 — 새 입력 확인 후 ‘전체 수동 완료’ 또는 전체 방향 선택 (미해결 %1)").arg(model.UnresolvedCount()));
         }
     }
     void CompareWindow::selectBlock()

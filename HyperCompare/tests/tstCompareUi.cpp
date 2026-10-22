@@ -51,6 +51,78 @@ private slots:
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/compare-dark.png"));
         window.close();
     }
+    void recomparePreservesManualUndoAndFailure()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "left\n"); write(r.file2_, "right\n");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT");
+        auto* status = window.findChild<QLabel*>("compareStatus"); auto* retry = action(window, "다시 비교");
+        auto* cancel = action(window, "취소"); auto* save = action(window, "결과 저장");
+        action(window, "블록 RIGHT")->trigger();
+        output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n"));
+        const auto text = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        retry->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(window.findChild<ScintillaEditBase*>("RESULT"), output); QCOMPARE(contents(output), text);
+        QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo); QVERIFY(status->text().contains("입력 내용 동일"));
+        output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("right\n")); QVERIFY(save->isEnabled());
+        output->send(SCI_REDO); QCOMPARE(contents(output), text); QVERIFY(!save->isEnabled());
+        QVERIFY(QFile::rename(r.file2_, r.file2_ + ".away"));
+        retry->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        QVERIFY(status->text().contains("재비교 중단")); QVERIFY(!output->send(SCI_GETREADONLY));
+        QVERIFY(QFile::rename(r.file2_ + ".away", r.file2_));
+        retry->trigger(); cancel->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        action(window, "전체 수동 완료")->trigger(); save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        retry->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(window.ExitCode(), 0); QCOMPARE(contents(output), text); window.close();
+    }
+    void recompareChangedInputsRequiresReview()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp");
+        const auto middle = QByteArray("unchanged line\n").repeated(20);
+        write(r.file1_, "a\n" + middle + "z\n"); write(r.file2_, "A\n" + middle + "Z\n");
+        CompareWindow window(r); window.show(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->topLevelItemCount(), 2, 10000);
+        action(window, "오른쪽 전체 선택")->trigger();
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); const auto text = contents(output);
+        write(r.file1_, "a\n" + middle + "new tail\n");
+        action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QCOMPARE(contents(output), text); QCOMPARE(tree->topLevelItem(0)->text(3), QString("RIGHT"));
+        QVERIFY(tree->topLevelItem(1)->text(3).contains("위치 재검토"));
+        QCOMPARE(contents(window.findChild<ScintillaEditBase*>("LEFT")), QByteArray("a\n" + middle + "new tail\n"));
+        auto* save = action(window, "결과 저장"); QVERIFY(!save->isEnabled());
+        tree->setCurrentItem(tree->topLevelItem(1)); QVERIFY(!action(window, "블록 RIGHT")->isEnabled());
+        QTest::qWait(60);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/recompare-review.png"));
+        // Old generation's native text Undo is usable but cannot resurrect trusted decisions.
+        output->send(SCI_UNDO); QVERIFY(!save->isEnabled());
+        output->send(SCI_REDO); QCOMPARE(contents(output), text); QVERIFY(!save->isEnabled());
+        action(window, "전체 수동 완료")->trigger(); QVERIFY(save->isEnabled());
+        output->send(SCI_UNDO); QVERIFY(!save->isEnabled()); output->send(SCI_REDO); QVERIFY(save->isEnabled());
+        save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), text); window.close();
+    }
+    void recompareWithoutConflictStillRequiresReview()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.base_ = dir.filePath("base.cpp"); r.output_ = dir.filePath("out.cpp");
+        write(r.file1_, "base\n"); write(r.file2_, "base\n"); write(r.base_, "base\n");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* save = action(window, "결과 저장");
+        write(r.file2_, "new independent change\n"); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QCOMPARE(contents(output), QByteArray("base\n"));
+        QCOMPARE(window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 0); QVERIFY(!save->isEnabled());
+        action(window, "오른쪽 전체 선택")->trigger(); QCOMPARE(contents(output), QByteArray("new independent change\n"));
+        output->send(SCI_UNDO); QVERIFY(!save->isEnabled()); output->send(SCI_REDO); QVERIFY(save->isEnabled());
+        save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
+    }
     void emptyRightMergeAndSave()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");

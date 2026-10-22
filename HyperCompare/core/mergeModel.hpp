@@ -44,16 +44,18 @@ namespace hc::compare
         const std::vector<BlockState>& State() const { return state_; }
         std::uint64_t Revision() const { return revision_; }
         std::size_t UnresolvedCount() const;
+        bool ReviewRequired() const { return reviewRequired_; }
         BlockEdit Prepare(std::uint64_t Id, std::uint64_t ExpectedRevision, Resolution Choice) const;
         void Apply(const BlockEdit& Edit);
         void TextChanged(std::size_t Position, std::size_t Removed, std::size_t Inserted);
         void SelectAll(Resolution Choice);
-        void Restore(const std::vector<BlockState>& State);
+        void Restore(const std::vector<BlockState>& State, bool ReviewRequired = false);
         void Invalidate();
     private:
         std::size_t index(std::uint64_t Id) const;
         std::shared_ptr<const MergePlan> plan_;
         std::vector<BlockState> state_;
         std::uint64_t revision_ = 1;
+        bool reviewRequired_ = false;
     };
 }

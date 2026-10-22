@@ -3,7 +3,7 @@ target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
 qt_add_library(hc_compare_runtime STATIC
-    cli/cliParser.cpp runtime/session.cpp runtime/session.hpp
+    cli/cliParser.cpp runtime/session.cpp runtime/session.hpp runtime/recompare.cpp
     "${PROJECT_SOURCE_DIR}/UniqueLibs/storageProviders.cpp"
     "${PROJECT_SOURCE_DIR}/UniqueLibs/nativeWritableStorage.cpp"
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentTextCodec.cpp"

@@ -19,12 +19,12 @@ namespace hc::compare
         const int at = static_cast<int>(editor_->send(SCI_GETUNDOCURRENT));
         const auto bytes = model_.State().size() * sizeof(BlockState) + 64;
         auto next = history_.lower_bound(at);
-        for (auto it = next; it != history_.end(); ++it) historyBytes_ -= it->second.size() * sizeof(BlockState) + 64;
-        history_.erase(next, history_.end()); history_[at] = model_.State(); historyBytes_ += bytes;
+        for (auto it = next; it != history_.end(); ++it) historyBytes_ -= it->second.state_.size() * sizeof(BlockState) + 64;
+        history_.erase(next, history_.end()); history_[at] = {model_.State(), model_.ReviewRequired()}; historyBytes_ += bytes;
         // Keep native text Undo intact. Older metadata beyond the budget becomes
         // untrusted if revisited, requiring explicit whole-result review or recompare.
         while (historyBytes_ > historyLimit_ && history_.size() > 1)
-        { auto it = history_.begin(); historyBytes_ -= it->second.size() * sizeof(BlockState) + 64; history_.erase(it); }
+        { auto it = history_.begin(); historyBytes_ -= it->second.state_.size() * sizeof(BlockState) + 64; history_.erase(it); }
     }
     void MergeController::modified(int Type, std::size_t Position, std::size_t Length)
     {
@@ -33,7 +33,7 @@ namespace hc::compare
         {
             if (!(Type & SC_LASTSTEPINUNDOREDO)) return;
             const auto at = history_.find(static_cast<int>(editor_->send(SCI_GETUNDOCURRENT)));
-            if (at == history_.end()) model_.Invalidate(); else model_.Restore(at->second);
+            if (at == history_.end()) model_.Invalidate(); else model_.Restore(at->second.state_, at->second.reviewRequired_);
         }
         else if (Type & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))
         {
@@ -77,7 +77,16 @@ namespace hc::compare
         auto next = model_; next.SelectAll(Choice);
         replace(0, std::size_t(editor_->send(SCI_GETLENGTH)), Text, std::move(next), Choice != Resolution::Manual);
     }
+    void MergeController::Refresh(std::shared_ptr<const MergePlan> Plan)
+    {
+        MergeModel next(std::move(Plan)); next.Restore(next.State(), true);
+        // Old text Undo remains available. Decisions from the old input generation
+        // cannot become trusted again by traversing its native Undo/Redo history.
+        history_.clear(); historyBytes_ = 0; model_ = std::move(next); saved_ = false;
+        remember();
+        if (changed_) changed_();
+    }
     void MergeController::MarkSaved() { saved_ = true; editor_->send(SCI_SETSAVEPOINT); if (changed_) changed_(); }
-    bool MergeController::Dirty() const { return editor_->send(SCI_GETMODIFY) != 0; }
+    bool MergeController::Dirty() const { return editor_->send(SCI_GETMODIFY) != 0 || model_.ReviewRequired(); }
     bool MergeController::Saved() const { return saved_ && !Dirty() && model_.UnresolvedCount() == 0; }
 }
