@@ -4,7 +4,9 @@
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
 #include "widgets/findBar.hpp"
+#include "widgets/overviewBar.hpp"
 #include <QtTest>
+#include <QtMath>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QSettings>
@@ -78,7 +80,120 @@ private slots:
     {
         QSettings settings; settings.setValue("view/alignSourceRows", false);
         settings.setValue("view/inlineHighlights", true);
+        settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void overviewNavigationAndAppearance()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
+        const auto a = lines(0, 1000);
+        const auto b = QByteArray("inserted\r\n") + lines(0, 180) + lines(180, 240, "changed") + lines(240, 600) + lines(640, 1000) + "tail\r\n";
+        write(r.file1_, a); write(r.file2_, b);
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        auto* bar = window.findChild<OverviewBar*>(); QVERIFY(bar); QTRY_VERIFY(bar->isVisible());
+        QVERIFY(!bar->accessibleName().isEmpty()); QVERIFY(bar->width() >= 48);
+        left->setFocus(); QTest::qWait(50);
+        left->send(SCI_SETSEL, 2, 8); right->send(SCI_SETSEL, 3, 9);
+        QTest::qWait(30); const auto initial = bar->grab().toImage();
+        // A one-bin insertion at BOF remains visible under the viewport marker.
+        const auto scale = initial.devicePixelRatio();
+        QCOMPARE(initial.pixelColor(qRound(bar->width() * 0.75 * scale), qCeil((bar->fontMetrics().height() + 8) * scale)), QColor("#31804b"));
+        QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2));
+        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, QPoint(bar->width() / 4, bar->height() / 2));
+        QTRY_VERIFY(left->send(SCI_GETFIRSTVISIBLELINE) > 400 && left->send(SCI_GETFIRSTVISIBLELINE) < 600);
+        QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), left->send(SCI_GETFIRSTVISIBLELINE));
+        QVERIFY(bar->hasFocus()); QVERIFY(initial != bar->grab().toImage());
+        QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2));
+        const auto before = left->send(SCI_GETFIRSTVISIBLELINE);
+        QTest::keyClick(bar, Qt::Key_PageDown); QVERIFY(left->send(SCI_GETFIRSTVISIBLELINE) > before);
+        const auto advanced = left->send(SCI_GETFIRSTVISIBLELINE);
+        QTest::keyClick(bar, Qt::Key_Up); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), advanced - 1);
+        QTest::keyClick(bar, Qt::Key_Down); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), advanced);
+        QTest::keyClick(bar, Qt::Key_PageUp); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), before);
+        QTest::keyClick(bar, Qt::Key_Home); QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        const auto map = AlignmentMap::Build(SplitLines(a.toStdString()).size(), SplitLines(b.toStdString()).size(), Diff(a.toStdString(), b.toStdString()));
+        QTest::keyClick(bar, Qt::Key_End); QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(map.RowCount()));
+        QTest::mousePress(bar, Qt::LeftButton, Qt::NoModifier, QPoint(bar->width() / 4, bar->height() * 3 / 4));
+        const QPoint drag(bar->width() / 4, bar->height() / 4);
+        QMouseEvent move(QEvent::MouseMove, QPointF(drag), QPointF(bar->mapToGlobal(drag)), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(bar, &move); QTest::mouseRelease(bar, Qt::LeftButton, Qt::NoModifier, drag);
+        QTRY_VERIFY(left->send(SCI_GETFIRSTVISIBLELINE) < 300);
+        action(window, "왼쪽·오른쪽 표시 줄 정렬")->setChecked(false);
+        action(window, "왼쪽·오른쪽 스크롤 동기화")->setChecked(false);
+        QTest::keyClick(bar, Qt::Key_Right); QTest::keyClick(bar, Qt::Key_Home);
+        const auto leftTop = left->send(SCI_GETFIRSTVISIBLELINE);
+        QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0)); QVERIFY(leftTop > 0);
+        QTest::keyClick(bar, Qt::Key_End); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(map.LineCount(1)));
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), leftTop);
+        QTest::keyClick(bar, Qt::Key_Left); QTest::keyClick(bar, Qt::Key_Home);
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2));
+        auto* toggle = action(window, "차이 개요 막대"); toggle->setChecked(false); QVERIFY(bar->isHidden());
+        toggle->setChecked(true); QTRY_VERIFY(bar->isVisible());
+        QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2)); QCOMPARE(left->send(SCI_GETCURRENTPOS), sptr_t(8));
+        QCOMPARE(right->send(SCI_GETANCHOR), sptr_t(3)); QCOMPARE(right->send(SCI_GETCURRENTPOS), sptr_t(9));
+        for (auto* editor : {left, right}) { QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0)); }
+        QCOMPARE(contents(left), a); QCOMPARE(contents(right), b);
+        left->send(SCI_SETFIRSTVISIBLELINE, 170); right->send(SCI_SETFIRSTVISIBLELINE, 171);
+        QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/overview-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/overview-dark.png")); window.close();
+    }
+    void overviewRecompareAndMergePreservation()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.base_ = dir.filePath("base.cpp"); r.output_ = dir.filePath("out.cpp");
+        const auto a = lines(0, 500), b = lines(0, 200) + QByteArray("right\r\n") + lines(201, 500);
+        write(r.file1_, a); write(r.file2_, b); write(r.base_, lines(0, 200) + QByteArray("base\r\n") + lines(201, 500));
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* base = window.findChild<ScintillaEditBase*>("BASE");
+        auto* left = window.findChild<ScintillaEditBase*>("LEFT"); auto* bar = window.findChild<OverviewBar*>();
+        action(window, "왼쪽 전체 선택")->trigger(); output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n"));
+        const auto text = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        auto* tree = window.findChild<QTreeWidget*>("compareChanges"); QVERIFY(tree->topLevelItem(0));
+        const auto decision = tree->topLevelItem(0)->text(3);
+        output->send(SCI_SETFIRSTVISIBLELINE, 20); base->send(SCI_SETFIRSTVISIBLELINE, 15);
+        bar->setFocus(); QTest::keyClick(bar, Qt::Key_End);
+        QCOMPARE(output->send(SCI_GETFIRSTVISIBLELINE), sptr_t(20)); QCOMPARE(base->send(SCI_GETFIRSTVISIBLELINE), sptr_t(15));
+        QCOMPARE(tree->topLevelItem(0)->text(3), decision); QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        write(r.file1_, "short left"); write(r.file2_, "short right"); action(window, "다시 비교")->trigger();
+        QVERIFY(!bar->isEnabled()); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QVERIFY(bar->isEnabled()); QTest::keyClick(bar, Qt::Key_End);
+        QVERIFY(left->send(SCI_GETFIRSTVISIBLELINE) <= 1); QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        QVERIFY(QFile::remove(r.file1_)); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QVERIFY(bar->isEnabled()); QTest::keyClick(bar, Qt::Key_Home); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QCOMPARE(contents(output), text); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        write(r.file1_, "short left"); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), text); window.close();
+    }
+    void overviewEmptyDisabledAndLifetime()
+    {
+        CompareWindow empty(Request{}); empty.show(); auto* emptyBar = empty.findChild<OverviewBar*>();
+        QVERIFY(emptyBar->isHidden()); QVERIFY(!action(empty, "차이 개요 막대")->isEnabled()); empty.close();
+        QTemporaryDir dir; QDir{}.mkpath(dir.filePath("one")); QDir{}.mkpath(dir.filePath("two"));
+        Request r; r.file1_ = dir.filePath("one"); r.file2_ = dir.filePath("two"); r.mode_ = "directory";
+        CompareWindow directory(r); directory.show();
+        QTRY_VERIFY_WITH_TIMEOUT(directory.findChild<QLabel*>("compareStatus")->text().contains("directory2"), 10000);
+        QVERIFY(directory.findChild<OverviewBar*>()->isHidden()); QVERIFY(!action(directory, "차이 개요 막대")->isEnabled()); directory.close();
+        auto* left = new ScintillaEditBase; auto* right = new ScintillaEditBase;
+        setText(*left, ""); setText(*right, "abc"); left->send(SCI_SETENDATLASTLINE, 0); right->send(SCI_SETENDATLASTLINE, 0);
+        auto map = std::make_shared<AlignmentMap>(AlignmentMap::Build(0, 1, {{0, 0, 0, 1, {}}}));
+        OverviewBar bar(nullptr); bar.resize(60, 200); bar.SetSession(left, right, map); bar.show();
+        QTest::keyClick(&bar, Qt::Key_End); QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        QTest::keyClick(&bar, Qt::Key_Right); bar.setEnabled(false); const auto before = right->send(SCI_GETFIRSTVISIBLELINE);
+        QKeyEvent attempt(QEvent::KeyPress, Qt::Key_End, Qt::NoModifier); QApplication::sendEvent(&bar, &attempt);
+        QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), before);
+        bar.setEnabled(true); delete left; QVERIFY(bar.isHidden());
+        bar.SetSession(nullptr, nullptr, {}); delete right; bar.resize(48, 16); bar.show();
+        QApplication::sendEvent(&bar, &attempt); QVERIFY(!bar.grab().isNull()); bar.close();
     }
     void inlineHighlightsThemeSearchAndToggle()
     {

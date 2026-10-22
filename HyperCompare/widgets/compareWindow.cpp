@@ -3,6 +3,7 @@
 #include "mergeController.hpp"
 #include "scrollSynchronizer.hpp"
 #include "findBar.hpp"
+#include "overviewBar.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -20,6 +21,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QtConcurrentRun>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
@@ -56,8 +58,11 @@ namespace hc::compare
         uiFont_ = qApp->font(); uiFont_.fromString(settings.value("fonts/ui", uiFont_.toString()).toString());
         listFont_ = uiFont_; listFont_.fromString(settings.value("fonts/list", listFont_.toString()).toString());
         textFont_ = QFont("Cascadia Mono", 11); textFont_.fromString(settings.value("fonts/text", textFont_.toString()).toString());
-        auto* layout = new QSplitter(Qt::Vertical, this); panes_ = new QSplitter(Qt::Horizontal, layout);
-        changes_ = new QTreeWidget(layout); layout->addWidget(panes_); layout->addWidget(changes_);
+        auto* layout = new QSplitter(Qt::Vertical, this);
+        auto* sources = new QWidget(layout); auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
+        panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);
+        row->addWidget(panes_, 1); row->addWidget(overview_);
+        changes_ = new QTreeWidget(layout); layout->addWidget(sources); layout->addWidget(changes_);
         panes_->setChildrenCollapsible(false); layout->setChildrenCollapsible(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽")});
         changes_->setObjectName("compareChanges");
@@ -122,7 +127,7 @@ namespace hc::compare
         alignRows_->setToolTip(tr("두 원본의 대응 줄을 빈 여백으로 맞춥니다. 여백은 복사하거나 저장하는 텍스트에 포함되지 않습니다."));
         connect(alignRows_, &QAction::toggled, this, [this](bool Enabled) {
             QSettings{}.setValue("view/alignSourceRows", Enabled);
-            if (scroll_ && !busy()) scroll_->SetAligned(Enabled);
+            if (scroll_ && !busy()) { scroll_->SetAligned(Enabled); overview_->SetAligned(Enabled); }
         });
         syncScroll_ = viewMenu->addAction(tr("왼쪽·오른쪽 스크롤 동기화")); syncScroll_->setCheckable(true);
         syncScroll_->setChecked(settings.value("view/synchronizeSources", true).toBool()); syncScroll_->setEnabled(false);
@@ -140,6 +145,14 @@ namespace hc::compare
         inlineHighlights_->setToolTip(tr("첫 번째와 두 번째 원본의 변경 줄을 순서대로 짝지어 문자 차이를 표시합니다. 긴 줄은 줄 단위 표시를 유지합니다."));
         connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
             QSettings{}.setValue("view/inlineHighlights", Enabled); applyInlineHighlights();
+        });
+        showOverview_ = viewMenu->addAction(tr("차이 개요 막대")); showOverview_->setCheckable(true);
+        showOverview_->setChecked(settings.value("view/overview", true).toBool()); showOverview_->setEnabled(false);
+        connect(showOverview_, &QAction::toggled, this, [this](bool Enabled) {
+            // Hiding the focused bar must not focus the change list: its first
+            // current-item event would navigate and replace source selections.
+            if (!Enabled && overview_->hasFocus()) overview_->FocusSource();
+            QSettings{}.setValue("view/overview", Enabled); overview_->setVisible(Enabled && scroll_);
         });
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
         connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
@@ -259,6 +272,7 @@ namespace hc::compare
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
             if (scroll_) scroll_->SetMap(result_.alignment_);
+            overview_->SetSession(editors_[0], editors_[1], result_.alignment_);
             showBlocks(); merge_->Refresh(result_.plan_); applyAppearance();
         }
         updateMerge();
@@ -295,6 +309,7 @@ namespace hc::compare
     {
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
+        overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
         delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
         inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
@@ -320,6 +335,8 @@ namespace hc::compare
             {
                 scroll_ = new ScrollSynchronizer(editors_[0], editors_[1], result_.alignment_, this);
                 scroll_->SetAligned(alignRows_->isChecked());
+                overview_->SetAligned(alignRows_->isChecked());
+                overview_->SetSession(editors_[0], editors_[1], result_.alignment_);
                 // Initial view includes any leading insertion gap.
                 editors_[0]->send(SCI_SETFIRSTVISIBLELINE, 0); editors_[1]->send(SCI_SETFIRSTVISIBLELINE, 0);
             }
@@ -373,6 +390,8 @@ namespace hc::compare
         find_->SetBusy(busy()); for (auto* action : findActions_) action->setEnabled(searchable);
         syncScroll_->setEnabled(scroll_ && !busy());
         alignRows_->setEnabled(scroll_ && !busy());
+        showOverview_->setEnabled(scroll_ != nullptr);
+        overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
@@ -513,7 +532,7 @@ namespace hc::compare
             editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
             editor->send(SCI_COLOURISE, 0, -1);
         }
-        applyInlineHighlights();
+        applyInlineHighlights(); overview_->SetDark(dark_);
         QSettings settings; settings.setValue("theme/dark", dark_); settings.setValue("fonts/ui", uiFont_.toString());
         settings.setValue("fonts/list", listFont_.toString()); settings.setValue("fonts/text", textFont_.toString());
     }

@@ -1,7 +1,8 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
-    core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp)
+    core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
+    core/overviewMap.cpp core/overviewMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
@@ -21,7 +22,7 @@ target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
-    widgets/findBar.cpp widgets/findBar.hpp)
+    widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
 target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 

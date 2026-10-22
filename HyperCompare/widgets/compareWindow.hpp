@@ -21,6 +21,7 @@ namespace hc::compare
     class MergeController;
     class ScrollSynchronizer;
     class FindBar;
+    class OverviewBar;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -62,6 +63,7 @@ namespace hc::compare
         MergeController* merge_ = nullptr;
         ScrollSynchronizer* scroll_ = nullptr;
         FindBar* find_ = nullptr;
+        OverviewBar* overview_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
@@ -76,6 +78,7 @@ namespace hc::compare
         QAction* syncScroll_ = nullptr;
         QAction* alignRows_ = nullptr;
         QAction* inlineHighlights_ = nullptr;
+        QAction* showOverview_ = nullptr;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QVector<QAction*> findActions_;

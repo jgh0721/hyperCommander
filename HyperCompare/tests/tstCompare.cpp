@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "core/compare.hpp"
+#include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
@@ -30,6 +31,81 @@ private:
         return row.back();
     }
 private slots:
+    void overviewTypesAndBoundaries()
+    {
+        const auto insertion = AlignmentMap::Build(0, 3, {{0, 0, 0, 3, {}}});
+        const auto aligned = BuildOverviewRaster(insertion, 4, true);
+        QCOMPARE(aligned.rows_, (std::array<std::size_t, 2>{4, 4}));
+        QCOMPARE(aligned.bands_[0], (std::vector<std::uint8_t>{Gap, Gap, Gap, 0}));
+        QCOMPARE(aligned.bands_[1], (std::vector<std::uint8_t>{Added, Added, Added, 0}));
+        const auto plain = BuildOverviewRaster(insertion, 4, false);
+        QCOMPARE(plain.rows_, (std::array<std::size_t, 2>{1, 4}));
+        QCOMPARE(plain.bands_[0], (std::vector<std::uint8_t>{Gap, 0, 0, 0}));
+        const auto deletion = BuildOverviewRaster(AlignmentMap::Build(3, 0, {{0, 3, 0, 0, {}}}), 4, true);
+        QCOMPARE(deletion.bands_[0], (std::vector<std::uint8_t>{Removed, Removed, Removed, 0}));
+        QCOMPARE(deletion.bands_[1], aligned.bands_[0]);
+        const auto unequal = BuildOverviewRaster(AlignmentMap::Build(2, 3, {{0, 2, 0, 3, {}}}), 4, true);
+        QCOMPARE(unequal.bands_[0], (std::vector<std::uint8_t>{Modified, Modified, Gap, 0}));
+        QCOMPARE(unequal.bands_[1], (std::vector<std::uint8_t>{Modified, Modified, Modified, 0}));
+        const auto mixed = BuildOverviewRaster(AlignmentMap::Build(2, 2, {{0, 1, 0, 0, {}}, {2, 2, 1, 2, {}}}), 1, false);
+        QCOMPARE(mixed.bands_[0], (std::vector<std::uint8_t>{Removed | Gap}));
+        QCOMPARE(mixed.bands_[1], (std::vector<std::uint8_t>{Added | Gap}));
+        const auto empty = BuildOverviewRaster(AlignmentMap::Build(0, 0, {}), 1, true);
+        QCOMPARE(empty.rows_[0], std::size_t(1)); QCOMPARE(empty.bands_[0], (std::vector<std::uint8_t>{0}));
+        QVERIFY(BuildOverviewRaster(insertion, 0, true).bands_[0].empty());
+    }
+    void overviewProjectionCoverage()
+    {
+        std::mt19937 rng(0x0be71e);
+        for (int trial = 0; trial < 1000; ++trial)
+        {
+            std::string a, b;
+            for (auto n = rng() % 15; n > 0; --n) a += std::string(1, char('a' + rng() % 5)) + '\n';
+            for (auto n = rng() % 15; n > 0; --n) b += std::string(1, char('a' + rng() % 5)) + '\n';
+            const auto map = AlignmentMap::Build(SplitLines(a).size(), SplitLines(b).size(), Diff(a, b));
+            const std::size_t pixels = 1 + rng() % 30;
+            for (bool align : {false, true})
+            {
+                const auto raster = BuildOverviewRaster(map, pixels, align);
+                for (unsigned side = 0; side < 2; ++side)
+                {
+                    struct Span { std::size_t first, last; std::uint8_t kind; };
+                    std::vector<Span> spans;
+                    for (const auto& run : map.Runs())
+                    {
+                        if (!run.changed_) continue;
+                        const auto own = run.end_[side] - run.begin_[side], other = run.end_[1 - side] - run.begin_[1 - side];
+                        const auto begin = align ? run.rowBegin_ : run.begin_[side];
+                        if (own) spans.push_back({begin, begin + own, std::uint8_t(other ? Modified : side ? Added : Removed)});
+                        if (own < other) spans.push_back({begin + own, align ? run.rowEnd_ : begin + own, Gap});
+                    }
+                    // Independent interval-intersection oracle for every bin.
+                    for (std::size_t p = 0; p < pixels; ++p)
+                    {
+                        std::uint8_t expected = 0; const auto rows = raster.rows_[side];
+                        for (const auto& span : spans)
+                        {
+                            const bool overlaps = span.first == span.last ? span.first * pixels / rows == p :
+                                span.first * pixels < (p + 1) * rows && p * rows < span.last * pixels;
+                            if (overlaps) expected |= span.kind;
+                        }
+                        QCOMPARE(raster.bands_[side][p], expected);
+                    }
+                }
+            }
+        }
+    }
+    void overviewLargeMapBoundedRaster()
+    {
+        std::vector<Edit> edits;
+        for (std::size_t line = 0; line < 200000; line += 2) edits.push_back({line, line + 1, line, line + 1, {}});
+        const auto map = AlignmentMap::Build(200000, 200000, edits);
+        QElapsedTimer timer; timer.start(); const auto raster = BuildOverviewRaster(map, 1000000, true);
+        QCOMPARE(raster.bands_[0].size(), std::size_t(4096)); QCOMPARE(raster.bands_[1].size(), std::size_t(4096));
+        QCOMPARE(raster.rows_[0], std::size_t(200001));
+        for (auto flags : raster.bands_[0]) QCOMPARE(flags, std::uint8_t(Modified));
+        qInfo("Overview 100000 changes: %lld us, %zu output bins", timer.nsecsElapsed() / 1000, raster.bands_[0].size() + raster.bands_[1].size());
+    }
     void inlineRangesUnicodeAndLineEndings()
     {
         const std::string a = "head\r\naXbcYd\r\n한글😀 끝\r\ntail\n", b = "head\r\naQbcRd\r\n한굴😃 끝\r\ntail\n";
