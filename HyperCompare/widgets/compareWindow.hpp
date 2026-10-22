@@ -67,6 +67,7 @@ namespace hc::compare
         QAction* redo_ = nullptr;
         QAction* baseChoice_ = nullptr;
         QAction* syncScroll_ = nullptr;
+        QAction* alignRows_ = nullptr;
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QFont uiFont_, listFont_, textFont_;

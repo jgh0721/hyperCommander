@@ -23,7 +23,32 @@ namespace hc::compare
         }
         if (LeftLines - left != RightLines - right) throw Failure("InvalidAlignmentEdits");
         if (LeftLines > left) map.runs_.push_back({{left, right}, {LeftLines, RightLines}, false});
+        for (auto& run : map.runs_)
+        {
+            Limits.Check(); run.rowBegin_ = map.rows_;
+            map.rows_ += std::max(run.end_[0] - run.begin_[0], run.end_[1] - run.begin_[1]);
+            run.rowEnd_ = map.rows_;
+        }
         Limits.Check(); return map;
+    }
+    std::size_t AlignmentMap::DisplayRow(unsigned Side, std::size_t Line) const
+    {
+        if (Side > 1) throw Failure("InvalidAlignmentSide");
+        if (Line > lines_[Side]) throw Failure("InvalidAlignmentLine");
+        if (Line == lines_[Side]) return rows_;
+        const auto run = std::upper_bound(runs_.begin(), runs_.end(), Line,
+            [Side](std::size_t At, const AlignmentRun& Run) { return At < Run.end_[Side]; });
+        return run->rowBegin_ + Line - run->begin_[Side];
+    }
+    std::optional<std::size_t> AlignmentMap::LineAtRow(unsigned Side, std::size_t Row) const
+    {
+        if (Side > 1) throw Failure("InvalidAlignmentSide");
+        if (Row >= rows_) return std::nullopt;
+        const auto run = std::upper_bound(runs_.begin(), runs_.end(), Row,
+            [](std::size_t At, const AlignmentRun& Run) { return At < Run.rowEnd_; });
+        const auto offset = Row - run->rowBegin_;
+        if (offset >= run->end_[Side] - run->begin_[Side]) return std::nullopt;
+        return run->begin_[Side] + offset;
     }
     std::size_t AlignmentMap::MapLine(unsigned FromSide, std::size_t Line) const
     {

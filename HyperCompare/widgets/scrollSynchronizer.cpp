@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "scrollSynchronizer.hpp"
+#include "scintillaPadding.hpp"
 #include <ScintillaEditBase.h>
 #include <algorithm>
 
@@ -26,7 +27,60 @@ namespace hc::compare
     ScrollSynchronizer::View ScrollSynchronizer::view(unsigned Side) const
     { return {editors_[Side]->send(SCI_GETFIRSTVISIBLELINE), editors_[Side]->send(SCI_GETXOFFSET)}; }
     void ScrollSynchronizer::remember() { for (unsigned side = 0; side < 2; ++side) known_[side] = view(side); }
-    void ScrollSynchronizer::SetMap(std::shared_ptr<const AlignmentMap> Map) { map_ = std::move(Map); remember(); }
+    void ScrollSynchronizer::ClearPadding()
+    {
+        applying_ = true;
+        for (auto* editor : editors_) editor->send(ClearPaddingRows);
+        remember(); applying_ = false;
+    }
+    void ScrollSynchronizer::applyPadding()
+    {
+        if (!map_) return;
+        for (unsigned side = 0; side < 2; ++side)
+        {
+            auto* editor = editors_[side]; std::size_t leading = 0;
+            // Coalesce gaps at the same boundary without allocating per-row data.
+            std::vector<std::pair<std::size_t, std::size_t>> gaps;
+            for (const auto& run : map_->Runs())
+            {
+                const auto count = run.rowEnd_ - run.rowBegin_ - (run.end_[side] - run.begin_[side]);
+                if (!count) continue;
+                const auto end = run.end_[side];
+                if (!end) leading += count;
+                else if (!gaps.empty() && gaps.back().first == end - 1) gaps.back().second += count;
+                else gaps.emplace_back(end - 1, count);
+            }
+            // Scintilla has a final empty document line only after EOL (and for
+            // empty files). Give other files one virtual EOF row as well.
+            const auto lines = map_->LineCount(side);
+            if (lines && std::size_t(editor->send(SCI_GETLINECOUNT)) == lines)
+            {
+                if (!gaps.empty() && gaps.back().first == lines - 1) ++gaps.back().second;
+                else gaps.emplace_back(lines - 1, 1);
+            }
+            for (const auto& [line, count] : gaps) editor->send(SetTrailingRows, line, sptr_t(count));
+            editor->send(SetLeadingRows, leading);
+        }
+    }
+    void ScrollSynchronizer::SetAligned(bool Aligned)
+    {
+        if (aligned_ == Aligned) return;
+        std::array<std::size_t, 2> lines{};
+        for (unsigned side = 0; side < 2; ++side)
+            lines[side] = std::size_t(editors_[side]->send(SCI_DOCLINEFROMVISIBLE, uptr_t(view(side).top_)));
+        ClearPadding(); applying_ = true; aligned_ = Aligned;
+        if (aligned_) applyPadding();
+        for (unsigned side = 0; side < 2; ++side) move(side, lines[side]);
+        remember(); applying_ = false;
+        if (enabled_) Synchronize(0);
+    }
+    void ScrollSynchronizer::SetMap(std::shared_ptr<const AlignmentMap> Map)
+    {
+        ClearPadding(); applying_ = true; map_ = std::move(Map);
+        if (aligned_) applyPadding();
+        for (auto* editor : editors_) editor->send(SCI_SETFIRSTVISIBLELINE, 0);
+        remember(); applying_ = false;
+    }
     void ScrollSynchronizer::SetEnabled(bool Enabled)
     { if (enabled_ != Enabled) { enabled_ = Enabled; remember(); } }
     void ScrollSynchronizer::move(unsigned Side, std::size_t Line)
@@ -45,8 +99,12 @@ namespace hc::compare
         applying_ = true;
         if (vertical)
         {
-            const auto line = editors_[Side]->send(SCI_DOCLINEFROMVISIBLE, uptr_t(current.top_));
-            move(1 - Side, map_->MapLine(Side, std::size_t(std::max<sptr_t>(0, line))));
+            if (aligned_) editors_[1 - Side]->send(SCI_SETFIRSTVISIBLELINE, uptr_t(current.top_));
+            else
+            {
+                const auto line = editors_[Side]->send(SCI_DOCLINEFROMVISIBLE, uptr_t(current.top_));
+                move(1 - Side, map_->MapLine(Side, std::size_t(std::max<sptr_t>(0, line))));
+            }
         }
         if (horizontal) editors_[1 - Side]->send(SCI_SETXOFFSET, uptr_t(current.x_));
         // SCN_UPDATEUI may arrive later during painting. Cache the actual target
@@ -65,6 +123,14 @@ namespace hc::compare
         for (unsigned side = 0; side < 2; ++side)
         {
             editors_[side]->send(SCI_GOTOLINE, lines[side]); move(side, lines[side]);
+        }
+        if (aligned_ && map_)
+        {
+            // A zero-length insertion anchor maps to the following real line.
+            // Show the earlier row so navigation includes its virtual gap.
+            const auto row = std::min(map_->DisplayRow(0, std::min(LeftLine, map_->LineCount(0))),
+                map_->DisplayRow(1, std::min(RightLine, map_->LineCount(1))));
+            for (auto* editor : editors_) editor->send(SCI_SETFIRSTVISIBLELINE, row);
         }
         remember(); applying_ = false;
     }

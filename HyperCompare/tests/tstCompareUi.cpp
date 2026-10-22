@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
 #include "widgets/mergeController.hpp"
+#include "widgets/scrollSynchronizer.hpp"
+#include "widgets/scintillaPadding.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -68,6 +70,123 @@ private slots:
         QCoreApplication::setOrganizationName("HyperCompareTests"); QCoreApplication::setApplicationName("UI");
         QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
         auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(*qApp);
+    }
+    void init() { QSettings{}.setValue("view/alignSourceRows", false); }
+    void alignedSourceRowsAndEngineBoundaries()
+    {
+        const std::vector<std::pair<std::string, std::string>> cases{
+            {"a\r\nb\nc\nz", "prefix\na\r\nB\nC\nD\nz\ntail"}, {"", "one\ntwo\n"}, {"one", ""},
+            {"", ""}, {"a\n", "a\nextra"}, {"a", "a\nextra\n"}, {"a\nb\n", "b\n"},
+            {"한글😀\r\n끝", "머리\n한글😀\r\n추가\n끝"}};
+        for (const auto& [a, b] : cases)
+        {
+            ScintillaEditBase left, right; left.resize(400, 250); right.resize(400, 250);
+            setText(left, a); setText(right, b); left.send(SCI_SETREADONLY, 1); right.send(SCI_SETREADONLY, 1);
+            auto map = std::make_shared<AlignmentMap>(AlignmentMap::Build(SplitLines(a).size(), SplitLines(b).size(), Diff(a, b)));
+            ScrollSynchronizer scroll(&left, &right, map, &left); scroll.SetAligned(true); scroll.SetEnabled(true);
+            left.show(); right.show(); QTest::qWait(20);
+            const std::array<ScintillaEditBase*, 2> editors{&left, &right};
+            for (unsigned side = 0; side < 2; ++side)
+            {
+                auto* editor = editors[side];
+                for (std::size_t line = 0; line < map->LineCount(side); ++line)
+                    QCOMPARE(editor->send(SCI_VISIBLEFROMDOCLINE, line), sptr_t(map->DisplayRow(side, line)));
+                // Both panes include one EOF display row, even without a final newline.
+                const auto count = editor->send(SCI_GETLINECOUNT);
+                QCOMPARE(editor->send(SCI_VISIBLEFROMDOCLINE, uptr_t(count)), sptr_t(map->RowCount() + 1));
+                editor->send(SCI_SELECTALL);
+                QByteArray selected(qsizetype(editor->send(SCI_GETSELTEXT)) + 1, '\0');
+                editor->send(SCI_GETSELTEXT, 0, reinterpret_cast<sptr_t>(selected.data())); selected.chop(1);
+                QCOMPARE(selected, QByteArray::fromStdString(side ? b : a));
+                QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0));
+            }
+            // Enabling the observer does not choose a leader; establish the
+            // initial common view as the window does before testing gestures.
+            scroll.Synchronize(0);
+            for (std::size_t row = 0; row <= map->RowCount(); ++row)
+            {
+                left.verticalScrollBar()->setValue(int(row));
+                QTRY_VERIFY2_WITH_TIMEOUT(right.send(SCI_GETFIRSTVISIBLELINE) == sptr_t(row),
+                    qPrintable(QString("a=%1 b=%2 row=%3 left=%4 right=%5 bar=%6")
+                        .arg(QString::fromStdString(a), QString::fromStdString(b)).arg(row)
+                        .arg(left.send(SCI_GETFIRSTVISIBLELINE)).arg(right.send(SCI_GETFIRSTVISIBLELINE)).arg(left.verticalScrollBar()->value())), 1000);
+            }
+            scroll.Reveal(0, 0); QCOMPARE(left.send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+            if (left.send(GetLeadingRows))
+            {
+                QCOMPARE(left.send(SCI_POSITIONFROMPOINTCLOSE, 80, 1), sptr_t(-1));
+                QTest::mouseClick(left.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(80, 1));
+                QCOMPARE(left.send(SCI_GETCURRENTPOS), sptr_t(0));
+            }
+            scroll.SetAligned(false);
+            for (auto* editor : editors)
+            {
+                QCOMPARE(editor->send(GetLeadingRows), sptr_t(0));
+                const auto count = editor->send(SCI_GETLINECOUNT);
+                QCOMPARE(editor->send(SCI_VISIBLEFROMDOCLINE, uptr_t(count)), count);
+            }
+            QCOMPARE(contents(&left), QByteArray::fromStdString(a)); QCOMPARE(contents(&right), QByteArray::fromStdString(b));
+        }
+        // A large gap must neither overflow Scintilla's 16-bit annotation count
+        // nor allocate/scan an annotation string for every painted blank row.
+        ScintillaEditBase editor; setText(editor, "first\nlast"); editor.send(SCI_SETREADONLY, 1); editor.resize(500, 300); editor.show();
+        QTest::qWait(20); QElapsedTimer timer; timer.start();
+        QCOMPARE(editor.send(SetLeadingRows, 90000), sptr_t(0)); QCOMPARE(editor.send(SetTrailingRows, 0, 150000), sptr_t(0));
+        QCOMPARE(editor.send(SCI_VISIBLEFROMDOCLINE, 1), sptr_t(240001));
+        editor.send(SCI_SETFIRSTVISIBLELINE, 200000); editor.repaint(); QTest::qWait(20);
+        QCOMPARE(editor.send(SCI_DOCLINEFROMVISIBLE, 200000), sptr_t(0));
+        editor.send(SCI_STYLESETSIZE, STYLE_DEFAULT, 19); editor.repaint(); QTest::qWait(20);
+        QCOMPARE(editor.send(SCI_VISIBLEFROMDOCLINE, 1), sptr_t(240001));
+        qInfo("Sparse padding: 90000 leading + 150000 trailing rows, layout/paint/font change %lld ms (including 40 ms waits)", timer.elapsed());
+        editor.send(ClearPaddingRows); QCOMPARE(editor.send(SCI_VISIBLEFROMDOCLINE, 1), sptr_t(1));
+        QCOMPARE(editor.send(SetLeadingRows, 2000001), sptr_t(-1));
+        editor.send(SCI_SETREADONLY, 0); QCOMPARE(editor.send(SetLeadingRows, 2), sptr_t(-1));
+        QCOMPARE(contents(&editor), QByteArray("first\nlast")); QCOMPARE(editor.send(SCI_CANUNDO), sptr_t(0));
+    }
+    void alignedWindowRecompareAndSave()
+    {
+        QSettings{}.remove("view/alignSourceRows"); // Product default: enabled.
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
+        r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp"); r.theme_ = "light";
+        const auto text = lines(0, 120); write(r.file1_, text);
+        write(r.file2_, lines(0, 5, "prefix") + lines(0, 40) + lines(0, 7, "insert") + lines(40, 120));
+        CompareWindow window(r); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("LEFT"); auto* right = window.findChild<ScintillaEditBase*>("RIGHT");
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* cancel = action(window, "취소");
+        auto* aligned = action(window, "왼쪽·오른쪽 표시 줄 정렬"); QVERIFY(aligned && aligned->isChecked());
+        action(window, "왼쪽·오른쪽 스크롤 동기화")->setChecked(true);
+        QTRY_COMPARE(left->send(SCI_VISIBLEFROMDOCLINE, 40), sptr_t(52));
+        QCOMPARE(right->send(SCI_VISIBLEFROMDOCLINE, 52), sptr_t(52));
+        left->verticalScrollBar()->setValue(47); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(47));
+        const auto leftPos = left->send(SCI_POSITIONFROMLINE, 40), rightPos = right->send(SCI_POSITIONFROMLINE, 52);
+        QCOMPARE(left->send(SCI_POINTYFROMPOSITION, 0, leftPos), right->send(SCI_POINTYFROMPOSITION, 0, rightPos));
+        output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n"));
+        const auto result = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        action(window, "Dark")->setChecked(true); window.repaint(); QTest::qWait(40);
+        QVERIFY(window.grab().save("aligned-rows-dark.png"));
+        QCOMPARE(left->send(SCI_POINTYFROMPOSITION, 0, leftPos), right->send(SCI_POINTYFROMPOSITION, 0, rightPos));
+        action(window, "Dark")->setChecked(false); left->verticalScrollBar()->setValue(0); window.repaint(); QTest::qWait(40);
+        QVERIFY(window.grab().save("aligned-rows-light.png"));
+        action(window, "다음 차이")->trigger();
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(45)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(45));
+        action(window, "다음 차이")->trigger();
+        QCOMPARE(left->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0)); QCOMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+        left->setFocus(); QTest::keyClick(left, Qt::Key_PageDown);
+        QTRY_COMPARE(left->send(SCI_GETFIRSTVISIBLELINE), right->send(SCI_GETFIRSTVISIBLELINE));
+        aligned->setChecked(false); QCOMPARE(left->send(SCI_VISIBLEFROMDOCLINE, 40), sptr_t(40));
+        aligned->setChecked(true); QCOMPARE(left->send(SCI_VISIBLEFROMDOCLINE, 40), sptr_t(52));
+        QCOMPARE(contents(output), result); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        write(r.file1_, text); write(r.file2_, lines(0, 3, "new") + text);
+        action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000);
+        QCOMPARE(left->send(GetLeadingRows), sptr_t(3)); QCOMPARE(left->send(SCI_VISIBLEFROMDOCLINE, 40), sptr_t(43));
+        QCOMPARE(contents(output), result); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        QVERIFY(QFile::rename(r.file2_, r.file2_ + ".away")); action(window, "다시 비교")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!cancel->isEnabled(), 10000); QCOMPARE(left->send(SCI_VISIBLEFROMDOCLINE, 40), sptr_t(43));
+        QVERIFY(QFile::rename(r.file2_ + ".away", r.file2_)); action(window, "전체 수동 완료")->trigger();
+        action(window, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
+        QFile file(r.output_); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), result);
+        QCOMPARE(contents(left), text); window.close();
     }
     void sourceScrollCorrespondenceAndNavigation()
     {

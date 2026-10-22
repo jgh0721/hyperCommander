@@ -47,6 +47,23 @@ private slots:
         QCOMPARE(eof.MapLine(0, 0), std::size_t(0)); QCOMPARE(eof.MapLine(0, 1), std::size_t(2));
         QVERIFY_EXCEPTION_THROWN(map.MapLine(2, 0), Failure);
     }
+    void alignmentDisplayRows()
+    {
+        const auto map = AlignmentMap::Build(4, 7, Diff("a\nb\nc\nz\n", "prefix\na\nB\nC\nD\nz\ntail"));
+        QCOMPARE(map.RowCount(), std::size_t(7));
+        const std::array<std::size_t, 5> rows{1, 2, 3, 5, 7};
+        for (std::size_t line = 0; line < rows.size(); ++line) QCOMPARE(map.DisplayRow(0, line), rows[line]);
+        for (const auto row : {0u, 4u, 6u, 7u}) QVERIFY(!map.LineAtRow(0, row));
+        QCOMPARE(*map.LineAtRow(0, 3), std::size_t(2));
+        QVERIFY_EXCEPTION_THROWN(map.DisplayRow(0, 5), Failure);
+        QVERIFY_EXCEPTION_THROWN(map.DisplayRow(2, 0), Failure);
+        QVERIFY_EXCEPTION_THROWN(map.LineAtRow(2, 0), Failure);
+        const auto empty = AlignmentMap::Build(0, 0, {});
+        QCOMPARE(empty.RowCount(), std::size_t(0)); QCOMPARE(empty.DisplayRow(1, 0), std::size_t(0)); QVERIFY(!empty.LineAtRow(0, 0));
+        const auto large = AlignmentMap::Build(1, 300000, {{1, 1, 1, 300000, {}}});
+        QCOMPARE(large.Runs().size(), std::size_t(2)); QCOMPARE(large.RowCount(), std::size_t(300000));
+        QVERIFY(!large.LineAtRow(0, 290000)); QCOMPARE(*large.LineAtRow(1, 290000), std::size_t(290000));
+    }
     void alignmentRandomCorrespondence()
     {
         std::mt19937 random(10959);
@@ -68,7 +85,12 @@ private slots:
                 for (std::size_t line = 0; line <= map.LineCount(side); ++line)
                 {
                     const auto target = map.MapLine(side, line); QVERIFY(target >= previous); QVERIFY(target <= map.LineCount(1 - side)); previous = target;
+                    if (line < map.LineCount(side)) QCOMPARE(*map.LineAtRow(side, map.DisplayRow(side, line)), line);
                 }
+                std::size_t nextLine = 0;
+                for (std::size_t row = 0; row < map.RowCount(); ++row)
+                    if (const auto line = map.LineAtRow(side, row)) QCOMPARE(*line, nextLine++);
+                QCOMPARE(nextLine, map.LineCount(side));
             }
             std::array<std::size_t, 2> end{};
             for (const auto& run : map.Runs())
@@ -78,6 +100,7 @@ private slots:
                 for (auto line = run.begin_[0]; line < run.end_[0]; ++line)
                 {
                     const auto other = map.MapLine(0, line); QCOMPARE(a[line], b[other]); QCOMPARE(map.MapLine(1, other), line);
+                    QCOMPARE(map.DisplayRow(0, line), map.DisplayRow(1, other));
                 }
             }
             QCOMPARE(end[0], a.size()); QCOMPARE(end[1], b.size());

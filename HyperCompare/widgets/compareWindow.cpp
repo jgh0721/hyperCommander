@@ -107,6 +107,13 @@ namespace hc::compare
         redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !busy()) output_->send(SCI_REDO); });
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
+        alignRows_ = viewMenu->addAction(tr("왼쪽·오른쪽 표시 줄 정렬")); alignRows_->setCheckable(true);
+        alignRows_->setChecked(settings.value("view/alignSourceRows", true).toBool()); alignRows_->setEnabled(false);
+        alignRows_->setToolTip(tr("두 원본의 대응 줄을 빈 여백으로 맞춥니다. 여백은 복사하거나 저장하는 텍스트에 포함되지 않습니다."));
+        connect(alignRows_, &QAction::toggled, this, [this](bool Enabled) {
+            QSettings{}.setValue("view/alignSourceRows", Enabled);
+            if (scroll_ && !busy()) scroll_->SetAligned(Enabled);
+        });
         syncScroll_ = viewMenu->addAction(tr("왼쪽·오른쪽 스크롤 동기화")); syncScroll_->setCheckable(true);
         syncScroll_->setChecked(settings.value("view/synchronizeSources", true).toBool()); syncScroll_->setEnabled(false);
         syncScroll_->setToolTip(tr("첫 번째와 두 번째 원본 패널의 대응 줄과 가로 위치를 함께 이동합니다."));
@@ -218,7 +225,7 @@ namespace hc::compare
         const bool changed = Value.inputsChanged_; result_ = std::move(Value);
         if (changed)
         {
-            if (scroll_) scroll_->SetEnabled(false);
+            if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
             for (qsizetype i = 0; i < result_.inputs_.size(); ++i)
             {
                 auto* editor = editors_[i]; editor->send(SCI_SETREADONLY, 0);
@@ -288,7 +295,13 @@ namespace hc::compare
                     QString(i == 0 ? "LEFT" : "RIGHT") : QString("FILE %1").arg(i + 1);
                 addPane(name, input.path_, input.utf8_, true);
             }
-            if (result_.alignment_) scroll_ = new ScrollSynchronizer(editors_[0], editors_[1], result_.alignment_, this);
+            if (result_.alignment_)
+            {
+                scroll_ = new ScrollSynchronizer(editors_[0], editors_[1], result_.alignment_, this);
+                scroll_->SetAligned(alignRows_->isChecked());
+                // Initial view includes any leading insertion gap.
+                editors_[0]->send(SCI_SETFIRSTVISIBLELINE, 0); editors_[1]->send(SCI_SETFIRSTVISIBLELINE, 0);
+            }
             for (std::size_t i = 0; i < result_.edits_.size(); ++i)
             {
                 const auto& edit = result_.edits_[i];
@@ -335,6 +348,7 @@ namespace hc::compare
     void CompareWindow::updateMerge()
     {
         syncScroll_->setEnabled(scroll_ && !busy());
+        alignRows_->setEnabled(scroll_ && !busy());
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);

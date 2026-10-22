@@ -13,6 +13,8 @@ namespace hc::compare
             std::shared_ptr<const AlignmentMap> Map, QObject* Parent);
         void SetEnabled(bool Enabled);
         void SetMap(std::shared_ptr<const AlignmentMap> Map);
+        void SetAligned(bool Aligned);
+        void ClearPadding();
         void Synchronize(unsigned FromSide);
         void Reveal(std::size_t LeftLine, std::size_t RightLine);
     private:
@@ -21,9 +23,10 @@ namespace hc::compare
         void remember();
         void changed(unsigned Side);
         void move(unsigned Side, std::size_t Line);
+        void applyPadding();
         std::array<ScintillaEditBase*, 2> editors_;
         std::array<View, 2> known_{};
         std::shared_ptr<const AlignmentMap> map_;
-        bool enabled_ = false, applying_ = false;
+        bool enabled_ = false, applying_ = false, aligned_ = false;
     };
 }

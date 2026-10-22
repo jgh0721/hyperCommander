@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
+
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
     core/alignmentMap.cpp core/alignmentMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
