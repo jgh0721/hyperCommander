@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare RESULT 저장 단계의 복구 기록과 명령행 조회·미리보기·백업 복원을 지원한다.
+
 * HyperCompare BASE·RESULT를 포함한 전체 패널 정렬과 편집 후 비동기 재정렬을 지원한다.
 
 * HyperCompare 3way 자동 병합 구간의 개별 재선택과 결정 계획 보존 지원

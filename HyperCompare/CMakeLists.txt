@@ -12,6 +12,7 @@ target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
     runtime/guiIpc.cpp runtime/guiIpc.hpp
+    runtime/saveRecovery.cpp runtime/saveRecovery.hpp
     runtime/semantic.cpp runtime/semantic.hpp
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp

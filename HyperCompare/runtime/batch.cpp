@@ -55,7 +55,7 @@ namespace hc::compare
                 if (id.isEmpty() || id.size() > 128 || ids.contains(id) || path.isEmpty() || path.size() > 32767) throw Failure("InvalidBatchJob"); ids.insert(id);
                 const auto requestPath = QDir::cleanPath(root.absoluteFilePath(path)); auto parsed = ParseRequestFile(requestPath, {"-headless", "-format", "json"}, true, Limits);
                 if (!parsed.error_.isEmpty()) throw Failure(("BatchRequest:" + id + ':' + parsed.error_).toStdString()); auto request = parsed.request_;
-                if (request.gui_ || request.help_ || request.version_ || request.mode_ == "capabilities" || request.mode_ == "batch") throw Failure("BatchModeUnsupported");
+                if (request.gui_ || request.help_ || request.version_ || request.mode_ == "capabilities" || request.mode_ == "batch" || request.mode_ == "recover") throw Failure("BatchModeUnsupported");
                 request.protectedInputs_ << manifest; add(requestPath, -1, false);
                 for (const auto& read : {request.file1_, request.file2_, request.file3_, request.base_, request.decisions_, request.applyPlan_}) add(read, i, false);
                 for (const auto& write : {request.output_, request.planOut_}) add(write, i, true);

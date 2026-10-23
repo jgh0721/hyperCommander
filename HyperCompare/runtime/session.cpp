@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
+#include "saveRecovery.hpp"
 #include "requestFile.hpp"
 #include "directory.hpp"
 #include "directoryPlan.hpp"
@@ -162,7 +163,7 @@ namespace hc::compare
     Snapshot ReadFileSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits) { return readSnapshot(Path, MaxBytes, Limits); }
     QJsonObject Capabilities()
     {
-        return {{"schemaVersion", 1}, {"phase", "foundation"}, {"engineRegistry", EngineCatalog()}, {"textCompare2", true}, {"textCompare3", true},
+        return {{"schemaVersion", 1}, {"phase", "foundation"}, {"saveRecovery", "local-journal-identity-checked-backup-restore"}, {"saveRecoveryCli", "-mode recover -journal FILE.hcsave [-dryrun]"}, {"engineRegistry", EngineCatalog()}, {"textCompare2", true}, {"textCompare3", true},
             {"textMerge3", true}, {"textMerge2", "explicit-block-decisions-or-whole-side"}, {"directoryCompare2", true}, {"directoryCompare3", true}, {"directoryFilters", true}, {"directoryLevels", QJsonArray{"bytes", "metadata"}},
             {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
@@ -181,6 +182,8 @@ namespace hc::compare
         try
         {
             CheckProtectedInputs(Input, {Input.output_, Input.planOut_, Input.report_, Input.journal_}, limits);
+            if (Input.mode_ == "recover")
+            { auto request = Input; request.dryRun_ |= !Save; RecoverSavedFile(request, result, limits); return result; }
             if (Input.mode_ == "probe")
             {
                 result.operation_ = "probe"; result.engineProbe_ = ProbeComparison(Input, limits);
@@ -356,7 +359,7 @@ namespace hc::compare
         if (Utf8.size() > 32 * 1024 * 1024) throw Failure("ResultSizeLimit");
         Budget limits; limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         CheckProtectedInputs(Input, {Input.output_}, limits);
-        const auto ctx = context(limits);
+        auto ctx = context(limits);
         for (const auto& input : Value.inputs_)
         {
             const auto current = require(reader(input.path_)->Resolve(locator(input.path_), ctx).get());
@@ -374,15 +377,26 @@ namespace hc::compare
         const auto provider = reader(Input.output_);
         const auto writer = storage::MakeNativeWritableStorage(locator(Input.output_).kind_, provider);
         Value.commit_ = "NotStarted";
-        const auto receipt = require(document::SaveDocumentBytes(*writer, locator(Input.output_), Value.expected_,
-            {reinterpret_cast<const std::byte*>(encoded.constData()), std::size_t(encoded.size())}, ctx));
+        SaveRecoveryJournal journal; ctx.writeCheckpoint_ = journal.Checkpoint();
+        const auto saved = document::SaveDocumentBytes(*writer, locator(Input.output_), Value.expected_,
+            {reinterpret_cast<const std::byte*>(encoded.constData()), std::size_t(encoded.size())}, ctx);
+        if (journal.Exists()) Value.recovery_.append(journal.Path());
+        const auto receipt = require(saved);
         if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
         Value.commit_ = "Committed"; Value.outcome_ = "Saved"; Value.exitCode_ = 0;
-        if (Value.planWritten_.isEmpty()) { Value.warnings_ = {}; Value.recovery_ = {}; }
+        if (Value.planWritten_.isEmpty()) { Value.warnings_ = {}; Value.recovery_ = QJsonArray{journal.Path()}; }
         for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
         for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
         const auto updated = require(writer->Inspect(locator(Input.output_), ctx));
         if (updated) Value.expected_ = {true, updated->id_.revision_};
+        if (receipt.cleanupErrors_.empty() && receipt.preservedArtifacts_.empty())
+        {
+            if (journal.Remove())
+            {
+                for (qsizetype i = Value.recovery_.size(); i-- > 0;) if (Value.recovery_[i] == journal.Path()) Value.recovery_.removeAt(i);
+            }
+            else Value.warnings_.append("SaveRecoveryJournalCleanupFailed");
+        }
     }
     QJsonObject Result::Json(bool IncludeContent) const
     {
@@ -420,12 +434,21 @@ namespace hc::compare
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
-            {"warnings", warnings_}, {"recovery", recovery_}};
+            {"warnings", warnings_}, {"recovery", recovery_}, {"saveRecovery", saveRecovery_}};
     }
     int WriteReport(const Request& Input, const Result& Value)
     {
+        if (Input.mode_ == "recover" && !Input.report_.isEmpty() && Input.report_ != "-") return 2;
         QByteArray data = Input.format_ == "json" ? QJsonDocument(Value.Json(Input.includeContent_)).toJson(QJsonDocument::Compact) + '\n'
             : QString("%1: %2 (exit %3)%4\n").arg(Value.operation_, Value.outcome_).arg(Value.exitCode_).arg(Value.error_.isEmpty() ? QString{} : ": " + Value.error_).toUtf8();
+        if (Input.format_ != "json")
+        {
+            for (const auto& path : Value.recovery_) data += "Recovery: " + path.toString().toUtf8() + '\n';
+            if (Value.saveRecovery_.contains("directory")) data += "Recovery directory: " + Value.saveRecovery_["directory"].toString().toUtf8() + '\n';
+            if (Value.saveRecovery_.contains("destination")) data += "Destination: " + Value.saveRecovery_["destination"].toString().toUtf8() +
+                " / phase: " + Value.saveRecovery_["phase"].toString().toUtf8() +
+                (Value.saveRecovery_["identitiesVerified"].toBool() ? " / identities checked\n" : " / preview only; identities not checked\n");
+        }
         if (Input.report_.isEmpty() || Input.report_ == "-")
         { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || output.write(data) != data.size() || !output.flush()) return 2; }
         else

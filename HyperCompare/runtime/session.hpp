@@ -80,6 +80,7 @@ namespace hc::compare
         QJsonObject engineProbe_;
         QJsonObject extension_;
         QJsonObject textComparison_;
+        QJsonObject saveRecovery_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;

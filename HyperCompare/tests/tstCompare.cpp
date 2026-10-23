@@ -2,6 +2,12 @@
 #include "core/compare.hpp"
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
+#include "runtime/saveRecovery.hpp"
+#include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeWritableStorage.hpp"
+#include "commonLibs/document/documentSaveCoordinator.hpp"
+#include <QStandardPaths>
+#include <QProcessEnvironment>
 #include "runtime/directoryPlan.hpp"
 #include "runtime/directoryApply.hpp"
 #include "runtime/decisionPlan.hpp"
@@ -58,6 +64,103 @@ private:
         return row.back();
     }
 private slots:
+    void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
+    void recoveryCrashChild()
+    {
+        const auto root = qEnvironmentVariable("HC_SAVE_CRASH_ROOT"); if (root.isEmpty()) return;
+        const auto phase = qEnvironmentVariableIntValue("HC_SAVE_CRASH_PHASE");
+        const auto path = QDir(root).filePath("destination.txt");
+        const hc::storage::Locator destination{path.startsWith("//") || path.startsWith("\\\\") ? hc::storage::LocatorKind::Smb : hc::storage::LocatorKind::Local, path.toStdString()};
+        auto writer = hc::storage::MakeNativeWritableStorage(destination.kind_, hc::storage::MakeNativeReadProvider(destination.kind_));
+        const auto inspected = writer->Inspect(destination, {}); QVERIFY(inspected.HasValue()); QVERIFY(inspected.Value());
+        SaveRecoveryJournal journal(qEnvironmentVariable("HC_SAVE_CRASH_JOURNALS")); auto checkpoint = journal.Checkpoint();
+        hc::storage::OperationContext context; context.writeCheckpoint_ = [checkpoint, phase](const auto& Record, auto Previous) {
+            auto saved = checkpoint(Record, Previous);
+            if (saved.HasValue() && int(Record.phase_) == phase) TerminateProcess(GetCurrentProcess(), 73);
+            return saved;
+        };
+        const QByteArray payload("new result\n");
+        const auto saved = hc::document::SaveDocumentBytes(*writer, destination, {true, inspected.Value()->id_.revision_},
+            {reinterpret_cast<const std::byte*>(payload.constData()), std::size_t(payload.size())}, context);
+        QFAIL(saved.HasValue() ? "Crash checkpoint did not fire" : saved.Failure().code_.c_str());
+    }
+    void saveRecoveryAtCommitBoundaries()
+    {
+        for (int phase = 0; phase <= 3; ++phase)
+        {
+            QTemporaryDir dir; QVERIFY(dir.isValid()); const auto path = dir.filePath("destination.txt"); write(path, "original\n");
+            auto env = QProcessEnvironment::systemEnvironment(); env.insert("HC_SAVE_CRASH_ROOT", dir.path()); env.insert("HC_SAVE_CRASH_PHASE", QString::number(phase)); env.insert("HC_SAVE_CRASH_JOURNALS", dir.filePath("journals"));
+            QProcess child; child.setProcessEnvironment(env); child.start(QCoreApplication::applicationFilePath(), {"recoveryCrashChild", "-o", dir.filePath("child.txt") + ",txt"});
+            QVERIFY(child.waitForStarted()); QVERIFY(child.waitForFinished(15000)); QCOMPARE(child.exitCode(), 73);
+            const auto files = QDir(dir.filePath("journals")).entryList({"*.hcsave"}, QDir::Files); QCOMPARE(files.size(), 1);
+            Request request; request.mode_ = "recover"; request.journal_ = QDir(dir.filePath("journals")).filePath(files[0]); request.dryRun_ = true;
+            auto result = Execute(request, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.outcome_, QString("RecoveryPreview")); QVERIFY(!result.saveRecovery_["identitiesVerified"].toBool());
+            QCOMPARE(QFileInfo::exists(path), phase != 2);
+            if (phase == 2) { QFile journal(request.journal_); QVERIFY(journal.open(QIODevice::Append)); journal.write("{torn"); }
+            request.dryRun_ = false; result = Execute(request, std::make_shared<std::atomic_bool>(false), true);
+            QVERIFY2(result.exitCode_ == 0, qPrintable(result.error_)); QVERIFY(result.saveRecovery_["identitiesVerified"].toBool());
+            QCOMPARE(read(path), phase == 3 ? QByteArray("new result\n") : QByteArray("original\n"));
+            if (phase == 2) QVERIFY(result.warnings_.contains("SaveRecoveryIgnoredTornTail"));
+            QVERIFY(QFileInfo::exists(request.journal_)); QVERIFY(result.recovery_.size() >= 2);
+            const auto again = Execute(request, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(again.exitCode_, 0);
+            QCOMPARE(read(path), phase == 3 ? QByteArray("new result\n") : QByteArray("original\n"));
+        }
+    }
+    void saveRecoveryRejectsForeignDestinationAndCorruptJournal()
+    {
+        QTemporaryDir dir; const auto path = dir.filePath("destination.txt"); write(path, "original\n");
+        auto env = QProcessEnvironment::systemEnvironment(); env.insert("HC_SAVE_CRASH_ROOT", dir.path()); env.insert("HC_SAVE_CRASH_PHASE", "2"); env.insert("HC_SAVE_CRASH_JOURNALS", dir.filePath("journals"));
+        QProcess child; child.setProcessEnvironment(env); child.start(QCoreApplication::applicationFilePath(), {"recoveryCrashChild", "-o", dir.filePath("child.txt") + ",txt"}); QVERIFY(child.waitForStarted()); QVERIFY(child.waitForFinished(15000)); QCOMPARE(child.exitCode(), 73);
+        const auto files = QDir(dir.filePath("journals")).entryList({"*.hcsave"}, QDir::Files); QCOMPARE(files.size(), 1);
+        Request r; r.mode_ = "recover"; r.journal_ = QDir(dir.filePath("journals")).filePath(files[0]);
+        write(path, "external change\n"); auto result = Execute(r, std::make_shared<std::atomic_bool>(false), true);
+        QCOMPARE(result.exitCode_, 2); QCOMPARE(result.error_, QString("write-recovery-destination-changed")); QCOMPARE(read(path), QByteArray("external change\n"));
+        const auto journal = read(r.journal_); write(r.journal_, journal + "bad complete record\n"); result = Execute(r, std::make_shared<std::atomic_bool>(false), true);
+        QCOMPARE(result.error_, QString("SaveRecoveryCorrupt")); QCOMPARE(read(path), QByteArray("external change\n"));
+        write(r.journal_, journal); auto mutated = journal; mutated.replace("backedUp", "finished"); write(r.journal_, mutated);
+        result = Execute(r, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(result.error_, QString("SaveRecoveryInconsistent"));
+        QCOMPARE(read(path), QByteArray("external change\n"));
+    }
+    void saveRecoveryCleanupAndJournalFailure()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out"); r.takeAll_ = "right";
+        write(r.file1_, "left\n"); write(r.file2_, "right\n");
+        const QDir journals(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery");
+        const auto before = journals.entryList({"*.hcsave"}, QDir::Files);
+        auto saved = Execute(r, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(saved.exitCode_, 0); QVERIFY(saved.recovery_.isEmpty()); QCOMPARE(read(r.output_), QByteArray("right\n"));
+        QCOMPARE(journals.entryList({"*.hcsave"}, QDir::Files), before);
+        r.overwrite_ = true; r.takeAll_ = "left"; saved = Execute(r, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(saved.exitCode_, 0); QVERIFY(saved.recovery_.isEmpty()); QCOMPARE(read(r.output_), QByteArray("left\n"));
+        QCOMPARE(journals.entryList({"*.hcsave"}, QDir::Files), before);
+        // Losing access to the journal must stop the write before moving the original.
+        const auto unavailable = dir.filePath("journal-folder"); SaveRecoveryJournal journal(unavailable); QVERIFY(QDir{}.rmdir(unavailable));
+        hc::storage::Locator destination{hc::storage::LocatorKind::Local, r.output_.toStdString()};
+        auto writer = hc::storage::MakeNativeWritableStorage(destination.kind_, hc::storage::MakeNativeReadProvider(destination.kind_));
+        const auto expected = writer->Inspect(destination, {}); QVERIFY(expected.HasValue()); QVERIFY(expected.Value());
+        hc::storage::OperationContext ctx; ctx.writeCheckpoint_ = journal.Checkpoint(); const QByteArray payload("should not publish");
+        const auto failed = hc::document::SaveDocumentBytes(*writer, destination, {true, expected.Value()->id_.revision_},
+            {reinterpret_cast<const std::byte*>(payload.constData()), std::size_t(payload.size())}, ctx);
+        QVERIFY(!failed.HasValue()); QCOMPARE(failed.Failure().code_, std::string("save-journal-open")); QCOMPARE(read(r.output_), QByteArray("left\n"));
+        QVERIFY(QDir(dir.path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden).isEmpty());
+    }
+    void saveRecoveryCannotRunInBatch()
+    {
+        QTemporaryDir dir; write(dir.filePath("recover.json"), QJsonDocument(QJsonObject{{"schemaVersion", 1}, {"mode", "recover"}, {"options", QJsonObject{{"journal", "unused.hcsave"}}}}).toJson());
+        manifest(dir.filePath("batch.json"), {"recover.json"}); Request request; request.mode_ = "batch"; request.manifest_ = dir.filePath("batch.json");
+        bool rejected = false;
+        try { RunBatch(request, std::make_shared<std::atomic_bool>(false), [](const auto&) { return true; }); }
+        catch (const Failure& failure) { rejected = failure.code_ == "BatchModeUnsupported"; }
+        QVERIFY(rejected);
+    }
+    void saveRecoveryCommandLine()
+    {
+        auto parsed = Parse({"hc", "-mode", "recover", "-journal", "save.hcsave", "-dryrun", "-format", "json"}, true); QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.mode_, QString("recover"));
+        QVERIFY(!Parse({"hc", "-mode", "recover", "-journal", "save.hcsave", "-report", "out.txt"}, true).error_.isEmpty());
+        QVERIFY(!Parse({"hc", "-mode", "recover", "-journal", "save.hcsave", "-file1", "anything"}, true).error_.isEmpty());
+        QVERIFY(Parse({"hc", "-mode", "recover"}, true).error_.isEmpty());
+        Request list; list.mode_ = "recover"; const auto listed = Execute(list, std::make_shared<std::atomic_bool>(false), true);
+        QCOMPARE(listed.exitCode_, 0); QCOMPARE(listed.outcome_, QString("RecoveryJournals")); QCOMPARE(listed.saveRecovery_["directory"].toString(), SaveRecoveryDirectory());
+        QVERIFY(!Parse({"hc", "-mode", "recover", "-journal", "save.hcsave", "-gui"}, true).error_.isEmpty());
+    }
     void guiTransportOptions()
     {
         auto parsed = Parse({"hc", "-gui", "-reuse", "-wait-timeout-ms", "100", "-file1", "left", "-file2", "right"}, true);

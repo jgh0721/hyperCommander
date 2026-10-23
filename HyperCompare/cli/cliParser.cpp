@@ -25,7 +25,7 @@ namespace hc::compare
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
         value("request", "Schema 1 request JSON; relative paths resolve from its directory (maximum 1 MiB).");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
-        value("mode", "auto, compare, merge, directory, directory-merge, apply, batch, capabilities, probe.");
+        value("mode", "auto, compare, merge, directory, directory-merge, apply, recover, batch, capabilities, probe.");
         value("manifest", "Batch schema 1 JSON manifest; maximum 4 MiB and 1000 jobs.");
         value("jobs", "Batch concurrent jobs: 1 (default) or 2."); flag("failfast", "Stop starting batch jobs after exit code 2; differences do not stop the batch.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
@@ -48,7 +48,7 @@ namespace hc::compare
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
         flag("overwrite", "Allow replacing an existing output, subject to revision validation.");
         value("plan", "Reviewed directory plan to apply with -mode apply.");
-        value("journal", "Directory apply journal; default PLAN.journal, outside all roots.");
+        value("journal", "Directory apply journal, or .hcsave for -mode recover (omit to list local recovery records).");
         flag("resume", "Verify and resume an interrupted directory plan.");
         flag("allowdelete", "Authorize the reviewed plan removals; no implicit recursive deletion.");
         flag("mirror", "Directory plan: include removals for output-only paths; apply requires explicit deletion authorization.");
@@ -125,7 +125,7 @@ namespace hc::compare
         if (request.includeContent_ && (!request.headless_ || (request.format_ != "json" && request.mode_ != "batch"))) return fail("-include-content requires headless JSON reporting.");
         request.applyPlan_ = parser.value("plan"); request.journal_ = parser.value("journal");
         request.resume_ = parser.isSet("resume"); request.allowDelete_ = parser.isSet("allowdelete");
-        if (request.mode_ != "apply" && (parser.isSet("plan") || parser.isSet("journal") || request.resume_ || request.allowDelete_)) return fail("Apply options require -mode apply.");
+        if (request.mode_ != "apply" && (parser.isSet("plan") || (parser.isSet("journal") && request.mode_ != "recover") || request.resume_ || request.allowDelete_)) return fail("Apply options require -mode apply.");
         request.mirror_ = parser.isSet("mirror");
         if (request.mirror_ && request.mode_ != "directory-merge") return fail("-mirror requires directory-merge.");
         const bool decisionOptions = !request.planOut_.isEmpty() || !request.decisions_.isEmpty();
@@ -140,7 +140,7 @@ namespace hc::compare
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }
-        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "batch", "capabilities", "probe"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "recover", "batch", "capabilities", "probe"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
         if (request.mode_ == "probe" && !request.headless_) return fail("Probe requires headless mode.");
         if (request.mode_ == "batch")
         {
@@ -156,6 +156,14 @@ namespace hc::compare
         if (!QStringList{"text", "json"}.contains(request.format_)) return fail("Unsupported report format.");
         if (!request.encoding_.isEmpty() && !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(request.encoding_)) return fail("Unsupported encoding.");
         if (!request.theme_.isEmpty() && request.theme_ != "light" && request.theme_ != "dark") return fail("Invalid theme.");
+        if (request.mode_ == "recover")
+        {
+            if (!request.headless_ || request.journal_ == "-" || (parser.isSet("journal") && request.journal_.isEmpty())) return fail("Recover requires headless mode and an optional -journal FILE.hcsave.");
+            for (const auto& name : parser.optionNames())
+                if (!QStringList{"mode", "journal", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms"}.contains(name)) return fail("Option not valid for recover: " + name);
+            if (!request.report_.isEmpty() && request.report_ != "-") return fail("Recover reports must use stdout to preserve recovery artifacts.");
+            if (!request.journal_.isEmpty()) request.journal_ = QDir::cleanPath(QFileInfo(request.journal_).absoluteFilePath()); return result;
+        }
         if (request.mode_ == "apply")
         {
             if (!request.headless_ || request.applyPlan_.isEmpty()) return fail("Apply requires headless -plan.");

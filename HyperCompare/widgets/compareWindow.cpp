@@ -255,6 +255,7 @@ namespace hc::compare
                     state_->setToolTip(QString::fromUtf8(QJsonDocument(result_.Json()).toJson()));
                 }
                 else { exitCode_ = 2; state_->setText(tr("저장 실패: ") + result_.error_); }
+                state_->setToolTip(QString::fromUtf8(QJsonDocument(result_.Json()).toJson()));
                 if (closing_) close();
                 return;
             }
