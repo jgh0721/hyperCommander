@@ -23,6 +23,7 @@ namespace hc::compare
     class ScrollSynchronizer;
     class FindBar;
     class OverviewBar;
+    class DirectoryView;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -44,6 +45,7 @@ namespace hc::compare
         void refresh(Result Value);
         void showBlocks();
         void openInputs();
+        void openDirectories();
         void applyAppearance();
         void applyInlineHighlights();
         void chooseFont(const QString& Role);
@@ -68,6 +70,8 @@ namespace hc::compare
         ScrollSynchronizer* scroll_ = nullptr;
         FindBar* find_ = nullptr;
         OverviewBar* overview_ = nullptr;
+        DirectoryView* directory_ = nullptr;
+        QWidget* sources_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;

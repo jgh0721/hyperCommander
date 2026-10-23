@@ -4,6 +4,7 @@
 #include "scrollSynchronizer.hpp"
 #include "findBar.hpp"
 #include "overviewBar.hpp"
+#include "directoryView.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -60,10 +61,15 @@ namespace hc::compare
         listFont_ = uiFont_; listFont_.fromString(settings.value("fonts/list", listFont_.toString()).toString());
         textFont_ = QFont("Cascadia Mono", 11); textFont_.fromString(settings.value("fonts/text", textFont_.toString()).toString());
         auto* layout = new QSplitter(Qt::Vertical, this);
-        auto* sources = new QWidget(layout); auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
+        auto* sources = new QWidget(layout); sources_ = sources; auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
         panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);
         row->addWidget(panes_, 1); row->addWidget(overview_);
         changes_ = new QTreeWidget(layout); layout->addWidget(sources); layout->addWidget(changes_);
+        directory_ = new DirectoryView(layout); layout->addWidget(directory_); directory_->hide();
+        directory_->open_ = [this](Request Input) {
+            if (busy()) return; Input.theme_ = dark_ ? "dark" : "light";
+            auto* window = new CompareWindow(std::move(Input)); window->setAttribute(Qt::WA_DeleteOnClose); window->show();
+        };
         panes_->setChildrenCollapsible(false); layout->setChildrenCollapsible(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽")});
         changes_->setObjectName("compareChanges");
@@ -71,6 +77,7 @@ namespace hc::compare
         layout->setStretchFactor(0, 4); layout->setStretchFactor(1, 1); layout->setSizes({560, 140}); setCentralWidget(layout);
         auto* tools = addToolBar(tr("비교"));
         tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
+        tools->addAction(tr("디렉터리 열기"), this, &CompareWindow::openDirectories);
         tools->addAction(tr("다시 비교"), this, [this] { start(true); });
         cancel_ = tools->addAction(tr("취소"), this, [this] { canceled_->store(true); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
@@ -234,6 +241,14 @@ namespace hc::compare
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
     CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); }
+    void CompareWindow::openDirectories()
+    {
+        if (busy()) return;
+        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
+        const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
+        const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
+        Request request; request.mode_ = "directory"; request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
+    }
     void CompareWindow::openInputs()
     {
         if (busy()) return;
@@ -314,6 +329,8 @@ namespace hc::compare
     {
         if (result_.operation_ != "compare3") pairIndex_ = 0;
         { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
+        directory_->hide(); sources_->show(); changes_->show();
+        directory_->SetComparison({}, {});
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
@@ -326,9 +343,7 @@ namespace hc::compare
         if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
         if (result_.operation_.startsWith("directory"))
         {
-            changes_->setHeaderLabels({tr("경로"), tr("상태"), tr("왼쪽 / 오른쪽"), tr("BASE 관계")});
-            for (const auto& value : result_.entries_)
-            { const auto entry = value.toObject(); new QTreeWidgetItem(changes_, {entry["path"].toString(), entry["status"].toString(), entry["leftRight"].toString(), entry["leftBase"].toString() + " / " + entry["rightBase"].toString()}); }
+            directory_->SetComparison(request_, result_); sources_->hide(); changes_->hide(); directory_->show();
         }
         else
         {
@@ -351,6 +366,13 @@ namespace hc::compare
             }
         }
         state_->setText(QString("%1 — %2, conflicts: %3").arg(result_.operation_, result_.outcome_).arg(result_.merged_.conflicts_.size()));
+        if (result_.operation_.startsWith("directory"))
+        {
+            qsizetype differences = 0, conflicts = 0;
+            for (const auto& item : result_.entries_)
+            { const auto status = item.toObject()["status"].toString(); differences += status != "Equal"; conflicts += status == "Conflict" || status == "TypeConflict"; }
+            state_->setText(tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개").arg(differences).arg(conflicts));
+        }
         if (request_.mode_ == "merge") exitCode_ = 3;
         QList<int> widths; for (int i = 0; i < panes_->count(); ++i) widths.push_back(1);
         panes_->setSizes(widths);
@@ -410,6 +432,11 @@ namespace hc::compare
     }
     void CompareWindow::updateMerge()
     {
+        directory_->setEnabled(!busy());
+        const bool directoryMode = !directory_->isHidden();
+        for (auto* action : wholeActions_) action->setVisible(!directoryMode);
+        for (auto* action : blockActions_) action->setVisible(!directoryMode);
+        save_->setVisible(!directoryMode);
         const bool searchable = !editors_.isEmpty() && !busy();
         const bool pairSelection = result_.operation_ == "compare3" && result_.completion_ == "Complete";
         pairSelectorAction_->setVisible(pairSelection); pairSelector_->setEnabled(pairSelection && !busy());
@@ -469,7 +496,9 @@ namespace hc::compare
     }
     void CompareWindow::navigateBlock(int Direction)
     {
-        const auto count = changes_->topLevelItemCount(); if (!count || busy()) return;
+        if (busy()) return;
+        if (directory_->isVisible()) { directory_->NavigateDifference(Direction); return; }
+        const auto count = changes_->topLevelItemCount(); if (!count) return;
         const auto at = changes_->indexOfTopLevelItem(changes_->currentItem());
         auto* target = changes_->topLevelItem(at < 0 ? (Direction > 0 ? 0 : count - 1) : (at + Direction + count) % count);
         if (target == changes_->currentItem()) selectBlock(); else changes_->setCurrentItem(target);
@@ -535,7 +564,7 @@ namespace hc::compare
     void CompareWindow::applyAppearance()
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
-        qApp->setFont(uiFont_); changes_->setFont(listFont_);
+        qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_);
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)

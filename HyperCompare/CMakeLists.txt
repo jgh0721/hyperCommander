@@ -23,7 +23,7 @@ target_include_directories(hc_compare_runtime PUBLIC "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core PRIVATE advapi32 shell32 ole32 uuid netapi32 mpr shlwapi)
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
-qt_add_library(hc_compare_widgets STATIC widgets/compareWindow.cpp widgets/compareWindow.hpp
+qt_add_library(hc_compare_widgets STATIC widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
