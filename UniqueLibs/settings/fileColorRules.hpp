@@ -48,11 +48,12 @@ struct FileRuleKey
     quint64 size_ = 0;
     std::optional<qint64> modified_;
     std::optional<quint32> tag_;
-    quintptr identity_ = 0;
-    static FileRuleKey From(const FileRuleInput& Input, quintptr Identity = 0) { return {Input.name_, Input.attributes_, Input.size_, Input.modifiedUtcMs_, Input.reparseTag_, Identity}; }
+    // A style depends only on these inputs, so results stay valid across
+    // listings; the same file re-read after a refresh is a cache hit.
+    static FileRuleKey From(const FileRuleInput& Input) { return {Input.name_, Input.attributes_, Input.size_, Input.modifiedUtcMs_, Input.reparseTag_}; }
     bool operator==(const FileRuleKey&) const = default;
     friend size_t qHash(const FileRuleKey& Key, size_t Seed = 0) noexcept {
-        return qHashMulti(Seed, Key.name_, Key.attributes_, Key.size_, Key.modified_.has_value(), Key.modified_.value_or(0), Key.tag_.has_value(), Key.tag_.value_or(0), Key.identity_);
+        return qHashMulti(Seed, Key.name_, Key.attributes_, Key.size_, Key.modified_.has_value(), Key.modified_.value_or(0), Key.tag_.has_value(), Key.tag_.value_or(0));
     }
 };
 class FileColorRules

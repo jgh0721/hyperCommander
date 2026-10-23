@@ -249,7 +249,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -8415,6 +8415,89 @@ private slots:
         Dialog.reject(); QCOMPARE(Settings.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
     }
 
+    void fileColorFirstPaintUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 120; ++I) { QFile F(Directory.filePath(QString("note_%1.txt").arg(I, 3, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("data"); }
+        QVERIFY(QDir(Directory.path()).mkdir("nested")); QFile Other(Directory.filePath("other.dat")); QVERIFY(Other.open(QIODevice::WriteOnly)); Other.write("data"); Other.close();
+        auto Rules = FileColorRules::Empty(); Rules["version"] = 2;
+        Rules["groups"] = QJsonArray{QJsonObject{{"id", "first-paint"}, {"name", "텍스트"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}}},
+            {"light", QJsonObject{{"foreground", "#2266aa"}}}, {"dark", QJsonObject{{"foreground", "#88bbee"}}}}};
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); Model->SetColorScheme(Scheme);
+        const QColor Expected(Scheme.IsDarkMode ? "#88bbee" : "#2266aa");
+        const auto StyleUpdates = [](const QSignalSpy& Spy) {
+            int Count = 0;
+            for (const auto& Signal : Spy) { const auto Roles = Signal[2].value<QList<int>>(); if (Roles.contains(Qt::ForegroundRole) || Roles.contains(CFSModel::FileColorOverrideRole)) ++Count; }
+            return Count;
+        };
+        const auto Painted = [&] {
+            // The first read after publishing must already be the group color;
+            // a plain color here is the flicker this guards against.
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Name = Model->GetName(Model->index(Row, 0)); const auto Color = Model->index(Row, 0).data(Qt::ForegroundRole).value<QColor>();
+                if (Name.endsWith(".txt")) { if (Color != Expected) return false; }
+                else if (Name != ".." && Color == Expected) return false;
+            }
+            return true;
+        };
+        QSignalSpy Entering(Model, &QAbstractItemModel::dataChanged);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() >= 122);
+        QVERIFY(Painted()); QCOMPARE(StyleUpdates(Entering), 0);
+        QTest::qWait(150); QVERIFY(Painted()); QCOMPARE(StyleUpdates(Entering), 0);
+        // A refresh of the same folder paints from the retained cache as well.
+        QSignalSpy Refreshing(Model, &QAbstractItemModel::dataChanged);
+        Model->Refresh(); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() >= 122);
+        QVERIFY(Painted()); QCOMPARE(StyleUpdates(Refreshing), 0);
+        // Rule or palette changes still clear the cache: a miss returns at
+        // once and the row is restyled in a later turn.
+        Model->SetColorScheme(Scheme);
+        const auto First = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "note_000.txt") return Model->index(Row, 0); return QModelIndex{}; }();
+        QVERIFY(First.isValid()); QVERIFY(First.data(Qt::ForegroundRole).value<QColor>() != Expected);
+        QTRY_COMPARE(First.data(Qt::ForegroundRole).value<QColor>(), Expected);
+        QTRY_VERIFY(Painted());
+    }
+
+    void fileColorLargeFolderUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        // More rows than the worker seeds and than the indexed-order threshold.
+        const int Count = 4400;
+        for (int I = 0; I < Count; ++I) { QFile F(Directory.filePath(QString("page_%1.txt").arg(I, 5, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("d"); }
+        auto Rules = FileColorRules::Empty(); Rules["version"] = 2;
+        Rules["groups"] = QJsonArray{QJsonObject{{"id", "large-folder"}, {"name", "텍스트"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}}},
+            {"light", QJsonObject{{"foreground", "#2266aa"}}}, {"dark", QJsonObject{{"foreground", "#88bbee"}}}}};
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); Model->SetColorScheme(Scheme);
+        const QColor Expected(Scheme.IsDarkMode ? "#88bbee" : "#2266aa");
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() >= Count, 30000);
+        QVERIFY(Model->UsesIndexedOrder());
+        // The background pass styles the rows past the seeds before paging can
+        // reach them; every row then paints from the cache on its first read.
+        QTRY_VERIFY_WITH_TIMEOUT(Model->FileRuleCompletionIdle(), 10000);
+        QSignalSpy Painted(Model, &QAbstractItemModel::dataChanged);
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Name = Model->GetName(Model->index(Row, 0)); if (Name == "..") continue;
+            QCOMPARE(Model->index(Row, 0).data(Qt::ForegroundRole).value<QColor>(), Expected);
+        }
+        QTest::qWait(100);
+        int StyleUpdates = 0;
+        for (const auto& Signal : Painted) { const auto Roles = Signal[2].value<QList<int>>(); if (Roles.contains(Qt::ForegroundRole) || Roles.contains(CFSModel::FileColorOverrideRole)) ++StyleUpdates; }
+        QCOMPARE(StyleUpdates, 0);
+    }
+
     void fileColorConditionsUi()
     {
         using namespace hc::settings;
@@ -8662,8 +8745,9 @@ private slots:
                 auto* Model = static_cast<CFSModel*>(model(Panel));
                 for (int Row = 0; Row < Model->rowCount(); ++Row) {
                     const auto Index = Model->index(Row, 0); const auto Name = Model->GetName(Index);
-                    if (Name == "sample.txt" || Name == "UPPER.TXT") { QCOMPARE(Model->data(Index, Qt::ForegroundRole).value<QColor>(), QColor(Dark ? "#ffbd72" : "#9a3800")); QVERIFY(Model->data(Index, Qt::FontRole).value<QFont>().bold()); }
-                    if (Name == "folder.txt" || Name == "photo.jpg") QCOMPARE(Model->data(Index, Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
+                    // A palette change clears the style cache; rows restyle in a later turn.
+                    if (Name == "sample.txt" || Name == "UPPER.TXT") { QTRY_COMPARE(Model->data(Index, Qt::ForegroundRole).value<QColor>(), QColor(Dark ? "#ffbd72" : "#9a3800")); QVERIFY(Model->data(Index, Qt::FontRole).value<QFont>().bold()); }
+                    if (Name == "folder.txt" || Name == "photo.jpg") QTRY_COMPARE(Model->data(Index, Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
                 }
             }
             Dialog.hide(); QCoreApplication::processEvents(); Save(main_, Dark ? "p4-panels-dark" : "p4-panels-light"); Dialog.show();

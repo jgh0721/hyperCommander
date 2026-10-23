@@ -130,8 +130,9 @@ protected:
     QTimer* fileRuleClock_ = nullptr;
     void scheduleFileRuleExpiry(qint64 Deadline) const;
     mutable std::optional<qint64> fileRuleExpiry_;
-    struct CachedFileRule { hc::settings::FileRuleResult style_; int row_ = 0; };
-    mutable QCache<hc::settings::FileRuleKey, CachedFileRule> fileColorCache_{2048};
+    struct CachedFileRule { hc::settings::FileRuleResult style_; };
+    // Holds a seeded 4,096-row listing plus the previous folder.
+    mutable QCache<hc::settings::FileRuleKey, CachedFileRule> fileColorCache_{8192};
 
     mutable nsCmn::nsConcurrent::CCmnMutex  lock;
     QVector< nsHC::TySpFileSystem > vecFs_;         // 어떠한 FS 에서 PACKER 를 호출하면 PACKER FS 가 추가된다.

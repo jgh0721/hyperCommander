@@ -118,6 +118,7 @@ public:
     void RequestDirectorySizes(const QModelIndexList& Entries = {}, bool Automatic = false);
     void ApplyDirectorySizeSettings();
     int PendingDirectorySizes() const { return int(directorySizePending_.size()); }
+    bool FileRuleCompletionIdle() const { return !fileRuleCompleting_ && !fileRuleCompleteTimer_.isActive(); }
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
@@ -169,7 +170,7 @@ private:
     void                            refreshProvider();
     void requestPage(std::uint64_t Offset, bool Rebuild);
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
-    void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries);
+    void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {});
     void                            refreshDisplayIcons(int First = 0);
     void applyRequestedIcons();
     void invalidateDisplayIcons(bool All, int SettleMs = 0);
@@ -184,9 +185,26 @@ private:
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
+    hc::settings::FileRuleInput fileRuleInput(const nsHC::TySpFileSource& Item) const;
     hc::settings::FileRuleResult fileRuleStyle(int Row) const;
+    // Leading rows are styled inside the listing worker so the first paint
+    // carries group colors; the budget bounds a pathological rule set.
+    static constexpr std::size_t FileRuleSeedRows = 4096;
+    static constexpr int FileRuleSeedBudgetMs = 25;
+    static std::vector<hc::settings::FileRuleResult> seedFileRuleStyles(const hc::settings::FileColorRules& Rules, const std::vector<hc::storage::EntrySnapshot>& Entries, bool Dark, std::stop_token Token);
+    bool fileRuleSeedsUsable(quint64 RuleGeneration, bool Dark) const;
     void pumpFileRules();
     void resetFileRules();
+    bool fileRuleFirstBatch_ = true;
+    // Rows past the seeds are styled in the background so paging never reaches
+    // an unstyled row; past the budget, a miss restarts the pass at that row.
+    static constexpr int FileRuleCompleteRows = 65536;
+    void completeFileRuleStyles();
+    void requestFileRuleCompletion(int Row) const;
+    mutable QTimer fileRuleCompleteTimer_;
+    mutable int fileRuleCompleteLow_ = 0, fileRuleCompleteNext_ = 0, fileRuleCompleteBudget_ = 0;
+    mutable bool fileRuleCompleting_ = false;
+    std::shared_ptr<hc::settings::FileColorRules::EvaluationContext> fileRuleCompleteContext_ = std::make_shared<hc::settings::FileColorRules::EvaluationContext>();
     struct FileRuleJob { hc::settings::FileRuleKey key_; hc::settings::FileRuleInput input_; int row_; nsHC::TySpFileSource item_; };
     mutable QList<FileRuleJob> fileRuleQueue_;
     mutable QSet<hc::settings::FileRuleKey> fileRulePending_;

@@ -17,24 +17,19 @@ CFsModelT::CFsModelT( QObject* Parent )
 {
     fileRuleClock_ = new QTimer(this); fileRuleClock_->setSingleShot(true);
     connect(fileRuleClock_, &QTimer::timeout, this, [this] {
-        QList<int> Rows; std::optional<qint64> Next;
+        bool Expired = false; std::optional<qint64> Next;
         {
             CCmnMutexLocker Locker(&lock); fileRuleExpiry_.reset(); const auto Now = QDateTime::currentMSecsSinceEpoch();
-            // Only cached rows can be visible stale records. Visiting at most
-            // 2,048 entries avoids a full-list refresh every second.
             for (const auto& Key : fileColorCache_.keys()) {
                 auto* Cached = fileColorCache_.object(Key); const auto Deadline = Cached->style_.validUntilUtcMs_; if (!Deadline) continue;
-                if (*Deadline <= Now) { Rows.append(Cached->row_); fileColorCache_.remove(Key); }
+                if (*Deadline <= Now) { Expired = true; fileColorCache_.remove(Key); }
                 else if (!Next || *Deadline < *Next) Next = Deadline;
             }
             if (Next) scheduleFileRuleExpiry(*Next);
         }
-        std::sort(Rows.begin(), Rows.end()); const int Count = rowCount();
-        for (int I = 0; I < Rows.size();) {
-            const int First = Rows[I]; int Last = First; ++I;
-            while (I < Rows.size() && Rows[I] <= Last + 1) Last = qMax(Last, Rows[I++]);
-            if (First >= 0 && First < Count && columnCount()) emit dataChanged(index(First, 0), index(qMin(Last, Count - 1), columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
-        }
+        // Cached styles outlive listings, so an entry no longer knows its row.
+        // Style roles repaint without relayout; one range covers every row.
+        if (Expired && rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
     });
 }
 
