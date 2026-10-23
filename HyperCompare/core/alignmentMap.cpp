@@ -72,6 +72,82 @@ namespace hc::compare
         if (cursor != map.lines_) throw Failure("InvalidAlignmentEdits");
         Limits.Check(); return map;
     }
+    MultiAlignmentMap MultiAlignmentMap::WithSimilarLines(const std::vector<std::string_view>& Texts, const Budget& Limits) const
+    {
+        if (Texts.size() != lines_.size()) throw Failure("InvalidAlignmentSides");
+        try
+        {
+            auto budget = Limits; budget.steps_ = std::min<std::uint64_t>(budget.steps_, 4'000'000);
+            std::vector<Lines> lines;
+            for (std::size_t side = 0; side < Texts.size(); ++side)
+            {
+                lines.push_back(SplitLines(Texts[side], budget));
+                if (lines.back().size() != lines_[side]) throw Failure("InvalidAlignmentInput");
+            }
+            MultiAlignmentMap result; result.lines_ = lines_;
+            const auto span = [&](std::size_t Side, std::size_t Begin, std::size_t End) -> std::string_view {
+                if (Begin == End) return {};
+                const auto first = lines[Side][Begin], last = lines[Side][End - 1];
+                return {first.data(), std::size_t(last.data() + last.size() - first.data())};
+            };
+            const auto append = [&](MultiAlignmentRun Run) {
+                std::size_t height = 0; Run.changedPairs_ = 0;
+                for (std::size_t a = 0; a < Texts.size(); ++a)
+                {
+                    height = std::max(height, Run.end_[a] - Run.begin_[a]);
+                    for (std::size_t b = a + 1; b < Texts.size(); ++b)
+                        if (span(a, Run.begin_[a], Run.end_[a]) != span(b, Run.begin_[b], Run.end_[b]))
+                            Run.changedPairs_ |= (1u << (a * 4 + b)) | (1u << (b * 4 + a));
+                }
+                if (!height) return;
+                Run.rowBegin_ = result.rows_; result.rows_ += height; Run.rowEnd_ = result.rows_;
+                result.runs_.push_back(std::move(Run));
+            };
+            for (const auto& run : runs_)
+            {
+                budget.Check(); const auto n = run.end_[0] - run.begin_[0];
+                bool bounded = run.changedPairs_ && n && budget.steps_;
+                for (std::size_t side = 0; side < Texts.size(); ++side) bounded &= run.end_[side] - run.begin_[side] <= 128;
+                if (bounded) for (std::size_t side = 0; side < Texts.size(); ++side)
+                    for (auto i = run.begin_[side]; i < run.end_[side]; ++i) bounded &= lines[side][i].size() <= 2048;
+                if (!bounded) { auto copy = run; copy.rowBegin_ = result.rows_; result.rows_ += run.rowEnd_ - run.rowBegin_; copy.rowEnd_ = result.rows_; result.runs_.push_back(std::move(copy)); continue; }
+                // Each side contributes insertions before an anchor line and at most
+                // one corresponding line. Union these slots across all panes.
+                std::vector<std::vector<std::size_t>> gaps(Texts.size(), std::vector<std::size_t>(n + 1));
+                std::vector<std::vector<std::size_t>> matched(Texts.size(), std::vector<std::size_t>(n));
+                std::fill(matched[0].begin(), matched[0].end(), 1); bool refined = false;
+                for (std::size_t side = 1; side < Texts.size(); ++side)
+                {
+                    const auto m = run.end_[side] - run.begin_[side];
+                    const auto pair = AlignmentMap::Build(n, m, {{0, n, 0, m, {}}}, budget).WithSimilarLines(
+                        span(0, run.begin_[0], run.end_[0]), span(side, run.begin_[side], run.end_[side]), budget);
+                    budget.steps_ -= pair.SimilarityWork(); refined |= pair.HasSimilarLines();
+                    for (const auto& part : pair.Runs())
+                    {
+                        const auto a = part.end_[0] - part.begin_[0], b = part.end_[1] - part.begin_[1];
+                        const auto common = std::min(a, b);
+                        for (std::size_t i = 0; i < common; ++i) matched[side][part.begin_[0] + i] = 1;
+                        gaps[side][part.end_[0]] += b - common;
+                    }
+                }
+                if (!refined) { append(run); continue; }
+                auto cursor = run.begin_;
+                for (std::size_t i = 0; i <= n; ++i)
+                {
+                    budget.Check(); MultiAlignmentRun gap; gap.begin_ = cursor; gap.end_ = cursor;
+                    for (std::size_t side = 0; side < Texts.size(); ++side) gap.end_[side] += gaps[side][i];
+                    cursor = gap.end_; append(std::move(gap));
+                    if (i == n) break;
+                    MultiAlignmentRun row; row.begin_ = cursor; row.end_ = cursor;
+                    for (std::size_t side = 0; side < Texts.size(); ++side) row.end_[side] += matched[side][i];
+                    cursor = row.end_; append(std::move(row));
+                }
+                if (cursor != run.end_) throw Failure("InvalidAlignmentEdits");
+            }
+            budget.Check(); return result;
+        }
+        catch (const Failure& error) { if (error.code_ != "Timeout") throw; return *this; }
+    }
     AlignmentMap MultiAlignmentMap::Pair(std::size_t Left, std::size_t Right) const
     {
         if (Left == Right || Left >= lines_.size() || Right >= lines_.size()) throw Failure("InvalidAlignmentSide");

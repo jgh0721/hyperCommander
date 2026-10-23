@@ -51,6 +51,8 @@ namespace hc::compare
         std::size_t LineCount(std::size_t Side) const { return lines_.at(Side); }
         std::size_t RowCount() const { return rows_; }
         AlignmentMap Pair(std::size_t Left, std::size_t Right) const;
+        // Optional bounded refinement around the common anchor; never changes text.
+        MultiAlignmentMap WithSimilarLines(const std::vector<std::string_view>& Texts, const Budget& Limits = {}) const;
     private:
         std::vector<std::size_t> lines_;
         std::vector<MultiAlignmentRun> runs_;

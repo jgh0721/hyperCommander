@@ -1868,6 +1868,39 @@ private slots:
         auto first = blocks[0].toObject(); first["choice"] = "base"; blocks[0] = first; plan["blocks"] = blocks;
         ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {}); QCOMPARE(result.output_, QByteArray("a\nkeep\nR\n"));
     }
+    void multiPaneSimilarLineSlots()
+    {
+        const std::vector<std::string_view> texts{
+            "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n",
+            "head\n// left\nalpha_value = 9;\nomega_counter = 8;\ntail\n",
+            "head\nalpha_value = 3;\n// right\nomega_counter = 4;\ntail\n",
+            "head\n// result\nalpha_value = 5;\n// keep\nomega_counter = 6;\ntail\n"};
+        const auto original = MultiAlignmentMap::Build(texts);
+        const auto map = original.WithSimilarLines(texts); QCOMPARE(map.RowCount(), std::size_t(6));
+        for (std::size_t side = 0; side < texts.size(); ++side)
+        {
+            const auto pair = map.Pair(side, (side + 1) % texts.size());
+            const auto lines = SplitLines(texts[side]); std::string rebuilt;
+            for (std::size_t i = 0; i < lines.size(); ++i)
+            {
+                QCOMPARE(pair.LineAtRow(0, pair.DisplayRow(0, i)), std::optional<std::size_t>(i));
+                if (lines[i].starts_with("alpha")) QCOMPARE(pair.DisplayRow(0, i), std::size_t(2));
+                if (lines[i].starts_with("omega")) QCOMPARE(pair.DisplayRow(0, i), std::size_t(4));
+            }
+            for (const auto& run : map.Runs()) for (auto i = run.begin_[side]; i < run.end_[side]; ++i) rebuilt += lines[i];
+            QCOMPARE(rebuilt, std::string(texts[side]));
+        }
+        Budget low; low.steps_ = 0; QCOMPARE(original.WithSimilarLines(texts, low).RowCount(), original.RowCount());
+        low.deadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        QCOMPARE(original.WithSimilarLines(texts, low).RowCount(), original.RowCount());
+        std::atomic_bool canceled{true}; low = {}; low.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(original.WithSimilarLines(texts, low), Failure);
+        QVERIFY_EXCEPTION_THROWN(original.WithSimilarLines({"bad"}), Failure);
+        auto invalid = texts; invalid[1] = "bad";
+        QVERIFY_EXCEPTION_THROWN(original.WithSimilarLines(invalid), Failure);
+        const auto identical = MultiAlignmentMap::Build({texts[0], texts[0], texts[3]}).WithSimilarLines({texts[0], texts[0], texts[3]}).Pair(0, 1);
+        for (const auto& run : identical.Runs()) QVERIFY(!run.changed_);
+    }
     void multiPaneAlignmentSharedRows()
     {
         const std::vector<std::string_view> texts{"a\nb\n", "x\na\nb\n", "a\ny\nb\n", "x\na\ny\nb\n"};
@@ -1885,7 +1918,7 @@ private slots:
                 for (unsigned i = 0, n = random() % 20; i < n; ++i) { text += char('a' + random() % 5); text += random() % 2 ? "\r\n" : "\n"; }
                 if (!text.empty() && random() % 3 == 0) text.pop_back(); inputs.push_back(text);
             }
-            map = MultiAlignmentMap::Build(inputs);
+            map = MultiAlignmentMap::Build(inputs).WithSimilarLines(inputs);
             for (std::size_t side = 0; side < inputs.size(); ++side)
             {
                 const auto projection = map.Pair(side, (side + 1) % inputs.size());

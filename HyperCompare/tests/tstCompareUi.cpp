@@ -194,6 +194,36 @@ private slots:
             }
         }
     }
+    void allPaneSimilarLinesAfterEditing()
+    {
+        QWidget host; ScintillaEditBase base(&host), left(&host), right(&host), output(&host);
+        const QByteArray a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
+        const QByteArray b = "head\n// left\nalpha_value = 9;\nomega_counter = 8;\ntail\n";
+        const QByteArray c = "head\nalpha_value = 3;\n// right\nomega_counter = 4;\ntail\n";
+        setText(base, a.toStdString()); setText(left, b.toStdString()); setText(right, c.toStdString()); setText(output, a.toStdString());
+        host.resize(800, 400); host.show();
+        MultiPaneAlignment alignment({&base, &left, &right, &output}, &host);
+        const auto check = [&] {
+            for (const auto word : {"alpha", "omega"})
+            {
+                const auto baseLine = base.send(SCI_LINEFROMPOSITION, a.indexOf(word));
+                const auto row = base.send(SCI_VISIBLEFROMDOCLINE, baseLine);
+                for (auto* editor : {&left, &right, &output})
+                {
+                    const auto line = editor->send(SCI_LINEFROMPOSITION, contents(editor).indexOf(word));
+                    QCOMPARE(editor->send(SCI_VISIBLEFROMDOCLINE, line), row);
+                }
+            }
+        };
+        QTRY_VERIFY(alignment.Ready()); check();
+        QCOMPARE(base.send(SCI_VISIBLEFROMDOCLINE, 1), sptr_t(2));
+        QCOMPARE(base.send(SCI_VISIBLEFROMDOCLINE, 2), sptr_t(4));
+        const QByteArray inserted = "// manual\n";
+        output.send(SCI_INSERTTEXT, 5, reinterpret_cast<sptr_t>(inserted.constData()));
+        QTRY_VERIFY(alignment.Ready()); check(); QCOMPARE(contents(&output), a.left(5) + inserted + a.mid(5));
+        output.send(SCI_UNDO); QTRY_VERIFY(alignment.Ready()); check(); QCOMPARE(contents(&output), a);
+        QCOMPARE(contents(&base), a); QCOMPARE(contents(&left), b); QCOMPARE(contents(&right), c);
+    }
     void allPaneAlignmentEmptyDocuments()
     {
         QWidget host; ScintillaEditBase first(&host), second(&host), third(&host);

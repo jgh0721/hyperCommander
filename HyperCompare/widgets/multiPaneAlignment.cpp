@@ -74,7 +74,10 @@ namespace hc::compare
             {
                 Budget limits; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
                 std::vector<std::string_view> views; for (const auto& text : texts) views.emplace_back(text.constData(), std::size_t(text.size()));
-                result.map_ = std::make_shared<MultiAlignmentMap>(MultiAlignmentMap::Build(views, limits));
+                auto map = MultiAlignmentMap::Build(views, limits);
+                auto decoration = limits;
+                decoration.deadline_ = std::min(limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
+                result.map_ = std::make_shared<MultiAlignmentMap>(map.WithSimilarLines(views, decoration));
             }
             catch (const std::exception& error) { result.error_ = QString::fromUtf8(error.what()); }
             return result;
