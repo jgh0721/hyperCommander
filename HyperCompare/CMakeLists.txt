@@ -4,6 +4,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
 target_sources(hc_compare_semantic_worker PRIVATE runtime/docxWorker.cpp)
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
+    core/linearDiff.cpp core/linearDiff.hpp
     core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
     core/overviewMap.cpp core/overviewMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

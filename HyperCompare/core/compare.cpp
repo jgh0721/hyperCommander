@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compare.hpp"
+#include "linearDiff.hpp"
 #include <functional>
 
 namespace hc::compare
@@ -110,11 +111,19 @@ namespace hc::compare
         std::vector<std::vector<Index>> trace;
         std::uint64_t bytes = 0;
         Index distance = 0; bool done = false;
+        // Prefer bounded history for small changes. If the linear workspace cannot
+        // fit a custom budget, keep the original history allowance available.
+        const auto traceLimit = LinearDiffWorkspaceBytes(std::size_t(n + m)) <= Limits.traceBytes_
+            ? std::min<std::uint64_t>(Limits.traceBytes_, 8 * 1024 * 1024) : Limits.traceBytes_;
         // Keep only reachable diagonals and reject trace growth before allocating.
         for (Index d = 0; d <= n + m && !done; ++d)
         {
             Limits.Check(); const auto cost = std::uint64_t(d + 1) * sizeof(Index);
-            if (cost > Limits.traceBytes_ || bytes > Limits.traceBytes_ - cost) throw Failure("DiffMemoryLimit");
+            if (cost > traceLimit || bytes > traceLimit - cost)
+            {
+                std::vector<std::vector<Index>>{}.swap(trace);
+                return LinearDiff(left, right, prefix, suffix, Limits, steps);
+            }
             bytes += cost;
             std::vector<Index> row(static_cast<std::size_t>(d + 1));
             for (Index i = 0; i <= d; ++i)

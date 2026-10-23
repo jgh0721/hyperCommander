@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "core/compare.hpp"
+#include "core/linearDiff.hpp"
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
 #include "runtime/inputEditing.hpp"
@@ -1275,6 +1276,49 @@ private slots:
             for (const auto& edit : edits) length += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
             QCOMPARE(length, al.size() + bl.size() - 2 * lcs(al, bl));
         }
+    }
+    void linearDiffMatchesOptimalEdits()
+    {
+        std::mt19937 random(74532);
+        for (int sample = 0; sample < 3000; ++sample)
+        {
+            std::array<std::string, 2> texts;
+            for (auto& text : texts)
+            {
+                for (int i = 0, n = int(random() % 70); i < n; ++i) { text += char('a' + random() % 6); text += random() % 2 ? "\n" : "\r\n"; }
+                if (random() % 2 && !text.empty()) text.pop_back();
+            }
+            const auto a = SplitLines(texts[0]), b = SplitLines(texts[1]); std::uint64_t steps = 0;
+            const auto edits = LinearDiff(a, b, 0, 0, {}, steps); QCOMPARE(Apply(texts[0], edits), texts[1]);
+            std::size_t cost = 0; for (const auto& edit : edits) cost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+            QCOMPARE(cost, a.size() + b.size() - 2 * lcs(a, b));
+            steps = 0; QCOMPARE(LinearDiff(a, b, 0, 0, {}, steps), edits);
+        }
+    }
+    void linearDiffFallbackAndLimits()
+    {
+        std::string a, b;
+        for (int i = 0; i < 3000; ++i) { a += std::to_string(i) + "\n"; b += std::to_string(2999 - i) + "\n"; }
+        QElapsedTimer timer; timer.start(); const auto edits = Diff(a, b); QCOMPARE(Apply(a, edits), b);
+        std::size_t cost = 0; for (const auto& edit : edits) cost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+        QCOMPARE(cost, std::size_t(5998)); qInfo("Linear diff fallback: 3000 reversed lines in %lld ms", timer.elapsed());
+        const auto al = SplitLines(a), bl = SplitLines(b); std::uint64_t steps = 0; Budget limits; limits.traceBytes_ = 8;
+        QVERIFY_EXCEPTION_THROWN(LinearDiff(al, bl, 0, 0, limits, steps), Failure);
+        limits = {}; limits.steps_ = 10; steps = 9; QVERIFY_EXCEPTION_THROWN(LinearDiff(al, bl, 0, 0, limits, steps), Failure);
+        std::atomic_bool canceled{true}; limits = {}; limits.canceled_ = &canceled; steps = 0;
+        QVERIFY_EXCEPTION_THROWN(LinearDiff(al, bl, 0, 0, limits, steps), Failure);
+        limits = {}; limits.deadline_ = std::chrono::steady_clock::now(); QVERIFY_EXCEPTION_THROWN(LinearDiff(al, bl, 0, 0, limits, steps), Failure);
+        const auto merged = Merge(a, a, b); QCOMPARE(merged.text_, b); QVERIFY(merged.conflicts_.empty());
+        const auto paddedA = std::string("head\n") + a + "tail\n", paddedB = std::string("head\n") + b + "tail\n";
+        QCOMPARE(Apply(paddedA, Diff(paddedA, paddedB)), paddedB);
+        steps = 0; limits = {}; limits.traceBytes_ = LinearDiffWorkspaceBytes(al.size() + bl.size());
+        QCOMPARE(Apply(a, LinearDiff(al, bl, 0, 0, limits, steps)), b);
+        --limits.traceBytes_; steps = 0; QVERIFY_EXCEPTION_THROWN(LinearDiff(al, bl, 0, 0, limits, steps), Failure);
+        // A long mostly equal input needs little history even if two full vectors cannot fit.
+        std::string sparseA = "a\n", sparseB = "b\n";
+        for (int i = 0; i < 20000; ++i) { sparseA += "same\n"; sparseB += "same\n"; }
+        sparseA += "c\n"; sparseB += "d\n"; limits = {}; limits.traceBytes_ = 1024;
+        QCOMPARE(Apply(sparseA, Diff(sparseA, sparseB, limits)), sparseB);
     }
     void mergeIdentities()
     {
