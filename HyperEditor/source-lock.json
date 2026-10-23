@@ -237,9 +237,9 @@
     "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file"
   },
   "pdfium": {
-    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7834/pdfium-win-x64.tgz",
-    "sha256": "0abfacf8aacc919f98eff2c3efa2927c3dc9faf07e31f22558a1f1cf93809612",
-    "version": "150.0.7834.0"
+    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz",
+    "sha256": "3452d11031050ec65e57f180215b57b9e6d465e3fbedafa8a77ad90885c7d23e",
+    "version": "158.0.8111.0"
   },
   "policy": "MainWindow, application settings, direct writes and shadow backup are replaced by HC services; original vendor naming retained inside this isolated port.",
   "features": [

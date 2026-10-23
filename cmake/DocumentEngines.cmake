@@ -43,8 +43,8 @@ foreach(T IN ITEMS hc_scintilla hc_lexilla)
 endforeach()
 # PDFium is deliberately a DLL. Only its documented C API crosses the CRT boundary.
 FetchContent_Declare(hc_pdfium
-    URL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7834/pdfium-win-x64.tgz"
-    URL_HASH SHA256=0abfacf8aacc919f98eff2c3efa2927c3dc9faf07e31f22558a1f1cf93809612
+    URL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz"
+    URL_HASH SHA256=3452d11031050ec65e57f180215b57b9e6d465e3fbedafa8a77ad90885c7d23e
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(hc_pdfium)
 add_library(hc_pdfium_runtime SHARED IMPORTED GLOBAL)
