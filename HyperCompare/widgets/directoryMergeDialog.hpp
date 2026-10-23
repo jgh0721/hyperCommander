@@ -21,7 +21,7 @@ namespace hc::compare
         QJsonObject Plan() const;
         bool HasPlan() const { return plan_["kind"] == "HyperCompareDirectoryPlan"; }
         QString Output() const { return plan_["output"].toObject()["path"].toString(); }
-        bool Matches(const QString& Output, bool Mirror, bool Overwrite) const;
+        bool Matches(const QString& Output, bool Mirror, bool Overwrite, storage::CopyOptions Copy = {false, true, false, false}) const;
         int Unresolved() const { return unresolved_; }
         int rowCount(const QModelIndex& Parent = {}) const override;
         int columnCount(const QModelIndex& Parent = {}) const override;
@@ -57,6 +57,7 @@ namespace hc::compare
     private:
         void run(QString Kind, std::function<Result()> Work);
         void updateControls();
+        storage::CopyOptions copyOptions() const;
         Request input_;
         Result comparison_, last_;
         QString kind_, planPath_;
@@ -67,6 +68,11 @@ namespace hc::compare
         QLineEdit* output_ = nullptr;
         QCheckBox* mirror_ = nullptr;
         QCheckBox* overwrite_ = nullptr;
+        QCheckBox* metadata_ = nullptr;
+        QCheckBox* acl_ = nullptr;
+        QCheckBox* streams_ = nullptr;
+        int transferSource_ = -1;
+        QString transferPath_;
         QLabel* state_ = nullptr;
         QPushButton* prepare_ = nullptr;
         QPushButton* save_ = nullptr;

@@ -10,6 +10,8 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QScopeGuard>
+#include <Aclapi.h>
 
 namespace hc::compare
 {
@@ -62,12 +64,12 @@ namespace hc::compare
             }
             return result;
         }
-        QJsonObject inventory(const DirectorySnapshot& Snapshot, const Budget& Limits)
+        QJsonObject inventory(const DirectorySnapshot& Snapshot, const Budget& Limits, storage::CopyOptions Copy)
         {
             QJsonArray entries;
             for (const auto& item : Snapshot.entries_)
             {
-                Limits.Check(); auto evidence = DirectoryEntryEvidence(Snapshot.Expand(item), Limits);
+                Limits.Check(); auto evidence = DirectoryEntryEvidence(Snapshot.Expand(item), Limits, Copy);
                 evidence["path"] = item.path_; entries.append(evidence);
             }
             return {{"path", CheckedDirectoryPath(Snapshot.root_)}, {"exists", true}, {"revision", revision(Snapshot.entry_)}, {"entries", entries}};
@@ -138,10 +140,64 @@ namespace hc::compare
         if (size != Entry.size_ || require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != Entry.id_.revision_) throw Failure("DirectoryChanged");
         return hash.result().toHex();
     }
-    QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits)
+    QJsonObject DirectoryCopyEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy)
     {
-        return {{"directory", Entry.directory_}, {"size", QString::number(Entry.size_)}, {"revision", revision(Entry)},
+        if (Entry.directory_ || !DirectoryCopyExtras(Copy)) return {};
+        Limits.Check(); const auto ctx = context(Limits); const auto provider = storage::MakeNativeReadProvider(Entry.locator_.kind_);
+        const auto bound = require(provider->Resolve(Entry.locator_, ctx).get());
+        if (bound.id_.revision_ != Entry.id_.revision_) throw Failure("DirectorySourceChanged");
+        const auto pin = require(provider->OpenRead(bound.id_, ctx).get());
+        const auto path = QDir::toNativeSeparators(QString::fromStdString(Entry.locator_.root_));
+        QJsonObject result;
+        if (Copy.metadata_) { result["modified"] = QString::number(bound.modifiedUtcMs_); result["attributes"] = QString::number(bound.attributes_ & 0x27u); }
+        if (Copy.acl_)
+        {
+            const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(path.utf16()), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) throw Failure("DirectoryAclReadFailed"); const auto close = qScopeGuard([&] { CloseHandle(handle); });
+            PACL dacl = nullptr; PSECURITY_DESCRIPTOR descriptor = nullptr;
+            if (GetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS) throw Failure("DirectoryAclReadFailed");
+            const auto release = qScopeGuard([&] { LocalFree(descriptor); }); SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+            if (!GetSecurityDescriptorControl(descriptor, &control, &revision)) throw Failure("DirectoryAclReadFailed");
+            result["dacl"] = dacl ? QString::fromLatin1(QCryptographicHash::hash(QByteArrayView(reinterpret_cast<const char*>(dacl), dacl->AclSize), QCryptographicHash::Sha256).toHex()) : "null";
+            result["protected"] = bool(control & SE_DACL_PROTECTED);
+        }
+        if (Copy.streams_)
+        {
+            QStringList names; WIN32_FIND_STREAM_DATA data{};
+            const auto search = FindFirstStreamW(reinterpret_cast<const wchar_t*>(path.utf16()), FindStreamInfoStandard, &data, 0);
+            if (search == INVALID_HANDLE_VALUE && GetLastError() != ERROR_HANDLE_EOF) throw Failure("DirectoryStreamsReadFailed");
+            const auto closeSearch = qScopeGuard([&] { if (search != INVALID_HANDLE_VALUE) FindClose(search); });
+            if (search != INVALID_HANDLE_VALUE) for (;;)
+            {
+                Limits.Check(); const auto name = QString::fromWCharArray(data.cStreamName);
+                if (name != "::$DATA") { if (names.size() >= 65536 || !name.startsWith(':') || !name.endsWith(":$DATA") || name.contains('/') || name.contains('\\')) throw Failure("DirectoryStreamNameInvalid"); names.append(name); }
+                if (!FindNextStreamW(search, &data)) { if (GetLastError() != ERROR_HANDLE_EOF) throw Failure("DirectoryStreamsReadFailed"); break; }
+            }
+            names.sort(); QJsonArray streams; QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+            for (const auto& name : names)
+            {
+                Limits.Check(); const auto streamPath = path + name;
+                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(streamPath.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+                if (handle == INVALID_HANDLE_VALUE) throw Failure("DirectoryStreamsReadFailed"); const auto close = qScopeGuard([&] { CloseHandle(handle); });
+                QCryptographicHash hash(QCryptographicHash::Sha256); quint64 size = 0;
+                for (;;)
+                {
+                    Limits.Check(); DWORD read = 0; if (!ReadFile(handle, buffer.data(), DWORD(buffer.size()), &read, nullptr)) throw Failure("DirectoryStreamsReadFailed");
+                    if (!read) break; hash.addData(QByteArrayView(buffer.constData(), read)); size += read;
+                }
+                streams.append(QJsonObject{{"name", name}, {"size", QString::number(size)}, {"sha256", QString::fromLatin1(hash.result().toHex())}});
+            }
+            result["streams"] = streams;
+        }
+        if (require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != Entry.id_.revision_) throw Failure("DirectorySourceChanged");
+        return result;
+    }
+    QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy)
+    {
+        QJsonObject result{{"directory", Entry.directory_}, {"size", QString::number(Entry.size_)}, {"revision", revision(Entry)},
             {"sha256", Entry.directory_ ? QString{} : QString::fromLatin1(DirectoryFileDigest(Entry, Limits))}};
+        if (!Entry.directory_ && DirectoryCopyExtras(Copy)) result["copy"] = DirectoryCopyEvidence(Entry, Limits, Copy);
+        return result;
     }
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
     {
@@ -153,12 +209,12 @@ namespace hc::compare
         for (const auto& snapshot : *Comparison.directories_)
         {
             if (DirectoryPathsOverlap(output, CheckedDirectoryPath(snapshot.root_))) throw Failure("DirectoryOutputOverlapsInput");
-            roots.append(inventory(snapshot, Limits));
+            roots.append(inventory(snapshot, Limits, Input.directoryCopy_));
         }
         QJsonObject destination{{"path", output}, {"exists", false}, {"revision", ""}, {"entries", QJsonArray{}}};
         std::optional<DirectorySnapshot> capturedOutput;
         if (QFileInfo::exists(output))
-        { capturedOutput = CaptureDirectory(output, {}, Limits); destination = inventory(*capturedOutput, Limits); }
+        { capturedOutput = CaptureDirectory(output, {}, Limits); destination = inventory(*capturedOutput, Limits, Input.directoryCopy_); }
         else if (!QFileInfo(QFileInfo(output).absolutePath()).isDir()) throw Failure("DirectoryParentMissing");
         QJsonArray actions; QSet<QString> selected;
         for (const auto& row : Comparison.entries_)
@@ -178,7 +234,7 @@ namespace hc::compare
                     if (at == tree.cend() || at->directory_ || at->path_ != path) { eligible = false; break; }
                     inputs[side] = (*Comparison.directories_)[side].Expand(*at);
                 }
-                if (eligible && InputEncoding(Input, 0) == InputEncoding(Input, 1) && InputEncoding(Input, 0) == InputEncoding(Input, 2) && MergeDirectoryText(inputs, InputEncoding(Input, 0), Limits)) choice = "merge";
+                if (eligible && !DirectoryCopyExtras(Input.directoryCopy_) && InputEncoding(Input, 0) == InputEncoding(Input, 1) && InputEncoding(Input, 0) == InputEncoding(Input, 2) && MergeDirectoryText(inputs, InputEncoding(Input, 0), Limits)) choice = "merge";
             }
             if ((choice == "left" || choice == "right") && !entry[choice].toObject()["present"].toBool()) choice = "omit";
             actions.append(QJsonObject{{"path", path}, {"choice", choice}, {"reason", status}}); selected.insert(path.toCaseFolded());
@@ -191,6 +247,8 @@ namespace hc::compare
         QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", InputEncoding(Input, 0)}}}, {"roots", roots}, {"output", destination},
             {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
             {"overwrite", Input.overwrite_}, {"mirror", Input.mirror_}, {"actions", actions}};
+        if (DirectoryCopyExtras(Input.directoryCopy_))
+        { result["schemaVersion"] = 4; result["copyPolicy"] = QJsonObject{{"metadata", Input.directoryCopy_.metadata_}, {"acl", Input.directoryCopy_.acl_}, {"streams", Input.directoryCopy_.streams_}}; }
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
         return result;
     }
@@ -205,7 +263,7 @@ namespace hc::compare
         if (DirectoryPathsOverlap(source.root_, output)) throw Failure("DirectoryOutputOverlapsInput");
         ValidateDirectory(source, Input.directory_, Limits); ValidateDirectory(target, Input.directory_, Limits);
         const auto destinationSnapshot = CaptureDirectory(output, {}, Limits);
-        const auto sourceInventory = inventory(source, Limits), destination = inventory(destinationSnapshot, Limits);
+        const auto sourceInventory = inventory(source, Limits, Input.directoryCopy_), destination = inventory(destinationSnapshot, Limits, Input.directoryCopy_);
         QMap<QString, QString> paths;
         for (auto it = source.entries_.cbegin(); it != source.entries_.cend(); ++it) paths.insert(it.key(), it->path_);
         for (auto it = destinationSnapshot.entries_.cbegin(); it != destinationSnapshot.entries_.cend(); ++it) if (!paths.contains(it.key())) paths.insert(it.key(), it->path_);
@@ -220,6 +278,8 @@ namespace hc::compare
         QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 3}, {"transfer", true}, {"roots", QJsonArray{sourceInventory}}, {"output", destination},
             {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
             {"overwrite", true}, {"mirror", false}, {"actions", actions}};
+        if (DirectoryCopyExtras(Input.directoryCopy_))
+        { result["schemaVersion"] = 4; result["copyPolicy"] = QJsonObject{{"metadata", Input.directoryCopy_.metadata_}, {"acl", Input.directoryCopy_.acl_}, {"streams", Input.directoryCopy_.streams_}}; }
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
         return result;
     }

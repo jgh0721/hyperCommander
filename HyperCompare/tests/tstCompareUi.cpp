@@ -625,6 +625,20 @@ private slots:
         auto* base = window.findChild<ScintillaEditBase*>("BASE"); QVERIFY(base); QVERIFY(base->send(SCI_GETSELECTIONEND) > base->send(SCI_GETSELECTIONSTART));
         QVERIFY(!base->send(SCI_CANUNDO)); window.close();
     }
+    void directoryGuiCopyOptionsInvalidateAndApply()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "same"); write(r.file1_ + "/a:info", "ADS"); write(r.file2_ + "/a", "same");
+        auto compared = Execute(r, std::make_shared<std::atomic_bool>(false), false); DirectoryMergeDialog dialog(r, compared); dialog.show();
+        dialog.PrepareTransfer(0, "a"); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QCOMPARE(dialog.Model()->Plan()["schemaVersion"].toInt(), 3);
+        for (const auto& name : {"directoryCopyMetadata", "directoryCopyAcl", "directoryCopyStreams"}) { auto* check = dialog.findChild<QCheckBox*>(name); QVERIFY(check); check->setChecked(true); }
+        dialog.SavePlan(dir.filePath("stale.json")); QVERIFY(!QFileInfo::exists(dir.filePath("stale.json")));
+        dialog.PrepareTransfer(0, "a"); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QVERIFY2(dialog.LastResult().error_.isEmpty(), qPrintable(dialog.LastResult().error_));
+        QCOMPARE(dialog.Model()->Plan()["schemaVersion"].toInt(), 4); QVERIFY(dialog.Model()->Plan()["copyPolicy"].toObject()["streams"].toBool());
+        dialog.SavePlan(dir.filePath("copy.json")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); dialog.ApplyPlan(false); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QVERIFY2(dialog.LastResult().error_.isEmpty(), qPrintable(dialog.LastResult().error_)); QFile stream(r.file2_ + "/a:info"); QVERIFY(stream.open(QIODevice::ReadOnly)); QCOMPARE(stream.readAll(), QByteArray("ADS")); stream.close();
+        QVERIFY(dialog.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-copy-options.png")); dialog.close();
+    }
     void directoryRenameMenuAndKeyboard()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");

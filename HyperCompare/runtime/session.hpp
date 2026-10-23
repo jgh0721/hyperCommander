@@ -18,6 +18,7 @@ namespace hc::compare
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
+        storage::CopyOptions directoryCopy_{false, true, false, false};
         QString semantic_ = "auto";
         QString textEquality_ = "content";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;

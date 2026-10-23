@@ -70,10 +70,11 @@ namespace hc::compare
         for (qsizetype row = 0; row < actions_.size(); ++row) { auto action = actions_[row].toObject(); action["choice"] = choices_[row]; actions.append(action); }
         plan["actions"] = actions; return plan;
     }
-    bool DirectoryPlanModel::Matches(const QString& OutputPath, bool Mirror, bool Overwrite) const
+    bool DirectoryPlanModel::Matches(const QString& OutputPath, bool Mirror, bool Overwrite, storage::CopyOptions Copy) const
     {
         return HasPlan() && Output().compare(QDir::cleanPath(QDir::fromNativeSeparators(OutputPath)), Qt::CaseInsensitive) == 0 &&
-            plan_["mirror"].toBool() == Mirror && plan_["overwrite"].toBool() == Overwrite;
+            plan_["mirror"].toBool() == Mirror && plan_["overwrite"].toBool() == Overwrite &&
+            plan_["copyPolicy"].toObject()["metadata"].toBool() == Copy.metadata_ && plan_["copyPolicy"].toObject()["acl"].toBool() == Copy.acl_ && plan_["copyPolicy"].toObject()["streams"].toBool() == Copy.streams_;
     }
     int DirectoryPlanModel::rowCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : int(actions_.size()); }
     int DirectoryPlanModel::columnCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : 3; }
@@ -128,8 +129,15 @@ namespace hc::compare
         options->addWidget(overwrite_); options->addWidget(mirror_); options->addStretch(); prepare_ = new QPushButton(tr("계획 만들기"), this); options->addWidget(prepare_); box->addLayout(options);
         connect(prepare_, &QPushButton::clicked, this, [this] {
             if (model_->HasPlan() && QMessageBox::question(this, tr("계획 다시 만들기"), tr("현재 파일별 선택을 버리고 새 계획을 만드시겠습니까?")) != QMessageBox::Yes) return;
-            Prepare(output_->text(), mirror_->isChecked(), overwrite_->isChecked());
+            if (transfer_) PrepareTransfer(transferSource_, transferPath_); else Prepare(output_->text(), mirror_->isChecked(), overwrite_->isChecked());
         });
+        auto* copyRow = new QHBoxLayout(); metadata_ = new QCheckBox(tr("파일 수정 시각·특성"), this); acl_ = new QCheckBox(tr("파일 DACL"), this); streams_ = new QCheckBox(tr("파일 추가 데이터 스트림(ADS)"), this);
+        metadata_->setObjectName("directoryCopyMetadata"); acl_->setObjectName("directoryCopyAcl"); streams_->setObjectName("directoryCopyStreams");
+        metadata_->setChecked(input_.directoryCopy_.metadata_); acl_->setChecked(input_.directoryCopy_.acl_); streams_->setChecked(input_.directoryCopy_.streams_);
+        metadata_->setToolTip(tr("선택한 원본 파일의 수정 시각과 읽기 전용·숨김·시스템·보관 특성을 복사합니다. 폴더에는 적용하지 않습니다."));
+        acl_->setToolTip(tr("원본 파일 DACL을 복사하며 대상 폴더의 상속 규칙이 적용됩니다. 적용 여부가 기록되지 않은 중단 작업은 자동 재개하지 않고 복구 검토를 요구합니다."));
+        streams_->setToolTip(tr("원본 파일의 추가 데이터 스트림을 복사하고 내용을 검증합니다. 지원되지 않는 저장소에서는 실행을 중단합니다."));
+        copyRow->addWidget(metadata_); copyRow->addWidget(acl_); copyRow->addWidget(streams_); copyRow->addStretch(); box->addLayout(copyRow);
         model_ = new DirectoryPlanModel(this); model_->setObjectName("directoryPlanModel"); table_ = new QTableView(this); table_->setObjectName("directoryPlanTable"); table_->setModel(model_);
         QFont list = font(); list.fromString(QSettings{}.value("fonts/list", list.toString()).toString()); table_->setFont(list);
         table_->setItemDelegateForColumn(1, new ChoiceDelegate(table_)); table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -157,9 +165,10 @@ namespace hc::compare
         const auto optionsChanged = [this] {
             if (statusChanged_) statusChanged_(3);
             updateControls();
-            if (!Busy() && model_->HasPlan() && !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked()))
+            if (!Busy() && model_->HasPlan() && !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked(), copyOptions()))
                 state_->setText(tr("출력 설정이 변경되었습니다. ‘계획 만들기’로 다시 검토하십시오."));
         };
+        connect(metadata_, &QCheckBox::toggled, this, optionsChanged); connect(acl_, &QCheckBox::toggled, this, optionsChanged); connect(streams_, &QCheckBox::toggled, this, optionsChanged);
         connect(output_, &QLineEdit::textChanged, this, optionsChanged);
         connect(mirror_, &QCheckBox::toggled, this, optionsChanged); connect(overwrite_, &QCheckBox::toggled, this, optionsChanged);
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
@@ -186,7 +195,7 @@ namespace hc::compare
     }
     void DirectoryMergeDialog::Prepare(const QString& Output, bool Mirror, bool Overwrite)
     {
-        if (Busy()) return; model_->SetPlan({}); auto input = input_; input.output_ = Output; input.mirror_ = Mirror; input.overwrite_ = Overwrite;
+        if (Busy()) return; model_->SetPlan({}); auto input = input_; input.output_ = Output; input.mirror_ = Mirror; input.overwrite_ = Overwrite; input.directoryCopy_ = copyOptions();
         output_->setText(Output); mirror_->setChecked(Mirror); overwrite_->setChecked(Overwrite);
         run("prepare", [input, comparison = comparison_, cancel = canceled_] {
             Result result; result.directoryPlan_ = MakeDirectoryPlan(input, comparison, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
@@ -195,16 +204,17 @@ namespace hc::compare
     void DirectoryMergeDialog::PrepareTransfer(int Source, const QString& Path)
     {
         if (Busy() || Source < 0 || Source > 1) return;
-        transfer_ = true; model_->SetPlan({}); output_->setText(Source == 0 ? input_.file2_ : input_.file1_); mirror_->setChecked(false); overwrite_->setChecked(true);
+        transfer_ = true; transferSource_ = Source; transferPath_ = Path; model_->SetPlan({}); output_->setText(Source == 0 ? input_.file2_ : input_.file1_); mirror_->setChecked(false); overwrite_->setChecked(true);
         findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(Source == 0 ? input_.file1_ : input_.file2_));
         findChild<QPushButton*>("directoryOutputBrowse")->setEnabled(false);
-        run("prepare", [input = input_, comparison = comparison_, Source, Path, cancel = canceled_] {
+        auto input = input_; input.directoryCopy_ = copyOptions();
+        run("prepare", [input, comparison = comparison_, Source, Path, cancel = canceled_] {
             Result result; result.directoryPlan_ = MakeDirectoryTransferPlan(input, comparison, Source, Path, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
         });
     }
     void DirectoryMergeDialog::SavePlan(const QString& Path)
     {
-        if (Busy() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked())) return;
+        if (Busy() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked(), copyOptions())) return;
         const auto plan = model_->Plan(); run("save", [input = input_, plan, Path, cancel = canceled_] {
             CheckProtectedInputs(input, {Path}, budget(input, cancel));
             Result result; SaveDirectoryPlan(plan, Path, result, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
@@ -212,16 +222,19 @@ namespace hc::compare
     }
     void DirectoryMergeDialog::ApplyPlan(bool AllowDelete, bool Resume)
     {
-        if (Busy() || planPath_.isEmpty() || model_->Unresolved() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked())) return;
+        if (Busy() || planPath_.isEmpty() || model_->Unresolved() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked(), copyOptions())) return;
         Request request; request.mode_ = "apply"; request.headless_ = true; request.applyPlan_ = planPath_; request.allowDelete_ = AllowDelete; request.resume_ = Resume;
         request.protectedInputs_ = input_.protectedInputs_; request.requestId_ = input_.requestId_;
         request.timeoutMs_ = input_.timeoutMs_; request.applyPlanDigest_ = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(model_->Plan()).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
         run("apply", [request, cancel = canceled_] { return Execute(request, cancel, true); });
     }
+    storage::CopyOptions DirectoryMergeDialog::copyOptions() const
+    { return {metadata_->isChecked(), true, acl_->isChecked(), streams_->isChecked()}; }
     void DirectoryMergeDialog::updateControls()
     {
-        prepare_->setEnabled(!Busy() && !transfer_); output_->setEnabled(!Busy() && !transfer_); mirror_->setEnabled(!Busy() && !transfer_); overwrite_->setEnabled(!Busy() && !transfer_); table_->setEnabled(!Busy());
-        const bool current = model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked());
+        metadata_->setEnabled(!Busy()); acl_->setEnabled(!Busy()); streams_->setEnabled(!Busy());
+        prepare_->setEnabled(!Busy()); output_->setEnabled(!Busy() && !transfer_); mirror_->setEnabled(!Busy() && !transfer_); overwrite_->setEnabled(!Busy() && !transfer_); table_->setEnabled(!Busy());
+        const bool current = model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked(), copyOptions());
         save_->setEnabled(!Busy() && current); apply_->setEnabled(!Busy() && current && !planPath_.isEmpty() && !model_->Unresolved());
         cancel_->setText(Busy() ? tr("취소") : tr("닫기"));
     }

@@ -70,9 +70,16 @@ namespace hc::compare
         {
             if (Action.kind_ == "remove") return Evidence.isEmpty();
             if (Action.kind_ == "mkdir") return Evidence["directory"].toBool();
-            return !Evidence.isEmpty() && !Evidence["directory"].toBool() && Evidence["sha256"] == Action.desired_["sha256"] && Evidence["size"] == Action.desired_["size"];
+            if (Evidence.isEmpty() || Evidence["directory"].toBool() || Evidence["sha256"] != Action.desired_["sha256"] || Evidence["size"] != Action.desired_["size"]) return false;
+            const auto wanted = Action.desired_["copy"].toObject(), actual = Evidence["copy"].toObject();
+            // DACL inheritance may change the final descriptor. Its observed value
+            // is recorded durably and verified on resume; an ambiguous ACL commit is never adopted.
+            if (wanted.contains("dacl") && (!actual["dacl"].isString() || !actual["protected"].isBool())) return false;
+            for (auto it = wanted.cbegin(); it != wanted.cend(); ++it)
+                if (it.key() != "dacl" && it.key() != "protected" && actual[it.key()] != it.value()) return false;
+            return true;
         }
-        Evidence inventory(const QJsonObject& Object)
+        Evidence inventory(const QJsonObject& Object, storage::CopyOptions Copy)
         {
             keys(Object, {"path", "exists", "revision", "entries"});
             if (!Object["exists"].isBool() || !Object["entries"].isArray()) throw Failure("DirectorySchemaInvalid");
@@ -84,7 +91,9 @@ namespace hc::compare
             for (const auto& value : entries)
             {
                 if (!value.isObject()) throw Failure("DirectorySchemaInvalid"); auto entry = value.toObject();
-                keys(entry, {"path", "directory", "size", "revision", "sha256"});
+                QStringList expectedKeys{"path", "directory", "size", "revision", "sha256"};
+                if (!entry["directory"].toBool() && DirectoryCopyExtras(Copy)) { expectedKeys.append("copy"); if (!entry["copy"].isObject()) throw Failure("DirectorySchemaInvalid"); }
+                keys(entry, expectedKeys);
                 const auto path = relative(entry).toCaseFolded();
                 if (result.contains(path) || !entry["directory"].isBool()) throw Failure("DirectorySchemaInvalid");
                 bool ok = false; const auto size = text(entry, "size"); size.toULongLong(&ok); if (!ok) throw Failure("DirectorySchemaInvalid");
@@ -94,12 +103,12 @@ namespace hc::compare
             }
             return result;
         }
-        Evidence capture(const DirectorySnapshot& Snapshot, const Budget& Limits)
+        Evidence capture(const DirectorySnapshot& Snapshot, const Budget& Limits, storage::CopyOptions Copy)
         {
             Evidence result;
-            result.insert({}, DirectoryEntryEvidence(Snapshot.entry_, Limits));
+            result.insert({}, DirectoryEntryEvidence(Snapshot.entry_, Limits, Copy));
             for (auto it = Snapshot.entries_.cbegin(); it != Snapshot.entries_.cend(); ++it)
-                result.insert(it.key(), DirectoryEntryEvidence(Snapshot.Expand(*it), Limits));
+                result.insert(it.key(), DirectoryEntryEvidence(Snapshot.Expand(*it), Limits, Copy));
             return result;
         }
         void validateEvidence(const Evidence& Expected, const Evidence& Actual)
@@ -108,10 +117,10 @@ namespace hc::compare
             for (auto it = Expected.cbegin(); it != Expected.cend(); ++it)
                 if (!Actual.contains(it.key()) || !sameEvidence(it.value(), Actual.value(it.key()))) throw Failure("DirectorySnapshotMismatch");
         }
-        QJsonObject inspect(const QString& Path, const Budget& Limits)
+        QJsonObject inspect(const QString& Path, const Budget& Limits, storage::CopyOptions Copy)
         {
             CheckedDirectoryPath(Path); const auto entry = require(writer(Path)->Inspect(locator(Path), context(Limits)));
-            return entry ? DirectoryEntryEvidence(*entry, Limits) : QJsonObject{};
+            return entry ? DirectoryEntryEvidence(*entry, Limits, Copy) : QJsonObject{};
         }
         void append(QFile& File, const QJsonObject& Event)
         {
@@ -121,7 +130,7 @@ namespace hc::compare
             const auto handle = _get_osfhandle(File.handle());
             if (handle == -1 || !FlushFileBuffers(reinterpret_cast<HANDLE>(handle))) throw Failure("DirectoryJournalFlushFailed");
         }
-        void copy(const Action& Action, const QString& Destination, const QJsonObject& Before, Result& Value, const Budget& Limits)
+        void copy(const Action& Action, const QString& Destination, const QJsonObject& Before, Result& Value, const Budget& Limits, storage::CopyOptions Copy)
         {
             const auto& source = *Action.source_; const auto provider = storage::MakeNativeReadProvider(source.locator_.kind_); auto ctx = context(Limits);
             ctx.expectedWriteBytes_ = source.size_;
@@ -130,12 +139,15 @@ namespace hc::compare
             const auto input = require(provider->OpenRead(bound.id_, ctx).get());
             auto destination = writer(Destination); storage::DestinationExpectation expected;
             if (!Before.isEmpty()) expected = {true, storage::ResourceRevision{Before["revision"].toString().toStdString()}};
-            storage::CopyOptions options; options.verify_ = true; options.metadata_ = false;
+            auto options = Copy; options.verify_ = true;
+            if (DirectoryCopyExtras(Copy) && DirectoryCopyEvidence(source, Limits, Copy) != Action.desired_["copy"].toObject()) throw Failure("DirectorySourceChanged");
             SaveRecoveryJournal saveJournal; ctx.writeCheckpoint_ = saveJournal.Checkpoint();
             auto opened = destination->BeginCopy(locator(Destination), expected, options, ctx);
             saveJournal.Track(Value.recovery_); auto output = require(std::move(opened));
             try
             {
+                require(output->ConfigureCopy(bound, options, ctx));
+                if (Copy.metadata_) require(output->SetMetadata({bound.modifiedUtcMs_, bound.attributes_}, ctx));
                 QCryptographicHash hash(QCryptographicHash::Sha256); std::uint64_t size = 0;
                 for (;;)
                 {
@@ -147,7 +159,8 @@ namespace hc::compare
                 }
                 if (QString::number(size) != Action.desired_["size"] || QString::fromLatin1(hash.result().toHex()) != Action.desired_["sha256"] ||
                     require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != source.id_.revision_) throw Failure("DirectorySourceChanged");
-                while (!require(output->AdvanceCopyExtras(0, ctx)).done_) Limits.Check();
+                while (!require(output->AdvanceCopyExtras(std::numeric_limits<std::uint64_t>::max(), ctx)).done_) Limits.Check();
+                if (DirectoryCopyExtras(Copy) && DirectoryCopyEvidence(source, Limits, Copy) != Action.desired_["copy"].toObject()) throw Failure("DirectorySourceChanged");
                 while (!require(output->VerifyContent(ctx))) Limits.Check();
                 Limits.Check(); const auto receipt = require(output->Commit(ctx));
                 if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
@@ -192,9 +205,18 @@ namespace hc::compare
         const auto plan = json(bytes); Value.directoryPlan_ = plan;
         if (!Input.applyPlanDigest_.isEmpty() && Input.applyPlanDigest_ != QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(plan).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()))
             throw Failure("DirectoryPlanChanged");
-        const bool transfer = plan["schemaVersion"] == 3;
-        const bool textMerge = plan["schemaVersion"] == 2;
+        const bool extended = plan["schemaVersion"] == 4;
+        const bool transfer = plan["schemaVersion"] == 3 || (extended && plan.contains("transfer"));
+        const bool textMerge = plan["schemaVersion"] == 2 || (extended && !transfer);
+        storage::CopyOptions copyPolicy{false, true, false, false};
+        if (extended)
+        {
+            if (!plan["copyPolicy"].isObject()) throw Failure("DirectorySchemaInvalid"); const auto copy = plan["copyPolicy"].toObject(); keys(copy, {"metadata", "acl", "streams"});
+            for (const auto& key : {"metadata", "acl", "streams"}) if (!copy[key].isBool()) throw Failure("DirectorySchemaInvalid");
+            copyPolicy = {copy["metadata"].toBool(), true, copy["acl"].toBool(), copy["streams"].toBool()};
+        }
         QStringList expectedKeys{"kind", "schemaVersion", "roots", "output", "include", "exclude", "overwrite", "mirror", "actions"};
+        if (extended) expectedKeys.append("copyPolicy");
         if (transfer) expectedKeys.append("transfer");
         if (textMerge) expectedKeys.append("textMerge"); keys(plan, expectedKeys);
         if (transfer && (plan["transfer"] != true || plan["mirror"] != false)) throw Failure("DirectorySchemaInvalid");
@@ -220,7 +242,7 @@ namespace hc::compare
         const auto journalPath = CheckedDirectoryPath(Input.journal_.isEmpty() ? planPath + ".journal" : Input.journal_);
         CheckProtectedInputs(Input, {output, journalPath}, Limits);
         if (journalPath.compare(planPath, Qt::CaseInsensitive) == 0 || DirectoryPathsOverlap(output, journalPath) || DirectoryPathsOverlap(output, planPath)) throw Failure("DirectoryArtifactOverlapsRoot");
-        auto expected = inventory(destination); std::vector<DirectorySnapshot> roots; std::vector<Evidence> evidence;
+        auto expected = inventory(destination, copyPolicy); std::vector<DirectorySnapshot> roots; std::vector<Evidence> evidence;
         const auto rootList = plan["roots"].toArray(); if (transfer ? rootList.size() != 1 : (rootList.size() < 2 || rootList.size() > 3)) throw Failure("DirectorySchemaInvalid");
         QSet<QString> candidates;
         for (const auto& value : rootList)
@@ -228,8 +250,8 @@ namespace hc::compare
             if (!value.isObject()) throw Failure("DirectorySchemaInvalid"); const auto root = value.toObject();
             const auto path = CheckedDirectoryPath(text(root, "path"));
             if (DirectoryPathsOverlap(path, output) || DirectoryPathsOverlap(path, journalPath) || DirectoryPathsOverlap(path, planPath)) throw Failure("DirectoryOutputOverlapsInput");
-            roots.push_back(CaptureDirectory(path, policy, Limits)); evidence.push_back(inventory(root));
-            validateEvidence(evidence.back(), capture(roots.back(), Limits));
+            roots.push_back(CaptureDirectory(path, policy, Limits)); evidence.push_back(inventory(root, copyPolicy));
+            validateEvidence(evidence.back(), capture(roots.back(), Limits, copyPolicy));
             for (auto it = roots.back().entries_.cbegin(); it != roots.back().entries_.cend(); ++it) candidates.insert(it.key());
         }
         if (transfer || plan["mirror"].toBool()) for (auto it = expected.cbegin(); it != expected.cend(); ++it) if (!it.key().isEmpty()) candidates.insert(it.key());
@@ -256,7 +278,7 @@ namespace hc::compare
             std::optional<std::array<storage::EntrySnapshot, 3>> mergeInputs;
             if (choice == "merge")
             {
-                if (!textMerge || roots.size() != 3) throw Failure("DirectoryChoiceInvalid");
+                if (!textMerge || roots.size() != 3 || DirectoryCopyExtras(copyPolicy)) throw Failure("DirectoryChoiceInvalid");
                 std::array<storage::EntrySnapshot, 3> inputs;
                 for (std::size_t side = 0; side < 3; ++side)
                 { if (!roots[side].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid"); inputs[side] = roots[side].Expand(roots[side].entries_.value(key)); }
@@ -283,7 +305,7 @@ namespace hc::compare
             { if (before.isEmpty() || remove) directories.push_back({path, "mkdir", {}, {}}); }
             else
             {
-                if (!before.isEmpty() && !remove && before["sha256"] == desiredEntry["sha256"] && before["size"] == desiredEntry["size"]) continue;
+                if (!before.isEmpty() && !remove && before["sha256"] == desiredEntry["sha256"] && before["size"] == desiredEntry["size"] && before["copy"] == desiredEntry["copy"]) continue;
                 if (!before.isEmpty() && !plan["overwrite"].toBool()) throw Failure("OutputExists");
                 copies.push_back({path, mergeInputs ? "merge" : "copy", source, desiredEntry, mergeInputs, encoding});
             }
@@ -315,7 +337,7 @@ namespace hc::compare
         const auto lockName = QFileInfo(output).absolutePath() + "/.hypercompare-" + QString::fromLatin1(QCryptographicHash::hash(output.toCaseFolded().toUtf8(), QCryptographicHash::Sha256).toHex()) + ".lock";
         CheckedDirectoryPath(lockName); QLockFile lock(lockName); if (!lock.tryLock(0)) throw Failure("DirectoryOutputBusy");
         const auto planDigest = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(plan).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
-        QFile journal(journalPath); std::size_t completed = 0; bool pending = false; qint64 validBytes = 0;
+        QFile journal(journalPath); std::size_t completed = 0; bool pending = false, pendingCommitted = false; qint64 validBytes = 0;
         if (Input.resume_)
         {
             if (!journal.open(QIODevice::ReadOnly) || journal.size() > directoryPlanLimit) throw Failure("DirectoryJournalReadFailed");
@@ -341,17 +363,19 @@ namespace hc::compare
             journal.close();
             if (pending)
             {
-                const auto& action = schedule[completed]; const auto actual = inspect(pathOf(action), Limits);
+                const auto& action = schedule[completed]; const auto actual = inspect(pathOf(action), Limits, copyPolicy);
                 if (!sameEvidence(expected.value(action.path_.toCaseFolded()), actual))
                 {
-                    if (!desired(action, actual)) throw Failure("DirectoryRecoveryRequired");
+                    if ((copyPolicy.acl_ && action.kind_ == "copy") || !desired(action, actual))
+                    { Value.commit_ = "Partial"; Value.recovery_.append(journalPath); throw Failure("DirectoryRecoveryRequired"); }
+                    pendingCommitted = true;
                     const auto key = action.path_.toCaseFolded(); if (actual.isEmpty()) expected.remove(key); else expected[key] = actual;
                 }
             }
         }
         else if (QFileInfo::exists(journalPath)) throw Failure("DirectoryJournalExistsUseResume");
         Evidence actual;
-        if (QFileInfo::exists(output)) actual = capture(CaptureDirectory(output, {}, Limits), Limits);
+        if (QFileInfo::exists(output)) actual = capture(CaptureDirectory(output, {}, Limits), Limits, copyPolicy);
         validateEvidence(expected, actual);
         for (const auto& snapshot : roots) ValidateDirectory(snapshot, policy, Limits);
         if (Input.dryRun_) { Value.outcome_ = "Validated"; Value.exitCode_ = 0; Value.completion_ = "Complete"; return; }
@@ -363,12 +387,12 @@ namespace hc::compare
         for (; completed < schedule.size(); ++completed)
         {
             Limits.Check(); const auto& action = schedule[completed]; const auto path = pathOf(action), key = action.path_.toCaseFolded();
-            const auto before = inspect(path, Limits);
+            const auto before = inspect(path, Limits, copyPolicy);
             if (!sameEvidence(expected.value(key), before)) throw Failure("DirectoryTargetChanged");
             if (!pending) append(journal, {{"index", qint64(completed)}, {"phase", "pending"}, {"after", QJsonObject{}}});
-            if (!(pending && desired(action, before)))
+            if (!(pending && pendingCommitted))
             {
-                if (action.kind_ == "copy") copy(action, path, before, Value, Limits);
+                if (action.kind_ == "copy") copy(action, path, before, Value, Limits, copyPolicy);
                 else if (action.kind_ == "merge")
                 {
                     const auto data = MergeDirectoryText(*action.merge_, action.encoding_, Limits);
@@ -388,7 +412,7 @@ namespace hc::compare
                 else
                 {
                     auto destinationWriter = writer(path); const auto entry = require(destinationWriter->Inspect(locator(path), context(Limits)));
-                    if (!entry || !sameEvidence(before, DirectoryEntryEvidence(*entry, Limits))) throw Failure("DirectoryTargetChanged");
+                    if (!entry || !sameEvidence(before, DirectoryEntryEvidence(*entry, Limits, copyPolicy))) throw Failure("DirectoryTargetChanged");
                     require(destinationWriter->Remove(*entry, context(Limits)));
                 }
                 Value.commit_ = "Partial";
@@ -396,9 +420,9 @@ namespace hc::compare
             // Once committed, record evidence even when cancellation arrives between commit and journaling.
             auto recordBudget = Limits; recordBudget.canceled_ = nullptr;
             recordBudget.deadline_ = std::max(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(10));
-            const auto after = inspect(path, recordBudget); if (!desired(action, after)) throw Failure("DirectoryCommitVerificationFailed");
+            const auto after = inspect(path, recordBudget, copyPolicy); if (!desired(action, after)) throw Failure("DirectoryCommitVerificationFailed");
             append(journal, {{"index", qint64(completed)}, {"phase", "done"}, {"after", after}});
-            if (after.isEmpty()) expected.remove(key); else expected[key] = after; pending = false;
+            if (after.isEmpty()) expected.remove(key); else expected[key] = after; pending = false; pendingCommitted = false;
             if (AfterCommit) AfterCommit(completed + 1);
         }
         Value.commit_ = "Committed"; Value.outcome_ = "Saved"; Value.exitCode_ = 0; Value.completion_ = "Complete";

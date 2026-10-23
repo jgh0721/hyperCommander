@@ -1919,6 +1919,55 @@ private slots:
         plan["actions"] = actions; write(r.planOut_, QJsonDocument(plan).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
         QCOMPARE(read(r.output_ + "/a"), QByteArray("left")); QCOMPARE(read(r.output_ + "/binary"), QByteArray::fromHex("004c"));
     }
+    void directoryCopyMetadataStreamsAclAndResume()
+    {
+        for (const bool acl : {false, true})
+        {
+            QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left"; r.overwrite_ = true;
+            r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json"); r.directoryCopy_ = {true, true, acl, true};
+            for (const auto& root : {r.file1_, r.file2_, r.output_}) QVERIFY(QDir().mkpath(root));
+            write(r.file1_ + "/a", "same"); write(r.file1_ + "/a:info", "source stream"); write(r.file1_ + "/z", "last"); write(r.file1_ + "/z:info", "last stream");
+            write(r.output_ + "/a", "same"); write(r.output_ + "/a:info", "old stream");
+            { QFile file(r.file1_ + "/a"); QVERIFY(file.open(QIODevice::ReadWrite)); QVERIFY(file.setFileTime(QDateTime::fromMSecsSinceEpoch(1700000000000LL), QFileDevice::FileModificationTime)); }
+            QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>((r.file1_ + "/a").utf16()), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
+            if (acl)
+            {
+                PSECURITY_DESCRIPTOR descriptor = nullptr; QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
+                const auto release = qScopeGuard([&] { LocalFree(descriptor); });
+                for (const auto& name : {QString("a"), QString("z")}) QVERIFY(SetFileSecurityW(reinterpret_cast<LPCWSTR>((r.file1_ + '/' + name).utf16()), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+            }
+            auto cancel = std::make_shared<std::atomic_bool>(false); auto planned = Execute(r, cancel, true);
+            QVERIFY2(planned.error_.isEmpty(), qPrintable(planned.error_)); QCOMPARE(planned.directoryPlan_["schemaVersion"].toInt(), 4);
+            Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_; apply.dryRun_ = true;
+            QCOMPARE(Execute(apply, cancel, true).exitCode_, 0); QCOMPARE(read(r.output_ + "/a:info"), QByteArray("old stream"));
+            apply.dryRun_ = false; Result result; Budget limits; limits.canceled_ = cancel.get();
+            QVERIFY_EXCEPTION_THROWN(ApplyDirectoryPlan(apply, result, limits, [&](std::size_t Count) { if (Count == 1) cancel->store(true); }), Failure);
+            QCOMPARE(result.commit_, QString("Partial")); QCOMPARE(read(r.output_ + "/a:info"), QByteArray("source stream")); QVERIFY(!QFileInfo::exists(r.output_ + "/z"));
+            cancel->store(false); apply.resume_ = true; result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.commit_, QString("Committed"));
+            const auto source = CaptureDirectory(r.file1_, {}, {}), output = CaptureDirectory(r.output_, {}, {});
+            QCOMPARE(DirectoryCopyEvidence(source.Expand(source.entries_["a"]), {}, r.directoryCopy_), DirectoryCopyEvidence(output.Expand(output.entries_["a"]), {}, r.directoryCopy_));
+            QCOMPARE(read(r.output_ + "/z:info"), QByteArray("last stream")); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0); ValidateDirectory(output, {}, {});
+            const auto journalPath = r.planOut_ + ".journal"; const auto original = read(journalPath); auto torn = original;
+            torn.truncate(torn.lastIndexOf('\n', torn.size() - 2) + 1); write(journalPath, torn);
+            result = Execute(apply, cancel, true);
+            if (acl) { QCOMPARE(result.error_, QString("DirectoryRecoveryRequired")); QCOMPARE(result.commit_, QString("Partial")); QVERIFY(result.recovery_.contains(journalPath)); write(journalPath, original); }
+            else QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+            ValidateDirectory(output, {}, {});
+            write(r.output_ + "/a:info", "external change"); QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch"));
+        }
+        const auto parsed = Parse({"app", "-mode", "directory-merge", "-file1", "D:/left", "-file2", "D:/right", "-output", "D:/out", "-planout", "D:/plan.json", "-copy-metadata", "-copy-acl", "-copy-streams"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QVERIFY(parsed.request_.directoryCopy_.metadata_); QVERIFY(parsed.request_.directoryCopy_.acl_); QVERIFY(parsed.request_.directoryCopy_.streams_);
+        QVERIFY(!Parse({"app", "-mode", "compare", "-file1", "D:/a", "-file2", "D:/b", "-copy-streams"}, true).error_.isEmpty());
+    }
+    void directoryCopyOptionsRejectChangedSource()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left"; r.directoryCopy_.streams_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "data"); write(r.file1_ + "/a:info", "captured");
+        auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        write(r.file1_ + "/a:info", "changed stream"); Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch")); QVERIFY(!QFileInfo::exists(r.output_));
+    }
     void directoryRenameIdentityAndCollision()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");

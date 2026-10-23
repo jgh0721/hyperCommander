@@ -41,6 +41,9 @@ namespace hc::compare
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
         value("directory-level", "bytes (default), text (encoding/BOM-independent, up to 16 MiB per file; binary/oversized uses bytes), or metadata.");
+        flag("copy-metadata", "Directory-merge: preserve copied file modification time and basic attributes.");
+        flag("copy-acl", "Directory-merge: copy file DACL using destination inheritance rules; interrupted unrecorded ACL commits require recovery review.");
+        flag("copy-streams", "Directory-merge: preserve and verify named file data streams (ADS).");
         value("theme", "GUI theme: light or dark.");
         value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
@@ -110,6 +113,8 @@ namespace hc::compare
         for (const auto& name : {"planout", "decisions"})
             if (parser.isSet(name) && parser.value(name).isEmpty()) return fail("Empty path: " + QString(name));
         if (parser.isSet("mode")) request.mode_ = parser.value("mode");
+        request.directoryCopy_ = {parser.isSet("copy-metadata"), true, parser.isSet("copy-acl"), parser.isSet("copy-streams")};
+        if ((request.directoryCopy_.metadata_ || request.directoryCopy_.acl_ || request.directoryCopy_.streams_) && request.mode_ != "directory-merge") return fail("Copy options require -mode directory-merge; apply uses the saved plan policy.");
         if (parser.isSet("format")) request.format_ = parser.value("format");
         if (parser.isSet("headless") && parser.isSet("gui")) return fail("-gui and -headless are mutually exclusive.");
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);

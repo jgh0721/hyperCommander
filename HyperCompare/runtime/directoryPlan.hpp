@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "directory.hpp"
+#include "commonLibs/storage/writableStorage.hpp"
 #include <QJsonObject>
 
 namespace hc::compare
@@ -14,6 +15,8 @@ namespace hc::compare
     // Shared by export/apply. Rejects reparse ancestors and ambiguous native path syntax.
     QString CheckedDirectoryPath(const QString& Path);
     bool DirectoryPathsOverlap(const QString& A, const QString& B);
-    QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits);
+    inline bool DirectoryCopyExtras(storage::CopyOptions Copy) { return Copy.metadata_ || Copy.acl_ || Copy.streams_; }
+    QJsonObject DirectoryCopyEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy);
+    QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy = {false, true, false, false});
     QByteArray DirectoryFileDigest(const storage::EntrySnapshot& Entry, const Budget& Limits);
 }
