@@ -9,6 +9,8 @@
 #include "widgets/directoryMergeDialog.hpp"
 #include "widgets/semanticView.hpp"
 #include "widgets/imageCompareView.hpp"
+#include "widgets/archiveCompareView.hpp"
+#include "zipFixture.hpp"
 #include <QBuffer>
 #include <QPainter>
 #include <QScrollArea>
@@ -93,6 +95,20 @@ private slots:
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void zipViewContentsFiltersAndThemes()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip");
+        write(request.file1_, test::StoredZip({{"same.txt", "same"}, {"src/main.cpp", "left"}, {"left-only.txt", "left"}}));
+        write(request.file2_, test::StoredZip({{"same.txt", "same"}, {"src/main.cpp", "right"}, {"right-only.txt", "right"}}));
+        CompareWindow window(request); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("archiveCompareView"), 10000);
+        auto* table = window.findChild<QTableView*>("archiveTable"); QCOMPARE(table->model()->rowCount(), 4); QAbstractItemModelTester tester(table->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        auto* status = window.findChild<QComboBox*>("archiveStatus"); status->setCurrentIndex(1); QCOMPARE(table->model()->rowCount(), 3);
+        auto* query = window.findChild<QLineEdit*>("archiveQuery"); query->setText("main"); QCOMPARE(table->model()->rowCount(), 1); QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("내용 다름")); query->clear();
+        QVERIFY(!action(window, "결과 저장")->isEnabled()); QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty());
+        action(window, "Dark")->setChecked(false); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/zip-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/zip-dark.png"));
+        window.close();
     }
     void pngViewOriginalRasterZoomAndThemes()
     {

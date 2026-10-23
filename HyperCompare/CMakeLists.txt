@@ -1,5 +1,6 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
     core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
@@ -33,6 +34,7 @@ target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/semanticView.cpp widgets/semanticView.hpp
     widgets/imageCompareView.cpp widgets/imageCompareView.hpp
+    widgets/archiveCompareView.cpp widgets/archiveCompareView.hpp widgets/extensionView.cpp widgets/extensionView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
@@ -52,7 +54,7 @@ hc_enable_qt_deployment(HyperCompareCli PLUGINS)
 if(BUILD_TESTING)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
     qt_add_executable(hc_compare_tests tests/tstCompare.cpp)
-    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime Qt6::Test Qt6::Gui)
+    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime hc_compare_zip Qt6::Test Qt6::Gui)
     target_compile_definitions(hc_compare_tests PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(hc_compare_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     add_dependencies(hc_compare_tests HyperCompareCli HyperCompare)

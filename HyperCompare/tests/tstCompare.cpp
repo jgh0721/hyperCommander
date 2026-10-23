@@ -9,6 +9,7 @@
 #include "runtime/semantic.hpp"
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
+#include "zipFixture.hpp"
 #include <QCryptographicHash>
 #include <QBuffer>
 #include <QImage>
@@ -45,6 +46,63 @@ private:
         return row.back();
     }
 private slots:
+    void zipEntriesContentsAndNestedLocations()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        write(request.file1_, test::StoredZip({{"same", "same"}, {"changed.txt", "left"}, {"left-only", ""}, {"folder/", ""}, {QString::fromUtf8("한글.txt").toUtf8(), "unicode"}}));
+        write(request.file2_, test::StoredZip({{"same", "same"}, {"changed.txt", "right"}, {"right-only", "new"}, {"folder", "file"}, {QString::fromUtf8("한글.txt").toUtf8(), "unicode"}}));
+        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QCOMPARE(result.operation_, "compare-archive"); QCOMPARE(result.extension_["engine"].toString(), "container.zip");
+        const auto entries = result.extension_["entries"].toArray(); QCOMPARE(entries.size(), 6);
+        QMap<QString, QJsonObject> paths; for (const auto& entry : entries) paths.insert(entry.toObject()["path"].toString(), entry.toObject());
+        QCOMPARE(paths["changed.txt"]["state"].toString(), "Changed"); QCOMPARE(paths["folder"]["state"].toString(), "TypeChanged");
+        QCOMPARE(paths["left-only"]["state"].toString(), "LeftOnly"); QCOMPARE(paths["right-only"]["state"].toString(), "RightOnly");
+        const auto location = paths["changed.txt"]["left"].toObject()["location"].toObject();
+        QCOMPARE(location["schema"].toString(), "archive.entry.v1"); QCOMPARE(location["payload"].toObject()["ordinal"].toInt(), 1);
+        QCOMPARE(location["payload"].toObject()["locator"].toObject()["entryPath"].toString(), "changed.txt");
+        QCOMPARE(location["resourceRevision"].toString(), "sha256:" + QString::fromLatin1(QCryptographicHash::hash(read(request.file1_), QCryptographicHash::Sha256).toHex()));
+        QVERIFY(!QFileInfo::exists(dir.filePath("changed.txt"))); request.mode_ = "probe";
+        result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QCOMPARE(result.exitCode_, 0); QVERIFY(!result.engineProbe_["mergeTwoAvailable"].toBool());
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "all-zip-entries-verified");
+    }
+    void zipRejectionsAndContentIntegrity()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        const auto good = test::StoredZip({{"a", "hello"}}); write(request.file1_, good); auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto rejected = [&](const QByteArray& Bytes) { write(request.file2_, Bytes); return Execute(request, cancel, true).error_; };
+        QCOMPARE(rejected(test::StoredZip({{"../escape.txt", "x"}})), "ZipUnsafePath");
+        QCOMPARE(rejected(test::StoredZip({{"a", "x"}, {"a", "y"}})), "ZipDuplicateNameUnsupported");
+        QCOMPARE(rejected(test::StoredZip({{"a", "x", 0x801}})), "EncryptedZipUnsupported");
+        QCOMPARE(rejected(test::StoredZip({{"link", "target", 0x800, 0120000u << 16}})), "ZipSpecialEntryUnsupported");
+        QCOMPARE(rejected(test::StoredZip({{QString::fromUtf8("한글").toUtf8(), "x", 0}})), "ZipNameEncodingUnsupported");
+        auto corrupt = good; corrupt[31] = 'X'; QCOMPARE(rejected(corrupt), "ZipContentInvalid");
+        corrupt = good; corrupt.chop(10); QCOMPARE(rejected(corrupt), "InvalidZip");
+        auto large = good; const auto central = large.indexOf(QByteArray::fromHex("504b0102"));
+        qToLittleEndian<quint16>(8, large.data() + 8); qToLittleEndian<quint16>(8, large.data() + central + 10);
+        qToLittleEndian<quint32>(16 * 1024 * 1024 + 1, large.data() + 22); qToLittleEndian<quint32>(16 * 1024 * 1024 + 1, large.data() + central + 24);
+        QCOMPARE(rejected(large), "ArchiveExpandedLimit");
+        QVERIFY(!QFileInfo::exists(dir.filePath("escape.txt")));
+    }
+    void zipPackagingDifferencesAndConsole()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        write(request.file1_, test::StoredZip({{"a", "a"}, {"B", "b"}})); write(request.file2_, test::StoredZip({{"B", "b"}, {"a", "a"}}, "comment"));
+        const auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QVERIFY(result.extension_["contentsEqual"].toBool()); QVERIFY(!result.extension_["rawEqual"].toBool()); QCOMPARE(result.exitCode_, 1);
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-file1", request.file1_, "-file2", request.file2_, "-format", "json"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 1); QCOMPARE(QJsonDocument::fromJson(process.readAllStandardOutput()).object()["extension"].toObject()["payloadSchema"].toString(), "archive.entries.v1");
+        write(request.file1_, test::StoredZip({})); write(request.file2_, test::StoredZip({})); QCOMPARE(Execute(request, std::make_shared<std::atomic_bool>(false), false).exitCode_, 0);
+    }
+    void zipDeflateAndEntryBudget()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("compressed.zip"); request.file2_ = dir.filePath("stored.zip"); request.headless_ = true;
+        const auto compressed = QByteArray::fromBase64("UEsDBBQAAAAIAENuV11aGkI8IAAAAEAGAAAOAAAAY29tcHJlc3NlZC50eHRLzs8tKEotLk5N0U1JLEnkSh7lj/JH+aP8Uf4onwg+AFBLAQIUABQAAAAIAENuV11aGkI8IAAAAEAGAAAOAAAAAAAAAAAAAACAAQAAAABjb21wcmVzc2VkLnR4dFBLBQYAAAAAAQABADwAAABMAAAAAAA=");
+        write(request.file1_, compressed); write(request.file2_, test::StoredZip({{"compressed.txt", QByteArray("compressed-data\n").repeated(100)}}));
+        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QVERIFY(result.extension_["contentsEqual"].toBool()); QCOMPARE(result.extension_["entries"].toArray()[0].toObject()["state"].toString(), "Equal");
+        QVector<test::ZipEntry> many; for (int i = 0; i < 10001; ++i) many.append({QByteArray::number(i), ""});
+        write(request.file2_, test::StoredZip(many)); result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QCOMPARE(result.error_, "ArchiveEntryLimit");
+    }
     void pngPixelsMetadataAndLocations()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.png"); request.file2_ = dir.filePath("right.png"); request.headless_ = true;

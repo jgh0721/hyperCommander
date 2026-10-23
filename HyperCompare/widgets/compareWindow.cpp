@@ -7,7 +7,7 @@
 #include "directoryView.hpp"
 #include "directoryMergeDialog.hpp"
 #include "semanticView.hpp"
-#include "imageCompareView.hpp"
+#include "extensionView.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -370,11 +370,10 @@ namespace hc::compare
         {
             try
             {
-                if (result_.extension_["payloadSchema"] != "image.rgba.v1") throw Failure("ExtensionViewUnsupported");
-                extensionView_ = new ImageCompareView(result_.extension_, {request_.file1_, request_.file2_}, centralWidget());
+                extensionView_ = CreateExtensionView(result_.extension_, {request_.file1_, request_.file2_}, centralWidget());
                 auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->addWidget(extensionView_);
                 sources_->hide(); details_->hide(); directory_->hide(); extensionView_->show();
-                layout->setSizes({0, 0, 0, 700}); state_->setText(tr("PNG 비교 — %1").arg(result_.outcome_));
+                layout->setSizes({0, 0, 0, 700}); state_->setText(tr("비교 — %1").arg(result_.outcome_));
             }
             catch (const std::exception& error) { exitCode_ = 2; state_->setText(QString::fromUtf8(error.what())); }
             applyAppearance(); updateMerge(); return;
@@ -609,6 +608,7 @@ namespace hc::compare
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
         qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
+        if (extensionView_) extensionView_->SetListFont(listFont_);
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)

@@ -49,7 +49,7 @@ namespace hc::compare
             QImage image_; QRect bounds_; double zoom_ = 0;
         };
     }
-    ImageCompareView::ImageCompareView(const QJsonObject& Comparison, const QStringList& Paths, QWidget* Parent) : QWidget(Parent)
+    ImageCompareView::ImageCompareView(const QJsonObject& Comparison, const QStringList& Paths, QWidget* Parent) : ExtensionView(Parent)
     {
         setObjectName("imageCompareView"); const auto documents = Comparison["documents"].toArray(), pairs = Comparison["pairs"].toArray();
         if (documents.size() != 2 || pairs.size() != 1) throw Failure("ImageViewPayload");

@@ -9,9 +9,10 @@ namespace hc::compare
 {
     namespace
     {
-        struct Extension { QString format_, engine_; };
+        struct Extension { QString format_, engine_, schema_, operation_, validation_; };
         const std::vector<Extension>& extensions()
-        { static const std::vector<Extension> entries{{"png", "image.png"}}; return entries; }
+        { static const std::vector<Extension> entries{{"png", "image.png", "image.rgba.v1", "compare-image", "full-png-decode"},
+            {"zip", "container.zip", "archive.entries.v1", "compare-archive", "all-zip-entries-verified"}}; return entries; }
         const Extension* extension(const QString& Format)
         { for (const auto& entry : extensions()) if (entry.format_ == Format) return &entry; return nullptr; }
         QJsonObject run(const Extension& Engine, const QVector<Snapshot>& Inputs, bool Raster, const Budget& Limits)
@@ -22,13 +23,18 @@ namespace hc::compare
             auto result = RunWorker(Engine.engine_, {{"resources", resources}, {"raster", Raster}}, Limits, policy);
             if (result["status"] != "Complete") throw Failure(result["reason"].toString("ExtensionWorkerFailed").toStdString());
             const auto documents = result["documents"].toArray();
-            if (documents.size() != Inputs.size() || result["payloadSchema"] != "image.rgba.v1") throw Failure("ExtensionProtocol");
+            if (documents.size() != Inputs.size() || result["payloadSchema"] != Engine.schema_) throw Failure("ExtensionProtocol");
             for (int i = 0; i < documents.size(); ++i)
             {
-                const auto document = documents[i].toObject(); const auto width = document["width"].toInt(), height = document["height"].toInt();
-                if (width <= 0 || height <= 0 || width > 8192 || height > 8192 || qint64(width) * height > 4 * 1024 * 1024 ||
-                    document["rawSha256"].toString() != QString::fromLatin1(QCryptographicHash::hash(Inputs[i].raw_, QCryptographicHash::Sha256).toHex())) throw Failure("ExtensionProtocol");
-                if (Raster && document["rgba"].toString().size() != ((qint64(width) * height * 4 + 2) / 3) * 4) throw Failure("ExtensionProtocol");
+                const auto document = documents[i].toObject();
+                if (document["rawSha256"].toString() != QString::fromLatin1(QCryptographicHash::hash(Inputs[i].raw_, QCryptographicHash::Sha256).toHex())) throw Failure("ExtensionProtocol");
+                if (Engine.schema_ == "image.rgba.v1")
+                {
+                    const auto width = document["width"].toInt(), height = document["height"].toInt();
+                    if (width <= 0 || height <= 0 || width > 8192 || height > 8192 || qint64(width) * height > 4 * 1024 * 1024) throw Failure("ExtensionProtocol");
+                    if (Raster && document["rgba"].toString().size() != ((qint64(width) * height * 4 + 2) / 3) * 4) throw Failure("ExtensionProtocol");
+                }
+                else if (document["entryCount"].toInt(-1) < 0 || document["entryCount"].toInt() > 10000 || result["entries"].toArray().size() > 20000) throw Failure("ExtensionProtocol");
             }
             return result;
         }
@@ -37,7 +43,7 @@ namespace hc::compare
     {
         const auto* entry = extension(Format); if (!entry) throw Failure("NoRegisteredEngine");
         const auto result = run(*entry, {Input}, false, Limits);
-        return {{"validation", "full-png-decode"}, {"document", result["documents"].toArray()[0]}};
+        return {{"validation", entry->validation_}, {"document", result["documents"].toArray()[0]}};
     }
     bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits)
     {
@@ -46,13 +52,17 @@ namespace hc::compare
         if (Input.mode_ == "merge" || !Input.output_.isEmpty()) throw Failure("ExtensionMergeUnsupported");
         if (!Input.base_.isEmpty() || !Input.file3_.isEmpty()) throw Failure("ExtensionThreeUnsupported");
         if (InspectResourceFormat(Input.file2_, Limits) != format) throw Failure("MixedInputFormats");
-        Value.operation_ = "compare-image";
+        Value.operation_ = entry->operation_;
         for (const auto& path : {Input.file1_, Input.file2_}) Value.inputs_.append(ReadFileSnapshot(path, descriptor->maxInputBytes_, Limits));
         Value.extension_ = run(*entry, Value.inputs_, !Input.headless_, Limits);
-        const auto pairs = Value.extension_["pairs"].toArray(); if (pairs.size() != 1) throw Failure("ExtensionProtocol");
         const bool equal = Value.inputs_[0].raw_ == Value.inputs_[1].raw_;
-        const auto pair = pairs[0].toObject(); const auto count = pair["differentPixels"].toInteger(-1);
-        if (count < 0 || count > 8 * 1024 * 1024 || pair["rawEqual"].toBool() != equal || pair["pixelEqual"].toBool() != (count == 0)) throw Failure("ExtensionProtocol");
+        if (entry->schema_ == "image.rgba.v1")
+        {
+            const auto pairs = Value.extension_["pairs"].toArray(); if (pairs.size() != 1) throw Failure("ExtensionProtocol");
+            const auto pair = pairs[0].toObject(); const auto count = pair["differentPixels"].toInteger(-1);
+            if (count < 0 || count > 8 * 1024 * 1024 || pair["rawEqual"].toBool() != equal || pair["pixelEqual"].toBool() != (count == 0)) throw Failure("ExtensionProtocol");
+        }
+        else if (Value.extension_["rawEqual"].toBool() != equal) throw Failure("ExtensionProtocol");
         Value.exitCode_ = equal ? 0 : 1; Value.outcome_ = equal ? "Equal" : "Different";
         return true;
     }

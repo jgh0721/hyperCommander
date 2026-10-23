@@ -26,6 +26,7 @@ namespace hc::compare
     class OverviewBar;
     class DirectoryView;
     class SemanticView;
+    class ExtensionView;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -76,7 +77,7 @@ namespace hc::compare
         SemanticView* semantic_ = nullptr;
         QTabWidget* details_ = nullptr;
         QWidget* sources_ = nullptr;
-        QWidget* extensionView_ = nullptr;
+        ExtensionView* extensionView_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;

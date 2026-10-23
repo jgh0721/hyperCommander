@@ -2,6 +2,7 @@
 #include "workerHost.hpp"
 #include "semantic.hpp"
 #include "extensionEngine.hpp"
+#include "zipArchive.hpp"
 #include <QCryptographicHash>
 #include <QFile>
 #include <QJsonDocument>
@@ -22,6 +23,7 @@ namespace hc::compare
         {
             if (engine == "source.tree-sitter") result = SemanticWorkerRequest(payload);
             else if (engine == "image.png") result = PngWorkerRequest(payload);
+            else if (engine == "container.zip") result = ArchiveWorkerRequest(payload);
             else throw Failure("WorkerEngineUnsupported");
         }
         catch (const std::exception& failure) { result = {{"status", "Unavailable"}, {"reason", QString::fromUtf8(failure.what())}}; }
