@@ -10,6 +10,7 @@
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
 #include "zipFixture.hpp"
+#include "docxFixture.hpp"
 #include <QCryptographicHash>
 #include <QBuffer>
 #include <QImage>
@@ -46,6 +47,58 @@ private:
         return row.back();
     }
 private slots:
+    void docxParagraphProjectionAndLocations()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx"); request.headless_ = true;
+        const auto common = test::Paragraph(QString::fromUtf8("한글 & <문단> 😀"));
+        write(request.file1_, test::Docx(common + test::Paragraph("left") + "<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br/><w:t>c</w:t></w:r></w:p>"));
+        write(request.file2_, test::Docx(common + test::Paragraph("right") + "<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br/><w:t>c</w:t></w:r></w:p>"));
+        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.exitCode_, 1);
+        QCOMPARE(result.operation_, "compare-document"); QVERIFY(!result.Json()["coverage"].toObject()["scopeComplete"].toBool());
+        QVERIFY(!result.Json()["extension"].toObject()["documents"].toArray()[0].toObject()["paragraphs"].toArray()[0].toObject().contains("text"));
+        QVERIFY(result.Json(true)["extension"].toObject()["documents"].toArray()[0].toObject()["paragraphs"].toArray()[0].toObject().contains("text"));
+        const auto changes = result.extension_["changes"].toArray(); QCOMPARE(changes.size(), 1); QCOMPARE(changes[0].toObject()["begin"].toInt(), 1); QCOMPARE(changes[0].toObject()["end"].toInt(), 2);
+        const auto paragraphs = result.extension_["documents"].toArray()[0].toObject()["paragraphs"].toArray(); QCOMPARE(paragraphs.size(), 3);
+        QCOMPARE(paragraphs[2].toObject()["text"].toString(), "a\tb\nc"); QCOMPARE(paragraphs[0].toObject()["text"].toString(), QString::fromUtf8("한글 & <문단> 😀"));
+        const auto location = paragraphs[1].toObject()["location"].toObject(); QCOMPARE(location["schema"].toString(), "office.paragraph.v1");
+        QCOMPARE(location["payload"].toObject()["paragraph"].toInt(), 1); QCOMPARE(location["payload"].toObject()["locator"].toObject()["entryPath"].toString(), "word/document.xml");
+        request.mode_ = "probe"; result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QCOMPARE(result.exitCode_, 0);
+        request.mode_ = "merge"; result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY(!result.error_.isEmpty());
+    }
+    void docxScopeStrictAndPackageChanges()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx"); request.headless_ = true;
+        const auto body = test::Paragraph("same") + "<w:tbl><w:tr><w:tc>" + test::Paragraph("table") + "</w:tc></w:tr></w:tbl>" +
+            "<w:del>" + test::Paragraph("deleted") + "</w:del><w:p><w:r><w:drawing><w:txbxContent>" + test::Paragraph("textbox") + "</w:txbxContent></w:drawing></w:r></w:p>";
+        write(request.file1_, test::Docx(body, "left-style")); write(request.file2_, test::Docx(body, "right-style", true));
+        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.exitCode_, 1);
+        QVERIFY(result.extension_["textEqual"].toBool()); QVERIFY(!result.extension_["contentsEqual"].toBool());
+        const auto paragraphs = result.extension_["documents"].toArray()[1].toObject()["paragraphs"].toArray(); QCOMPARE(paragraphs.size(), 3); QCOMPARE(paragraphs[1].toObject()["text"].toString(), "table");
+        write(request.file2_, read(request.file1_)); result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QCOMPARE(result.exitCode_, 0);
+        QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-file1", request.file1_, "-file2", request.file2_, "-format", "json"}); QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 0);
+        QCOMPARE(QJsonDocument::fromJson(cli.readAllStandardOutput()).object()["extension"].toObject()["engine"].toString(), "office.docx");
+        cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-file1", request.file1_, "-file2", request.file2_, "-format", "json", "-include-content"}); QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 0);
+        QCOMPARE(QJsonDocument::fromJson(cli.readAllStandardOutput()).object()["extension"].toObject()["documents"].toArray()[0].toObject()["paragraphs"].toArray()[0].toObject()["text"].toString(), "same");
+    }
+    void docxRejectsInvalidXmlRelationshipsAndLimits()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx"); request.headless_ = true;
+        write(request.file2_, test::Docx(test::Paragraph("valid")));
+        auto reject = [&](const QByteArray& Bytes, const QString& Reason) {
+            write(request.file1_, Bytes); const auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
+            QCOMPARE(result.exitCode_, 2); QVERIFY2(result.error_.contains(Reason), qPrintable(result.error_));
+        };
+        reject(test::StoredZip({{"other", "not a document"}}), "DocxMissingPart");
+        reject(test::Docx("<w:p>"), "DocxInvalidXml");
+        reject(test::Docx(test::Paragraph("ok"), {}, false, "../outside.xml"), "DocxPartPathUnsupported");
+        reject(test::Docx(test::Paragraph("ok"), {}, false, "https://invalid.example/document.xml"), "DocxPartPathUnsupported");
+        reject(test::Docx(test::Paragraph("ok"), {}, false, "word/document.xml\" TargetMode=\"External"), "DocxExternalMainPart");
+        QByteArray deep; for (int i = 0; i < 257; ++i) deep += "<w:sdt>"; for (int i = 0; i < 257; ++i) deep += "</w:sdt>"; reject(test::Docx(deep), "DocxXmlDepthLimit");
+        QByteArray many; for (int i = 0; i < 50001; ++i) many += "<w:p/>"; reject(test::Docx(many), "DocxParagraphLimit");
+        reject(test::Docx(test::Paragraph(QString(256 * 1024 + 1, 'x'))), "DocxTextLimit");
+        const auto dtd = test::StoredZip({{"_rels/.rels", "<!DOCTYPE Relationships [<!ENTITY x 'x'>]><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'/>"}, {"[Content_Types].xml", ""}});
+        reject(dtd, "DocxDtdUnsupported");
+    }
     void zipEntriesContentsAndNestedLocations()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;

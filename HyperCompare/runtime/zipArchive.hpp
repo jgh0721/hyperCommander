@@ -30,4 +30,5 @@ namespace hc::compare
         QString digest_;
     };
     QJsonObject ArchiveWorkerRequest(const QJsonObject& Payload);
+    QJsonObject DocxWorkerRequest(const QJsonObject& Payload);
 }

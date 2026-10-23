@@ -20,6 +20,7 @@ namespace hc::compare
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         QString semantic_ = "auto";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
+        bool includeContent_ = false;
         QString applyPlan_, journal_, applyPlanDigest_;
         bool resume_ = false, allowDelete_ = false;
         bool mirror_ = false;
@@ -72,7 +73,7 @@ namespace hc::compare
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;
         bool inputsChanged_ = false;
-        QJsonObject Json() const;
+        QJsonObject Json(bool IncludeContent = false) const;
     };
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save);
     Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,

@@ -27,6 +27,8 @@ namespace hc::compare
             {"container.zip", "miniz-3.1.2/1", "comparison", {"zip"}, "miniz-memory-isolated", {}, "archive-entries", "archive.entry.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
                 {{"maxEntries", 10000}, {"maxEntryBytes", 16 * 1024 * 1024}, {"maxExpandedBytes", 64 * 1024 * 1024}, {"encrypted", false}, {"duplicateNames", false}}},
             {"source.tree-sitter", "0.27.1/c-0.24.2/cpp-0.23.4", "annotation", {"c", "cpp"}, "tree-sitter", {}, "function-relations", "text.bytes.v1", true, true, false, false, true, true, 16 * 1024 * 1024}
+            ,{"office.docx", "1", "comparison", {"docx"}, "ooxml-main-body-isolated", {}, "office-paragraphs", "office.paragraph.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
+                {{"maxParagraphs", 50000}, {"maxTextUnits", 4 * 1024 * 1024}, {"maxXmlDepth", 256}, {"scopeComplete", false}, {"projection", "main-body-text-v1"}}}
         };
         return engines;
     }
@@ -57,7 +59,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"engines", engines}, {"registration", "static"},
             {"location", "schema-version-resourceRevision-payload"}, {"nestedResources", "versioned-provider-locator"},
             {"probe", "-mode probe -file1 PATH -file2 PATH [-base PATH|-file3 PATH]"},
-            {"unsupportedFormats", QJsonArray{"jpeg", "gif", "webp", "docx", "xlsx", "pptx", "office-compound", "pdf", "binary"}}};
+            {"unsupportedFormats", QJsonArray{"jpeg", "gif", "webp", "xlsx", "pptx", "office-compound", "pdf", "binary"}}};
     }
     namespace
     {

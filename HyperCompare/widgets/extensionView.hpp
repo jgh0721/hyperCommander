@@ -8,6 +8,7 @@ namespace hc::compare
     public:
         using QWidget::QWidget;
         virtual void SetListFont(const QFont&) {}
+        virtual void SetTextFont(const QFont&) {}
     };
     ExtensionView* CreateExtensionView(const QJsonObject& Comparison, const QStringList& Paths, QWidget* Parent);
 }

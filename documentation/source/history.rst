@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare DOCX 본문 문단 비교와 내부 구성 파일 비교를 격리 worker에 추가하고 분석 범위를 명시했다.
+
 * HyperCompare ZIP 내부 항목의 경로·CRC·내용 해시 비교, 읽기 전용 목록 화면 및 격리 압축 해제를 추가했다.
 
 * HyperCompare 격리 PNG 2way 비교 어댑터 추가. 원본 RGBA8 픽셀·파일 바이트 차이를 구분하고 변경 영역 Location, 원본 해상도 확대, sRGB 표시, Light/Dark 화면 및 실제 입력 probe를 제공한다.

@@ -2,6 +2,7 @@
 #include "extensionView.hpp"
 #include "imageCompareView.hpp"
 #include "archiveCompareView.hpp"
+#include "docxCompareView.hpp"
 #include "core/compare.hpp"
 
 namespace hc::compare
@@ -11,6 +12,7 @@ namespace hc::compare
         const auto schema = Comparison["payloadSchema"].toString();
         if (schema == "image.rgba.v1") return new ImageCompareView(Comparison, Paths, Parent);
         if (schema == "archive.entries.v1") return new ArchiveCompareView(Comparison, Paths, Parent);
+        if (schema == "office.paragraphs.v1") return new DocxCompareView(Comparison, Paths, Parent);
         throw Failure("ExtensionViewUnsupported");
     }
 }

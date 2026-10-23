@@ -23,6 +23,7 @@ namespace hc::compare
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
         value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities, probe.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
+        flag("include-content", "Include bounded DOCX paragraph text in JSON reports; default reports contain locations only.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
         value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
@@ -79,6 +80,8 @@ namespace hc::compare
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);
         request.wait_ = parser.isSet("wait") || Console;
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
+        request.includeContent_ = parser.isSet("include-content");
+        if (request.includeContent_ && (!request.headless_ || request.format_ != "json")) return fail("-include-content requires headless JSON reporting.");
         request.applyPlan_ = parser.value("plan"); request.journal_ = parser.value("journal");
         request.resume_ = parser.isSet("resume"); request.allowDelete_ = parser.isSet("allowdelete");
         if (request.mode_ != "apply" && (parser.isSet("plan") || parser.isSet("journal") || request.resume_ || request.allowDelete_)) return fail("Apply options require -mode apply.");

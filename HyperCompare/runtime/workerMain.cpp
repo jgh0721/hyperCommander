@@ -24,6 +24,7 @@ namespace hc::compare
             if (engine == "source.tree-sitter") result = SemanticWorkerRequest(payload);
             else if (engine == "image.png") result = PngWorkerRequest(payload);
             else if (engine == "container.zip") result = ArchiveWorkerRequest(payload);
+            else if (engine == "office.docx") result = DocxWorkerRequest(payload);
             else throw Failure("WorkerEngineUnsupported");
         }
         catch (const std::exception& failure) { result = {{"status", "Unavailable"}, {"reason", QString::fromUtf8(failure.what())}}; }

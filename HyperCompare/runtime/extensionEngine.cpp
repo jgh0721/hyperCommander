@@ -12,7 +12,8 @@ namespace hc::compare
         struct Extension { QString format_, engine_, schema_, operation_, validation_; };
         const std::vector<Extension>& extensions()
         { static const std::vector<Extension> entries{{"png", "image.png", "image.rgba.v1", "compare-image", "full-png-decode"},
-            {"zip", "container.zip", "archive.entries.v1", "compare-archive", "all-zip-entries-verified"}}; return entries; }
+            {"zip", "container.zip", "archive.entries.v1", "compare-archive", "all-zip-entries-verified"},
+            {"docx", "office.docx", "office.paragraphs.v1", "compare-document", "docx-main-body-and-part-bytes"}}; return entries; }
         const Extension* extension(const QString& Format)
         { for (const auto& entry : extensions()) if (entry.format_ == Format) return &entry; return nullptr; }
         QJsonObject run(const Extension& Engine, const QVector<Snapshot>& Inputs, bool Raster, const Budget& Limits)
@@ -35,6 +36,22 @@ namespace hc::compare
                     if (Raster && document["rgba"].toString().size() != ((qint64(width) * height * 4 + 2) / 3) * 4) throw Failure("ExtensionProtocol");
                 }
                 else if (document["entryCount"].toInt(-1) < 0 || document["entryCount"].toInt() > 10000 || result["entries"].toArray().size() > 20000) throw Failure("ExtensionProtocol");
+                if (Engine.schema_ == "office.paragraphs.v1")
+                {
+                    const auto paragraphs = document["paragraphs"].toArray(); if (paragraphs.size() > 50000) throw Failure("ExtensionProtocol");
+                    qsizetype units = 0; for (const auto& value : paragraphs) { const auto text = value.toObject()["text"].toString(); units += text.size(); if (text.size() > 256 * 1024 || units > 4 * 1024 * 1024) throw Failure("ExtensionProtocol"); }
+                }
+            }
+            if (Engine.schema_ == "office.paragraphs.v1" && documents.size() == 2)
+            {
+                const auto left = documents[0].toObject()["paragraphs"].toArray().size(), right = documents[1].toObject()["paragraphs"].toArray().size(); int previousLeft = 0, previousRight = 0;
+                for (const auto& value : result["changes"].toArray())
+                {
+                    const auto edit = value.toObject(); const int begin = edit["begin"].toInt(-1), end = edit["end"].toInt(-1), otherBegin = edit["otherBegin"].toInt(-1), otherEnd = edit["otherEnd"].toInt(-1);
+                    if (begin < previousLeft || end < begin || end > left || otherBegin < previousRight || otherEnd < otherBegin || otherEnd > right || begin - previousLeft != otherBegin - previousRight) throw Failure("ExtensionProtocol");
+                    previousLeft = end; previousRight = otherEnd;
+                }
+                if (left - previousLeft != right - previousRight) throw Failure("ExtensionProtocol");
             }
             return result;
         }
@@ -43,7 +60,9 @@ namespace hc::compare
     {
         const auto* entry = extension(Format); if (!entry) throw Failure("NoRegisteredEngine");
         const auto result = run(*entry, {Input}, false, Limits);
-        return {{"validation", entry->validation_}, {"document", result["documents"].toArray()[0]}};
+        auto document = result["documents"].toArray()[0].toObject();
+        if (entry->schema_ == "office.paragraphs.v1") { document["paragraphCount"] = document["paragraphs"].toArray().size(); document.remove("paragraphs"); }
+        return {{"validation", entry->validation_}, {"document", document}};
     }
     bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits)
     {

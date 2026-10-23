@@ -1,12 +1,14 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
+target_sources(hc_compare_semantic_worker PRIVATE runtime/docxWorker.cpp)
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
     core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
     core/overviewMap.cpp core/overviewMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
+target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
     runtime/semantic.cpp runtime/semantic.hpp
@@ -35,6 +37,7 @@ qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widget
     widgets/semanticView.cpp widgets/semanticView.hpp
     widgets/imageCompareView.cpp widgets/imageCompareView.hpp
     widgets/archiveCompareView.cpp widgets/archiveCompareView.hpp widgets/extensionView.cpp widgets/extensionView.hpp
+    widgets/docxCompareView.cpp widgets/docxCompareView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)

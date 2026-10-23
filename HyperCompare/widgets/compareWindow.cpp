@@ -608,7 +608,7 @@ namespace hc::compare
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
         qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
-        if (extensionView_) extensionView_->SetListFont(listFont_);
+        if (extensionView_) { extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)

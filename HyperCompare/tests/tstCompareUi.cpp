@@ -11,6 +11,8 @@
 #include "widgets/imageCompareView.hpp"
 #include "widgets/archiveCompareView.hpp"
 #include "zipFixture.hpp"
+#include "docxFixture.hpp"
+#include <QPlainTextEdit>
 #include <QBuffer>
 #include <QPainter>
 #include <QScrollArea>
@@ -95,6 +97,22 @@ private slots:
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void docxParagraphViewAndCoverage()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx");
+        write(request.file1_, test::Docx(test::Paragraph(QString::fromUtf8("공통 제목")) + test::Paragraph(QString::fromUtf8("변경 전 본문"))));
+        write(request.file2_, test::Docx(test::Paragraph(QString::fromUtf8("공통 제목")) + test::Paragraph(QString::fromUtf8("변경 후 본문")) + test::Paragraph(QString::fromUtf8("추가 문단"))));
+        CompareWindow window(request); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("docxCompareView"), 10000);
+        auto* table = window.findChild<QTableView*>("docxParagraphTable"); QCOMPARE(table->model()->rowCount(), 2); QAbstractItemModelTester tester(table->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        auto* left = window.findChild<QPlainTextEdit*>("docxLeftText"); auto* right = window.findChild<QPlainTextEdit*>("docxRightText");
+        QCOMPARE(left->toPlainText(), QString::fromUtf8("변경 전 본문")); QCOMPARE(right->toPlainText(), QString::fromUtf8("변경 후 본문")); QVERIFY(left->isReadOnly());
+        table->setCurrentIndex(table->model()->index(1, 0)); QVERIFY(left->toPlainText().isEmpty()); QCOMPARE(right->toPlainText(), QString::fromUtf8("추가 문단"));
+        QVERIFY(window.findChild<QLabel*>("docxCoverage")->text().contains(QString::fromUtf8("제외"))); QVERIFY(!action(window, "결과 저장")->isEnabled());
+        auto* tabs = window.findChild<QTabWidget*>("docxTabs"); tabs->setCurrentIndex(1); QCOMPARE(window.findChild<QTableView*>("archiveTable")->model()->rowCount(), 4); tabs->setCurrentIndex(0);
+        table->setCurrentIndex(table->model()->index(0, 0));
+        action(window, "Dark")->setChecked(false); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/docx-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/docx-dark.png")); window.close();
     }
     void zipViewContentsFiltersAndThemes()
     {

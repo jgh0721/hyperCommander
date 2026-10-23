@@ -164,7 +164,7 @@ namespace hc::compare
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
-            {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", false}, {"archive", "zip-readonly"},
+            {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
@@ -365,7 +365,7 @@ namespace hc::compare
         const auto updated = require(writer->Inspect(locator(Input.output_), ctx));
         if (updated) Value.expected_ = {true, updated->id_.revision_};
     }
-    QJsonObject Result::Json() const
+    QJsonObject Result::Json(bool IncludeContent) const
     {
         QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
         for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"encoding", input.encoding_},
@@ -383,17 +383,29 @@ namespace hc::compare
             }
         }
         for (const auto& action : directoryPlan_["actions"].toArray()) unresolved += action.toObject()["choice"] == "unresolved";
-        return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
+        auto extension = extension_;
+        if (extension["payloadSchema"] == "office.paragraphs.v1")
+        {
+            auto documents = extension["documents"].toArray();
+            for (int i = 0; i < documents.size(); ++i)
+            {
+                auto document = documents[i].toObject(); auto paragraphs = document["paragraphs"].toArray();
+                if (!IncludeContent) for (int p = 0; p < paragraphs.size(); ++p) { auto item = paragraphs[p].toObject(); item.remove("text"); paragraphs[p] = item; }
+                document["paragraphs"] = paragraphs; documents[i] = document;
+            }
+            extension["documents"] = documents; extension["contentIncluded"] = IncludeContent;
+        }
+        return {{"schemaVersion", 1}, {"engineVersion", extension.isEmpty() ? QString("myers-bounded-1") : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
-            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
-            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension_},
+            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
+            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}};
     }
     int WriteReport(const Request& Input, const Result& Value)
     {
-        QByteArray data = Input.format_ == "json" ? QJsonDocument(Value.Json()).toJson(QJsonDocument::Compact) + '\n'
+        QByteArray data = Input.format_ == "json" ? QJsonDocument(Value.Json(Input.includeContent_)).toJson(QJsonDocument::Compact) + '\n'
             : QString("%1: %2 (exit %3)%4\n").arg(Value.operation_, Value.outcome_).arg(Value.exitCode_).arg(Value.error_.isEmpty() ? QString{} : ": " + Value.error_).toUtf8();
         if (Input.report_.isEmpty() || Input.report_ == "-")
         { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || output.write(data) != data.size() || !output.flush()) return 2; }
