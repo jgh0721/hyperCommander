@@ -10,6 +10,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLockFile>
 #include <io.h>
 
@@ -160,6 +161,27 @@ namespace hc::compare
                 throw;
             }
         }
+    }
+    Result RenameDirectoryEntry(const Request& Input, const Result& Comparison, int Side, const QString& Path, const QString& Name, const Budget& Limits)
+    {
+        Limits.Check();
+        if (!Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Side < 0 || Side > 1 || std::size_t(Side) >= Comparison.directories_->size())
+            throw Failure("DirectoryRenameRequiresCompleteComparison");
+        if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('/') || Name.contains('\\') || Name.contains(':') || Name.contains(QChar(0)))
+            throw Failure("DirectoryRenameInvalidName");
+        const auto& tree = (*Comparison.directories_)[Side]; const auto found = tree.entries_.constFind(Path.toCaseFolded());
+        if (found == tree.entries_.cend()) throw Failure("DirectoryRenameSelectionMissing");
+        const auto entry = tree.Expand(*found); const auto from = CheckedDirectoryPath(QString::fromStdString(entry.locator_.root_));
+        // Keep the requested spelling for a case-only rename; canonicalization is validation only.
+        const auto to = QDir(QFileInfo(from).absolutePath()).filePath(Name); CheckedDirectoryPath(to);
+        CheckProtectedInputs(Input, {from, to}, Limits);
+        const auto provider = storage::MakeNativeReadProvider(entry.locator_.kind_); const auto ctx = context(Limits);
+        const auto current = require(provider->Resolve(entry.locator_, ctx).get());
+        if (current.id_.revision_ != entry.id_.revision_) throw Failure("DirectorySourceChanged");
+        Result result; result.operation_ = "directory-rename";
+        if (QFileInfo(from).fileName() != Name)
+        { Limits.Check(); require(writer(from)->Rename(current, locator(to), ctx)); result.commit_ = "Committed"; }
+        result.completion_ = "Complete"; result.outcome_ = "Renamed"; result.exitCode_ = 0; return result;
     }
     void ApplyDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits, const std::function<void(std::size_t)>& AfterCommit)
     {

@@ -1,6 +1,14 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
 #include <QTimer>
+#include "runtime/directoryApply.hpp"
+#include <QToolButton>
+#include <QMenu>
+#include <QAction>
+#include <QInputDialog>
+#include <QFileInfo>
+#include <QShortcut>
+#include <QtConcurrentRun>
 #include "directoryTreeModel.hpp"
 #include "directoryMergeDialog.hpp"
 #include <QDir>
@@ -129,6 +137,18 @@ namespace hc::compare
                 dialog->show(); dialog->PrepareTransfer(source, path);
             });
         }
+        auto* rename = new QToolButton(this); rename->setText(tr("이름 변경")); rename->setPopupMode(QToolButton::InstantPopup);
+        rename->setObjectName("directoryRenameMenu"); rename->setAccessibleName(tr("선택 항목 이름 변경")); auto* menu = new QMenu(rename); rename->setMenu(menu);
+        for (int side = 0; side < 2; ++side)
+        { auto* action = menu->addAction(side == 0 ? tr("왼쪽 이름 변경…") : tr("오른쪽 이름 변경…"), this, [this, side] { promptRename(side); }); action->setObjectName(side == 0 ? "directoryRenameLeft" : "directoryRenameRight"); }
+        searchRow->addWidget(rename);
+        connect(&renameWatcher_, &QFutureWatcher<Result>::finished, this, [this] {
+            renaming_ = false; mutation_ = renameWatcher_.result(); setEnabled(true);
+            if (mutation_.error_.isEmpty()) comparison_.directoryComplete_ = false;
+            updateSelection(); summary_->setText(mutation_.error_.isEmpty() ? tr("이름 변경 완료 — 비교 갱신 중") : tr("이름 변경 실패: %1").arg(mutation_.error_));
+            if (mutation_.error_.isEmpty() && !renameCanceled_->load() && levelChanged_) levelChanged_(request_.directory_.level_);
+            if (activityChanged_) activityChanged_();
+        });
         viewMode_ = new QComboBox(this); viewMode_->setObjectName("directoryViewMode");
         viewMode_->setAccessibleName(tr("디렉터리 표시 방식")); viewMode_->addItems({tr("좌우 폴더 트리"), tr("경로 목록")});
         searchRow->addWidget(viewMode_);
@@ -159,6 +179,8 @@ namespace hc::compare
             auto* tree = new QTreeView(pane); trees_[side] = tree;
             tree->setObjectName(side ? "directoryRightTree" : "directoryLeftTree");
             tree->setAccessibleName(side ? tr("오른쪽 폴더 트리") : tr("왼쪽 폴더 트리")); tree->setModel(treeFilter_);
+            auto* renameKey = new QShortcut(QKeySequence(Qt::Key_F2), tree); renameKey->setContext(Qt::WidgetWithChildrenShortcut);
+            connect(renameKey, &QShortcut::activated, this, [this, side] { promptRename(side); });
             tree->setUniformRowHeights(true); tree->setItemDelegate(new TreeDelegate(tree));
             tree->setSelectionMode(QAbstractItemView::SingleSelection); tree->setSelectionBehavior(QAbstractItemView::SelectRows);
             tree->setEditTriggers(QAbstractItemView::NoEditTriggers); tree->setAlternatingRowColors(true);
@@ -201,6 +223,28 @@ namespace hc::compare
         connect(table_, &QTableView::doubleClicked, this, [this] { OpenCurrent(); });
         connect(openButton_, &QPushButton::clicked, this, [this] { OpenCurrent(); });
         updateSelection();
+    }
+    DirectoryView::~DirectoryView() { Cancel(); renameWatcher_.waitForFinished(); }
+    void DirectoryView::promptRename(int Side)
+    {
+        if (Busy() || streaming_ || !comparison_.directoryComplete_) return;
+        const auto item = currentEntry(); const auto entry = item[Side == 0 ? "left" : "right"].toObject(); if (!entry["present"].toBool()) return;
+        const auto path = entry["path"].toString(item["path"].toString()); bool ok = false;
+        const auto name = QInputDialog::getText(this, Side == 0 ? tr("왼쪽 이름 변경") : tr("오른쪽 이름 변경"), tr("새 이름:"), QLineEdit::Normal, QFileInfo(path).fileName(), &ok);
+        if (ok) RenameCurrent(Side, name);
+    }
+    void DirectoryView::RenameCurrent(int Side, const QString& Name)
+    {
+        if (Busy() || streaming_ || !comparison_.directoryComplete_ || Side < 0 || Side > 1) return;
+        const auto path = currentEntry()["path"].toString(); if (path.isEmpty()) return;
+        renameCanceled_->store(false); renaming_ = true; setEnabled(false); summary_->setText(tr("이름 변경 중…"));
+        renameWatcher_.setFuture(QtConcurrent::run([input = request_, comparison = comparison_, cancel = renameCanceled_, Side, path, Name] {
+            try { Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = input.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() : std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
+                return RenameDirectoryEntry(input, comparison, Side, path, Name, limits); }
+            catch (const Failure& error) { Result result; result.error_ = QString::fromStdString(error.code_); return result; }
+            catch (const std::exception& error) { Result result; result.error_ = QString::fromUtf8(error.what()); return result; }
+        }));
+        if (activityChanged_) activityChanged_();
     }
     void DirectoryView::BeginComparison(const Request& Input)
     {
@@ -316,6 +360,8 @@ namespace hc::compare
         const auto item = currentEntry();
         for (int side = 0; side < 2; ++side)
             findChild<QPushButton*>(side == 0 ? "directoryCopyRight" : "directoryCopyLeft")->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
+        for (int side = 0; side < 2; ++side)
+            findChild<QAction*>(side == 0 ? "directoryRenameLeft" : "directoryRenameRight")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
         summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));

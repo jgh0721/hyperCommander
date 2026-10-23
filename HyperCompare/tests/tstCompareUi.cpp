@@ -49,6 +49,7 @@
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QInputDialog>
 #include <QUuid>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
@@ -623,6 +624,26 @@ private slots:
         table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
         auto* base = window.findChild<ScintillaEditBase*>("BASE"); QVERIFY(base); QVERIFY(base->send(SCI_GETSELECTIONEND) > base->send(SCI_GETSELECTIONSTART));
         QVERIFY(!base->send(SCI_CANUNDO)); window.close();
+    }
+    void directoryRenameMenuAndKeyboard()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a.txt", "left"); write(r.file2_ + "/a.txt", "right");
+        auto cancel = std::make_shared<std::atomic_bool>(false); DirectoryView view; view.resize(1400, 600);
+        view.SetComparison(r, Execute(r, cancel, false)); view.show(); view.activateWindow(); view.NavigateDifference(1);
+        int refreshes = 0; view.levelChanged_ = [&](const QString&) { ++refreshes; };
+        QVERIFY(view.findChild<QAction*>("directoryRenameLeft")->isEnabled());
+        view.RenameCurrent(0, "../invalid"); QVERIFY(view.Busy()); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(!view.LastMutation().error_.isEmpty()); QCOMPARE(refreshes, 0);
+        bool prompted = false;
+        QTimer::singleShot(0, &view, [&] { if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) { prompted = true; dialog->setTextValue("left-renamed.txt"); dialog->accept(); } });
+        view.findChild<QAction*>("directoryRenameLeft")->trigger(); QVERIFY(prompted); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QVERIFY2(view.LastMutation().error_.isEmpty(), qPrintable(view.LastMutation().error_)); QCOMPARE(refreshes, 1); QVERIFY(QFileInfo::exists(r.file1_ + "/left-renamed.txt"));
+        view.SetComparison(r, Execute(r, cancel, false)); view.NavigateDifference(1);
+        auto* right = view.findChild<QTreeView*>("directoryRightTree"); right->setFocus(); QTest::qWait(30); prompted = false;
+        QTimer::singleShot(0, &view, [&] { if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) { prompted = true; dialog->setTextValue("right-renamed.txt"); dialog->accept(); } });
+        QTest::keyClick(right, Qt::Key_F2); QVERIFY(prompted); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QVERIFY2(view.LastMutation().error_.isEmpty(), qPrintable(view.LastMutation().error_)); QCOMPARE(refreshes, 2); QVERIFY(QFileInfo::exists(r.file2_ + "/right-renamed.txt"));
+        view.SetComparison(r, Execute(r, cancel, false)); QVERIFY(view.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-rename.png")); view.close();
     }
     void directoryGuiTransferSelection()
     {

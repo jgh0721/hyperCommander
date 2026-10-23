@@ -3,6 +3,7 @@
 #include <QAbstractTableModel>
 #include <QSortFilterProxyModel>
 #include <QWidget>
+#include <QFutureWatcher>
 #include <functional>
 
 class QTableView;
@@ -47,6 +48,12 @@ namespace hc::compare
     {
     public:
         explicit DirectoryView(QWidget* Parent = nullptr);
+        ~DirectoryView() override;
+        void RenameCurrent(int Side, const QString& Name);
+        bool Busy() const { return renaming_; }
+        void Cancel() { renameCanceled_->store(true); }
+        const Result& LastMutation() const { return mutation_; }
+        std::function<void()> activityChanged_;
         void SetComparison(const Request& Input, const Result& Value);
         void BeginComparison(const Request& Input);
         void ApplyProgress(const DirectoryProgress& Progress);
@@ -57,6 +64,7 @@ namespace hc::compare
         std::function<void(Request)> open_;
         std::function<void(QString)> levelChanged_;
     private:
+        void promptRename(int Side);
         void updateSelection();
         void updateRoots();
         QJsonObject currentEntry() const;
@@ -76,6 +84,10 @@ namespace hc::compare
         QLabel* roots_ = nullptr;
         QLabel* summary_ = nullptr;
         QPushButton* openButton_ = nullptr;
+        QFutureWatcher<Result> renameWatcher_;
+        std::shared_ptr<std::atomic_bool> renameCanceled_ = std::make_shared<std::atomic_bool>(false);
+        bool renaming_ = false;
+        Result mutation_;
         Request request_;
         Result comparison_;
     };

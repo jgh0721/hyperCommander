@@ -1919,6 +1919,30 @@ private slots:
         plan["actions"] = actions; write(r.planOut_, QJsonDocument(plan).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
         QCOMPARE(read(r.output_ + "/a"), QByteArray("left")); QCOMPARE(read(r.output_ + "/binary"), QByteArray::fromHex("004c"));
     }
+    void directoryRenameIdentityAndCollision()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_ + "/folder")); QVERIFY(QDir().mkpath(r.file2_));
+        write(r.file1_ + "/a.txt", "original"); write(r.file1_ + "/collision", "preserve"); write(r.file1_ + "/folder/child", "nested");
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto comparison = Execute(r, cancel, false);
+        for (const auto& name : {QString("../escape"), QString("CON"), QString("a:stream"), QString("bad."), QString(""), QString("x/y")})
+            QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 0, "a.txt", name, {}), Failure);
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 0, "a.txt", "collision", {}), Failure);
+        QCOMPARE(read(r.file1_ + "/collision"), QByteArray("preserve")); QCOMPARE(read(r.file1_ + "/a.txt"), QByteArray("original"));
+        auto protectedRequest = r; protectedRequest.protectedInputs_.append(r.file1_ + "/a.txt");
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(protectedRequest, comparison, 0, "a.txt", "blocked", {}), Failure);
+        std::atomic_bool stopped{true}; Budget limits; limits.canceled_ = &stopped;
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 0, "a.txt", "canceled", limits), Failure);
+        QCOMPARE(RenameDirectoryEntry(r, comparison, 0, "a.txt", "한글.txt", {}).commit_, QString("Committed"));
+        QVERIFY(!QFileInfo::exists(r.file1_ + "/a.txt")); QCOMPARE(read(r.file1_ + "/한글.txt"), QByteArray("original"));
+        comparison = Execute(r, cancel, false);
+        QCOMPARE(RenameDirectoryEntry(r, comparison, 0, "folder", "Folder", {}).exitCode_, 0);
+        QVERIFY(QDir(r.file1_).entryList(QDir::Dirs).contains("Folder")); QCOMPARE(read(r.file1_ + "/Folder/child"), QByteArray("nested"));
+        comparison = Execute(r, cancel, false); write(r.file1_ + "/한글.txt", "changed after comparison");
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 0, "한글.txt", "stale", {}), Failure);
+        QCOMPARE(read(r.file1_ + "/한글.txt"), QByteArray("changed after comparison"));
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 1, "한글.txt", "missing", {}), Failure);
+    }
     void directoryTransferSelectionAndResume()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
