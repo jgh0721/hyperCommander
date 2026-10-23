@@ -9,6 +9,7 @@ namespace hc::compare
     {
         if (canceled_ && canceled_->load(std::memory_order_relaxed)) throw Failure("Canceled");
         if (std::chrono::steady_clock::now() >= deadline_) throw Failure("Timeout");
+        if (memoryCheck_) memoryCheck_();
     }
     namespace
     {

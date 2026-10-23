@@ -12,6 +12,7 @@ target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/controllerMemory.cpp runtime/controllerMemory.hpp
     runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/saveRecovery.cpp runtime/saveRecovery.hpp
     runtime/inputEditing.cpp runtime/inputEditing.hpp

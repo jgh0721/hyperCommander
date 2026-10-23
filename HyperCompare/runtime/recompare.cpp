@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
+#include "controllerMemory.hpp"
 #include <QCryptographicHash>
 #include <QHash>
 
@@ -40,6 +41,7 @@ namespace hc::compare
         if (result.completion_ != "Complete") return result;
         try
         {
+            ConfigureMemoryBudget(limits, Input.memoryMiB_);
             if (!Previous.plan_ || !result.plan_ || Previous.plan_->hasBase_ != result.plan_->hasBase_ ||
                 State.size() != Previous.plan_->blocks_.size() || Previous.inputs_.size() != result.inputs_.size() ||
                 !Previous.hasOutputExpectation_) throw Failure("InvalidRecompareSession");

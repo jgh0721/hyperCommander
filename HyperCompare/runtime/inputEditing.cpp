@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "inputEditing.hpp"
+#include "controllerMemory.hpp"
 #include "saveRecovery.hpp"
 #include "semantic.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -20,11 +21,13 @@ namespace hc::compare
         template<class T> T require(storage::Result<T> Value)
         { if (!Value.HasValue()) throw Failure(Value.Failure().code_); return std::move(Value.Value()); }
     }
-    Result CompareOpenBuffers(const Request& Input, Result Previous, const QVector<QByteArray>& Texts, const Budget& Limits)
+    Result CompareOpenBuffers(const Request& Input, Result Previous, const QVector<QByteArray>& Texts, const Budget& OriginalLimits)
     {
+        auto Limits = OriginalLimits;
         Previous.error_.clear(); Previous.pairViews_ = {}; Previous.semantic_ = {}; Previous.comparisons_ = {};
         try
         {
+            ConfigureMemoryBudget(Limits, Input.memoryMiB_);
             if (Texts.size() != Previous.inputs_.size() || Texts.size() < 2 || Texts.size() > 3) throw Failure("InvalidBufferCount");
             for (int i = 0; i < Texts.size(); ++i) { validate(Texts[i], Limits); Previous.inputs_[i].utf8_ = Texts[i]; }
             const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};

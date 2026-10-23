@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "batch.hpp"
+#include "controllerMemory.hpp"
 #include "requestFile.hpp"
 #include "decisionPlan.hpp"
 #include "directoryPlan.hpp"
@@ -76,6 +77,7 @@ namespace hc::compare
     {
         if (Input.jobs_ < 1 || Input.jobs_ > 2) throw Failure("BatchConcurrencyLimit");
         Budget limits; limits.canceled_ = Canceled.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
+        ConfigureMemoryBudget(limits, Input.memoryMiB_);
         auto jobs = prepare(Input, limits); struct Running { int index_ = -1; std::future<Result> future_; }; std::vector<Running> active;
         int next = 0, code = 0, completed = 0, skipped = 0; std::array<int, 4> counts{}; bool failed = false, delivery = true;
         const auto send = [&](QJsonObject Event) { Event["schemaVersion"] = 1; if (delivery && !Sink(Event)) { delivery = false; Canceled->store(true); } return delivery; };
@@ -92,7 +94,7 @@ namespace hc::compare
                 const int index = next++; if (!send({{"event", "started"}, {"jobId", jobs[index].id_}})) { --next; break; }
                 const auto available = std::chrono::duration_cast<std::chrono::milliseconds>(limits.deadline_ - std::chrono::steady_clock::now()).count();
                 if (available <= 0) { --next; break; }
-                auto request = jobs[index].request_; request.timeoutMs_ = int(std::min<qint64>(request.timeoutMs_, available));
+                auto request = jobs[index].request_; request.memoryMiB_ = std::min(request.memoryMiB_, Input.memoryMiB_); request.timeoutMs_ = int(std::min<qint64>(request.timeoutMs_, available));
                 active.push_back({index, std::async(std::launch::async, [request, Canceled] { return Execute(request, Canceled, true); })});
             }
             bool ready = false;

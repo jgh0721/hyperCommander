@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@ namespace hc::compare
         std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         const std::atomic_bool* canceled_ = nullptr;
         std::uint64_t traceBytes_ = 64 * 1024 * 1024, steps_ = 50'000'000;
+        std::function<void()> memoryCheck_;
         void Check() const;
     };
     // Lines retain their terminators: EOF and CRLF/LF differences remain edits.

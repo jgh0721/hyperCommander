@@ -18,6 +18,7 @@
 #include "runtime/semantic.hpp"
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
+#include "runtime/controllerMemory.hpp"
 #include "runtime/requestFile.hpp"
 #include "runtime/batch.hpp"
 #include "zipFixture.hpp"
@@ -523,6 +524,64 @@ private slots:
         QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
         const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object(); QCOMPARE(report["extension"].toObject()["payloadSchema"].toString(), "image.rgba.v1");
         QVERIFY(!report["extension"].toObject()["documents"].toArray()[0].toObject().contains("rgba"));
+    }
+    void controllerMemoryAdmission()
+    {
+        constexpr std::uint64_t mib = 1024 * 1024;
+        std::atomic<std::uint64_t> measured{100 * mib};
+        auto pool = std::make_shared<ControllerMemory>([&] { return measured.load(); });
+        auto scope = pool->Enter(1024 * mib);
+        auto first = pool->TryWorker(512 * mib, 64 * mib, 64 * mib); QCOMPARE(first.bytes_, 512 * mib);
+        auto second = pool->TryWorker(512 * mib, 64 * mib, 64 * mib); QCOMPARE(second.bytes_, 284 * mib);
+        QVERIFY(!pool->TryWorker(512 * mib, 64 * mib, 64 * mib).lease_);
+        QCOMPARE(pool->Reserved(), 924 * mib);
+        measured = 120 * mib; QVERIFY(!pool->TryWorker(128 * mib, 64 * mib, 32 * mib).lease_); pool->Check();
+        measured = 100 * mib;
+        QVERIFY_EXCEPTION_THROWN(pool->Enter(256 * mib), Failure); pool->Check();
+        second = {}; first = {}; QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        auto smaller = pool->Enter(256 * mib);
+        auto adjusted = pool->TryWorker(512 * mib, 64 * mib, 64 * mib); QCOMPARE(adjusted.bytes_, 92 * mib);
+        adjusted = {}; smaller.reset();
+        measured = 1025 * mib; QVERIFY_EXCEPTION_THROWN(pool->TryWorker(256 * mib, 64 * mib, 64 * mib), Failure);
+        measured = 100 * mib;
+        // Concurrent reservations cannot each spend the same available bytes.
+        std::vector<std::future<bool>> futures; std::atomic_bool release{false}; std::atomic_int entered{0};
+        for (int i = 0; i < 16; ++i) futures.push_back(std::async(std::launch::async, [&] {
+            auto reservation = pool->TryWorker(128 * mib, 128 * mib, 32 * mib); ++entered;
+            while (!release.load()) std::this_thread::yield(); return bool(reservation.lease_);
+        }));
+        while (entered.load() != 16) std::this_thread::yield();
+        const auto reserved = pool->Reserved(); release = true; int admitted = 0; for (auto& future : futures) admitted += future.get();
+        QCOMPARE(admitted, 5); QCOMPARE(reserved, 800 * mib); QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        scope.reset(); QVERIFY_EXCEPTION_THROWN(pool->Enter(255 * mib), Failure);
+    }
+    void controllerMemoryCliAndRequest()
+    {
+        for (const auto& value : {"255", "1025", "0", "-1", "256.5", "bad"})
+            QVERIFY(!Parse({"hc", "-file1", "a", "-file2", "b", "-memory-mib", value}, true).error_.isEmpty());
+        auto parsed = Parse({"hc", "-file1", "a", "-file2", "b", "-memory-mib", "256"}, true);
+        QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.memoryMiB_, 256);
+        QTemporaryDir dir; const auto path = dir.filePath("request.json");
+        write(dir.filePath("a.cpp"), "int f(){return 1;}\n"); write(dir.filePath("b.cpp"), "int f(){return 2;}\n");
+        QJsonObject json{{"schemaVersion", 1}, {"mode", "compare"},
+            {"inputs", QJsonObject{{"left", QJsonObject{{"path", "a.cpp"}}}, {"right", QJsonObject{{"path", "b.cpp"}}}}},
+            {"limits", QJsonObject{{"memoryMiB", 512}}}};
+        write(path, QJsonDocument(json).toJson()); parsed = Parse({"hc", "-request", path}, true);
+        QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.memoryMiB_, 512);
+        parsed = Parse({"hc", "-request", path, "-memory-mib", "256"}, true); QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.memoryMiB_, 256);
+        QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-request", path, "-memory-mib", "256", "-format", "json"});
+        QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1);
+        const auto report = QJsonDocument::fromJson(cli.readAllStandardOutput()).object(); QCOMPARE(report["completion"].toString(), "Complete");
+        for (const auto& value : {QJsonValue(255), QJsonValue(1025), QJsonValue(256.5), QJsonValue("512")})
+        { json["limits"] = QJsonObject{{"memoryMiB", value}}; write(path, QJsonDocument(json).toJson()); QVERIFY(!Parse({"hc", "-request", path}, true).error_.isEmpty()); }
+        Budget limits; ConfigureMemoryBudget(limits, 1024);
+        const auto before = ProcessControllerMemory()->Reserved();
+        const auto response = RunWorker("source.tree-sitter", {{"language", "cpp"}, {"source", QString::fromLatin1(QByteArray("int f(){}").toBase64())}}, limits);
+        QCOMPARE(response["status"].toString(), "Complete"); QVERIFY(response["workerMemoryLimitBytes"].toDouble() >= 64 * 1024 * 1024);
+        QCOMPARE(ProcessControllerMemory()->Reserved(), before);
+        Budget checked; checked.memoryCheck_ = [] { throw Failure("ControllerMemoryLimit"); };
+        QVERIFY_EXCEPTION_THROWN(Diff("left", "right", checked), Failure);
+        QCOMPARE(RunWorker("source.tree-sitter", {}, checked)["reason"].toString(), "ControllerMemoryLimit");
     }
     void workerSharedCapacityAndAbandonedLease()
     {

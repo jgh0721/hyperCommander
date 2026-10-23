@@ -36,6 +36,7 @@ namespace hc::compare
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
         value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
+        value("memory-mib", "Controller analysis admission budget (256..1024 MiB, default 1024); cooperative parent checks plus shared worker reservations, not an OS-wide hard cap.");
         value("timeout-ms", "Cooperative request deadline in milliseconds (100..3600000); pending native/network I/O may exceed it.");
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
@@ -69,8 +70,8 @@ namespace hc::compare
             for (const auto& name : parser.optionNames())
             {
                 if (name == "request") continue;
-                if (!QStringList{"headless", "gui", "wait", "exitcode", "format", "report", "timeout-ms", "include-content", "reuse", "wait-timeout-ms"}.contains(name)) return fail("Option cannot be combined with -request: " + name);
-                overrides << '-' + name; if (QStringList{"format", "report", "timeout-ms", "wait-timeout-ms"}.contains(name)) overrides << parser.value(name);
+                if (!QStringList{"headless", "gui", "wait", "exitcode", "format", "report", "timeout-ms", "memory-mib", "include-content", "reuse", "wait-timeout-ms"}.contains(name)) return fail("Option cannot be combined with -request: " + name);
+                overrides << '-' + name; if (QStringList{"format", "report", "timeout-ms", "memory-mib", "wait-timeout-ms"}.contains(name)) overrides << parser.value(name);
             }
             return ParseRequestFile(parser.value("request"), overrides, Console);
         }
@@ -135,6 +136,11 @@ namespace hc::compare
         if (!request.headless_ && (request.dryRun_ || parser.isSet("report") || parser.isSet("format")))
             return fail("-dryrun/-report/-format require headless mode in this version.");
         if (parser.isSet("exitcode") && !request.wait_ && !request.headless_) return fail("-exitcode requires -wait in GUI mode.");
+        if (parser.isSet("memory-mib"))
+        {
+            bool valid = false; request.memoryMiB_ = parser.value("memory-mib").toInt(&valid);
+            if (!valid || request.memoryMiB_ < 256 || request.memoryMiB_ > 1024) return fail("Invalid memory-mib.");
+        }
         if (parser.isSet("timeout-ms"))
         {
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
@@ -145,7 +151,7 @@ namespace hc::compare
         if (request.mode_ == "batch")
         {
             for (const auto& name : parser.optionNames())
-                if (!QStringList{"mode", "manifest", "jobs", "failfast", "headless", "wait", "exitcode", "format", "report", "timeout-ms", "include-content"}.contains(name)) return fail("Option not valid for batch: " + name);
+                if (!QStringList{"mode", "manifest", "jobs", "failfast", "headless", "wait", "exitcode", "format", "report", "timeout-ms", "memory-mib", "include-content"}.contains(name)) return fail("Option not valid for batch: " + name);
             if (!request.headless_ || parser.value("manifest").isEmpty()) return fail("Batch requires headless -manifest.");
             request.format_ = parser.isSet("format") ? parser.value("format") : "ndjson"; if (request.format_ != "ndjson") return fail("Batch requires ndjson format.");
             if (parser.isSet("jobs")) { bool valid = false; request.jobs_ = parser.value("jobs").toInt(&valid); if (!valid || request.jobs_ < 1 || request.jobs_ > 2) return fail("Batch jobs must be 1 or 2."); }
@@ -160,7 +166,7 @@ namespace hc::compare
         {
             if (!request.headless_ || request.journal_ == "-" || (parser.isSet("journal") && request.journal_.isEmpty())) return fail("Recover requires headless mode and an optional -journal FILE.hcsave.");
             for (const auto& name : parser.optionNames())
-                if (!QStringList{"mode", "journal", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms"}.contains(name)) return fail("Option not valid for recover: " + name);
+                if (!QStringList{"mode", "journal", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms", "memory-mib"}.contains(name)) return fail("Option not valid for recover: " + name);
             if (!request.report_.isEmpty() && request.report_ != "-") return fail("Recover reports must use stdout to preserve recovery artifacts.");
             if (!request.journal_.isEmpty()) request.journal_ = QDir::cleanPath(QFileInfo(request.journal_).absoluteFilePath()); return result;
         }
@@ -168,7 +174,7 @@ namespace hc::compare
         {
             if (!request.headless_ || request.applyPlan_.isEmpty()) return fail("Apply requires headless -plan.");
             for (const auto& name : parser.optionNames())
-                if (!QStringList{"mode", "plan", "journal", "resume", "allowdelete", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms"}.contains(name)) return fail("Option not valid for apply: " + name);
+                if (!QStringList{"mode", "plan", "journal", "resume", "allowdelete", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms", "memory-mib"}.contains(name)) return fail("Option not valid for apply: " + name);
             for (auto* path : {&request.applyPlan_, &request.journal_, &request.report_})
                 if (!path->isEmpty() && *path != "-") *path = QDir::cleanPath(QFileInfo(*path).absoluteFilePath());
             if (request.applyPlan_ == "-" || (parser.isSet("journal") && request.journal_.isEmpty())) return fail("Apply requires file paths.");

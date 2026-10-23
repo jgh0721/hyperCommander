@@ -35,7 +35,7 @@ namespace hc::compare
         bool mirror_ = false;
         bool help_ = false, version_ = false;
         DirectoryPolicy directory_;
-        int timeoutMs_ = 60000;
+        int timeoutMs_ = 60000, memoryMiB_ = 1024;
     };
     struct Parsed { Request request_; QString error_, help_; };
     inline QString InputEncoding(const Request& Input, int Index)
