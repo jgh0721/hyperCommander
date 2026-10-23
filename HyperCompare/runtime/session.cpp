@@ -2,6 +2,7 @@
 #include "session.hpp"
 #include "directory.hpp"
 #include "directoryPlan.hpp"
+#include "directoryApply.hpp"
 #include "decisionPlan.hpp"
 #include "mergeWork.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -158,7 +159,7 @@ namespace hc::compare
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
-            {"directoryMerge", false}, {"directoryPlans", true}, {"directoryPlanSchema", 1}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
+            {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 1}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
@@ -168,6 +169,8 @@ namespace hc::compare
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
+            if (Input.mode_ == "apply")
+            { auto request = Input; request.dryRun_ |= !Save; ApplyDirectoryPlan(request, result, limits); return result; }
             if (Input.mode_ != "directory-merge" && (!Input.planOut_.isEmpty() || !Input.decisions_.isEmpty()))
             {
                 if (!Input.headless_ || Input.mode_ != "merge" || !Input.takeAll_.isEmpty() ||
@@ -383,7 +386,25 @@ namespace hc::compare
         { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || output.write(data) != data.size() || !output.flush()) return 2; }
         else
         {
-            try { checkArtifactPaths(Input, Budget{}); } catch (...) { return 2; }
+            try
+            {
+                checkArtifactPaths(Input, Budget{});
+                const auto report = CheckedDirectoryPath(Input.report_);
+                for (const auto& path : {Input.file1_, Input.file2_, Input.base_, Input.output_})
+                    if (!path.isEmpty() && QFileInfo(path).isDir() && DirectoryPathsOverlap(report, CheckedDirectoryPath(path))) return 2;
+                if (Input.mode_ == "apply")
+                {
+                    // Apply reports are written outside the reviewed input/output trees.
+                    const auto paths = Value.directoryPlan_;
+                    const auto target = paths["output"].toObject()["path"].toString();
+                    if (!target.isEmpty() && DirectoryPathsOverlap(report, CheckedDirectoryPath(target))) return 2;
+                    for (const auto& item : paths["roots"].toArray())
+                        if (DirectoryPathsOverlap(report, CheckedDirectoryPath(item.toObject()["path"].toString()))) return 2;
+                    for (const auto& path : {Input.applyPlan_, Input.journal_.isEmpty() ? Input.applyPlan_ + ".journal" : Input.journal_})
+                        if (report.compare(CheckedDirectoryPath(path), Qt::CaseInsensitive) == 0) return 2;
+                }
+            }
+            catch (...) { return 2; }
             // Never replace a report that aliases source content through a hard link.
             if (QFileInfo::exists(Input.report_))
             {

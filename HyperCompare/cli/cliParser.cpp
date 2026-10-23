@@ -21,7 +21,7 @@ namespace hc::compare
         const auto value = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description, "value"}); };
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
-        value("mode", "auto, compare, merge, directory, directory-merge, capabilities.");
+        value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
@@ -35,6 +35,10 @@ namespace hc::compare
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
         flag("overwrite", "Allow replacing an existing output, subject to revision validation.");
+        value("plan", "Reviewed directory plan to apply with -mode apply.");
+        value("journal", "Directory apply journal; default PLAN.journal, outside all roots.");
+        flag("resume", "Verify and resume an interrupted directory plan.");
+        flag("allowdelete", "Authorize the reviewed plan removals; no implicit recursive deletion.");
         flag("mirror", "Directory plan: include removals for output-only paths; apply requires explicit deletion authorization.");
         flag("dryrun", "Compute without writing the merge output.");
         result.help_ = parser.helpText();
@@ -72,6 +76,9 @@ namespace hc::compare
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);
         request.wait_ = parser.isSet("wait") || Console;
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
+        request.applyPlan_ = parser.value("plan"); request.journal_ = parser.value("journal");
+        request.resume_ = parser.isSet("resume"); request.allowDelete_ = parser.isSet("allowdelete");
+        if (request.mode_ != "apply" && (parser.isSet("plan") || parser.isSet("journal") || request.resume_ || request.allowDelete_)) return fail("Apply options require -mode apply.");
         request.mirror_ = parser.isSet("mirror");
         if (request.mirror_ && request.mode_ != "directory-merge") return fail("-mirror requires directory-merge.");
         const bool decisionOptions = !request.planOut_.isEmpty() || !request.decisions_.isEmpty();
@@ -86,10 +93,20 @@ namespace hc::compare
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }
-        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "capabilities"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "capabilities"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
         if (!QStringList{"text", "json"}.contains(request.format_)) return fail("Unsupported report format.");
         if (!request.encoding_.isEmpty() && !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(request.encoding_)) return fail("Unsupported encoding.");
         if (!request.theme_.isEmpty() && request.theme_ != "light" && request.theme_ != "dark") return fail("Invalid theme.");
+        if (request.mode_ == "apply")
+        {
+            if (!request.headless_ || request.applyPlan_.isEmpty()) return fail("Apply requires headless -plan.");
+            for (const auto& name : parser.optionNames())
+                if (!QStringList{"mode", "plan", "journal", "resume", "allowdelete", "headless", "wait", "exitcode", "dryrun", "format", "report", "timeout-ms"}.contains(name)) return fail("Option not valid for apply: " + name);
+            for (auto* path : {&request.applyPlan_, &request.journal_, &request.report_})
+                if (!path->isEmpty() && *path != "-") *path = QDir::cleanPath(QFileInfo(*path).absoluteFilePath());
+            if (request.applyPlan_ == "-" || (parser.isSet("journal") && request.journal_.isEmpty())) return fail("Apply requires file paths.");
+            return result;
+        }
         if (request.mode_ == "capabilities") return result;
         if (request.file1_.isEmpty() && request.file2_.isEmpty() && !request.headless_ && Arguments.size() == 1) return result;
         if (request.file1_.isEmpty() || request.file2_.isEmpty()) return fail("Both -file1 and -file2 are required.");

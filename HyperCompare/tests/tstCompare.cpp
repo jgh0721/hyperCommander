@@ -3,6 +3,7 @@
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
 #include "runtime/directoryPlan.hpp"
+#include "runtime/directoryApply.hpp"
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
 #include <QtTest>
@@ -780,6 +781,94 @@ private slots:
         write(r.file1_, QByteArray::fromHex("ff00")); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
         write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
+    }
+    void directoryApplyCopyAndResume()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_ + "/sub")); QVERIFY(QDir().mkpath(r.file2_));
+        write(r.file1_ + "/sub/a", QByteArray(2000000, 'a')); write(r.file1_ + "/z", "last");
+        auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_; apply.dryRun_ = true;
+        auto result = Execute(apply, cancel, true); QCOMPARE(result.exitCode_, 0); QVERIFY(!QFileInfo::exists(r.output_));
+        QVERIFY(!QFileInfo::exists(r.planOut_ + ".journal"));
+        apply.dryRun_ = false; Budget limits; limits.canceled_ = cancel.get();
+        QVERIFY_EXCEPTION_THROWN(ApplyDirectoryPlan(apply, result, limits, [&](std::size_t Count) { if (Count == 3) cancel->store(true); }), Failure);
+        QCOMPARE(result.commit_, QString("Partial")); QCOMPARE(read(r.output_ + "/sub/a"), QByteArray(2000000, 'a')); QVERIFY(!QFileInfo::exists(r.output_ + "/z"));
+        cancel->store(false); apply.resume_ = true; result = Execute(apply, cancel, true);
+        QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.commit_, QString("Committed")); QCOMPARE(read(r.output_ + "/z"), QByteArray("last"));
+        const auto before = CaptureDirectory(r.output_, {}, {}); result = Execute(apply, cancel, true); QCOMPARE(result.exitCode_, 0);
+        ValidateDirectory(before, {}, {}); // completed work is verified without copying again
+        write(r.output_ + "/z", "external"); QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch"));
+    }
+    void directoryApplyPreconditionsAndDelete()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left"; r.overwrite_ = true; r.mirror_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        for (const auto& root : {r.file1_, r.file2_, r.output_}) QVERIFY(QDir().mkpath(root));
+        write(r.file1_ + "/a", "new"); write(r.output_ + "/a", "old"); QVERIFY(QDir().mkpath(r.output_ + "/extra/sub")); write(r.output_ + "/extra/sub/remove", "extra");
+        auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectoryDeletionAuthorizationRequired")); QCOMPARE(read(r.output_ + "/a"), QByteArray("old"));
+        apply.allowDelete_ = true; auto result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QCOMPARE(result.exitCode_, 0); QCOMPARE(read(r.output_ + "/a"), QByteArray("new")); QVERIFY(!QFileInfo::exists(r.output_ + "/extra"));
+        QCOMPARE(read(r.file1_ + "/a"), QByteArray("new"));
+        apply.resume_ = true; write(r.file1_ + "/a", "changed source"); QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch"));
+    }
+    void directoryApplyRejectsPlanTampering()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_ + "/sub")); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/sub/a", "data");
+        auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        const auto original = QJsonDocument::fromJson(read(r.planOut_)).object(); Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        auto changed = original; changed["schemaVersion"] = 2; write(r.planOut_, QJsonDocument(changed).toJson());
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySchemaInvalid"));
+        changed = original; auto actions = changed["actions"].toArray(); auto action = actions[0].toObject(); action["path"] = "../escape"; actions[0] = action; changed["actions"] = actions;
+        write(r.planOut_, QJsonDocument(changed).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 2); QVERIFY(!QFileInfo::exists(r.output_));
+        changed = original; actions = changed["actions"].toArray(); action = actions[0].toObject(); action["choice"] = "omit"; actions[0] = action; changed["actions"] = actions;
+        write(r.planOut_, QJsonDocument(changed).toJson()); QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectoryParentChoiceConflict"));
+        write(r.planOut_, QJsonDocument(original).toJson()); write(r.file1_ + "/added", "not captured");
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch")); QVERIFY(!QFileInfo::exists(r.output_));
+        const auto parsed = Parse({"app", "-mode", "apply", "-plan", r.planOut_, "-resume", "-allowdelete", "-dryrun"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QVERIFY(parsed.request_.resume_); QVERIFY(parsed.request_.allowDelete_);
+    }
+    void directoryApplyLostCompletionAndConsole()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "complete bytes");
+        auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        QCOMPARE(Execute(apply, cancel, false).outcome_, QString("Validated")); QVERIFY(!QFileInfo::exists(r.output_));
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-mode", "apply", "-plan", r.planOut_, "-format", "json"});
+        QVERIFY(process.waitForFinished(15000)); QCOMPARE(process.exitCode(), 0);
+        QCOMPARE(QJsonDocument::fromJson(process.readAllStandardOutput()).object()["commit"].toString(), QString("Committed"));
+        const auto snapshot = CaptureDirectory(r.output_, {}, {});
+        // Simulate power loss after commit: durable pending record, torn completion suffix.
+        const auto journalPath = r.planOut_ + ".journal"; auto journal = read(journalPath);
+        const auto finalLine = journal.lastIndexOf('\n', journal.size() - 2) + 1; QVERIFY(finalLine > 0);
+        journal.truncate(finalLine); journal += "{\"index\":"; write(journalPath, journal);
+        apply.resume_ = true; const auto result = Execute(apply, cancel, true);
+        QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.commit_, QString("Committed"));
+        ValidateDirectory(snapshot, {}, {}); QCOMPARE(read(r.output_ + "/a"), QByteArray("complete bytes"));
+        QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
+    }
+    void directoryApplyTypeReplacementAndEmptyFile()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); QVERIFY(QDir().mkpath(r.output_ + "/item/sub"));
+        write(r.file1_ + "/empty", ""); write(r.file1_ + "/item", "replacement"); write(r.output_ + "/item/sub/keep", "existing");
+        r.overwrite_ = true; auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_; apply.allowDelete_ = true;
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectoryPreservedChildConflict"));
+        QCOMPARE(read(r.output_ + "/item/sub/keep"), QByteArray("existing"));
+        r.mirror_ = true; r.planOut_ = dir.filePath("mirror.json"); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
+        apply.applyPlan_ = r.planOut_; const auto result = Execute(apply, cancel, true);
+        QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(read(r.output_ + "/item"), QByteArray("replacement"));
+        QVERIFY(QFileInfo(r.output_ + "/empty").isFile()); QCOMPARE(QFileInfo(r.output_ + "/empty").size(), qint64(0));
+        apply.resume_ = true; QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
     }
     void directoryPlanExportAndChoices()
     {
