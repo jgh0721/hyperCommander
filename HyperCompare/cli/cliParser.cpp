@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "runtime/requestFile.hpp"
 #include <QCommandLineParser>
 #include <QDir>
 #include <QFileInfo>
@@ -20,6 +21,7 @@ namespace hc::compare
         const auto flag = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description}); };
         const auto value = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description, "value"}); };
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
+        value("request", "Schema 1 request JSON; relative paths resolve from its directory (maximum 1 MiB).");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
         value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities, probe.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
@@ -52,6 +54,18 @@ namespace hc::compare
         { if (seen.contains(name)) return fail("Duplicate option: " + name); seen.insert(name); }
         request.help_ = parser.isSet("help"); request.version_ = parser.isSet("version");
         if (request.help_ || request.version_) return result;
+        if (parser.isSet("request"))
+        {
+            if (parser.value("request").isEmpty()) return fail("Empty request path.");
+            QStringList overrides;
+            for (const auto& name : parser.optionNames())
+            {
+                if (name == "request") continue;
+                if (!QStringList{"headless", "gui", "wait", "exitcode", "format", "report", "timeout-ms", "include-content"}.contains(name)) return fail("Option cannot be combined with -request: " + name);
+                overrides << '-' + name; if (QStringList{"format", "report", "timeout-ms"}.contains(name)) overrides << parser.value(name);
+            }
+            return ParseRequestFile(parser.value("request"), overrides, Console);
+        }
         request.file1_ = parser.value("file1"); request.file2_ = parser.value("file2");
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");

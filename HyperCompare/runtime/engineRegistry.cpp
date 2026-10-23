@@ -134,10 +134,10 @@ namespace hc::compare
     }
     QJsonObject ProbeComparison(const Request& Input, const Budget& Limits)
     {
-        QJsonArray inputs; QString format; bool compatible = true;
+        QJsonArray inputs; QString format; bool compatible = true; int index = 0;
         for (const auto& path : {Input.file1_, Input.file2_, Input.base_.isEmpty() ? Input.file3_ : Input.base_})
         {
-            if (path.isEmpty()) continue; auto probe = probeOne(path, Input.encoding_, Limits);
+            if (path.isEmpty()) continue; auto probe = probeOne(path, InputEncoding(Input, index++), Limits);
             if (format.isEmpty()) format = probe["format"].toString();
             compatible &= probe["format"] == format && probe["available"].toBool(); inputs.append(probe);
         }

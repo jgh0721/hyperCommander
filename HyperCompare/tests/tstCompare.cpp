@@ -9,6 +9,7 @@
 #include "runtime/semantic.hpp"
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
+#include "runtime/requestFile.hpp"
 #include "zipFixture.hpp"
 #include "docxFixture.hpp"
 #include <QCryptographicHash>
@@ -47,6 +48,41 @@ private:
         return row.back();
     }
 private slots:
+    void requestFilesRelativeRolesAndEncodings()
+    {
+        QTemporaryDir dir; const auto requestPath = dir.filePath(QString::fromUtf8("요청 😀.json"));
+        write(dir.filePath("left.txt"), QByteArray::fromHex("b0a10a")); write(dir.filePath("right.txt"), QString::fromUtf8("가\n").toUtf8());
+        const QJsonObject json{{"schemaVersion", 1}, {"requestId", "encoding-test"}, {"mode", "compare"},
+            {"inputs", QJsonObject{{"left", QJsonObject{{"path", "left.txt"}}}, {"right", QJsonObject{{"path", "right.txt"}}}}},
+            {"policy", QJsonObject{{"encodingByRole", QJsonObject{{"left", "CP949"}, {"right", "UTF-8"}}}}}};
+        write(requestPath, QJsonDocument(json).toJson()); auto parsed = Parse({"hc", "-request", requestPath, "-format", "json"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QCOMPARE(parsed.request_.file1_, dir.filePath("left.txt")); QCOMPARE(InputEncoding(parsed.request_, 0), "CP949");
+        auto result = Execute(parsed.request_, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QVERIFY(result.edits_.empty()); QCOMPARE(result.exitCode_, 1); QCOMPARE(result.Json()["requestId"].toString(), "encoding-test"); QCOMPARE(result.inputs_[0].encoding_, "CP949");
+        auto three = json; auto inputs = three["inputs"].toObject(); inputs["center"] = QJsonObject{{"path", "right.txt"}}; three["inputs"] = inputs; write(requestPath, QJsonDocument(three).toJson());
+        parsed = Parse({"hc", "-request", requestPath, "-timeout-ms", "1234"}, true); QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.file2_, dir.filePath("right.txt")); QCOMPARE(parsed.request_.file3_, dir.filePath("right.txt")); QCOMPARE(parsed.request_.timeoutMs_, 1234);
+        QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-request", requestPath, "-format", "json"}); QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1);
+        QCOMPARE(QJsonDocument::fromJson(cli.readAllStandardOutput()).object()["operation"].toString(), "compare3");
+    }
+    void requestValidationAndProtectedFiles()
+    {
+        QTemporaryDir dir; const auto path = dir.filePath("request.json"); const QJsonObject json{{"schemaVersion", 1}, {"mode", "merge"},
+            {"inputs", QJsonObject{{"left", QJsonObject{{"path", "a"}}}, {"right", QJsonObject{{"path", "b"}}}}},
+            {"output", QJsonObject{{"path", "out"}}}, {"options", QJsonObject{{"takeall", "left"}}}};
+        write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b");
+        const auto bytes = QJsonDocument(json).toJson();
+        QVector<QByteArray> invalid{QByteArray(1024 * 1024 + 1, ' '), "{}", "{\"schemaVersion\":1,\"schem\\u0061Version\":1}"};
+        auto value = json; value["unknown"] = true; invalid << QJsonDocument(value).toJson(); value = json; value["schemaVersion"] = 2; invalid << QJsonDocument(value).toJson();
+        value = json; value["limits"] = QJsonObject{{"timeoutMs", 500.5}}; invalid << QJsonDocument(value).toJson();
+        value = json; value["output"] = QJsonObject{{"path", "request.json"}, {"overwrite", true}}; invalid << QJsonDocument(value).toJson();
+        value = json; value["policy"] = QJsonObject{{"encodingByRole", QJsonObject{{"left", "unknown"}}}}; invalid << QJsonDocument(value).toJson();
+        for (const auto& data : invalid) { write(path, data); QVERIFY2(!Parse({"hc", "-request", path}, true).error_.isEmpty(), data.constData()); QCOMPARE(read(path), data); }
+        write(path, bytes); QVERIFY(!Parse({"hc", "-request", path, "-file1", "override"}, true).error_.isEmpty());
+        const auto alias = dir.filePath("alias.json"); QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(alias.utf16()), reinterpret_cast<LPCWSTR>(path.utf16()), nullptr));
+        QVERIFY(!Parse({"hc", "-request", path, "-report", alias}, true).error_.isEmpty());
+        auto parsed = Parse({"hc", "-request", path}, true); QVERIFY(parsed.error_.isEmpty()); const auto result = Execute(parsed.request_, std::make_shared<std::atomic_bool>(false), true);
+        QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.exitCode_, 0); QCOMPARE(read(dir.filePath("out")), "a"); QCOMPARE(read(path), bytes);
+    }
     void docxParagraphProjectionAndLocations()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx"); request.headless_ = true;

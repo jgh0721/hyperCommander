@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryPlan.hpp"
+#include "requestFile.hpp"
 #include "directoryText.hpp"
 #include "session.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -93,6 +94,7 @@ namespace hc::compare
     }
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
     {
+        CheckProtectedInputs(Input, {Input.output_}, Limits);
         if (!Comparison.directories_ || Comparison.completion_ != "Complete" || Input.directory_.level_ != "bytes") throw Failure("DirectoryPlanRequiresContentComparison");
         if (!Input.takeAll_.isEmpty() && (Comparison.directories_->size() == 3 || (Input.takeAll_ != "left" && Input.takeAll_ != "right"))) throw Failure("InvalidDirectorySelection");
         const auto output = CheckedDirectoryPath(Input.output_); QJsonArray roots;
@@ -161,6 +163,7 @@ namespace hc::compare
     }
     void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits)
     {
+        CheckProtectedInputs(Input, {Input.planOut_, Input.output_}, Limits);
         const auto destination = CheckedDirectoryPath(Input.planOut_);
         if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Input.output_))) throw Failure("DirectoryArtifactOverlapsRoot");
         for (const auto& snapshot : *Value.directories_)

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryMergeDialog.hpp"
+#include "runtime/requestFile.hpp"
 #include "directoryView.hpp"
 #include <QSettings>
 #include "runtime/directoryPlan.hpp"
@@ -189,6 +190,7 @@ namespace hc::compare
     {
         if (Busy() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked())) return;
         const auto plan = model_->Plan(); run("save", [input = input_, plan, Path, cancel = canceled_] {
+            CheckProtectedInputs(input, {Path}, budget(input, cancel));
             Result result; SaveDirectoryPlan(plan, Path, result, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
         });
     }
@@ -196,6 +198,7 @@ namespace hc::compare
     {
         if (Busy() || planPath_.isEmpty() || model_->Unresolved() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked())) return;
         Request request; request.mode_ = "apply"; request.headless_ = true; request.applyPlan_ = planPath_; request.allowDelete_ = AllowDelete; request.resume_ = Resume;
+        request.protectedInputs_ = input_.protectedInputs_; request.requestId_ = input_.requestId_;
         request.timeoutMs_ = input_.timeoutMs_; request.applyPlanDigest_ = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(model_->Plan()).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
         run("apply", [request, cancel = canceled_] { return Execute(request, cancel, true); });
     }

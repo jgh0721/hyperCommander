@@ -21,6 +21,9 @@ namespace hc::compare
         QString semantic_ = "auto";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;
+        QString requestFile_, requestId_;
+        QStringList protectedInputs_;
+        std::array<QString, 3> inputEncodings_;
         QString applyPlan_, journal_, applyPlanDigest_;
         bool resume_ = false, allowDelete_ = false;
         bool mirror_ = false;
@@ -29,6 +32,7 @@ namespace hc::compare
         int timeoutMs_ = 60000;
     };
     struct Parsed { Request request_; QString error_, help_; };
+    inline QString InputEncoding(const Request& Input, int Index) { return Input.inputEncodings_[Index].isEmpty() ? Input.encoding_ : Input.inputEncodings_[Index]; }
     Parsed Parse(const QStringList& Arguments, bool Console);
     struct Snapshot
     {
@@ -52,6 +56,7 @@ namespace hc::compare
     {
         int exitCode_ = 2;
         QString operation_, error_, outcome_ = "Unknown", completion_ = "Failed";
+        QString requestId_;
         QString commit_ = "NotRequested";
         QVector<Snapshot> inputs_;
         std::optional<Snapshot> decisionsSnapshot_;

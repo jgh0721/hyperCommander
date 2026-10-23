@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryApply.hpp"
+#include "requestFile.hpp"
 #include "directoryText.hpp"
 #include "commonLibs/document/documentSaveCoordinator.hpp"
 #include "session.hpp"
@@ -188,6 +189,7 @@ namespace hc::compare
         const auto destination = plan["output"].toObject(); const auto output = CheckedDirectoryPath(text(destination, "path"));
         if (QDir(output).isRoot()) throw Failure("DirectoryOutputRootUnsupported");
         const auto journalPath = CheckedDirectoryPath(Input.journal_.isEmpty() ? planPath + ".journal" : Input.journal_);
+        CheckProtectedInputs(Input, {output, journalPath}, Limits);
         if (journalPath.compare(planPath, Qt::CaseInsensitive) == 0 || DirectoryPathsOverlap(output, journalPath) || DirectoryPathsOverlap(output, planPath)) throw Failure("DirectoryArtifactOverlapsRoot");
         auto expected = inventory(destination); std::vector<DirectorySnapshot> roots; std::vector<Evidence> evidence;
         const auto rootList = plan["roots"].toArray(); if (rootList.size() < 2 || rootList.size() > 3) throw Failure("DirectorySchemaInvalid");
