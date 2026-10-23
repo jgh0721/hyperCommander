@@ -24,7 +24,10 @@ namespace hc::ui
         const bool Remote = NativePath.startsWith("\\\\");
         const bool Redirected = NativePath.compare("\\\\tsclient", Qt::CaseInsensitive) == 0
             || NativePath.startsWith("\\\\tsclient\\", Qt::CaseInsensitive);
-        if (Error.category_ == ErrorCategory::AccessDenied) {
+        if (Error.category_ == ErrorCategory::Cancelled) {
+            Text.summary_ = QObject::tr("폴더 목록 조회를 취소했습니다.");
+            Text.recovery_ = QObject::tr("다시 시도를 누르면 같은 폴더를 다시 조회합니다.");
+        } else if (Error.category_ == ErrorCategory::AccessDenied) {
             Text.summary_ = QObject::tr("이 폴더에 접근할 권한이 없습니다.");
             Text.recovery_ = Remote ? QObject::tr("연결 계정의 공유 폴더 접근 권한을 확인한 뒤 다시 시도하세요.")
                 : QObject::tr("폴더 접근 권한을 확인하세요. 관리자 권한으로도 시스템 보호 폴더에 접근하지 못할 수 있습니다.");

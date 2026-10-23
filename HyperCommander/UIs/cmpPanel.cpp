@@ -810,7 +810,7 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
     auto* Model = static_cast<CFSModel*>(State->Model);
     const bool WasSearch = Model->IsSearchResults();
     if (WasSearch) StopEverythingSearch(false);
-    if (Model->IsLoading()) Model->CancelNavigation();
+    if (Model->IsLoading()) Model->CancelNavigation(true);
     const auto Location = Model->WorkspaceLocation();
     emit sig_NotifyPanelActivated();
     Model->setProperty("hc.historyTarget", {});
@@ -1450,7 +1450,8 @@ void CmpPanel::processPanelStatusText()
         const auto First = Model->rowCount() ? Model->GetFileInfo(Model->index(0, 0)) : nullptr;
         const int ParentCount = First && First->Name_ == ".." ? 1 : 0;
         const int FolderCount = std::max(0, State->footerDirectoryCount_ - ParentCount);
-        status_->setLeftText(Model->IsLoading() ? (State->navigationStatus_.isEmpty() ? tr("목록 조회 중…") : State->navigationStatus_) : Model->LastNavigationError() ? tr("목록 조회 실패 · 다시 시도하십시오") :
+        status_->setLeftText(Model->IsLoading() ? (State->navigationStatus_.isEmpty() ? tr("목록 조회 중…") : State->navigationStatus_) : Model->LastNavigationError()
+            ? (Model->LastNavigationError()->category_ == hc::storage::ErrorCategory::Cancelled ? tr("목록 조회 취소 · 다시 시도하십시오") : tr("목록 조회 실패 · 다시 시도하십시오")) :
             tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
             .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));
         status_->setRightText(Search().isEmpty() ? tr("폴더 %1개").arg(FolderCount) : tr("검색 결과 %1개").arg(std::max(0, State->ProxyModel->rowCount() - ParentCount)));

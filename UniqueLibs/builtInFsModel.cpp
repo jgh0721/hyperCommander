@@ -642,7 +642,7 @@ CFSModel::~CFSModel()
     }
 }
 
-void CFSModel::CancelNavigation()
+void CFSModel::CancelNavigation(bool Superseding)
 {
     automaticRefresh_ = autoRefreshRequested_ = false;
     failedNavigationRetry_ = {};
@@ -650,15 +650,28 @@ void CFSModel::CancelNavigation()
     setProperty("hc.restoreTicket", QString{}); setProperty("hc.restorePending", false);
     emit NavigationCancelled();
     navigationStop_.request_stop();
-    ++generation_;
+    const auto Generation = ++generation_;
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
-    if (loading_)
+    if (!loading_) return;
+    if (!Superseding)
     {
         loading_ = false;
         navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Cancelled, "cancelled"};
         emit sigNavigationFailed("cancelled");
         emit sigRefreshCompleted();
+        return;
     }
+    // A superseding request starts in this same call. Publishing a cancelled
+    // listing in between would flash a failure notice and consume a pending
+    // selection restore, so only the request's outcome is reported now; the
+    // panel settles as cancelled only if no request has arrived by the next turn.
+    emit sigNavigationFailed("cancelled");
+    QTimer::singleShot(0, this, [this, Generation] {
+        if (generation_ != Generation || !loading_) return;
+        loading_ = false;
+        navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Cancelled, "cancelled"};
+        emit sigRefreshCompleted();
+    });
 }
 
 void CFSModel::SetProviderEnabled(bool Enabled)

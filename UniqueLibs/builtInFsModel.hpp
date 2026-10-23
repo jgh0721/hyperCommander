@@ -106,7 +106,9 @@ public:
     void SetPageFilter(const QString& Query, bool ShowHidden, const QString& Match = {});
     hc::storage::Result<std::shared_ptr<hc::storage::ISelectionManifest>> SelectAllEntries() const;
     bool                            HandlesRefreshSignals() const override { return providerEnabled_; }
-    void                            CancelNavigation();
+    // Superseding: the caller starts another navigation at once, so the
+    // cancelled state is not shown unless that navigation never arrives.
+    void                            CancelNavigation(bool Superseding = false);
     std::optional<hc::storage::Error> LastNavigationError() const { return navigationError_; }
     bool RetryFailedNavigation(bool Elevated = false);
     void DismissNavigationError();

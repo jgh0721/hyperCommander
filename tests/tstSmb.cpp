@@ -249,7 +249,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -3177,6 +3177,65 @@ private slots:
             QVERIFY(Model->LastNavigationError()); QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
             Panel->findChild<QMessageBox*>("hc.navigationError")->button(QMessageBox::Cancel)->click();
         } else if (Outcome == "complete") QVERIFY(!Model->LastNavigationError());
+    }
+    void navigationEnterRepeatUi()
+    {
+        // Holding Enter alternates between a folder and its parent faster than
+        // listings complete. Every listing must either publish or be superseded;
+        // no navigation error may surface.
+        main_->resize(1400, 900); main_->show();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Root = qEnvironmentVariable("HC_PROBE_ROOT"); const auto Child = qEnvironmentVariable("HC_PROBE_CHILD", "Dev");
+        if (Root.isEmpty()) {
+            Root = Directory.path(); QVERIFY(QDir(Root).mkdir(Child));
+            for (int I = 0; I < 40; ++I) { QFile F(QDir(Root).filePath(Child + QString("/item_%1.txt").arg(I))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("d"); }
+            for (int I = 0; I < 8; ++I) { QFile F(QDir(Root).filePath(QString("root_%1.txt").arg(I))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("d"); }
+        }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        View->SetListMode("one-line");
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Root), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains(Child), 30000);
+        // Superseded listings report "cancelled" to automation only; the panel
+        // must never enter an error state, show its notice, or post a status
+        // bar message while the user keeps navigating.
+        QStringList Failures; int Dialogs = 0, Notices = 0, Superseded = 0;
+        auto* Retry = Panel->findChild<QPushButton*>("hc.workspaceRetry"); QVERIFY(Retry);
+        const auto Failed = connect(Model, &CFsModelT::sigNavigationFailed, this, [&](const QString& Code) {
+            if (const auto Error = Model->LastNavigationError()) Failures.append(Code + QString("/%1@").arg(int(Error->category_)) + Model->GetCurrentPathWithRoot());
+            else ++Superseded;
+        });
+        const auto Completed = connect(Model, &CFsModelT::sigRefreshCompleted, this, [&] {
+            if (const auto Error = Model->LastNavigationError()) Failures.append(QString::fromStdString(Error->code_) + "/completed@" + Model->GetCurrentPathWithRoot());
+        });
+        const auto Shown = connect(Model, &CFSModel::DirectoryReadFailed, this, [&](const QString& Path, bool) { ++Dialogs; qWarning() << "DirectoryReadFailed" << Path; });
+        const auto Disconnect = qScopeGuard([&] { disconnect(Failed); disconnect(Completed); disconnect(Shown); });
+        const auto ChildIndex = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Child) return Model->index(Row, 0); return QModelIndex{}; }();
+        QVERIFY(ChildIndex.isValid());
+        const auto ChildKey = hc::workspace::SelectionKey(*Model->GetFileInfo(ChildIndex)->storageEntry_);
+        View->RestoreSelection({}, ChildKey); Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        QCOMPARE(View->CaptureFocus(), ChildKey);
+        int Transitions = 0; auto LastPath = Model->GetCurrentPathWithRoot();
+        for (int I = 0; I < 400; ++I) {
+            QTest::keyClick(Grid, Qt::Key_Return);
+            QTest::qWait(3 + (I % 9) * 4);
+            if (auto* Dialog = Panel->findChild<QMessageBox*>("hc.navigationError")) Dialog->button(QMessageBox::Cancel)->click();
+            if (Retry->isVisible() || main_->statusBar()->currentMessage().contains("목록")) ++Notices;
+            const auto Path = Model->GetCurrentPathWithRoot(); if (Path != LastPath) { ++Transitions; LastPath = Path; }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 30000);
+        qWarning() << "navigationEnterRepeatUi transitions" << Transitions << "superseded" << Superseded << "failures" << Failures << "dialogs" << Dialogs << "notices" << Notices;
+        QVERIFY2(Transitions >= 20, qPrintable(QString("only %1 transitions").arg(Transitions)));
+        QVERIFY2(Dialogs == 0 && Failures.isEmpty(), qPrintable(Failures.join(", ")));
+        QCOMPARE(Notices, 0);
+        QVERIFY(!Model->LastNavigationError());
+        // An explicit cancel still settles the panel in a visible cancelled state.
+        // Refresh dispatches synchronously, unlike the queued Enter command.
+        Model->Refresh(); QVERIFY(Model->IsLoading()); Model->CancelNavigation();
+        QVERIFY(!Model->IsLoading()); QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->LastNavigationError()->category_, hc::storage::ErrorCategory::Cancelled);
+        QTRY_VERIFY(Retry->isVisible());
+        Model->DismissNavigationError(); QTRY_VERIFY(!Retry->isVisible());
     }
     void navigationRefreshSettingsUi()
     {

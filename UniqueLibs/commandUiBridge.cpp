@@ -291,9 +291,12 @@ void CommandUiBridge::bindModels()
             Event.payload_ = {{"tab", Model->property("hc.tabId").toString().toStdString()},
                 {"path", Model->GetCurrentPathWithRoot().toStdString()}, {"code", Code.toStdString()}};
             events_->Publish(std::move(Event));
-            if (!Success)
+            // A request superseded by the next navigation reports its outcome
+            // to automation only; the panel never entered a failed state.
+            const bool Visible = !Success && Model->LastNavigationError();
+            if (Visible)
                 hc::plugins::OfferPluginReview(main_, Code, {}, viewers_->reviewPlugin_);
-            if (!Success)
+            if (Visible)
                 if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
                 {
                     const auto Failure = Model->LastNavigationError().value_or(hc::storage::Error{hc::storage::ErrorCategory::Unavailable, Code.toStdString()});
@@ -581,7 +584,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
     if (Id.starts_with("hc.viewer.")) return executeViewer(Invocation, Model);
     if ((Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel") || Id == "hc.tab.close")
-        if (Model->IsLoading()) Model->CancelNavigation();
+        if (Model->IsLoading()) Model->CancelNavigation(Id != "hc.tab.close");
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel")
         Model->setProperty("hc.correlation", QString::fromStdString(Invocation.correlationId_));
     if (NavigateToPath)
