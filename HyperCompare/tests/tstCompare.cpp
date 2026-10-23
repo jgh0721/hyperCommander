@@ -1100,6 +1100,28 @@ private slots:
         QVERIFY(!three.plan_->blocks_.empty()); MergeWork conflicts{three.output_, three.plan_->initial_, false};
         QCOMPARE(DecodeMergeWork(r, three, EncodeMergeWork(r, three, conflicts, {}), {}).state_, conflicts.state_);
     }
+    void legacyMergeWorkPreservesTextForReview()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, "a\nkeep\nz\n"); write(r.file2_, "A\nkeep\nZ\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto session = Execute(r, cancel, false);
+        MergeWork work{QByteArray("manually edited result\n"), std::vector<BlockState>(session.plan_->blocks_.size(), {0, 0, Resolution::Manual, false}), false};
+        for (const auto& engine : {"myers-bounded-1", "myers-bounded-2"})
+        {
+            auto json = QJsonDocument::fromJson(EncodeMergeWork(r, session, work, {})).object(); auto identity = json["identity"].toObject();
+            identity.remove("generation"); identity["engineVersion"] = engine;
+            identity["generation"] = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+            json["identity"] = identity; json["blocks"] = QJsonArray{}; // Legacy block count may differ.
+            const auto restored = DecodeMergeWork(r, session, QJsonDocument(json).toJson(), {});
+            QCOMPARE(restored.text_, work.text_); QVERIFY(restored.reviewRequired_); QCOMPARE(restored.state_.size(), session.plan_->blocks_.size());
+            for (const auto& state : restored.state_) { QVERIFY(!state.mapped_); QCOMPARE(state.resolution_, Resolution::Unresolved); }
+            auto bad = json; auto badIdentity = identity; badIdentity["generation"] = "wrong"; bad["identity"] = badIdentity;
+            QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, session, QJsonDocument(bad).toJson(), {}), Failure);
+            bad = json; bad["resultSha256"] = "wrong"; QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, session, QJsonDocument(bad).toJson(), {}), Failure);
+            write(r.file2_, "changed\n"); const auto changed = Execute(r, cancel, false);
+            QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, changed, QJsonDocument(json).toJson(), {}), Failure); write(r.file2_, "A\nkeep\nZ\n");
+        }
+    }
     void mergeWorkStrictValidation()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");

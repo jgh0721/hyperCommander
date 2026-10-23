@@ -978,6 +978,22 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
     }
+    void legacyWorkRestoresTextWithReviewAndUndo()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt"); r.output_ = dir.filePath("out.txt"); r.semantic_ = "off";
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); const auto session = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        MergeWork work{QByteArray("legacy manual result\n"), std::vector<BlockState>(session.plan_->blocks_.size(), {0, 0, Resolution::Manual, false}), false};
+        auto object = QJsonDocument::fromJson(EncodeMergeWork(r, session, work, {})).object(); auto identity = object["identity"].toObject();
+        identity.remove("generation"); identity["engineVersion"] = "myers-bounded-2";
+        identity["generation"] = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+        object["identity"] = identity; const auto path = dir.filePath("legacy.hcmerge"); write(path, QJsonDocument(object).toJson());
+        CompareWindow window(r); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("RESULT"), 10000);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); const auto initial = contents(output); window.LoadWork(path);
+        QTRY_COMPARE_WITH_TIMEOUT(contents(output), work.text_, 10000); QVERIFY(!action(window, "결과 저장")->isEnabled());
+        output->send(SCI_UNDO); QCOMPARE(contents(output), initial); output->send(SCI_REDO); QCOMPARE(contents(output), work.text_);
+        action(window, "전체 수동 완료")->trigger(); QVERIFY(action(window, "결과 저장")->isEnabled());
+        action(window, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
+    }
     void reportExportWorkingBuffersAndMergeState()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt"); r.semantic_ = "off";

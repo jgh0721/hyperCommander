@@ -298,7 +298,7 @@ namespace hc::compare
             }
             updateMerge();
             if (!transfer.error_.isEmpty()) state_->setText(tr("작업 파일 처리 중단: ") + transfer.error_);
-            else if (transfer.loading_) state_->setText(tr("작업 복원 완료 — 실행 취소로 이전 RESULT 복원 가능"));
+            else if (transfer.loading_) state_->setText(transfer.file_.work_.reviewRequired_ ? tr("작업 복원 완료 — 전체 재검토 필요 · 실행 취소로 이전 RESULT 복원 가능") : tr("작업 복원 완료 — 실행 취소로 이전 RESULT 복원 가능"));
             else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
                 tr("작업 파일 저장 완료 — RESULT 저장 상태 유지") : tr("작업 파일 저장 완료 — 정리·파일 변경 확인 필요"));
             state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{

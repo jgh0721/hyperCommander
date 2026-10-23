@@ -80,7 +80,17 @@ namespace hc::compare
         auto object = ReadCompareJson(Json, Limits);
         QStringList keys{"schemaVersion", "kind", "identity", "takeAll", "resultBytes", "resultSha256", "resultChunks", "blocks", "reviewRequired"}; keys.sort();
         if (object.keys() != keys || object["schemaVersion"] != QJsonValue(1) || object["kind"] != QJsonValue("text-merge-work")) throw Failure("InvalidWorkSchema");
-        if (object["identity"] != DecisionIdentity(Input, Session, Limits) || object["takeAll"] != QJsonValue(Input.takeAll_)) throw Failure("StaleWork");
+        auto expectedIdentity = DecisionIdentity(Input, Session, Limits); bool legacy = false;
+        if (object["identity"] != expectedIdentity)
+        {
+            const auto savedIdentity = object["identity"].toObject(); const auto engine = savedIdentity["engineVersion"].toString();
+            if (engine != "myers-bounded-1" && engine != "myers-bounded-2") throw Failure("StaleWork");
+            expectedIdentity.remove("generation"); expectedIdentity["engineVersion"] = engine;
+            expectedIdentity["generation"] = digest(QJsonDocument(expectedIdentity).toJson(QJsonDocument::Compact));
+            if (object["identity"] != expectedIdentity) throw Failure("StaleWork");
+            legacy = true;
+        }
+        if (object["takeAll"] != QJsonValue(Input.takeAll_)) throw Failure("StaleWork");
         if (!object["reviewRequired"].isBool() || !object["resultChunks"].isArray() || !object["blocks"].isArray()) throw Failure("InvalidWorkSchema");
         MergeWork work; work.reviewRequired_ = object["reviewRequired"].toBool();
         const auto size = integer(object["resultBytes"], resultLimit); const auto chunks = object["resultChunks"].toArray();
@@ -95,18 +105,25 @@ namespace hc::compare
         }
         if (object["resultSha256"] != QJsonValue(digest(work.text_))) throw Failure("WorkDigestMismatch");
         const auto blocks = object["blocks"].toArray();
-        if (std::size_t(blocks.size()) != Session.plan_->blocks_.size()) throw Failure("InvalidWorkBlocks");
+        if (blocks.size() > qsizetype(decisionBlockLimit) || (!legacy && std::size_t(blocks.size()) != Session.plan_->blocks_.size())) throw Failure("InvalidWorkBlocks");
         work.state_.reserve(std::size_t(blocks.size()));
         const QStringList blockKeys{"begin", "end", "id", "mapped", "resolution"};
         for (qsizetype i = 0; i < blocks.size(); ++i)
         {
             Limits.Check(); if (!blocks[i].isObject()) throw Failure("InvalidWorkBlocks"); const auto block = blocks[i].toObject();
             if (block.keys() != blockKeys || !block["mapped"].isBool() ||
-                block["id"] != QJsonValue(qint64(Session.plan_->blocks_[std::size_t(i)].id_))) throw Failure("InvalidWorkBlocks");
+                block["id"] != QJsonValue(legacy ? qint64(i + 1) : qint64(Session.plan_->blocks_[std::size_t(i)].id_))) throw Failure("InvalidWorkBlocks");
             BlockState state{std::size_t(integer(block["begin"], size)), std::size_t(integer(block["end"], size)),
                 static_cast<Resolution>(integer(block["resolution"], int(Resolution::Omit))), block["mapped"].toBool()};
-            if (!state.mapped_ && (state.begin_ || state.end_)) throw Failure("InvalidWorkRange");
+            if (state.begin_ > state.end_ || (!state.mapped_ && (state.begin_ || state.end_))) throw Failure("InvalidWorkRange");
             work.state_.push_back(state);
+        }
+        if (legacy)
+        {
+            // Retain verified result text, but no old engine offsets or decisions
+            // have authority over the newly computed block layout.
+            work.state_.assign(Session.plan_->blocks_.size(), BlockState{0, 0, Resolution::Unresolved, false});
+            work.reviewRequired_ = true;
         }
         validate(Session, work, Limits); return work;
     }
