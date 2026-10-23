@@ -22,6 +22,9 @@ namespace hc::compare
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;
         QString requestFile_, requestId_;
+        QString manifest_;
+        int jobs_ = 1;
+        bool failFast_ = false;
         QStringList protectedInputs_;
         std::array<QString, 3> inputEncodings_;
         QString applyPlan_, journal_, applyPlanDigest_;

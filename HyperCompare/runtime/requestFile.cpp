@@ -21,13 +21,13 @@ namespace hc::compare
         int number(const QJsonValue& Value, int Minimum, int Maximum)
         { const auto n = Value.toInteger(-1); if (!Value.isDouble() || n < Minimum || n > Maximum || double(n) != Value.toDouble()) throw Failure("InvalidRequestNumber"); return int(n); }
     }
-    Parsed ParseRequestFile(const QString& Path, const QStringList& Overrides, bool Console)
+    Parsed ParseRequestFile(const QString& Path, const QStringList& Overrides, bool Console, const Budget& Limits)
     {
         Parsed parsed; parsed.request_.headless_ = Console || Overrides.contains("-headless");
         try
         {
-            const auto path = CheckedDirectoryPath(QFileInfo(Path).absoluteFilePath()); const auto snapshot = ReadFileSnapshot(path, 1024 * 1024, {});
-            const auto json = ReadCompareJson(snapshot.raw_, {}); keys(json, {"schemaVersion", "requestId", "mode", "inputs", "output", "policy", "limits", "options"});
+            const auto path = CheckedDirectoryPath(QFileInfo(Path).absoluteFilePath()); const auto snapshot = ReadFileSnapshot(path, 1024 * 1024, Limits);
+            const auto json = ReadCompareJson(snapshot.raw_, Limits); keys(json, {"schemaVersion", "requestId", "mode", "inputs", "output", "policy", "limits", "options"});
             if (json["schemaVersion"] != QJsonValue(1)) throw Failure("UnsupportedRequestSchema");
             const QDir parent(QFileInfo(path).absolutePath());
             const auto absolute = [&](const QJsonValue& Value) { return QDir::cleanPath(parent.absoluteFilePath(string(Value))); };
@@ -77,7 +77,7 @@ namespace hc::compare
                 if (InputEncoding(request, 1) != codec || (!request.base_.isEmpty() && InputEncoding(request, 2) != codec)) throw Failure("DirectoryRoleEncodingUnsupported");
                 request.encoding_ = codec;
             }
-            CheckProtectedInputs(request, {request.output_, request.planOut_, request.report_, request.journal_}, {});
+            CheckProtectedInputs(request, {request.output_, request.planOut_, request.report_, request.journal_}, Limits);
         }
         catch (const std::exception& error) { parsed.error_ = QString::fromUtf8(error.what()); }
         return parsed;

@@ -23,7 +23,9 @@ namespace hc::compare
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
         value("request", "Schema 1 request JSON; relative paths resolve from its directory (maximum 1 MiB).");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
-        value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities, probe.");
+        value("mode", "auto, compare, merge, directory, directory-merge, apply, batch, capabilities, probe.");
+        value("manifest", "Batch schema 1 JSON manifest; maximum 4 MiB and 1000 jobs.");
+        value("jobs", "Batch concurrent jobs: 1 (default) or 2."); flag("failfast", "Stop starting batch jobs after exit code 2; differences do not stop the batch.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         flag("include-content", "Include bounded DOCX paragraph text in JSON reports; default reports contain locations only.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
@@ -95,7 +97,7 @@ namespace hc::compare
         request.wait_ = parser.isSet("wait") || Console;
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
         request.includeContent_ = parser.isSet("include-content");
-        if (request.includeContent_ && (!request.headless_ || request.format_ != "json")) return fail("-include-content requires headless JSON reporting.");
+        if (request.includeContent_ && (!request.headless_ || (request.format_ != "json" && request.mode_ != "batch"))) return fail("-include-content requires headless JSON reporting.");
         request.applyPlan_ = parser.value("plan"); request.journal_ = parser.value("journal");
         request.resume_ = parser.isSet("resume"); request.allowDelete_ = parser.isSet("allowdelete");
         if (request.mode_ != "apply" && (parser.isSet("plan") || parser.isSet("journal") || request.resume_ || request.allowDelete_)) return fail("Apply options require -mode apply.");
@@ -113,8 +115,19 @@ namespace hc::compare
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }
-        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "capabilities", "probe"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "batch", "capabilities", "probe"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
         if (request.mode_ == "probe" && !request.headless_) return fail("Probe requires headless mode.");
+        if (request.mode_ == "batch")
+        {
+            for (const auto& name : parser.optionNames())
+                if (!QStringList{"mode", "manifest", "jobs", "failfast", "headless", "wait", "exitcode", "format", "report", "timeout-ms", "include-content"}.contains(name)) return fail("Option not valid for batch: " + name);
+            if (!request.headless_ || parser.value("manifest").isEmpty()) return fail("Batch requires headless -manifest.");
+            request.format_ = parser.isSet("format") ? parser.value("format") : "ndjson"; if (request.format_ != "ndjson") return fail("Batch requires ndjson format.");
+            if (parser.isSet("jobs")) { bool valid = false; request.jobs_ = parser.value("jobs").toInt(&valid); if (!valid || request.jobs_ < 1 || request.jobs_ > 2) return fail("Batch jobs must be 1 or 2."); }
+            request.manifest_ = QDir::cleanPath(QFileInfo(parser.value("manifest")).absoluteFilePath()); request.failFast_ = parser.isSet("failfast");
+            if (!request.report_.isEmpty() && request.report_ != "-") request.report_ = QDir::cleanPath(QFileInfo(request.report_).absoluteFilePath()); return result;
+        }
+        if (parser.isSet("manifest") || parser.isSet("jobs") || parser.isSet("failfast")) return fail("Batch options require -mode batch.");
         if (!QStringList{"text", "json"}.contains(request.format_)) return fail("Unsupported report format.");
         if (!request.encoding_.isEmpty() && !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(request.encoding_)) return fail("Unsupported encoding.");
         if (!request.theme_.isEmpty() && request.theme_ != "light" && request.theme_ != "dark") return fail("Invalid theme.");

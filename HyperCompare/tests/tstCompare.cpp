@@ -10,6 +10,7 @@
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
 #include "runtime/requestFile.hpp"
+#include "runtime/batch.hpp"
 #include "zipFixture.hpp"
 #include "docxFixture.hpp"
 #include <QCryptographicHash>
@@ -37,6 +38,15 @@ private:
     { QFile file(Path); if (!file.open(QIODevice::WriteOnly) || file.write(Data) != Data.size()) qFatal("Fixture write failed"); }
     static QByteArray read(const QString& Path)
     { QFile file(Path); if (!file.open(QIODevice::ReadOnly)) return {}; return file.readAll(); }
+    static void requestFile(const QString& Path, const QString& Left, const QString& Right, const QString& Output = {})
+    {
+        QJsonObject json{{"schemaVersion", 1}, {"mode", Output.isEmpty() ? "compare" : "merge"},
+            {"inputs", QJsonObject{{"left", QJsonObject{{"path", Left}}}, {"right", QJsonObject{{"path", Right}}}}}};
+        if (!Output.isEmpty()) { json["output"] = QJsonObject{{"path", Output}}; json["options"] = QJsonObject{{"takeall", "left"}}; }
+        write(Path, QJsonDocument(json).toJson());
+    }
+    static void manifest(const QString& Path, const QStringList& Requests)
+    { QJsonArray jobs; for (int i = 0; i < Requests.size(); ++i) jobs.append(QJsonObject{{"jobId", "job" + QString::number(i)}, {"request", Requests[i]}}); write(Path, QJsonDocument(QJsonObject{{"schemaVersion", 1}, {"jobs", jobs}}).toJson()); }
     static std::size_t lcs(const Lines& A, const Lines& B)
     {
         std::vector<std::size_t> row(B.size() + 1);
@@ -48,6 +58,69 @@ private:
         return row.back();
     }
 private slots:
+    void batchResultsConcurrencyAndConsole()
+    {
+        QTemporaryDir dir; write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b");
+        requestFile(dir.filePath("same.json"), "a", "a"); requestFile(dir.filePath("diff.json"), "a", "b"); requestFile(dir.filePath("merge.json"), "a", "b", "out");
+        const auto path = dir.filePath("batch.json"); manifest(path, {"same.json", "diff.json", "merge.json"});
+        auto parsed = Parse({"hc", "-mode", "batch", "-manifest", path, "-jobs", "2"}, true); QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_));
+        QVector<QJsonObject> events; QCOMPARE(RunBatch(parsed.request_, std::make_shared<std::atomic_bool>(false), [&](const auto& Event) { events.append(Event); return true; }), 1);
+        QCOMPARE(events.back()["event"].toString(), "batchSummary"); QCOMPARE(events.back()["success"].toInt(), 2); QCOMPARE(events.back()["different"].toInt(), 1); QCOMPARE(read(dir.filePath("out")), "a");
+        QSet<QString> ids; for (const auto& event : events) if (event["event"] == "result") { QVERIFY(!ids.contains(event["jobId"].toString())); ids.insert(event["jobId"].toString()); } QCOMPARE(ids.size(), 3);
+        manifest(path, {"same.json", "diff.json"}); QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-mode", "batch", "-manifest", path, "-jobs", "2"});
+        QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1); QVERIFY(cli.readAllStandardError().isEmpty());
+        auto lines = cli.readAllStandardOutput().trimmed().split('\n'); QCOMPARE(lines.size(), 7); QCOMPARE(QJsonDocument::fromJson(lines.back()).object()["event"].toString(), "batchSummary");
+        const auto report = dir.filePath("report.ndjson"); cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-mode", "batch", "-manifest", path, "-report", report});
+        QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1); QVERIFY(cli.readAllStandardOutput().isEmpty()); QCOMPARE(read(report).trimmed().split('\n').size(), 7);
+    }
+    void batchFailFastAndDifferencePriority()
+    {
+        QTemporaryDir dir; write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b");
+        requestFile(dir.filePath("first.json"), "missing", "b"); requestFile(dir.filePath("second.json"), "a", "b", "out"); manifest(dir.filePath("batch.json"), {"first.json", "second.json"});
+        const auto parsed = Parse({"hc", "-mode", "batch", "-manifest", dir.filePath("batch.json"), "-failfast"}, true); QVERIFY(parsed.error_.isEmpty()); QVector<QJsonObject> events;
+        auto sink = [&](const QJsonObject& Event) { events.append(Event); return true; };
+        QCOMPARE(RunBatch(parsed.request_, std::make_shared<std::atomic_bool>(false), sink), 2); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); QCOMPARE(events.back()["skipped"].toInt(), 1);
+        requestFile(dir.filePath("first.json"), "a", "b"); events.clear(); QCOMPARE(RunBatch(parsed.request_, std::make_shared<std::atomic_bool>(false), sink), 1); QCOMPARE(read(dir.filePath("out")), "a"); QCOMPARE(events.back()["skipped"].toInt(), 0);
+    }
+    void batchPreflightConflictsAndManifestValidation()
+    {
+        QTemporaryDir dir; write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b"); const auto path = dir.filePath("batch.json");
+        requestFile(dir.filePath("one.json"), "a", "b", "out"); requestFile(dir.filePath("two.json"), "a", "b", "out"); manifest(path, {"one.json", "two.json"});
+        auto parsed = Parse({"hc", "-mode", "batch", "-manifest", path}, true); QVERIFY(parsed.error_.isEmpty()); int delivered = 0;
+        auto reject = [&] { bool rejected = false; try { RunBatch(parsed.request_, std::make_shared<std::atomic_bool>(false), [&](const auto&) { ++delivered; return true; }); } catch (const Failure&) { rejected = true; } QVERIFY(rejected); QCOMPARE(delivered, 0); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); };
+        reject(); requestFile(dir.filePath("two.json"), "out", "b"); reject();
+        requestFile(dir.filePath("two.json"), "a", "b"); parsed.request_.report_ = dir.filePath("a"); reject(); parsed.request_.report_.clear();
+        const auto alias = dir.filePath("alias"); QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(alias.utf16()), reinterpret_cast<LPCWSTR>(dir.filePath("a").utf16()), nullptr));
+        requestFile(dir.filePath("two.json"), "a", "b", "alias"); reject();
+        write(path, "{\"schemaVersion\":1,\"jobs\":[],\"jobs\":[]}"); reject();
+        manifest(path, {"one.json"}); auto json = QJsonDocument::fromJson(read(path)).object(); auto jobs = json["jobs"].toArray(); jobs.append(jobs[0]); json["jobs"] = jobs; write(path, QJsonDocument(json).toJson()); reject();
+        QVERIFY(!Parse({"hc", "-mode", "batch", "-manifest", path, "-jobs", "3"}, true).error_.isEmpty());
+        QVERIFY(!Parse({"hc", "-mode", "batch", "-manifest", path, "-gui"}, true).error_.isEmpty());
+    }
+    void batchCancellationAndDeliveryFailure()
+    {
+        QTemporaryDir dir; write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b"); requestFile(dir.filePath("one.json"), "a", "b", "out"); requestFile(dir.filePath("two.json"), "a", "b"); manifest(dir.filePath("batch.json"), {"one.json", "two.json"});
+        const auto parsed = Parse({"hc", "-mode", "batch", "-manifest", dir.filePath("batch.json")}, true); QVERIFY(parsed.error_.isEmpty()); auto canceled = std::make_shared<std::atomic_bool>(false); QVector<QJsonObject> events;
+        QCOMPARE(RunBatch(parsed.request_, canceled, [&](const QJsonObject& Event) { events.append(Event); if (Event["event"] == "started") canceled->store(true); return true; }), 3);
+        QCOMPARE(events.back()["canceled"].toInt(), 2); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        canceled->store(false); QCOMPARE(RunBatch(parsed.request_, canceled, [](const auto&) { return false; }), 2); QVERIFY(canceled->load()); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        auto timed = parsed.request_; timed.timeoutMs_ = 100; canceled->store(false);
+        QCOMPARE(RunBatch(timed, canceled, [](const QJsonObject& Event) { if (Event["event"] == "started") std::this_thread::sleep_for(std::chrono::milliseconds(150)); return true; }), 2); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        canceled->store(false); QCOMPARE(RunBatch(parsed.request_, canceled, [](const QJsonObject& Event) { return Event["event"] != "result"; }), 2); QCOMPARE(read(dir.filePath("out")), "a");
+    }
+    void batchAppliesReviewedDirectoryPlan()
+    {
+        QTemporaryDir dir; QVERIFY(QDir().mkdir(dir.filePath("left"))); QVERIFY(QDir().mkdir(dir.filePath("right"))); write(dir.filePath("left/a"), "copy");
+        Request plan; plan.mode_ = "directory-merge"; plan.headless_ = true; plan.file1_ = dir.filePath("left"); plan.file2_ = dir.filePath("right"); plan.output_ = dir.filePath("output"); plan.planOut_ = dir.filePath("plan.json"); plan.takeAll_ = "left";
+        auto planned = Execute(plan, std::make_shared<std::atomic_bool>(false), true); QVERIFY2(planned.error_.isEmpty(), qPrintable(planned.error_));
+        write(dir.filePath("apply.json"), QJsonDocument(QJsonObject{{"schemaVersion", 1}, {"mode", "apply"}, {"options", QJsonObject{{"plan", "plan.json"}}}}).toJson());
+        manifest(dir.filePath("batch.json"), {"apply.json"}); const auto parsed = Parse({"hc", "-mode", "batch", "-manifest", dir.filePath("batch.json")}, true); QVERIFY(parsed.error_.isEmpty());
+        QVector<QJsonObject> events; QCOMPARE(RunBatch(parsed.request_, std::make_shared<std::atomic_bool>(false), [&](const auto& Event) { events.append(Event); return true; }), 0);
+        QCOMPARE(read(dir.filePath("output/a")), "copy"); QCOMPARE(events[1]["result"].toObject()["commit"].toString(), "Committed");
+        // The apply output must not contain its batch controller file, even for a resumed plan.
+        manifest(dir.filePath("output/batch.json"), {"../apply.json"}); auto collision = parsed.request_; collision.manifest_ = dir.filePath("output/batch.json");
+        bool rejected = false; try { RunBatch(collision, std::make_shared<std::atomic_bool>(false), [](const auto&) { return true; }); } catch (const Failure& error) { rejected = error.code_ == "BatchPathConflict"; } QVERIFY(rejected);
+    }
     void requestFilesRelativeRolesAndEncodings()
     {
         QTemporaryDir dir; const auto requestPath = dir.filePath(QString::fromUtf8("요청 😀.json"));

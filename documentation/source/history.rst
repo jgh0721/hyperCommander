@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 배치 JSON·동시 작업 상한·경로 충돌 사전 검사·NDJSON 및 전송 중단 처리를 추가했다.
+
 * HyperCompare 버전형 JSON 요청 파일, 역할별 인코딩 및 요청 파일 덮어쓰기 방지를 추가했다.
 
 * HyperCompare DOCX 본문 문단 비교와 내부 구성 파일 비교를 격리 worker에 추가하고 분석 범위를 명시했다.

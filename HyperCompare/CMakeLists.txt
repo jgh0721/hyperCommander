@@ -17,6 +17,7 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/workerHost.cpp runtime/workerHost.hpp
     runtime/extensionEngine.cpp runtime/extensionEngine.hpp
     runtime/requestFile.cpp runtime/requestFile.hpp
+    runtime/batch.cpp runtime/batch.hpp
     runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp

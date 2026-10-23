@@ -168,6 +168,7 @@ namespace hc::compare
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},
             {"requestFiles", true}, {"requestSchema", 1}, {"maxRequestBytes", 1048576}, {"roleEncodings", true},
+            {"batch", true}, {"maxBatchJobs", 1000}, {"maxConcurrentJobs", 2}, {"batchFormat", "ndjson"},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)

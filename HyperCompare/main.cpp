@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "runtime/batch.hpp"
 #include "widgets/compareWindow.hpp"
 #include <QApplication>
 #include <QFile>
@@ -32,6 +33,7 @@ int main(int argc, char** argv)
         if (request.help_) { print(parsed.help_.toUtf8(), stdout); return 0; }
         if (request.version_) { print("HyperCompare 0.1.0; CLI schema 1; foundation\n", stdout); return 0; }
         if (request.mode_ == "capabilities") { print(QJsonDocument(hc::compare::Capabilities()).toJson(), stdout); return 0; }
+        if (request.mode_ == "batch") return hc::compare::RunBatchAndReport(request, canceled);
         const auto result = hc::compare::Execute(request, canceled, true);
         return hc::compare::WriteReport(request, result);
     }
