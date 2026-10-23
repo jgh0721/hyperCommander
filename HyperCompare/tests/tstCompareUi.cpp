@@ -867,6 +867,31 @@ private slots:
         QVERIFY(window.findChild<QAction*>("encoding2_CP949")->isEnabled());
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-text-policy.png")); window.close();
     }
+    void directoryStreamingInteractionLatency()
+    {
+        DirectoryView view; view.resize(1300, 700); Request request; view.BeginComparison(request); view.show();
+        auto* tree = view.findChild<QTreeView*>("directoryLeftTree"); auto* source = static_cast<DirectoryTreeModel*>(view.findChild<QAbstractItemModel*>("directoryTreeModel"));
+        QVector<qint64> cycles; QElapsedTimer total; total.start();
+        for (int phase = 0; phase < 2; ++phase) for (int offset = 0; offset < 32768; offset += 512)
+        {
+            DirectoryProgress batch; batch.side_ = phase == 0 ? 0 : -1; batch.phase_ = phase == 0 ? "scan" : "compare";
+            for (int i = offset; i < offset + 512; ++i)
+            {
+                DirectoryRow row; row.path_ = QString("src/file%1.cpp").arg(i, 6, 10, QChar('0')); row.statuses_[0] = phase == 0 ? 18 : 2;
+                row.sides_[0].present_ = true; row.sides_[0].path_ = row.path_; row.sides_[0].size_ = 1024; batch.rows_.append(row);
+            }
+            QSignalSpy inserted(source, &QAbstractItemModel::rowsInserted), updated(source, &QAbstractItemModel::dataChanged);
+            QElapsedTimer cycle; cycle.start(); view.ApplyProgress(batch);
+            QVERIFY(inserted.size() <= 2); QVERIFY(updated.size() <= 2);
+            const auto root = tree->model()->index(0, 0); tree->expand(root);
+            tree->verticalScrollBar()->setValue(offset % 2 ? 0 : tree->verticalScrollBar()->maximum());
+            QCoreApplication::processEvents(); cycles.append(cycle.elapsed());
+        }
+        std::sort(cycles.begin(), cycles.end());
+        qInfo("Streaming 32768 expanded siblings: total %lld ms, cycle p95 %lld ms, max %lld ms", total.elapsed(), cycles[cycles.size() * 95 / 100], cycles.back());
+        QCOMPARE(source->VisibleEntries(), 32768); QCOMPARE(tree->model()->rowCount(tree->model()->index(0, 0)), 32768);
+        tree->setFocus(); QTest::keyClick(tree, Qt::Key_End); QVERIFY(tree->currentIndex().isValid()); view.close();
+    }
     void directoryLargeWorkspaceAcceptance()
     {
         const auto leftPath = qEnvironmentVariable("HC_COMPARE_LARGE_LEFT"), rightPath = qEnvironmentVariable("HC_COMPARE_LARGE_RIGHT");
@@ -878,6 +903,12 @@ private slots:
         sampler.start(100);
         QElapsedTimer elapsed; elapsed.start(); CompareWindow window(r); window.resize(1400, 850); window.show();
         auto* tree = window.findChild<QTreeView*>("directoryLeftTree");
+        QVector<qint64> eventGaps; QElapsedTimer heartbeat; heartbeat.start(); QTimer interaction;
+        int ticks = 0; connect(&interaction, &QTimer::timeout, &interaction, [&] {
+            eventGaps.append(heartbeat.restart());
+            if (tree->isVisible() && ++ticks % 10 == 0)
+                tree->verticalScrollBar()->setValue(ticks % 20 == 0 ? 0 : tree->verticalScrollBar()->maximum());
+        }); interaction.start(20);
         QTest::qWait(100);
         QTRY_VERIFY_WITH_TIMEOUT(tree->isVisible() || window.ExitCode() == 2, 30000);
         QVERIFY2(tree->isVisible(), qPrintable(window.findChild<QLabel*>("compareStatus")->text()));
@@ -892,6 +923,8 @@ private slots:
         auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel")); QVERIFY(model);
         QVERIFY(model->VisibleEntries() > 100000); QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("디렉터리 비교"));
         qInfo("Large directory GUI ready: %lld ms, %d entries, sampled peak private %llu bytes", elapsed.elapsed(), model->VisibleEntries(), peakPrivate);
+        interaction.stop(); std::sort(eventGaps.begin(), eventGaps.end());
+        QVERIFY(!eventGaps.isEmpty()); qInfo("During Qt comparison with repeated scrolling: event-loop gap p95 %lld ms, max %lld ms, %lld samples", eventGaps[eventGaps.size() * 95 / 100], eventGaps.back(), eventGaps.size());
         ProcessControllerMemory()->Check();
         auto* view = static_cast<DirectoryView*>(window.findChild<QWidget*>("directoryView"));
         view->NavigateDifference(1); QVERIFY(tree->currentIndex().isValid());

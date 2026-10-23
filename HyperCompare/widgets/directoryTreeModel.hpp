@@ -4,6 +4,9 @@
 #include "runtime/directory.hpp"
 #include <QJsonObject>
 #include <QHash>
+#include <QIcon>
+#include <QPointer>
+#include <QStyle>
 #include <memory>
 #include <vector>
 
@@ -46,11 +49,14 @@ namespace hc::compare
         std::vector<Node*> order_, entriesToNodes_;
         DirectoryEntries entries_;
         int visibleEntries_ = 0;
+        mutable QPointer<QStyle> iconStyle_;
+        mutable qint64 iconPalette_ = 0;
+        mutable QIcon folderIcon_, fileIcon_;
     };
     class DirectoryTreeFilter final : public QSortFilterProxyModel
     {
     public:
-        explicit DirectoryTreeFilter(QObject* Parent) : QSortFilterProxyModel(Parent) {}
+        explicit DirectoryTreeFilter(QObject* Parent) : QSortFilterProxyModel(Parent) { setFilterRole(DirectoryTreeModel::VisibleRole); }
         void SetQuery(const QString& Query, int Status);
     protected:
         bool filterAcceptsRow(int Row, const QModelIndex& Parent) const override;

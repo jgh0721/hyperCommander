@@ -72,6 +72,8 @@ namespace hc::compare
     void DirectoryTreeModel::ApplyProgress(const DirectoryProgress& Progress)
     {
         if (paths_.isEmpty()) paths_.insert({}, &root_);
+        QHash<Node*, std::vector<Node*>> additions; std::vector<Node*> parents;
+        QSet<Node*> changed;
         for (const auto& row : Progress.rows_)
         {
             auto at = row.path_; QStringList missing;
@@ -80,26 +82,44 @@ namespace hc::compare
             auto* parent = paths_.value(at.toCaseFolded());
             for (auto it = missing.crbegin(); it != missing.crend(); ++it)
             {
-                const int index = int(parent->children_.size()); beginInsertRows(indexFor(parent), index, index);
-                auto node = std::make_unique<Node>(); node->path_ = *it; node->parent_ = parent; node->row_ = index;
-                node->order_ = int(order_.size()); auto* added = node.get(); order_.push_back(added);
-                parent->children_.push_back(added); parent->folder_ = true; paths_.insert(it->toCaseFolded(), added);
-                nodes_.push_back(std::move(node)); parent = added; endInsertRows();
+                auto item = std::make_unique<Node>(); item->path_ = *it; item->parent_ = parent;
+                item->order_ = int(order_.size()); auto* added = item.get(); order_.push_back(added);
+                if (!additions.contains(parent)) parents.push_back(parent);
+                additions[parent].push_back(added);
+                if (!parent->folder_) { parent->folder_ = true; changed.insert(parent); }
+                paths_.insert(it->toCaseFolded(), added); nodes_.push_back(std::move(item)); parent = added;
             }
             if (parent == &root_) continue;
             if (parent->entry_ < 0)
-            {
-                parent->entry_ = int(entries_.size()); entries_.append(row); entriesToNodes_.push_back(parent); ++visibleEntries_;
-            }
-            else if (Progress.side_ >= 0)
-                entries_[parent->entry_].sides_[Progress.side_] = row.sides_[Progress.side_];
+            { parent->entry_ = int(entries_.size()); entries_.append(row); entriesToNodes_.push_back(parent); ++visibleEntries_; }
+            else if (Progress.side_ >= 0) entries_[parent->entry_].sides_[Progress.side_] = row.sides_[Progress.side_];
             else entries_[parent->entry_] = row;
             const auto& entry = entries_.at(parent->entry_); parent->matched_ = true;
             parent->different_ = !DirectoryContentEqual(entry.Status());
             for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
-            if (parent->different_) for (auto* ancestor = parent->parent_; ancestor; ancestor = ancestor->parent_) ancestor->different_ = true;
-            const auto index = indexFor(parent); emit dataChanged(index, index.siblingAtColumn(5));
+            changed.insert(parent);
+            if (parent->different_) for (auto* ancestor = parent->parent_; ancestor && !ancestor->different_; ancestor = ancestor->parent_)
+            { ancestor->different_ = true; changed.insert(ancestor); }
         }
+        // Parents are discovered before descendants. Publish each contiguous sibling
+        // batch once so expanded views do not relayout for every individual file.
+        for (auto* parent : parents)
+        {
+            const auto& children = additions.value(parent); const int first = int(parent->children_.size());
+            beginInsertRows(indexFor(parent), first, first + int(children.size()) - 1);
+            for (auto* child : children) { child->row_ = int(parent->children_.size()); parent->children_.push_back(child); changed.remove(child); }
+            endInsertRows();
+        }
+        QHash<Node*, std::pair<int, int>> ranges;
+        for (auto* item : changed) if (item != &root_)
+        {
+            auto it = ranges.find(item->parent_);
+            if (it == ranges.end()) ranges.insert(item->parent_, {item->row_, item->row_});
+            else { it->first = std::min(it->first, item->row_); it->second = std::max(it->second, item->row_); }
+        }
+        const QList<int> roles{Qt::DisplayRole, Qt::AccessibleTextRole, Qt::FontRole, Qt::DecorationRole, Qt::ToolTipRole, Qt::UserRole};
+        for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
+            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), roles);
     }
     void DirectoryTreeModel::SetFilter(const QString& Query, int Status)
     {
@@ -120,33 +140,43 @@ namespace hc::compare
         if (Role == VisibleRole) return n->visible_;
         if (Role == PathRole) return n->path_;
         if (Role == EntryRole) return n->entry_;
-        const auto entry = Entry(Index);
-        if (Role == Qt::UserRole) return entry;
-        const auto side = entry[Index.column() < 3 ? "left" : "right"].toObject();
-        const bool present = side["present"].toBool(); const auto column = Index.column() % 3;
+        if (Role == Qt::UserRole) return Entry(Index);
+        if (Role != Qt::FontRole && Role != Qt::DecorationRole && Role != Qt::ToolTipRole && Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
+        const DirectoryRow empty; const auto& entry = n->entry_ >= 0 ? entries_.at(n->entry_) : empty;
+        const auto& side = entry.sides_[Index.column() < 3 ? 0 : 1];
+        const bool present = side.present_; const auto column = Index.column() % 3;
         if (Role == Qt::FontRole) { QFont font; font.setBold(n->different_); font.setItalic(!present); return font; }
-        if (Role == Qt::DecorationRole && !column && present)
-            return qApp->style()->standardIcon(side["directory"].toBool() ? QStyle::SP_DirIcon : QStyle::SP_FileIcon);
+        if (Role == Qt::DecorationRole)
+        {
+            if (column || !present) return {};
+            if (iconStyle_ != qApp->style() || iconPalette_ != qApp->palette().cacheKey())
+            {
+                iconStyle_ = qApp->style(); iconPalette_ = qApp->palette().cacheKey();
+                folderIcon_ = qApp->style()->standardIcon(QStyle::SP_DirIcon); fileIcon_ = qApp->style()->standardIcon(QStyle::SP_FileIcon);
+            }
+            return side.directory_ ? folderIcon_ : fileIcon_;
+        }
+        const auto status = entry.Status();
         if (Role == Qt::ToolTipRole)
-            return n->path_ + '\n' + DirectoryStatusName(entry["status"].toString()) +
-                tr("\nLEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(entry["leftRight"].toString(), entry["leftBase"].toString(), entry["rightBase"].toString()) + '\n' + QString::fromUtf8(QJsonDocument(entry["errors"].toArray()).toJson(QJsonDocument::Compact));
-        if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
+            return n->path_ + '\n' + DirectoryStatusName(status) +
+                tr("\nLEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(entry.Status(1), entry.Status(2), entry.Status(3)) + '\n' + QString::fromUtf8(QJsonDocument(entry.errors_).toJson(QJsonDocument::Compact));
         if (!column)
         {
-            const auto path = present ? side["path"].toString(n->path_) : n->path_;
+            const auto& path = present ? (side.path_.isEmpty() ? entry.path_ : side.path_) : n->path_;
             return path.mid(path.lastIndexOf('/') + 1);
         }
         if (column == 1)
         {
-            if (entry["status"] == "Pending") return tr("비교 대기");
-            if (entry["status"] == "Error") return tr("비교 불가");
+            if (status == "Pending") return tr("비교 대기");
+            if (status == "Error") return tr("비교 불가");
             if (!present) return n->entry_ < 0 ? tr("상위 경로") : tr("없음");
-            if (entry["status"] == "Equal" && n->different_) return tr("하위 항목 차이");
-            return DirectoryStatusName(entry["status"].toString());
+            if (DirectoryContentEqual(status) && n->different_) return tr("하위 항목 차이");
+            return DirectoryStatusName(status);
         }
         if (!present) return QString{};
-        return side["directory"].toBool() ? tr("폴더") : tr("%1 B").arg(QLocale().toString(side["size"].toString().toULongLong()));
+        return side.directory_ ? tr("폴더") : tr("%1 B").arg(QLocale().toString(qulonglong(side.size_)));
     }
+
     QVariant DirectoryTreeModel::headerData(int Section, Qt::Orientation Orientation, int Role) const
     {
         if (Orientation != Qt::Horizontal || Role != Qt::DisplayRole || Section < 0 || Section >= 6) return {};
