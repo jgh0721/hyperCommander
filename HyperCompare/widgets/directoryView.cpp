@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include <QTimer>
 #include "directoryTreeModel.hpp"
 #include "directoryMergeDialog.hpp"
 #include <QDir>
@@ -114,6 +115,20 @@ namespace hc::compare
             auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
         });
         searchRow->addWidget(merge);
+        for (int source = 0; source < 2; ++source)
+        {
+            auto* transfer = new QPushButton(source == 0 ? tr("선택 →") : tr("← 선택"), this);
+            transfer->setObjectName(source == 0 ? "directoryCopyRight" : "directoryCopyLeft");
+            transfer->setToolTip(source == 0 ? tr("선택한 왼쪽 항목을 오른쪽 폴더로 복사하는 계획 검토") : tr("선택한 오른쪽 항목을 왼쪽 폴더로 복사하는 계획 검토"));
+            transfer->setEnabled(false); searchRow->addWidget(transfer);
+            connect(transfer, &QPushButton::clicked, this, [this, source] {
+                if (streaming_ || !comparison_.directoryComplete_) return;
+                const auto path = currentEntry()["path"].toString(); if (path.isEmpty()) return;
+                auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->statusChanged_ = [this](int Code) { if (Code == 0 && levelChanged_) QTimer::singleShot(0, this, [this] { if (levelChanged_) levelChanged_(request_.directory_.level_); }); };
+                dialog->show(); dialog->PrepareTransfer(source, path);
+            });
+        }
         viewMode_ = new QComboBox(this); viewMode_->setObjectName("directoryViewMode");
         viewMode_->setAccessibleName(tr("디렉터리 표시 방식")); viewMode_->addItems({tr("좌우 폴더 트리"), tr("경로 목록")});
         searchRow->addWidget(viewMode_);
@@ -289,6 +304,8 @@ namespace hc::compare
     void DirectoryView::updateSelection()
     {
         const auto item = currentEntry();
+        for (int side = 0; side < 2; ++side)
+            findChild<QPushButton*>(side == 0 ? "directoryCopyRight" : "directoryCopyLeft")->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
         summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(model_->rowCount()));

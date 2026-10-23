@@ -29,6 +29,7 @@ namespace hc::compare
     {
         QString choiceLabel(const QString& Choice)
         {
+            if (Choice == "keep") return QObject::tr("대상 유지");
             if (Choice == "unresolved") return QObject::tr("미결정");
             if (Choice == "merge") return QObject::tr("자동 텍스트 병합");
             if (Choice == "omit") return QObject::tr("제외 — 대상 존재 시 삭제");
@@ -82,6 +83,10 @@ namespace hc::compare
         const auto action = actions_[Index.row()].toObject();
         if (Role == Qt::UserRole)
         {
+            if (plan_["transfer"] == true)
+            {
+                QStringList choices{"keep"}; if (paths_[0].contains(action["path"].toString().toCaseFolded())) choices.append("left"); return choices;
+            }
             QStringList choices{"unresolved", "omit"}; const QStringList names{"left", "right", "base"};
             for (std::size_t i = 0; i < paths_.size(); ++i) if (paths_[i].contains(action["path"].toString().toCaseFolded())) choices.push_back(names[qsizetype(i)]);
             if (action["choice"] == "merge") choices.push_back("merge");
@@ -113,11 +118,11 @@ namespace hc::compare
     {
         setObjectName("directoryMergeDialog"); setWindowTitle(tr("디렉터리 병합 계획")); resize(1000, 700);
         auto* box = new QVBoxLayout(this); auto* introduction = new QLabel(tr("출력 디렉터리를 지정하고 계획을 검토하십시오. 입력은 보존하며, ‘계획 실행’에서 출력 파일을 변경합니다."), this);
-        introduction->setWordWrap(true); box->addWidget(introduction);
+        introduction->setObjectName("directoryPlanIntroduction"); introduction->setWordWrap(true); box->addWidget(introduction);
         auto* inputs = new QLabel(tr("LEFT  %1\nRIGHT  %2%3").arg(input_.file1_, input_.file2_, input_.base_.isEmpty() ? QString{} : "\nBASE  " + input_.base_), this);
         inputs->setTextFormat(Qt::PlainText); inputs->setWordWrap(true); inputs->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); box->addWidget(inputs);
         auto* destination = new QHBoxLayout(); output_ = new QLineEdit(this); output_->setObjectName("directoryOutput"); output_->setPlaceholderText(tr("출력 디렉터리")); output_->setAccessibleName(tr("병합 출력 디렉터리"));
-        auto* browse = new QPushButton(tr("찾아보기…"), this); destination->addWidget(output_, 1); destination->addWidget(browse); box->addLayout(destination);
+        auto* browse = new QPushButton(tr("찾아보기…"), this); browse->setObjectName("directoryOutputBrowse"); destination->addWidget(output_, 1); destination->addWidget(browse); box->addLayout(destination);
         connect(browse, &QPushButton::clicked, this, [this] { if (Busy()) return; const auto path = QFileDialog::getExistingDirectory(this, tr("출력 디렉터리")); if (!path.isEmpty()) output_->setText(path); });
         auto* options = new QHBoxLayout(); overwrite_ = new QCheckBox(tr("기존 출력 파일 교체 허용"), this); mirror_ = new QCheckBox(tr("출력에만 있는 항목 제거 계획 포함"), this);
         options->addWidget(overwrite_); options->addWidget(mirror_); options->addStretch(); prepare_ = new QPushButton(tr("계획 만들기"), this); options->addWidget(prepare_); box->addLayout(options);
@@ -187,6 +192,16 @@ namespace hc::compare
             Result result; result.directoryPlan_ = MakeDirectoryPlan(input, comparison, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
         });
     }
+    void DirectoryMergeDialog::PrepareTransfer(int Source, const QString& Path)
+    {
+        if (Busy() || Source < 0 || Source > 1) return;
+        transfer_ = true; model_->SetPlan({}); output_->setText(Source == 0 ? input_.file2_ : input_.file1_); mirror_->setChecked(false); overwrite_->setChecked(true);
+        findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(Source == 0 ? input_.file1_ : input_.file2_));
+        findChild<QPushButton*>("directoryOutputBrowse")->setEnabled(false);
+        run("prepare", [input = input_, comparison = comparison_, Source, Path, cancel = canceled_] {
+            Result result; result.directoryPlan_ = MakeDirectoryTransferPlan(input, comparison, Source, Path, budget(input, cancel)); result.exitCode_ = 0; result.completion_ = "Complete"; return result;
+        });
+    }
     void DirectoryMergeDialog::SavePlan(const QString& Path)
     {
         if (Busy() || !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked())) return;
@@ -205,7 +220,7 @@ namespace hc::compare
     }
     void DirectoryMergeDialog::updateControls()
     {
-        prepare_->setEnabled(!Busy()); output_->setEnabled(!Busy()); mirror_->setEnabled(!Busy()); overwrite_->setEnabled(!Busy()); table_->setEnabled(!Busy());
+        prepare_->setEnabled(!Busy() && !transfer_); output_->setEnabled(!Busy() && !transfer_); mirror_->setEnabled(!Busy() && !transfer_); overwrite_->setEnabled(!Busy() && !transfer_); table_->setEnabled(!Busy());
         const bool current = model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked());
         save_->setEnabled(!Busy() && current); apply_->setEnabled(!Busy() && current && !planPath_.isEmpty() && !model_->Unresolved());
         cancel_->setText(Busy() ? tr("취소") : tr("닫기"));

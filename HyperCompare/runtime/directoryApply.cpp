@@ -76,7 +76,7 @@ namespace hc::compare
             keys(Object, {"path", "exists", "revision", "entries"});
             if (!Object["exists"].isBool() || !Object["entries"].isArray()) throw Failure("DirectorySchemaInvalid");
             Evidence result;
-            const auto entries = Object["entries"].toArray(); if (entries.size() > 100000) throw Failure("DirectoryEntryLimit");
+            const auto entries = Object["entries"].toArray();
             if (Object["exists"].toBool())
                 result.insert({}, QJsonObject{{"directory", true}, {"revision", text(Object, "revision")}, {"size", "0"}, {"sha256", ""}});
             else if (!entries.isEmpty() || !text(Object, "revision").isEmpty()) throw Failure("DirectorySchemaInvalid");
@@ -170,9 +170,12 @@ namespace hc::compare
         const auto plan = json(bytes); Value.directoryPlan_ = plan;
         if (!Input.applyPlanDigest_.isEmpty() && Input.applyPlanDigest_ != QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(plan).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()))
             throw Failure("DirectoryPlanChanged");
+        const bool transfer = plan["schemaVersion"] == 3;
         const bool textMerge = plan["schemaVersion"] == 2;
         QStringList expectedKeys{"kind", "schemaVersion", "roots", "output", "include", "exclude", "overwrite", "mirror", "actions"};
+        if (transfer) expectedKeys.append("transfer");
         if (textMerge) expectedKeys.append("textMerge"); keys(plan, expectedKeys);
+        if (transfer && (plan["transfer"] != true || plan["mirror"] != false)) throw Failure("DirectorySchemaInvalid");
         QString encoding;
         if (textMerge)
         {
@@ -181,7 +184,7 @@ namespace hc::compare
             if (policy["engine"] != textEngineVersion) for (const auto& action : plan["actions"].toArray())
                 if (action.toObject()["choice"] == "merge") throw Failure("DirectoryTextPlanEngineChanged");
         }
-        if (plan["kind"] != "HyperCompareDirectoryPlan" || (plan["schemaVersion"] != 1 && !textMerge) || !plan["roots"].isArray() ||
+        if (plan["kind"] != "HyperCompareDirectoryPlan" || (plan["schemaVersion"] != 1 && !textMerge && !transfer) || !plan["roots"].isArray() ||
             !plan["output"].isObject() || !plan["actions"].isArray() || !plan["overwrite"].isBool() || !plan["mirror"].isBool()) throw Failure("DirectorySchemaInvalid");
         DirectoryPolicy policy;
         for (const auto& key : {QString("include"), QString("exclude")})
@@ -196,7 +199,7 @@ namespace hc::compare
         CheckProtectedInputs(Input, {output, journalPath}, Limits);
         if (journalPath.compare(planPath, Qt::CaseInsensitive) == 0 || DirectoryPathsOverlap(output, journalPath) || DirectoryPathsOverlap(output, planPath)) throw Failure("DirectoryArtifactOverlapsRoot");
         auto expected = inventory(destination); std::vector<DirectorySnapshot> roots; std::vector<Evidence> evidence;
-        const auto rootList = plan["roots"].toArray(); if (rootList.size() < 2 || rootList.size() > 3) throw Failure("DirectorySchemaInvalid");
+        const auto rootList = plan["roots"].toArray(); if (transfer ? rootList.size() != 1 : (rootList.size() < 2 || rootList.size() > 3)) throw Failure("DirectorySchemaInvalid");
         QSet<QString> candidates;
         for (const auto& value : rootList)
         {
@@ -207,11 +210,11 @@ namespace hc::compare
             validateEvidence(evidence.back(), capture(roots.back(), Limits));
             for (auto it = roots.back().entries_.cbegin(); it != roots.back().entries_.cend(); ++it) candidates.insert(it.key());
         }
-        if (plan["mirror"].toBool()) for (auto it = expected.cbegin(); it != expected.cend(); ++it) if (!it.key().isEmpty()) candidates.insert(it.key());
+        if (transfer || plan["mirror"].toBool()) for (auto it = expected.cbegin(); it != expected.cend(); ++it) if (!it.key().isEmpty()) candidates.insert(it.key());
         std::vector<Action> removals, directories, copies;
         if (!expected.contains({})) directories.push_back({{}, "mkdir", {}, {}});
         QSet<QString> seen; QMap<QString, bool> chosen;
-        const auto actions = plan["actions"].toArray(); if (actions.size() > 300000) throw Failure("DirectoryEntryLimit");
+        const auto actions = plan["actions"].toArray();
         for (const auto& value : actions)
         {
             Limits.Check(); if (!value.isObject()) throw Failure("DirectorySchemaInvalid"); const auto item = value.toObject();
@@ -219,6 +222,12 @@ namespace hc::compare
             text(item, "reason");
             if (seen.contains(key) || !candidates.contains(key)) throw Failure("DirectoryActionScopeInvalid"); seen.insert(key);
             if (choice == "unresolved") throw Failure("DirectoryDecisionsRequired");
+            if (transfer && choice != "left" && choice != "keep") throw Failure("DirectoryChoiceInvalid");
+            if (transfer && choice == "keep")
+            {
+                const auto before = expected.value(key); if (!before.isEmpty()) chosen.insert(key, before["directory"].toBool());
+                continue;
+            }
             const QStringList roles{"left", "right", "base"}; const auto side = roles.indexOf(choice);
             std::optional<storage::EntrySnapshot> source;
             QJsonObject desiredEntry;

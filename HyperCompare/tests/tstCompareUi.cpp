@@ -624,6 +624,22 @@ private slots:
         auto* base = window.findChild<ScintillaEditBase*>("BASE"); QVERIFY(base); QVERIFY(base->send(SCI_GETSELECTIONEND) > base->send(SCI_GETSELECTIONSTART));
         QVERIFY(!base->send(SCI_CANUNDO)); window.close();
     }
+    void directoryGuiTransferSelection()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "left"); write(r.file2_ + "/keep", "preserved");
+        const auto compared = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        DirectoryView view; view.resize(1300, 600); view.SetComparison(r, compared); view.show(); view.NavigateDifference(1);
+        auto* copy = view.findChild<QPushButton*>("directoryCopyRight"); QVERIFY(copy); QVERIFY(copy->isEnabled()); QTest::mouseClick(copy, Qt::LeftButton);
+        auto* dialog = static_cast<DirectoryMergeDialog*>(view.findChild<QDialog*>("directoryMergeDialog")); QVERIFY(dialog); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
+        QVERIFY2(dialog->LastResult().error_.isEmpty(), qPrintable(dialog->LastResult().error_)); QCOMPARE(dialog->Model()->Plan()["transfer"].toBool(), true);
+        QVERIFY(!dialog->findChild<QLineEdit*>("directoryOutput")->isEnabled()); QCOMPARE(dialog->Model()->Output(), r.file2_);
+        for (int row = 0; row < dialog->Model()->rowCount(); ++row) QVERIFY(!dialog->Model()->setData(dialog->Model()->index(row, 1), "omit"));
+        dialog->SavePlan(dir.filePath("transfer.json")); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
+        dialog->ApplyPlan(false); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000); QVERIFY2(dialog->LastResult().error_.isEmpty(), qPrintable(dialog->LastResult().error_));
+        QFile file(r.file2_ + "/a"); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("left")); file.close();
+        QVERIFY(QFileInfo::exists(r.file2_ + "/keep")); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-transfer.png")); dialog->close(); view.close();
+    }
     void directoryGuiPlanChoicesSaveApply()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");

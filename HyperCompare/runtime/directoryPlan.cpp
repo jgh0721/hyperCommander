@@ -194,6 +194,35 @@ namespace hc::compare
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
         return result;
     }
+    QJsonObject MakeDirectoryTransferPlan(const Request& Input, const Result& Comparison, int Source, const QString& Path, const Budget& Limits)
+    {
+        if (Source < 0 || Source > 1 || !Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Comparison.directories_->size() != 2)
+            throw Failure("DirectoryTransferRequiresCompleteComparison");
+        const auto& source = (*Comparison.directories_)[Source]; const auto& target = (*Comparison.directories_)[1 - Source];
+        const auto key = Path.toCaseFolded(); if (key.isEmpty() || !source.entries_.contains(key)) throw Failure("DirectoryTransferSelectionMissing");
+        const auto output = CheckedDirectoryPath(target.root_);
+        CheckProtectedInputs(Input, {output}, Limits);
+        if (DirectoryPathsOverlap(source.root_, output)) throw Failure("DirectoryOutputOverlapsInput");
+        ValidateDirectory(source, Input.directory_, Limits); ValidateDirectory(target, Input.directory_, Limits);
+        const auto destinationSnapshot = CaptureDirectory(output, {}, Limits);
+        const auto sourceInventory = inventory(source, Limits), destination = inventory(destinationSnapshot, Limits);
+        QMap<QString, QString> paths;
+        for (auto it = source.entries_.cbegin(); it != source.entries_.cend(); ++it) paths.insert(it.key(), it->path_);
+        for (auto it = destinationSnapshot.entries_.cbegin(); it != destinationSnapshot.entries_.cend(); ++it) if (!paths.contains(it.key())) paths.insert(it.key(), it->path_);
+        QJsonArray actions;
+        for (auto it = paths.cbegin(); it != paths.cend(); ++it)
+        {
+            Limits.Check(); const bool selected = source.entries_.contains(it.key()) &&
+                (it.key() == key || it.key().startsWith(key + '/') || key.startsWith(it.key() + '/'));
+            actions.append(QJsonObject{{"path", it.value()}, {"choice", selected ? "left" : "keep"}, {"reason", selected ? "Transfer" : "Preserve"}});
+        }
+        ValidateDirectory(source, Input.directory_, Limits); ValidateDirectory(destinationSnapshot, {}, Limits);
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 3}, {"transfer", true}, {"roots", QJsonArray{sourceInventory}}, {"output", destination},
+            {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
+            {"overwrite", true}, {"mirror", false}, {"actions", actions}};
+        if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
+        return result;
+    }
     void SaveDirectoryPlan(const QJsonObject& Plan, const QString& Path, Result& Value, const Budget& Limits)
     {
         const auto destination = CheckedDirectoryPath(Path);

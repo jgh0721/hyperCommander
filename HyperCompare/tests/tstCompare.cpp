@@ -1919,6 +1919,31 @@ private slots:
         plan["actions"] = actions; write(r.planOut_, QJsonDocument(plan).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
         QCOMPARE(read(r.output_ + "/a"), QByteArray("left")); QCOMPARE(read(r.output_ + "/binary"), QByteArray::fromHex("004c"));
     }
+    void directoryTransferSelectionAndResume()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_ + "/folder")); QVERIFY(QDir().mkpath(r.file2_ + "/folder"));
+        write(r.file1_ + "/folder/a", "new a"); write(r.file1_ + "/folder/b", "new b"); write(r.file1_ + "/outside", "source outside");
+        write(r.file2_ + "/folder/a", "old a"); write(r.file2_ + "/folder/keep", "target only"); write(r.file2_ + "/outside", "target outside");
+        auto cancel = std::make_shared<std::atomic_bool>(false); const auto compared = Execute(r, cancel, false); QCOMPARE(compared.exitCode_, 1);
+        const auto plan = MakeDirectoryTransferPlan(r, compared, 0, "folder", {}); QCOMPARE(plan["schemaVersion"].toInt(), 3);
+        Result result; const auto path = dir.filePath("transfer.json"); SaveDirectoryPlan(plan, path, result, {});
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = path; apply.dryRun_ = true;
+        QCOMPARE(Execute(apply, cancel, true).exitCode_, 0); QCOMPARE(read(r.file2_ + "/folder/a"), QByteArray("old a"));
+        apply.dryRun_ = false; Budget limits; limits.canceled_ = cancel.get();
+        QVERIFY_EXCEPTION_THROWN(ApplyDirectoryPlan(apply, result, limits, [&](std::size_t Count) { if (Count == 1) cancel->store(true); }), Failure);
+        QCOMPARE(read(r.file2_ + "/folder/a"), QByteArray("new a")); QVERIFY(!QFileInfo::exists(r.file2_ + "/folder/b"));
+        cancel->store(false); apply.resume_ = true; result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QCOMPARE(read(r.file2_ + "/folder/b"), QByteArray("new b")); QCOMPARE(read(r.file2_ + "/folder/keep"), QByteArray("target only"));
+        QCOMPARE(read(r.file2_ + "/outside"), QByteArray("target outside")); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
+        const auto refreshed = Execute(r, cancel, false); const auto reverse = MakeDirectoryTransferPlan(r, refreshed, 1, "folder/keep", {});
+        SaveDirectoryPlan(reverse, dir.filePath("reverse.json"), result, {}); apply.applyPlan_ = dir.filePath("reverse.json"); apply.resume_ = false;
+        result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(read(r.file1_ + "/folder/keep"), QByteArray("target only"));
+        write(r.file1_ + "/folder/keep", "external"); apply.resume_ = true; QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySnapshotMismatch"));
+        auto tampered = reverse; auto actions = tampered["actions"].toArray(); auto action = actions[0].toObject(); action["choice"] = "omit"; actions[0] = action; tampered["actions"] = actions;
+        write(dir.filePath("bad.json"), QJsonDocument(tampered).toJson()); apply.applyPlan_ = dir.filePath("bad.json"); apply.resume_ = false;
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectoryChoiceInvalid"));
+    }
     void directoryApplyCopyAndResume()
     {
         QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";

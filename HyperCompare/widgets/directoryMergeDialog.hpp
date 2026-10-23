@@ -43,6 +43,7 @@ namespace hc::compare
         DirectoryMergeDialog(Request Input, Result Comparison, QWidget* Parent = nullptr);
         ~DirectoryMergeDialog() override;
         void Prepare(const QString& Output, bool Mirror = false, bool Overwrite = false);
+        void PrepareTransfer(int Source, const QString& Path);
         void SavePlan(const QString& Path);
         void ApplyPlan(bool AllowDelete, bool Resume = false);
         bool Busy() const { return active_; }
@@ -71,6 +72,6 @@ namespace hc::compare
         QPushButton* save_ = nullptr;
         QPushButton* apply_ = nullptr;
         QPushButton* cancel_ = nullptr;
-        bool active_ = false, closing_ = false;
+        bool active_ = false, closing_ = false, transfer_ = false;
     };
 }
