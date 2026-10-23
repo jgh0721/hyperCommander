@@ -12,7 +12,7 @@ namespace hc::compare
         struct Change { std::size_t side_; const Edit* edit_; }; std::vector<Change> changes;
         for (std::size_t side = 0; side < Texts.size(); ++side)
         {
-            lines.push_back(SplitLines(Texts[side])); map.lines_.push_back(lines.back().size());
+            lines.push_back(SplitLines(Texts[side], Limits)); map.lines_.push_back(lines.back().size());
             if (!side) continue;
             edits[side] = Diff(Texts[0], Texts[side], Limits);
             for (const auto& edit : edits[side]) changes.push_back({side, &edit});

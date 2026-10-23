@@ -9,17 +9,36 @@ namespace hc::compare
         if (canceled_ && canceled_->load(std::memory_order_relaxed)) throw Failure("Canceled");
         if (std::chrono::steady_clock::now() >= deadline_) throw Failure("Timeout");
     }
-    Lines SplitLines(std::string_view Text)
+    namespace
     {
-        Lines result;
-        std::size_t start = 0;
-        for (std::size_t i = 0; i < Text.size(); ++i)
+        template<class Emit> std::size_t scanLines(std::string_view Text, const Budget& Limits,
+            std::size_t MaxLines, std::size_t MaxLineBytes, Emit Output)
         {
-            if (Text[i] != '\n' && Text[i] != '\r') continue;
-            if (Text[i] == '\r' && i + 1 < Text.size() && Text[i + 1] == '\n') ++i;
-            result.push_back(Text.substr(start, i + 1 - start)); start = i + 1;
+            Limits.Check(); std::size_t start = 0, count = 0, nextCheck = 0;
+            const auto emit = [&](std::size_t End) {
+                if (count == MaxLines) throw Failure("LineLimit");
+                Output(Text.substr(start, End - start)); ++count; start = End;
+            };
+            for (std::size_t i = 0; i < Text.size(); ++i)
+            {
+                if (i >= nextCheck) { Limits.Check(); nextCheck = i + 4096; }
+                const bool end = Text[i] == '\n' || Text[i] == '\r';
+                if (Text[i] == '\r' && i + 1 < Text.size() && Text[i + 1] == '\n') ++i;
+                if (i + 1 - start > MaxLineBytes) throw Failure("LongLineLimit");
+                if (end) emit(i + 1);
+            }
+            if (start < Text.size()) emit(Text.size());
+            Limits.Check(); return count;
         }
-        if (start < Text.size()) result.push_back(Text.substr(start));
+    }
+    std::size_t CountLines(std::string_view Text, const Budget& Limits, std::size_t MaxLines, std::size_t MaxLineBytes)
+    { return scanLines(Text, Limits, MaxLines, MaxLineBytes, [](std::string_view) {}); }
+    Lines SplitLines(std::string_view Text, const Budget& Limits, std::size_t MaxLines, std::size_t MaxLineBytes)
+    {
+        // Reject pathological input before allocating, then allocate the exact index.
+        const auto count = CountLines(Text, Limits, MaxLines, MaxLineBytes);
+        Lines result; result.reserve(count);
+        scanLines(Text, Limits, MaxLines, MaxLineBytes, [&](std::string_view Line) { result.push_back(Line); });
         return result;
     }
     namespace
@@ -57,8 +76,8 @@ namespace hc::compare
     std::vector<Edit> Diff(std::string_view Left, std::string_view Right, const Budget& Limits)
     {
         Limits.Check(); if (Left == Right) return {};
-        const auto left = SplitLines(Left), right = SplitLines(Right);
-        if (left.size() + right.size() > 2'000'000) throw Failure("LineLimit");
+        const auto left = SplitLines(Left, Limits);
+        const auto right = SplitLines(Right, Limits, 2'000'000 - left.size());
         std::uint64_t steps = 0;
         const auto step = [&] { if (++steps > Limits.steps_) throw Failure("DiffWorkLimit"); if ((steps & 1023) == 0) Limits.Check(); };
         std::size_t prefix = 0, suffix = 0;
@@ -166,7 +185,7 @@ namespace hc::compare
             if (a.edit_->begin_ != b.edit_->begin_) return a.edit_->begin_ < b.edit_->begin_;
             return a.edit_->end_ < b.edit_->end_;
         });
-        const auto base = SplitLines(Base); MergeResult result; std::size_t cursor = 0;
+        const auto base = SplitLines(Base, Limits); MergeResult result; std::size_t cursor = 0;
         for (std::size_t i = 0; i < all.size();)
         {
             Limits.Check(); auto end = i + 1;

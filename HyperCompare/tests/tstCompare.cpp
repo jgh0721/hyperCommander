@@ -67,6 +67,38 @@ private:
     }
 private slots:
     void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
+    void boundedLineScanning()
+    {
+        const auto failure = [](auto Operation) {
+            try { Operation(); return std::string{}; } catch (const Failure& error) { return error.code_; }
+        };
+        QCOMPARE(CountLines(""), std::size_t(0));
+        const std::string mixed = "a\r\nb\rc\nend";
+        const auto lines = SplitLines(mixed, {}, 4, 3); QCOMPARE(lines.size(), std::size_t(4));
+        QCOMPARE(lines[0], std::string_view("a\r\n")); QCOMPARE(lines[1], std::string_view("b\r"));
+        QCOMPARE(lines[2], std::string_view("c\n")); QCOMPARE(lines[3], std::string_view("end"));
+        QCOMPARE(failure([&] { CountLines(mixed, {}, 3, 3); }), std::string("LineLimit"));
+        QCOMPARE(failure([&] { SplitLines("a\r\n", {}, 1, 2); }), std::string("LongLineLimit"));
+        QCOMPARE(failure([&] { CountLines("x", {}, 0); }), std::string("LineLimit"));
+        QCOMPARE(CountLines("", {}, 0, 0), std::size_t(0));
+        const std::string many(16 * 1024 * 1024, '\n'); QElapsedTimer timer; timer.start();
+        QCOMPARE(failure([&] { CountLines(many, {}, 300000, 256 * 1024); }), std::string("LineLimit"));
+        qInfo("16 MiB newline input rejected without line-index allocation in %lld ms", timer.elapsed());
+        QCOMPARE(failure([&] { Diff(many, ""); }), std::string("LineLimit"));
+        const std::string hugeLine(16 * 1024 * 1024, 'x');
+        QCOMPARE(failure([&] { SplitLines(hugeLine, {}, 300000, 256 * 1024); }), std::string("LongLineLimit"));
+        std::atomic_bool canceled{true}; Budget budget; budget.canceled_ = &canceled;
+        QCOMPARE(failure([&] { CountLines(hugeLine, budget); }), std::string("Canceled"));
+        QCOMPARE(failure([&] { SplitLines(many, budget); }), std::string("Canceled"));
+        budget.canceled_ = nullptr; budget.deadline_ = std::chrono::steady_clock::now();
+        QCOMPARE(failure([&] { CountLines(many, budget); }), std::string("Timeout"));
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        write(request.file1_, QByteArray(many.data(), qsizetype(many.size()))); write(request.file2_, "right");
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        QCOMPARE(Execute(request, cancel, false).error_, QString("LineLimit"));
+        write(request.file1_, "left"); const auto session = Execute(request, cancel, false);
+        QCOMPARE(CompareOpenBuffers(request, session, {QByteArray(many.data(), qsizetype(many.size())), "right"}, {}).error_, QString("LineLimit"));
+    }
     void recoveryCrashChild()
     {
         const auto root = qEnvironmentVariable("HC_SAVE_CRASH_ROOT"); if (root.isEmpty()) return;

@@ -36,8 +36,8 @@ namespace hc::compare
                 result->changes_.push_back({change.begin_, change.end_, change.otherBegin_, change.otherEnd_});
             const auto& a = Inputs[First].utf8_; const auto& b = Inputs[Second].utf8_;
             result->alignment_ = std::make_shared<AlignmentMap>(AlignmentMap::Build(
-                SplitLines({a.constData(), std::size_t(a.size())}).size(),
-                SplitLines({b.constData(), std::size_t(b.size())}).size(), Changes, Limits));
+                CountLines({a.constData(), std::size_t(a.size())}, Limits),
+                CountLines({b.constData(), std::size_t(b.size())}, Limits), Changes, Limits));
             return result;
         }
         storage::Locator locator(const QString& Path)
@@ -100,9 +100,7 @@ namespace hc::compare
             result.encoding_ = decoded.encoding_; result.bom_ = decoded.bom_; result.utf8_ = decoded.text_.toUtf8();
             if (result.utf8_.contains('\0')) throw Failure("BinaryInputUnsupported");
             if (result.utf8_.size() > textLimit) throw Failure("DecodedSizeLimit");
-            const auto lines = SplitLines(std::string_view(result.utf8_.constData(), std::size_t(result.utf8_.size())));
-            if (lines.size() > 300000) throw Failure("LineLimit");
-            for (const auto line : lines) if (line.size() > 256 * 1024) throw Failure("LongLineLimit");
+            CountLines({result.utf8_.constData(), std::size_t(result.utf8_.size())}, Limits, 300000, 256 * 1024);
             return result;
         }
         std::string_view view(const QByteArray& Text) { return {Text.constData(), std::size_t(Text.size())}; }

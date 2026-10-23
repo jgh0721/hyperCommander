@@ -39,9 +39,12 @@ namespace hc::compare
             const auto encoding = !Encoding.isEmpty() ? Encoding : raw.startsWith("\xff\xfe") ? QString("UTF-16LE") : raw.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString("UTF-8");
             const auto decoded = document::DecodeDocumentText(raw, encoding); if (!decoded.HasValue()) return {};
             text[i] = decoded.Value().text_.toUtf8(); if (text[i].size() > limit) return {};
-            const auto lines = SplitLines({text[i].constData(), std::size_t(text[i].size())});
-            if (lines.size() > 300000) return {};
-            for (const auto line : lines) if (line.size() > 256 * 1024) return {};
+            try { CountLines({text[i].constData(), std::size_t(text[i].size())}, Limits, 300000, 256 * 1024); }
+            catch (const Failure& error)
+            {
+                if (error.code_ == "LineLimit" || error.code_ == "LongLineLimit") return {};
+                throw;
+            }
             if (i == 0) { outputEncoding = decoded.Value().encoding_; bom = decoded.Value().bom_; }
         }
         auto local = Limits; local.deadline_ = std::min(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(500));

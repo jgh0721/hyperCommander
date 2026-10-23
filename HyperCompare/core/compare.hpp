@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,7 +25,11 @@ namespace hc::compare
     };
     // Lines retain their terminators: EOF and CRLF/LF differences remain edits.
     using Lines = std::vector<std::string_view>;
-    Lines SplitLines(std::string_view Text);
+    // Count and validate without allocating a line index. Limits include terminators.
+    std::size_t CountLines(std::string_view Text, const Budget& Limits = {},
+        std::size_t MaxLines = 2'000'000, std::size_t MaxLineBytes = std::numeric_limits<std::size_t>::max());
+    Lines SplitLines(std::string_view Text, const Budget& Limits = {},
+        std::size_t MaxLines = 2'000'000, std::size_t MaxLineBytes = std::numeric_limits<std::size_t>::max());
     struct Edit
     {
         std::size_t begin_ = 0, end_ = 0, otherBegin_ = 0, otherEnd_ = 0;

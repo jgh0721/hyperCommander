@@ -85,7 +85,18 @@ namespace hc::compare
             catch (const Failure& error) { if (error.code_ != "Timeout") throw; }
             return result;
         }
-        const auto left = SplitLines(Left), right = SplitLines(Right);
+        Lines left, right;
+        try { left = SplitLines(Left, Limits); right = SplitLines(Right, Limits); }
+        catch (const Failure& error)
+        {
+            if (error.code_ != "Timeout") throw;
+            for (const auto& edit : Edits)
+            {
+                if (edit.begin_ > edit.end_ || edit.otherBegin_ > edit.otherEnd_) throw Failure("InvalidInlineEdits");
+                result.pairedLines_ += std::min(edit.end_ - edit.begin_, edit.otherEnd_ - edit.otherBegin_);
+            }
+            result.skippedLines_ = result.pairedLines_; return result;
+        }
         std::size_t previousLeft = 0, previousRight = 0;
         for (const auto& edit : Edits)
         {

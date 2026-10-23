@@ -15,8 +15,7 @@ namespace hc::compare
         {
             Limits.Check(); if (Text.size() > 16 * 1024 * 1024) throw Failure("DecodedSizeLimit");
             if (Text.contains('\0')) throw Failure("BinaryInputUnsupported");
-            const auto lines = SplitLines(view(Text)); if (lines.size() > 300000) throw Failure("LineLimit");
-            for (const auto line : lines) { Limits.Check(); if (line.size() > 256 * 1024) throw Failure("LongLineLimit"); }
+            CountLines(view(Text), Limits, 300000, 256 * 1024);
         }
         template<class T> T require(storage::Result<T> Value)
         { if (!Value.HasValue()) throw Failure(Value.Failure().code_); return std::move(Value.Value()); }
@@ -35,7 +34,7 @@ namespace hc::compare
                 if (slot && (Texts.size() != 3 || !Input.base_.isEmpty())) continue;
                 const auto [a, b] = pairs[slot]; const auto edits = Diff(view(Texts[a]), view(Texts[b]), Limits);
                 auto pair = std::make_shared<PairComparison>(); pair->inputs_ = {a, b};
-                pair->alignment_ = std::make_shared<AlignmentMap>(AlignmentMap::Build(SplitLines(view(Texts[a])).size(), SplitLines(view(Texts[b])).size(), edits, Limits));
+                pair->alignment_ = std::make_shared<AlignmentMap>(AlignmentMap::Build(CountLines(view(Texts[a]), Limits), CountLines(view(Texts[b]), Limits), edits, Limits));
                 for (const auto& edit : edits) pair->changes_.push_back({edit.begin_, edit.end_, edit.otherBegin_, edit.otherEnd_});
                 auto decoration = Limits; decoration.deadline_ = std::min(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
                 pair->inline_ = BuildInlineDiff(view(Texts[a]), view(Texts[b]), edits, decoration);
