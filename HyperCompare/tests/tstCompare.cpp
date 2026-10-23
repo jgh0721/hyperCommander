@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QProcess>
 #include <random>
+#include <numeric>
 #include <Windows.h>
 
 using namespace hc::compare;
@@ -34,6 +35,74 @@ private:
         return row.back();
     }
 private slots:
+    void functionRelationsMovementAndModification()
+    {
+        const QByteArray a = "int a(){return 1;}\n", b = "int b(){return 2;}\n", c = "int c(){return 3;}\n";
+        const auto left = AnalyzeFunctions("l.cpp", a + b + c);
+        const auto right = AnalyzeFunctions("r.cpp", b + c + "int a(){return 10;}\n");
+        const auto match = MatchFunctions(left, right); QCOMPARE(match["status"].toString(), "Complete");
+        QCOMPARE(match["moved"].toInt(), 1); QCOMPARE(match["modified"].toInt(), 1);
+        QCOMPARE(match["relations"].toArray()[0].toObject()["status"].toString(), "MovedModified");
+        const auto shifted = AnalyzeFunctions("r.cpp", "// prefix\n\nint extra(){return 0;}\n" + a + b + c);
+        const auto shift = MatchFunctions(left, shifted); QCOMPARE(shift["moved"].toInt(), 0); QCOMPARE(shift["modified"].toInt(), 0);
+        QCOMPARE(shift["relations"].toArray().last().toObject()["status"].toString(), "Added");
+        const auto removed = MatchFunctions(left, AnalyzeFunctions("r.cpp", a + c));
+        QCOMPARE(removed["relations"].toArray()[1].toObject()["status"].toString(), "Removed");
+    }
+    void functionRelationsOverloadsAmbiguityAndPartial()
+    {
+        const auto left = AnalyzeFunctions("l.cpp", "namespace N { int f(int x){return x;} double f(double x){return x;} }\nnamespace Other { int f(){return 1;} }");
+        const auto right = AnalyzeFunctions("r.cpp", "namespace Other { int f(){return 1;} }\nnamespace N { double f(double x){return x;} int f(int x){return x;} }");
+        const auto match = MatchFunctions(left, right); QCOMPARE(match["moved"].toInt(), 1); QCOMPARE(match["ambiguous"].toInt(), 0);
+        const auto duplicates = AnalyzeFunctions("a.cpp", "int f(){return 1;} int f(){return 1;}");
+        const auto ambiguous = MatchFunctions(duplicates, duplicates); QCOMPARE(ambiguous["status"].toString(), "Partial"); QCOMPARE(ambiguous["ambiguous"].toInt(), 4);
+        auto partial = left; partial["status"] = "Partial"; partial["functions"] = QJsonArray{};
+        const auto unknown = MatchFunctions(partial, right);
+        for (const auto& value : unknown["relations"].toArray()) QCOMPARE(value.toObject()["status"].toString(), "Unmatched");
+    }
+    void functionRelationsRandomOrderOracle()
+    {
+        std::mt19937 rng(0x51a7); std::vector<int> order(40); std::iota(order.begin(), order.end(), 0);
+        const auto document = [](const std::vector<int>& Values) {
+            QJsonArray functions; for (int value : Values) functions.append(QJsonObject{{"name", QString::number(value)}, {"scope", ""}, {"signature", "signature"}, {"body", "body"}});
+            return QJsonObject{{"status", "Complete"}, {"functions", functions}};
+        };
+        const auto left = document(order);
+        for (int trial = 0; trial < 100; ++trial)
+        {
+            std::shuffle(order.begin(), order.end(), rng); std::vector<int> lengths(order.size(), 1); int longest = 1;
+            for (std::size_t i = 0; i < order.size(); ++i) for (std::size_t j = 0; j < i; ++j)
+                if (order[j] < order[i]) { lengths[i] = std::max(lengths[i], lengths[j] + 1); longest = std::max(longest, lengths[i]); }
+            const auto result = MatchFunctions(left, document(order)); QCOMPARE(result["moved"].toInt(), int(order.size()) - longest);
+        }
+    }
+    void sourceAnalysisSessionAndConsole()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("l.cpp"); request.file2_ = dir.filePath("r.cpp"); request.base_ = dir.filePath("base.cpp");
+        write(request.file1_, "int a(){return 1;} int b(){return 2;}"); write(request.file2_, "int b(){return 2;} int a(){return 1;}"); write(request.base_, "int a(){return 0;} int b(){return 2;}");
+        request.headless_ = true; const auto cancel = std::make_shared<std::atomic_bool>(false); const auto value = Execute(request, cancel, false);
+        QCOMPARE(value.completion_, "Complete"); QCOMPARE(value.semantic_["pairs"].toArray().size(), 3); QCOMPARE(value.semantic_["status"].toString(), "Complete");
+        QCOMPARE(value.Json()["sourceAnalysis"], QJsonValue(value.semantic_));
+        request.semantic_ = "off"; const auto off = Execute(request, cancel, false);
+        QCOMPARE(off.semantic_["status"].toString(), "Disabled"); QCOMPARE(off.edits_, value.edits_); QCOMPARE(off.merged_.text_, value.merged_.text_);
+        QVERIFY(!Parse({"hc", "-semantic", "invalid", "-file1", request.file1_, "-file2", request.file2_}, true).error_.isEmpty());
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-file1", request.file1_, "-file2", request.file2_, "-format", "json"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 1);
+        const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+        QCOMPARE(report["sourceAnalysis"].toObject()["pairs"].toArray()[0].toObject()["moved"].toInt(), 1);
+    }
+    void functionTemplatesAndResourceLimits()
+    {
+        const auto a = AnalyzeFunctions("a.cpp", "template<class T=int> T f(T x){return x;}\n");
+        const auto b = AnalyzeFunctions("b.cpp", "template<class T=long> T f(T x){return x;}\n");
+        QCOMPARE(a["status"].toString(), "Complete"); QCOMPARE(a["functions"].toArray()[0].toObject()["begin"].toInt(), 0);
+        const auto relation = MatchFunctions(a, b)["relations"].toArray()[0].toObject();
+        QCOMPARE(relation["status"].toString(), "Modified"); QCOMPARE(relation["match"].toString(), "UniqueName");
+        QByteArray source; for (int i = 0; i < 10001; ++i) source += "int f" + QByteArray::number(i) + "(){return 0;}\n";
+        QElapsedTimer timer; timer.start(); const auto limited = AnalyzeFunctions("large.cpp", source);
+        QCOMPARE(limited["status"].toString(), "Unavailable"); QVERIFY((QStringList{"FunctionLimit", "TimeLimit"}.contains(limited["reason"].toString())));
+        QVERIFY(timer.elapsed() < 5000); qInfo("Semantic 10001-function limit: %lld ms", timer.elapsed());
+    }
     void semanticWorkerScopesAndTokens()
     {
         const QByteArray source = "namespace space {\nint first(int x) { return x; }\nstruct Type { int second() { return 2; } };\n}\nint space::Type::outside() { return 3; }\n";

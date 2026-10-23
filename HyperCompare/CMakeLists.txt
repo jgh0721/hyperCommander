@@ -9,6 +9,7 @@ target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
 qt_add_library(hc_compare_runtime STATIC
     runtime/semantic.cpp runtime/semantic.hpp
+    runtime/functionMatch.cpp
     runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp
@@ -27,6 +28,7 @@ target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core PRIVAT
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
+    widgets/semanticView.cpp widgets/semanticView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)

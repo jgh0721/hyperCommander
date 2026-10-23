@@ -7,6 +7,8 @@
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
 #include "widgets/directoryMergeDialog.hpp"
+#include "widgets/semanticView.hpp"
+#include <QTabWidget>
 #include <QTableView>
 #include <QPushButton>
 #include <QAbstractItemModelTester>
@@ -88,6 +90,43 @@ private slots:
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
     }
+    void sourceFunctionsNavigationAndPairs()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.file3_ = dir.filePath("third.cpp");
+        const QByteArray a = "int alpha() { return 1; }\n", b = "int beta() { return 2; }\n", c = "int gamma() { return 3; }\n";
+        write(request.file1_, a + b + c); write(request.file2_, b + c + "int alpha() { return 10; }\n"); write(request.file3_, c + a + b);
+        CompareWindow window(request); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
+        auto* pairs = window.findChild<QComboBox*>("semanticPairs"); auto* tabs = window.findChild<QTabWidget*>("comparisonDetails");
+        QTRY_COMPARE_WITH_TIMEOUT(pairs->count(), 3, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+        tabs->setCurrentIndex(1); QCOMPARE(table->model()->rowCount(), 1);
+        QCOMPARE(table->model()->data(table->model()->index(0, 0)).toString(), "alpha");
+        QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("이동 + 수정"));
+        table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
+        auto* first = window.findChild<ScintillaEditBase*>("FILE 1"); auto* second = window.findChild<ScintillaEditBase*>("FILE 2");
+        QVERIFY(first); QVERIFY(second); QCOMPARE(first->send(SCI_GETSELECTIONSTART), sptr_t(0)); QCOMPARE(second->send(SCI_GETSELECTIONSTART), sptr_t(b.size() + c.size()));
+        QCOMPARE(contents(first), a + b + c); QVERIFY(!first->send(SCI_CANUNDO));
+        action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/functions-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/functions-dark.png"));
+        pairs->setCurrentIndex(2); QCOMPARE(window.findChild<QComboBox*>("comparePairSelector")->currentIndex(), 2);
+        QAbstractItemModelTester tester(table->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        window.close();
+    }
+    void sourceFunctionsBaseAndPartialCoverage()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.base_ = dir.filePath("base.cpp");
+        write(request.file1_, "int first(){return 1;}\nint second(){return 2;}\n");
+        write(request.file2_, "int first(){return 2;}\nint second(){return 2;}\n");
+        write(request.base_, "int second(){return 2;}\nint first(){return 0;}\nint invalid( {");
+        CompareWindow window(request); window.show(); auto* pairs = window.findChild<QComboBox*>("semanticPairs");
+        QTRY_COMPARE_WITH_TIMEOUT(pairs->count(), 3, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+        window.findChild<QTabWidget*>("comparisonDetails")->setCurrentIndex(1); pairs->setCurrentIndex(1);
+        QCOMPARE(pairs->currentText(), QString::fromUtf8("LEFT ↔ BASE"));
+        QVERIFY(window.findChild<QLabel*>("semanticCoverage")->text().contains(QString::fromUtf8("문법 오류")));
+        auto* table = window.findChild<QTableView*>("semanticTable"); QVERIFY(table->model()->rowCount() > 0);
+        table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
+        auto* base = window.findChild<ScintillaEditBase*>("BASE"); QVERIFY(base); QVERIFY(base->send(SCI_GETSELECTIONEND) > base->send(SCI_GETSELECTIONSTART));
+        QVERIFY(!base->send(SCI_CANUNDO)); window.close();
+    }
     void directoryGuiPlanChoicesSaveApply()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
@@ -157,7 +196,7 @@ private slots:
         write(r.file1_ + "/only-left.txt", "new"); CompareWindow window(r); window.show(); window.activateWindow();
         auto* table = window.findChild<QTableView*>("directoryTable"); QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 4, 10000);
         QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("충돌 1개"));
-        QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty()); QVERIFY(window.findChild<QTreeWidget*>("compareChanges")->isHidden());
+        QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty()); QVERIFY(!window.findChild<QTreeWidget*>("compareChanges")->isVisible());
         auto* filter = window.findChild<QComboBox*>("directoryStatusFilter"); auto* query = window.findChild<QLineEdit*>("directoryQuery");
         filter->setCurrentIndex(2); QCOMPARE(table->model()->rowCount(), 1); action(window, "다음 차이")->trigger();
         auto* open = window.findChild<QPushButton*>("directoryOpenFile"); QVERIFY(open->isEnabled());

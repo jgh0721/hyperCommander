@@ -32,6 +32,7 @@ namespace hc::compare
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
         value("directory-level", "bytes (default) or metadata; metadata does not verify file contents.");
         value("theme", "GUI theme: light or dark.");
+        value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
         flag("overwrite", "Allow replacing an existing output, subject to revision validation.");
@@ -54,6 +55,8 @@ namespace hc::compare
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");
         request.takeAll_ = parser.value("takeall"); request.theme_ = parser.value("theme");
+        if (parser.isSet("semantic")) request.semantic_ = parser.value("semantic");
+        if (request.semantic_ != "auto" && request.semantic_ != "off") return fail("Invalid semantic mode.");
         for (const auto& name : {"include", "exclude"})
         {
             if (!parser.isSet(name)) continue;

@@ -112,19 +112,23 @@ namespace hc::compare
                     {
                         const auto scopeNode = ts_node_child_by_field_name(parent, "name", 4);
                         if (!ts_node_is_null(scopeNode) && ts_node_end_byte(scopeNode) - ts_node_start_byte(scopeNode) > 4096) { ++skipped; return false; }
-                        const auto scope = ts_node_is_null(scopeNode) ? QString("(anonymous)") : QString::fromUtf8(text(scopeNode, Context));
+                        auto scope = ts_node_is_null(scopeNode) ? QString("(anonymous)") : QString::fromUtf8(text(scopeNode, Context));
+                        scope.remove(QRegularExpression("\\s+"));
                         scopes.prepend(scope);
                     }
                     if (type == "lambda_expression" || type == "function_definition") { ++skipped; return false; }
                 }
                 if (depth >= 256) { ++skipped; return false; }
-                const auto qualified = scopes.isEmpty() ? name : scopes.join("::") + "::" + name;
+                const auto qualified = name.startsWith("::") ? name.mid(2) : scopes.isEmpty() ? name : scopes.join("::") + "::" + name;
+                if (qualified.size() > 16384) { ++skipped; return false; }
+                auto signatureRoot = node; const auto enclosing = ts_node_parent(node);
+                if (!ts_node_is_null(enclosing) && QByteArrayView(ts_node_type(enclosing)) == "template_declaration") signatureRoot = enclosing;
                 const auto separator = qualified.lastIndexOf("::");
                 functions.append(QJsonObject{{"name", qualified}, {"scope", separator < 0 ? QString{} : qualified.left(separator)},
-                    {"signature", tokenHash(node, Context, ts_node_start_byte(body))},
+                    {"signature", tokenHash(signatureRoot, Context, ts_node_start_byte(body))},
                     {"body", tokenHash(body, Context, ts_node_end_byte(body))},
-                    {"begin", double(ts_node_start_byte(node))}, {"end", double(ts_node_end_byte(node))},
-                    {"line", int(ts_node_start_point(node).row)}, {"endLine", int(ts_node_end_point(node).row)}});
+                    {"begin", double(ts_node_start_byte(signatureRoot))}, {"end", double(ts_node_end_byte(node))},
+                    {"line", int(ts_node_start_point(signatureRoot).row)}, {"endLine", int(ts_node_end_point(node).row)}});
                 return false;
             });
             return {{"status", ts_node_has_error(root) || skipped ? "Partial" : "Complete"}, {"functions", functions}, {"skipped", skipped},

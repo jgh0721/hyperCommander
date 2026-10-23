@@ -18,6 +18,7 @@ namespace hc::compare
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
+        QString semantic_ = "auto";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         QString applyPlan_, journal_, applyPlanDigest_;
         bool resume_ = false, allowDelete_ = false;
@@ -62,6 +63,7 @@ namespace hc::compare
         QByteArray output_;
         std::shared_ptr<const std::vector<DirectorySnapshot>> directories_;
         QJsonObject directoryPlan_;
+        QJsonObject semantic_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;

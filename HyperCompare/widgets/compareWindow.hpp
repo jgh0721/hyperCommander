@@ -13,6 +13,7 @@ class QSplitter;
 class QAction;
 class QCloseEvent;
 class QComboBox;
+class QTabWidget;
 
 namespace hc::compare
 {
@@ -24,6 +25,7 @@ namespace hc::compare
     class FindBar;
     class OverviewBar;
     class DirectoryView;
+    class SemanticView;
     class CompareWindow final : public QMainWindow
     {
     public:
@@ -71,6 +73,8 @@ namespace hc::compare
         FindBar* find_ = nullptr;
         OverviewBar* overview_ = nullptr;
         DirectoryView* directory_ = nullptr;
+        SemanticView* semantic_ = nullptr;
+        QTabWidget* details_ = nullptr;
         QWidget* sources_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;

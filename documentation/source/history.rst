@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare C/C++ 함수 이름·scope·서명 대응과 상대 순서 이동·수정 분석 추가. 일반 3파일·BASE 비교 쌍의 함수 변경 탭, 원본 함수 선택·탐색, semantic auto/off 및 JSON 분석 범위·모호성 보고 지원.
+
 * HyperCompare Tree-sitter 버전을 고정하고 C/C++ 함수 범위·토큰 해시를 별도 프로세스에서 추출한다. 워커의 메모리·시간·출력 크기를 제한하고 패키지에 라이선스를 포함한다.
 
 * HyperCompare 디렉터리 BASE 비교의 비충돌 텍스트 변경 자동 병합 추가. LEFT 인코딩·BOM·줄 끝 유지, 파일별 분석 한도와 충돌/바이너리 fallback, 실행 전 재계산·내용 검증 및 계획 schema 1 호환 지원.

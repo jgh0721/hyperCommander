@@ -6,6 +6,7 @@
 #include "overviewBar.hpp"
 #include "directoryView.hpp"
 #include "directoryMergeDialog.hpp"
+#include "semanticView.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -23,6 +24,7 @@
 #include <QToolBar>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QtConcurrentRun>
@@ -65,7 +67,23 @@ namespace hc::compare
         auto* sources = new QWidget(layout); sources_ = sources; auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
         panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);
         row->addWidget(panes_, 1); row->addWidget(overview_);
-        changes_ = new QTreeWidget(layout); layout->addWidget(sources); layout->addWidget(changes_);
+        details_ = new QTabWidget(layout); details_->setObjectName("comparisonDetails");
+        changes_ = new QTreeWidget(details_); semantic_ = new SemanticView(details_);
+        details_->addTab(changes_, tr("줄 차이")); details_->addTab(semantic_, tr("함수 변경")); details_->setTabVisible(1, false);
+        layout->addWidget(sources); layout->addWidget(details_);
+        connect(details_, &QTabWidget::currentChanged, this, [layout](int Index) { if (Index == 1) layout->setSizes({500, 240}); });
+        semantic_->pairChanged_ = [this](int Index) { if (!busy() && result_.operation_ == "compare3") pairSelector_->setCurrentIndex(Index); };
+        semantic_->reveal_ = [this](int A, const QJsonObject& First, int B, const QJsonObject& Second) {
+            if (busy()) return;
+            if (scroll_) scroll_->SetEnabled(false);
+            for (const auto& entry : {std::pair{A, First}, std::pair{B, Second}})
+            {
+                if (entry.second.isEmpty() || entry.first < 0 || entry.first >= result_.inputs_.size() || entry.first >= editors_.size()) continue;
+                auto* editor = editors_[entry.first]; editor->send(SCI_SETSEL, uptr_t(entry.second["begin"].toInt()), entry.second["end"].toInt());
+                editor->send(SCI_SCROLLRANGE, uptr_t(entry.second["begin"].toInt()), entry.second["end"].toInt());
+            }
+            if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked());
+        };
         directory_ = new DirectoryView(layout); layout->addWidget(directory_); directory_->hide();
         directory_->open_ = [this](Request Input) {
             if (busy()) return; Input.theme_ = dark_ ? "dark" : "light";
@@ -282,6 +300,8 @@ namespace hc::compare
             updateMerge(); state_->setText(tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
         }
         const bool changed = Value.inputsChanged_; result_ = std::move(Value);
+        semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
+        details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
         if (changed)
         {
             if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
@@ -330,7 +350,9 @@ namespace hc::compare
     {
         if (result_.operation_ != "compare3") pairIndex_ = 0;
         { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
-        directory_->hide(); sources_->show(); changes_->show();
+        directory_->hide(); sources_->show(); details_->show();
+        semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
+        details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
         directory_->SetComparison({}, {});
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
@@ -344,7 +366,7 @@ namespace hc::compare
         if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
         if (result_.operation_.startsWith("directory"))
         {
-            directory_->SetComparison(request_, result_); sources_->hide(); changes_->hide(); directory_->show();
+            directory_->SetComparison(request_, result_); sources_->hide(); details_->hide(); directory_->show();
             if (request_.mode_ == "directory-merge")
             {
                 auto* dialog = new DirectoryMergeDialog(request_, result_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
@@ -389,6 +411,7 @@ namespace hc::compare
     }
     void CompareWindow::applyPairView()
     {
+        semantic_->SetPair(pairIndex_);
         overview_->SetSession(nullptr, nullptr, {});
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); delete scroll_; scroll_ = nullptr; }
         for (auto* editor : editors_) editor->send(SCI_MARKERDELETEALL, 8);
@@ -570,7 +593,7 @@ namespace hc::compare
     void CompareWindow::applyAppearance()
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
-        qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_);
+        qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)
