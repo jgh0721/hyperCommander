@@ -29,6 +29,7 @@ namespace hc::compare
         QString choiceLabel(const QString& Choice)
         {
             if (Choice == "unresolved") return QObject::tr("미결정");
+            if (Choice == "merge") return QObject::tr("자동 텍스트 병합");
             if (Choice == "omit") return QObject::tr("제외 — 대상 존재 시 삭제");
             return Choice.toUpper();
         }
@@ -82,6 +83,7 @@ namespace hc::compare
         {
             QStringList choices{"unresolved", "omit"}; const QStringList names{"left", "right", "base"};
             for (std::size_t i = 0; i < paths_.size(); ++i) if (paths_[i].contains(action["path"].toString().toCaseFolded())) choices.push_back(names[qsizetype(i)]);
+            if (action["choice"] == "merge") choices.push_back("merge");
             return choices;
         }
         if (Role == Qt::EditRole && Index.column() == 1) return choices_[Index.row()];

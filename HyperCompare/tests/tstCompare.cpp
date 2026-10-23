@@ -782,6 +782,40 @@ private slots:
         write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
     }
+    void directoryTextAutoMergeAndEncoding()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.base_ = dir.filePath("b"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        for (const auto& root : {r.file1_, r.file2_, r.base_}) QVERIFY(QDir().mkpath(root));
+        write(r.file1_ + "/a", "LEFT\r\nkeep\r\nend"); write(r.file2_ + "/a", "start\r\nkeep\r\nRIGHT"); write(r.base_ + "/a", "start\r\nkeep\r\nend");
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, true);
+        QCOMPARE(result.exitCode_, 0); QCOMPARE(result.directoryPlan_["actions"].toArray()[0].toObject()["choice"].toString(), QString("merge"));
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
+        QCOMPARE(read(r.output_ + "/a"), QByteArray("LEFT\r\nkeep\r\nRIGHT")); apply.resume_ = true; QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
+        // Mixed encodings preserve LEFT's UTF-16LE BOM and byte-level newline policy.
+        write(r.file1_ + "/a", QByteArray::fromHex("fffe4c000a0062000a006300")); write(r.file2_ + "/a", "a\nb\nR"); write(r.base_ + "/a", "a\nb\nc");
+        r.output_ = dir.filePath("utf16"); r.planOut_ = dir.filePath("utf16.json"); result = Execute(r, cancel, true); QCOMPARE(result.exitCode_, 0);
+        apply.applyPlan_ = r.planOut_; apply.resume_ = false; QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
+        QCOMPARE(read(r.output_ + "/a"), QByteArray::fromHex("fffe4c000a0062000a005200"));
+    }
+    void directoryTextConflictsFallbackAndLegacyPlan()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.base_ = dir.filePath("b"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        for (const auto& root : {r.file1_, r.file2_, r.base_}) QVERIFY(QDir().mkpath(root));
+        write(r.file1_ + "/a", "left"); write(r.file2_ + "/a", "right"); write(r.base_ + "/a", "base");
+        write(r.file1_ + "/binary", QByteArray::fromHex("004c")); write(r.file2_ + "/binary", QByteArray::fromHex("0052")); write(r.base_ + "/binary", QByteArray::fromHex("0042"));
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, true); QCOMPARE(result.Json()["unresolvedCount"].toInt(), 2);
+        auto plan = result.directoryPlan_; auto actions = plan["actions"].toArray(); auto item = actions[0].toObject(); item["choice"] = "merge"; actions[0] = item; plan["actions"] = actions; write(r.planOut_, QJsonDocument(plan).toJson());
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectoryTextMergeUnavailable")); QVERIFY(!QFileInfo::exists(r.output_));
+        // Schema 1 plans without the newer text policy remain executable.
+        plan.remove("textMerge"); plan["schemaVersion"] = 1;
+        for (qsizetype i = 0; i < actions.size(); ++i) { auto action = actions[i].toObject(); action["choice"] = "left"; actions[i] = action; }
+        plan["actions"] = actions; write(r.planOut_, QJsonDocument(plan).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
+        QCOMPARE(read(r.output_ + "/a"), QByteArray("left")); QCOMPARE(read(r.output_ + "/binary"), QByteArray::fromHex("004c"));
+    }
     void directoryApplyCopyAndResume()
     {
         QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
@@ -822,7 +856,7 @@ private slots:
         QVERIFY(QDir().mkpath(r.file1_ + "/sub")); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/sub/a", "data");
         auto cancel = std::make_shared<std::atomic_bool>(false); QCOMPARE(Execute(r, cancel, true).exitCode_, 0);
         const auto original = QJsonDocument::fromJson(read(r.planOut_)).object(); Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
-        auto changed = original; changed["schemaVersion"] = 2; write(r.planOut_, QJsonDocument(changed).toJson());
+        auto changed = original; changed["schemaVersion"] = 999; write(r.planOut_, QJsonDocument(changed).toJson());
         QCOMPARE(Execute(apply, cancel, true).error_, QString("DirectorySchemaInvalid"));
         changed = original; auto actions = changed["actions"].toArray(); auto action = actions[0].toObject(); action["path"] = "../escape"; actions[0] = action; changed["actions"] = actions;
         write(r.planOut_, QJsonDocument(changed).toJson()); QCOMPARE(Execute(apply, cancel, true).exitCode_, 2); QVERIFY(!QFileInfo::exists(r.output_));

@@ -7,6 +7,7 @@ target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp
     runtime/directory.cpp runtime/directory.hpp

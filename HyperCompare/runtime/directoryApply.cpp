@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "directoryApply.hpp"
+#include "directoryText.hpp"
+#include "commonLibs/document/documentSaveCoordinator.hpp"
 #include "session.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -19,6 +21,8 @@ namespace hc::compare
             QString path_, kind_;
             std::optional<storage::EntrySnapshot> source_;
             QJsonObject desired_;
+            std::optional<std::array<storage::EntrySnapshot, 3>> merge_;
+            QString encoding_;
         };
         storage::Locator locator(const QString& Path)
         { return {Path.startsWith("//") ? storage::LocatorKind::Smb : storage::LocatorKind::Local, Path.toUtf8().toStdString()}; }
@@ -163,8 +167,16 @@ namespace hc::compare
         const auto plan = json(bytes); Value.directoryPlan_ = plan;
         if (!Input.applyPlanDigest_.isEmpty() && Input.applyPlanDigest_ != QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(plan).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()))
             throw Failure("DirectoryPlanChanged");
-        keys(plan, {"kind", "schemaVersion", "roots", "output", "include", "exclude", "overwrite", "mirror", "actions"});
-        if (plan["kind"] != "HyperCompareDirectoryPlan" || plan["schemaVersion"] != 1 || !plan["roots"].isArray() ||
+        const bool textMerge = plan["schemaVersion"] == 2;
+        QStringList expectedKeys{"kind", "schemaVersion", "roots", "output", "include", "exclude", "overwrite", "mirror", "actions"};
+        if (textMerge) expectedKeys.append("textMerge"); keys(plan, expectedKeys);
+        QString encoding;
+        if (textMerge)
+        {
+            const auto policy = plan["textMerge"].toObject(); keys(policy, {"engine", "encoding"}); encoding = text(policy, "encoding");
+            if (policy["engine"] != "myers-bounded-1" || !QStringList{"", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(encoding)) throw Failure("DirectoryTextPolicyUnsupported");
+        }
+        if (plan["kind"] != "HyperCompareDirectoryPlan" || (plan["schemaVersion"] != 1 && !textMerge) || !plan["roots"].isArray() ||
             !plan["output"].isObject() || !plan["actions"].isArray() || !plan["overwrite"].isBool() || !plan["mirror"].isBool()) throw Failure("DirectorySchemaInvalid");
         DirectoryPolicy policy;
         for (const auto& key : {QString("include"), QString("exclude")})
@@ -204,7 +216,19 @@ namespace hc::compare
             const QStringList roles{"left", "right", "base"}; const auto side = roles.indexOf(choice);
             std::optional<storage::EntrySnapshot> source;
             QJsonObject desiredEntry;
-            if (choice != "omit")
+            std::optional<std::array<storage::EntrySnapshot, 3>> mergeInputs;
+            if (choice == "merge")
+            {
+                if (!textMerge || roots.size() != 3) throw Failure("DirectoryChoiceInvalid");
+                std::array<storage::EntrySnapshot, 3> inputs;
+                for (std::size_t side = 0; side < 3; ++side)
+                { if (!roots[side].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid"); inputs[side] = roots[side].entries_.value(key); }
+                const auto merged = MergeDirectoryText(inputs, encoding, Limits); if (!merged) throw Failure("DirectoryTextMergeUnavailable");
+                source = inputs[0]; mergeInputs = inputs;
+                desiredEntry = {{"directory", false}, {"size", QString::number(merged->size())}, {"sha256", QString::fromLatin1(QCryptographicHash::hash(*merged, QCryptographicHash::Sha256).toHex())}};
+                chosen.insert(key, false);
+            }
+            else if (choice != "omit")
             {
                 if (side < 0 || std::size_t(side) >= roots.size() || !roots[std::size_t(side)].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid");
                 source = roots[std::size_t(side)].entries_.value(key); desiredEntry = evidence[std::size_t(side)].value(key);
@@ -224,7 +248,7 @@ namespace hc::compare
             {
                 if (!before.isEmpty() && !remove && before["sha256"] == desiredEntry["sha256"] && before["size"] == desiredEntry["size"]) continue;
                 if (!before.isEmpty() && !plan["overwrite"].toBool()) throw Failure("OutputExists");
-                copies.push_back({path, "copy", source, desiredEntry});
+                copies.push_back({path, mergeInputs ? "merge" : "copy", source, desiredEntry, mergeInputs, encoding});
             }
         }
         if (seen != candidates) throw Failure("DirectoryActionScopeInvalid");
@@ -308,6 +332,20 @@ namespace hc::compare
             if (!(pending && desired(action, before)))
             {
                 if (action.kind_ == "copy") copy(action, path, before, Value, Limits);
+                else if (action.kind_ == "merge")
+                {
+                    const auto data = MergeDirectoryText(*action.merge_, action.encoding_, Limits);
+                    if (!data || QString::number(data->size()) != action.desired_["size"] || QString::fromLatin1(QCryptographicHash::hash(*data, QCryptographicHash::Sha256).toHex()) != action.desired_["sha256"])
+                        throw Failure("DirectorySourceChanged");
+                    storage::DestinationExpectation expectation;
+                    if (!before.isEmpty()) expectation = {true, storage::ResourceRevision{before["revision"].toString().toStdString()}};
+                    const auto receipt = require(document::SaveDocumentBytes(*writer(path), locator(path), expectation,
+                        {reinterpret_cast<const std::byte*>(data->constData()), std::size_t(data->size())}, context(Limits)));
+                    if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
+                    Value.commit_ = "Partial";
+                    for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
+                    for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
+                }
                 else if (action.kind_ == "mkdir") require(writer(path)->MakeDirectory(locator(path), context(Limits)));
                 else
                 {

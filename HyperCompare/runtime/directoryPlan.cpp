@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryPlan.hpp"
+#include "directoryText.hpp"
 #include "session.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -115,6 +116,17 @@ namespace hc::compare
             else if (status == "Equal" || status == "BothSame" || status == "LeftChanged" || status == "LeftAdded") choice = "left";
             else if (status == "RightChanged" || status == "RightAdded") choice = "right";
             else if (status == "LeftDeleted" || status == "RightDeleted" || status == "BothDeleted") choice = "omit";
+            if (choice == "unresolved" && Comparison.directories_->size() == 3 && status == "Conflict")
+            {
+                std::array<storage::EntrySnapshot, 3> inputs; bool eligible = true;
+                for (std::size_t side = 0; side < 3; ++side)
+                {
+                    const auto& tree = (*Comparison.directories_)[side].entries_; const auto at = tree.constFind(path.toCaseFolded());
+                    if (at == tree.cend() || at->directory_ || QString::fromStdString(at->hints_.at("relativePath")) != path) { eligible = false; break; }
+                    inputs[side] = *at;
+                }
+                if (eligible && MergeDirectoryText(inputs, Input.encoding_, Limits)) choice = "merge";
+            }
             if ((choice == "left" || choice == "right") && !entry[choice].toObject()["present"].toBool()) choice = "omit";
             actions.append(QJsonObject{{"path", path}, {"choice", choice}, {"reason", status}}); selected.insert(path.toCaseFolded());
         }
@@ -123,7 +135,7 @@ namespace hc::compare
                 if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", QString::fromStdString(it->hints_.at("relativePath"))}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
         for (const auto& snapshot : *Comparison.directories_) ValidateDirectory(snapshot, Input.directory_, Limits);
         if (capturedOutput) ValidateDirectory(*capturedOutput, {}, Limits);
-        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 1}, {"roots", roots}, {"output", destination},
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", "myers-bounded-1"}, {"encoding", Input.encoding_}}}, {"roots", roots}, {"output", destination},
             {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
             {"overwrite", Input.overwrite_}, {"mirror", Input.mirror_}, {"actions", actions}};
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
