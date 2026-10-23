@@ -6,6 +6,7 @@
 #include "runtime/directoryApply.hpp"
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
+#include "runtime/semantic.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -33,6 +34,45 @@ private:
         return row.back();
     }
 private slots:
+    void semanticWorkerScopesAndTokens()
+    {
+        const QByteArray source = "namespace space {\nint first(int x) { return x; }\nstruct Type { int second() { return 2; } };\n}\nint space::Type::outside() { return 3; }\n";
+        const auto result = AnalyzeFunctions("sample.cpp", source);
+        QCOMPARE(result["status"].toString(), "Complete");
+        const auto functions = result["functions"].toArray(); QCOMPARE(functions.size(), 3);
+        QCOMPARE(functions[0].toObject()["name"].toString(), "space::first");
+        QCOMPARE(functions[1].toObject()["name"].toString(), "space::Type::second");
+        QCOMPARE(functions[2].toObject()["name"].toString(), "space::Type::outside");
+        QCOMPARE(functions[0].toObject()["line"].toInt(), 1);
+        const auto normal = AnalyzeFunctions("a.c", "int f(int x){ return x + 1; }")["functions"].toArray()[0].toObject();
+        const auto comment = AnalyzeFunctions("b.c", "int /* header */ f(int x) { /*body*/ return x+1; }")["functions"].toArray()[0].toObject();
+        QCOMPARE(normal["signature"], comment["signature"]); QCOMPARE(normal["body"], comment["body"]);
+        const auto changed = AnalyzeFunctions("b.c", "int f(int x) { return x + 2; }")["functions"].toArray()[0].toObject();
+        QCOMPARE(normal["signature"], changed["signature"]); QVERIFY(normal["body"] != changed["body"]);
+    }
+    void semanticWorkerUnicodeErrorsAndLimits()
+    {
+        const auto unicode = AnalyzeFunctions("a.cpp", QString::fromUtf8("// 한글😀\nint 함수() { return 1; }\n").toUtf8());
+        QCOMPARE(unicode["status"].toString(), "Complete");
+        const auto function = unicode["functions"].toArray()[0].toObject();
+        QCOMPARE(function["name"].toString(), QString::fromUtf8("함수")); QCOMPARE(function["begin"].toInt(), 14);
+        QCOMPARE(AnalyzeFunctions("a.txt", "int f(){}")["status"].toString(), "Unsupported");
+        const auto broken = AnalyzeFunctions("a.cpp", "int good() {return 1;}\nint bad( {\n");
+        QCOMPARE(broken["status"].toString(), "Partial"); QVERIFY(broken["syntaxErrors"].toBool());
+        QCOMPARE(broken["functions"].toArray().size(), 1);
+        std::atomic_bool cancel{true}; Budget canceled; canceled.canceled_ = &cancel;
+        QCOMPARE(AnalyzeFunctions("a.cpp", "", canceled)["reason"].toString(), "Canceled");
+        Budget expired; expired.deadline_ = std::chrono::steady_clock::now();
+        QCOMPARE(AnalyzeFunctions("a.cpp", "", expired)["reason"].toString(), "TimeLimit");
+        QCOMPARE(AnalyzeFunctions("a.cpp", QByteArray(16 * 1024 * 1024 + 1, ' '))["reason"].toString(), "InputLimit");
+        const auto anonymous = AnalyzeFunctions("a.cpp", "namespace { int f() {} } struct { int g() {} } value;");
+        QCOMPARE(anonymous["functions"].toArray().size(), 2);
+        Budget shortBudget; shortBudget.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+        QCOMPARE(AnalyzeFunctions("a.cpp", QByteArray(1024 * 1024, ' '), shortBudget)["reason"].toString(), "TimeLimit");
+        QProcess malformed; malformed.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-semantic"});
+        QVERIFY(malformed.waitForStarted()); malformed.write("{invalid}"); malformed.closeWriteChannel(); QVERIFY(malformed.waitForFinished());
+        QCOMPARE(malformed.exitCode(), 2); QVERIFY(malformed.readAllStandardOutput().isEmpty());
+    }
     void overviewTypesAndBoundaries()
     {
         const auto insertion = AlignmentMap::Build(0, 3, {{0, 0, 0, 3, {}}});

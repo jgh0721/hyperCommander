@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "runtime/semantic.hpp"
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
@@ -17,6 +18,7 @@ namespace
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv); app.setApplicationName("HyperCompare"); app.setOrganizationName("HyperTools"); app.setApplicationVersion("0.1.0");
+    if (app.arguments() == QStringList{app.arguments().front(), "-internal-semantic"}) return hc::compare::SemanticWorkerMain();
     SetConsoleCtrlHandler(control, TRUE);
     const auto parsed = hc::compare::Parse(app.arguments(), true); const auto& request = parsed.request_;
     if (!parsed.error_.isEmpty()) { print(parsed.error_.toUtf8() + '\n', stderr); return 2; }

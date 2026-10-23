@@ -1,4 +1,5 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
     core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
@@ -7,6 +8,7 @@ target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/semantic.cpp runtime/semantic.hpp
     runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp
@@ -33,7 +35,7 @@ target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 qt_add_executable(HyperCompare WIN32 main.cpp)
 target_link_libraries(HyperCompare PRIVATE hc_compare_widgets fmstyle)
 qt_add_executable(HyperCompareCli cliMain.cpp)
-target_link_libraries(HyperCompareCli PRIVATE hc_compare_runtime)
+target_link_libraries(HyperCompareCli PRIVATE hc_compare_runtime hc_compare_semantic_worker)
 foreach(target IN ITEMS hc_compare_core hc_compare_runtime hc_compare_widgets HyperCompare HyperCompareCli)
     target_compile_definitions(${target} PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
