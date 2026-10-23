@@ -6,6 +6,7 @@
 #include "decisionPlan.hpp"
 #include "mergeWork.hpp"
 #include "semantic.hpp"
+#include "engineRegistry.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -152,9 +153,10 @@ namespace hc::compare
 
     }
 
+    Snapshot ReadTextSnapshot(const QString& Path, const QString& Encoding, const Budget& Limits) { return load(Path, Encoding, Limits); }
     QJsonObject Capabilities()
     {
-        return {{"schemaVersion", 1}, {"phase", "foundation"}, {"textCompare2", true}, {"textCompare3", true},
+        return {{"schemaVersion", 1}, {"phase", "foundation"}, {"engineRegistry", EngineCatalog()}, {"textCompare2", true}, {"textCompare3", true},
             {"textMerge3", true}, {"textMerge2", "explicit-block-decisions-or-whole-side"}, {"directoryCompare2", true}, {"directoryCompare3", true}, {"directoryFilters", true}, {"directoryLevels", QJsonArray{"bytes", "metadata"}},
             {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
@@ -170,6 +172,12 @@ namespace hc::compare
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
+            if (Input.mode_ == "probe")
+            {
+                result.operation_ = "probe"; result.engineProbe_ = ProbeComparison(Input, limits);
+                result.exitCode_ = result.engineProbe_["available"].toBool() ? 0 : 2;
+                result.outcome_ = result.exitCode_ == 0 ? "Supported" : "Unsupported"; result.completion_ = "Complete"; return result;
+            }
             if (Input.mode_ == "apply")
             { auto request = Input; request.dryRun_ |= !Save; ApplyDirectoryPlan(request, result, limits); return result; }
             if (Input.mode_ != "directory-merge" && (!Input.planOut_.isEmpty() || !Input.decisions_.isEmpty()))
@@ -375,7 +383,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
-            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_},
+            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}};

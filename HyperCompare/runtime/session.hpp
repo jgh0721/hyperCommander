@@ -64,6 +64,7 @@ namespace hc::compare
         std::shared_ptr<const std::vector<DirectorySnapshot>> directories_;
         QJsonObject directoryPlan_;
         QJsonObject semantic_;
+        QJsonObject engineProbe_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;
@@ -78,4 +79,5 @@ namespace hc::compare
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8);
     int WriteReport(const Request& Input, const Result& Value);
     QJsonObject Capabilities();
+    Snapshot ReadTextSnapshot(const QString& Path, const QString& Encoding, const Budget& Limits);
 }

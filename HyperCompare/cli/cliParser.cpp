@@ -21,7 +21,7 @@ namespace hc::compare
         const auto value = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description, "value"}); };
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
-        value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities.");
+        value("mode", "auto, compare, merge, directory, directory-merge, apply, capabilities, probe.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
@@ -96,7 +96,8 @@ namespace hc::compare
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }
-        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "capabilities"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "apply", "capabilities", "probe"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (request.mode_ == "probe" && !request.headless_) return fail("Probe requires headless mode.");
         if (!QStringList{"text", "json"}.contains(request.format_)) return fail("Unsupported report format.");
         if (!request.encoding_.isEmpty() && !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(request.encoding_)) return fail("Unsupported encoding.");
         if (!request.theme_.isEmpty() && request.theme_ != "light" && request.theme_ != "dark") return fail("Invalid theme.");

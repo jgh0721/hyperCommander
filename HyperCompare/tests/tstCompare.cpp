@@ -7,6 +7,7 @@
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
 #include "runtime/semantic.hpp"
+#include "runtime/engineRegistry.hpp"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -35,6 +36,54 @@ private:
         return row.back();
     }
 private slots:
+    void engineRegistryContractsAndSignatures()
+    {
+        QSet<QString> ids;
+        for (const auto& engine : RegisteredEngines())
+        {
+            QVERIFY(!ids.contains(engine.id_)); ids.insert(engine.id_); QVERIFY(!engine.version_.isEmpty()); QVERIFY(!engine.locationSchema_.isEmpty());
+            if (engine.mergeTwo_ || engine.mergeBase_) QVERIFY(!engine.writer_.isEmpty());
+        }
+        QCOMPARE(FindComparisonEngine("text")->id_, "text.myers"); QVERIFY(!FindComparisonEngine("png"));
+        QCOMPARE(DetectResourceFormat("fake.png", "plain text"), "text");
+        QCOMPARE(DetectResourceFormat("fake.txt", QByteArray::fromHex("89504e470d0a1a0a")), "png");
+        QCOMPARE(DetectResourceFormat("a.DOCX", QByteArray::fromHex("504b0304")), "docx");
+        QCOMPARE(DetectResourceFormat("a.zip", QByteArray::fromHex("504b0506")), "zip");
+        QCOMPARE(DetectResourceFormat("a.txt", QByteArray::fromHex("610062")), "binary");
+        QCOMPARE(DetectResourceFormat("a.txt", QByteArray::fromHex("fffe6100")), "text");
+        QCOMPARE(Capabilities()["engineRegistry"].toObject()["schemaVersion"].toInt(), 1);
+    }
+    void engineProbeInputsAndLimits()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "probe"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        write(request.file1_, "hello\n"); write(request.file2_, "world\n"); auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto result = Execute(request, cancel, true); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.operation_, "probe");
+        QVERIFY(result.inputs_.isEmpty()); QVERIFY(!result.engineProbe_["outputValidated"].toBool());
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "full-text-decode");
+        QVERIFY(result.engineProbe_["mergeTwoAvailable"].toBool()); QCOMPARE(result.commit_, "NotRequested");
+        write(request.file2_, QByteArray::fromHex("89504e470d0a1a0a")); result = Execute(request, cancel, false);
+        QCOMPARE(result.exitCode_, 2); QCOMPARE(result.completion_, "Complete"); QCOMPARE(result.outcome_, "Unsupported");
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[1].toObject()["reason"].toString(), "NoRegisteredEngine");
+        write(request.file2_, QByteArray::fromHex("ff")); result = Execute(request, cancel, false); QCOMPARE(result.exitCode_, 2);
+        write(request.file1_, QByteArray::fromHex("6100")); write(request.file2_, QByteArray::fromHex("6200")); request.encoding_ = "UTF-16LE";
+        result = Execute(request, cancel, false); QCOMPARE(result.exitCode_, 0);
+        request.encoding_.clear(); write(request.file2_, QByteArray(16 * 1024 * 1024 + 1, 'a')); result = Execute(request, cancel, false);
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[1].toObject()["reason"].toString(), "InputSizeLimit");
+    }
+    void engineProbeDirectoryModesAndConsole()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "probe"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); request.file3_ = dir.filePath("third");
+        QVERIFY(QDir().mkpath(request.file1_)); QVERIFY(QDir().mkpath(request.file2_)); QVERIFY(QDir().mkpath(request.file3_));
+        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(result.engineProbe_["reason"].toString(), "IndependentThreeUnsupported");
+        request.base_ = request.file3_; request.file3_.clear(); result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(result.exitCode_, 0); QVERIFY(result.engineProbe_["mergeBaseAvailable"].toBool());
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "root-only");
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-mode", "probe", "-file1", request.file1_, "-file2", request.file2_, "-format", "json"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object(); QCOMPARE(report["engineProbe"].toObject()["engine"].toObject()["id"].toString(), "directory.native");
+        QVERIFY(!Parse({"hc", "-mode", "probe", "-file1", request.file1_, "-file2", request.file2_}, false).error_.isEmpty());
+    }
     void functionRelationsMovementAndModification()
     {
         const QByteArray a = "int a(){return 1;}\n", b = "int b(){return 2;}\n", c = "int c(){return 3;}\n";
