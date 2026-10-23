@@ -170,7 +170,8 @@ namespace hc::compare
         auto* find = editMenu->addAction(tr("찾기"), find_, &FindBar::Open); find->setShortcut(QKeySequence::Find);
         auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { find_->Find(false); }); findNext->setShortcut(QKeySequence("F3"));
         auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { find_->Find(true); }); findPrevious->setShortcut(QKeySequence("Shift+F3"));
-        findActions_ = {find, findNext, findPrevious}; for (auto* action : findActions_) action->setEnabled(false);
+        auto* findAll = editMenu->addAction(tr("모두 찾기"), find_, &FindBar::FindAll); findAll->setShortcut(QKeySequence("Ctrl+Shift+F"));
+        findActions_ = {find, findNext, findPrevious, findAll}; for (auto* action : findActions_) action->setEnabled(false);
         auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(Qt::Key_Escape)); closeFind->setEnabled(false); addAction(closeFind);
         connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
         connect(find_, &QToolBar::visibilityChanged, closeFind, &QAction::setEnabled);
@@ -814,7 +815,7 @@ namespace hc::compare
     void CompareWindow::applyAppearance()
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
-        qApp->setFont(uiFont_); changes_->setFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
+        qApp->setFont(uiFont_); changes_->setFont(listFont_); find_->SetListFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
         if (extensionView_) { extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();

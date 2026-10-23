@@ -9,6 +9,7 @@
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
 #include "widgets/findBar.hpp"
+#include <QDockWidget>
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
 #include "widgets/saveRecoveryDialog.hpp"
@@ -975,6 +976,63 @@ private slots:
         action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger();
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
+    }
+    void findAllHighlightsResultsAndInvalidation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.semantic_ = "off"; r.theme_ = "light";
+        const auto text = QString::fromUtf8("alpha alphabet Alpha\r\n한글😀 alpha\nlast alpha").toUtf8(); write(r.file1_, text); write(r.file2_, "prefix\n" + text);
+        CompareWindow window(r); window.resize(1200, 720); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* bar = window.findChild<FindBar*>();
+        auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* status = bar->findChild<QLabel*>("compareFindFeedback");
+        auto* rows = window.findChild<QTreeWidget*>("compareFindResults"); auto* dock = window.findChild<QDockWidget*>("compareFindResultsDock");
+        auto* word = bar->findChild<QCheckBox*>("compareFindWord"); auto* matchCase = bar->findChild<QCheckBox*>("compareFindCase");
+        left->send(SCI_SETSEL, 0, 0); left->send(SCI_SETINDICATORCURRENT, 7); left->send(SCI_SETINDICATORVALUE, 9);
+        left->send(SCI_SETTARGETRANGE, 2, 5); left->send(SCI_SETSEARCHFLAGS, SCFIND_MATCHCASE);
+        word->setChecked(true); matchCase->setChecked(false); query->setText("alpha"); bar->FindAll();
+        QTRY_COMPARE(status->text(), QString("4건 찾음")); QCOMPARE(rows->topLevelItemCount(), 4); QVERIFY(dock->isVisible());
+        QCOMPARE(rows->topLevelItem(2)->text(0), QString("2")); QCOMPARE(rows->topLevelItem(2)->text(1), QString("5"));
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 0), sptr_t(1));
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 6), sptr_t(0));
+        QCOMPARE(left->send(SCI_GETINDICATORCURRENT), sptr_t(7)); QCOMPARE(left->send(SCI_GETINDICATORVALUE), sptr_t(9));
+        QCOMPARE(left->send(SCI_GETTARGETSTART), sptr_t(2)); QCOMPARE(left->send(SCI_GETTARGETEND), sptr_t(5));
+        QCOMPARE(left->send(SCI_GETSEARCHFLAGS), sptr_t(SCFIND_MATCHCASE)); QCOMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(0));
+        QVERIFY(!left->send(SCI_GETMODIFY)); QVERIFY(!left->send(SCI_CANUNDO));
+        rows->setCurrentItem(rows->topLevelItem(3)); rows->setFocus(); QTest::keyClick(rows, Qt::Key_Return); QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(text.lastIndexOf("alpha")));
+        bar->Find(false); QTRY_COMPARE(left->send(SCI_GETSELECTIONSTART), sptr_t(0)); QCOMPARE(rows->topLevelItemCount(), 4);
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 0), sptr_t(1));
+        QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/find-all-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/find-all-dark.png"));
+        QCOMPARE(rows->topLevelItemCount(), 4); QCOMPARE(contents(left), text);
+        left->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("edit\n")); QCOMPARE(rows->topLevelItemCount(), 0);
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 5), sptr_t(0));
+        left->send(SCI_UNDO); QCOMPARE(contents(left), text);
+        query->setText(QString::fromUtf8("한글😀")); bar->FindAll(); QTRY_COMPARE(status->text(), QString("1건 찾음"));
+        QCOMPARE(rows->topLevelItem(0)->text(0), QString("2")); QVERIFY(rows->topLevelItem(0)->text(2).contains(QString::fromUtf8("한글😀")));
+        bar->Close(); QVERIFY(!dock->isVisible()); QCOMPARE(rows->topLevelItemCount(), 0);
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, searchMatchIndicator, text.indexOf(QString::fromUtf8("한글").toUtf8())), sptr_t(0)); window.close();
+    }
+    void findAllLimitsBoundaryAndCancel()
+    {
+        QMainWindow window; auto* editor = new ScintillaEditBase(&window); editor->setObjectName("TEXT"); window.setCentralWidget(editor);
+        auto* bar = new FindBar(&window); window.addToolBar(Qt::BottomToolBarArea, bar); bar->SetEditors({editor}); window.resize(1100, 600); window.show();
+        auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* status = bar->findChild<QLabel*>("compareFindFeedback");
+        auto* rows = window.findChild<QTreeWidget*>("compareFindResults"); bar->findChild<QCheckBox*>("compareFindWord")->setChecked(false);
+        setText(*editor, std::string(3000, 'a')); query->setText("a"); bar->FindAll();
+        QTRY_COMPARE(status->text(), QString("1000건 · 표시 제한")); QCOMPARE(rows->topLevelItemCount(), 1000);
+        QVERIFY(rows->topLevelItem(999)->text(2).size() <= 130);
+        QCOMPARE(editor->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 999), sptr_t(1)); QCOMPARE(editor->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 1000), sptr_t(0));
+        query->setText("missing"); QCOMPARE(rows->topLevelItemCount(), 0); QCOMPARE(editor->send(SCI_INDICATORVALUEAT, searchMatchIndicator, 0), sptr_t(0));
+        bar->FindAll(); QTRY_COMPARE(status->text(), QString("0건 찾음"));
+        const auto pattern = QString::fromUtf8("한글😀").toUtf8(); const auto chunk = 262144 / pattern.size();
+        QByteArray text(3 * chunk, 'x'); text.replace(chunk - 3, pattern.size(), pattern); text.replace(2 * chunk - 3, pattern.size(), pattern);
+        setText(*editor, text.toStdString()); query->setText(QString::fromUtf8(pattern)); bar->FindAll();
+        QTRY_COMPARE(status->text(), QString("2건 찾음")); QCOMPARE(rows->topLevelItem(0)->data(0, Qt::UserRole).toLongLong(), qlonglong(chunk - 3));
+        QCOMPARE(rows->topLevelItem(1)->data(0, Qt::UserRole).toLongLong(), qlonglong(2 * chunk - 3));
+        query->setText("x"); bar->FindAll(); bar->Close(); QTest::qWait(20); QCOMPARE(rows->topLevelItemCount(), 0);
+        bar->FindAll(); bar->SetBusy(true); QTest::qWait(20); QCOMPARE(rows->topLevelItemCount(), 0); QCOMPARE(status->text(), QString("검색 중단"));
+        bar->SetBusy(false); bar->SetEditors({}); QVERIFY(!bar->isVisible()); window.close();
     }
     void findNavigationOptionsAndUnicode()
     {
