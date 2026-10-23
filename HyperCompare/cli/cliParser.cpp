@@ -21,11 +21,11 @@ namespace hc::compare
         const auto value = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description, "value"}); };
         flag("help", "Show supported options."); flag("version", "Show product and CLI schema versions.");
         for (const auto& name : {"file1", "file2", "file3", "base", "output"}) value(name, "Path for this input/output role.");
-        value("mode", "auto, compare, merge, directory, capabilities.");
+        value("mode", "auto, compare, merge, directory, directory-merge, capabilities.");
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
-        value("planout", "Export a text merge decision template to a new JSON file (headless only).");
+        value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
         value("timeout-ms", "Request deadline in milliseconds (100..3600000).");
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
@@ -35,6 +35,7 @@ namespace hc::compare
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
         flag("overwrite", "Allow replacing an existing output, subject to revision validation.");
+        flag("mirror", "Directory plan: include removals for output-only paths; apply requires explicit deletion authorization.");
         flag("dryrun", "Compute without writing the merge output.");
         result.help_ = parser.helpText();
         const auto fail = [&](QString Text) { result.error_ = std::move(Text); return result; };
@@ -61,7 +62,7 @@ namespace hc::compare
         if (parser.isSet("directory-level")) request.directory_.level_ = parser.value("directory-level");
         if (request.directory_.level_ != "bytes" && request.directory_.level_ != "metadata") return fail("Invalid directory-level.");
         if ((parser.isSet("include") || parser.isSet("exclude") || parser.isSet("directory-level")) &&
-            !QStringList{"auto", "directory"}.contains(parser.isSet("mode") ? parser.value("mode") : "auto")) return fail("Directory options require auto or directory mode.");
+            !QStringList{"auto", "directory", "directory-merge"}.contains(parser.isSet("mode") ? parser.value("mode") : "auto")) return fail("Directory options require auto or directory mode.");
         request.planOut_ = parser.value("planout"); request.decisions_ = parser.value("decisions");
         for (const auto& name : {"planout", "decisions"})
             if (parser.isSet(name) && parser.value(name).isEmpty()) return fail("Empty path: " + QString(name));
@@ -71,9 +72,11 @@ namespace hc::compare
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);
         request.wait_ = parser.isSet("wait") || Console;
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
+        request.mirror_ = parser.isSet("mirror");
+        if (request.mirror_ && request.mode_ != "directory-merge") return fail("-mirror requires directory-merge.");
         const bool decisionOptions = !request.planOut_.isEmpty() || !request.decisions_.isEmpty();
-        if (decisionOptions && (!request.headless_ || request.mode_ != "merge")) return fail("-planout/-decisions require headless -mode merge.");
-        if (decisionOptions && !request.takeAll_.isEmpty()) return fail("-takeall cannot be combined with decision plan options.");
+        if (decisionOptions && (!request.headless_ || (request.mode_ != "merge" && request.mode_ != "directory-merge"))) return fail("-planout/-decisions require headless -mode merge.");
+        if (decisionOptions && request.mode_ != "directory-merge" && !request.takeAll_.isEmpty()) return fail("-takeall cannot be combined with decision plan options.");
         if (!request.planOut_.isEmpty() && !request.decisions_.isEmpty()) return fail("Use -planout and -decisions in separate requests.");
         if (!request.headless_ && (request.dryRun_ || parser.isSet("report") || parser.isSet("format")))
             return fail("-dryrun/-report/-format require headless mode in this version.");
@@ -83,7 +86,7 @@ namespace hc::compare
             bool valid = false; request.timeoutMs_ = parser.value("timeout-ms").toInt(&valid);
             if (!valid || request.timeoutMs_ < 100 || request.timeoutMs_ > 3600000) return fail("Invalid timeout-ms.");
         }
-        if (!QStringList{"auto", "compare", "merge", "directory", "capabilities"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
+        if (!QStringList{"auto", "compare", "merge", "directory", "directory-merge", "capabilities"}.contains(request.mode_)) return fail("Unsupported mode: " + request.mode_);
         if (!QStringList{"text", "json"}.contains(request.format_)) return fail("Unsupported report format.");
         if (!request.encoding_.isEmpty() && !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(request.encoding_)) return fail("Unsupported encoding.");
         if (!request.theme_.isEmpty() && request.theme_ != "light" && request.theme_ != "dark") return fail("Invalid theme.");
@@ -91,7 +94,13 @@ namespace hc::compare
         if (request.file1_.isEmpty() && request.file2_.isEmpty() && !request.headless_ && Arguments.size() == 1) return result;
         if (request.file1_.isEmpty() || request.file2_.isEmpty()) return fail("Both -file1 and -file2 are required.");
         if (!request.base_.isEmpty() && !request.file3_.isEmpty()) return fail("-base and -file3 are mutually exclusive.");
-        if (request.mode_ == "merge")
+        if (request.mode_ == "directory-merge")
+        {
+            if (!request.headless_ || request.planOut_.isEmpty() || request.output_.isEmpty() || !request.decisions_.isEmpty() || !request.file3_.isEmpty() || request.dryRun_)
+                return fail("directory-merge requires headless -planout and -output; use -base for three-way.");
+            if (!request.takeAll_.isEmpty() && (!request.base_.isEmpty() || (request.takeAll_ != "left" && request.takeAll_ != "right"))) return fail("Invalid directory selection.");
+        }
+        else if (request.mode_ == "merge")
         {
             if (request.output_.isEmpty() || !request.file3_.isEmpty()) return fail("Merge requires -output and does not accept -file3.");
             if (!request.takeAll_.isEmpty() && (!request.base_.isEmpty() || (request.takeAll_ != "left" && request.takeAll_ != "right"))) return fail("-takeall left|right is only valid for two-way merge.");

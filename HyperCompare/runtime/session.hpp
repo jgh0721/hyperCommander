@@ -19,6 +19,7 @@ namespace hc::compare
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
+        bool mirror_ = false;
         bool help_ = false, version_ = false;
         DirectoryPolicy directory_;
         int timeoutMs_ = 60000;
@@ -58,6 +59,7 @@ namespace hc::compare
         std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;
         std::shared_ptr<const std::vector<DirectorySnapshot>> directories_;
+        QJsonObject directoryPlan_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;

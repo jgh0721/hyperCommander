@@ -2,6 +2,7 @@
 #include "core/compare.hpp"
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
+#include "runtime/directoryPlan.hpp"
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
 #include <QtTest>
@@ -779,6 +780,46 @@ private slots:
         write(r.file1_, QByteArray::fromHex("ff00")); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
         write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
+    }
+    void directoryPlanExportAndChoices()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_));
+        write(r.file1_ + "/equal", "same"); write(r.file2_ + "/equal", "same"); write(r.file1_ + "/one", "left"); write(r.file2_ + "/one", "right");
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, true);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.outcome_, QString("Planned"));
+        QCOMPARE(result.exitCode_, 1); QCOMPARE(result.Json()["unresolvedCount"].toInt(), 1); QVERIFY(!QFileInfo::exists(r.output_));
+        auto plan = QJsonDocument::fromJson(read(r.planOut_)).object(); QCOMPARE(plan["kind"].toString(), QString("HyperCompareDirectoryPlan"));
+        const auto roots = plan["roots"].toArray(); QCOMPARE(roots.size(), qsizetype(2));
+        QCOMPARE(roots[0].toObject()["entries"].toArray()[0].toObject()["sha256"].toString().size(), qsizetype(64));
+        QCOMPARE(plan["actions"].toArray()[0].toObject()["choice"].toString(), QString("left"));
+        QCOMPARE(Execute(r, cancel, true).error_, QString("PlanAlreadyExists"));
+        r.planOut_ = dir.filePath("selected.json"); r.takeAll_ = "right";
+        result = Execute(r, cancel, true); QCOMPARE(result.exitCode_, 0);
+        for (const auto& action : result.directoryPlan_["actions"].toArray()) QCOMPARE(action.toObject()["choice"].toString(), QString("right"));
+        const auto parsed = Parse({"app", "-mode", "directory-merge", "-file1", r.file1_, "-file2", r.file2_, "-output", r.output_, "-planout", dir.filePath("cli.json"), "-takeall", "left"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_));
+    }
+    void directoryPlanBaseMirrorAndBoundaries()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true;
+        r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.base_ = dir.filePath("b"); r.output_ = dir.filePath("out"); r.planOut_ = dir.filePath("plan.json");
+        for (const auto& root : {r.file1_, r.file2_, r.base_, r.output_}) QVERIFY(QDir().mkpath(root));
+        write(r.file1_ + "/a", "new"); write(r.file2_ + "/a", "old"); write(r.base_ + "/a", "old");
+        write(r.output_ + "/extra", "preserve");
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, true);
+        QCOMPARE(result.exitCode_, 0); QCOMPARE(result.directoryPlan_["actions"].toArray().size(), qsizetype(1));
+        QCOMPARE(result.directoryPlan_["actions"].toArray()[0].toObject()["choice"].toString(), QString("left"));
+        r.planOut_ = dir.filePath("mirror.json"); r.mirror_ = true; result = Execute(r, cancel, true);
+        QCOMPARE(result.directoryPlan_["actions"].toArray().size(), qsizetype(2)); QCOMPARE(read(r.output_ + "/extra"), QByteArray("preserve"));
+        r.output_ = r.file1_ + "/inside"; QCOMPARE(Execute(r, cancel, true).error_, QString("DirectoryOutputOverlapsInput"));
+        r.output_ = dir.path(); QCOMPARE(Execute(r, cancel, true).error_, QString("DirectoryArtifactOverlapsRoot"));
+        r.output_ = dir.filePath("out"); r.planOut_ = r.file1_ + "/plan.json";
+        QCOMPARE(Execute(r, cancel, true).error_, QString("DirectoryArtifactOverlapsRoot"));
+        for (const auto& suffix : {"../escape", "NUL", "name.", "name ", "file:stream"})
+            QVERIFY_EXCEPTION_THROWN(CheckedDirectoryPath(dir.path() + '/' + suffix), Failure);
+        QVERIFY(!DirectoryPathsOverlap(dir.path() + "/a", dir.path() + "/abc"));
     }
     void directoryThreeWayStates()
     {

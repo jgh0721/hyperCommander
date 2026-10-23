@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
 #include "directory.hpp"
+#include "directoryPlan.hpp"
 #include "decisionPlan.hpp"
 #include "mergeWork.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -157,7 +158,7 @@ namespace hc::compare
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
-            {"directoryMerge", false}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
+            {"directoryMerge", false}, {"directoryPlans", true}, {"directoryPlanSchema", 1}, {"sourceMovement", false}, {"image", false}, {"office", false}, {"archive", false},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
@@ -167,7 +168,7 @@ namespace hc::compare
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
-            if (!Input.planOut_.isEmpty() || !Input.decisions_.isEmpty())
+            if (Input.mode_ != "directory-merge" && (!Input.planOut_.isEmpty() || !Input.decisions_.isEmpty()))
             {
                 if (!Input.headless_ || Input.mode_ != "merge" || !Input.takeAll_.isEmpty() ||
                     (!Input.planOut_.isEmpty() && !Input.decisions_.isEmpty())) throw Failure("InvalidDecisionOptions");
@@ -177,8 +178,16 @@ namespace hc::compare
             const auto first = require(reader(Input.file1_)->Resolve(locator(Input.file1_), context(limits)).get());
             const auto second = require(reader(Input.file2_)->Resolve(locator(Input.file2_), context(limits)).get());
             if (first.directory_ != second.directory_) throw Failure("MixedInputKinds");
-            if (Input.mode_ == "directory" || (Input.mode_ == "auto" && first.directory_))
-            { CompareDirectory(Input, result, limits); }
+            if (Input.mode_ == "directory" || Input.mode_ == "directory-merge" || (Input.mode_ == "auto" && first.directory_))
+            {
+                CompareDirectory(Input, result, limits);
+                if (Input.mode_ == "directory-merge")
+                {
+                    if (!Input.headless_ || Input.planOut_.isEmpty() || !Input.decisions_.isEmpty()) throw Failure("DirectoryPlanOptionsRequired");
+                    result.completion_ = "Complete"; ExportDirectoryPlan(Input, result, limits);
+                    result.operation_ = "directory-plan";
+                }
+            }
             else
             {
                 if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
@@ -357,11 +366,12 @@ namespace hc::compare
                 resolutions.append(QJsonObject{{"block", qint64(i + 1)}, {"choice", names.at(int(resolution))}});
             }
         }
+        for (const auto& action : directoryPlan_["actions"].toArray()) unresolved += action.toObject()["choice"] == "unresolved";
         return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_},
-            {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
+            {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}};
     }
