@@ -15,6 +15,7 @@ namespace hc::compare
         struct WorkerReservation { std::uint64_t bytes_ = 0; std::shared_ptr<void> lease_; };
         std::shared_ptr<void> Enter(std::uint64_t Limit);
         void Check();
+        std::shared_ptr<void> ReserveController(std::uint64_t Bytes);
         WorkerReservation TryWorker(std::uint64_t Maximum, std::uint64_t Minimum, std::uint64_t Overhead);
         std::uint64_t Reserved() const;
     private:

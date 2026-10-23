@@ -33,6 +33,8 @@ namespace hc::compare
             if (Texts.size() != Previous.inputs_.size() || Texts.size() < 2 || Texts.size() > 3) throw Failure("InvalidBufferCount");
             for (int i = 0; i < Texts.size(); ++i) { validate(Texts[i], Limits); Previous.inputs_[i].utf8_ = Texts[i]; }
             const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};
+            std::uint64_t textBytes = 0; for (const auto& text : Texts) textBytes += std::uint64_t(text.size());
+            const auto reservation = ProcessControllerMemory()->ReserveController(textBytes * 3 + 32 * 1024 * 1024);
             bool equal = true;
             for (std::size_t slot = 0; slot < pairs.size(); ++slot)
             {

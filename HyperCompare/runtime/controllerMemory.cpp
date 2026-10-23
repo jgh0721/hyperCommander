@@ -45,6 +45,17 @@ namespace hc::compare
         const auto bytes = std::min(Maximum, available - Overhead);
         lease->bytes_ = bytes + Overhead; lease->child_ = bytes; reserved_ += lease->bytes_; workerBytes_ += bytes; return {bytes, lease};
     }
+    std::shared_ptr<void> ControllerMemory::ReserveController(std::uint64_t Bytes)
+    {
+        if (!Bytes) return {};
+        auto lease = std::make_shared<WorkerLease>(); lease->owner_ = shared_from_this();
+        std::lock_guard lock(mutex_); checkLocked(true);
+        const auto available = ceiling() - measured_;
+        if (reserved_ > available || Bytes > available - reserved_) throw Failure("ControllerMemoryLimit");
+        // Admission reservation only: once allocated these bytes are already
+        // included in private commit. Check must not add them a second time.
+        lease->bytes_ = Bytes; reserved_ += Bytes; return lease;
+    }
     std::uint64_t ControllerMemory::Reserved() const { std::lock_guard lock(mutex_); return reserved_; }
     std::shared_ptr<ControllerMemory> ProcessControllerMemory()
     {

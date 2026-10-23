@@ -673,6 +673,26 @@ private slots:
         QCOMPARE(admitted, 5); QCOMPARE(reserved, 800 * mib); QCOMPARE(pool->Reserved(), std::uint64_t(0));
         scope.reset(); QVERIFY_EXCEPTION_THROWN(pool->Enter(255 * mib), Failure);
     }
+    void controllerReservationsAndStreamingReport()
+    {
+        constexpr std::uint64_t mib = 1024 * 1024; std::uint64_t measured = 100 * mib;
+        auto pool = std::make_shared<ControllerMemory>([&] { return measured; }); auto scope = pool->Enter(256 * mib);
+        auto first = pool->ReserveController(100 * mib); QCOMPARE(pool->Reserved(), 100 * mib);
+        QVERIFY_EXCEPTION_THROWN(pool->ReserveController(57 * mib), Failure);
+        QVERIFY(!pool->TryWorker(64 * mib, 64 * mib, 0).lease_);
+        measured = 200 * mib; pool->Check(); first.reset(); QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        { auto last = pool->ReserveController(56 * mib); QVERIFY_EXCEPTION_THROWN(pool->ReserveController(1), Failure); }
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        QTemporaryDir dir; Request request; request.format_ = "json"; request.report_ = dir.filePath("report.json");
+        Result result; result.operation_ = "directory2"; result.completion_ = "Complete"; result.exitCode_ = 0;
+        for (int i = 0; i < 20000; ++i) result.entries_.append(QJsonObject{{"path", QString("한글/quote\"%1.txt").arg(i)}, {"status", "Equivalent"}});
+        QCOMPARE(WriteReport(request, result), 0);
+        QCOMPARE(QJsonDocument::fromJson(read(request.report_)).object(), result.Json());
+        QCOMPARE(result.Json(false, false)["entries"].toArray().size(), 0);
+        SaveComparisonReport(dir.filePath("gui.json"), request, result, {{"scope", "test"}}, false, {});
+        const auto gui = QJsonDocument::fromJson(read(dir.filePath("gui.json"))).object();
+        QCOMPARE(gui["entries"], result.Json()["entries"]); QCOMPARE(gui["viewState"].toObject()["scope"].toString(), QString("test"));
+    }
     void controllerMemoryCliAndRequest()
     {
         for (const auto& value : {"255", "2049", "0", "-1", "256.5", "bad"})

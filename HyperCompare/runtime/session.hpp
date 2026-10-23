@@ -92,7 +92,7 @@ namespace hc::compare
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;
         bool inputsChanged_ = false;
-        QJsonObject Json(bool IncludeContent = false) const;
+        QJsonObject Json(bool IncludeContent = false, bool IncludeEntries = true) const;
     };
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save);
     Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,

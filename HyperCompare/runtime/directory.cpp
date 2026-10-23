@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "directory.hpp"
 #include "session.hpp"
+#include "controllerMemory.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include <QDir>
@@ -123,11 +124,26 @@ namespace hc::compare
             constexpr qsizetype maxTextBytes = 16 * 1024 * 1024;
             if (A.size_ > maxTextBytes || B.size_ > maxTextBytes) return RawEqual ? "Equal" : "Different";
             const auto decode = [&](const storage::EntrySnapshot& Entry, const QString& Encoding) -> std::optional<QString> {
-                Limits.Check(); const auto snapshot = ReadFileSnapshot(QString::fromStdString(Entry.locator_.root_), maxTextBytes, Limits);
+                Limits.Check();
+                if (Encoding != "UTF-16LE" && Encoding != "UTF-16BE")
+                {
+                    // Reject obvious binary data before reading an entire DLL,
+                    // library or image merely to discover a NUL during decoding.
+                    const auto provider = reader(QString::fromStdString(Entry.locator_.root_)); const auto ctx = context(Limits);
+                    const auto bound = require(provider->Resolve(Entry.locator_, ctx).get());
+                    if (bound.id_.revision_ != Entry.id_.revision_) throw Failure("ChangedDuringRead");
+                    const auto stream = require(provider->OpenRead(bound.id_, ctx).get());
+                    const auto prefix = require(stream->Read(4096, ctx).get());
+                    const QByteArray probe(reinterpret_cast<const char*>(prefix.bytes_.data()), qsizetype(prefix.bytes_.size()));
+                    if (require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != Entry.id_.revision_) throw Failure("ChangedDuringRead");
+                    if (!probe.startsWith("\xff\xfe") && !probe.startsWith("\xfe\xff") && probe.contains('\0')) return {};
+                }
+                const auto snapshot = ReadFileSnapshot(QString::fromStdString(Entry.locator_.root_), maxTextBytes, Limits);
                 if (snapshot.entry_.id_.revision_ != Entry.id_.revision_) throw Failure("ChangedDuringRead");
                 const auto& raw = snapshot.raw_;
                 const auto bom = raw.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : raw.startsWith("\xff\xfe") ? QString("UTF-16LE") : raw.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
                 if (!Encoding.isEmpty() && !bom.isEmpty() && Encoding != bom) return {};
+                const auto reservation = ProcessControllerMemory()->ReserveController(std::uint64_t(raw.size()) * 2 + 2 * 1024 * 1024);
                 const auto decoded = document::DecodeDocumentText(raw, Encoding.isEmpty() ? (bom.isEmpty() ? QString("UTF-8") : bom) : Encoding);
                 Limits.Check(); if (!decoded.HasValue()) return {};
                 return decoded.Value().text_;

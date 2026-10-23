@@ -52,6 +52,8 @@
 #include <QUuid>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
+#include <Windows.h>
+#include <psapi.h>
 
 using namespace hc::compare;
 class CompareUiTests final : public QObject
@@ -831,7 +833,11 @@ private slots:
     {
         const auto leftPath = qEnvironmentVariable("HC_COMPARE_LARGE_LEFT"), rightPath = qEnvironmentVariable("HC_COMPARE_LARGE_RIGHT");
         if (leftPath.isEmpty() || rightPath.isEmpty()) QSKIP("Set HC_COMPARE_LARGE_LEFT/RIGHT for the local large-directory acceptance test");
-        Request r; r.mode_ = "directory"; r.file1_ = leftPath; r.file2_ = rightPath; r.timeoutMs_ = 0;
+        Request r; r.mode_ = "directory"; r.file1_ = leftPath; r.file2_ = rightPath; r.timeoutMs_ = 0; r.directory_.level_ = qEnvironmentVariable("HC_COMPARE_LARGE_LEVEL", "bytes");
+        std::uint64_t peakPrivate = 0; QTimer sampler;
+        connect(&sampler, &QTimer::timeout, &sampler, [&] { PROCESS_MEMORY_COUNTERS_EX counters{}; counters.cb = sizeof(counters);
+            if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) peakPrivate = std::max<std::uint64_t>(peakPrivate, counters.PrivateUsage); });
+        sampler.start(100);
         QElapsedTimer elapsed; elapsed.start(); CompareWindow window(r); window.resize(1400, 850); window.show();
         auto* tree = window.findChild<QTreeView*>("directoryLeftTree");
         QTest::qWait(100);
@@ -847,7 +853,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLabel*>("compareStatus")->text().startsWith("디렉터리 비교") || window.ExitCode() == 2, 1200000);
         auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel")); QVERIFY(model);
         QVERIFY(model->VisibleEntries() > 100000); QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("디렉터리 비교"));
-        qInfo("Large directory GUI ready: %lld ms, %d entries", elapsed.elapsed(), model->VisibleEntries());
+        qInfo("Large directory GUI ready: %lld ms, %d entries, sampled peak private %llu bytes", elapsed.elapsed(), model->VisibleEntries(), peakPrivate);
         ProcessControllerMemory()->Check();
         auto* view = static_cast<DirectoryView*>(window.findChild<QWidget*>("directoryView"));
         view->NavigateDifference(1); QVERIFY(tree->currentIndex().isValid());

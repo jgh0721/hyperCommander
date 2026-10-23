@@ -17,6 +17,7 @@
 #include "commonLibs/document/documentSaveCoordinator.hpp"
 #include <QCryptographicHash>
 #include <QFile>
+#include <QBuffer>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QSaveFile>
@@ -81,6 +82,7 @@ namespace hc::compare
             if (result.entry_.directory_) throw Failure("ExpectedFile");
             if (result.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseInputUnsupported");
             if (result.entry_.size_ > std::uint64_t(MaxBytes)) throw Failure("InputSizeLimit");
+            const auto reservation = ProcessControllerMemory()->ReserveController(result.entry_.size_ * 2 + 1024 * 1024);
             const auto stream = require(provider->OpenRead(result.entry_.id_, ctx).get());
             for (;;)
             {
@@ -97,6 +99,7 @@ namespace hc::compare
         Snapshot load(const QString& Path, const QString& Encoding, const Budget& Limits, bool AllowMissing = false)
         {
             auto result = readSnapshot(Path, textLimit, Limits, AllowMissing);
+            const auto reservation = ProcessControllerMemory()->ReserveController(std::uint64_t(result.raw_.size()) * 6 + 4 * 1024 * 1024);
             auto encoding = Encoding;
             const auto bomEncoding = result.raw_.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : result.raw_.startsWith("\xff\xfe") ? QString("UTF-16LE") : result.raw_.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
             if (!Encoding.isEmpty() && !bomEncoding.isEmpty() && Encoding != bomEncoding) throw Failure("EncodingBomMismatch");
@@ -428,7 +431,7 @@ namespace hc::compare
             else Value.warnings_.append("SaveRecoveryJournalCleanupFailed");
         }
     }
-    QJsonObject Result::Json(bool IncludeContent) const
+    QJsonObject Result::Json(bool IncludeContent, bool IncludeEntries) const
     {
         QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
         for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"exists", input.exists_}, {"encoding", input.encoding_}, {"bom", input.bom_},
@@ -461,10 +464,32 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString(textEngineVersion) : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_}, {"textComparison", textComparison_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && directoryComplete_ && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
-            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_.Json()}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
+            {"changes", changes}, {"conflicts", conflicts}, {"entries", IncludeEntries ? entries_.Json() : QJsonArray{}}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}, {"saveRecovery", saveRecovery_}};
+    }
+    namespace
+    {
+        bool writeJsonReport(QIODevice& Output, QJsonObject Metadata, const DirectoryEntries& Entries,
+            const Budget& Limits, qint64 Maximum = std::numeric_limits<qint64>::max())
+        {
+            Limits.Check(); Metadata.remove("entries");
+            auto header = QJsonDocument(Metadata).toJson(QJsonDocument::Compact); header.chop(1); header += ",\"entries\":[";
+            qint64 written = 0;
+            const auto put = [&](const QByteArray& Bytes) {
+                Limits.Check(); if (Bytes.size() > Maximum - written) throw Failure("ReportSizeLimit");
+                if (Output.write(Bytes) != Bytes.size()) return false; written += Bytes.size(); return true;
+            };
+            if (!put(header)) return false;
+            bool first = true;
+            for (const auto& row : Entries)
+            {
+                Limits.Check(); auto data = QJsonDocument(row.toObject()).toJson(QJsonDocument::Compact);
+                if (!first) data.prepend(','); first = false; if (!put(data)) return false;
+            }
+            return put("]}\n");
+        }
     }
     ReportFile SaveComparisonReport(const QString& Path, const Request& Input, const Result& Session,
         const QJsonObject& ViewState, bool ReplaceExisting, const Budget& OriginalLimits)
@@ -487,12 +512,14 @@ namespace hc::compare
                 if (!identity(*entry).isEmpty() && identity(*entry) == identity(input.entry_)) throw Failure("ArtifactPathAlias");
             expected = {true, entry->id_.revision_};
         }
-        auto report = Session.Json(false); report["reportKind"] = "gui-comparison-snapshot"; report["viewState"] = ViewState;
+        const auto reservation = ProcessControllerMemory()->ReserveController(128 * 1024 * 1024);
+        auto report = Session.Json(false, false); report["reportKind"] = "gui-comparison-snapshot"; report["viewState"] = ViewState;
         auto extension = report["extension"].toObject(); auto documents = extension["documents"].toArray();
         for (int i = 0; i < documents.size(); ++i) { auto document = documents[i].toObject(); document.remove("rgba"); documents[i] = document; }
         if (extension.contains("documents")) { extension["documents"] = documents; report["extension"] = extension; }
-        const auto data = QJsonDocument(report).toJson(QJsonDocument::Indented);
-        if (data.size() > 64 * 1024 * 1024) throw Failure("ReportSizeLimit"); Limits.Check();
+        QByteArray data; QBuffer buffer(&data); buffer.open(QIODevice::WriteOnly);
+        if (!writeJsonReport(buffer, std::move(report), Session.entries_, Limits, 64 * 1024 * 1024)) throw Failure("ReportWriteFailed");
+        Limits.Check();
         ReportFile file; SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
         const auto saved = document::SaveDocumentBytes(*writer, locator(target), expected,
             {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
@@ -504,54 +531,62 @@ namespace hc::compare
     int WriteReport(const Request& Input, const Result& Value)
     {
         if (Input.mode_ == "recover" && !Input.report_.isEmpty() && Input.report_ != "-") return 2;
-        QByteArray data = Input.format_ == "json" ? QJsonDocument(Value.Json(Input.includeContent_)).toJson(QJsonDocument::Compact) + '\n'
-            : QString("%1: %2 (exit %3)%4\n").arg(Value.operation_, Value.outcome_).arg(Value.exitCode_).arg(Value.error_.isEmpty() ? QString{} : ": " + Value.error_).toUtf8();
-        if (Input.format_ != "json")
+        try
         {
-            for (const auto& path : Value.recovery_) data += "Recovery: " + path.toString().toUtf8() + '\n';
-            if (Value.saveRecovery_.contains("directory")) data += "Recovery directory: " + Value.saveRecovery_["directory"].toString().toUtf8() + '\n';
-            if (Value.saveRecovery_.contains("destination")) data += "Destination: " + Value.saveRecovery_["destination"].toString().toUtf8() +
-                " / phase: " + Value.saveRecovery_["phase"].toString().toUtf8() +
-                (Value.saveRecovery_["identitiesVerified"].toBool() ? " / identities checked\n" : " / preview only; identities not checked\n");
-        }
-        if (Input.report_.isEmpty() || Input.report_ == "-")
-        { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || output.write(data) != data.size() || !output.flush()) return 2; }
-        else
-        {
-            try
+            Budget limits; ConfigureMemoryBudget(limits, Input.memoryMiB_);
+            limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(60000, Input.timeoutMs_));
+            const auto write = [&](QIODevice& Output, const QByteArray& Text) {
+                return Input.format_ == "json" ? writeJsonReport(Output, Value.Json(Input.includeContent_, false), Value.entries_, limits) : Output.write(Text) == Text.size();
+            };
+            QByteArray data = QString("%1: %2 (exit %3)%4\n").arg(Value.operation_, Value.outcome_).arg(Value.exitCode_).arg(Value.error_.isEmpty() ? QString{} : ": " + Value.error_).toUtf8();
+            if (Input.format_ != "json")
             {
-                checkArtifactPaths(Input, Budget{});
-                CheckProtectedInputs(Input, {Input.report_}, {});
-                const auto report = CheckedDirectoryPath(Input.report_);
-                for (const auto& path : {Input.file1_, Input.file2_, Input.base_, Input.output_})
-                    if (!path.isEmpty() && QFileInfo(path).isDir() && DirectoryPathsOverlap(report, CheckedDirectoryPath(path))) return 2;
-                if (Input.mode_ == "apply")
-                {
-                    // Apply reports are written outside the reviewed input/output trees.
-                    const auto paths = Value.directoryPlan_;
-                    const auto target = paths["output"].toObject()["path"].toString();
-                    if (!target.isEmpty() && DirectoryPathsOverlap(report, CheckedDirectoryPath(target))) return 2;
-                    for (const auto& item : paths["roots"].toArray())
-                        if (DirectoryPathsOverlap(report, CheckedDirectoryPath(item.toObject()["path"].toString()))) return 2;
-                    for (const auto& path : {Input.applyPlan_, Input.journal_.isEmpty() ? Input.applyPlan_ + ".journal" : Input.journal_})
-                        if (report.compare(CheckedDirectoryPath(path), Qt::CaseInsensitive) == 0) return 2;
-                }
+                for (const auto& path : Value.recovery_) data += "Recovery: " + path.toString().toUtf8() + '\n';
+                if (Value.saveRecovery_.contains("directory")) data += "Recovery directory: " + Value.saveRecovery_["directory"].toString().toUtf8() + '\n';
+                if (Value.saveRecovery_.contains("destination")) data += "Destination: " + Value.saveRecovery_["destination"].toString().toUtf8() +
+                    " / phase: " + Value.saveRecovery_["phase"].toString().toUtf8() +
+                    (Value.saveRecovery_["identitiesVerified"].toBool() ? " / identities checked\n" : " / preview only; identities not checked\n");
             }
-            catch (...) { return 2; }
-            // Never replace a report that aliases source content through a hard link.
-            if (QFileInfo::exists(Input.report_))
+            if (Input.report_.isEmpty() || Input.report_ == "-")
+            { QFile output; if (!output.open(stdout, QIODevice::WriteOnly) || !write(output, data) || !output.flush()) return 2; }
+            else
             {
                 try
                 {
-                    const auto existing = require(reader(Input.report_)->Resolve(locator(Input.report_), {}).get());
-                    for (const auto& input : Value.inputs_)
-                        if (!identity(existing).isEmpty() && identity(existing) == identity(input.entry_)) return 2;
+                    checkArtifactPaths(Input, Budget{});
+                    CheckProtectedInputs(Input, {Input.report_}, {});
+                    const auto report = CheckedDirectoryPath(Input.report_);
+                    for (const auto& path : {Input.file1_, Input.file2_, Input.base_, Input.output_})
+                        if (!path.isEmpty() && QFileInfo(path).isDir() && DirectoryPathsOverlap(report, CheckedDirectoryPath(path))) return 2;
+                    if (Input.mode_ == "apply")
+                    {
+                        // Apply reports are written outside the reviewed input/output trees.
+                        const auto paths = Value.directoryPlan_;
+                        const auto target = paths["output"].toObject()["path"].toString();
+                        if (!target.isEmpty() && DirectoryPathsOverlap(report, CheckedDirectoryPath(target))) return 2;
+                        for (const auto& item : paths["roots"].toArray())
+                            if (DirectoryPathsOverlap(report, CheckedDirectoryPath(item.toObject()["path"].toString()))) return 2;
+                        for (const auto& path : {Input.applyPlan_, Input.journal_.isEmpty() ? Input.applyPlan_ + ".journal" : Input.journal_})
+                            if (report.compare(CheckedDirectoryPath(path), Qt::CaseInsensitive) == 0) return 2;
+                    }
                 }
                 catch (...) { return 2; }
+                // Never replace a report that aliases source content through a hard link.
+                if (QFileInfo::exists(Input.report_))
+                {
+                    try
+                    {
+                        const auto existing = require(reader(Input.report_)->Resolve(locator(Input.report_), {}).get());
+                        for (const auto& input : Value.inputs_)
+                            if (!identity(existing).isEmpty() && identity(existing) == identity(input.entry_)) return 2;
+                    }
+                    catch (...) { return 2; }
+                }
+                QSaveFile output(Input.report_); output.setDirectWriteFallback(false);
+                if (!output.open(QIODevice::WriteOnly) || !write(output, data) || !output.commit()) return 2;
             }
-            QSaveFile output(Input.report_); output.setDirectWriteFallback(false);
-            if (!output.open(QIODevice::WriteOnly) || output.write(data) != data.size() || !output.commit()) return 2;
+            return Value.exitCode_;
         }
-        return Value.exitCode_;
+        catch (...) { return 2; }
     }
 }
