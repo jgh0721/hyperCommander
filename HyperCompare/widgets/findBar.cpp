@@ -1,5 +1,9 @@
 ﻿#include "stdafx.h"
 #include "findBar.hpp"
+#include "runtime/workerHost.hpp"
+#include "runtime/controllerMemory.hpp"
+#include <QtConcurrentRun>
+#include <QJsonArray>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -29,7 +33,7 @@ namespace hc::compare
         scope_ = new QComboBox(controls_); scope_->setObjectName("compareFindScope"); scope_->setAccessibleName(tr("검색 대상 패널"));
         label->setBuddy(scope_); layout->addWidget(scope_);
         query_ = new QLineEdit(controls_); query_->setObjectName("compareFindText"); query_->setMaxLength(256);
-        query_->setToolTip(tr("일반 문자열 검색 · 최대 256자"));
+        query_->setToolTip(tr("문자열·정규식 검색 · 최대 256자 · 확장 검색 최대 1,000건 / 5초"));
         query_->setAccessibleName(tr("찾을 문자열")); query_->setPlaceholderText(tr("찾을 문자열 — Enter: 다음, Shift+Enter: 이전"));
         query_->setClearButtonEnabled(true); query_->setMinimumWidth(160); layout->addWidget(query_, 1);
         auto button = [this, layout](const QString& Text, const QString& Name) {
@@ -39,6 +43,8 @@ namespace hc::compare
         auto* next = button(tr("다음"), "compareFindNext"); next->setToolTip(tr("다음 찾기 (F3)"));
         auto* all = button(tr("모두 찾기"), "compareFindAll"); all->setToolTip(tr("일치 구간 강조와 결과 목록 · 최대 1,000건"));
         case_ = new QCheckBox(tr("대소문자"), controls_); case_->setObjectName("compareFindCase"); layout->addWidget(case_);
+        regex_ = new QCheckBox(tr("정규식"), controls_); regex_->setObjectName("compareFindRegex"); layout->addWidget(regex_);
+        connect(regex_, &QCheckBox::toggled, this, &FindBar::clearFeedback);
         word_ = new QCheckBox(tr("단어 단위"), controls_); word_->setObjectName("compareFindWord"); layout->addWidget(word_);
         QSettings settings; case_->setChecked(settings.value("find/caseSensitive", false).toBool());
         word_->setChecked(settings.value("find/wholeWord", false).toBool());
@@ -60,25 +66,31 @@ namespace hc::compare
             resultsDock_ = new QDockWidget(tr("검색 결과"), main); resultsDock_->setObjectName("compareFindResultsDock");
             resultsDock_->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
             results_ = new QTreeWidget(resultsDock_); results_->setObjectName("compareFindResults");
-            results_->setAccessibleName(tr("검색 결과 목록")); results_->setHeaderLabels({tr("줄"), tr("열"), tr("내용")});
+            results_->setAccessibleName(tr("검색 결과 목록")); results_->setHeaderLabels({tr("줄"), tr("열"), tr("내용"), tr("패널")});
             results_->setRootIsDecorated(false); results_->setUniformRowHeights(true); results_->setSelectionMode(QAbstractItemView::SingleSelection);
             results_->setToolTip(tr("결과를 두 번 클릭하거나 Enter를 눌러 이동합니다."));
             results_->header()->setSectionResizeMode(0, QHeaderView::Interactive); results_->setColumnWidth(0, 75);
-            results_->header()->setSectionResizeMode(1, QHeaderView::Interactive); results_->setColumnWidth(1, 75); results_->header()->setStretchLastSection(true);
+            results_->header()->setSectionResizeMode(1, QHeaderView::Interactive); results_->setColumnWidth(1, 75); results_->header()->setStretchLastSection(false);
+            results_->header()->setSectionResizeMode(2, QHeaderView::Stretch); results_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
             resultsDock_->setWidget(results_); main->addDockWidget(Qt::BottomDockWidgetArea, resultsDock_); resultsDock_->hide();
             connect(results_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* Item) {
-                if (busy_ || search_ || !resultEditor_ || resultEditor_ != editor()) return;
+                if (busy_ || search_ || extended_.isRunning()) return;
+                const int panel = Item->data(2, Qt::UserRole).toInt();
+                if (panel < 0 || panel >= editors_.size() || !editors_[panel]) return;
+                auto* resultEditor = editors_[panel].data();
                 const auto begin = Item->data(0, Qt::UserRole).toLongLong(), end = Item->data(1, Qt::UserRole).toLongLong();
-                resultEditor_->send(SCI_SETSEL, uptr_t(begin), sptr_t(end)); resultEditor_->send(SCI_SCROLLCARET); resultEditor_->setFocus();
+                resultEditor->send(SCI_SETSEL, uptr_t(begin), sptr_t(end)); resultEditor->send(SCI_SCROLLCARET); resultEditor->setFocus();
             });
             connect(resultsDock_, &QDockWidget::visibilityChanged, this, [this](bool Visible) { if (!Visible) clearFeedback(); });
         }
         query_->installEventFilter(this); hide();
     }
+    FindBar::~FindBar() { if (extendedCanceled_) extendedCanceled_->store(true); extended_.waitForFinished(); }
+    bool FindBar::allPanels() const { return !editors_.isEmpty() && scope_->currentIndex() == editors_.size(); }
     ScintillaEditBase* FindBar::editor() const
     {
         const auto index = scope_->currentIndex();
-        return index >= 0 && index < editors_.size() ? editors_[index].data() : nullptr;
+        return index >= 0 && index < editors_.size() ? editors_[index].data() : allPanels() ? (activeEditor_ ? activeEditor_.data() : editors_.front().data()) : nullptr;
     }
     void FindBar::resetSearch()
     { timer_->stop(); search_.reset(); feedback_->clear(); if (results_) results_->setEnabled(!busy_); }
@@ -92,7 +104,7 @@ namespace hc::compare
             target->send(SCI_SETINDICATORCURRENT, uptr_t(current)); target->send(SCI_SETINDICATORVALUE, uptr_t(value));
         }
     }
-    void FindBar::clearFeedback() { resetSearch(); clearMatches(); }
+    void FindBar::clearFeedback() { ++searchGeneration_; if (extendedCanceled_) extendedCanceled_->store(true); resetSearch(); clearMatches(); lastZeroEditor_.clear(); lastZeroPosition_ = -1; }
     void FindBar::SetListFont(const QFont& Font) { if (results_) results_->setFont(Font); }
     void FindBar::styleMatches()
     {
@@ -116,10 +128,12 @@ namespace hc::compare
         {
             const int index = int(editors_.size()); editors_.push_back(value); scope_->addItem(value->objectName());
             connections_.push_back(connect(value, &ScintillaEditBase::focusChanged, this, [this, index](bool Focused) {
-                if (Focused) scope_->setCurrentIndex(index);
+                if (Focused) { activeEditor_ = editors_[index]; if (!allPanels()) scope_->setCurrentIndex(index); }
             }));
             connections_.push_back(connect(value, &ScintillaEditBase::notifyChange, this, &FindBar::clearFeedback));
         }
+        activeEditor_ = editors_.isEmpty() ? nullptr : editors_.front();
+        if (!editors_.isEmpty()) scope_->addItem(tr("전체 패널"));
         if (editors_.isEmpty()) hide();
         styleMatches(); SetBusy(busy_);
     }
@@ -167,6 +181,7 @@ namespace hc::compare
         auto* target = editor(); if (busy_ || !target) return;
         if (query_->text().isEmpty()) { Open(); return; }
         if (query_->text().contains(QChar::Null)) { show(); feedback_->setText(tr("검색어 확인 필요")); return; }
+        if (regex_->isChecked() || allPanels()) { findExtended(false, Backwards); return; }
         resetSearch(); search_.emplace(); auto& search = *search_;
         search.editor_ = target; search.text_ = query_->text().toUtf8(); search.backwards_ = Backwards;
         search.length_ = target->send(SCI_GETLENGTH);
@@ -180,6 +195,7 @@ namespace hc::compare
     void FindBar::FindAll()
     {
         if (busy_ || !editor()) return;
+        if (regex_->isChecked() || allPanels()) { findExtended(true, false); return; }
         clearFeedback(); Find(false); if (!search_) return;
         search_->all_ = true; search_->cursor_ = 0; resultEditor_ = editor(); styleMatches();
         if (results_) results_->setEnabled(false);
@@ -189,6 +205,101 @@ namespace hc::compare
             if (opening) if (auto* main = qobject_cast<QMainWindow*>(parentWidget()))
                 main->resizeDocks({resultsDock_}, {std::clamp(main->height() / 4, 120, 220)}, Qt::Vertical);
         }
+    }
+    void FindBar::findExtended(bool All, bool Backwards)
+    {
+        if (busy_ || !editor() || query_->text().isEmpty()) return;
+        if (extended_.isRunning()) { clearFeedback(); feedback_->setText(tr("이전 검색 취소 중 — 다시 실행하십시오.")); return; }
+        const int active = editors_.indexOf(editor()); auto cursor = editor()->send(Backwards ? SCI_GETSELECTIONSTART : SCI_GETSELECTIONEND);
+        if (!All && lastZeroEditor_ == editor() && lastZeroPosition_ == cursor) cursor += Backwards ? -1 : 1;
+        if (All) clearFeedback(); else { ++searchGeneration_; resetSearch(); }
+        const auto generation = searchGeneration_; extendedCanceled_ = std::make_shared<std::atomic_bool>(false);
+        QVector<QPair<int, QByteArray>> texts; QVector<QPair<sptr_t, sptr_t>> selections;
+        for (const auto& target : editors_) selections.push_back({target->send(SCI_GETANCHOR), target->send(SCI_GETCURRENTPOS)});
+        try
+        {
+            std::uint64_t total = 0; for (int i = 0; i < editors_.size(); ++i) if (allPanels() || i == active) total += editors_[i]->send(SCI_GETLENGTH);
+            const auto reservation = ProcessControllerMemory()->ReserveController(total + 1024 * 1024);
+            for (int i = 0; i < editors_.size(); ++i) if (allPanels() || i == active)
+            {
+                auto* target = editors_[i].data(); const auto length = target->send(SCI_GETLENGTH);
+                if (length > 16 * 1024 * 1024) throw Failure("SearchInputLimit");
+                QByteArray bytes(qsizetype(length) + 1, '\0'); target->send(SCI_GETTEXT, bytes.size(), reinterpret_cast<sptr_t>(bytes.data())); bytes.chop(1);
+                texts.push_back({i, std::move(bytes)});
+            }
+        }
+        catch (const std::exception& error) { feedback_->setText(QString::fromUtf8(error.what())); return; }
+        show(); feedback_->setText(tr("검색 중…")); if (results_) results_->setEnabled(false);
+        if (All && resultsDock_) { resultsDock_->setWindowTitle(tr("검색 결과 — %1").arg(scope_->currentText())); resultsDock_->show(); }
+        disconnect(&extended_, nullptr, this, nullptr);
+        connect(&extended_, &QFutureWatcher<QJsonObject>::finished, this, [this, generation, All, Backwards, active, cursor, selections] {
+            if (generation != searchGeneration_ || busy_) return;
+            for (int i = 0; i < editors_.size(); ++i)
+                if (editors_[i]->send(SCI_GETANCHOR) != selections[i].first || editors_[i]->send(SCI_GETCURRENTPOS) != selections[i].second)
+                { clearFeedback(); feedback_->setText(tr("선택 변경으로 검색 중단")); return; }
+            showExtendedResult(extended_.result(), All, Backwards, active, cursor);
+        });
+        extended_.setFuture(QtConcurrent::run([texts = std::move(texts), query = query_->text(), regex = regex_->isChecked(), matchCase = case_->isChecked(), word = word_->isChecked(), cancel = extendedCanceled_, All, active, cursor] {
+            try
+            {
+                Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5); ConfigureMemoryBudget(limits, 2048);
+                QJsonArray matches; bool limited = false;
+                for (const auto& text : texts)
+                {
+                    limits.Check(); const auto reservation = ProcessControllerMemory()->ReserveController(std::uint64_t(text.second.size()) * 6 + 1024 * 1024);
+                    WorkerPolicy policy; policy.timeoutMs_ = 5000; policy.requestBytes_ = 32 * 1024 * 1024;
+                    const auto result = RunWorker("search.text", {{"text", QString::fromLatin1(text.second.toBase64())}, {"query", query}, {"regex", regex}, {"case", matchCase}, {"word", word}, {"maximum", 1000 - matches.size()}, {"all", All}, {"cursor", qint64(text.first == active ? cursor : 0)}}, limits, policy);
+                    if (result["status"] == "Unavailable") return result;
+                    for (const auto& value : result["matches"].toArray()) { auto hit = value.toObject(); hit["panel"] = text.first; matches.append(hit); }
+                    limited |= result["status"] == "Partial"; if (matches.size() >= 1000) { limited = true; break; }
+                }
+                return QJsonObject{{"status", limited ? "Partial" : "Complete"}, {"matches", matches}};
+            }
+            catch (const std::exception& error) { return QJsonObject{{"status", "Unavailable"}, {"reason", QString::fromUtf8(error.what())}}; }
+        }));
+    }
+    void FindBar::appendExtendedMatch(int Panel, std::intptr_t Begin, std::intptr_t End)
+    {
+        auto* target = editors_[Panel].data();
+        const auto indicator = target->send(SCI_GETINDICATORCURRENT), value = target->send(SCI_GETINDICATORVALUE);
+        target->send(SCI_SETINDICATORCURRENT, searchMatchIndicator); target->send(SCI_SETINDICATORVALUE, 1); target->send(SCI_INDICATORFILLRANGE, Begin, End - Begin);
+        target->send(SCI_SETINDICATORCURRENT, indicator); target->send(SCI_SETINDICATORVALUE, value);
+        if (!results_) return;
+        const auto line = target->send(SCI_LINEFROMPOSITION, Begin), start = target->send(SCI_POSITIONFROMLINE, line);
+        const auto lineEnd = target->send(SCI_GETLINEENDPOSITION, line), rawEnd = std::min(lineEnd, start + 128);
+        const auto end = rawEnd == lineEnd ? lineEnd : target->send(SCI_POSITIONBEFORE, rawEnd + 1);
+        QByteArray bytes(end - start + 1, '\0'); Sci_TextRangeFull range{{start, end}, bytes.data()};
+        target->send(SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<sptr_t>(&range)); bytes.chop(1);
+        auto* item = new QTreeWidgetItem(results_, {QString::number(line + 1), QString::number(target->send(SCI_GETCOLUMN, Begin) + 1), QString::fromUtf8(bytes), target->objectName()});
+        item->setData(0, Qt::UserRole, qlonglong(Begin)); item->setData(1, Qt::UserRole, qlonglong(End)); item->setData(2, Qt::UserRole, Panel);
+    }
+    void FindBar::showExtendedResult(const QJsonObject& Result, bool All, bool Backwards, int Panel, std::intptr_t Cursor)
+    {
+        if (results_) results_->setEnabled(true);
+        if (Result["status"] == "Unavailable") { feedback_->setText(tr("검색 실패: %1 %2").arg(Result["reason"].toString(), Result["detail"].toString())); return; }
+        const auto matches = Result["matches"].toArray(); const bool limited = Result["status"] == "Partial";
+        if (All)
+        {
+            if (results_) results_->setUpdatesEnabled(false);
+            for (const auto& value : matches) { const auto hit = value.toObject(); appendExtendedMatch(hit["panel"].toInt(), hit["begin"].toInteger(), hit["end"].toInteger()); }
+            if (results_) results_->setUpdatesEnabled(true);
+            feedback_->setText(limited ? tr("%1건 · 표시 제한").arg(matches.size()) : tr("%1건 찾음").arg(matches.size())); return;
+        }
+        if (matches.isEmpty()) { feedback_->setText(tr("일치 없음")); return; }
+        int chosen = -1;
+        for (int i = 0; i < matches.size(); ++i)
+        {
+            const auto hit = matches[i].toObject(); const int panel = hit["panel"].toInt();
+            if (Backwards ? (panel < Panel || (panel == Panel && hit["end"].toInteger() <= Cursor)) : (panel > Panel || (panel == Panel && hit["begin"].toInteger() >= Cursor)))
+            { chosen = i; if (!Backwards) break; }
+        }
+        if (chosen < 0) chosen = Backwards ? int(matches.size()) - 1 : 0;
+        const auto hit = matches[chosen].toObject(); auto* target = editors_[hit["panel"].toInt()].data();
+        const auto begin = hit["begin"].toInteger(), end = hit["end"].toInteger();
+        target->send(SCI_SETSEL, Backwards ? end : begin, Backwards ? begin : end); target->send(SCI_SCROLLCARET);
+        activeEditor_ = target; if (allPanels()) target->setFocus(Qt::ShortcutFocusReason);
+        if (begin == end) { lastZeroEditor_ = target; lastZeroPosition_ = begin; }
+        feedback_->setText(limited ? tr("찾음 · 검색 결과 1,000건 제한") : tr("찾음"));
     }
     void FindBar::finishAll(bool Limited)
     {
@@ -247,6 +358,7 @@ namespace hc::compare
                     target->send(SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<sptr_t>(&range)); text.chop(1);
                     auto* item = new QTreeWidgetItem(results_, {QString::number(line + 1), QString::number(target->send(SCI_GETCOLUMN, uptr_t(begin)) + 1), (start > lineStart ? QStringLiteral("…") : QString{}) + QString::fromUtf8(text) + (finish < lineEnd ? QStringLiteral("…") : QString{})});
                     item->setData(0, Qt::UserRole, qlonglong(begin)); item->setData(1, Qt::UserRole, qlonglong(end));
+                    item->setData(2, Qt::UserRole, editors_.indexOf(target)); item->setText(3, target->objectName());
                 }
                 ++search.count_; search.cursor_ = end;
                 if (end >= search.length_) finishAll(false);

@@ -5,6 +5,10 @@
 #include <QElapsedTimer>
 #include <optional>
 #include <cstdint>
+#include <QFutureWatcher>
+#include <QJsonObject>
+#include <atomic>
+#include <memory>
 
 class ScintillaEditBase;
 class QComboBox;
@@ -24,6 +28,7 @@ namespace hc::compare
         Q_OBJECT
     public:
         explicit FindBar(QWidget* Parent);
+        ~FindBar() override;
         void SetEditors(const QVector<ScintillaEditBase*>& Editors);
         void SetBusy(bool Busy);
         void Open();
@@ -43,6 +48,16 @@ namespace hc::compare
         void styleMatches();
         void step();
         void stepOnce();
+        void findExtended(bool All, bool Backwards);
+        void showExtendedResult(const QJsonObject& Result, bool All, bool Backwards, int Panel, std::intptr_t Cursor);
+        void appendExtendedMatch(int Panel, std::intptr_t Begin, std::intptr_t End);
+        bool allPanels() const;
+        QFutureWatcher<QJsonObject> extended_;
+        std::shared_ptr<std::atomic_bool> extendedCanceled_;
+        std::uint64_t searchGeneration_ = 0;
+        QPointer<ScintillaEditBase> activeEditor_, lastZeroEditor_;
+        std::intptr_t lastZeroPosition_ = -1;
+        QCheckBox* regex_ = nullptr;
         struct Search
         {
             QPointer<ScintillaEditBase> editor_;

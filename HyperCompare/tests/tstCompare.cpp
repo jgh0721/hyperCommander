@@ -643,6 +643,19 @@ private slots:
         session = Execute(r, cancel, false); QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(r.file1_ + "/report.json", r, session, {}, false, {}), Failure);
         QVERIFY(!QFileInfo::exists(r.file1_ + "/report.json"));
     }
+    void boundedSearchWorker()
+    {
+        const auto raw = QString("가 123\n나 456\n").toUtf8();
+        QJsonObject input{{"text", QString::fromLatin1(raw.toBase64())}, {"query", "\\d+"}, {"regex", true}};
+        auto result = RunWorker("search.text", input, {}); QCOMPARE(result["status"].toString(), QString("Complete"));
+        QCOMPARE(result["matches"].toArray().size(), 2); QCOMPARE(result["matches"].toArray()[0].toObject()["begin"].toInt(), 4);
+        input["query"] = "["; QCOMPARE(RunWorker("search.text", input, {})["reason"].toString(), QString("InvalidSearchExpression"));
+        input["query"] = "^"; result = RunWorker("search.text", input, {}); QVERIFY(result["matches"].toArray().size() >= 2);
+        input["text"] = QString::fromLatin1(QByteArray(10000, 'x').toBase64()); input["query"] = "x"; input["all"] = false; input["cursor"] = 9000;
+        result = RunWorker("search.text", input, {}); QVERIFY(result["matches"].toArray().contains(QJsonObject{{"begin", 9000}, {"end", 9001}}));
+        WorkerPolicy shortPolicy; shortPolicy.timeoutMs_ = 1;
+        QCOMPARE(RunWorker("search.text", input, {}, shortPolicy)["status"].toString(), QString("Unavailable"));
+    }
     void controllerMemoryAdmission()
     {
         constexpr std::uint64_t mib = 1024 * 1024;

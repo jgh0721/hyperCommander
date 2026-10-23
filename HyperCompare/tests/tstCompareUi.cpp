@@ -814,6 +814,28 @@ private slots:
             QTRY_COMPARE(window.ExitCode(), 0); window.close(); view.close();
         }
     }
+    void extendedFindAcrossPanelsAndRegex()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b");
+        write(r.file1_, QString("가 123\nleft 45\n").toUtf8()); write(r.file2_, "right 67\n");
+        CompareWindow window(r); window.resize(1400, 850); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("FILE 2"));
+        auto* first = window.findChild<ScintillaEditBase*>("FILE 1"); auto* second = window.findChild<ScintillaEditBase*>("FILE 2");
+        auto* bar = window.findChild<FindBar*>(); auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* scope = bar->findChild<QComboBox*>("compareFindScope");
+        auto* regex = bar->findChild<QCheckBox*>("compareFindRegex"); auto* feedback = bar->findChild<QLabel*>("compareFindFeedback"); auto* rows = window.findChild<QTreeWidget*>("compareFindResults");
+        bar->Open(); scope->setCurrentIndex(2); regex->setChecked(true); query->setText("\\d+"); bar->FindAll();
+        QTRY_COMPARE_WITH_TIMEOUT(feedback->text(), QString("3건 찾음"), 10000); QCOMPARE(rows->topLevelItemCount(), 3);
+        QCOMPARE(rows->topLevelItem(0)->data(0, Qt::UserRole).toLongLong(), qint64(4)); QCOMPARE(rows->topLevelItem(2)->text(3), QString("FILE 2"));
+        rows->setCurrentItem(rows->topLevelItem(2)); QTest::keyClick(rows, Qt::Key_Return); QTRY_COMPARE(second->send(SCI_GETSELECTIONSTART), sptr_t(6));
+        QCOMPARE(scope->currentIndex(), 2); QCOMPARE(rows->topLevelItemCount(), 3);
+        query->setText("["); bar->FindAll(); QTRY_VERIFY_WITH_TIMEOUT(feedback->text().contains("InvalidSearchExpression"), 10000);
+        scope->setCurrentIndex(0); first->send(SCI_SETSEL, 0, 0); query->setText("^"); bar->Find(false);
+        QTRY_COMPARE_WITH_TIMEOUT(feedback->text(), QString("찾음"), 10000); QCOMPARE(first->send(SCI_GETSELECTIONSTART), sptr_t(0));
+        bar->Find(false); QTRY_VERIFY_WITH_TIMEOUT(first->send(SCI_GETSELECTIONSTART) > 0, 10000);
+        regex->setChecked(false); query->setText("right"); scope->setCurrentIndex(2); bar->FindAll();
+        QTRY_COMPARE_WITH_TIMEOUT(feedback->text(), QString("1건 찾음"), 10000);
+        QVERIFY(!first->send(SCI_GETMODIFY)); QVERIFY(!second->send(SCI_GETMODIFY));
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/extended-search.png")); window.close();
+    }
     void directoryTextPolicySwitchAndFilter()
     {
         QTemporaryDir dir; Request r; r.mode_ = "directory"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.directory_.level_ = "text";
@@ -1431,7 +1453,7 @@ private slots:
         auto* base = window.findChild<ScintillaEditBase*>("BASE"); auto* bar = window.findChild<FindBar*>();
         auto* query = bar->findChild<QLineEdit*>("compareFindText"); auto* scope = bar->findChild<QComboBox*>("compareFindScope");
         auto* feedback = bar->findChild<QLabel*>("compareFindFeedback"); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
-        QCOMPARE(scope->count(), 4); action(window, "왼쪽 전체 선택")->trigger();
+        QCOMPARE(scope->count(), 5); action(window, "왼쪽 전체 선택")->trigger();
         output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual needle\n")); output->send(SCI_SETSEL, 0, 0); output->setFocus();
         QTRY_COMPARE(scope->currentText(), QString("RESULT"));
         const auto before = contents(output); const auto undo = output->send(SCI_GETUNDOCURRENT); const auto resolution = tree->topLevelItem(0)->text(3);
