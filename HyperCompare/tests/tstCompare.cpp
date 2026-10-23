@@ -831,7 +831,7 @@ private slots:
         restored = DecodeMergeWork(r, session, EncodeMergeWork(r, session, work, {}), {}); QCOMPARE(restored.text_, work.text_);
         r.base_ = dir.filePath("base"); write(r.base_, "head\na\r\nkeep\r\nz");
         auto three = Execute(r, std::make_shared<std::atomic_bool>(false), false);
-        QVERIFY(three.plan_->blocks_.empty()); MergeWork automatic{three.output_, {}, false};
+        QVERIFY(!three.plan_->blocks_.empty()); MergeWork automatic{three.output_, three.plan_->initial_, false};
         QCOMPARE(DecodeMergeWork(r, three, EncodeMergeWork(r, three, automatic, {}), {}).text_, three.output_);
         write(r.base_, "head\nbase\r\nkeep\r\nbase"); three = Execute(r, std::make_shared<std::atomic_bool>(false), false);
         QVERIFY(!three.plan_->blocks_.empty()); MergeWork conflicts{three.output_, three.plan_->initial_, false};
@@ -918,7 +918,7 @@ private slots:
         r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
         write(r.base_, "a\nb\nc\n"); write(r.file1_, "L\nb\nlc\n"); write(r.file2_, "R\nrb\nc\n");
         const auto initial = Execute(r, std::make_shared<std::atomic_bool>(false), false);
-        QCOMPARE(initial.completion_, QString("Complete")); QCOMPARE(initial.plan_->blocks_.size(), std::size_t(1));
+        QCOMPARE(initial.completion_, QString("Complete")); QCOMPARE(initial.plan_->blocks_.size(), std::size_t(2));
         const auto templatePlan = MakeDecisionPlan(r, initial, {});
         const std::vector<std::pair<QString, QByteArray>> cases{{"left", "L\nb\nlc\n"}, {"right", "R\nrb\nlc\n"},
             {"base", "a\nb\nlc\n"}, {"leftThenRight", "L\nb\nR\nrb\nlc\n"}, {"rightThenLeft", "R\nrb\nL\nb\nlc\n"}, {"manual", "lc\n"}, {"omit", "lc\n"}};
@@ -1173,7 +1173,30 @@ private slots:
                 QCOMPARE(text.substr(at.begin_, at.end_ - at.begin_), plan->blocks_[i].right_);
             }
             QCOMPARE(model.UnresolvedCount(), std::size_t(0));
+            QCOMPARE(text, right);
+            for (const auto choice : {Resolution::Left, Resolution::Base})
+            {
+                for (const auto& block : plan->blocks_)
+                {
+                    const auto change = model.Prepare(block.id_, model.Revision(), choice);
+                    text.replace(change.begin_, change.end_ - change.begin_, change.replacement_); model.Apply(change);
+                }
+                QCOMPARE(text, choice == Resolution::Left ? left : base);
+            }
         }
+    }
+    void automaticThreeWayDecisionRoundTrip()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        write(r.base_, "a\nkeep\nz\n"); write(r.file1_, "L\nkeep\nz\n"); write(r.file2_, "a\nkeep\nR\n");
+        auto result = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(result.exitCode_, 0); QCOMPARE(result.plan_->blocks_.size(), std::size_t(2));
+        const auto original = result.output_; auto plan = MakeDecisionPlan(r, result, {}); auto blocks = plan["blocks"].toArray();
+        QCOMPARE(blocks[0].toObject()["choice"].toString(), "left"); QCOMPARE(blocks[1].toObject()["choice"].toString(), "right");
+        ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {}); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.output_, original);
+        auto first = blocks[0].toObject(); first["choice"] = "base"; blocks[0] = first; plan["blocks"] = blocks;
+        ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {}); QCOMPARE(result.output_, QByteArray("a\nkeep\nR\n"));
     }
     void commandLine()
     {

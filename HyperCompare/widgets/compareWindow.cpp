@@ -347,6 +347,7 @@ namespace hc::compare
         {
             auto* item = new QTreeWidgetItem(changes_, {QString::number(block.id_), QString::number(block.leftLine_ + 1), QString::number(block.rightLine_ + 1)});
             item->setData(0, Qt::UserRole, qulonglong(block.id_));
+            if (result_.plan_->hasBase_) item->setText(0, QString::number(block.id_) + (block.automatic_ ? tr(" · 자동 구간") : tr(" · 충돌 구간")));
         }
         if (changes_->topLevelItemCount()) changes_->setCurrentItem(changes_->topLevelItem(0));
     }

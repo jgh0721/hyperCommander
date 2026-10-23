@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 3way 자동 병합 구간의 개별 재선택과 결정 계획 보존 지원
+
 * HyperCompare 청크별 RESULT 적용·제거·결합 버튼과 대응 영역 연결선 추가
 
 * HyperCompare 파일별 인코딩 지정, BOM 차이 표시 및 내용 기준 동등성 판정 추가

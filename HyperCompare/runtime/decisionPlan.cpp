@@ -109,8 +109,9 @@ namespace hc::compare
             inputs.append(QJsonObject{{"role", i == 0 ? "left" : i == 1 ? "right" : "base"},
                 {"path", input.path_}, {"sha256", digest(input.raw_)}, {"encoding", input.encoding_}, {"bom", input.bom_}});
         }
-        const QJsonObject policy{{"encoding", Input.encoding_}, {"comparison", "exact-lines-v1"},
+        QJsonObject policy{{"encoding", Input.encoding_}, {"comparison", "exact-lines-v1"},
             {"seed", Session.plan_->hasBase_ ? "base-with-independent-changes" : "left"}, {"outputEncoding", "left"}};
+        if (Session.plan_->hasBase_) policy["blockLayout"] = "all-change-regions-v1";
         QJsonObject result{{"schemaVersion", 1}, {"kind", "text-merge-decisions"}, {"engineVersion", "myers-bounded-2"},
             {"policyDigest", digest(QJsonDocument(policy).toJson(QJsonDocument::Compact))}, {"inputs", inputs}};
         const auto generation = digest(QJsonDocument(result).toJson(QJsonDocument::Compact)); result["generation"] = generation;
@@ -128,7 +129,8 @@ namespace hc::compare
             const auto spanDigest = digest(QByteArrayView(initial.constData() + range.begin_, qsizetype(range.end_ - range.begin_)));
             blocks.append(QJsonObject{{"changeId", digest(generation.toUtf8() + ':' + QByteArray::number(qulonglong(i)) + ':' + spanDigest.toUtf8())},
                 {"expectedSpanDigest", spanDigest}, {"leftLine", qint64(block.leftLine_ + 1)}, {"rightLine", qint64(block.rightLine_ + 1)},
-                {"baseLine", Session.plan_->hasBase_ ? qint64(block.baseLine_ + 1) : 0}, {"choice", "unresolved"}, {"replacement", ""}});
+                {"baseLine", Session.plan_->hasBase_ ? qint64(block.baseLine_ + 1) : 0},
+                {"choice", range.resolution_ == Resolution::Left ? "left" : range.resolution_ == Resolution::Right ? "right" : "unresolved"}, {"replacement", ""}});
         }
         result["blocks"] = blocks; return result;
     }

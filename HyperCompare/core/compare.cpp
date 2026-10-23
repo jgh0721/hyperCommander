@@ -181,8 +181,10 @@ namespace hc::compare
             for (auto j = i; j < end; ++j) (all[j].left_ ? ls : rs).push_back(all[j].edit_);
             const auto left = variant(base, beginLine, endLine, ls), right = variant(base, beginLine, endLine, rs);
             append(result.text_, base, cursor, beginLine);
-            if (ls.empty()) result.text_ += right;
-            else if (rs.empty() || left == right) result.text_ += left;
+            MergeRegion region{beginLine, endLine, sideLine(beginLine, beginLine == endLine, l),
+                sideLine(beginLine, beginLine == endLine, r), left.size(), right.size(), result.text_.size()};
+            if (ls.empty()) { result.text_ += right; region.origin_ = MergeOrigin::Right; }
+            else if (rs.empty() || left == right) { result.text_ += left; region.origin_ = MergeOrigin::Left; }
             else
             {
                 Conflict conflict; conflict.baseBegin_ = beginLine; conflict.baseEnd_ = endLine;
@@ -192,6 +194,7 @@ namespace hc::compare
                 conflict.left_ = left; conflict.right_ = right; result.text_ += conflict.base_;
                 conflict.resultEnd_ = result.text_.size(); result.conflicts_.push_back(std::move(conflict));
             }
+            region.resultEnd_ = result.text_.size(); result.regions_.push_back(region);
             cursor = endLine; i = end;
         }
         append(result.text_, base, cursor, base.size()); return result;

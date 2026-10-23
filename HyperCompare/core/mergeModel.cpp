@@ -36,15 +36,19 @@ namespace hc::compare
     {
         MergePlan result; result.hasBase_ = true;
         const auto base = offsets(Base), left = offsets(Left), right = offsets(Right);
-        for (const auto& conflict : Merged.conflicts_)
+        for (const auto& region : Merged.regions_)
         {
             MergeBlock block; block.id_ = result.blocks_.size() + 1;
-            block.leftLine_ = conflict.leftBegin_; block.rightLine_ = conflict.rightBegin_; block.baseLine_ = conflict.baseBegin_;
+            block.leftLine_ = region.leftBegin_; block.rightLine_ = region.rightBegin_; block.baseLine_ = region.baseBegin_;
             block.leftBegin_ = left.at(block.leftLine_); block.rightBegin_ = right.at(block.rightLine_); block.baseBegin_ = base.at(block.baseLine_);
-            block.left_ = conflict.left_; block.right_ = conflict.right_; block.base_ = conflict.base_;
-            if (Left.substr(block.leftBegin_, block.left_.size()) != block.left_ || Right.substr(block.rightBegin_, block.right_.size()) != block.right_)
+            if (region.leftBytes_ > Left.size() - block.leftBegin_ || region.rightBytes_ > Right.size() - block.rightBegin_ ||
+                region.resultBegin_ > region.resultEnd_ || region.resultEnd_ > Merged.text_.size())
                 throw Failure("InvalidMergeLocation");
-            result.initial_.push_back({conflict.resultBegin_, conflict.resultEnd_}); result.blocks_.push_back(std::move(block));
+            block.left_ = Left.substr(block.leftBegin_, region.leftBytes_); block.right_ = Right.substr(block.rightBegin_, region.rightBytes_);
+            block.base_ = Base.substr(block.baseBegin_, base.at(region.baseEnd_) - block.baseBegin_);
+            block.automatic_ = region.origin_ != MergeOrigin::Conflict;
+            const auto choice = region.origin_ == MergeOrigin::Left ? Resolution::Left : region.origin_ == MergeOrigin::Right ? Resolution::Right : Resolution::Unresolved;
+            result.initial_.push_back({region.resultBegin_, region.resultEnd_, choice}); result.blocks_.push_back(std::move(block));
         }
         return result;
     }

@@ -18,6 +18,7 @@ namespace hc::compare
         std::size_t leftBegin_ = 0, rightBegin_ = 0, baseBegin_ = 0;
         std::size_t leftLine_ = 0, rightLine_ = 0, baseLine_ = 0;
         std::string left_, right_, base_;
+        bool automatic_ = false;
     };
     struct MergePlan
     {

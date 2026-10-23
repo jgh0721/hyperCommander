@@ -39,7 +39,16 @@ namespace hc::compare
         std::size_t leftBegin_ = 0, rightBegin_ = 0;
         std::string base_, left_, right_;
     };
-    struct MergeResult { std::string text_; std::vector<Conflict> conflicts_; };
+    enum class MergeOrigin { Conflict, Left, Right };
+    // All changed regions, including automatic choices. Payloads stay in the
+    // input snapshots; the result only retains line/byte locations here.
+    struct MergeRegion
+    {
+        std::size_t baseBegin_ = 0, baseEnd_ = 0, leftBegin_ = 0, rightBegin_ = 0;
+        std::size_t leftBytes_ = 0, rightBytes_ = 0, resultBegin_ = 0, resultEnd_ = 0;
+        MergeOrigin origin_ = MergeOrigin::Conflict;
+    };
+    struct MergeResult { std::string text_; std::vector<Conflict> conflicts_; std::vector<MergeRegion> regions_; };
     MergeResult Merge(std::string_view Base, std::string_view Left, std::string_view Right, const Budget& Limits = {});
     // Versioned opaque locations keep future image/Office engines out of the text model.
     struct Location { std::string schema_, resourceRevision_, payload_; std::uint32_t version_ = 1; };

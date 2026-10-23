@@ -89,6 +89,22 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void automaticThreeWayChunksRemainEditable()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        write(r.base_, "a\nkeep\nz\n"); write(r.file1_, "L\nkeep\nz\n"); write(r.file2_, "a\nkeep\nR\n");
+        CompareWindow window(r); window.show(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
+        QTRY_COMPARE(tree->topLevelItemCount(), 2); auto* output = window.findChild<ScintillaEditBase*>("RESULT"); QVERIFY(output);
+        QCOMPARE(contents(output), QByteArray("L\nkeep\nR\n")); QVERIFY(action(window, QString::fromUtf8("결과 저장"))->isEnabled());
+        QVERIFY(tree->topLevelItem(0)->text(0).contains(QString::fromUtf8("자동 구간")));
+        tree->setCurrentItem(tree->topLevelItem(0)); action(window, QString::fromUtf8("블록 BASE"))->trigger();
+        QCOMPARE(contents(output), QByteArray("a\nkeep\nR\n"));
+        output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("L\nkeep\nR\n"));
+        output->send(SCI_REDO); QCOMPARE(contents(output), QByteArray("a\nkeep\nR\n"));
+        tree->setCurrentItem(tree->topLevelItem(1)); action(window, QString::fromUtf8("블록 LEFT"))->trigger();
+        QCOMPARE(contents(output), QByteArray("a\nkeep\nz\n"));
+        action(window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window.ExitCode(), 0); window.close();
+    }
     void chunkGutterApplyRemoveUndoAndWork()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("result.cpp");
@@ -1172,7 +1188,7 @@ private slots:
         write(r.file2_, "new independent change\n"); action(window, "다시 비교")->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
         QCOMPARE(contents(output), QByteArray("base\n"));
-        QCOMPARE(window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 0); QVERIFY(!save->isEnabled());
+        QCOMPARE(window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 1); QVERIFY(!save->isEnabled());
         action(window, "오른쪽 전체 선택")->trigger(); QCOMPARE(contents(output), QByteArray("new independent change\n"));
         output->send(SCI_UNDO); QVERIFY(!save->isEnabled()); output->send(SCI_REDO); QVERIFY(save->isEnabled());
         save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
