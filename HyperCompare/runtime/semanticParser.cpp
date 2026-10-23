@@ -54,14 +54,16 @@ namespace hc::compare
                     if (!ts_tree_cursor_goto_parent(&cursor)) return;
             }
         }
-        QString tokenHash(TSNode Node, ParseContext& Context, uint32_t Stop)
+        QString tokenHash(TSNode Node, ParseContext& Context, uint32_t Stop, TSNode Skip = {}, int* Tokens = nullptr)
         {
             QCryptographicHash hash(QCryptographicHash::Sha256);
             walk(Node, Context, [&](TSNode child)
             {
+                if (!ts_node_is_null(Skip) && ts_node_eq(child, Skip)) { hash.addData("<function-name>"); return false; }
                 if (ts_node_start_byte(child) >= Stop || QByteArrayView(ts_node_type(child)) == "comment") return false;
                 if (!ts_node_child_count(child))
                 {
+                    if (Tokens) ++*Tokens;
                     const auto value = text(child, Context);
                     hash.addData(QByteArray::number(value.size())); hash.addData(":"); hash.addData(value);
                 }
@@ -123,10 +125,26 @@ namespace hc::compare
                 if (qualified.size() > 16384) { ++skipped; return false; }
                 auto signatureRoot = node; const auto enclosing = ts_node_parent(node);
                 if (!ts_node_is_null(enclosing) && QByteArrayView(ts_node_type(enclosing)) == "template_declaration") signatureRoot = enclosing;
+                // Only ordinary, typed functions are rename candidates. Constructors,
+                // operators and unresolved declarators retain name-based matching.
+                auto nameNode = declarator;
+                for (int level = 0; level < 64 && !ts_node_is_null(nameNode); ++level)
+                {
+                    const QByteArrayView kind(ts_node_type(nameNode));
+                    if (kind == "identifier" || kind == "field_identifier") break;
+                    nameNode = ts_node_child_by_field_name(nameNode, kind == "qualified_identifier" ? "name" : "declarator",
+                        kind == "qualified_identifier" ? 4 : 10);
+                }
+                const bool ordinary = !ts_node_is_null(nameNode) &&
+                    (QByteArrayView(ts_node_type(nameNode)) == "identifier" || QByteArrayView(ts_node_type(nameNode)) == "field_identifier") &&
+                    !ts_node_is_null(ts_node_child_by_field_name(node, "type", 4));
+                int bodyTokens = 0;
+                const auto bodyHash = tokenHash(body, Context, ts_node_end_byte(body), {}, &bodyTokens);
                 const auto separator = qualified.lastIndexOf("::");
                 functions.append(QJsonObject{{"name", qualified}, {"scope", separator < 0 ? QString{} : qualified.left(separator)},
                     {"signature", tokenHash(signatureRoot, Context, ts_node_start_byte(body))},
-                    {"body", tokenHash(body, Context, ts_node_end_byte(body))},
+                    {"body", bodyHash}, {"bodyTokens", bodyTokens},
+                    {"renameSignature", ordinary ? tokenHash(signatureRoot, Context, ts_node_start_byte(body), nameNode) : QString{}},
                     {"begin", double(ts_node_start_byte(signatureRoot))}, {"end", double(ts_node_end_byte(node))},
                     {"line", int(ts_node_start_point(signatureRoot).row)}, {"endLine", int(ts_node_end_point(node).row)}});
                 return false;

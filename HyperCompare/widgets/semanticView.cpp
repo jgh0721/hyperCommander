@@ -17,6 +17,8 @@ namespace hc::compare
     {
         QString statusName(const QString& Status)
         {
+            if (Status == "Renamed") return QObject::tr("이름 변경 추정");
+            if (Status == "MovedRenamed") return QObject::tr("이동 + 이름 변경 추정");
             if (Status == "Moved") return QObject::tr("이동");
             if (Status == "MovedModified") return QObject::tr("이동 + 수정");
             if (Status == "Modified") return QObject::tr("수정");
@@ -34,7 +36,7 @@ namespace hc::compare
         if (Role == Qt::UserRole) return row;
         if (Role == Qt::ToolTipRole) return tr("함수의 구문 구조와 상대 순서를 비교합니다. 매크로·타입 해석 및 자동 충돌 해결은 수행하지 않습니다.");
         if (Role != Qt::DisplayRole) return {};
-        if (Index.column() == 0) return row["name"].toString();
+        if (Index.column() == 0) return row["name"].toString() + (row["newName"].isString() ? " → " + row["newName"].toString() : QString{});
         if (Index.column() == 1) return statusName(row["status"].toString()) + (row["match"] == "UniqueName" ? tr(" · 이름 대응") : QString{});
         const auto function = Function(Index.row(), Index.column() - 2);
         return function.isEmpty() ? QVariant(QString("—")) : QVariant(function["line"].toInt() + 1);
@@ -74,7 +76,7 @@ namespace hc::compare
         table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         table_->verticalHeader()->hide(); table_->verticalHeader()->setDefaultSectionSize(fontMetrics().height() + 10);
         table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-        table_->setColumnWidth(1, 130); table_->setColumnWidth(2, 100); table_->setColumnWidth(3, 100); layout->addWidget(table_, 1);
+        table_->setColumnWidth(1, 180); table_->setColumnWidth(2, 100); table_->setColumnWidth(3, 100); layout->addWidget(table_, 1);
         connect(search, &QLineEdit::textChanged, filter_, &QSortFilterProxyModel::setFilterFixedString);
         connect(pairs_, &QComboBox::currentIndexChanged, this, [this](int Index) { updatePair(); if (pairChanged_) pairChanged_(Index); });
         connect(reveal, &QPushButton::clicked, this, &SemanticView::RevealCurrent);
@@ -109,8 +111,8 @@ namespace hc::compare
             else if (document["status"] != "Complete") partial << tr("%1: 분석 불가 (%2)").arg(at + 1).arg(document["reason"].toString());
         }
         if (pair["ambiguous"].toInt()) partial << tr("대응 모호 %1개").arg(pair["ambiguous"].toInt());
-        coverage_->setText(tr("이동 %1 · 수정 %2 · 구문 구조 분석 (매크로·타입 해석 제외)%3")
-            .arg(pair["moved"].toInt()).arg(pair["modified"].toInt()).arg(partial.isEmpty() ? QString{} : " · " + partial.join(" / ")));
+        coverage_->setText(tr("이동 %1 · 수정 %2 · 이름 변경 추정 %3 · 구문 구조 분석 (매크로·타입 해석 제외)%4")
+            .arg(pair["moved"].toInt()).arg(pair["modified"].toInt()).arg(pair["renamed"].toInt()).arg(partial.isEmpty() ? QString{} : " · " + partial.join(" / ")));
     }
     void SemanticView::RevealCurrent()
     {

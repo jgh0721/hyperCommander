@@ -609,6 +609,22 @@ private slots:
         QAbstractItemModelTester tester(table->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
         window.close();
     }
+    void sourceFunctionRenameNavigation()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp");
+        const QByteArray body = "(int x){if(x < 0) return -x; return x * 2 + 1;}";
+        write(request.file1_, "int oldName" + body); write(request.file2_, "// prefix\nint newName" + body);
+        CompareWindow window(request); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
+        QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+        window.findChild<QTabWidget*>("comparisonDetails")->setCurrentIndex(1);
+        QCOMPARE(table->model()->data(table->model()->index(0, 0)).toString(), QString::fromUtf8("oldName → newName"));
+        QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("이름 변경 추정"));
+        QVERIFY(window.findChild<QLabel*>("semanticCoverage")->text().contains(QString::fromUtf8("이름 변경 추정 1")));
+        table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
+        auto* second = window.findChild<ScintillaEditBase*>("FILE 2"); QVERIFY(second);
+        QCOMPARE(second->send(SCI_GETSELECTIONSTART), sptr_t(10)); QVERIFY(!second->send(SCI_CANUNDO));
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/function-rename.png")); window.close();
+    }
     void sourceFunctionsBaseAndPartialCoverage()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.base_ = dir.filePath("base.cpp");

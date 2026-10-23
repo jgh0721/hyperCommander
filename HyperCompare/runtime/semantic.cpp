@@ -24,7 +24,8 @@ namespace hc::compare
             const auto function = value.toObject(); const int begin = function["begin"].toInt(-1), end = function["end"].toInt(-1);
             if (begin < previous || end < begin || end > Utf8.size() || function["name"].toString().isEmpty() || function["name"].toString().size() > 16384 ||
                 function["line"].toInt(-1) < 0 || function["endLine"].toInt(-1) < function["line"].toInt() ||
-                function["signature"].toString().size() != 64 || function["body"].toString().size() != 64) return unavailable("WorkerProtocol");
+                (function["renameSignature"].toString().size() != 0 && function["renameSignature"].toString().size() != 64) ||
+                function["bodyTokens"].toInt(-1) < 0 || function["signature"].toString().size() != 64 || function["body"].toString().size() != 64) return unavailable("WorkerProtocol");
             previous = end;
         }
         return result;

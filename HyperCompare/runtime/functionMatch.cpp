@@ -37,6 +37,34 @@ namespace hc::compare
             else if (!remaining[0].isEmpty() && !remaining[1].isEmpty())
             { for (int i : remaining[0]) ambiguousLeft[i] = true; for (int i : remaining[1]) ambiguousRight[i] = true; }
         }
+        const bool complete = Left["status"] == "Complete" && Right["status"] == "Complete";
+        QVector<bool> renamed(left.size(), false);
+        if (complete)
+        {
+            // Count all functions, including already matched ones: a duplicate body
+            // must not become unique merely because another name matched first.
+            QMap<QString, Group> candidates;
+            for (int side = 0; side < 2; ++side)
+            {
+                const auto& source = side ? right : left;
+                for (int i = 0; i < source.size(); ++i)
+                {
+                    Limits.Check(); const auto function = source[i].toObject();
+                    if (function["renameSignature"].toString().size() != 64 || function["bodyTokens"].toInt() < 12) continue;
+                    const auto key = function["scope"].toString() + QChar(0) + function["renameSignature"].toString() + function["body"].toString();
+                    candidates[key].sides_[side].push_back(i);
+                }
+            }
+            for (const auto& group : candidates)
+            {
+                Limits.Check();
+                if (group.sides_[0].size() != 1 || group.sides_[1].size() != 1) continue;
+                const int a = group.sides_[0][0], b = group.sides_[1][0];
+                if (partner[a] >= 0 || used[b] || ambiguousLeft[a] || ambiguousRight[b] ||
+                    left[a].toObject()["name"] == right[b].toObject()["name"]) continue;
+                partner[a] = b; used[b] = true; renamed[a] = true;
+            }
+        }
         // Relative order among matched functions in the same scope is stable
         // under added prefix lines/functions. LIS marks a minimal relocation set.
         QMap<QString, QVector<int>> scopes;
@@ -54,17 +82,17 @@ namespace hc::compare
             }
             for (int i = tails.isEmpty() ? -1 : tails.back(); i >= 0; i = previous[i]) moved[indexes[i]] = false;
         }
-        QJsonArray relations; int moveCount = 0, modifiedCount = 0, ambiguousCount = 0;
-        const bool complete = Left["status"] == "Complete" && Right["status"] == "Complete";
+        QJsonArray relations; int moveCount = 0, modifiedCount = 0, ambiguousCount = 0, renamedCount = 0;
         for (int i = 0; i < left.size(); ++i)
         {
             Limits.Check(); const auto from = left[i].toObject(); const auto to = partner[i] < 0 ? QJsonObject{} : right[partner[i]].toObject();
-            const bool modified = partner[i] >= 0 && (from["body"] != to["body"] || from["signature"] != to["signature"]);
+            const bool modified = partner[i] >= 0 && !renamed[i] && (from["body"] != to["body"] || from["signature"] != to["signature"]);
             const QString status = ambiguousLeft[i] ? "Ambiguous" : partner[i] < 0 ? (complete ? "Removed" : "Unmatched") :
-                moved[i] ? (modified ? "MovedModified" : "Moved") : modified ? "Modified" : "Unchanged";
+                renamed[i] ? (moved[i] ? "MovedRenamed" : "Renamed") : moved[i] ? (modified ? "MovedModified" : "Moved") : modified ? "Modified" : "Unchanged";
             relations.append(QJsonObject{{"name", from["name"]}, {"status", status}, {"left", i}, {"right", partner[i]},
-                {"match", partner[i] < 0 ? "None" : from["signature"] == to["signature"] ? "Signature" : "UniqueName"}});
-            moveCount += moved[i]; modifiedCount += modified; ambiguousCount += ambiguousLeft[i];
+                {"newName", renamed[i] ? to["name"] : QJsonValue{}},
+                {"match", partner[i] < 0 ? "None" : renamed[i] ? "UniqueBodySignature" : from["signature"] == to["signature"] ? "Signature" : "UniqueName"}});
+            renamedCount += renamed[i]; moveCount += moved[i]; modifiedCount += modified; ambiguousCount += ambiguousLeft[i];
         }
         for (int i = 0; i < right.size(); ++i) if (!used[i])
         {
@@ -73,7 +101,7 @@ namespace hc::compare
             ambiguousCount += ambiguousRight[i];
         }
         return {{"status", complete && !ambiguousCount ? "Complete" : "Partial"}, {"relations", relations}, {"moved", moveCount}, {"modified", modifiedCount},
-            {"ambiguous", ambiguousCount}, {"method", "qualified-name-signature/scope-order-lis-1"}};
+            {"renamed", renamedCount}, {"ambiguous", ambiguousCount}, {"method", "qualified-name-signature/unique-body-rename/scope-order-lis-2"}};
     }
     void AnalyzeSourceRelations(const Request& Input, Result& Value, const Budget& Limits)
     {
