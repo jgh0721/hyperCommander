@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "inlineDiff.hpp"
+#include <QString>
+#include <QTextBoundaryFinder>
 
 namespace hc::compare
 {
@@ -11,14 +13,46 @@ namespace hc::compare
             if (!Line.empty() && Line.back() == '\r') Line.remove_suffix(1);
             return Line;
         }
-        struct Scalars
+        struct Graphemes
         {
             std::string_view text_;
             std::vector<std::size_t> offsets_;
-            explicit Scalars(std::string_view Text) : text_(Text)
+            explicit Graphemes(std::string_view Text) : text_(Text)
             {
-                for (std::size_t i = 0; i < Text.size(); ++i)
-                    if ((static_cast<unsigned char>(Text[i]) & 0xc0) != 0x80) offsets_.push_back(i);
+                offsets_.reserve(Text.size() + 1);
+                if (std::all_of(Text.begin(), Text.end(), [](unsigned char Byte) { return Byte < 0x80; }))
+                {
+                    for (std::size_t i = 0; i <= Text.size(); ++i) offsets_.push_back(i);
+                    return;
+                }
+                const auto decoded = QString::fromUtf8(Text.data(), qsizetype(Text.size()));
+                // Map UTF-16 boundary positions to the original UTF-8 snapshot.
+                // Inputs are validated UTF-8. Surrogate interiors cannot be boundaries.
+                std::vector<std::size_t> bytes(std::size_t(decoded.size()) + 1);
+                std::size_t utf16 = 0;
+                for (std::size_t i = 0; i < Text.size();)
+                {
+                    const auto lead = static_cast<unsigned char>(Text[i]);
+                    bytes[utf16++] = i;
+                    if (lead >= 0xf0) bytes[utf16++] = i;
+                    i += lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+                }
+                bytes[utf16] = Text.size();
+                QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, decoded);
+                int regionalRun = 0;
+                for (qsizetype position = 0; position < decoded.size();)
+                {
+                    const auto first = decoded.at(position);
+                    const auto scalar = first.isHighSurrogate() ? QChar::surrogateToUcs4(first, decoded.at(position + 1)) : char32_t(first.unicode());
+                    const bool regional = scalar >= 0x1f1e6 && scalar <= 0x1f1ff;
+                    finder.setPosition(position);
+                    // GB12/GB13: only consecutive regional indicators count.
+                    // Qt 6.12 can carry parity across an intervening emoji.
+                    const bool boundary = regional && regionalRun ? regionalRun % 2 == 0 : finder.isAtBoundary();
+                    if (boundary) offsets_.push_back(bytes[std::size_t(position)]);
+                    regionalRun = regional ? regionalRun + 1 : 0;
+                    position += first.isHighSurrogate() ? 2 : 1;
+                }
                 offsets_.push_back(Text.size());
             }
             std::size_t Size() const { return offsets_.size() - 1; }
@@ -31,7 +65,7 @@ namespace hc::compare
         {
             constexpr std::size_t maxLine = 16384;
             if (Left.size() > maxLine || Right.size() > maxLine) return false;
-            const Scalars a(Left), b(Right);
+            const Graphemes a(Left), b(Right);
             std::size_t prefix = 0, suffix = 0;
             while (prefix < a.Size() && prefix < b.Size() && a.At(prefix) == b.At(prefix)) ++prefix;
             while (suffix < a.Size() - prefix && suffix < b.Size() - prefix &&
@@ -50,7 +84,8 @@ namespace hc::compare
                 cells > maximum - std::min(Cells, maximum)) return false;
             Cells += cells;
             // The full bounded table makes traceback deterministic without a
-            // second expensive pass. A line has at most 16384 scalar values.
+            // second expensive pass. A line has at most 16384 grapheme clusters. Tokenization is bounded by the
+            // same 16 KiB line cap; it never normalizes the source bytes.
             std::vector<std::uint16_t> table(cells);
             const auto at = [&](std::size_t I, std::size_t J) -> std::uint16_t& { return table[I * (m + 1) + J]; };
             for (auto i = n; i-- > 0;)

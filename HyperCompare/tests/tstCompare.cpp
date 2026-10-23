@@ -1049,28 +1049,61 @@ private slots:
         QCOMPARE(unequal.pairedLines_, std::size_t(2));
         QCOMPARE(unequal.ranges_[1], (std::vector<ByteRange>{{1, 2}, {4, 5}}));
     }
+    void inlineGraphemeClustersRemainWhole()
+    {
+        const std::vector<std::pair<std::string, std::string>> cases{
+            {"e\xcc\x81", "e\xcc\x80"}, {"e\xcc\x81", "é"},
+            {"👩‍💻", "👨‍💻"}, {"👍🏻", "👍🏿"}, {"🇰🇷", "🇯🇵"},
+            {"\xe1\x84\x80\xe1\x85\xa1", "\xe1\x84\x80\xe1\x85\xa2"},
+            {"1️⃣", "2️⃣"}, {"☀️", "☀"}, {"a\xcc\x81\xcc\x88", "a\xcc\x81"}};
+        for (const auto& [a, b] : cases)
+        {
+            const auto left = "prefix " + a + " suffix\r\n", right = "prefix " + b + " suffix\n";
+            const auto compared = BuildInlineDiff(left, right, Diff(left, right));
+            QCOMPARE(compared.skippedLines_, std::size_t(0));
+            QCOMPARE(compared.ranges_[0], (std::vector<ByteRange>{{7, 7 + a.size()}}));
+            QCOMPARE(compared.ranges_[1], (std::vector<ByteRange>{{7, 7 + b.size()}}));
+            const auto inserted = BuildInlineDiff("x y", "x " + a + "y", {{0, 1, 0, 1, {}}});
+            QVERIFY(inserted.ranges_[0].empty());
+            QCOMPARE(inserted.ranges_[1], (std::vector<ByteRange>{{2, 2 + a.size()}}));
+        }
+        // Regression: prior flag + intervening emoji must reset RI pairing.
+        const std::string flagPrefix = "🇰🇷😀";
+        const auto flags = BuildInlineDiff(flagPrefix + "🇰🇷🇰🇷", flagPrefix + "🇯🇵🇰🇷", {{0, 1, 0, 1, {}}});
+        QCOMPARE(flags.ranges_[0], (std::vector<ByteRange>{{flagPrefix.size(), flagPrefix.size() + 8}}));
+        QCOMPARE(flags.ranges_[1], flags.ranges_[0]);
+        // Attaching a combining mark replaces the whole preceding grapheme.
+        const auto attached = BuildInlineDiff("a", "a\xcc\x81", {{0, 1, 0, 1, {}}});
+        QCOMPARE(attached.ranges_[0], (std::vector<ByteRange>{{0, 1}}));
+        QCOMPARE(attached.ranges_[1], (std::vector<ByteRange>{{0, 3}}));
+        const auto deleted = BuildInlineDiff("👩‍💻", "", {{0, 1, 0, 0, {}}});
+        QVERIFY(deleted.ranges_[0].empty()); // Whole-line removal has no paired line.
+    }
     void inlineRandomizedCommonSubsequence()
     {
         std::mt19937 rng(0x1a11ce);
-        const std::vector<std::string> alphabet{"a", "b", "c", "한", "😀", "\xcc\x81"};
+        const std::vector<std::string> alphabet{"a", "b", "c", "한", "😀", "e\xcc\x81", "👩‍💻", "👍🏻", "🇰🇷", "가"};
         for (int iteration = 0; iteration < 1500; ++iteration)
         {
             std::array<std::string, 2> texts;
-            std::array<std::vector<std::string_view>, 2> scalars;
-            for (auto& text : texts) for (auto n = rng() % 24; n > 0; --n) text += alphabet[rng() % alphabet.size()];
+            std::array<std::vector<std::string_view>, 2> clusters;
+            std::array<std::vector<std::size_t>, 2> boundaries;
             for (std::size_t side = 0; side < 2; ++side)
-                for (std::size_t i = 0; i < texts[side].size();)
+            {
+                for (auto n = rng() % 24; n > 0; --n)
                 {
-                    const auto begin = i++;
-                    while (i < texts[side].size() && (static_cast<unsigned char>(texts[side][i]) & 0xc0) == 0x80) ++i;
-                    scalars[side].push_back(std::string_view(texts[side]).substr(begin, i - begin));
+                    const auto& token = alphabet[rng() % alphabet.size()];
+                    boundaries[side].push_back(texts[side].size()); texts[side] += token;
+                    clusters[side].push_back(token);
                 }
+                boundaries[side].push_back(texts[side].size());
+            }
             // Explicit one-line pairing includes empty sides, unlike a whole-line insertion.
             const std::array<std::string, 2> lines{texts[0] + '\n', texts[1] + '\n'};
             const auto diff = BuildInlineDiff(lines[0], lines[1], {{0, 1, 0, 1, {}}});
             QCOMPARE(diff.skippedLines_, std::size_t(0));
             std::array<std::string, 2> common;
-            std::size_t commonScalars = 0;
+            std::size_t commonClusters = 0;
             for (std::size_t side = 0; side < 2; ++side)
             {
                 std::size_t previous = 0;
@@ -1078,14 +1111,18 @@ private slots:
                 {
                     QVERIFY(range.begin_ >= previous && range.begin_ < range.end_ && range.end_ <= texts[side].size());
                     for (auto offset : {range.begin_, range.end_})
-                        QVERIFY(offset == texts[side].size() || (static_cast<unsigned char>(texts[side][offset]) & 0xc0) != 0x80);
+                        QVERIFY(std::binary_search(boundaries[side].begin(), boundaries[side].end(), offset));
                     common[side] += texts[side].substr(previous, range.begin_ - previous); previous = range.end_;
                 }
                 common[side] += texts[side].substr(previous);
             }
             QCOMPARE(common[0], common[1]);
-            for (auto byte : common[0]) if ((static_cast<unsigned char>(byte) & 0xc0) != 0x80) ++commonScalars;
-            QCOMPARE(commonScalars, lcs(scalars[0], scalars[1]));
+            for (std::size_t pos = 0; pos < common[0].size(); ++commonClusters)
+            {
+                const auto token = std::find_if(alphabet.begin(), alphabet.end(), [&](const auto& Value) { return common[0].compare(pos, Value.size(), Value) == 0; });
+                QVERIFY(token != alphabet.end()); pos += token->size();
+            }
+            QCOMPARE(commonClusters, lcs(clusters[0], clusters[1]));
         }
     }
     void inlineBudgetsAndCancellation()

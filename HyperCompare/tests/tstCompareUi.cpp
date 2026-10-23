@@ -1345,6 +1345,28 @@ private slots:
         QCOMPARE(left->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(left->send(SCI_CANUNDO), sptr_t(0));
         QCOMPARE(window.ExitCode(), 1); window.close();
     }
+    void inlineGraphemeIndicatorsAndSourcePreservation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        const QByteArray a = QString::fromUtf8("x e\u0301 👩‍💻 👍🏻 🇰🇷 z\n").toUtf8();
+        const QByteArray b = QString::fromUtf8("x e\u0300 👨‍💻 👍🏿 🇯🇵 z\n").toUtf8();
+        write(r.file1_, a); write(r.file2_, b); CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        for (auto* editor : {left, right})
+        {
+            const auto text = contents(editor); int begin = 2;
+            for (int token = 0; token < 4; ++token)
+            {
+                const int end = text.indexOf(' ', begin); QVERIFY(end > begin);
+                for (int at = begin; at < end; ++at) QCOMPARE(editor->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, at), sptr_t(1));
+                QCOMPARE(editor->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, end), sptr_t(0)); begin = end + 1;
+            }
+            QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0));
+        }
+        QCOMPARE(contents(left), a); QCOMPARE(contents(right), b);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/grapheme-highlights.png")); window.close();
+    }
     void inlineRecompareFallbackAndMergePreservation()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");

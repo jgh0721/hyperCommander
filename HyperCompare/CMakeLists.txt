@@ -8,6 +8,7 @@ qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mer
     core/alignmentMap.cpp core/alignmentMap.hpp core/inlineDiff.cpp core/inlineDiff.hpp
     core/overviewMap.cpp core/overviewMap.hpp)
 target_include_directories(hc_compare_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(hc_compare_core PRIVATE Qt6::Core)
 target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
