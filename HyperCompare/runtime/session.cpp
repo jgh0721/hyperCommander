@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
+#include "directory.hpp"
 #include "decisionPlan.hpp"
 #include "mergeWork.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -145,91 +146,13 @@ namespace hc::compare
             }
             Result.hasOutputExpectation_ = true;
         }
-        using Tree = QMap<QString, storage::EntrySnapshot>;
-        Tree enumerate(const QString& Root, const Budget& Limits)
-        {
-            Tree result; const auto provider = reader(Root); const auto ctx = context(Limits);
-            const auto root = require(provider->Resolve(locator(Root), ctx).get());
-            if (!root.directory_) throw Failure("ExpectedDirectory");
-            if (root.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
-            std::vector<std::pair<storage::Locator, QString>> pending{{root.locator_, {}}};
-            while (!pending.empty())
-            {
-                Limits.Check(); auto [at, prefix] = std::move(pending.back()); pending.pop_back();
-                const auto cursor = require(provider->Enumerate(at, ctx).get());
-                for (;;)
-                {
-                    Limits.Check(); auto page = require(cursor->Next(256, ctx).get());
-                    for (auto& entry : page.entries_)
-                    {
-                        if (result.size() >= 100000) throw Failure("DirectoryEntryLimit");
-                        if (entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
-                        const auto relative = prefix + QString::fromStdString(entry.name_);
-                        const auto key = relative.toCaseFolded();
-                        if (result.contains(key)) throw Failure("CaseCollision");
-                        entry.hints_["relativePath"] = relative.toUtf8().toStdString();
-                        if (entry.directory_) pending.push_back({entry.locator_, relative + '/'});
-                        result.insert(key, std::move(entry));
-                    }
-                    if (page.end_) break;
-                }
-            }
-            return result;
-        }
-        bool sameContent(const storage::EntrySnapshot& A, const storage::EntrySnapshot& B, const Budget& Limits)
-        {
-            if (A.size_ != B.size_) return false;
-            const auto pa = reader(QString::fromStdString(A.locator_.root_)), pb = reader(QString::fromStdString(B.locator_.root_));
-            const auto ctx = context(Limits);
-            // Resource keys are provider-session scoped. Rebind locators and verify captured revisions.
-            const auto boundA = require(pa->Resolve(A.locator_, ctx).get()), boundB = require(pb->Resolve(B.locator_, ctx).get());
-            if (boundA.id_.revision_ != A.id_.revision_ || boundB.id_.revision_ != B.id_.revision_) throw Failure("ChangedDuringRead");
-            auto a = require(pa->OpenRead(boundA.id_, ctx).get()), b = require(pb->OpenRead(boundB.id_, ctx).get());
-            // Streams may return different short-read sizes, so compare a rolling byte window.
-            std::vector<std::byte> aa, bb; std::size_t ai = 0, bi = 0; bool ae = false, be = false, equal = true;
-            for (;;)
-            {
-                Limits.Check();
-                if (ai == aa.size() && !ae) { auto chunk = require(a->Read(1024 * 1024, ctx).get()); aa = std::move(chunk.bytes_); ai = 0; ae = chunk.eof_; if (aa.empty() && !ae) throw Failure("ReadMadeNoProgress"); }
-                if (bi == bb.size() && !be) { auto chunk = require(b->Read(1024 * 1024, ctx).get()); bb = std::move(chunk.bytes_); bi = 0; be = chunk.eof_; if (bb.empty() && !be) throw Failure("ReadMadeNoProgress"); }
-                const auto count = std::min(aa.size() - ai, bb.size() - bi);
-                if (count && !std::equal(aa.begin() + ai, aa.begin() + ai + count, bb.begin() + bi)) { equal = false; break; }
-                ai += count; bi += count;
-                if (ae && ai == aa.size() && be && bi == bb.size()) break;
-                if ((ae && ai == aa.size() && bi < bb.size()) || (be && bi == bb.size() && ai < aa.size())) { equal = false; break; }
-            }
-            if (require(pa->Stat(boundA.id_, ctx).get()).id_.revision_ != A.id_.revision_ ||
-                require(pb->Stat(boundB.id_, ctx).get()).id_.revision_ != B.id_.revision_) throw Failure("ChangedDuringRead");
-            return equal;
-        }
-        void directory(const Request& Request, Result& Value, const Budget& Limits)
-        {
-            if (!Request.base_.isEmpty() || !Request.file3_.isEmpty()) throw Failure("DirectoryThreeWayNotImplemented");
-            const auto left = enumerate(Request.file1_, Limits), right = enumerate(Request.file2_, Limits);
-            auto keys = left.keys(); for (const auto& key : right.keys()) if (!left.contains(key)) keys.push_back(key);
-            std::sort(keys.begin(), keys.end()); bool different = false;
-            for (const auto& key : keys)
-            {
-                Limits.Check(); QString status;
-                const auto a = left.constFind(key), b = right.constFind(key);
-                if (a == left.end()) status = "RightOnly";
-                else if (b == right.end()) status = "LeftOnly";
-                else if (a->directory_ != b->directory_) status = "TypeConflict";
-                else if (a->name_ != b->name_) status = "NameDifferent";
-                else if (a->directory_) status = "Equal";
-                else status = sameContent(*a, *b, Limits) ? "Equal" : "Different";
-                different |= status != "Equal";
-                const auto& entry = a == left.end() ? *b : *a;
-                Value.entries_.append(QJsonObject{{"path", QString::fromStdString(entry.hints_.at("relativePath"))}, {"status", status}});
-            }
-            Value.exitCode_ = different ? 1 : 0; Value.outcome_ = different ? "Different" : "Equal";
-        }
+
     }
 
     QJsonObject Capabilities()
     {
         return {{"schemaVersion", 1}, {"phase", "foundation"}, {"textCompare2", true}, {"textCompare3", true},
-            {"textMerge3", true}, {"textMerge2", "explicit-block-decisions-or-whole-side"}, {"directoryCompare2", true},
+            {"textMerge3", true}, {"textMerge2", "explicit-block-decisions-or-whole-side"}, {"directoryCompare2", true}, {"directoryCompare3", true}, {"directoryFilters", true}, {"directoryLevels", QJsonArray{"bytes", "metadata"}},
             {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
@@ -255,9 +178,10 @@ namespace hc::compare
             const auto second = require(reader(Input.file2_)->Resolve(locator(Input.file2_), context(limits)).get());
             if (first.directory_ != second.directory_) throw Failure("MixedInputKinds");
             if (Input.mode_ == "directory" || (Input.mode_ == "auto" && first.directory_))
-            { result.operation_ = "directory2"; directory(Input, result, limits); }
+            { CompareDirectory(Input, result, limits); }
             else
             {
+                if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
                 result.operation_ = Input.mode_ == "merge" ? (Input.base_.isEmpty() ? "merge2" : "merge3") : "compare2";
                 result.inputs_.push_back(load(Input.file1_, Input.encoding_, limits));
                 result.inputs_.push_back(load(Input.file2_, Input.encoding_, limits));
@@ -435,7 +359,7 @@ namespace hc::compare
         }
         return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
-            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}}}, {"inputs", inputs},
+            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_},
             {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},

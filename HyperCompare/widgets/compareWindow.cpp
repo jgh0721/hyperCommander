@@ -226,7 +226,7 @@ namespace hc::compare
             if (closing_) close();
         });
         connect(changes_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
-            if (!Item || editors_.size() < 2 || result_.operation_ == "directory2") return;
+            if (!Item || editors_.size() < 2 || result_.operation_.startsWith("directory")) return;
             selectBlock(); if (merge_) updateMerge();
         });
         applyAppearance();
@@ -324,10 +324,11 @@ namespace hc::compare
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
         if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
-        if (result_.operation_ == "directory2")
+        if (result_.operation_.startsWith("directory"))
         {
+            changes_->setHeaderLabels({tr("경로"), tr("상태"), tr("왼쪽 / 오른쪽"), tr("BASE 관계")});
             for (const auto& value : result_.entries_)
-            { const auto entry = value.toObject(); new QTreeWidgetItem(changes_, {entry["path"].toString(), entry["status"].toString()}); }
+            { const auto entry = value.toObject(); new QTreeWidgetItem(changes_, {entry["path"].toString(), entry["status"].toString(), entry["leftRight"].toString(), entry["leftBase"].toString() + " / " + entry["rightBase"].toString()}); }
         }
         else
         {

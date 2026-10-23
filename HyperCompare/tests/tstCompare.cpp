@@ -780,6 +780,74 @@ private slots:
         write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
     }
+    void directoryThreeWayStates()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.base_ = dir.filePath("b");
+        for (const auto& root : {r.file1_, r.file2_, r.base_}) QVERIFY(QDir().mkpath(root));
+        struct Case { const char* name; const char* left; const char* right; const char* base; const char* status; };
+        const std::vector<Case> cases{
+            {"same", "a", "a", "a", "Equal"}, {"left", "b", "a", "a", "LeftChanged"},
+            {"right", "a", "b", "a", "RightChanged"}, {"both", "b", "b", "a", "BothSame"},
+            {"conflict", "b", "c", "a", "Conflict"}, {"left-add", "a", nullptr, nullptr, "LeftAdded"},
+            {"right-add", nullptr, "a", nullptr, "RightAdded"}, {"both-add", "a", "a", nullptr, "BothSame"},
+            {"add-conflict", "a", "b", nullptr, "Conflict"}, {"delete-left", nullptr, "a", "a", "LeftDeleted"},
+            {"delete-right", "a", nullptr, "a", "RightDeleted"}, {"delete-both", nullptr, nullptr, "a", "BothDeleted"},
+            {"delete-modify", nullptr, "b", "a", "Conflict"}, {"modify-delete", "b", nullptr, "a", "Conflict"}};
+        for (const auto& item : cases)
+        {
+            if (item.left) write(r.file1_ + '/' + item.name, item.left);
+            if (item.right) write(r.file2_ + '/' + item.name, item.right);
+            if (item.base) write(r.base_ + '/' + item.name, item.base);
+        }
+        auto cancel = std::make_shared<std::atomic_bool>(false); const auto result = Execute(r, cancel, false);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.operation_, QString("directory3"));
+        QCOMPARE(result.outcome_, QString("Conflict")); QCOMPARE(result.entries_.size(), qsizetype(cases.size()));
+        for (const auto& item : cases)
+        {
+            bool found = false;
+            for (const auto& row : result.entries_) if (row.toObject()["path"] == item.name)
+            { QCOMPARE(row.toObject()["status"].toString(), QString(item.status)); found = true; }
+            QVERIFY(found);
+        }
+        r.file3_ = r.base_; r.base_.clear(); QCOMPARE(Execute(r, cancel, false).error_, QString("DirectoryIndependentThreeUnsupported"));
+    }
+    void directoryFiltersAndMetadata()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r");
+        for (const auto& root : {r.file1_, r.file2_}) { QVERIFY(QDir().mkpath(root + "/nested")); QVERIFY(QDir().mkpath(root + "/build")); }
+        write(r.file1_ + "/nested/a.cpp", "left"); write(r.file2_ + "/nested/a.cpp", "same");
+        write(r.file1_ + "/skip.txt", "excluded"); write(r.file1_ + "/build/only.cpp", "excluded subtree");
+        r.directory_.include_ = {"*.cpp"}; r.directory_.exclude_ = {"build"};
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, false);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.entries_.size(), qsizetype(2));
+        QCOMPARE(result.exitCode_, 1); QVERIFY(result.Json()["coverage"].toObject()["filtered"].toBool());
+        const auto stamp = QDateTime::fromMSecsSinceEpoch(1700000000000LL);
+        for (const auto& root : {r.file1_, r.file2_})
+        { QFile f(root + "/nested/a.cpp"); QVERIFY(f.open(QIODevice::ReadWrite)); QVERIFY(f.setFileTime(stamp, QFileDevice::FileModificationTime)); }
+        r.directory_.level_ = "metadata"; result = Execute(r, cancel, false);
+        QCOMPARE(result.exitCode_, 0); QCOMPARE(result.Json()["coverage"].toObject()["comparisonLevel"].toString(), QString("metadata"));
+        r.directory_.level_ = "bytes"; QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        r.directory_.include_ = {"nested/*.cpp"}; QCOMPARE(Execute(r, cancel, false).entries_.size(), qsizetype(2));
+        r.directory_.include_ = {QString(257, 'a')}; QCOMPARE(Execute(r, cancel, false).error_, QString("InvalidDirectoryFilter"));
+        const auto parsed = Parse({"app", "-file1", r.file1_, "-file2", r.file2_, "-exclude", "build;*.txt", "-directory-level", "metadata"}, true);
+        QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.directory_.exclude_.size(), qsizetype(2));
+        QVERIFY(!Parse({"app", "-file1", "a", "-file2", "b", "-include", ""}, true).error_.isEmpty());
+    }
+    void directorySnapshotMutationAndKinds()
+    {
+        QTemporaryDir dir; const auto root = dir.filePath("root"); QVERIFY(QDir().mkpath(root)); write(root + "/a", "one");
+        const auto first = CaptureDirectory(root, {}, {}); ValidateDirectory(first, {}, {});
+        write(root + "/a", "changed"); QVERIFY_EXCEPTION_THROWN(ValidateDirectory(first, {}, {}), Failure);
+        const auto second = CaptureDirectory(root, {}, {}); write(root + "/new", "one");
+        QVERIFY_EXCEPTION_THROWN(ValidateDirectory(second, {}, {}), Failure);
+        const auto third = CaptureDirectory(root, {}, {}); QVERIFY(QFile::remove(root + "/new"));
+        QVERIFY_EXCEPTION_THROWN(ValidateDirectory(third, {}, {}), Failure);
+        Request r; r.file1_ = root; r.file2_ = dir.filePath("right"); QVERIFY(QDir().mkpath(r.file2_ + "/a"));
+        auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, false);
+        QCOMPARE(result.entries_[0].toObject()["status"].toString(), QString("TypeConflict"));
+        r.base_ = root + "/a"; QCOMPARE(Execute(r, cancel, false).error_, QString("ExpectedDirectory"));
+        cancel->store(true); QCOMPARE(Execute(r, cancel, false).completion_, QString("Canceled"));
+    }
     void directoryComparison()
     {
         QTemporaryDir dir; QDir root(dir.path()); QVERIFY(root.mkdir("l")); QVERIFY(root.mkdir("r"));

@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "core/compare.hpp"
+#include "directory.hpp"
 #include "core/mergeModel.hpp"
 #include "core/alignmentMap.hpp"
 #include "core/inlineDiff.hpp"
@@ -19,6 +20,7 @@ namespace hc::compare
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool help_ = false, version_ = false;
+        DirectoryPolicy directory_;
         int timeoutMs_ = 60000;
     };
     struct Parsed { Request request_; QString error_, help_; };
@@ -55,6 +57,9 @@ namespace hc::compare
         MergeResult merged_;
         std::shared_ptr<const MergePlan> plan_;
         QByteArray output_;
+        std::shared_ptr<const std::vector<DirectorySnapshot>> directories_;
+        QString directoryLevel_;
+        bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;

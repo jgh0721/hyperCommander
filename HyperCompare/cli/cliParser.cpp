@@ -28,6 +28,9 @@ namespace hc::compare
         value("planout", "Export a text merge decision template to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
         value("timeout-ms", "Request deadline in milliseconds (100..3600000).");
+        value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
+        value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
+        value("directory-level", "bytes (default) or metadata; metadata does not verify file contents.");
         value("theme", "GUI theme: light or dark.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
@@ -46,6 +49,19 @@ namespace hc::compare
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");
         request.takeAll_ = parser.value("takeall"); request.theme_ = parser.value("theme");
+        for (const auto& name : {"include", "exclude"})
+        {
+            if (!parser.isSet(name)) continue;
+            const auto patterns = parser.value(name).split(';');
+            if (patterns.size() > 32) return fail("Too many directory filters.");
+            for (const auto& pattern : patterns)
+                if (pattern.isEmpty() || pattern.size() > 256 || pattern.contains('\\')) return fail("Invalid directory filter.");
+            (QString(name) == "include" ? request.directory_.include_ : request.directory_.exclude_) = patterns;
+        }
+        if (parser.isSet("directory-level")) request.directory_.level_ = parser.value("directory-level");
+        if (request.directory_.level_ != "bytes" && request.directory_.level_ != "metadata") return fail("Invalid directory-level.");
+        if ((parser.isSet("include") || parser.isSet("exclude") || parser.isSet("directory-level")) &&
+            !QStringList{"auto", "directory"}.contains(parser.isSet("mode") ? parser.value("mode") : "auto")) return fail("Directory options require auto or directory mode.");
         request.planOut_ = parser.value("planout"); request.decisions_ = parser.value("decisions");
         for (const auto& name : {"planout", "decisions"})
             if (parser.isSet(name) && parser.value(name).isEmpty()) return fail("Empty path: " + QString(name));
