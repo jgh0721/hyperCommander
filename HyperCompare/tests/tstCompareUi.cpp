@@ -262,12 +262,39 @@ private slots:
         left.send(SCI_SETFIRSTVISIBLELINE, 9000); right.send(SCI_SETFIRSTVISIBLELINE, 9000); gutter.Refresh();
         QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk9001_action0")); QVERIFY(gutter.findChildren<QToolButton*>().size() < 100);
         QFont larger = gutter.font(); larger.setPointSize(20); gutter.setFont(larger);
-        QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk9001_action0")->height() >= gutter.fontMetrics().height() + 8);
+        QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk9001_action0")->height() >= gutter.fontMetrics().height() + 2);
         const auto edits = Diff("a\n", "b\n", {});
         auto plan = std::make_shared<MergePlan>(TwoWayPlan("a\n", "b\n", edits)); MergeModel model(plan);
         const auto revision = model.Revision(); model.Apply(model.Prepare(1, revision, Resolution::Omit));
         QVERIFY_EXCEPTION_THROWN(model.Prepare(1, revision, Resolution::Right), Failure);
         QCOMPARE(model.State()[0].begin_, model.State()[0].end_);
+    }
+    void chunkGutterControlsFollowBothEdges()
+    {
+        QWidget host; host.resize(800, 400); ScintillaEditBase left(&host), right(&host);
+        left.setGeometry(0, 0, 320, 400); right.setGeometry(480, 0, 320, 400);
+        for (auto* editor : {&left, &right})
+        {
+            editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>("Consolas"));
+            editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, 12); editor->send(SCI_STYLECLEARALL); editor->send(SCI_SETENDATLASTLINE, 0);
+        }
+        const auto text = lines(0, 80); setText(left, text.toStdString()); setText(right, text.toStdString());
+        ChunkGutter gutter(&left, &right, -1, &host); gutter.setGeometry(320, 0, 100, 400); host.show();
+        const auto pos = [](ScintillaEditBase& editor, int line) { return std::size_t(editor.send(SCI_POSITIONFROMLINE, line)); };
+        gutter.SetChunks({{1, {pos(left, 2), pos(right, 8)}, {pos(left, 3), pos(right, 9)}}}, 1);
+        QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk1_action1"));
+        auto* forward = gutter.findChild<QToolButton*>("chunk1_action0"); auto* backward = gutter.findChild<QToolButton*>("chunk1_action1");
+        QTRY_VERIFY(forward->isVisible() && backward->isVisible());
+        QVERIFY(forward->geometry().right() + 20 < backward->x()); QVERIFY(forward->y() < backward->y());
+        QCOMPARE(forward->y(), int(left.send(SCI_POINTYFROMPOSITION, 0, pos(left, 2))));
+        QCOMPARE(backward->y(), int(right.send(SCI_POINTYFROMPOSITION, 0, pos(right, 8))));
+        QVERIFY(forward->autoRaise()); QCOMPARE(forward->arrowType(), Qt::RightArrow); QCOMPARE(backward->arrowType(), Qt::LeftArrow);
+        left.send(SCI_SETFIRSTVISIBLELINE, 30); gutter.Refresh();
+        QTest::qWait(50);
+        QVERIFY2(!forward->isVisible(), qPrintable(QString("first=%1 y=%2 widgetY=%3").arg(left.send(SCI_GETFIRSTVISIBLELINE)).arg(left.send(SCI_POINTYFROMPOSITION, 0, pos(left, 2))).arg(forward->y()))); QVERIFY(backward->isVisible());
+        left.send(SCI_SETFIRSTVISIBLELINE, 0); gutter.Refresh(); QTRY_VERIFY(forward->isVisible());
+        QVERIFY(host.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/chunk-edge-layout.png"));
+        host.close();
     }
     void chunkGutterEmptyEofAndThreeWay()
     {

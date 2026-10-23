@@ -50,9 +50,9 @@ namespace hc::compare
     }
     void ChunkGutter::arrange()
     {
-        const int cell = std::max(26, fontMetrics().height() + 8);
+        const int cell = std::max(20, fontMetrics().height() + 2);
         // Keep a visible connector lane beside the controls, even for one-line chunks.
-        setFixedWidth(3 * (cell + 1) + 27);
+        setFixedWidth((sourceSide_ < 0 ? 2 : 3) * (cell + 2) + 28);
         rows_.clear(); std::set<std::size_t> candidates;
         // Ranges are monotonic on both sides. Binary search avoids scanning every
         // chunk on each scroll, including files with tens of thousands of changes.
@@ -77,25 +77,31 @@ namespace hc::compare
             };
             rows_.push_back({index, y(0, chunk.begin_[0]), bottom(0), y(1, chunk.begin_[1]), bottom(1)});
         }
-        std::size_t used = 0; int previous = -100;
+        std::size_t used = 0; std::array<int, 3> previous{-100, -100, -100};
         for (const auto& row : rows_)
         {
             const auto& chunk = chunks_[row.index_];
-            const unsigned anchor = sourceSide_ == 1 ? 1 : 0;
-            const int viewTop = mapFromGlobal(editors_[anchor]->mapToGlobal(QPoint{})).y();
-            const int viewBottom = std::min(height(), viewTop + editors_[anchor]->height());
-            const int top = anchor == 0 ? row.leftTop_ : row.rightTop_;
-            const int bottom = anchor == 0 ? row.leftBottom_ : row.rightBottom_;
-            if (bottom <= viewTop || top >= viewBottom || viewBottom - viewTop < cell) continue;
-            const int at = std::clamp(top, viewTop, viewBottom - cell);
-            if (at < previous + cell + 1) continue; previous = at;
+            std::array<QRect, 3> geometry; std::array<bool, 3> visible{};
+            for (int j = 0; j < 3; ++j)
+            {
+                const unsigned anchor = sourceSide_ < 0 ? unsigned(j == 1) : unsigned(j == 0 ? sourceSide_ : 1 - sourceSide_);
+                const int viewTop = std::max(0, mapFromGlobal(editors_[anchor]->mapToGlobal(QPoint{})).y());
+                const int viewBottom = std::min(height(), mapFromGlobal(editors_[anchor]->mapToGlobal(QPoint(0, editors_[anchor]->height()))).y());
+                const int top = anchor == 0 ? row.leftTop_ : row.rightTop_, bottom = anchor == 0 ? row.leftBottom_ : row.rightBottom_;
+                const int at = viewBottom - viewTop >= cell ? std::clamp(top, viewTop, viewBottom - cell) : viewTop;
+                const int inset = j == 2 ? cell + 4 : 2;
+                geometry[j] = QRect(anchor ? width() - cell - inset : inset, at, cell, cell);
+                visible[j] = (sourceSide_ >= 0 || j < 2) && bottom > viewTop && top < viewBottom &&
+                    viewBottom - viewTop >= cell && at >= previous[j] + cell + 1;
+            }
+            if (std::none_of(visible.begin(), visible.end(), [](bool value) { return value; })) continue;
             if (used == buttons_.size())
             {
                 std::array<QToolButton*, 3> group{};
                 for (int j = 0; j < 3; ++j)
                 {
                     auto* button = new QToolButton(this); group[j] = button;
-                    button->setFocusPolicy(Qt::StrongFocus); button->setAutoRaise(false);
+                    button->setFocusPolicy(Qt::StrongFocus); button->setAutoRaise(true);
                     connect(button, &QToolButton::clicked, this, [this, button, j] {
                         const auto id = button->property("chunkId").toULongLong();
                         const auto revision = button->property("revision").toULongLong();
@@ -128,8 +134,11 @@ namespace hc::compare
                 const auto purpose = sourceSide_ < 0 ? (j == 0 ? tr("왼쪽 청크를 오른쪽 문서에 반영 (저장은 별도)") : tr("오른쪽 청크를 왼쪽 문서에 반영 (저장은 별도)")) :
                     j == 0 ? tr("%1 청크를 RESULT에 적용").arg(sourceSide_ == 0 ? "LEFT" : "RIGHT") : j == 1 ? tr("RESULT 청크 제거 (실행 취소 가능)") : tr("양쪽 청크 결합");
                 button->setText(QString::fromUtf8(symbol)); button->setToolTip(tr("청크 %1: %2").arg(chunk.id_).arg(purpose)); button->setAccessibleName(button->toolTip());
-                button->setGeometry((sourceSide_ == 1 ? 26 : 2) + j * (cell + 1), at, cell, cell); button->setEnabled(chunk.enabled_);
-                button->setVisible(sourceSide_ >= 0 || j < 2);
+                const unsigned anchor = sourceSide_ < 0 ? unsigned(j == 1) : unsigned(j == 0 ? sourceSide_ : 1 - sourceSide_);
+                button->setGeometry(geometry[j]);
+                button->setArrowType((sourceSide_ < 0 || j == 0) ? (anchor ? Qt::LeftArrow : Qt::RightArrow) : Qt::NoArrow);
+                button->setEnabled(chunk.enabled_); button->setVisible(visible[j]);
+                if (visible[j]) previous[j] = geometry[j].y();
             }
         }
         for (; used < buttons_.size(); ++used) for (auto* button : buttons_[used]) button->hide();
