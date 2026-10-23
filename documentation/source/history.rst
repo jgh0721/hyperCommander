@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 청크별 RESULT 적용·제거·결합 버튼과 대응 영역 연결선 추가
+
 * HyperCompare 파일별 인코딩 지정, BOM 차이 표시 및 내용 기준 동등성 판정 추가
 
 * HyperCompare 기존 GUI 프로세스에 요청별 창을 전달하고 개별 완료 코드·대기 취소·연결 단절 시 RESULT 보존 지원

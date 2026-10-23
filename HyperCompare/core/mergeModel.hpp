@@ -4,7 +4,7 @@
 
 namespace hc::compare
 {
-    enum class Resolution { Unresolved, Left, Right, Base, LeftThenRight, RightThenLeft, Manual };
+    enum class Resolution { Unresolved, Left, Right, Base, LeftThenRight, RightThenLeft, Manual, Omit };
     struct BlockState
     {
         std::size_t begin_ = 0, end_ = 0;

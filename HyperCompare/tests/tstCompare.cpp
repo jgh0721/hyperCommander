@@ -921,7 +921,7 @@ private slots:
         QCOMPARE(initial.completion_, QString("Complete")); QCOMPARE(initial.plan_->blocks_.size(), std::size_t(1));
         const auto templatePlan = MakeDecisionPlan(r, initial, {});
         const std::vector<std::pair<QString, QByteArray>> cases{{"left", "L\nb\nlc\n"}, {"right", "R\nrb\nlc\n"},
-            {"base", "a\nb\nlc\n"}, {"leftThenRight", "L\nb\nR\nrb\nlc\n"}, {"rightThenLeft", "R\nrb\nL\nb\nlc\n"}, {"manual", "lc\n"}};
+            {"base", "a\nb\nlc\n"}, {"leftThenRight", "L\nb\nR\nrb\nlc\n"}, {"rightThenLeft", "R\nrb\nL\nb\nlc\n"}, {"manual", "lc\n"}, {"omit", "lc\n"}};
         for (const auto& [name, expected] : cases)
         {
             auto plan = templatePlan; auto blocks = plan["blocks"].toArray(); auto block = blocks[0].toObject(); block["choice"] = name;

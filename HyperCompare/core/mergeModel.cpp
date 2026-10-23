@@ -77,6 +77,7 @@ namespace hc::compare
         case Resolution::LeftThenRight: result.replacement_ = block.left_ + block.right_; break;
         case Resolution::RightThenLeft: result.replacement_ = block.right_ + block.left_; break;
         case Resolution::Manual: break;
+        case Resolution::Omit: break;
         default: throw Failure("InvalidMergeChoice");
         }
         return result;

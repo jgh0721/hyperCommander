@@ -3,6 +3,8 @@
 #include "widgets/guiRequestServer.hpp"
 #include "runtime/guiIpc.hpp"
 #include "widgets/mergeController.hpp"
+#include "widgets/chunkGutter.hpp"
+#include <QToolButton>
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
 #include "widgets/findBar.hpp"
@@ -87,6 +89,98 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void chunkGutterApplyRemoveUndoAndWork()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("result.cpp");
+        write(r.file1_, "start\nleft\nkeep\nold\nend\n"); write(r.file2_, "start\nright\nkeep\nnew\nend\n");
+        CompareWindow window(r); window.show();
+        QTRY_COMPARE(window.findChildren<ScintillaEditBase*>().size(), 3);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); QVERIFY(output);
+        auto* left = window.findChild<ScintillaEditBase*>("LEFT"); auto* right = window.findChild<ScintillaEditBase*>("RIGHT");
+        QVERIFY(left->mapTo(&window, QPoint{}).x() < output->mapTo(&window, QPoint{}).x()); QVERIFY(output->mapTo(&window, QPoint{}).x() < right->mapTo(&window, QPoint{}).x());
+        auto gutters = window.findChildren<ChunkGutter*>(); QCOMPARE(gutters.size(), 2);
+        std::sort(gutters.begin(), gutters.end(), [](auto* A, auto* B) { return A->SourceSide() < B->SourceSide(); });
+        QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action0"));
+        QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action0")->isVisible());
+        QTest::mouseClick(gutters[1]->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+        QCOMPARE(contents(output), QByteArray("start\nright\nkeep\nold\nend\n"));
+        QTRY_VERIFY(gutters[0]->findChild<QToolButton*>("chunk2_action1")->isVisible());
+        QTest::mouseClick(gutters[0]->findChild<QToolButton*>("chunk2_action1"), Qt::LeftButton);
+        QCOMPARE(contents(output), QByteArray("start\nright\nkeep\nend\n"));
+        output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("start\nright\nkeep\nold\nend\n"));
+        output->send(SCI_REDO); QCOMPARE(contents(output), QByteArray("start\nright\nkeep\nend\n"));
+        window.SaveWork(dir.filePath("work.hcmerge")); QTRY_VERIFY(QFileInfo::exists(dir.filePath("work.hcmerge")));
+        QTRY_VERIFY(action(window, QString::fromUtf8("결과 저장"))->isEnabled());
+        output->send(SCI_UNDO); window.LoadWork(dir.filePath("work.hcmerge"));
+        QTRY_COMPARE(contents(output), QByteArray("start\nright\nkeep\nend\n"));
+        for (auto* editor : {left, output, right}) editor->send(SCI_SETFIRSTVISIBLELINE, 0);
+        action(window, "Dark")->setChecked(false); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/chunk-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/chunk-dark.png"));
+        action(window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window.ExitCode(), 0);
+        QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), QByteArray("start\nright\nkeep\nend\n")); window.close();
+    }
+    void chunkGutterVirtualizesAndRejectsStaleChoice()
+    {
+        QWidget host; host.resize(700, 180); ScintillaEditBase left(&host), right(&host);
+        left.setGeometry(0, 0, 300, 180); right.setGeometry(400, 0, 300, 180);
+        const auto bytes = lines(0, 10000); setText(left, bytes.toStdString()); setText(right, bytes.toStdString());
+        ChunkGutter gutter(&left, &right, 0, &host); gutter.setGeometry(300, 0, 84, 180); host.show();
+        std::vector<GutterChunk> chunks;
+        for (int line = 0; line < 10000; ++line)
+        {
+            const auto begin = std::size_t(left.send(SCI_POSITIONFROMLINE, line)); const auto end = std::size_t(left.send(SCI_GETLINEENDPOSITION, line));
+            chunks.push_back({std::uint64_t(line + 1), {begin, begin}, {end, end}});
+        }
+        gutter.SetChunks(chunks, 7); QTest::qWait(40); QVERIFY(gutter.findChildren<QToolButton*>().size() < 100);
+        left.send(SCI_SETFIRSTVISIBLELINE, 9000); right.send(SCI_SETFIRSTVISIBLELINE, 9000); gutter.Refresh();
+        QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk9001_action0")); QVERIFY(gutter.findChildren<QToolButton*>().size() < 100);
+        QFont larger = gutter.font(); larger.setPointSize(20); gutter.setFont(larger);
+        QTRY_VERIFY(gutter.findChild<QToolButton*>("chunk9001_action0")->height() >= gutter.fontMetrics().height() + 8);
+        const auto edits = Diff("a\n", "b\n", {});
+        auto plan = std::make_shared<MergePlan>(TwoWayPlan("a\n", "b\n", edits)); MergeModel model(plan);
+        const auto revision = model.Revision(); model.Apply(model.Prepare(1, revision, Resolution::Omit));
+        QVERIFY_EXCEPTION_THROWN(model.Prepare(1, revision, Resolution::Right), Failure);
+        QCOMPARE(model.State()[0].begin_, model.State()[0].end_);
+    }
+    void chunkGutterEmptyEofAndThreeWay()
+    {
+        for (int scenario = 0; scenario < 3; ++scenario)
+        {
+            QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+            const auto left = scenario == 0 ? QByteArray{} : scenario == 1 ? QByteArray("keep\n") : QByteArray("keep\nleft");
+            const auto right = scenario == 0 ? QString::fromUtf8("가").toUtf8() : scenario == 1 ? QByteArray("keep\ninsert") : QByteArray("keep\nright");
+            write(r.file1_, left); write(r.file2_, right);
+            if (scenario == 2) { r.base_ = dir.filePath("base"); write(r.base_, "keep\nbase"); }
+            CompareWindow window(r); window.show();
+            QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT")); auto* output = window.findChild<ScintillaEditBase*>("RESULT");
+            action(window, QString::fromUtf8("왼쪽·오른쪽 표시 줄 정렬"))->setChecked(true);
+            auto gutters = window.findChildren<ChunkGutter*>(); QCOMPARE(gutters.size(), 2);
+            std::sort(gutters.begin(), gutters.end(), [](auto* A, auto* B) { return A->SourceSide() < B->SourceSide(); });
+            QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action0"));
+            auto* take = gutters[1]->findChild<QToolButton*>("chunk1_action0"); QTRY_VERIFY(take->isVisible());
+            take->setFocus(); QTest::keyClick(take, Qt::Key_Space); QCOMPARE(contents(output), right);
+            QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action1")->isVisible());
+            QTest::mouseClick(gutters[1]->findChild<QToolButton*>("chunk1_action1"), Qt::LeftButton);
+            QCOMPARE(contents(output), scenario == 0 ? QByteArray{} : QByteArray("keep\n"));
+            output->send(SCI_UNDO); QCOMPARE(contents(output), right);
+            action(window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window.ExitCode(), 0); window.close();
+        }
+    }
+    void compareGutterStartsIndependentMerge()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); CompareWindow window(r); window.show();
+        QTRY_COMPARE(window.ExitCode(), 1); auto* gutter = window.findChild<ChunkGutter*>(); QVERIFY(gutter);
+        QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action1"));
+        QAction invoke(&window); connect(&invoke, &QAction::triggered, gutter->findChild<QToolButton*>("chunk1_action1"), &QToolButton::click);
+        chooseFile(&invoke, dir.filePath("out"));
+        CompareWindow* merge = nullptr;
+        for (auto* item : QApplication::topLevelWidgets()) if (item != &window && dynamic_cast<CompareWindow*>(item)) merge = static_cast<CompareWindow*>(item);
+        QVERIFY(merge); QTRY_VERIFY(merge->findChild<ScintillaEditBase*>("RESULT"));
+        QCOMPARE(contents(merge->findChild<ScintillaEditBase*>("RESULT")), QByteArray("right\n"));
+        QCOMPARE(window.ExitCode(), 1); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        action(*merge, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(merge->ExitCode(), 0); merge->close(); window.close();
+    }
     void encodingRecoveryAndFormatOnly()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");

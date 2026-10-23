@@ -31,7 +31,7 @@ namespace hc::compare
             for (std::size_t i = 0; i < Work.state_.size(); ++i)
             {
                 Limits.Check(); const auto& state = Work.state_[i]; const auto& block = Session.plan_->blocks_[i];
-                if (state.resolution_ < Resolution::Unresolved || state.resolution_ > Resolution::Manual ||
+                if (state.resolution_ < Resolution::Unresolved || state.resolution_ > Resolution::Omit ||
                     (state.resolution_ == Resolution::Base && !Session.plan_->hasBase_)) throw Failure("InvalidWorkResolution");
                 if (!state.mapped_)
                 {
@@ -48,6 +48,7 @@ namespace hc::compare
                 case Resolution::Base: expected = block.base_; break;
                 case Resolution::LeftThenRight: expected = block.left_ + block.right_; break;
                 case Resolution::RightThenLeft: expected = block.right_ + block.left_; break;
+                case Resolution::Omit: break;
                 default: continue;
                 }
                 if (QByteArrayView(Work.text_.constData() + state.begin_, qsizetype(state.end_ - state.begin_)) != QByteArrayView(expected))
@@ -103,7 +104,7 @@ namespace hc::compare
             if (block.keys() != blockKeys || !block["mapped"].isBool() ||
                 block["id"] != QJsonValue(qint64(Session.plan_->blocks_[std::size_t(i)].id_))) throw Failure("InvalidWorkBlocks");
             BlockState state{std::size_t(integer(block["begin"], size)), std::size_t(integer(block["end"], size)),
-                static_cast<Resolution>(integer(block["resolution"], 6)), block["mapped"].toBool()};
+                static_cast<Resolution>(integer(block["resolution"], int(Resolution::Omit))), block["mapped"].toBool()};
             if (!state.mapped_ && (state.begin_ || state.end_)) throw Failure("InvalidWorkRange");
             work.state_.push_back(state);
         }

@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
 #include "mergeController.hpp"
+#include "chunkGutter.hpp"
 #include "scrollSynchronizer.hpp"
 #include "findBar.hpp"
 #include "overviewBar.hpp"
@@ -110,7 +111,7 @@ namespace hc::compare
         pairSelectorAction_ = tools->addWidget(pairSelector_); pairSelectorAction_->setVisible(false);
         connect(pairSelector_, &QComboBox::currentIndexChanged, this, [this](int Index) {
             if (busy() || result_.operation_ != "compare3" || Index < 0 || Index > 2 || !result_.pairViews_[std::size_t(Index)]) return;
-            pairIndex_ = Index; applyPairView(); applyAppearance(); updateMerge();
+            pairIndex_ = Index; applyPairView(); rebuildGutters(); applyAppearance(); updateMerge();
             state_->setText(tr("%1 — 차이 %2개 · 전체 3파일: %3").arg(pairSelector_->currentText()).arg(currentPair()->changes_.size()).arg(result_.outcome_));
         });
         wholeActions_.push_back(tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); }));
@@ -127,7 +128,7 @@ namespace hc::compare
         previous->setShortcut(QKeySequence("Shift+F7")); next->setShortcut(QKeySequence("F7"));
         for (const auto& choice : {std::pair{tr("블록 LEFT"), Resolution::Left}, {tr("블록 RIGHT"), Resolution::Right},
             {tr("블록 BASE"), Resolution::Base}, {tr("LEFT → RIGHT"), Resolution::LeftThenRight},
-            {tr("RIGHT → LEFT"), Resolution::RightThenLeft}, {tr("블록 수동 완료"), Resolution::Manual}})
+            {tr("RIGHT → LEFT"), Resolution::RightThenLeft}, {tr("블록 제거"), Resolution::Omit}, {tr("블록 수동 완료"), Resolution::Manual}})
         {
             auto* action = mergeTools->addAction(choice.first, this, [this, value = choice.second] { chooseBlock(value); });
             blockActions_.push_back(action); action->setEnabled(false);
@@ -334,7 +335,7 @@ namespace hc::compare
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
             applyPairView();
-            showBlocks(); merge_->Refresh(result_.plan_); applyAppearance();
+            showBlocks(); merge_->Refresh(result_.plan_); rebuildGutters(); applyAppearance();
         }
         updateMerge();
         if (!changed) state_->setText(tr("입력 내용 동일 — RESULT·Undo·해결 상태 보존"));
@@ -381,6 +382,7 @@ namespace hc::compare
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
+        for (auto* gutter : gutters_) delete gutter; gutters_.clear();
         delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); formatLabels_.clear(); changes_->clear();
         inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
@@ -443,12 +445,21 @@ namespace hc::compare
             state_->setText(tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개").arg(differences).arg(conflicts));
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
+        rebuildGutters();
         QList<int> widths; for (int i = 0; i < panes_->count(); ++i) widths.push_back(1);
         panes_->setSizes(widths);
         auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->setSizes({560, 140});
         find_->SetEditors(editors_);
         applyAppearance();
         updateMerge();
+        if (pendingChunk_ && merge_)
+        {
+            const auto id = pendingChunk_; pendingChunk_ = 0;
+            if (result_.inputs_[0].raw_ == pendingInputs_[0] && result_.inputs_[1].raw_ == pendingInputs_[1])
+                chooseGutter(id, merge_->Model().Revision(), pendingChoice_);
+            else state_->setText(tr("입력 변경 감지 — 청크를 다시 확인하여 선택하십시오."));
+            pendingInputs_ = {};
+        }
     }
     void CompareWindow::applyPairView()
     {
@@ -482,6 +493,88 @@ namespace hc::compare
         // Include initial insertion gaps without changing caret/selection bytes.
         first->send(SCI_SETFIRSTVISIBLELINE, 0); second->send(SCI_SETFIRSTVISIBLELINE, 0);
         syncScroll_->setToolTip(tr("%1 / %2의 대응 줄과 가로 위치를 함께 이동합니다.").arg(first->objectName(), second->objectName()));
+    }
+    void CompareWindow::rebuildGutters()
+    {
+        for (auto* gutter : gutters_) delete gutter; gutters_.clear();
+        const auto* pair = currentPair(); if (!pair || editors_.size() < 2) return;
+        const auto create = [this](ScintillaEditBase* Left, ScintillaEditBase* Right, int Side, int Position) {
+            auto* gutter = new ChunkGutter(Left, Right, Side, panes_);
+            panes_->insertWidget(Position, gutter); gutters_.push_back(gutter);
+            gutter->choose_ = [this](auto Id, auto Revision, auto Choice) { chooseGutter(Id, Revision, Choice); };
+        };
+        if (merge_)
+        {
+            // Physical arrows point from each source toward the editable RESULT.
+            panes_->insertWidget(1, output_->parentWidget());
+            create(editors_[0], output_, 0, 1);
+            create(output_, editors_[1], 1, 3);
+        }
+        else create(editors_[pair->inputs_[0]], editors_[pair->inputs_[1]], -1, panes_->indexOf(editors_[pair->inputs_[0]]->parentWidget()) + 1);
+        updateGutters();
+    }
+    void CompareWindow::updateGutters()
+    {
+        const auto* pair = currentPair(); if (!pair || gutters_.isEmpty()) return;
+        for (qsizetype side = 0; side < gutters_.size(); ++side)
+        {
+            auto* gutter = gutters_[side]; gutter->setEnabled(!busy()); std::vector<GutterChunk> chunks;
+            if (merge_)
+            {
+                const auto& model = merge_->Model(); chunks.reserve(model.State().size());
+                for (std::size_t i = 0; i < model.State().size(); ++i)
+                {
+                    const auto& state = model.State()[i]; const auto& block = model.Plan().blocks_[i];
+                    // Unmapped edits cannot be drawn or applied at a trusted location.
+                    if (!state.mapped_) continue;
+                    const auto begin = side == 0 ? block.leftBegin_ : block.rightBegin_;
+                    const auto end = begin + (side == 0 ? block.left_.size() : block.right_.size());
+                    chunks.push_back({block.id_, side == 0 ? std::array{begin, state.begin_} : std::array{state.begin_, begin},
+                        side == 0 ? std::array{end, state.end_} : std::array{state.end_, end}, true, state.resolution_ != Resolution::Unresolved});
+                }
+                gutter->SetChunks(std::move(chunks), model.Revision());
+            }
+            else
+            {
+                const auto position = [this, pair](int Side, std::size_t Line) {
+                    auto* editor = editors_[pair->inputs_[Side]];
+                    const auto at = editor->send(SCI_POSITIONFROMLINE, Line);
+                    return std::size_t(at < 0 ? editor->send(SCI_GETLENGTH) : at);
+                };
+                chunks.reserve(pair->changes_.size());
+                for (const auto& change : pair->changes_)
+                    chunks.push_back({chunks.size() + 1, {position(0, change.begin_), position(1, change.otherBegin_)},
+                        {position(0, change.end_), position(1, change.otherEnd_)}});
+                gutter->SetChunks(std::move(chunks), 0);
+            }
+        }
+    }
+    void CompareWindow::chooseGutter(std::uint64_t Id, std::uint64_t Revision, Resolution Choice)
+    {
+        if (busy()) return;
+        if (merge_)
+        {
+            try
+            {
+                merge_->Choose(Id, Revision, Choice);
+                if (Id && Id <= std::uint64_t(changes_->topLevelItemCount())) changes_->setCurrentItem(changes_->topLevelItem(int(Id - 1)));
+                selectBlock();
+            }
+            catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+            return;
+        }
+        const auto* pair = currentPair(); if (!pair || !Id || Id > pair->changes_.size()) return;
+        QFileDialog dialog(this, tr("청크 병합 — RESULT 저장 경로"));
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) return;
+        Request input; input.mode_ = "merge"; input.gui_ = true; input.theme_ = dark_ ? "dark" : "light";
+        input.file1_ = result_.inputs_[pair->inputs_[0]].path_; input.file2_ = result_.inputs_[pair->inputs_[1]].path_;
+        input.inputEncodings_[0] = InputEncoding(request_, pair->inputs_[0]); input.inputEncodings_[1] = InputEncoding(request_, pair->inputs_[1]);
+        input.output_ = dialog.selectedFiles().front(); input.overwrite_ = QFileInfo::exists(input.output_);
+        auto* window = new CompareWindow(input); window->setAttribute(Qt::WA_DeleteOnClose);
+        window->pendingChunk_ = Id; window->pendingChoice_ = Choice;
+        window->pendingInputs_ = {result_.inputs_[pair->inputs_[0]].raw_, result_.inputs_[pair->inputs_[1]].raw_};
+        window->show();
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {
@@ -529,6 +622,7 @@ namespace hc::compare
         for (auto* action : blockActions_) action->setEnabled(false);
         for (auto* action : wholeActions_) action->setEnabled(ready);
         undo_->setEnabled(ready && output_->send(SCI_CANUNDO)); redo_->setEnabled(ready && output_->send(SCI_CANREDO));
+        updateGutters();
         if (!merge_) return;
         const auto& model = merge_->Model();
         for (std::size_t i = 0; i < model.State().size(); ++i)
@@ -536,7 +630,7 @@ namespace hc::compare
             auto* item = changes_->topLevelItem(int(i)); const auto& block = model.State()[i];
             const auto label = block.resolution_ == Resolution::Unresolved ? tr("미해결") : block.resolution_ == Resolution::Left ? "LEFT" :
                 block.resolution_ == Resolution::Right ? "RIGHT" : block.resolution_ == Resolution::Base ? "BASE" :
-                block.resolution_ == Resolution::LeftThenRight ? "LEFT → RIGHT" : block.resolution_ == Resolution::RightThenLeft ? "RIGHT → LEFT" : tr("수동 완료");
+                block.resolution_ == Resolution::LeftThenRight ? "LEFT → RIGHT" : block.resolution_ == Resolution::RightThenLeft ? "RIGHT → LEFT" : block.resolution_ == Resolution::Omit ? tr("제거") : tr("수동 완료");
             item->setText(3, label + (block.mapped_ ? QString{} : tr(" · 위치 재검토")));
             item->setToolTip(3, block.mapped_ ? QString{} : tr("RESULT의 블록 위치를 확정할 수 없습니다. 전체 결과 검토 후 ‘전체 수동 완료’를 선택하거나 전체 방향을 다시 선택하십시오."));
             item->setData(3, Qt::UserRole, qulonglong(model.Revision()));

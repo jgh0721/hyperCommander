@@ -143,7 +143,7 @@ namespace hc::compare
         if (choices.size() != blocks.size()) throw Failure("IncompleteDecisionPlan");
         const auto initial = seed(Session); QByteArray output; output.reserve(initial.size());
         MergeModel model(Session.plan_); auto plan = std::make_shared<MergePlan>(*Session.plan_);
-        const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual"};
+        const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual", "omit"};
         std::size_t cursor = 0, unresolved = 0;
         const auto append = [&](QByteArrayView Bytes) {
             if (Bytes.size() > resultLimit - output.size()) throw Failure("ResultSizeLimit");

@@ -23,6 +23,7 @@ namespace hc::compare
     // and Scintilla's selection elements. Reserve other IDs for future search.
     inline constexpr int sourceDifferenceIndicator = 20;
     class MergeController;
+    class ChunkGutter;
     class ScrollSynchronizer;
     class FindBar;
     class OverviewBar;
@@ -56,6 +57,9 @@ namespace hc::compare
         void openDirectories();
         void applyAppearance();
         void updateFormats();
+        void rebuildGutters();
+        void updateGutters();
+        void chooseGutter(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         void applyInlineHighlights();
         void chooseFont(const QString& Role);
         void save();
@@ -111,6 +115,10 @@ namespace hc::compare
         QVector<QAction*> findActions_;
         QVector<QAction*> encodingActions_;
         QVector<QLabel*> formatLabels_;
+        QVector<ChunkGutter*> gutters_;
+        std::uint64_t pendingChunk_ = 0;
+        Resolution pendingChoice_ = Resolution::Unresolved;
+        std::array<QByteArray, 2> pendingInputs_;
         QFont uiFont_, listFont_, textFont_;
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         bool refreshing_ = false;
