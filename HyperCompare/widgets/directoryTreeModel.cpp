@@ -126,6 +126,30 @@ namespace hc::compare
         std::vector<bool> previous; previous.reserve(nodes_.size());
         for (const auto& item : nodes_)
         { previous.push_back(item->different_); item->different_ = item->entry_ >= 0 && !DirectoryContentEqual(entries_.at(item->entry_).Status()); }
+        // Sort existing nodes without resetting the model or losing persistent
+        // selections/expanded branches. Preserve the established folder-first order.
+        emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
+        const auto before = persistentIndexList();
+        const auto sort = [](Node* Parent) {
+            auto& children = Parent->children_;
+            std::sort(children.begin(), children.end(), [](const Node* A, const Node* B) {
+                if (A->folder_ != B->folder_) return A->folder_;
+                return QString::compare(A->path_, B->path_, Qt::CaseInsensitive) < 0;
+            });
+            for (std::size_t i = 0; i < children.size(); ++i) children[i]->row_ = int(i);
+        };
+        sort(&root_); for (const auto& item : nodes_) sort(item.get());
+        QModelIndexList after; after.reserve(before.size());
+        for (const auto& index : before) after.append(createIndex(node(index)->row_, index.column(), node(index)));
+        changePersistentIndexList(before, after);
+        emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+        // Keep difference navigation in visible tree order after streamed inserts.
+        order_.clear(); std::vector<Node*> pending(root_.children_.rbegin(), root_.children_.rend());
+        while (!pending.empty())
+        {
+            auto* item = pending.back(); pending.pop_back(); item->order_ = int(order_.size()); order_.push_back(item);
+            pending.insert(pending.end(), item->children_.rbegin(), item->children_.rend());
+        }
         root_.different_ = false;
         for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) if ((*it)->different_) (*it)->parent_->different_ = true;
         QHash<Node*, std::pair<int, int>> ranges;

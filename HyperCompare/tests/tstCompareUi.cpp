@@ -867,6 +867,36 @@ private slots:
         QVERIFY(window.findChild<QAction*>("encoding2_CP949")->isEnabled());
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-text-policy.png")); window.close();
     }
+    void directoryWindowKeepsStreamedModelAtCompletion()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(request.file1_ + "/src")); QVERIFY(QDir().mkpath(request.file2_ + "/src"));
+        for (int i = 0; i < 2000; ++i)
+        { const auto name = QString("/src/file%1.txt").arg(i, 5, 10, QChar('0')); write(request.file1_ + name, "left"); write(request.file2_ + name, "right"); }
+        CompareWindow window(request); window.show(); auto* tree = window.findChild<QTreeView*>("directoryLeftTree");
+        auto* status = window.findChild<QLabel*>("compareStatus");
+        QTRY_VERIFY_WITH_TIMEOUT(tree->isVisible(), 10000); QVERIFY(status->text().contains("중"));
+        auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel"));
+        QSignalSpy resets(model, &QAbstractItemModel::modelReset);
+        const QPersistentModelIndex selected(tree->model()->index(0, 0)); tree->setCurrentIndex(selected); tree->expand(selected);
+        QTRY_VERIFY_WITH_TIMEOUT(status->text().startsWith("디렉터리 비교"), 15000);
+        QCOMPARE(resets.size(), 0); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected)); QVERIFY(tree->isExpanded(selected));
+        QCOMPARE(model->VisibleEntries(), 2001); window.close();
+    }
+    void directoryStreamingCompletionNavigationOrder()
+    {
+        DirectoryTreeModel model; QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        DirectoryProgress batch;
+        for (const auto& path : {QString("a"), QString("b"), QString("b/y"), QString("a/x")})
+        {
+            const bool folder = !path.contains('/'); batch.rows_.append(QJsonObject{{"path", path}, {"status", folder ? "Equal" : "Different"},
+                {"left", QJsonObject{{"present", true}, {"directory", folder}}}, {"right", QJsonObject{{"present", true}, {"directory", folder}}}});
+        }
+        model.ApplyProgress(batch); model.FinishProgress();
+        const auto first = model.NextDifference({}, 1); QCOMPARE(first.data(DirectoryTreeModel::PathRole).toString(), QString("a/x"));
+        const auto second = model.NextDifference(first, 1); QCOMPARE(second.data(DirectoryTreeModel::PathRole).toString(), QString("b/y"));
+        QCOMPARE(model.NextDifference(second, -1), first);
+    }
     void directoryStreamingInteractionLatency()
     {
         DirectoryView view; view.resize(1300, 700); Request request; view.BeginComparison(request); view.show();
@@ -932,6 +962,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(tree->isVisible() || window.ExitCode() == 2, 30000);
         QVERIFY2(tree->isVisible(), qPrintable(window.findChild<QLabel*>("compareStatus")->text()));
         QVERIFY(tree->isEnabled());
+        auto* streamedModel = window.findChild<QAbstractItemModel*>("directoryTreeModel"); QSignalSpy resets(streamedModel, &QAbstractItemModel::modelReset);
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, tree->visualRect(tree->model()->index(0, 0)).center());
         QVERIFY(tree->currentIndex().isValid());
         qInfo("First incremental directory display: %lld ms", elapsed.elapsed());
@@ -940,7 +971,7 @@ private slots:
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-directory-progress.png"));
         QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLabel*>("compareStatus")->text().startsWith("디렉터리 비교") || window.ExitCode() == 2, 1200000);
         auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel")); QVERIFY(model);
-        QVERIFY(model->VisibleEntries() > 100000); QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("디렉터리 비교"));
+        QCOMPARE(resets.size(), 0); QVERIFY(model->VisibleEntries() > 100000); QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("디렉터리 비교"));
         qInfo("Large directory GUI ready: %lld ms, %d entries, sampled peak private %llu bytes", elapsed.elapsed(), model->VisibleEntries(), peakPrivate);
         interaction.stop(); eventGaps.append(heartbeat.elapsed()); std::sort(eventGaps.begin(), eventGaps.end());
         QVERIFY(scrollChanges >= 20); qInfo("Verified actual scroll position changes: %d", scrollChanges);

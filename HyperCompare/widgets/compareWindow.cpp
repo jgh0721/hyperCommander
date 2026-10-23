@@ -499,10 +499,11 @@ namespace hc::compare
         delete extensionView_; extensionView_ = nullptr;
         if (result_.operation_ != "compare3") pairIndex_ = 0;
         { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
-        directory_->hide(); sources_->show(); details_->show();
+        const bool directoryResult = result_.operation_.startsWith("directory");
+        if (!directoryResult) { directory_->hide(); sources_->show(); details_->show(); }
         semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
         details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
-        directory_->SetComparison({}, {});
+        if (!directoryResult) directory_->SetComparison({}, {});
         workPath_.clear(); workExpected_.reset();
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
