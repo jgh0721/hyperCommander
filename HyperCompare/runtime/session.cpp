@@ -408,7 +408,7 @@ namespace hc::compare
         for (const auto& conflict : merged_.conflicts_) conflicts.append(QJsonObject{{"baseBegin", double(conflict.baseBegin_)}, {"baseEnd", double(conflict.baseEnd_)}});
         if (plan_)
         {
-            const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual"};
+            const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual", "omit"};
             for (std::size_t i = 0; i < plan_->initial_.size(); ++i)
             {
                 const auto resolution = plan_->initial_[i].resolution_; unresolved += resolution == Resolution::Unresolved;
@@ -417,7 +417,7 @@ namespace hc::compare
         }
         for (const auto& action : directoryPlan_["actions"].toArray()) unresolved += action.toObject()["choice"] == "unresolved";
         auto extension = extension_;
-        if (extension["payloadSchema"] == "office.paragraphs.v1")
+        if (extension.value("payloadSchema") == "office.paragraphs.v1")
         {
             auto documents = extension["documents"].toArray();
             for (int i = 0; i < documents.size(); ++i)

@@ -1031,6 +1031,8 @@ private slots:
             blocks[0] = block; plan["blocks"] = blocks; auto result = initial;
             ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {});
             QCOMPARE(result.exitCode_, 0); QCOMPARE(result.output_, expected);
+            const auto report = result.Json(); QCOMPARE(report["resolutions"].toArray()[0].toObject()["choice"].toString(), name);
+            QCOMPARE(report["engineVersion"].toString(), QString("myers-bounded-2")); QVERIFY(report["extension"].toObject().isEmpty());
         }
         auto partial = initial; ApplyDecisionPlan(r, partial, QJsonDocument(templatePlan).toJson(), {});
         QCOMPARE(partial.exitCode_, 1); QVERIFY(!QFile::exists(r.output_));

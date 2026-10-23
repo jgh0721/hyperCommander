@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 블록 제거 선택의 JSON 보고와 기본 비교 엔진 버전 표시를 수정한다.
+
 * HyperCompare RESULT 저장 단계의 복구 기록과 명령행 조회·미리보기·백업 복원을 지원한다.
 
 * HyperCompare BASE·RESULT를 포함한 전체 패널 정렬과 편집 후 비동기 재정렬을 지원한다.
