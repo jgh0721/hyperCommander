@@ -28,7 +28,8 @@ namespace hc::compare
         if (Revision == revision_ && Chunks == chunks_) { Refresh(); return; }
         // Hide old controls immediately so queued painting cannot apply stale IDs.
         for (auto& row : buttons_) for (auto* button : row) button->hide();
-        chunks_ = std::move(Chunks); revision_ = Revision; Refresh();
+        // A synchronous grab/paint can precede the queued arrange after editing.
+        rows_.clear(); chunks_ = std::move(Chunks); revision_ = Revision; Refresh();
     }
     void ChunkGutter::Refresh()
     {

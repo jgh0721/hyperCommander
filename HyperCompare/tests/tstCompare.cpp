@@ -1220,6 +1220,43 @@ private slots:
         QCOMPARE(limited.completion_, QString("Complete")); QCOMPARE(limited.exitCode_, 1);
         QCOMPARE(limited.pairViews_[0]->inline_.skippedLines_, std::size_t(1)); QVERIFY(!limited.edits_.empty());
     }
+    void similarLineAlignmentAndInlineRanges()
+    {
+        const std::string a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
+        const std::string b = "head\n// new log\nalpha_value = 9;\n// keep inserted\nomega_counter = 8;\ntail\n";
+        const auto edits = Diff(a, b); QCOMPARE(edits.size(), std::size_t(1));
+        const auto ordinary = AlignmentMap::Build(4, 6, edits); const auto map = ordinary.WithSimilarLines(a, b);
+        QVERIFY(map.HasSimilarLines()); QCOMPARE(map.RowCount(), std::size_t(6));
+        QCOMPARE(map.DisplayRow(0, 1), std::size_t(2)); QCOMPARE(map.DisplayRow(0, 2), std::size_t(4));
+        QVERIFY(!map.LineAtRow(0, 1)); QVERIFY(!map.LineAtRow(0, 3));
+        QCOMPARE(map.MapLine(0, 1), std::size_t(2)); QCOMPARE(map.MapLine(1, 4), std::size_t(2));
+        for (unsigned side = 0; side < 2; ++side) for (std::size_t line = 0; line < map.LineCount(side); ++line)
+            QCOMPARE(map.LineAtRow(side, map.DisplayRow(side, line)), std::optional<std::size_t>(line));
+        const auto decorated = BuildInlineDiff(a, b, edits, {}, &map);
+        QCOMPARE(decorated.pairedLines_, std::size_t(2)); QCOMPARE(decorated.skippedLines_, std::size_t(0));
+        QCOMPARE(decorated.ranges_[0], (std::vector<ByteRange>{{a.find('1'), a.find('1') + 1}, {a.find('2'), a.find('2') + 1}}));
+        QCOMPARE(decorated.ranges_[1], (std::vector<ByteRange>{{b.find('9'), b.find('9') + 1}, {b.find('8'), b.find('8') + 1}}));
+        const auto reverse = AlignmentMap::Build(6, 4, Diff(b, a)).WithSimilarLines(b, a);
+        QVERIFY(reverse.HasSimilarLines()); QCOMPARE(reverse.DisplayRow(1, 2), map.DisplayRow(0, 2));
+        Budget low; low.steps_ = 0; QVERIFY(!ordinary.WithSimilarLines(a, b, low).HasSimilarLines());
+        low = {}; low.deadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        QVERIFY(!ordinary.WithSimilarLines(a, b, low).HasSimilarLines());
+        std::atomic_bool canceled{true}; low = {}; low.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(ordinary.WithSimilarLines(a, b, low), Failure);
+        QVERIFY_EXCEPTION_THROWN(ordinary.WithSimilarLines("wrong", b), Failure);
+        const std::string repeated = "repeat_value = 1;\nrepeat_value = 1;\n", changed = "extra\nrepeat_value = 2;\nrepeat_value = 2;\n";
+        QVERIFY(!AlignmentMap::Build(2, 3, Diff(repeated, changed)).WithSimilarLines(repeated, changed).HasSimilarLines());
+        std::string largeA, largeB = "inserted\n";
+        for (int i = 0; i < 129; ++i) { largeA += "field = 1;\n"; largeB += "field = 2;\n"; }
+        QVERIFY(!AlignmentMap::Build(129, 130, Diff(largeA, largeB)).WithSimilarLines(largeA, largeB).HasSimilarLines());
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        write(request.file1_, QByteArray::fromStdString(a)); write(request.file2_, QByteArray::fromStdString(b));
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto gui = Execute(request, cancel, false);
+        QVERIFY(gui.pairViews_[0]->alignment_->HasSimilarLines()); QCOMPARE(gui.pairViews_[0]->inline_.ranges_, decorated.ranges_);
+        request.headless_ = true; const auto cli = Execute(request, cancel, false); QCOMPARE(gui.Json(), cli.Json()); QCOMPARE(gui.edits_, cli.edits_);
+        request.headless_ = false; const auto buffers = CompareOpenBuffers(request, gui, {QByteArray::fromStdString(a), QByteArray::fromStdString(b)}, {});
+        QCOMPARE(buffers.completion_, QString("Complete")); QVERIFY(buffers.pairViews_[0]->alignment_->HasSimilarLines());
+    }
     void alignmentBoundaries()
     {
         const std::string left = "a\r\nkeep\nz", right = "prefix\na\r\ninsert\nkeep\nZ\nend";

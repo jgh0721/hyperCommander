@@ -179,6 +179,49 @@ namespace hc::compare
         { state_->setText(tr("범위 병합은 연속된 텍스트 선택을 사용하십시오.")); return true; }
         const auto begin = std::max(selectedBegin, SourceBegin), end = std::min(selectedEnd, SourceEnd);
         if (begin >= end || Target->send(SCI_GETREADONLY)) return true;
+        const bool whole = begin == SourceBegin && end == SourceEnd;
+        const auto* pair = currentPair();
+        if (!merge_ && editors_.size() == 2 && pair && pair->alignment_->HasSimilarLines())
+        {
+            const unsigned from = Source == editors_[pair->inputs_[0]] ? 0 : 1, to = 1 - from;
+            const auto position = [](ScintillaEditBase* Editor, std::size_t Line) {
+                const auto at = Editor->send(SCI_POSITIONFROMLINE, Line); return at < 0 ? Editor->send(SCI_GETLENGTH) : at;
+            };
+            struct Replacement { sptr_t begin_, end_; QByteArray text_; };
+            QVector<Replacement> replacements; const auto sourceText = bytes(Source);
+            for (const auto& run : pair->alignment_->Runs())
+            {
+                if (run.begin_[from] == run.end_[from]) continue; // Preserve target-only rows.
+                const auto runBegin = position(Source, run.begin_[from]), runEnd = position(Source, run.end_[from]);
+                const auto first = std::max(begin, runBegin), last = std::min(end, runEnd); if (first >= last) continue;
+                const auto count = run.end_[to] - run.begin_[to];
+                const auto mapPosition = [&](sptr_t At) {
+                    const auto line = At == runEnd ? run.end_[from] : std::size_t(Source->send(SCI_LINEFROMPOSITION, At));
+                    const auto offset = line - run.begin_[from];
+                    if (offset >= count) return std::clamp(position(Target, run.end_[to]), TargetBegin, TargetEnd);
+                    const auto destination = run.begin_[to] + offset;
+                    const auto start = position(Target, destination);
+                    if (At == runEnd) return std::clamp(start, TargetBegin, TargetEnd);
+                    const auto characters = Source->send(SCI_COUNTCHARACTERS, position(Source, line), At);
+                    const auto mapped = Target->send(SCI_POSITIONRELATIVE, start, characters);
+                    const auto lineEnd = Target->send(SCI_GETLINEENDPOSITION, destination);
+                    return std::clamp(mapped < 0 ? lineEnd : std::min(mapped, lineEnd), TargetBegin, TargetEnd);
+                };
+                replacements.push_back({mapPosition(first), mapPosition(last), sourceText.mid(first, last - first)});
+            }
+            if (replacements.isEmpty()) return true;
+            sptr_t cursor = replacements.back().begin_ + replacements.back().text_.size();
+            for (qsizetype i = 0; i + 1 < replacements.size(); ++i) cursor += replacements[i].text_.size() - (replacements[i].end_ - replacements[i].begin_);
+            activeInput_ = editors_.indexOf(Target); Target->send(SCI_BEGINUNDOACTION);
+            // Snapshot all ranges before the first mutation invalidates comparison state.
+            for (auto it = replacements.crbegin(); it != replacements.crend(); ++it)
+            {
+                Target->send(SCI_SETTARGETRANGE, it->begin_, it->end_);
+                Target->send(SCI_REPLACETARGET, uptr_t(it->text_.size()), reinterpret_cast<sptr_t>(it->text_.constData()));
+            }
+            Target->send(SCI_ENDUNDOACTION); Target->send(SCI_SETSEL, cursor, cursor);
+            Target->setFocus(Qt::OtherFocusReason); updateMerge(); return true;
+        }
         // Align selected document lines from the chunk's first line. Do not use
         // proportional scroll mapping: it would overwrite unselected target rows.
         const auto sourceLine = Source->send(SCI_LINEFROMPOSITION, SourceBegin);
@@ -193,7 +236,6 @@ namespace hc::compare
             const auto lineEnd = Target->send(SCI_GETLINEENDPOSITION, destination);
             return std::clamp(at < 0 ? lineEnd : std::min(at, lineEnd), TargetBegin, TargetEnd);
         };
-        const bool whole = begin == SourceBegin && end == SourceEnd;
         const auto destinationBegin = whole ? TargetBegin : map(begin), destinationEnd = whole ? TargetEnd : map(end);
         const auto replacement = bytes(Source).mid(begin, end - begin);
         if (merge_) merge_->ReplaceRange(Id, Revision, destinationBegin, destinationEnd, replacement);

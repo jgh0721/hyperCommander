@@ -18,6 +18,10 @@ namespace hc::compare
     public:
         static AlignmentMap Build(std::size_t LeftLines, std::size_t RightLines,
             const std::vector<Edit>& Edits, const Budget& Limits = {});
+        // Optional, bounded presentation refinement; leaves edit/merge decisions intact.
+        AlignmentMap WithSimilarLines(std::string_view Left, std::string_view Right, const Budget& Limits = {}) const;
+        bool HasSimilarLines() const { return similar_; }
+        std::uint64_t SimilarityWork() const { return similarityWork_; }
         std::size_t MapLine(unsigned FromSide, std::size_t Line) const;
         std::size_t DisplayRow(unsigned Side, std::size_t Line) const;
         std::optional<std::size_t> LineAtRow(unsigned Side, std::size_t Row) const;
@@ -29,6 +33,8 @@ namespace hc::compare
         std::array<std::size_t, 2> lines_{};
         std::vector<AlignmentRun> runs_;
         std::size_t rows_ = 0;
+        bool similar_ = false;
+        std::uint64_t similarityWork_ = 0;
     };
     struct MultiAlignmentRun
     {

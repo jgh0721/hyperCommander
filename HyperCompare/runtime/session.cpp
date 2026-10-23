@@ -311,8 +311,14 @@ namespace hc::compare
                     std::vector<Edit> ranges; ranges.reserve(views[i]->changes_.size());
                     for (const auto& change : views[i]->changes_)
                         ranges.push_back({change.begin_, change.end_, change.otherBegin_, change.otherEnd_, {}});
+                    if (result.inputs_.size() == 2 && !result.plan_)
+                    {
+                        views[i]->alignment_ = std::make_shared<AlignmentMap>(views[i]->alignment_->WithSimilarLines(
+                            view(result.inputs_[0].utf8_), view(result.inputs_[1].utf8_), decoration));
+                        decoration.steps_ -= views[i]->alignment_->SimilarityWork();
+                    }
                     views[i]->inline_ = BuildInlineDiff(view(result.inputs_[views[i]->inputs_[0]].utf8_),
-                        view(result.inputs_[views[i]->inputs_[1]].utf8_), ranges, decoration);
+                        view(result.inputs_[views[i]->inputs_[1]].utf8_), ranges, decoration, views[i]->alignment_.get());
                     decoration.steps_ -= views[i]->inline_.cells_;
                     result.pairViews_[i] = std::move(views[i]);
                 }

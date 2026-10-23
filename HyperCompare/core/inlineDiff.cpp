@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "inlineDiff.hpp"
+#include "alignmentMap.hpp"
 #include <QString>
 #include <map>
 #include <QTextBoundaryFinder>
@@ -194,8 +195,15 @@ namespace hc::compare
             return true;
         }
     }
-    InlineDiff BuildInlineDiff(std::string_view Left, std::string_view Right, const std::vector<Edit>& Edits, const Budget& Limits)
+    InlineDiff BuildInlineDiff(std::string_view Left, std::string_view Right, const std::vector<Edit>& Edits, const Budget& Limits, const AlignmentMap* Alignment)
     {
+        if (Alignment && Alignment->HasSimilarLines())
+        {
+            std::vector<Edit> aligned;
+            for (const auto& run : Alignment->Runs()) if (run.changed_)
+                aligned.push_back({run.begin_[0], run.end_[0], run.begin_[1], run.end_[1], {}});
+            return BuildInlineDiff(Left, Right, aligned, Limits);
+        }
         InlineDiff result;
         if (Edits.empty())
         {

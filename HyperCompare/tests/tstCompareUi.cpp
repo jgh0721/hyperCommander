@@ -386,6 +386,41 @@ private slots:
             to->send(SCI_UNDO); QTRY_VERIFY(!to->send(SCI_GETMODIFY)); window.close();
         }
     }
+    void similarLineSelectionPreservesTargetInsertions()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        const QByteArray a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
+        const QByteArray b = "head\n// new log\nalpha_value = 9;\n// keep inserted\nomega_counter = 8;\ntail\n";
+        for (bool reverse : {false, true}) for (int selection = 0; selection < 3; ++selection)
+        {
+            QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+            write(r.file1_, reverse ? b : a); write(r.file2_, reverse ? a : b);
+            CompareWindow window(r); window.resize(1300, 800); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 2"), 10000);
+            auto* from = window.findChild<ScintillaEditBase*>(reverse ? "FILE 2" : "FILE 1");
+            auto* to = window.findChild<ScintillaEditBase*>(reverse ? "FILE 1" : "FILE 2");
+            QCOMPARE(from->send(SCI_VISIBLEFROMDOCLINE, 1), to->send(SCI_VISIBLEFROMDOCLINE, 2));
+            QCOMPARE(from->send(SCI_VISIBLEFROMDOCLINE, 2), to->send(SCI_VISIBLEFROMDOCLINE, 4));
+            QByteArray expected = b; const auto digit = a.indexOf('1');
+            if (selection == 0) { from->send(SCI_SETSEL, digit, digit + 1); expected.replace("alpha_value = 9", "alpha_value = 1"); }
+            else if (selection == 1) { from->send(SCI_SETSEL, 5, a.indexOf("tail")); expected.replace("alpha_value = 9", "alpha_value = 1"); expected.replace("omega_counter = 8", "omega_counter = 2"); }
+            else { from->send(SCI_SETSEL, 5, 5); expected = a; } // No selection still replaces the whole chunk.
+            auto* gutter = window.findChild<ChunkGutter*>(); const auto buttonName = QString("chunk1_action%1").arg(reverse ? 1 : 0);
+            QTRY_VERIFY(gutter->findChild<QToolButton*>(buttonName) && gutter->findChild<QToolButton*>(buttonName)->isVisible());
+            QTest::mouseClick(gutter->findChild<QToolButton*>(buttonName), Qt::LeftButton); QCOMPARE(contents(to), expected);
+            QCOMPARE(contents(from), a); QCOMPARE(readBytes(reverse ? r.file1_ : r.file2_), b);
+            to->send(SCI_UNDO); QCOMPARE(contents(to), b); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+            if (!reverse && selection == 0)
+            {
+                // Exercise synchronous painting before the deferred chunk refresh.
+                QVERIFY(!window.grab().isNull());
+                QTRY_COMPARE(from->send(SCI_VISIBLEFROMDOCLINE, 1), to->send(SCI_VISIBLEFROMDOCLINE, 2));
+                QTRY_VERIFY(gutter->findChild<QToolButton*>(buttonName)->isVisible());
+                QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/similar-lines.png"));
+            }
+            window.close();
+        }
+    }
     void selectedChunkRejectsUnrelatedAndRectangle()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");

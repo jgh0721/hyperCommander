@@ -44,7 +44,12 @@ namespace hc::compare
                 pair->alignment_ = std::make_shared<AlignmentMap>(AlignmentMap::Build(CountLines(view(Texts[a]), Limits), CountLines(view(Texts[b]), Limits), edits, Limits));
                 for (const auto& edit : edits) pair->changes_.push_back({edit.begin_, edit.end_, edit.otherBegin_, edit.otherEnd_});
                 auto decoration = Limits; decoration.deadline_ = std::min(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
-                pair->inline_ = BuildInlineDiff(view(Texts[a]), view(Texts[b]), edits, decoration);
+                if (Texts.size() == 2)
+                {
+                    pair->alignment_ = std::make_shared<AlignmentMap>(pair->alignment_->WithSimilarLines(view(Texts[a]), view(Texts[b]), decoration));
+                    decoration.steps_ -= pair->alignment_->SimilarityWork();
+                }
+                pair->inline_ = BuildInlineDiff(view(Texts[a]), view(Texts[b]), edits, decoration, pair->alignment_.get());
                 Previous.pairViews_[slot] = std::move(pair); equal &= Texts[a] == Texts[b];
                 if (!slot) Previous.edits_ = edits;
                 Previous.comparisons_.append(QJsonObject{{"fromFile", a + 1}, {"toFile", b + 1}, {"changeCount", qint64(edits.size())}});

@@ -106,6 +106,95 @@ namespace hc::compare
         }
         Limits.Check(); return map;
     }
+    AlignmentMap AlignmentMap::WithSimilarLines(std::string_view Left, std::string_view Right, const Budget& Limits) const
+    {
+        AlignmentMap result = *this; result.runs_.clear(); result.rows_ = 0; result.similarityWork_ = 0;
+        const auto append = [&](std::size_t A, std::size_t EndA, std::size_t B, std::size_t EndB, bool Changed) {
+            const auto height = std::max(EndA - A, EndB - B); if (!height) return;
+            result.runs_.push_back({{A, B}, {EndA, EndB}, Changed, result.rows_, result.rows_ + height}); result.rows_ += height;
+        };
+        try
+        {
+            const auto left = SplitLines(Left, Limits), right = SplitLines(Right, Limits);
+            if (left.size() != lines_[0] || right.size() != lines_[1]) throw Failure("InvalidAlignmentInput");
+            const auto trim = [](std::string_view Text) {
+                const auto space = [](char C) { return C == ' ' || C == '\t' || C == '\r' || C == '\n'; };
+                while (!Text.empty() && space(Text.front())) Text.remove_prefix(1);
+                while (!Text.empty() && space(Text.back())) Text.remove_suffix(1);
+                return Text;
+            };
+            const auto maximum = std::min<std::uint64_t>(4'000'000, Limits.steps_);
+            for (const auto& run : runs_)
+            {
+                Limits.Check(); const auto n = run.end_[0] - run.begin_[0], m = run.end_[1] - run.begin_[1];
+                std::vector<std::pair<std::size_t, std::size_t>> candidates;
+                if (run.changed_ && n && m && n <= 128 && m <= 128 && result.similarityWork_ < maximum)
+                {
+                    std::vector<std::string_view> a, b; std::uint64_t bytesA = 0, bytesB = 0; bool bounded = true;
+                    for (std::size_t i = 0; i < n; ++i) { a.push_back(trim(left[run.begin_[0] + i])); bytesA += a.back().size(); bounded &= a.back().size() <= 2048; }
+                    for (std::size_t j = 0; j < m; ++j) { b.push_back(trim(right[run.begin_[1] + j])); bytesB += b.back().size(); bounded &= b.back().size() <= 2048; }
+                    const auto work = bytesA * m + bytesB * n + n * m;
+                    if (bounded && work <= maximum - result.similarityWork_)
+                    {
+                        result.similarityWork_ += work;
+                        std::vector<unsigned> rowBest(n), rowSecond(n), colBest(m), colSecond(m);
+                        std::vector<std::size_t> rowChoice(n), colChoice(m);
+                        const auto best = [](unsigned Score, std::size_t At, unsigned& First, unsigned& Second, std::size_t& Choice) {
+                            if (Score > First) { Second = First; First = Score; Choice = At; } else Second = std::max(Second, Score);
+                        };
+                        for (std::size_t i = 0; i < n; ++i)
+                        {
+                            Limits.Check();
+                            for (std::size_t j = 0; j < m; ++j)
+                            {
+                                std::size_t prefix = 0, suffix = 0;
+                                while (prefix < a[i].size() && prefix < b[j].size() && a[i][prefix] == b[j][prefix]) ++prefix;
+                                while (suffix < a[i].size() - prefix && suffix < b[j].size() - prefix &&
+                                    a[i][a[i].size() - suffix - 1] == b[j][b[j].size() - suffix - 1]) ++suffix;
+                                const auto common = prefix + suffix;
+                                const unsigned score = common >= 4 ? unsigned(2000 * common / (a[i].size() + b[j].size())) : 0;
+                                best(score, j, rowBest[i], rowSecond[i], rowChoice[i]); best(score, i, colBest[j], colSecond[j], colChoice[j]);
+                            }
+                        }
+                        for (std::size_t i = 0; i < n; ++i)
+                        {
+                            const auto j = rowChoice[i];
+                            if (rowBest[i] >= 700 && rowBest[i] >= rowSecond[i] + 80 && colChoice[j] == i && colBest[j] >= colSecond[j] + 80)
+                                candidates.emplace_back(i, j);
+                        }
+                    }
+                }
+                // Unique mutual best matches, in monotone order. Repeated or weak
+                // candidates retain the established ordinal fallback.
+                std::vector<std::size_t> tails; std::vector<int> previous(candidates.size(), -1);
+                for (std::size_t i = 0; i < candidates.size(); ++i)
+                {
+                    const auto at = std::lower_bound(tails.begin(), tails.end(), candidates[i].second,
+                        [&](std::size_t Index, std::size_t Value) { return candidates[Index].second < Value; });
+                    const auto position = std::size_t(at - tails.begin()); if (position) previous[i] = int(tails[position - 1]);
+                    if (at == tails.end()) tails.push_back(i); else *at = i;
+                }
+                std::vector<std::pair<std::size_t, std::size_t>> anchors;
+                for (int i = tails.empty() ? -1 : int(tails.back()); i >= 0; i = previous[std::size_t(i)]) anchors.push_back(candidates[std::size_t(i)]);
+                std::reverse(anchors.begin(), anchors.end());
+                if (std::none_of(anchors.begin(), anchors.end(), [](const auto& Pair) { return Pair.first != Pair.second; }))
+                { append(run.begin_[0], run.end_[0], run.begin_[1], run.end_[1], run.changed_); continue; }
+                result.similar_ = true; auto a = run.begin_[0], b = run.begin_[1];
+                for (const auto& [i, j] : anchors)
+                {
+                    const auto endA = run.begin_[0] + i, endB = run.begin_[1] + j;
+                    append(a, endA, b, endB, true); append(endA, endA + 1, endB, endB + 1, true); a = endA + 1; b = endB + 1;
+                }
+                append(a, run.end_[0], b, run.end_[1], true);
+            }
+            Limits.Check(); return result;
+        }
+        catch (const Failure& error)
+        {
+            if (error.code_ != "Timeout") throw;
+            auto fallback = *this; fallback.similarityWork_ = result.similarityWork_; return fallback;
+        }
+    }
     std::size_t AlignmentMap::DisplayRow(unsigned Side, std::size_t Line) const
     {
         if (Side > 1) throw Failure("InvalidAlignmentSide");
