@@ -7,6 +7,7 @@
 #include "directoryView.hpp"
 #include "directoryMergeDialog.hpp"
 #include "semanticView.hpp"
+#include "imageCompareView.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -348,6 +349,7 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
+        delete extensionView_; extensionView_ = nullptr;
         if (result_.operation_ != "compare3") pairIndex_ = 0;
         { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
         directory_->hide(); sources_->show(); details_->show();
@@ -364,6 +366,19 @@ namespace hc::compare
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
         if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
+        if (!result_.extension_.isEmpty())
+        {
+            try
+            {
+                if (result_.extension_["payloadSchema"] != "image.rgba.v1") throw Failure("ExtensionViewUnsupported");
+                extensionView_ = new ImageCompareView(result_.extension_, {request_.file1_, request_.file2_}, centralWidget());
+                auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->addWidget(extensionView_);
+                sources_->hide(); details_->hide(); directory_->hide(); extensionView_->show();
+                layout->setSizes({0, 0, 0, 700}); state_->setText(tr("PNG 비교 — %1").arg(result_.outcome_));
+            }
+            catch (const std::exception& error) { exitCode_ = 2; state_->setText(QString::fromUtf8(error.what())); }
+            applyAppearance(); updateMerge(); return;
+        }
         if (result_.operation_.startsWith("directory"))
         {
             directory_->SetComparison(request_, result_); sources_->hide(); details_->hide(); directory_->show();
@@ -462,7 +477,7 @@ namespace hc::compare
     void CompareWindow::updateMerge()
     {
         directory_->setEnabled(!busy());
-        const bool directoryMode = !directory_->isHidden();
+        const bool directoryMode = !directory_->isHidden() || extensionView_ != nullptr;
         for (auto* action : wholeActions_) action->setVisible(!directoryMode);
         for (auto* action : blockActions_) action->setVisible(!directoryMode);
         save_->setVisible(!directoryMode);

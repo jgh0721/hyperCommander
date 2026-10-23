@@ -8,6 +8,10 @@
 #include "widgets/directoryView.hpp"
 #include "widgets/directoryMergeDialog.hpp"
 #include "widgets/semanticView.hpp"
+#include "widgets/imageCompareView.hpp"
+#include <QBuffer>
+#include <QPainter>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QTableView>
 #include <QPushButton>
@@ -89,6 +93,25 @@ private slots:
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void pngViewOriginalRasterZoomAndThemes()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.png"); request.file2_ = dir.filePath("right.png");
+        QImage left(640, 480, QImage::Format_RGBA8888); left.fill(QColor(240, 245, 250));
+        { QPainter painter(&left); painter.fillRect(50, 50, 240, 180, QColor("#437ead")); painter.fillRect(350, 210, 160, 180, QColor(100, 160, 110, 160)); }
+        auto right = left.copy(); { QPainter painter(&right); painter.fillRect(80, 80, 160, 100, QColor("#bd765d")); }
+        QVERIFY(left.save(request.file1_, "PNG")); QVERIFY(right.save(request.file2_, "PNG"));
+        CompareWindow window(request); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("imageCompareView"), 10000);
+        auto* view = static_cast<ImageCompareView*>(window.findChild<QWidget*>("imageCompareView"));
+        QCOMPARE(view->Image(0).size(), left.size()); QCOMPARE(view->Image(1).pixelColor(100, 100), right.pixelColor(100, 100));
+        QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty()); QVERIFY(!action(window, "결과 저장")->isEnabled());
+        auto* zoom = view->findChild<QComboBox*>("imageZoom"); zoom->setCurrentIndex(4);
+        auto* area = view->findChild<QScrollArea*>("imageArea0"); QCOMPARE(area->widget()->size(), QSize(1280, 960)); QVERIFY(!area->widgetResizable());
+        zoom->setCurrentIndex(0); QVERIFY(area->widgetResizable());
+        action(window, "Dark")->setChecked(false); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/png-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/png-dark.png"));
+        const auto before = view->Image(0).copy(); action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        auto* refreshed = static_cast<ImageCompareView*>(window.findChild<QWidget*>("imageCompareView")); QVERIFY(refreshed); QCOMPARE(refreshed->Image(0), before); window.close();
     }
     void sourceFunctionsNavigationAndPairs()
     {
@@ -218,7 +241,7 @@ private slots:
         write(r.file1_, a); write(r.file2_, b); write(r.file3_, c);
         CompareWindow window(r); window.show(); window.activateWindow();
         QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 3"), 10000);
-        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); QVERIFY(selector->isVisible()); QCOMPARE(selector->count(), 3);
+        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); QTRY_VERIFY_WITH_TIMEOUT(selector->isVisible(), 10000); QCOMPARE(selector->count(), 3);
         const std::array<ScintillaEditBase*, 3> editors{window.findChild<ScintillaEditBase*>("FILE 1"), window.findChild<ScintillaEditBase*>("FILE 2"), window.findChild<ScintillaEditBase*>("FILE 3")};
         auto* bar = window.findChild<OverviewBar*>(); auto* tree = window.findChild<QTreeWidget*>("compareChanges");
         editors[0]->setFocus(); QTest::qWait(50);

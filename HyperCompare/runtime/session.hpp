@@ -65,6 +65,7 @@ namespace hc::compare
         QJsonObject directoryPlan_;
         QJsonObject semantic_;
         QJsonObject engineProbe_;
+        QJsonObject extension_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;
@@ -80,4 +81,5 @@ namespace hc::compare
     int WriteReport(const Request& Input, const Result& Value);
     QJsonObject Capabilities();
     Snapshot ReadTextSnapshot(const QString& Path, const QString& Encoding, const Budget& Limits);
+    Snapshot ReadFileSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits);
 }

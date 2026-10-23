@@ -76,6 +76,7 @@ namespace hc::compare
         SemanticView* semantic_ = nullptr;
         QTabWidget* details_ = nullptr;
         QWidget* sources_ = nullptr;
+        QWidget* extensionView_ = nullptr;
         QSplitter* panes_ = nullptr;
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;

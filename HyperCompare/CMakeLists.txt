@@ -12,6 +12,7 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp
     runtime/workerHost.cpp runtime/workerHost.hpp
+    runtime/extensionEngine.cpp runtime/extensionEngine.hpp
     runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp
@@ -31,6 +32,7 @@ target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/semanticView.cpp widgets/semanticView.hpp
+    widgets/imageCompareView.cpp widgets/imageCompareView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
 target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
@@ -45,17 +47,17 @@ foreach(target IN ITEMS hc_compare_core hc_compare_runtime hc_compare_widgets Hy
     target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 endforeach()
 hc_enable_qt_deployment(HyperCompare PLUGINS)
-hc_enable_qt_deployment(HyperCompareCli)
+hc_enable_qt_deployment(HyperCompareCli PLUGINS)
 
 if(BUILD_TESTING)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
     qt_add_executable(hc_compare_tests tests/tstCompare.cpp)
-    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime Qt6::Test)
+    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime Qt6::Test Qt6::Gui)
     target_compile_definitions(hc_compare_tests PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(hc_compare_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     add_dependencies(hc_compare_tests HyperCompareCli HyperCompare)
     add_test(NAME hypercompare.core COMMAND hc_compare_tests -o "${CMAKE_CURRENT_BINARY_DIR}/core-results.txt,txt")
-    hc_enable_qt_deployment(hc_compare_tests TEST)
+    hc_enable_qt_deployment(hc_compare_tests TEST PLUGINS)
     qt_add_executable(hc_compare_ui_tests tests/tstCompareUi.cpp)
     target_link_libraries(hc_compare_ui_tests PRIVATE hc_compare_widgets hc_scintilla fmstyle Qt6::Test)
     target_compile_definitions(hc_compare_ui_tests PRIVATE NOMINMAX UNICODE _UNICODE)

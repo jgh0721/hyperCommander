@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 격리 PNG 2way 비교 어댑터 추가. 원본 RGBA8 픽셀·파일 바이트 차이를 구분하고 변경 영역 Location, 원본 해상도 확대, sRGB 표시, Light/Dark 화면 및 실제 입력 probe를 제공한다.
+
 * HyperCompare 파서 IPC를 버전형 공통 워커로 분리하고 요청 ID·엔진·내용 해시를 검증한다. 같은 로그온 세션의 GUI·CLI 워커를 두 개로 제한하며 비정상 종료 슬롯을 회수한다.
 
 * HyperCompare 텍스트·디렉터리·함수 분석 엔진의 버전·decoder·writer·view·Location schema와 비교/병합 기능을 분리한 registry 추가. 명령행 probe로 입력 형식·전체 텍스트 디코딩·한도·3파일 지원 여부와 미지원 사유를 조회한다.

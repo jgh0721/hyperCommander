@@ -7,6 +7,7 @@
 #include "mergeWork.hpp"
 #include "semantic.hpp"
 #include "engineRegistry.hpp"
+#include "extensionEngine.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -154,6 +155,7 @@ namespace hc::compare
     }
 
     Snapshot ReadTextSnapshot(const QString& Path, const QString& Encoding, const Budget& Limits) { return load(Path, Encoding, Limits); }
+    Snapshot ReadFileSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits) { return readSnapshot(Path, MaxBytes, Limits); }
     QJsonObject Capabilities()
     {
         return {{"schemaVersion", 1}, {"phase", "foundation"}, {"engineRegistry", EngineCatalog()}, {"textCompare2", true}, {"textCompare3", true},
@@ -162,7 +164,7 @@ namespace hc::compare
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
-            {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", false}, {"office", false}, {"archive", false},
+            {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", false}, {"archive", false},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
@@ -203,6 +205,7 @@ namespace hc::compare
             else
             {
                 if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
+                if (TryExtensionComparison(Input, result, limits)) { result.completion_ = "Complete"; return result; }
                 result.operation_ = Input.mode_ == "merge" ? (Input.base_.isEmpty() ? "merge2" : "merge3") : "compare2";
                 result.inputs_.push_back(load(Input.file1_, Input.encoding_, limits));
                 result.inputs_.push_back(load(Input.file2_, Input.encoding_, limits));
@@ -383,7 +386,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"engineVersion", "myers-bounded-1"}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete"}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
-            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_},
+            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension_},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}};

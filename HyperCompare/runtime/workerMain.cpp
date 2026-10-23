@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "workerHost.hpp"
 #include "semantic.hpp"
+#include "extensionEngine.hpp"
 #include <QCryptographicHash>
 #include <QFile>
 #include <QJsonDocument>
@@ -20,6 +21,7 @@ namespace hc::compare
         try
         {
             if (engine == "source.tree-sitter") result = SemanticWorkerRequest(payload);
+            else if (engine == "image.png") result = PngWorkerRequest(payload);
             else throw Failure("WorkerEngineUnsupported");
         }
         catch (const std::exception& failure) { result = {{"status", "Unavailable"}, {"reason", QString::fromUtf8(failure.what())}}; }

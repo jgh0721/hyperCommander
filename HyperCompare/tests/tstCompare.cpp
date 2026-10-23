@@ -10,6 +10,9 @@
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
 #include <QCryptographicHash>
+#include <QBuffer>
+#include <QImage>
+#include <QtEndian>
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -25,6 +28,8 @@ class CompareTests final : public QObject
 {
     Q_OBJECT
 private:
+    static QByteArray png(const QImage& Image)
+    { QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); if (!Image.save(&buffer, "PNG")) qFatal("PNG fixture failed"); return bytes; }
     static void write(const QString& Path, const QByteArray& Data)
     { QFile file(Path); if (!file.open(QIODevice::WriteOnly) || file.write(Data) != Data.size()) qFatal("Fixture write failed"); }
     static QByteArray read(const QString& Path)
@@ -40,6 +45,56 @@ private:
         return row.back();
     }
 private slots:
+    void pngPixelsMetadataAndLocations()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.png"); request.file2_ = dir.filePath("right.png"); request.headless_ = true;
+        QImage a(20, 12, QImage::Format_RGBA8888); a.fill(QColor(10, 20, 30, 85)); auto b = a.copy(); b.setPixelColor(5, 3, QColor(44, 55, 66, 85));
+        write(request.file1_, png(a)); write(request.file2_, png(b)); const auto canceled = std::make_shared<std::atomic_bool>(false);
+        auto result = Execute(request, canceled, false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.exitCode_, 1);
+        QCOMPARE(result.operation_, "compare-image"); const auto pair = result.extension_["pairs"].toArray()[0].toObject();
+        QCOMPARE(pair["differentPixels"].toInteger(), 1); QCOMPARE(pair["bounds"].toObject(), (QJsonObject{{"x", 5}, {"y", 3}, {"width", 1}, {"height", 1}}));
+        QCOMPARE(pair["locations"].toArray()[0].toObject()["schema"].toString(), "image.rect.v1");
+        QVERIFY(!result.extension_["documents"].toArray()[0].toObject().contains("rgba"));
+        b = a; b.setText("Comment", "metadata changed"); write(request.file2_, png(b)); result = Execute(request, canceled, false);
+        QCOMPARE(result.exitCode_, 1); QVERIFY(result.extension_["pairs"].toArray()[0].toObject()["pixelEqual"].toBool());
+        write(request.file2_, read(request.file1_)); result = Execute(request, canceled, false); QCOMPARE(result.exitCode_, 0);
+        request.mode_ = "probe"; result = Execute(request, canceled, false); QCOMPARE(result.exitCode_, 0);
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "full-png-decode"); QVERIFY(!result.engineProbe_["mergeTwoAvailable"].toBool());
+        request.mode_ = "merge"; request.output_ = dir.filePath("output.png"); result = Execute(request, canceled, true);
+        QCOMPARE(result.error_, "ExtensionMergeUnsupported"); QVERIFY(!QFileInfo::exists(request.output_));
+    }
+    void pngAlphaDimensionsAndRejections()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("a.png"); request.file2_ = dir.filePath("b.png"); request.headless_ = true;
+        QImage a(10, 20, QImage::Format_RGBA8888); a.fill(QColor(10, 20, 30, 0)); QImage b(20, 12, QImage::Format_RGBA8888); b.fill(QColor(10, 20, 30, 0));
+        write(request.file1_, png(a)); write(request.file2_, png(b)); auto canceled = std::make_shared<std::atomic_bool>(false);
+        auto result = Execute(request, canceled, false); QCOMPARE(result.extension_["pairs"].toArray()[0].toObject()["differentPixels"].toInteger(), 200);
+        const auto locations = result.extension_["pairs"].toArray()[0].toObject()["locations"].toArray();
+        QCOMPARE(locations[0].toObject()["payload"].toObject()["width"].toInt(), 10);
+        QCOMPARE(locations[1].toObject()["payload"].toObject()["height"].toInt(), 12);
+        b = a.copy(); b.setPixelColor(0, 0, QColor(99, 20, 30, 0)); write(request.file2_, png(b)); result = Execute(request, canceled, false);
+        QCOMPARE(result.extension_["pairs"].toArray()[0].toObject()["differentPixels"].toInteger(), 1);
+        auto invalid = png(a); qToBigEndian<quint32>(8193, invalid.data() + 16); write(request.file2_, invalid); result = Execute(request, canceled, false); QCOMPARE(result.error_, "ImagePixelLimit");
+        invalid = png(a); invalid[24] = char(16); write(request.file2_, invalid); result = Execute(request, canceled, false); QCOMPARE(result.error_, "Png16BitUnsupported");
+        invalid = png(a); invalid.insert(invalid.size() - 12, QByteArray::fromHex("000000086163544c000000010000000000000000"));
+        write(request.file2_, invalid); result = Execute(request, canceled, false); QCOMPARE(result.error_, "AnimatedPngUnsupported");
+        invalid = png(a); invalid.chop(5); write(request.file2_, invalid); result = Execute(request, canceled, false); QCOMPARE(result.error_, "TruncatedOrTrailingPng");
+        request.file3_ = request.file1_; result = Execute(request, canceled, false); QCOMPARE(result.error_, "ExtensionThreeUnsupported");
+    }
+    void pngMaximumRasterAndConsole()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("a.png"); request.file2_ = dir.filePath("b.png");
+        QImage image(2048, 2048, QImage::Format_RGBA8888); image.fill(QColor(20, 40, 60, 128)); write(request.file1_, png(image)); write(request.file2_, read(request.file1_));
+        QElapsedTimer timer; timer.start(); const auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
+        QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_)); QCOMPARE(result.exitCode_, 0);
+        const auto document = result.extension_["documents"].toArray()[0].toObject();
+        QCOMPARE(QByteArray::fromBase64(document["rgba"].toString().toLatin1()).size(), 2048 * 2048 * 4);
+        qInfo("PNG two 2048x2048 full raster response: %lld ms", timer.elapsed());
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-file1", request.file1_, "-file2", request.file2_, "-format", "json"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object(); QCOMPARE(report["extension"].toObject()["payloadSchema"].toString(), "image.rgba.v1");
+        QVERIFY(!report["extension"].toObject()["documents"].toArray()[0].toObject().contains("rgba"));
+    }
     void workerSharedCapacityAndAbandonedLease()
     {
         struct Handles { HANDLE values_[2]{}; ~Handles() { for (auto value : values_) if (value) CloseHandle(value); } } handles;
@@ -81,7 +136,7 @@ private slots:
             QVERIFY(!ids.contains(engine.id_)); ids.insert(engine.id_); QVERIFY(!engine.version_.isEmpty()); QVERIFY(!engine.locationSchema_.isEmpty());
             if (engine.mergeTwo_ || engine.mergeBase_) QVERIFY(!engine.writer_.isEmpty());
         }
-        QCOMPARE(FindComparisonEngine("text")->id_, "text.myers"); QVERIFY(!FindComparisonEngine("png"));
+        QCOMPARE(FindComparisonEngine("text")->id_, "text.myers"); QCOMPARE(FindComparisonEngine("png")->id_, "image.png");
         QCOMPARE(DetectResourceFormat("fake.png", "plain text"), "text");
         QCOMPARE(DetectResourceFormat("fake.txt", QByteArray::fromHex("89504e470d0a1a0a")), "png");
         QCOMPARE(DetectResourceFormat("a.DOCX", QByteArray::fromHex("504b0304")), "docx");
@@ -100,7 +155,7 @@ private slots:
         QVERIFY(result.engineProbe_["mergeTwoAvailable"].toBool()); QCOMPARE(result.commit_, "NotRequested");
         write(request.file2_, QByteArray::fromHex("89504e470d0a1a0a")); result = Execute(request, cancel, false);
         QCOMPARE(result.exitCode_, 2); QCOMPARE(result.completion_, "Complete"); QCOMPARE(result.outcome_, "Unsupported");
-        QCOMPARE(result.engineProbe_["inputs"].toArray()[1].toObject()["reason"].toString(), "NoRegisteredEngine");
+        QCOMPARE(result.engineProbe_["inputs"].toArray()[1].toObject()["reason"].toString(), "InvalidPng");
         write(request.file2_, QByteArray::fromHex("ff")); result = Execute(request, cancel, false); QCOMPARE(result.exitCode_, 2);
         write(request.file1_, QByteArray::fromHex("6100")); write(request.file2_, QByteArray::fromHex("6200")); request.encoding_ = "UTF-16LE";
         result = Execute(request, cancel, false); QCOMPARE(result.exitCode_, 0);

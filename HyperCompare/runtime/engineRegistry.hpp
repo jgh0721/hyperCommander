@@ -19,11 +19,13 @@ namespace hc::compare
         bool compareTwo_ = false, compareThree_ = false, mergeTwo_ = false, mergeBase_ = false;
         bool independentThree_ = false, isolated_ = false;
         qint64 maxInputBytes_ = 0;
+        QJsonObject limits_;
         QJsonObject Json() const;
     };
     const std::vector<EngineDescriptor>& RegisteredEngines();
     const EngineDescriptor* FindComparisonEngine(const QString& Format);
     QString DetectResourceFormat(const QString& Path, const QByteArray& Prefix);
+    QString InspectResourceFormat(const QString& Path, const Budget& Limits);
     QJsonObject EngineCatalog();
     QJsonObject ProbeComparison(const Request& Input, const Budget& Limits);
 }
