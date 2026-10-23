@@ -311,6 +311,10 @@ namespace hc::compare
             }
         });
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
+            // The producer is finished and the channel holds at most four batches.
+            // Keep their final statuses before reusing the populated tree.
+            if (directoryStreaming_ && !closing_ && request_.directoryProgress_)
+                while (auto progress = request_.directoryProgress_->Take()) directory_->ApplyProgress(*progress);
             directoryTimer_.stop(); directoryStreaming_ = false;
             cancel_->setEnabled(false);
             if (refreshing_)

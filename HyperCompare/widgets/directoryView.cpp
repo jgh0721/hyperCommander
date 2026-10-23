@@ -221,7 +221,11 @@ namespace hc::compare
     }
     void DirectoryView::EndProgress(bool PreserveRows)
     {
-        if (streaming_ && PreserveRows) model_->SetEntries(treeModel_->Entries());
+        if (streaming_ && PreserveRows)
+        {
+            listDeferred_ = treeMode_ && treeModel_->Entries().size() > 10000;
+            if (!listDeferred_) model_->SetEntries(treeModel_->Entries());
+        }
         streaming_ = false; viewMode_->setEnabled(true); findChild<QComboBox*>("directoryComparisonLevel")->setEnabled(true);
         findChild<QLineEdit*>("directoryQuery")->setEnabled(true); findChild<QComboBox*>("directoryStatusFilter")->setEnabled(true);
     }
@@ -229,12 +233,17 @@ namespace hc::compare
     {
         const bool wasStreaming = streaming_;
         const auto selectedPath = wasStreaming ? currentEntry()["path"].toString() : QString{};
-        const auto expanded = expandedPaths_; expandedPaths_.clear();
+        const bool reuse = wasStreaming && Value.directoryComplete_ && Value.completion_ == "Complete" && treeModel_->Entries().size() == Value.entries_.size();
+        const auto expanded = expandedPaths_; if (!reuse) expandedPaths_.clear();
         EndProgress(false); request_ = Input; comparison_ = Value;
         auto* level = findChild<QComboBox*>("directoryComparisonLevel");
         { const QSignalBlocker blocker(level); level->setCurrentIndex(level->findData(Input.directory_.level_)); }
-        findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
-        treeModel_->SetEntries(Value.entries_);
+        findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); table_->setColumnHidden(4, Input.base_.isEmpty());
+        if (reuse) treeModel_->FinishProgress(); else treeModel_->SetEntries(Value.entries_);
+        // A hidden flat proxy sorts every row when populated. Build it only when
+        // requested for large trees, using the same entry order for selection mapping.
+        listDeferred_ = treeMode_ && Value.entries_.size() > 10000;
+        model_->SetEntries(listDeferred_ ? DirectoryEntries{} : treeModel_->Entries());
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
         for (int side = 0; side < 2; ++side)
         {
@@ -242,7 +251,7 @@ namespace hc::compare
             treeRoots_[side]->setText((side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
             if (!wasStreaming) trees_[side]->expandToDepth(0);
         }
-        if (wasStreaming)
+        if (wasStreaming && !reuse)
         {
             for (const auto& path : expanded)
             {
@@ -293,6 +302,7 @@ namespace hc::compare
         if (Tree == treeMode_) return;
         const int row = treeMode_ ? trees_[0]->currentIndex().data(DirectoryTreeModel::EntryRole).toInt() : filter_->mapToSource(table_->currentIndex()).row();
         const bool selected = treeMode_ ? trees_[0]->currentIndex().isValid() : table_->currentIndex().isValid();
+        if (!Tree && listDeferred_) { model_->SetEntries(treeModel_->Entries()); listDeferred_ = false; }
         treeMode_ = Tree; treeBox_->setVisible(Tree); table_->setVisible(!Tree); updateRoots();
         if (selected)
         {
@@ -308,7 +318,7 @@ namespace hc::compare
             findChild<QPushButton*>(side == 0 ? "directoryCopyRight" : "directoryCopyLeft")->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
-        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(model_->rowCount()));
+        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
     }
     void DirectoryView::OpenCurrent()
     {

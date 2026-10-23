@@ -121,6 +121,23 @@ namespace hc::compare
         for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
             emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), roles);
     }
+    void DirectoryTreeModel::FinishProgress()
+    {
+        std::vector<bool> previous; previous.reserve(nodes_.size());
+        for (const auto& item : nodes_)
+        { previous.push_back(item->different_); item->different_ = item->entry_ >= 0 && !DirectoryContentEqual(entries_.at(item->entry_).Status()); }
+        root_.different_ = false;
+        for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) if ((*it)->different_) (*it)->parent_->different_ = true;
+        QHash<Node*, std::pair<int, int>> ranges;
+        for (std::size_t i = 0; i < nodes_.size(); ++i) if (previous[i] != nodes_[i]->different_)
+        {
+            auto* item = nodes_[i].get(); auto it = ranges.find(item->parent_);
+            if (it == ranges.end()) ranges.insert(item->parent_, {item->row_, item->row_});
+            else { it->first = std::min(it->first, item->row_); it->second = std::max(it->second, item->row_); }
+        }
+        for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
+            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), {Qt::DisplayRole, Qt::AccessibleTextRole, Qt::FontRole});
+    }
     void DirectoryTreeModel::SetFilter(const QString& Query, int Status)
     {
         visibleEntries_ = 0;

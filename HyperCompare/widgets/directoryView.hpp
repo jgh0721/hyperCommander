@@ -69,7 +69,7 @@ namespace hc::compare
         QSplitter* treeBox_ = nullptr;
         QComboBox* viewMode_ = nullptr;
         QSet<QString> expandedPaths_;
-        bool treeMode_ = true, syncing_ = false, streaming_ = false;
+        bool treeMode_ = true, syncing_ = false, streaming_ = false, listDeferred_ = false;
         DirectoryModel* model_ = nullptr;
         DirectoryFilter* filter_ = nullptr;
         QTableView* table_ = nullptr;

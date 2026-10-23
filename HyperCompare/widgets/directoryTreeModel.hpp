@@ -20,6 +20,7 @@ namespace hc::compare
         void SetEntries(DirectoryEntries Entries);
         DirectoryEntries Entries() const { return entries_; }
         void ApplyProgress(const DirectoryProgress& Progress);
+        void FinishProgress();
         void SetFilter(const QString& Query, int Status);
         QModelIndex index(int Row, int Column, const QModelIndex& Parent = {}) const override;
         QModelIndex parent(const QModelIndex& Child) const override;

@@ -890,7 +890,15 @@ private slots:
         std::sort(cycles.begin(), cycles.end());
         qInfo("Streaming 32768 expanded siblings: total %lld ms, cycle p95 %lld ms, max %lld ms", total.elapsed(), cycles[cycles.size() * 95 / 100], cycles.back());
         QCOMPARE(source->VisibleEntries(), 32768); QCOMPARE(tree->model()->rowCount(tree->model()->index(0, 0)), 32768);
-        tree->setFocus(); QTest::keyClick(tree, Qt::Key_End); QVERIFY(tree->currentIndex().isValid()); view.close();
+        tree->setFocus(); QTest::keyClick(tree, Qt::Key_End); QVERIFY(tree->currentIndex().isValid());
+        const QPersistentModelIndex selected(tree->currentIndex()); const auto selectedPath = selected.data(DirectoryTreeModel::PathRole).toString();
+        QSignalSpy resets(source, &QAbstractItemModel::modelReset); Result completed; completed.entries_ = source->Entries(); completed.directoryComplete_ = true; completed.completion_ = "Complete";
+        QElapsedTimer finish; finish.start(); view.SetComparison(request, completed); QCoreApplication::processEvents();
+        qInfo("Streaming completion reusing 32768 entries: %lld ms", finish.elapsed()); QCOMPARE(resets.size(), 0); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected));
+        auto* table = view.findChild<QTableView*>("directoryTable"); QCOMPARE(table->model()->rowCount(), 0);
+        view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(1); QCOMPARE(table->model()->rowCount(), 32768);
+        QCOMPARE(table->currentIndex().data().toString(), selectedPath); view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(0);
+        QCOMPARE(tree->currentIndex().data(DirectoryTreeModel::PathRole).toString(), selectedPath); view.close();
     }
     void directoryLargeWorkspaceAcceptance()
     {
@@ -904,10 +912,21 @@ private slots:
         QElapsedTimer elapsed; elapsed.start(); CompareWindow window(r); window.resize(1400, 850); window.show();
         auto* tree = window.findChild<QTreeView*>("directoryLeftTree");
         QVector<qint64> eventGaps; QElapsedTimer heartbeat; heartbeat.start(); QTimer interaction;
-        int ticks = 0; connect(&interaction, &QTimer::timeout, &interaction, [&] {
+        int ticks = 0, scrollChanges = 0; connect(&interaction, &QTimer::timeout, &interaction, [&] {
             eventGaps.append(heartbeat.restart());
             if (tree->isVisible() && ++ticks % 10 == 0)
-                tree->verticalScrollBar()->setValue(ticks % 20 == 0 ? 0 : tree->verticalScrollBar()->maximum());
+            {
+                // A directory discovered before its children cannot yet be expanded.
+                // Retry a bounded number of branches as enumeration fills them.
+                for (int row = 0; row < std::min(3, tree->model()->rowCount()); ++row)
+                {
+                    const auto root = tree->model()->index(row, 0); if (tree->model()->rowCount(root)) tree->expand(root);
+                    for (int child = 0; child < std::min(3, tree->model()->rowCount(root)); ++child)
+                    { const auto branch = tree->model()->index(child, 0, root); if (tree->model()->rowCount(branch)) tree->expand(branch); }
+                }
+                auto* bar = tree->verticalScrollBar(); const auto before = bar->value();
+                bar->setValue(ticks % 20 == 0 ? 0 : bar->maximum()); scrollChanges += bar->value() != before;
+            }
         }); interaction.start(20);
         QTest::qWait(100);
         QTRY_VERIFY_WITH_TIMEOUT(tree->isVisible() || window.ExitCode() == 2, 30000);
@@ -923,7 +942,8 @@ private slots:
         auto* model = static_cast<DirectoryTreeModel*>(window.findChild<QAbstractItemModel*>("directoryTreeModel")); QVERIFY(model);
         QVERIFY(model->VisibleEntries() > 100000); QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("디렉터리 비교"));
         qInfo("Large directory GUI ready: %lld ms, %d entries, sampled peak private %llu bytes", elapsed.elapsed(), model->VisibleEntries(), peakPrivate);
-        interaction.stop(); std::sort(eventGaps.begin(), eventGaps.end());
+        interaction.stop(); eventGaps.append(heartbeat.elapsed()); std::sort(eventGaps.begin(), eventGaps.end());
+        QVERIFY(scrollChanges >= 20); qInfo("Verified actual scroll position changes: %d", scrollChanges);
         QVERIFY(!eventGaps.isEmpty()); qInfo("During Qt comparison with repeated scrolling: event-loop gap p95 %lld ms, max %lld ms, %lld samples", eventGaps[eventGaps.size() * 95 / 100], eventGaps.back(), eventGaps.size());
         ProcessControllerMemory()->Check();
         auto* view = static_cast<DirectoryView*>(window.findChild<QWidget*>("directoryView"));
