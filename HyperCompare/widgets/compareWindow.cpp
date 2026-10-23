@@ -152,8 +152,8 @@ namespace hc::compare
         saveWork_->setShortcut(QKeySequence("Ctrl+Shift+S")); loadWork_->setShortcut(QKeySequence("Ctrl+Shift+O"));
         saveWork_->setEnabled(false); loadWork_->setEnabled(false);
         auto* editMenu = menuBar()->addMenu(tr("편집"));
-        undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { if (output_ && !busy()) output_->send(SCI_UNDO); });
-        redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { if (output_ && !busy()) output_->send(SCI_REDO); });
+        undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { inputUndo(false); });
+        redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { inputUndo(true); });
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
         find_ = new FindBar(this); addToolBar(Qt::BottomToolBarArea, find_);
         editMenu->addSeparator();
@@ -290,10 +290,11 @@ namespace hc::compare
             selectBlock(); if (merge_) updateMerge();
         });
         applyAppearance();
+        setupInputEditing();
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
-    CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
+    CompareWindow::~CompareWindow() { sourceEditing_ = false; bufferTimer_.stop(); if (bufferCanceled_) bufferCanceled_->store(true); bufferWatcher_.waitForFinished(); inputSaveWatcher_.waitForFinished(); canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
     void CompareWindow::openDirectories()
     {
         if (busy()) return;
@@ -314,11 +315,14 @@ namespace hc::compare
     void CompareWindow::start(bool Preserve)
     {
         if (busy() || request_.file1_.isEmpty()) return;
+        if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
+        sourceEditing_ = false; bufferTimer_.stop(); ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         canceled_ = std::make_shared<std::atomic_bool>(false);
         refreshing_ = Preserve && merge_;
         if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
         save_->setEnabled(false); state_->setText(tr("비교 중…"));
         cancel_->setEnabled(true);
+        for (auto* editor : editors_) editor->send(SCI_SETREADONLY, 1);
         if (output_) output_->send(SCI_SETREADONLY, 1);
         if (refreshing_)
             watcher_.setFuture(QtConcurrent::run([input = request_, previous = result_, states = merge_->Model().State(),
@@ -387,6 +391,9 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
+        sourceEditing_ = false; sourcePending_ = false; bufferTimer_.stop(); ++bufferGeneration_;
+        if (bufferCanceled_) bufferCanceled_->store(true);
+        save_->setText(tr("결과 저장"));
         delete directoryMerge_; directoryMerge_.clear();
         delete extensionView_; extensionView_ = nullptr;
         if (result_.operation_ != "compare3") pairIndex_ = 0;
@@ -462,6 +469,7 @@ namespace hc::compare
             state_->setText(tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개").arg(differences).arg(conflicts));
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
+        bindInputEditors();
         rebuildGutters();
         rebuildMultiAlignment();
         QList<int> widths; for (int i = 0; i < panes_->count(); ++i) widths.push_back(1);
@@ -470,14 +478,6 @@ namespace hc::compare
         find_->SetEditors(editors_);
         applyAppearance();
         updateMerge();
-        if (pendingChunk_ && merge_)
-        {
-            const auto id = pendingChunk_; pendingChunk_ = 0;
-            if (result_.inputs_[0].raw_ == pendingInputs_[0] && result_.inputs_[1].raw_ == pendingInputs_[1])
-                chooseGutter(id, merge_->Model().Revision(), pendingChoice_);
-            else state_->setText(tr("입력 변경 감지 — 청크를 다시 확인하여 선택하십시오."));
-            pendingInputs_ = {};
-        }
     }
     void CompareWindow::applyPairView()
     {
@@ -602,7 +602,7 @@ namespace hc::compare
                 for (const auto& change : pair->changes_)
                     chunks.push_back({chunks.size() + 1, {position(0, change.begin_), position(1, change.otherBegin_)},
                         {position(0, change.end_), position(1, change.otherEnd_)}});
-                gutter->SetChunks(std::move(chunks), 0);
+                gutter->SetChunks(std::move(chunks), bufferGeneration_);
             }
         }
     }
@@ -620,18 +620,7 @@ namespace hc::compare
             catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
             return;
         }
-        const auto* pair = currentPair(); if (!pair || !Id || Id > pair->changes_.size()) return;
-        QFileDialog dialog(this, tr("청크 병합 — RESULT 저장 경로"));
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) return;
-        Request input; input.mode_ = "merge"; input.gui_ = true; input.theme_ = dark_ ? "dark" : "light";
-        input.file1_ = result_.inputs_[pair->inputs_[0]].path_; input.file2_ = result_.inputs_[pair->inputs_[1]].path_;
-        input.inputEncodings_[0] = InputEncoding(request_, pair->inputs_[0]); input.inputEncodings_[1] = InputEncoding(request_, pair->inputs_[1]);
-        input.output_ = dialog.selectedFiles().front(); input.overwrite_ = QFileInfo::exists(input.output_);
-        auto* window = new CompareWindow(input); window->setAttribute(Qt::WA_DeleteOnClose);
-        window->pendingChunk_ = Id; window->pendingChoice_ = Choice;
-        window->pendingInputs_ = {result_.inputs_[pair->inputs_[0]].raw_, result_.inputs_[pair->inputs_[1]].raw_};
-        window->show();
+        applyInputChunk(Id, Revision, Choice);
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {
@@ -674,7 +663,7 @@ namespace hc::compare
         alignAll_->setEnabled(currentPair() && editors_.size() >= 3 && !busy());
         showOverview_->setEnabled(scroll_ != nullptr);
         overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
-        if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_);
+        if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
@@ -682,6 +671,8 @@ namespace hc::compare
         for (auto* action : wholeActions_) action->setEnabled(ready);
         undo_->setEnabled(ready && output_->send(SCI_CANUNDO)); redo_->setEnabled(ready && output_->send(SCI_CANREDO));
         updateGutters();
+        for (int i = 0; i < inputSaveActions_.size(); ++i) inputSaveActions_[i]->setVisible(sourceEditing_ && i < result_.inputs_.size() && !(i == 2 && !request_.base_.isEmpty()));
+        if (sourceEditing_) { updateInputState(); return; }
         if (!merge_) return;
         const auto& model = merge_->Model();
         for (std::size_t i = 0; i < model.State().size(); ++i)
@@ -724,7 +715,7 @@ namespace hc::compare
     }
     void CompareWindow::selectBlock()
     {
-        if (busy() || !changes_->currentItem()) return;
+        if (busy() || !changes_->currentItem() || !currentPair()) return;
         if (!merge_)
         {
             const auto* item = changes_->currentItem();
@@ -751,6 +742,7 @@ namespace hc::compare
     }
     void CompareWindow::save()
     {
+        if (sourceEditing_) { saveInput(activeInput_); return; }
         if (!output_ || busy()) return;
         if (unresolved_) { QMessageBox::information(this, tr("충돌 해결"), tr("충돌을 검토하고 ‘수동 해결 완료’를 선택하십시오.")); return; }
         const auto text = contents(output_);
@@ -850,7 +842,7 @@ namespace hc::compare
         completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
         setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
     }
-    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()); }
+    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()); }
     void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directoryMerge_) directoryMerge_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {

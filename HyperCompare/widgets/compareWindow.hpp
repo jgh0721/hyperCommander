@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "runtime/session.hpp"
 #include "runtime/mergeWork.hpp"
+#include "runtime/inputEditing.hpp"
+#include <QTimer>
 #include <QMainWindow>
 #include <QFutureWatcher>
 #include <QFont>
@@ -46,12 +48,20 @@ namespace hc::compare
         void closeEvent(QCloseEvent* Event) override;
     private:
         void start(bool Preserve = false);
+        void setupInputEditing();
+        void bindInputEditors();
+        void invalidateInputComparison();
+        void compareInputBuffers();
+        void updateInputState();
+        void saveInput(int Index);
+        void applyInputChunk(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
+        void inputUndo(bool Redo);
         bool busy() const;
         void transferWork(const QString& Path, bool Loading, bool ReplaceExisting);
         void display();
         void applyPairView();
         const PairComparison* currentPair() const
-        { return result_.completion_ == "Complete" ? result_.pairViews_[std::size_t(pairIndex_)].get() : nullptr; }
+        { return result_.completion_ == "Complete" && (!sourceEditing_ || (!sourcePending_ && sourceValid_)) ? result_.pairViews_[std::size_t(pairIndex_)].get() : nullptr; }
         void refresh(Result Value);
         void showBlocks();
         void openInputs();
@@ -75,6 +85,16 @@ namespace hc::compare
         Request request_;
         Result result_;
         QFutureWatcher<Result> watcher_;
+        struct BufferComparison { Result result_; std::uint64_t generation_ = 0; };
+        QFutureWatcher<BufferComparison> bufferWatcher_;
+        QFutureWatcher<InputSaveResult> inputSaveWatcher_;
+        QTimer bufferTimer_;
+        std::shared_ptr<std::atomic_bool> bufferCanceled_;
+        std::uint64_t bufferGeneration_ = 0;
+        bool sourceEditing_ = false, sourcePending_ = false, sourceValid_ = true;
+        int activeInput_ = 0, savingInput_ = -1;
+        QString inputError_, inputSaveError_;
+        QVector<QAction*> inputSaveActions_;
         struct WorkTransfer { MergeWorkFile file_; QString path_, error_; bool loading_ = false; };
         QFutureWatcher<WorkTransfer> workWatcher_;
         QString workPath_;
@@ -122,9 +142,6 @@ namespace hc::compare
         QVector<QAction*> encodingActions_;
         QVector<QLabel*> formatLabels_;
         QVector<ChunkGutter*> gutters_;
-        std::uint64_t pendingChunk_ = 0;
-        Resolution pendingChoice_ = Resolution::Unresolved;
-        std::array<QByteArray, 2> pendingInputs_;
         QFont uiFont_, listFont_, textFont_;
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         bool refreshing_ = false;

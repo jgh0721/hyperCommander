@@ -2,6 +2,7 @@
 #include "core/compare.hpp"
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
+#include "runtime/inputEditing.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -150,6 +151,17 @@ private slots:
         try { RunBatch(request, std::make_shared<std::atomic_bool>(false), [](const auto&) { return true; }); }
         catch (const Failure& failure) { rejected = failure.code_ == "BatchModeUnsupported"; }
         QVERIFY(rejected);
+    }
+    void inputSavePreservesEncodingAndRevision()
+    {
+        QTemporaryDir dir; const auto target = dir.filePath("target");
+        write(target, QByteArray::fromHex("fffe61000a00")); auto snapshot = ReadTextSnapshot(target, "", {});
+        auto saved = SaveInputBuffer(snapshot, QString::fromUtf8("가\n").toUtf8(), {}); QVERIFY2(saved.error_.isEmpty(), qPrintable(saved.error_));
+        QCOMPARE(read(target), QByteArray::fromHex("fffe00ac0a00")); QVERIFY(saved.recovery_.isEmpty());
+        write(target, QByteArray::fromHex("fffe62000a00")); saved = SaveInputBuffer(saved.snapshot_, "overwrite", {}); QVERIFY(!saved.error_.isEmpty()); QCOMPARE(read(target), QByteArray::fromHex("fffe62000a00"));
+        write(target, QByteArray::fromHex("b0a10a")); snapshot = ReadTextSnapshot(target, "CP949", {});
+        saved = SaveInputBuffer(snapshot, QString::fromUtf8("😀\n").toUtf8(), {}); QVERIFY(!saved.error_.isEmpty()); QCOMPARE(read(target), QByteArray::fromHex("b0a10a"));
+        snapshot = ReadTextSnapshot(target, "CP949", {}); saved = SaveInputBuffer(snapshot, {}, {}); QVERIFY2(saved.error_.isEmpty(), qPrintable(saved.error_)); QCOMPARE(read(target), QByteArray{});
     }
     void saveRecoveryCommandLine()
     {

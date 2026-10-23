@@ -13,6 +13,7 @@ target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 qt_add_library(hc_compare_runtime STATIC
     runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/saveRecovery.cpp runtime/saveRecovery.hpp
+    runtime/inputEditing.cpp runtime/inputEditing.hpp
     runtime/semantic.cpp runtime/semantic.hpp
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp
@@ -41,6 +42,7 @@ qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widget
     widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp
     widgets/chunkGutter.cpp widgets/chunkGutter.hpp
     widgets/multiPaneAlignment.cpp widgets/multiPaneAlignment.hpp
+    widgets/compareInputEditing.cpp
     widgets/semanticView.cpp widgets/semanticView.hpp
     widgets/imageCompareView.cpp widgets/imageCompareView.hpp
     widgets/archiveCompareView.cpp widgets/archiveCompareView.hpp widgets/extensionView.cpp widgets/extensionView.hpp

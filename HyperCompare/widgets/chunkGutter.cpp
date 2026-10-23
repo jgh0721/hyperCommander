@@ -125,7 +125,7 @@ namespace hc::compare
                 button->setProperty("chunkId", qulonglong(chunk.id_)); button->setProperty("revision", qulonglong(revision_));
                 button->setObjectName(QString("chunk%1_action%2").arg(chunk.id_).arg(j));
                 const auto symbol = sourceSide_ < 0 ? (j == 0 ? ">" : "<") : j == 0 ? (sourceSide_ == 0 ? ">" : "<") : j == 1 ? "×" : "⋮";
-                const auto purpose = sourceSide_ < 0 ? tr("%1 → 새 RESULT 병합 시작").arg(j == 0 ? "LEFT" : "RIGHT") :
+                const auto purpose = sourceSide_ < 0 ? (j == 0 ? tr("왼쪽 청크를 오른쪽 문서에 반영 (저장은 별도)") : tr("오른쪽 청크를 왼쪽 문서에 반영 (저장은 별도)")) :
                     j == 0 ? tr("%1 청크를 RESULT에 적용").arg(sourceSide_ == 0 ? "LEFT" : "RIGHT") : j == 1 ? tr("RESULT 청크 제거 (실행 취소 가능)") : tr("양쪽 청크 결합");
                 button->setText(QString::fromUtf8(symbol)); button->setToolTip(tr("청크 %1: %2").arg(chunk.id_).arg(purpose)); button->setAccessibleName(button->toolTip());
                 button->setGeometry((sourceSide_ == 1 ? 26 : 2) + j * (cell + 1), at, cell, cell); button->setEnabled(chunk.enabled_);

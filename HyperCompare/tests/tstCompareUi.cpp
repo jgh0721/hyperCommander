@@ -247,20 +247,60 @@ private slots:
             action(window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window.ExitCode(), 0); window.close();
         }
     }
-    void compareGutterStartsIndependentMerge()
+    void compareGutterAppliesInPlaceAndSavesEachFile()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        write(r.file1_, "A\nkeep\nleft\n"); write(r.file2_, "B\nkeep\nright\n");
+        CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ChunkGutter*>());
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        auto* tree = window.findChild<QTreeWidget*>("compareChanges"); QTRY_COMPARE(tree->topLevelItemCount(), 2);
+        int dialogs = 0; QTimer guard; connect(&guard, &QTimer::timeout, &guard, [&] { if (auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) { ++dialogs; dialog->reject(); } }); guard.start(10);
+        auto* gutter = window.findChild<ChunkGutter*>(); QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action0")->isVisible());
+        QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+        QCOMPARE(contents(right), QByteArray("A\nkeep\nright\n")); QCOMPARE(dialogs, 0); QVERIFY(!window.findChild<ScintillaEditBase*>("RESULT"));
+        QFile originalRight(r.file2_); QVERIFY(originalRight.open(QIODevice::ReadOnly)); QCOMPARE(originalRight.readAll(), QByteArray("B\nkeep\nright\n")); originalRight.close();
+        QTRY_COMPARE(tree->topLevelItemCount(), 1); QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action1")->isVisible());
+        action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-pending-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-pending-dark.png"));
+        QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action1"), Qt::LeftButton);
+        QCOMPARE(contents(left), QByteArray("A\nkeep\nright\n")); QTRY_COMPARE(tree->topLevelItemCount(), 0); QCOMPARE(dialogs, 0); guard.stop();
+        action(window, QString::fromUtf8("실행 취소"))->trigger(); QCOMPARE(contents(left), QByteArray("A\nkeep\nleft\n"));
+        action(window, QString::fromUtf8("다시 실행"))->trigger(); QCOMPARE(contents(left), QByteArray("A\nkeep\nright\n"));
+        auto* saveRight = window.findChild<QAction*>("saveInput2"); auto* saveLeft = window.findChild<QAction*>("saveInput1");
+        QVERIFY(saveRight->isEnabled()); saveRight->trigger(); QTRY_VERIFY(!right->send(SCI_GETMODIFY));
+        QVERIFY(originalRight.open(QIODevice::ReadOnly)); QCOMPARE(originalRight.readAll(), QByteArray("A\nkeep\nright\n")); originalRight.close();
+        QVERIFY(left->send(SCI_GETMODIFY)); QTRY_VERIFY(saveLeft->isEnabled()); saveLeft->trigger(); QTRY_VERIFY(!left->send(SCI_GETMODIFY));
+        QTRY_COMPARE(window.ExitCode(), 0); QCOMPARE(window.findChildren<ScintillaEditBase*>().size(), 2);
+        action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-dark.png")); window.close();
+    }
+    void compareInputExternalChangeAndPendingUndo()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
-        write(r.file1_, "left\n"); write(r.file2_, "right\n"); CompareWindow window(r); window.show();
-        QTRY_COMPARE(window.ExitCode(), 1); auto* gutter = window.findChild<ChunkGutter*>(); QVERIFY(gutter);
-        QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action1"));
-        QAction invoke(&window); connect(&invoke, &QAction::triggered, gutter->findChild<QToolButton*>("chunk1_action1"), &QToolButton::click);
-        chooseFile(&invoke, dir.filePath("out"));
-        CompareWindow* merge = nullptr;
-        for (auto* item : QApplication::topLevelWidgets()) if (item != &window && dynamic_cast<CompareWindow*>(item)) merge = static_cast<CompareWindow*>(item);
-        QVERIFY(merge); QTRY_VERIFY(merge->findChild<ScintillaEditBase*>("RESULT"));
-        QCOMPARE(contents(merge->findChild<ScintillaEditBase*>("RESULT")), QByteArray("right\n"));
-        QCOMPARE(window.ExitCode(), 1); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
-        action(*merge, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(merge->ExitCode(), 0); merge->close(); window.close();
+        write(r.file1_, "a\n"); write(r.file2_, "b\n"); CompareWindow window(r); window.show();
+        QTRY_VERIFY(window.findChild<ScintillaEditBase*>("FILE 1")); auto* left = window.findChild<ScintillaEditBase*>("FILE 1");
+        left->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n")); left->send(SCI_UNDO); left->send(SCI_REDO);
+        QCOMPARE(contents(left), QByteArray("manual\na\n"));
+        action(window, QString::fromUtf8("다시 비교"))->trigger(); QCOMPARE(contents(left), QByteArray("manual\na\n")); QVERIFY(left->send(SCI_CANUNDO));
+        write(r.file1_, "external\n"); window.findChild<QAction*>("saveInput1")->trigger();
+        QTRY_VERIFY(window.findChild<QLabel*>("compareStatus")->text().contains(QString::fromUtf8("저장 실패")));
+        QCOMPARE(contents(left), QByteArray("manual\na\n")); QVERIFY(left->send(SCI_GETMODIFY));
+        QFile disk(r.file1_); QVERIFY(disk.open(QIODevice::ReadOnly)); QCOMPARE(disk.readAll(), QByteArray("external\n")); disk.close();
+        left->send(SCI_UNDO); QTRY_VERIFY(!left->send(SCI_GETMODIFY)); window.close();
+    }
+    void compareThreeFileEditingKeepsPairAndBuffers()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b"); r.file3_ = dir.filePath("c");
+        write(r.file1_, "a\n"); write(r.file2_, "b\n"); write(r.file3_, "c\n"); CompareWindow window(r); window.show();
+        QTRY_COMPARE(window.findChildren<ScintillaEditBase*>().size(), 3);
+        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); QTRY_VERIFY(selector->isEnabled()); selector->setCurrentIndex(2);
+        auto* gutter = window.findChild<ChunkGutter*>(); QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action0"));
+        QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+        auto* third = window.findChild<ScintillaEditBase*>("FILE 3"); QCOMPARE(contents(third), QByteArray("b\n")); QTRY_VERIFY(selector->isEnabled());
+        selector->setCurrentIndex(1); QCOMPARE(contents(third), QByteArray("b\n")); QVERIFY(third->send(SCI_CANUNDO));
+        third->send(SCI_UNDO); QTRY_VERIFY(!third->send(SCI_GETMODIFY)); window.close();
     }
     void encodingRecoveryAndFormatOnly()
     {
