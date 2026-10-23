@@ -87,6 +87,8 @@ namespace hc::compare
         {
             auto result = readSnapshot(Path, textLimit, Limits);
             auto encoding = Encoding;
+            const auto bomEncoding = result.raw_.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : result.raw_.startsWith("\xff\xfe") ? QString("UTF-16LE") : result.raw_.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
+            if (!Encoding.isEmpty() && !bomEncoding.isEmpty() && Encoding != bomEncoding) throw Failure("EncodingBomMismatch");
             if (encoding.isEmpty())
             {
                 if (result.raw_.startsWith("\xff\xfe")) encoding = "UTF-16LE";
@@ -219,7 +221,7 @@ namespace hc::compare
                 const auto left = view(result.inputs_[0].utf8_), right = view(result.inputs_[1].utf8_);
                 result.edits_ = Diff(left, right, limits);
                 if (!Input.headless_) views[0] = pairView(0, 1, result.inputs_, result.edits_, limits);
-                bool different = !result.edits_.empty() || result.inputs_[0].raw_ != result.inputs_[1].raw_;
+                bool rawEqual = result.inputs_[0].raw_ == result.inputs_[1].raw_, contentEqual = left == right;
                 if (result.inputs_.size() == 3)
                 {
                     if (!Input.base_.isEmpty()) result.merged_ = Merge(view(result.inputs_[2].utf8_), left, right, limits);
@@ -237,10 +239,20 @@ namespace hc::compare
                             }
                         }
                     }
-                    different |= result.inputs_[2].raw_ != result.inputs_[0].raw_;
+                    rawEqual &= result.inputs_[2].raw_ == result.inputs_[0].raw_;
+                    contentEqual &= result.inputs_[2].utf8_ == result.inputs_[0].utf8_;
                     if (Input.mode_ != "merge") result.operation_ = Input.base_.isEmpty() ? "compare3" : "compareBase3";
                 }
-                result.exitCode_ = different ? 1 : 0; result.outcome_ = different ? "Different" : "Equal";
+                QJsonArray formats;
+                for (int a = 0; a < result.inputs_.size(); ++a) for (int b = a + 1; b < result.inputs_.size(); ++b)
+                {
+                    const auto& first = result.inputs_[a]; const auto& second = result.inputs_[b];
+                    formats.append(QJsonObject{{"fromFile", a + 1}, {"toFile", b + 1}, {"contentEqual", first.utf8_ == second.utf8_},
+                        {"rawEqual", first.raw_ == second.raw_}, {"encodingChanged", first.encoding_ != second.encoding_}, {"bomChanged", first.bom_ != second.bom_}});
+                }
+                result.textComparison_ = {{"policy", Input.textEquality_}, {"contentEqual", contentEqual}, {"rawEqual", rawEqual}, {"encodingOnly", contentEqual && !rawEqual}, {"pairs", formats}};
+                const bool different = Input.textEquality_ == "bytes" ? !rawEqual || !contentEqual : !contentEqual;
+                result.exitCode_ = different ? 1 : 0; result.outcome_ = different ? "Different" : rawEqual ? "Equal" : "Equivalent";
                 if (Input.mode_ == "merge")
                 {
                     inspectOutput(Input, result, limits);
@@ -375,7 +387,7 @@ namespace hc::compare
     QJsonObject Result::Json(bool IncludeContent) const
     {
         QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
-        for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"encoding", input.encoding_},
+        for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"encoding", input.encoding_}, {"bom", input.bom_},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(input.raw_, QCryptographicHash::Sha256).toHex())}});
         for (const auto& edit : edits_) changes.append(QJsonObject{{"begin", double(edit.begin_)}, {"end", double(edit.end_)},
             {"otherBegin", double(edit.otherBegin_)}, {"otherEnd", double(edit.otherEnd_)}});
@@ -403,7 +415,7 @@ namespace hc::compare
             extension["documents"] = documents; extension["contentIncluded"] = IncludeContent;
         }
         return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString("myers-bounded-2") : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
-            {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_},
+            {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_}, {"textComparison", textComparison_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},

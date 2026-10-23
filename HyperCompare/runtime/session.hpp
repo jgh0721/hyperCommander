@@ -19,6 +19,7 @@ namespace hc::compare
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         QString semantic_ = "auto";
+        QString textEquality_ = "content";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;
         bool reuse_ = false;
@@ -37,7 +38,8 @@ namespace hc::compare
         int timeoutMs_ = 60000;
     };
     struct Parsed { Request request_; QString error_, help_; };
-    inline QString InputEncoding(const Request& Input, int Index) { return Input.inputEncodings_[Index].isEmpty() ? Input.encoding_ : Input.inputEncodings_[Index]; }
+    inline QString InputEncoding(const Request& Input, int Index)
+    { const auto value = Input.inputEncodings_[Index].isEmpty() ? Input.encoding_ : Input.inputEncodings_[Index]; return value == "auto" ? QString{} : value; }
     Parsed Parse(const QStringList& Arguments, bool Console);
     struct Snapshot
     {
@@ -77,6 +79,7 @@ namespace hc::compare
         QJsonObject semantic_;
         QJsonObject engineProbe_;
         QJsonObject extension_;
+        QJsonObject textComparison_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         QJsonArray entries_, comparisons_, warnings_, recovery_;

@@ -31,6 +31,8 @@ namespace hc::compare
         value("format", "text or json. stdout contains only this report."); value("report", "Report file; '-' means stdout.");
         flag("include-content", "Include bounded DOCX paragraph text in JSON reports; default reports contain locations only.");
         value("encoding", "Explicit UTF-8, UTF-16LE, UTF-16BE or CP949 for all inputs.");
+        for (const auto& name : {"encoding1", "encoding2", "encoding3"}) value(name, "Per-input auto, UTF-8, UTF-16LE, UTF-16BE or CP949; encoding3 also applies to BASE.");
+        value("text-equality", "Text identity: content (default; encoding/BOM differences are informational) or bytes. Line endings remain significant.");
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
         value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
@@ -75,6 +77,18 @@ namespace hc::compare
         request.file1_ = parser.value("file1"); request.file2_ = parser.value("file2");
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");
+        if (parser.isSet("text-equality")) request.textEquality_ = parser.value("text-equality");
+        if (request.textEquality_ != "content" && request.textEquality_ != "bytes") return fail("Invalid text-equality.");
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto name = "encoding" + QString::number(i + 1);
+            if (parser.isSet(name))
+            {
+                const auto codec = parser.value(name);
+                if (!QStringList{"auto", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(codec)) return fail("Invalid role encoding.");
+                request.inputEncodings_[i] = codec;
+            }
+        }
         request.takeAll_ = parser.value("takeall"); request.theme_ = parser.value("theme");
         if (parser.isSet("semantic")) request.semantic_ = parser.value("semantic");
         if (request.semantic_ != "auto" && request.semantic_ != "off") return fail("Invalid semantic mode.");
@@ -156,6 +170,13 @@ namespace hc::compare
         if (request.file1_.isEmpty() && request.file2_.isEmpty() && !request.headless_ && Arguments.size() == 1) return result;
         if (request.file1_.isEmpty() || request.file2_.isEmpty()) return fail("Both -file1 and -file2 are required.");
         if (!request.base_.isEmpty() && !request.file3_.isEmpty()) return fail("-base and -file3 are mutually exclusive.");
+        if (parser.isSet("encoding3") && request.base_.isEmpty() && request.file3_.isEmpty()) return fail("encoding3 requires -base or -file3.");
+        if (request.mode_ == "directory-merge")
+        {
+            const auto codec = InputEncoding(request, 0);
+            if (InputEncoding(request, 1) != codec || (!request.base_.isEmpty() && InputEncoding(request, 2) != codec)) return fail("DirectoryRoleEncodingUnsupported");
+            request.encoding_ = codec;
+        }
         if (request.mode_ == "directory-merge")
         {
             if ((request.headless_ && request.planOut_.isEmpty()) || request.output_.isEmpty() || !request.decisions_.isEmpty() || !request.file3_.isEmpty() || request.dryRun_)

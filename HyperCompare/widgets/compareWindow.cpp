@@ -9,6 +9,7 @@
 #include "semanticView.hpp"
 #include "extensionView.hpp"
 #include <QApplication>
+#include <QActionGroup>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QFileDialog>
@@ -160,6 +161,23 @@ namespace hc::compare
         connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
         connect(find_, &QToolBar::visibilityChanged, closeFind, &QAction::setEnabled);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
+        auto* encodingMenu = menuBar()->addMenu(tr("인코딩"));
+        for (int role = 0; role < 3; ++role)
+        {
+            auto* menu = encodingMenu->addMenu(role == 2 ? tr("FILE 3 / BASE") : tr("FILE %1").arg(role + 1));
+            auto* group = new QActionGroup(menu);
+            for (const auto& codec : {QString("auto"), QString("UTF-8"), QString("UTF-16LE"), QString("UTF-16BE"), QString("CP949")})
+            {
+                auto* action = menu->addAction(codec == "auto" ? tr("자동 (BOM / UTF-8)") : codec);
+                action->setCheckable(true); group->addAction(action); action->setData(role);
+                action->setObjectName(QString("encoding%1_%2").arg(role + 1).arg(codec));
+                action->setProperty("codec", codec); encodingActions_.push_back(action);
+                connect(action, &QAction::triggered, this, [this, role, codec] {
+                    if (busy()) return;
+                    request_.inputEncodings_[role] = codec; start(true);
+                });
+            }
+        }
         alignRows_ = viewMenu->addAction(tr("왼쪽·오른쪽 표시 줄 정렬")); alignRows_->setCheckable(true);
         alignRows_->setChecked(settings.value("view/alignSourceRows", true).toBool()); alignRows_->setEnabled(false);
         alignRows_->setToolTip(tr("두 원본의 대응 줄을 빈 여백으로 맞춥니다. 여백은 복사하거나 저장하는 텍스트에 포함되지 않습니다."));
@@ -301,6 +319,7 @@ namespace hc::compare
             updateMerge(); state_->setText(tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
         }
         const bool changed = Value.inputsChanged_; result_ = std::move(Value);
+        updateFormats();
         semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
         details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
         if (changed)
@@ -335,6 +354,8 @@ namespace hc::compare
         auto* pane = new QWidget(panes_); auto* box = new QVBoxLayout(pane); box->setContentsMargins(2, 2, 2, 2);
         auto* label = new QLabel(Title + " — " + QFileInfo(Path).fileName(), pane); label->setTextFormat(Qt::PlainText); label->setToolTip(Path);
         label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); box->addWidget(label);
+        auto* format = new QLabel(pane); format->setObjectName("format_" + Title);
+        format->setTextFormat(Qt::PlainText); box->addWidget(format); formatLabels_.push_back(format);
         auto* editor = new ScintillaEditBase(pane); editor->setObjectName(Title); box->addWidget(editor); editors_.push_back(editor);
         panes_->addWidget(pane); pane->setMinimumWidth(120);
         editor->send(SCI_SETCODEPAGE, SC_CP_UTF8); editor->send(SCI_SETWRAPMODE, SC_WRAP_NONE);
@@ -361,7 +382,7 @@ namespace hc::compare
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
         delete scroll_; scroll_ = nullptr;
-        delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); changes_->clear();
+        delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); formatLabels_.clear(); changes_->clear();
         inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
@@ -411,6 +432,9 @@ namespace hc::compare
             }
         }
         state_->setText(QString("%1 — %2, conflicts: %3").arg(result_.operation_, result_.outcome_).arg(result_.merged_.conflicts_.size()));
+        if (result_.textComparison_["encodingOnly"].toBool())
+            state_->setText(request_.textEquality_ == "bytes" ? tr("내용 동일 · 인코딩/BOM 차이 (바이트 비교)") : tr("내용 동일 — 인코딩/BOM만 다름"));
+        updateFormats();
         if (result_.operation_.startsWith("directory"))
         {
             qsizetype differences = 0, conflicts = 0;
@@ -478,6 +502,14 @@ namespace hc::compare
     }
     void CompareWindow::updateMerge()
     {
+        for (auto* action : encodingActions_)
+        {
+            const int role = action->data().toInt();
+            const auto path = role == 0 ? request_.file1_ : role == 1 ? request_.file2_ : request_.base_.isEmpty() ? request_.file3_ : request_.base_;
+            action->setEnabled(!busy() && !path.isEmpty() && !QFileInfo(path).isDir() && result_.extension_.isEmpty());
+            const auto codec = InputEncoding(request_, role);
+            action->setChecked(action->property("codec").toString() == (codec.isEmpty() ? "auto" : codec));
+        }
         directory_->setEnabled(!busy());
         const bool directoryMode = !directory_->isHidden() || extensionView_ != nullptr;
         for (auto* action : wholeActions_) action->setVisible(!directoryMode);
@@ -523,6 +555,18 @@ namespace hc::compare
             exitCode_ = merge_->Saved() ? 0 : 3;
             state_->setText(tr("미해결: %1 / %2 — %3").arg(model.UnresolvedCount()).arg(model.State().size()).arg(merge_->Saved() ? tr("저장 완료") : tr("결과 저장 필요")));
             if (model.ReviewRequired()) state_->setText(tr("RESULT 보존 · 전체 재검토 필요 — 새 입력 확인 후 ‘전체 수동 완료’ 또는 전체 방향 선택 (미해결 %1)").arg(model.UnresolvedCount()));
+        }
+    }
+    void CompareWindow::updateFormats()
+    {
+        for (qsizetype i = 0; i < formatLabels_.size(); ++i)
+        {
+            const bool output = i >= result_.inputs_.size();
+            const auto source = output ? (request_.takeAll_ == "right" ? 1 : 0) : i;
+            if (source >= result_.inputs_.size()) continue;
+            const auto& input = result_.inputs_[source];
+            formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"),
+                output ? tr(" · 저장 형식 (%1)").arg(source == 0 ? "LEFT" : "RIGHT") : QString{}));
         }
     }
     void CompareWindow::selectBlock()

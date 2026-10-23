@@ -55,6 +55,7 @@ namespace hc::compare
         void openInputs();
         void openDirectories();
         void applyAppearance();
+        void updateFormats();
         void applyInlineHighlights();
         void chooseFont(const QString& Role);
         void save();
@@ -108,6 +109,8 @@ namespace hc::compare
         QVector<QAction*> blockActions_;
         QVector<QAction*> wholeActions_;
         QVector<QAction*> findActions_;
+        QVector<QAction*> encodingActions_;
+        QVector<QLabel*> formatLabels_;
         QFont uiFont_, listFont_, textFont_;
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         bool refreshing_ = false;

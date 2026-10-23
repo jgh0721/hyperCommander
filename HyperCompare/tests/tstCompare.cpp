@@ -162,10 +162,10 @@ private slots:
         write(requestPath, QJsonDocument(json).toJson()); auto parsed = Parse({"hc", "-request", requestPath, "-format", "json"}, true);
         QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QCOMPARE(parsed.request_.file1_, dir.filePath("left.txt")); QCOMPARE(InputEncoding(parsed.request_, 0), "CP949");
         auto result = Execute(parsed.request_, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
-        QVERIFY(result.edits_.empty()); QCOMPARE(result.exitCode_, 1); QCOMPARE(result.Json()["requestId"].toString(), "encoding-test"); QCOMPARE(result.inputs_[0].encoding_, "CP949");
+        QVERIFY(result.edits_.empty()); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.outcome_, "Equivalent"); QCOMPARE(result.Json()["requestId"].toString(), "encoding-test"); QCOMPARE(result.inputs_[0].encoding_, "CP949");
         auto three = json; auto inputs = three["inputs"].toObject(); inputs["center"] = QJsonObject{{"path", "right.txt"}}; three["inputs"] = inputs; write(requestPath, QJsonDocument(three).toJson());
         parsed = Parse({"hc", "-request", requestPath, "-timeout-ms", "1234"}, true); QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.file2_, dir.filePath("right.txt")); QCOMPARE(parsed.request_.file3_, dir.filePath("right.txt")); QCOMPARE(parsed.request_.timeoutMs_, 1234);
-        QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-request", requestPath, "-format", "json"}); QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1);
+        QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-request", requestPath, "-format", "json"}); QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 0);
         QCOMPARE(QJsonDocument::fromJson(cli.readAllStandardOutput()).object()["operation"].toString(), "compare3");
     }
     void requestValidationAndProtectedFiles()
@@ -1279,10 +1279,33 @@ private slots:
         QTemporaryDir dir; auto cancel = std::make_shared<std::atomic_bool>(false); Request r;
         r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b");
         write(r.file1_, QByteArray::fromHex("efbbbf61")); write(r.file2_, "a");
-        auto result = Execute(r, cancel, false); QCOMPARE(result.exitCode_, 1); QVERIFY(result.edits_.empty());
+        auto result = Execute(r, cancel, false); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.outcome_, "Equivalent"); QVERIFY(result.edits_.empty());
+        QVERIFY(result.Json()["inputs"].toArray()[0].toObject()["bom"].toBool());
+        QVERIFY(result.textComparison_["encodingOnly"].toBool());
+        r.textEquality_ = "bytes"; QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
         write(r.file1_, QByteArray::fromHex("ff00")); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
         write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
+    }
+    void mixedEncodingEquality()
+    {
+        QTemporaryDir dir; auto cancel = std::make_shared<std::atomic_bool>(false);
+        Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.file3_ = dir.filePath("third");
+        write(r.file1_, QByteArray::fromHex("fffe00ac0a00")); // UTF-16LE: 가 + LF
+        write(r.file2_, QByteArray::fromHex("feffac00000a"));
+        write(r.file3_, QString::fromUtf8("가\n").toUtf8());
+        auto value = Execute(r, cancel, false); QCOMPARE(value.exitCode_, 0); QCOMPARE(value.outcome_, "Equivalent");
+        QCOMPARE(value.textComparison_["pairs"].toArray().size(), 3);
+        r.inputEncodings_[0] = "UTF-8"; QCOMPARE(Execute(r, cancel, false).error_, "EncodingBomMismatch");
+        r.inputEncodings_[0] = "auto"; r.textEquality_ = "bytes"; QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        r.textEquality_ = "content"; write(r.file3_, QString::fromUtf8("가\r\n").toUtf8()); QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        r.file3_.clear(); write(r.file1_, QByteArray::fromHex("b0a10a")); r.inputEncodings_[0] = "CP949";
+        value = Execute(r, cancel, false); QCOMPARE(value.exitCode_, 0); QCOMPARE(value.outcome_, "Equivalent");
+        r.mode_ = "merge"; r.output_ = dir.filePath("out");
+        value = Execute(r, cancel, false); SaveResult(r, value, QString::fromUtf8("가\n").toUtf8());
+        QCOMPARE(value.exitCode_, 0); QCOMPARE(read(r.output_), QByteArray::fromHex("b0a10a"));
+        auto parsed = Parse({"app", "-file1", r.file1_, "-file2", r.file2_, "-encoding1", "CP949", "-encoding2", "auto", "-text-equality", "bytes"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QCOMPARE(InputEncoding(parsed.request_, 0), "CP949"); QVERIFY(InputEncoding(parsed.request_, 1).isEmpty());
     }
     void directoryTextAutoMergeAndEncoding()
     {

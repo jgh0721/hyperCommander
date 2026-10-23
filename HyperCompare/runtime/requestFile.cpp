@@ -45,8 +45,8 @@ namespace hc::compare
             }
             const auto output = object(json, "output"); keys(output, {"path", "overwrite"});
             if (!output.isEmpty()) { args << "-output" << absolute(output["path"]); if (output.contains("overwrite")) { if (!output["overwrite"].isBool()) throw Failure("InvalidRequestBoolean"); if (output["overwrite"].toBool()) args << "-overwrite"; } }
-            const auto policy = object(json, "policy"); keys(policy, {"encoding", "encodingByRole", "semantic", "include", "exclude", "directoryLevel"});
-            for (const auto& pair : {std::pair{"encoding", "encoding"}, {"semantic", "semantic"}, {"directoryLevel", "directory-level"}})
+            const auto policy = object(json, "policy"); keys(policy, {"encoding", "encodingByRole", "semantic", "include", "exclude", "directoryLevel", "textEquality"});
+            for (const auto& pair : {std::pair{"encoding", "encoding"}, {"semantic", "semantic"}, {"directoryLevel", "directory-level"}, {"textEquality", "text-equality"}})
                 if (policy.contains(pair.first)) args << '-' + QString(pair.second) << string(policy[pair.first]);
             for (const auto& key : {"include", "exclude"}) if (policy.contains(key))
             {
@@ -57,7 +57,7 @@ namespace hc::compare
             const auto encodings = object(policy, "encodingByRole"); keys(encodings, roles.keys()); std::array<QString, 3> codecs;
             for (auto it = encodings.begin(); it != encodings.end(); ++it)
             {
-                const auto codec = string(it.value()); if (!inputs.contains(it.key()) || !QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(codec)) throw Failure("InvalidRoleEncoding"); codecs[roles[it.key()]] = codec;
+                const auto codec = string(it.value()); if (!inputs.contains(it.key()) || !QStringList{"auto", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(codec)) throw Failure("InvalidRoleEncoding"); codecs[roles[it.key()]] = codec;
             }
             const auto limits = object(json, "limits"); keys(limits, {"timeoutMs"});
             if (limits.contains("timeoutMs") && !Overrides.contains("-timeout-ms")) args << "-timeout-ms" << QString::number(number(limits["timeoutMs"], 100, 3600000));

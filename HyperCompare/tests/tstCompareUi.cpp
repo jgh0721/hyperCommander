@@ -87,6 +87,20 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void encodingRecoveryAndFormatOnly()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        write(r.file1_, QByteArray::fromHex("b0a10a")); write(r.file2_, QString::fromUtf8("가\n").toUtf8());
+        CompareWindow window(r); window.show();
+        auto* cp949 = window.findChild<QAction*>("encoding1_CP949"); QVERIFY(cp949);
+        QTRY_VERIFY(cp949->isEnabled()); QTRY_COMPARE(window.ExitCode(), 2);
+        cp949->trigger(); QTRY_COMPARE(window.ExitCode(), 0);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); QVERIFY(left);
+        QCOMPARE(contents(left), QString::fromUtf8("가\n").toUtf8());
+        QVERIFY(window.findChild<QLabel*>("format_FILE 1")->text().contains("CP949"));
+        QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains(QString::fromUtf8("내용 동일")));
+        window.close();
+    }
     void guiRequestIsolation()
     {
         QTemporaryDir dir; write(dir.filePath("a.txt"), "a"); write(dir.filePath("b.txt"), "b");
