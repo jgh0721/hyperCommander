@@ -16,6 +16,7 @@ namespace hc::compare
         const MergeModel& Model() const { return model_; }
         void Choose(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         void ChooseAll(Resolution Choice, const QByteArray& Text = {});
+        void ReplaceRange(std::uint64_t Id, std::uint64_t Revision, std::size_t Begin, std::size_t End, const QByteArray& Text);
         void Refresh(std::shared_ptr<const MergePlan> Plan);
         void RestoreWork(const QByteArray& Text, const std::vector<BlockState>& State, bool ReviewRequired);
         void MarkSaved();

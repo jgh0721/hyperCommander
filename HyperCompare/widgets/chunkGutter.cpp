@@ -137,7 +137,20 @@ namespace hc::compare
                 const unsigned anchor = sourceSide_ < 0 ? unsigned(j == 1) : unsigned(j == 0 ? sourceSide_ : 1 - sourceSide_);
                 button->setGeometry(geometry[j]);
                 button->setArrowType((sourceSide_ < 0 || j == 0) ? (anchor ? Qt::LeftArrow : Qt::RightArrow) : Qt::NoArrow);
-                button->setEnabled(chunk.enabled_); button->setVisible(visible[j]);
+                bool applicable = chunk.enabled_;
+                if (sourceSide_ < 0 || j == 0)
+                {
+                    auto* source = editors_[anchor];
+                    const auto begin = source->send(SCI_GETSELECTIONSTART), end = source->send(SCI_GETSELECTIONEND);
+                    if (begin != end || source->send(SCI_GETSELECTIONS) != 1 || source->send(SCI_SELECTIONISRECTANGLE))
+                    {
+                        applicable &= source->send(SCI_GETSELECTIONS) == 1 && !source->send(SCI_SELECTIONISRECTANGLE) &&
+                            std::max<std::size_t>(begin, chunk.begin_[anchor]) < std::min<std::size_t>(end, chunk.end_[anchor]);
+                        button->setToolTip(tr("청크 %1: 선택한 텍스트 중 이 청크와 겹치는 범위만 반영 (실행 취소 가능, 저장은 별도)").arg(chunk.id_));
+                        button->setAccessibleName(button->toolTip());
+                    }
+                }
+                button->setEnabled(applicable); button->setVisible(visible[j]);
                 if (visible[j]) previous[j] = geometry[j].y();
             }
         }

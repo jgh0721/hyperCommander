@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
 #include "chunkGutter.hpp"
+#include "mergeController.hpp"
 #include "scrollSynchronizer.hpp"
 #include "multiPaneAlignment.hpp"
 #include "overviewBar.hpp"
@@ -162,10 +163,49 @@ namespace hc::compare
         const auto position = [](ScintillaEditBase* Editor, std::size_t Line) { const auto at = Editor->send(SCI_POSITIONFROMLINE, Line); return at < 0 ? Editor->send(SCI_GETLENGTH) : at; };
         const auto a = position(source, from ? change.otherBegin_ : change.begin_), b = position(source, from ? change.otherEnd_ : change.end_);
         const auto begin = position(target, to ? change.otherBegin_ : change.begin_), end = position(target, to ? change.otherEnd_ : change.end_);
+        if (applySelectedChunk(source, target, a, b, begin, end, Id, Revision)) return;
         const auto replacement = bytes(source).mid(a, b - a); activeInput_ = pair->inputs_[to];
         target->send(SCI_BEGINUNDOACTION); target->send(SCI_SETTARGETRANGE, begin, end);
         target->send(SCI_REPLACETARGET, uptr_t(replacement.size()), reinterpret_cast<sptr_t>(replacement.constData())); target->send(SCI_ENDUNDOACTION);
-        target->send(SCI_SETSEL, begin, begin + replacement.size()); target->setFocus(Qt::OtherFocusReason); updateMerge();
+        target->send(SCI_SETSEL, begin + replacement.size(), begin + replacement.size()); target->setFocus(Qt::OtherFocusReason); updateMerge();
+    }
+    bool CompareWindow::applySelectedChunk(ScintillaEditBase* Source, ScintillaEditBase* Target,
+        std::intptr_t SourceBegin, std::intptr_t SourceEnd, std::intptr_t TargetBegin, std::intptr_t TargetEnd,
+        std::uint64_t Id, std::uint64_t Revision)
+    {
+        const auto selectedBegin = Source->send(SCI_GETSELECTIONSTART), selectedEnd = Source->send(SCI_GETSELECTIONEND);
+        if (selectedBegin == selectedEnd && Source->send(SCI_GETSELECTIONS) == 1 && !Source->send(SCI_SELECTIONISRECTANGLE)) return false;
+        if (Source->send(SCI_GETSELECTIONS) != 1 || Source->send(SCI_SELECTIONISRECTANGLE))
+        { state_->setText(tr("범위 병합은 연속된 텍스트 선택을 사용하십시오.")); return true; }
+        const auto begin = std::max(selectedBegin, SourceBegin), end = std::min(selectedEnd, SourceEnd);
+        if (begin >= end || Target->send(SCI_GETREADONLY)) return true;
+        // Align selected document lines from the chunk's first line. Do not use
+        // proportional scroll mapping: it would overwrite unselected target rows.
+        const auto sourceLine = Source->send(SCI_LINEFROMPOSITION, SourceBegin);
+        const auto targetLine = Target->send(SCI_LINEFROMPOSITION, TargetBegin);
+        const auto map = [&](sptr_t Position) {
+            const auto line = Source->send(SCI_LINEFROMPOSITION, Position);
+            const auto destination = targetLine + line - sourceLine;
+            const auto start = Target->send(SCI_POSITIONFROMLINE, destination);
+            if (start < 0 || start >= TargetEnd) return TargetEnd;
+            const auto chars = Source->send(SCI_COUNTCHARACTERS, Source->send(SCI_POSITIONFROMLINE, line), Position);
+            const auto at = Target->send(SCI_POSITIONRELATIVE, start, chars);
+            const auto lineEnd = Target->send(SCI_GETLINEENDPOSITION, destination);
+            return std::clamp(at < 0 ? lineEnd : std::min(at, lineEnd), TargetBegin, TargetEnd);
+        };
+        const bool whole = begin == SourceBegin && end == SourceEnd;
+        const auto destinationBegin = whole ? TargetBegin : map(begin), destinationEnd = whole ? TargetEnd : map(end);
+        const auto replacement = bytes(Source).mid(begin, end - begin);
+        if (merge_) merge_->ReplaceRange(Id, Revision, destinationBegin, destinationEnd, replacement);
+        else
+        {
+            activeInput_ = editors_.indexOf(Target);
+            Target->send(SCI_BEGINUNDOACTION); Target->send(SCI_SETTARGETRANGE, destinationBegin, destinationEnd);
+            Target->send(SCI_REPLACETARGET, uptr_t(replacement.size()), reinterpret_cast<sptr_t>(replacement.constData()));
+            Target->send(SCI_ENDUNDOACTION);
+        }
+        Target->send(SCI_SETSEL, destinationBegin + replacement.size(), destinationBegin + replacement.size());
+        Target->setFocus(Qt::OtherFocusReason); updateMerge(); return true;
     }
     void CompareWindow::saveInput(int Index)
     {

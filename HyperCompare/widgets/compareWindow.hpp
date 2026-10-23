@@ -59,6 +59,9 @@ namespace hc::compare
         void updateInputState();
         void saveInput(int Index);
         void applyInputChunk(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
+        bool applySelectedChunk(ScintillaEditBase* Source, ScintillaEditBase* Target,
+            std::intptr_t SourceBegin, std::intptr_t SourceEnd, std::intptr_t TargetBegin, std::intptr_t TargetEnd,
+            std::uint64_t Id, std::uint64_t Revision);
         void inputUndo(bool Redo);
         bool busy() const;
         void transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions = false);

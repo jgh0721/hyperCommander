@@ -707,6 +707,15 @@ namespace hc::compare
         {
             try
             {
+                if (Choice == Resolution::Left || Choice == Resolution::Right)
+                {
+                    const auto verified = merge_->Model().Prepare(Id, Revision, Choice);
+                    const auto& block = merge_->Model().Plan().blocks_[Id - 1];
+                    const int side = Choice == Resolution::Left ? 0 : 1;
+                    const auto begin = side ? block.rightBegin_ : block.leftBegin_;
+                    const auto length = side ? block.right_.size() : block.left_.size();
+                    if (applySelectedChunk(editors_[side], output_, begin, begin + length, verified.begin_, verified.end_, Id, Revision)) return;
+                }
                 merge_->Choose(Id, Revision, Choice);
                 if (Id && Id <= std::uint64_t(changes_->topLevelItemCount())) changes_->setCurrentItem(changes_->topLevelItem(int(Id - 1)));
                 selectBlock();

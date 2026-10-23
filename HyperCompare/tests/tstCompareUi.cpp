@@ -349,6 +349,80 @@ private slots:
         action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-light.png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/input-edit-dark.png")); window.close();
     }
+    void selectedChunkRange_data()
+    {
+        QTest::addColumn<QByteArray>("source"); QTest::addColumn<QByteArray>("target");
+        QTest::addColumn<int>("begin"); QTest::addColumn<int>("end"); QTest::addColumn<QByteArray>("expected");
+        QTest::newRow("middle-line") << QByteArray("head\nA0\nA1\nA2\ntail\n") << QByteArray("head\nB0\nB1\nB2\nB3\ntail\n") << 8 << 11 << QByteArray("head\nB0\nA1\nB2\nB3\ntail\n");
+        QTest::newRow("unicode-characters") << QString("prefix 가나 suffix\n").toUtf8() << QByteArray("prefix XY suffix\n") << 7 << 13 << QString("prefix 가나 suffix\n").toUtf8();
+        QTest::newRow("partial-text") << QByteArray("AAA selected ZZZ\n") << QByteArray("BBB oldvalue YYY\n") << 4 << 12 << QByteArray("BBB selected YYY\n");
+        QTest::newRow("empty-target") << QByteArray("first\nsecond\nthird\n") << QByteArray{} << 6 << 13 << QByteArray("second\n");
+        QTest::newRow("unequal-eof") << QByteArray("A0\nA1\nA2") << QByteArray("B0\nB1\nB2\nB3") << 6 << 8 << QByteArray("B0\nB1\nA2\nB3");
+        QTest::newRow("crlf") << QByteArray("A0\r\nA1\r\nA2\r\n") << QByteArray("B0\r\nB1\r\nB2\r\n") << 4 << 8 << QByteArray("B0\r\nA1\r\nB2\r\n");
+    }
+    void selectedChunkRange()
+    {
+        QFETCH(QByteArray, source); QFETCH(QByteArray, target); QFETCH(int, begin); QFETCH(int, end); QFETCH(QByteArray, expected);
+        for (bool reverse : {false, true})
+        {
+            QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+            write(r.file1_, reverse ? target : source); write(r.file2_, reverse ? source : target);
+            CompareWindow window(r); window.resize(1300, 800); window.show();
+            QTRY_VERIFY(window.findChild<ScintillaEditBase*>("FILE 2"));
+            auto* from = window.findChild<ScintillaEditBase*>(reverse ? "FILE 2" : "FILE 1");
+            auto* to = window.findChild<ScintillaEditBase*>(reverse ? "FILE 1" : "FILE 2");
+            auto* gutter = window.findChild<ChunkGutter*>(); QVERIFY(gutter);
+            from->send(SCI_SETSEL, end, begin); from->setFocus();
+            const auto buttonName = QString("chunk1_action%1").arg(reverse ? 1 : 0);
+            QTRY_VERIFY(gutter->findChild<QToolButton*>(buttonName) && gutter->findChild<QToolButton*>(buttonName)->isVisible());
+            QTRY_VERIFY(gutter->findChild<QToolButton*>(buttonName)->toolTip().contains("선택한 텍스트"));
+            QTest::mouseClick(gutter->findChild<QToolButton*>(buttonName), Qt::LeftButton);
+            QCOMPARE(contents(to), expected); QCOMPARE(contents(from), source);
+            QCOMPARE(readBytes(reverse ? r.file1_ : r.file2_), target); QVERIFY(!QApplication::activeModalWidget());
+            to->send(SCI_UNDO); QCOMPARE(contents(to), target); to->send(SCI_REDO); QCOMPARE(contents(to), expected);
+            to->send(SCI_UNDO); QTRY_VERIFY(!to->send(SCI_GETMODIFY)); window.close();
+        }
+    }
+    void selectedChunkRejectsUnrelatedAndRectangle()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        write(r.file1_, "A\nkeep\nC\n"); write(r.file2_, "B\nkeep\nD\n");
+        CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("FILE 2"));
+        auto* source = window.findChild<ScintillaEditBase*>("FILE 1"); auto* target = window.findChild<ScintillaEditBase*>("FILE 2");
+        auto* gutter = window.findChild<ChunkGutter*>(); source->send(SCI_SETSEL, 0, 2);
+        QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk2_action0"));
+        QTRY_VERIFY(!gutter->findChild<QToolButton*>("chunk2_action0")->isEnabled());
+        source->send(SCI_SETSEL, 0, 1); source->send(SCI_SETSELECTIONMODE, SC_SEL_RECTANGLE);
+        QVERIFY(source->send(SCI_SELECTIONISRECTANGLE));
+        QTRY_VERIFY(!gutter->findChild<QToolButton*>("chunk1_action0")->isEnabled());
+        QCOMPARE(contents(target), QByteArray("B\nkeep\nD\n"));
+        source->send(SCI_SETSELECTIONMODE, SC_SEL_STREAM); source->send(SCI_SETSEL, 0, 0);
+        QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action0")->isEnabled());
+        QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+        QCOMPARE(contents(target), QByteArray("A\nkeep\nD\n")); target->send(SCI_UNDO); window.close();
+    }
+    void selectedThreeWayRangeKeepsConflictAndUndo()
+    {
+        for (int side : {0, 1})
+        {
+            QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+            write(r.file1_, "L0\nL1\nL2\n"); write(r.file2_, "R0\nR1\nR2\n"); write(r.base_, "B0\nB1\nB2\n");
+            CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT"));
+            auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* source = window.findChild<ScintillaEditBase*>(side ? "RIGHT" : "LEFT");
+            const auto initial = contents(output); auto expected = initial; expected.replace(3, 3, side ? "R1\n" : "L1\n");
+            MergeController* controller = nullptr; for (auto* object : window.findChildren<QObject*>()) if (auto* value = dynamic_cast<MergeController*>(object)) controller = value;
+            QVERIFY(controller); const auto states = controller->Model().State();
+            source->send(SCI_SETSEL, 3, 6); ChunkGutter* gutter = nullptr;
+            for (auto* value : window.findChildren<ChunkGutter*>()) if (value->SourceSide() == side) gutter = value;
+            QVERIFY(gutter); QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action0"));
+            QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+            QCOMPARE(contents(output), expected); QCOMPARE(controller->Model().UnresolvedCount(), std::size_t(1));
+            QVERIFY(!QFileInfo::exists(r.output_)); output->send(SCI_UNDO); QCOMPARE(contents(output), initial); QVERIFY(controller->Model().State() == states);
+            output->send(SCI_REDO); QCOMPARE(contents(output), expected); QCOMPARE(controller->Model().UnresolvedCount(), std::size_t(1));
+            output->send(SCI_UNDO); action(window, QString::fromUtf8("전체 수동 완료"))->trigger();
+            action(window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window.ExitCode(), 0); window.close();
+        }
+    }
     void compareInputExternalChangeAndPendingUndo()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");

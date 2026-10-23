@@ -72,6 +72,15 @@ namespace hc::compare
         const auto edit = model_.Prepare(Id, Revision, Choice); auto next = model_; next.Apply(edit);
         replace(edit.begin_, edit.end_, QByteArray::fromStdString(edit.replacement_), std::move(next), Choice != Resolution::Manual);
     }
+    void MergeController::ReplaceRange(std::uint64_t Id, std::uint64_t Revision, std::size_t Begin, std::size_t End, const QByteArray& Text)
+    {
+        const auto block = model_.Prepare(Id, Revision, Resolution::Manual);
+        if (Begin < block.begin_ || End > block.end_ || Begin > End) throw Failure("InvalidMergeLocation");
+        auto next = model_; next.TextChanged(Begin, End - Begin, std::size_t(Text.size()));
+        // A partial source choice cannot certify the rest of a conflict. Keep
+        // it unresolved, with text and decision metadata in the same undo step.
+        replace(Begin, End, Text, std::move(next), true);
+    }
     void MergeController::ChooseAll(Resolution Choice, const QByteArray& Text)
     {
         auto next = model_; next.SelectAll(Choice);
