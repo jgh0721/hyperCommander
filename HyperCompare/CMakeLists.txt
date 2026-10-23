@@ -14,6 +14,7 @@ target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 qt_add_library(hc_compare_runtime STATIC
     runtime/controllerMemory.cpp runtime/controllerMemory.hpp
     runtime/guiIpc.cpp runtime/guiIpc.hpp
+    runtime/gitTool.cpp runtime/gitTool.hpp
     runtime/saveRecovery.cpp runtime/saveRecovery.hpp
     runtime/inputEditing.cpp runtime/inputEditing.hpp
     runtime/semantic.cpp runtime/semantic.hpp

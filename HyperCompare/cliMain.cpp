@@ -2,6 +2,7 @@
 #include "runtime/session.hpp"
 #include "runtime/batch.hpp"
 #include "runtime/guiIpc.hpp"
+#include "runtime/gitTool.hpp"
 #include "runtime/semantic.hpp"
 #include "runtime/workerHost.hpp"
 #include <QCoreApplication>
@@ -23,9 +24,14 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv); app.setApplicationName("HyperCompare"); app.setOrganizationName("HyperTools"); app.setApplicationVersion("0.1.0");
     if (app.arguments() == QStringList{app.arguments().front(), "-internal-worker"}) return hc::compare::WorkerMain();
     SetConsoleCtrlHandler(control, TRUE);
+    if (hc::compare::IsGitToolInvocation(app.arguments()))
+    {
+        QByteArray output; QString error; const auto code = hc::compare::RunGitTool(app.arguments(), canceled, output, error);
+        if (!output.isEmpty()) print(output, stdout); if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
+    }
     const auto parsed = hc::compare::Parse(app.arguments(), true); const auto& request = parsed.request_;
     if (!parsed.error_.isEmpty()) { print(parsed.error_.toUtf8() + '\n', stderr); return 2; }
-    if (request.help_) { print(parsed.help_.toUtf8(), stdout); return 0; }
+    if (request.help_) { print(parsed.help_.toUtf8() + "\nConsole Git adapter: -git-tool config | diff -file1 LOCAL -file2 REMOTE | merge -base BASE -file1 LOCAL -file2 REMOTE -output MERGED\n", stdout); return 0; }
     if (request.version_) { print("HyperCompare 0.1.0; CLI schema 1; foundation\n", stdout); return 0; }
     if (request.mode_ == "capabilities") { print(QJsonDocument(hc::compare::Capabilities()).toJson(), stdout); return 0; }
     if (request.mode_ == "batch") return hc::compare::RunBatchAndReport(request, canceled);

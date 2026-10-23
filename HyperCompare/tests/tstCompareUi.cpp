@@ -108,6 +108,18 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void gitSetupPreview()
+    {
+        CompareWindow window({}); window.resize(1100, 720); window.show();
+        auto* setup = window.findChild<QAction*>("openGitSetup"); QVERIFY(setup); setup->trigger();
+        auto* dialog = window.findChild<QDialog*>("gitSetupDialog"); QVERIFY(dialog);
+        auto* text = dialog->findChild<QPlainTextEdit*>("gitSetupConfig"); QVERIFY(text); QVERIFY(text->isReadOnly());
+        QVERIFY(text->toPlainText().contains("-git-tool merge")); QVERIFY(text->toPlainText().contains("trustExitCode = true"));
+        QVERIFY(dialog->findChild<QPushButton*>("copyGitSetup"));
+        action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/git-setup-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/git-setup-dark.png"));
+        dialog->close(); window.close();
+    }
     void allPaneAlignmentPreservesEditingAndUndo()
     {
         QSettings{}.setValue("view/alignAllPanes", true);

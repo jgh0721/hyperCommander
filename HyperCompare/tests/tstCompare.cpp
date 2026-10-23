@@ -21,6 +21,7 @@
 #include "runtime/controllerMemory.hpp"
 #include "runtime/requestFile.hpp"
 #include "runtime/batch.hpp"
+#include "runtime/gitTool.hpp"
 #include "zipFixture.hpp"
 #include "docxFixture.hpp"
 #include <QCryptographicHash>
@@ -68,6 +69,96 @@ private:
         return row.back();
     }
 private slots:
+    void gitToolConfigurationAndShellQuoting()
+    {
+        QTemporaryDir dir; const auto script = dir.filePath(QString::fromUtf8("도구 ' $ & [x].sh"));
+        write(script, "#!/bin/sh\nprintf '%s\\0' \"$@\"\nexit 3\n");
+        const auto config = dir.filePath("gitconfig"); write(config, GitToolConfig(script).toUtf8());
+        const auto git = QStandardPaths::findExecutable("git"); QVERIFY(!git.isEmpty());
+        QProcess process; process.start(git, {"config", "--file", config, "--get", "difftool.hypercompare.cmd"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        const auto command = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const auto shell = QDir(QFileInfo(git).absolutePath()).absoluteFilePath("../bin/sh.exe"); QVERIFY(QFileInfo::exists(shell));
+        auto env = QProcessEnvironment::systemEnvironment(); const auto local = QString::fromUtf8("공백 ' $() & [a].txt");
+        env.insert("LOCAL", local); env.insert("REMOTE", "remote `literal`.txt"); process.setProcessEnvironment(env);
+        process.start(shell, {"-c", command}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 3);
+        const auto fields = process.readAllStandardOutput().split('\0'); QCOMPARE(fields.size(), 7);
+        QCOMPARE(fields[0], QByteArray("-git-tool")); QCOMPARE(fields[1], QByteArray("diff")); QCOMPARE(fields[3], local.toUtf8()); QCOMPARE(fields[5], QByteArray("remote `literal`.txt"));
+        QVERIFY_EXCEPTION_THROWN(GitToolConfig("bad\npath"), Failure);
+        process.setProcessEnvironment(QProcessEnvironment::systemEnvironment()); process.setWorkingDirectory(dir.path());
+        process.start(git, {"init", "-q"}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        const auto fileName = QString::fromUtf8("추가 ' $ [a].txt"); write(dir.filePath(fileName), "new\n");
+        process.start(git, {"add", "--", fileName}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        process.start(git, {"-c", "include.path=" + config, "difftool", "--no-prompt", "--trust-exit-code", "--tool=hypercompare", "--cached", "--", fileName});
+        QVERIFY(process.waitForFinished(10000)); QVERIFY(process.exitCode() != 0); // Git for Windows may wrap the tool code as 128.
+        const auto gitArgs = process.readAllStandardOutput().split('\0'); QCOMPARE(gitArgs.size(), 7);
+        QCOMPARE(gitArgs[1], QByteArray("diff")); QCOMPARE(gitArgs[3], QByteArray("/dev/null")); QVERIFY(gitArgs[5].endsWith(fileName.toUtf8()));
+        process.start(git, {"hash-object", "-w", "--", fileName}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        const auto hash = process.readAllStandardOutput().trimmed(); QByteArray index = "0 " + QByteArray(40, '0') + '\t' + fileName.toUtf8() + '\0';
+        for (int stage : {1, 2, 3}) index += "100644 " + hash + ' ' + QByteArray::number(stage) + '\t' + fileName.toUtf8() + '\0';
+        process.start(git, {"update-index", "-z", "--index-info"}); QVERIFY(process.waitForStarted()); process.write(index); process.closeWriteChannel();
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
+        process.start(git, {"ls-files", "-u", "-z"}); QVERIFY(process.waitForFinished(10000)); const auto before = process.readAllStandardOutput(); QVERIFY(!before.isEmpty());
+        process.start(git, {"-c", "include.path=" + config, "mergetool", "--no-prompt", "--tool=hypercompare", "--", fileName});
+        QVERIFY(process.waitForFinished(10000)); QVERIFY(process.exitCode() != 0);
+        QVERIFY(process.readAllStandardOutput().contains(QByteArray("-git-tool\0merge\0", 16)));
+        process.start(git, {"ls-files", "-u", "-z"}); QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.readAllStandardOutput(), before);
+        process.setProcessEnvironment(QProcessEnvironment::systemEnvironment());
+        process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-git-tool", "config"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0); QVERIFY(process.readAllStandardOutput().contains("hideResolved = false"));
+        process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-git-tool", "merge", "-takeall", "left"});
+        QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 2);
+    }
+    void gitToolRolesStatesAndExitCodes()
+    {
+        QTemporaryDir dir; const auto git = QStandardPaths::findExecutable("git"); QVERIFY(!git.isEmpty());
+        const auto invoke = [&](const QStringList& Args, const QByteArray& Input = QByteArray{}) {
+            QProcess process; process.setWorkingDirectory(dir.path()); process.start(git, Args);
+            if (!process.waitForStarted(5000)) return QPair<int, QByteArray>{-1, {}};
+            process.write(Input); process.closeWriteChannel();
+            if (!process.waitForFinished(10000)) return QPair<int, QByteArray>{-1, {}};
+            return QPair<int, QByteArray>{process.exitCode(), process.readAllStandardOutput()};
+        };
+        QCOMPARE(invoke({"init", "-q"}).first, 0);
+        const auto targetName = QString::fromUtf8("충돌 ' $ [1].txt"), target = dir.filePath(targetName);
+        const auto left = dir.filePath("local"), right = dir.filePath("remote"), base = dir.filePath("base");
+        write(left, "left\n"); write(right, "right\n"); write(base, "base\n"); write(target, "unresolved\n");
+        const auto blob = invoke({"hash-object", "-w", "--stdin"}, "base\n"); QCOMPARE(blob.first, 0); const auto hash = blob.second.trimmed();
+        const auto setStages = [&](const QList<int>& Stages, const QByteArray& Mode = QByteArray("100644")) {
+            QByteArray data = "0 " + QByteArray(40, '0') + '\t' + targetName.toUtf8() + '\0';
+            for (int stage : Stages) data += Mode + ' ' + hash + ' ' + QByteArray::number(stage) + '\t' + targetName.toUtf8() + '\0';
+            return invoke({"update-index", "-z", "--index-info"}, data).first;
+        };
+        const auto cancel = std::make_shared<std::atomic_bool>(false); QByteArray output; QString error; Request captured; QStringList received; int calls = 0, status = 0;
+        const GitGuiSubmit submit = [&](const QStringList& Args, const Request& Input, const auto&, QString&) { received = Args; captured = Input; ++calls; return status; };
+        const QStringList args{"app", "-git-tool", "merge", "-file1", left, "-file2", right, "-base", base, "-output", target};
+        QCOMPARE(setStages({1, 2, 3}), 0);
+        const auto originalIndex = read(dir.filePath(".git/index"));
+        for (int code : {0, 1, 2, 3})
+        {
+            status = code; QCOMPARE(RunGitTool(args, cancel, output, error, submit), code); QVERIFY2(error.isEmpty(), qPrintable(error));
+            QVERIFY(captured.gui_); QVERIFY(captured.wait_); QVERIFY(captured.overwrite_); QCOMPARE(captured.mode_, QString("merge"));
+            QCOMPARE(captured.base_, base); QCOMPARE(read(target), QByteArray("unresolved\n"));
+        }
+        QCOMPARE(read(dir.filePath(".git/index")), originalIndex); QCOMPARE(calls, 4);
+        QCOMPARE(setStages({2, 3}), 0); status = 0;
+        QCOMPARE(RunGitTool(args, cancel, output, error, submit), 2); QCOMPARE(error, QString("InvalidGitEmptyBase"));
+        write(base, {}); QCOMPARE(RunGitTool(args, cancel, output, error, submit), 0); QCOMPARE(calls, 5);
+        for (const auto& stages : {QList<int>{1, 2}, QList<int>{1, 3}, QList<int>{2}, QList<int>{1}, QList<int>{}})
+        { QCOMPARE(setStages(stages), 0); QCOMPARE(RunGitTool(args, cancel, output, error, submit), 2); QCOMPARE(error, QString("UnsupportedVcsState")); }
+        QCOMPARE(setStages({1, 2, 3}, "120000"), 0); QCOMPARE(RunGitTool(args, cancel, output, error, submit), 2); QCOMPARE(calls, 5);
+        QCOMPARE(setStages({1, 2, 3}), 0);
+        const GitGuiSubmit changeIndex = [&](const auto&, const auto&, const auto&, QString&) { setStages({2, 3}); return 0; };
+        QCOMPARE(RunGitTool(args, cancel, output, error, changeIndex), 2); QCOMPARE(error, QString("GitIndexChangedDuringMerge"));
+        QStringList diff{"app", "-git-tool", "diff", "-file1", left, "-file2", right};
+        for (int code : {0, 1, 2, 3}) { status = code; QCOMPARE(RunGitTool(diff, cancel, output, error, submit), code == 1 ? 0 : code); }
+        diff[4] = "/dev/null"; bool emptySeen = false;
+        const GitGuiSubmit emptySubmit = [&](const auto&, const Request& Input, const auto&, QString&) { emptySeen = QFileInfo(Input.file1_).isFile() && read(Input.file1_).isEmpty(); return 1; };
+        for (const auto& nullPath : {QString("/dev/null"), QString("nul"), QString("\\\\.\\NUL")})
+        { diff[4] = nullPath; emptySeen = false; QCOMPARE(RunGitTool(diff, cancel, output, error, emptySubmit), 0); QVERIFY(emptySeen); }
+        cancel->store(true); QCOMPARE(RunGitTool(args, cancel, output, error, submit), 3);
+        QCOMPARE(GitToolExitCode(true, -1), 2); QCOMPARE(GitToolExitCode(false, 4), 2);
+    }
     void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
     void boundedLineScanning()
     {

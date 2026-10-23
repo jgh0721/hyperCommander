@@ -2,6 +2,12 @@
 #include "compareWindow.hpp"
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
+#include "runtime/gitTool.hpp"
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPlainTextEdit>
+#include <QClipboard>
+#include <QPushButton>
 #include "mergeController.hpp"
 #include "chunkGutter.hpp"
 #include "scrollSynchronizer.hpp"
@@ -157,6 +163,24 @@ namespace hc::compare
             updateMerge(); dialog->show();
         });
         recoveryAction_->setObjectName("openSaveRecovery");
+        auto* gitSetup = fileMenu->addAction(tr("Git 연동 설정…"), this, [this] {
+            auto* dialog = new QDialog(this); dialog->setObjectName("gitSetupDialog"); dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setWindowTitle(tr("Git 연동 설정")); dialog->resize(800, 480);
+            auto* layout = new QVBoxLayout(dialog);
+            auto* explanation = new QLabel(tr("git config --local --edit로 저장소 설정을 열어 아래 내용을 기존 항목과 병합하십시오.\n"
+                "일반 파일 충돌과 add/add를 지원합니다. 삭제·복잡한 이름 변경·파일 모드 충돌은 지원하지 않습니다."), dialog);
+            explanation->setWordWrap(true); layout->addWidget(explanation);
+            auto* text = new QPlainTextEdit(dialog); text->setObjectName("gitSetupConfig"); text->setReadOnly(true); text->setFont(textFont_);
+            text->setLineWrapMode(QPlainTextEdit::NoWrap); text->setAccessibleName(tr("Git 연동 설정 내용"));
+            try { text->setPlainText(GitToolConfig(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe")); }
+            catch (const std::exception& error) { text->setPlainText(QString::fromUtf8(error.what())); }
+            layout->addWidget(text);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog); auto* copy = buttons->addButton(tr("설정 복사"), QDialogButtonBox::ActionRole);
+            buttons->button(QDialogButtonBox::Close)->setText(tr("닫기"));
+            copy->setObjectName("copyGitSetup"); connect(copy, &QPushButton::clicked, dialog, [text] { QApplication::clipboard()->setText(text->toPlainText()); });
+            connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close); layout->addWidget(buttons); dialog->show();
+        });
+        gitSetup->setObjectName("openGitSetup");
         saveWork_ = fileMenu->addAction(tr("작업 저장..."), this, [this] {
             if (!merge_ || busy()) return;
             QFileDialog dialog(this, tr("병합 작업 저장"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));

@@ -170,6 +170,8 @@ namespace hc::compare
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 2}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},
+            {"gitAdapter", QJsonObject{{"schemaVersion", 1}, {"config", "-git-tool config"}, {"diff", "files-and-explicit-dev-null"},
+                {"merge", "regular-same-mode-index-stages-123-or-23"}, {"writesConfig", false}, {"writesIndex", false}}},
             {"requestFiles", true}, {"requestSchema", 1}, {"maxRequestBytes", 1048576}, {"roleEncodings", true},
             {"batch", true}, {"maxBatchJobs", 1000}, {"maxConcurrentJobs", 2}, {"batchFormat", "ndjson"},
             {"controllerMemoryMiB", QJsonArray{256, 1024}}, {"controllerMemoryPolicy", "cooperative-private-commit-and-worker-reservations"},
