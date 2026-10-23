@@ -25,10 +25,15 @@ namespace hc::compare
                 if (QDir::match(pattern, pattern.contains('/') ? Relative : Relative.section('/', -1))) return true;
             return false;
         }
-        DirectoryTree enumerate(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits)
+        bool recoverable(const Failure& Error)
+        { return Error.code_.starts_with("win32:") || Error.code_ == "ChangedDuringRead"; }
+        void enumerate(DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete)
         {
-            DirectoryTree result; const auto provider = reader(Root); const auto ctx = context(Limits);
-            const auto root = require(provider->Resolve(locator(Root), ctx).get());
+            auto& result = Snapshot.entries_; const auto provider = reader(Snapshot.root_); auto ctx = context(Limits);
+            // Retain listing metadata until filters run; included unavailable entries
+            // still fail strict mutation capture below.
+            ctx.allowUnavailableChildMetadata_ = true;
+            const auto& root = Snapshot.entry_;
             if (!root.directory_) throw Failure("ExpectedDirectory");
             if (root.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
             std::vector<std::pair<storage::Locator, QString>> pending{{root.locator_, {}}};
@@ -36,28 +41,56 @@ namespace hc::compare
             while (!pending.empty())
             {
                 Limits.Check(); auto [at, prefix] = std::move(pending.back()); pending.pop_back();
-                const auto cursor = require(provider->Enumerate(at, ctx).get());
-                for (;;)
+                try
                 {
-                    Limits.Check(); auto page = require(cursor->Next(256, ctx).get());
-                    for (auto& entry : page.entries_)
+                    const auto cursor = require(provider->Enumerate(at, ctx).get());
+                    for (;;)
                     {
-                        if (++visited > 100000) throw Failure("DirectoryEntryLimit");
-                        const auto relative = prefix + QString::fromStdString(entry.name_);
-                        if (matches(Policy.exclude_, relative)) continue;
-                        if (entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
-                        if (relative.count('/') > 128) throw Failure("DirectoryDepthLimit");
-                        if (!entry.directory_ && !Policy.include_.isEmpty() && !matches(Policy.include_, relative)) continue;
-                        const auto key = relative.toCaseFolded();
-                        if (result.contains(key)) throw Failure("CaseCollision");
-                        entry.hints_["relativePath"] = relative.toUtf8().toStdString();
-                        if (entry.directory_) pending.push_back({entry.locator_, relative + '/'});
-                        result.insert(key, std::move(entry));
+                        Limits.Check(); auto page = require(cursor->Next(256, ctx).get());
+                        for (auto& entry : page.entries_)
+                        {
+                            if (++visited > 100000)
+                            {
+                                if (!AllowIncomplete) throw Failure("DirectoryEntryLimit");
+                                Snapshot.issues_.insert({}, "DirectoryEntryLimit"); return;
+                            }
+                            const auto relative = prefix + QString::fromStdString(entry.name_);
+                            if (matches(Policy.exclude_, relative)) continue;
+                            if (!entry.directory_ && !Policy.include_.isEmpty() && !matches(Policy.include_, relative)) continue;
+                            const auto key = relative.toCaseFolded();
+                            if (result.contains(key)) throw Failure("CaseCollision");
+                            QString error;
+                            if (const auto found = entry.hints_.find("comparisonError"); found != entry.hints_.end()) error = QString::fromStdString(found->second);
+                            if (entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) error = "ReparseDirectoryUnsupported";
+                            if (relative.count('/') > 128) error = "DirectoryDepthLimit";
+                            if (!error.isEmpty())
+                            {
+                                if (!AllowIncomplete) throw Failure(error.toStdString());
+                                Snapshot.issues_.insert(key, error);
+                            }
+                            entry.hints_["relativePath"] = relative.toUtf8().toStdString();
+                            if (entry.directory_ && error.isEmpty()) pending.push_back({entry.locator_, relative + '/'});
+                            result.insert(key, std::move(entry));
+                        }
+                        if (page.end_) break;
                     }
-                    if (page.end_) break;
+                }
+                catch (const Failure& error)
+                {
+                    if (!AllowIncomplete || !recoverable(error)) throw;
+                    Snapshot.issues_.insert(prefix.isEmpty() ? QString{} : prefix.chopped(1).toCaseFolded(), QString::fromStdString(error.code_));
                 }
             }
-            return result;
+        }
+        QString issueFor(const DirectorySnapshot& Snapshot, QString Key, bool Present)
+        {
+            for (;;)
+            {
+                const auto found = Snapshot.issues_.constFind(Key);
+                if (found != Snapshot.issues_.cend() && (!Key.isEmpty() || !Present)) return found.value();
+                if (Key.isEmpty()) return {};
+                const auto slash = Key.lastIndexOf('/'); Key = slash < 0 ? QString{} : Key.left(slash);
+            }
         }
         bool sameContent(const storage::EntrySnapshot& A, const storage::EntrySnapshot& B, const Budget& Limits)
         {
@@ -108,7 +141,7 @@ namespace hc::compare
             return sameContent(*A, *B, Limits) ? "Equal" : "Different";
         }
     }
-    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits)
+    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete)
     {
         if (Policy.level_ != "bytes" && Policy.level_ != "metadata") throw Failure("InvalidDirectoryLevel");
         for (const auto& patterns : {Policy.include_, Policy.exclude_})
@@ -119,11 +152,12 @@ namespace hc::compare
         }
         Limits.Check(); DirectorySnapshot snapshot; snapshot.root_ = Root;
         snapshot.entry_ = require(reader(Root)->Resolve(locator(Root), context(Limits)).get());
-        snapshot.entries_ = enumerate(Root, Policy, Limits);
+        enumerate(snapshot, Policy, Limits, AllowIncomplete);
         return snapshot;
     }
     void ValidateDirectory(const DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits)
     {
+        if (!Snapshot.issues_.isEmpty()) throw Failure("DirectoryComparisonIncomplete");
         const auto current = CaptureDirectory(Snapshot.root_, Policy, Limits);
         if (current.entry_.id_.revision_ != Snapshot.entry_.id_.revision_ || current.entries_.size() != Snapshot.entries_.size())
             throw Failure("DirectoryChanged");
@@ -139,9 +173,9 @@ namespace hc::compare
     {
         if (!Input.file3_.isEmpty()) throw Failure("DirectoryIndependentThreeUnsupported");
         auto captured = std::make_shared<std::vector<DirectorySnapshot>>();
-        captured->push_back(CaptureDirectory(Input.file1_, Input.directory_, Limits));
-        captured->push_back(CaptureDirectory(Input.file2_, Input.directory_, Limits));
-        if (!Input.base_.isEmpty()) captured->push_back(CaptureDirectory(Input.base_, Input.directory_, Limits));
+        captured->push_back(CaptureDirectory(Input.file1_, Input.directory_, Limits, true));
+        captured->push_back(CaptureDirectory(Input.file2_, Input.directory_, Limits, true));
+        if (!Input.base_.isEmpty()) captured->push_back(CaptureDirectory(Input.base_, Input.directory_, Limits, true));
         const bool three = captured->size() == 3;
         Value.operation_ = three ? "directory3" : "directory2";
         Value.directoryLevel_ = Input.directory_.level_;
@@ -150,6 +184,11 @@ namespace hc::compare
         for (const auto& tree : *captured) for (auto it = tree.entries_.cbegin(); it != tree.entries_.cend(); ++it) keys.insert(it.key());
         auto sorted = keys.values(); std::sort(sorted.begin(), sorted.end());
         bool different = false, conflict = false;
+        for (const auto& snapshot : *captured) for (auto it = snapshot.issues_.cbegin(); it != snapshot.issues_.cend(); ++it)
+        {
+            Value.directoryComplete_ = false;
+            Value.warnings_.append(QJsonObject{{"root", snapshot.root_}, {"path", it.key()}, {"error", it.value()}});
+        }
         for (const auto& key : sorted)
         {
             Limits.Check(); std::array<const storage::EntrySnapshot*, 3> entries{};
@@ -158,27 +197,45 @@ namespace hc::compare
                 const auto found = (*captured)[i].entries_.constFind(key);
                 if (found != (*captured)[i].entries_.cend()) entries[i] = &*found;
             }
-            const auto lr = relation(entries[0], entries[1], Input.directory_, Limits);
+            QJsonArray errors;
+            for (std::size_t i = 0; i < captured->size(); ++i)
+            {
+                const auto issue = issueFor((*captured)[i], key, entries[i] != nullptr);
+                if (!issue.isEmpty()) errors.append(QJsonObject{{"side", int(i)}, {"root", (*captured)[i].root_}, {"path", key}, {"error", issue}});
+            }
+            const auto safeRelation = [&](int A, int B) -> QString {
+                if (!errors.isEmpty()) return "Error";
+                try { return relation(entries[A], entries[B], Input.directory_, Limits); }
+                catch (const Failure& error)
+                {
+                    if (!recoverable(error)) throw;
+                    errors.append(QJsonObject{{"path", key}, {"error", QString::fromStdString(error.code_)}}); return "Error";
+                }
+            };
+            const auto lr = safeRelation(0, 1);
             QString status = lr, lb, rb;
             if (three)
             {
-                lb = relation(entries[0], entries[2], Input.directory_, Limits);
-                rb = relation(entries[1], entries[2], Input.directory_, Limits);
+                lb = safeRelation(0, 2);
+                rb = safeRelation(1, 2);
                 if (lr == "Equal") status = lb == "Equal" ? "Equal" : !entries[0] ? "BothDeleted" : "BothSame";
                 else if (lb == "Equal") status = !entries[1] ? "RightDeleted" : !entries[2] ? "RightAdded" : "RightChanged";
                 else if (rb == "Equal") status = !entries[0] ? "LeftDeleted" : !entries[2] ? "LeftAdded" : "LeftChanged";
                 else status = "Conflict";
             }
+            if (!errors.isEmpty()) { status = "Error"; Value.directoryComplete_ = false; }
             conflict |= status == "Conflict" || status == "TypeConflict";
             different |= status != "Equal";
             const auto* item = entries[0] ? entries[0] : entries[1] ? entries[1] : entries[2];
             Value.entries_.append(QJsonObject{{"path", relative(item)}, {"status", status},
-                {"leftRight", lr}, {"leftBase", lb}, {"rightBase", rb},
+                {"leftRight", lr}, {"leftBase", lb}, {"rightBase", rb}, {"errors", errors},
                 {"left", describe(entries[0])}, {"right", describe(entries[1])}, {"base", describe(entries[2])}});
         }
         // Two traversals detect membership/revision changes; this is not an atomic filesystem snapshot.
-        for (const auto& snapshot : *captured) ValidateDirectory(snapshot, Input.directory_, Limits);
+        if (Value.directoryComplete_) for (const auto& snapshot : *captured) ValidateDirectory(snapshot, Input.directory_, Limits);
         Value.directories_ = std::move(captured);
-        Value.exitCode_ = different ? 1 : 0; Value.outcome_ = conflict ? "Conflict" : different ? "Different" : "Equal";
+        Value.exitCode_ = Value.directoryComplete_ ? (different ? 1 : 0) : 2;
+        Value.outcome_ = Value.directoryComplete_ ? (conflict ? "Conflict" : different ? "Different" : "Equal") : "Partial";
+        if (!Value.directoryComplete_) Value.error_ = "DirectoryComparisonIncomplete";
     }
 }

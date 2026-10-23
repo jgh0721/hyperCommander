@@ -5,6 +5,7 @@
 #include <QStyle>
 #include <QFont>
 #include <QLocale>
+#include <QJsonDocument>
 #include <algorithm>
 
 namespace hc::compare
@@ -97,7 +98,7 @@ namespace hc::compare
             return qApp->style()->standardIcon(side["directory"].toBool() ? QStyle::SP_DirIcon : QStyle::SP_FileIcon);
         if (Role == Qt::ToolTipRole)
             return n->path_ + '\n' + DirectoryStatusName(entry["status"].toString()) +
-                tr("\nLEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(entry["leftRight"].toString(), entry["leftBase"].toString(), entry["rightBase"].toString());
+                tr("\nLEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(entry["leftRight"].toString(), entry["leftBase"].toString(), entry["rightBase"].toString()) + '\n' + QString::fromUtf8(QJsonDocument(entry["errors"].toArray()).toJson(QJsonDocument::Compact));
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
         if (!column)
         {
@@ -106,6 +107,7 @@ namespace hc::compare
         }
         if (column == 1)
         {
+            if (entry["status"] == "Error") return tr("비교 불가");
             if (!present) return n->entry_ < 0 ? tr("상위 경로") : tr("없음");
             if (entry["status"] == "Equal" && n->different_) return tr("하위 항목 차이");
             return DirectoryStatusName(entry["status"].toString());

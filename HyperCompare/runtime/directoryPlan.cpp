@@ -146,7 +146,7 @@ namespace hc::compare
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
     {
         CheckProtectedInputs(Input, {Input.output_}, Limits);
-        if (!Comparison.directories_ || Comparison.completion_ != "Complete" || Input.directory_.level_ != "bytes") throw Failure("DirectoryPlanRequiresContentComparison");
+        if (!Comparison.directoryComplete_ || !Comparison.directories_ || Comparison.completion_ != "Complete" || Input.directory_.level_ != "bytes") throw Failure("DirectoryPlanRequiresContentComparison");
         if (!Input.takeAll_.isEmpty() && (Comparison.directories_->size() == 3 || (Input.takeAll_ != "left" && Input.takeAll_ != "right"))) throw Failure("InvalidDirectorySelection");
         const auto output = CheckedDirectoryPath(Input.output_); QJsonArray roots;
         if (QDir(output).isRoot()) throw Failure("DirectoryOutputRootUnsupported");

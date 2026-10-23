@@ -20,8 +20,9 @@ namespace hc::compare
         QString root_;
         storage::EntrySnapshot entry_;
         DirectoryTree entries_;
+        QMap<QString, QString> issues_; // Incomplete subtrees, keyed by folded relative path.
     };
-    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits);
+    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete = false);
     void ValidateDirectory(const DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits);
     void CompareDirectory(const Request& Input, Result& Value, const Budget& Limits);
 }

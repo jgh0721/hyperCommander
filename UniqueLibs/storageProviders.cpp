@@ -144,9 +144,17 @@ namespace hc::storage
                         const auto Name = Utf8(found_.cFileName);
                         const auto Path = at_.root_ + (at_.root_.ends_with('\\') ? "" : "\\") + Name;
                         WIN32_FILE_ATTRIBUTE_DATA Data{}; ResourceRevision Revision;
-                        if (!ReadAttributes(Wide(Path), Data, &Revision)) return NativeError(GetLastError(), provider_);
+                        DWORD metadataError = ERROR_SUCCESS;
+                        if (!ReadAttributes(Wide(Path), Data, &Revision)) {
+                            metadataError = GetLastError();
+                            if (!Context.allowUnavailableChildMetadata_ || (metadataError != ERROR_ACCESS_DENIED && metadataError != ERROR_SHARING_VIOLATION)) {
+                                auto Error = NativeError(metadataError, provider_); Error.nativePath_ = Path; return Error;
+                            }
+                            Data = {found_.dwFileAttributes, found_.ftCreationTime, found_.ftLastAccessTime, found_.ftLastWriteTime, found_.nFileSizeHigh, found_.nFileSizeLow};
+                        }
                         auto Item = Entry(provider_, prefix_, {at_.kind_, Path}, Name, Data);
-                        Item.id_.revision_ = std::move(Revision); Item.hints_["reparseTag"] = std::to_string(found_.dwReserved0);
+                        if (metadataError) { Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(metadataError); }
+                        else Item.id_.revision_ = std::move(Revision); Item.hints_["reparseTag"] = std::to_string(found_.dwReserved0);
                         Page.entries_.push_back(std::move(Item)); ++count_;
                     }
                     Page.end_ = ended_;

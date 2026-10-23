@@ -37,6 +37,7 @@
 #include <future>
 #include <thread>
 #include <Windows.h>
+#include <sddl.h>
 
 using namespace hc::compare;
 class CompareTests final : public QObject
@@ -2060,6 +2061,46 @@ private slots:
             QVERIFY(found);
         }
         r.file3_ = r.base_; r.base_.clear(); QCOMPARE(Execute(r, cancel, false).error_, QString("DirectoryIndependentThreeUnsupported"));
+    }
+    void directoryAccessFailuresPreserveKnownResults()
+    {
+        QTemporaryDir dir; const auto left = dir.filePath("left"), right = dir.filePath("right");
+        QVERIFY(QDir().mkpath(left + "/blocked")); QVERIFY(QDir().mkpath(right + "/blocked"));
+        write(left + "/known.txt", "left\n"); write(right + "/known.txt", "right\n");
+        write(left + "/blocked/child", "same"); write(right + "/blocked/child", "same");
+        write(left + "/locked.txt", "locked"); write(right + "/locked.txt", "locked");
+        struct Acl { QString path_; QByteArray original_; }; QVector<Acl> changed;
+        const auto restore = qScopeGuard([&] {
+            for (const auto& acl : changed) SetFileSecurityW(reinterpret_cast<LPCWSTR>(acl.path_.utf16()), DACL_SECURITY_INFORMATION,
+                reinterpret_cast<PSECURITY_DESCRIPTOR>(const_cast<char*>(acl.original_.constData())));
+        });
+        for (const auto& item : {qMakePair(left + "/blocked", QString("0x1")), qMakePair(left + "/locked.txt", QString("0x1"))})
+        {
+            DWORD size = 0; GetFileSecurityW(reinterpret_cast<LPCWSTR>(item.first.utf16()), DACL_SECURITY_INFORMATION, nullptr, 0, &size); QVERIFY(size > 0);
+            QByteArray original(qsizetype(size), '\0'); QVERIFY(GetFileSecurityW(reinterpret_cast<LPCWSTR>(item.first.utf16()), DACL_SECURITY_INFORMATION, original.data(), size, &size));
+            changed.push_back({item.first, original}); PSECURITY_DESCRIPTOR restricted = nullptr;
+            const auto sddl = ("D:(D;;" + item.second + ";;;WD)(A;;FA;;;WD)").toStdWString();
+            QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &restricted, nullptr));
+            const auto free = qScopeGuard([&] { LocalFree(restricted); });
+            QVERIFY(SetFileSecurityW(reinterpret_cast<LPCWSTR>(item.first.utf16()), DACL_SECURITY_INFORMATION, restricted));
+        }
+        Request r; r.mode_ = "directory"; r.file1_ = left; r.file2_ = right; r.output_ = dir.filePath("out");
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        for (const auto& base : {QString{}, right})
+        {
+            r.base_ = base; const auto result = Execute(r, cancel, false);
+            QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.outcome_, QString("Partial")); QCOMPARE(result.exitCode_, 2);
+            QVERIFY(!result.directoryComplete_); QVERIFY(!result.Json()["coverage"].toObject()["scopeComplete"].toBool());
+            QMap<QString, QJsonObject> rows; for (const auto& entry : result.entries_) rows.insert(entry.toObject()["path"].toString(), entry.toObject());
+            QVERIFY(rows.contains("known.txt")); QVERIFY(rows["known.txt"]["status"] != "Error");
+            for (const auto& path : {"blocked", "blocked/child", "locked.txt"})
+            { QVERIFY2(rows[path]["status"] == "Error", qPrintable(QString(path) + ": " + QString::fromUtf8(QJsonDocument(rows[path]).toJson()))); QVERIFY(!rows[path]["errors"].toArray().isEmpty()); }
+            QVERIFY_EXCEPTION_THROWN(MakeDirectoryPlan(r, result, {}), Failure);
+            QVERIFY_EXCEPTION_THROWN(ValidateDirectory(result.directories_->front(), r.directory_, {}), Failure);
+        }
+        QVERIFY_EXCEPTION_THROWN(CaptureDirectory(left, {}, {}), Failure); // Mutation capture remains strict.
+        r.base_.clear(); r.directory_.exclude_ = {"blocked", "locked.txt"};
+        const auto filtered = Execute(r, cancel, false); QCOMPARE(filtered.completion_, QString("Complete")); QVERIFY(filtered.directoryComplete_); QCOMPARE(filtered.entries_.size(), 1);
     }
     void directoryFiltersAndMetadata()
     {

@@ -506,7 +506,7 @@ namespace hc::compare
         if (result_.operation_.startsWith("directory"))
         {
             directory_->SetComparison(request_, result_); sources_->hide(); details_->hide(); directory_->show();
-            if (request_.mode_ == "directory-merge")
+            if (request_.mode_ == "directory-merge" && result_.directoryComplete_)
             {
                 auto* dialog = new DirectoryMergeDialog(request_, result_, this); directoryMerge_ = dialog; exitCode_ = 3;
                 dialog->statusChanged_ = [this](int Code) { exitCode_ = Code; if (closing_) QTimer::singleShot(0, this, [this] { close(); }); };
@@ -543,7 +543,7 @@ namespace hc::compare
             qsizetype differences = 0, conflicts = 0;
             for (const auto& item : result_.entries_)
             { const auto status = item.toObject()["status"].toString(); differences += status != "Equal"; conflicts += status == "Conflict" || status == "TypeConflict"; }
-            state_->setText(tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개").arg(differences).arg(conflicts));
+            state_->setText((result_.directoryComplete_ ? tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개") : tr("디렉터리 일부 비교 — 미확인 항목 포함 %1개 · 충돌 %2개")).arg(differences).arg(conflicts));
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
         bindInputEditors();

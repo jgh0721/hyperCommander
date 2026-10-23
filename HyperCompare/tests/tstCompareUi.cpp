@@ -108,6 +108,22 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void directoryPartialResultsAndPlanGuard()
+    {
+        Request request; request.file1_ = "D:/left"; request.file2_ = "D:/right"; Result value; value.directoryComplete_ = false;
+        const QJsonObject missing{{"present", false}}, folder{{"present", true}, {"directory", true}, {"path", "blocked"}};
+        value.entries_ = QJsonArray{
+            QJsonObject{{"path", "blocked"}, {"status", "Error"}, {"left", folder}, {"right", folder}, {"errors", QJsonArray{QJsonObject{{"path", "blocked"}, {"error", "win32:5"}}}}},
+            QJsonObject{{"path", "blocked/child"}, {"status", "Error"}, {"left", missing}, {"right", QJsonObject{{"present", true}, {"path", "blocked/child"}}}},
+            QJsonObject{{"path", "normal"}, {"status", "Different"}, {"left", missing}, {"right", QJsonObject{{"present", true}, {"path", "normal"}}}}};
+        DirectoryView view; view.resize(1000, 600); view.SetComparison(request, value); view.show();
+        QVERIFY(!view.findChild<QPushButton*>("directoryMergePlan")->isEnabled());
+        auto* filter = view.findChild<QComboBox*>("directoryStatusFilter"); QCOMPARE(filter->count(), 4); filter->setCurrentIndex(3);
+        auto* tree = view.findChild<QTreeView*>("directoryLeftTree"); QVERIFY(tree); QCOMPARE(tree->model()->rowCount(), 1);
+        const auto blocked = tree->model()->index(0, 0); QVERIFY(blocked.data(Qt::ToolTipRole).toString().contains("win32:5"));
+        QCOMPARE(tree->model()->index(0, 1, blocked).data().toString(), QString::fromUtf8("비교 불가"));
+        value.directoryComplete_ = true; view.SetComparison(request, value); QVERIFY(view.findChild<QPushButton*>("directoryMergePlan")->isEnabled()); view.close();
+    }
     void gitSetupPreview()
     {
         CompareWindow window({}); window.resize(1100, 720); window.show();

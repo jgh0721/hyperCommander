@@ -83,6 +83,7 @@ namespace hc::compare
         QJsonObject saveRecovery_;
         QString directoryLevel_;
         bool directoryFiltered_ = false;
+        bool directoryComplete_ = true;
         QJsonArray entries_, comparisons_, warnings_, recovery_;
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;

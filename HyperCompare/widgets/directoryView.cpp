@@ -3,6 +3,7 @@
 #include "directoryTreeModel.hpp"
 #include "directoryMergeDialog.hpp"
 #include <QDir>
+#include <QJsonDocument>
 #include <QLocale>
 #include <QFontMetrics>
 #include <QTableView>
@@ -35,7 +36,7 @@ namespace hc::compare
         };
         QString statusName(const QString& Status)
         {
-            static const QMap<QString, QString> labels{{"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
+            static const QMap<QString, QString> labels{{"Error", QObject::tr("비교 불가")}, {"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
                 {"LeftOnly", QObject::tr("왼쪽만 존재")}, {"RightOnly", QObject::tr("오른쪽만 존재")},
                 {"TypeConflict", QObject::tr("파일/폴더 충돌")}, {"NameDifferent", QObject::tr("이름 다름")},
                 {"LeftChanged", QObject::tr("왼쪽 수정")}, {"RightChanged", QObject::tr("오른쪽 수정")},
@@ -50,7 +51,7 @@ namespace hc::compare
     {
         const auto status = Entry["status"].toString();
         return Entry["path"].toString().contains(Query, Qt::CaseInsensitive) &&
-            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")));
+            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
     }
     QString DirectoryStatusName(const QString& Status) { return statusName(Status); }
     void DirectoryModel::SetEntries(QJsonArray Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
@@ -64,12 +65,12 @@ namespace hc::compare
         if (Role == Qt::UserRole) return item;
         if (Role == Qt::ToolTipRole)
             return item["path"].toString() + '\n' + statusName(item["status"].toString()) + '\n' +
-                tr("LEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(item["leftRight"].toString(), item["leftBase"].toString(), item["rightBase"].toString());
+                tr("LEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(item["leftRight"].toString(), item["leftBase"].toString(), item["rightBase"].toString()) + '\n' + QString::fromUtf8(QJsonDocument(item["errors"].toArray()).toJson(QJsonDocument::Compact));
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
         if (Index.column() == 0) return item["path"].toString();
         if (Index.column() == 1) return statusName(item["status"].toString());
         const auto side = item[QStringList{"left", "right", "base"}[Index.column() - 2]].toObject();
-        if (!side["present"].toBool()) return tr("없음");
+        if (!side["present"].toBool()) return item["status"] == "Error" ? tr("확인 불가") : tr("없음");
         return side["directory"].toBool() ? tr("폴더") : tr("%1 B").arg(QLocale().toString(side["size"].toString().toULongLong()));
     }
     QVariant DirectoryModel::headerData(int Section, Qt::Orientation Orientation, int Role) const
@@ -93,7 +94,7 @@ namespace hc::compare
         auto* searchRow = new QHBoxLayout(); auto* query = new QLineEdit(this); query->setObjectName("directoryQuery");
         query->setPlaceholderText(tr("경로에서 찾기")); query->setAccessibleName(tr("디렉터리 경로 검색")); query->setClearButtonEnabled(true);
         auto* status = new QComboBox(this); status->setObjectName("directoryStatusFilter"); status->setAccessibleName(tr("디렉터리 상태 필터"));
-        status->addItems({tr("모든 항목"), tr("차이만"), tr("충돌만")});
+        status->addItems({tr("모든 항목"), tr("차이만"), tr("충돌만"), tr("비교 불가만")});
         openButton_ = new QPushButton(tr("파일 비교 열기"), this); openButton_->setObjectName("directoryOpenFile");
         openButton_->setToolTip(tr("양쪽에 있는 파일을 현재 디스크 내용으로 비교합니다. BASE 파일이 있으면 함께 엽니다."));
         auto* merge = new QPushButton(tr("병합 계획…"), this); merge->setObjectName("directoryMergePlan");
@@ -168,7 +169,8 @@ namespace hc::compare
     }
     void DirectoryView::SetComparison(const Request& Input, const Result& Value)
     {
-        request_ = Input; comparison_ = Value; model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
+        request_ = Input; comparison_ = Value;
+        findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
         treeModel_->SetEntries(Value.entries_);
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
         for (int side = 0; side < 2; ++side)
@@ -186,6 +188,15 @@ namespace hc::compare
         if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(request_.base_);
         lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교")) +
             (comparison_.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
+        if (!comparison_.directoryComplete_) lines << tr("일부 항목을 비교하지 못했습니다. ‘비교 불가만’ 필터에서 경로와 오류를 확인하십시오. 병합 계획은 제한됩니다.");
+        QStringList issues; bool limited = false;
+        for (const auto& warning : comparison_.warnings_)
+        {
+            const auto item = warning.toObject(); limited |= item["error"] == "DirectoryEntryLimit";
+            if (issues.size() < 32 && item.contains("root")) issues << QDir(item["root"].toString()).filePath(item["path"].toString()) + " — " + item["error"].toString();
+        }
+        if (limited) lines << tr("루트당 100,000개 열거 제한에 도달하여 일부 하위 경로는 미확인 상태입니다.");
+        roots_->setToolTip(issues.join('\n'));
         roots_->setText(lines.join('\n'));
     }
     void DirectoryView::SetListFont(const QFont& Font)
