@@ -273,7 +273,7 @@ namespace hc::compare
         });
         inlineHighlights_ = viewMenu->addAction(tr("줄 내부 차이 강조")); inlineHighlights_->setCheckable(true);
         inlineHighlights_->setChecked(settings.value("view/inlineHighlights", true).toBool());
-        inlineHighlights_->setToolTip(tr("선택한 두 원본의 변경 줄을 순서대로 짝지어 문자 묶음 단위로 차이를 표시합니다. 결합 문자와 이모지 내부는 나누지 않습니다. 긴 줄은 줄 단위 표시를 유지합니다."));
+        inlineHighlights_->setToolTip(tr("선택한 두 원본의 변경 줄을 순서대로 짝지어 동일한 단어·식별자를 먼저 대응시키고, 나머지는 문자 묶음 단위로 차이를 표시합니다. 결합 문자와 이모지 내부는 나누지 않습니다. 긴 줄은 줄 단위 표시를 유지합니다."));
         connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
             QSettings{}.setValue("view/inlineHighlights", Enabled); applyInlineHighlights();
         });

@@ -15,8 +15,12 @@ namespace hc::compare
         std::size_t pairedLines_ = 0, skippedLines_ = 0;
         std::uint64_t cells_ = 0;
     };
-    // Presentation only: pair changed lines by ordinal, compare Unicode grapheme clusters,
-    // without normalization, and omit CR/LF. Inputs must be valid decoded UTF-8, as in session snapshots.
+    // Presentation only: pair changed lines by ordinal, anchor unique exact words/
+    // identifiers in increasing order, then compare grapheme clusters between anchors.
+    // Words are runs of letters, numbers and underscores (at least two clusters), not
+    // language-specific lexical analysis. Repeated words are not anchors. This prefers
+    // whole-word correspondence over a globally maximal character subsequence.
+    // No normalization; CR/LF omitted. Inputs must be valid decoded UTF-8 snapshots.
     // Limits: 16 KiB/line, 4096 pairs, 262144 cells/pair, 4M cells/session,
     // 32768 ranges/session. Oversized pairs retain their line-level decoration.
     // Timeout returns completed pairs; explicit cancellation still throws.

@@ -1409,6 +1409,23 @@ private slots:
         QCOMPARE(left->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(left->send(SCI_CANUNDO), sptr_t(0));
         QCOMPARE(window.ExitCode(), 1); window.close();
     }
+    void inlineWordAnchorsPresentationOnly()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        write(r.file1_, "alpha beta\n"); write(r.file2_, "beta alpha\n");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        for (int i = 0; i < 10; ++i)
+        {
+            QCOMPARE(left->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, i), sptr_t(i < 6));
+            QCOMPARE(right->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, i), sptr_t(i >= 4));
+        }
+        QCOMPARE(contents(left), QByteArray("alpha beta\n")); QCOMPARE(contents(right), QByteArray("beta alpha\n"));
+        QCOMPARE(left->send(SCI_CANUNDO), sptr_t(0)); QCOMPARE(right->send(SCI_CANUNDO), sptr_t(0));
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/word-highlights.png"));
+        window.close();
+    }
     void inlineGraphemeIndicatorsAndSourcePreservation()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");

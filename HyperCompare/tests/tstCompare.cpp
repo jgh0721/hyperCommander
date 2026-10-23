@@ -1122,8 +1122,55 @@ private slots:
                 const auto token = std::find_if(alphabet.begin(), alphabet.end(), [&](const auto& Value) { return common[0].compare(pos, Value.size(), Value) == 0; });
                 QVERIFY(token != alphabet.end()); pos += token->size();
             }
-            QCOMPARE(commonClusters, lcs(clusters[0], clusters[1]));
+            // Word anchors can deliberately choose a shorter character subsequence.
+            QVERIFY(commonClusters <= lcs(clusters[0], clusters[1]));
         }
+    }
+    void inlineWordAnchorsAndRefinement()
+    {
+        const auto swapped = BuildInlineDiff("alpha beta", "beta alpha", {{0, 1, 0, 1, {}}});
+        QCOMPARE(swapped.ranges_[0], (std::vector<ByteRange>{{0, 6}}));
+        QCOMPARE(swapped.ranges_[1], (std::vector<ByteRange>{{4, 10}}));
+        const auto punctuation = BuildInlineDiff("alpha(beta)", "beta(alpha)", {{0, 1, 0, 1, {}}});
+        QCOMPARE(punctuation.ranges_[0], (std::vector<ByteRange>{{0, 6}}));
+        QCOMPARE(punctuation.ranges_[1], (std::vector<ByteRange>{{4, 10}}));
+        const auto renamed = BuildInlineDiff("value = item_count + 10;", "value = item_total + 20;", {{0, 1, 0, 1, {}}});
+        QVERIFY(!renamed.ranges_[0].empty());
+        for (const auto& range : renamed.ranges_[0]) QVERIFY(range.begin_ >= 13); // common item_ prefix is retained
+        const auto repeated = BuildInlineDiff("repeat repeat one", "repeat repeat two", {{0, 1, 0, 1, {}}});
+        for (const auto& range : repeated.ranges_[0]) QVERIFY(range.begin_ >= 14);
+        const auto unicode = BuildInlineDiff("한글 식별자", "식별자 한글", {{0, 1, 0, 1, {}}});
+        QCOMPARE(unicode.ranges_[0], (std::vector<ByteRange>{{0, 7}}));
+        QCOMPARE(unicode.ranges_[1], (std::vector<ByteRange>{{9, 16}}));
+        // A single identifier still uses the exact grapheme LCS oracle.
+        std::mt19937 rng(0x70ad);
+        for (int trial = 0; trial < 500; ++trial)
+        {
+            std::string a, b; for (int i = 0; i < 24; ++i) { a += char('a' + rng() % 4); b += char('a' + rng() % 4); }
+            const auto diff = BuildInlineDiff(a, b, {{0, 1, 0, 1, {}}}); std::size_t retained = a.size();
+            for (const auto& range : diff.ranges_[0]) retained -= range.end_ - range.begin_;
+            Lines aa, bb; for (std::size_t i = 0; i < a.size(); ++i) { aa.push_back(std::string_view(a).substr(i, 1)); bb.push_back(std::string_view(b).substr(i, 1)); }
+            QCOMPARE(retained, lcs(aa, bb));
+        }
+        const std::string middle = " stable_word ";
+        const auto split = BuildInlineDiff(std::string(300, 'x') + middle + std::string(300, 'u'),
+            std::string(300, 'y') + middle + std::string(300, 'v'), {{0, 1, 0, 1, {}}});
+        QCOMPARE(split.skippedLines_, std::size_t(0)); QCOMPARE(split.cells_, std::uint64_t(181202));
+        QCOMPARE(split.ranges_[0], (std::vector<ByteRange>{{0, 300}, {300 + middle.size(), 600 + middle.size()}}));
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        write(r.file1_, "alpha beta\n"); write(r.file2_, "beta alpha\n");
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto gui = Execute(r, cancel, false);
+        QVERIFY(gui.pairViews_[0]); QCOMPARE(gui.pairViews_[0]->inline_.ranges_, swapped.ranges_);
+        r.headless_ = true; const auto cli = Execute(r, cancel, false);
+        QCOMPARE(gui.Json(), cli.Json()); QCOMPARE(gui.edits_, cli.edits_); QCOMPARE(gui.merged_.text_, cli.merged_.text_);
+        std::string a, b;
+        for (int i = 0; i < 10; ++i)
+        {
+            const auto anchor = " anchor_" + std::to_string(i) + " ";
+            a += std::string(200, 'x') + anchor; b += std::string(200, 'y') + anchor;
+        }
+        const auto bounded = BuildInlineDiff(a, b, {{0, 1, 0, 1, {}}});
+        QCOMPARE(bounded.skippedLines_, std::size_t(1)); QVERIFY(bounded.ranges_[0].empty()); QVERIFY(bounded.cells_ <= 262144);
     }
     void inlineBudgetsAndCancellation()
     {
