@@ -1450,6 +1450,14 @@ private slots:
             QVERIFY_EXCEPTION_THROWN(CheckedDirectoryPath(dir.path() + '/' + suffix), Failure);
         QVERIFY(!DirectoryPathsOverlap(dir.path() + "/a", dir.path() + "/abc"));
     }
+    void directoryRejectsUnqualifiedUncRoots()
+    {
+        for (const auto& path : {"//", "//server", "//server/", "//?/UNC/server/share", "//./server/share"})
+        {
+            try { CheckedDirectoryPath(QString::fromLatin1(path)); QFAIL("Unqualified/device path accepted"); }
+            catch (const Failure& error) { QVERIFY2(error.code_ == "InvalidDirectoryPath", qPrintable(QString::fromLatin1(path) + ": " + QString::fromUtf8(error.what()))); }
+        }
+    }
     void directoryThreeWayStates()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r"); r.base_ = dir.filePath("b");

@@ -16,7 +16,9 @@ namespace hc::compare
         parser.setApplicationDescription("HyperCompare: independent file and directory comparison\n"
             "HyperCompare.exe -file1 \"D:\\left.cpp\" -file2 \"C:\\right.cpp\"\n"
             "Three independent files: -file1 LEFT -file2 CENTER -file3 RIGHT\n"
-            "Three-way merge: -mode merge -base BASE -file1 LEFT -file2 RIGHT -output RESULT");
+            "Three-way merge: -mode merge -base BASE -file1 LEFT -file2 RIGHT -output RESULT\n"
+            "Paths accept existing mapped drives and UNC shares using the current Windows session.\n"
+            "Example: -file1 \\\\server\\share\\left.txt -file2 Z:\\right.txt");
         parser.setSingleDashWordOptionMode(QCommandLineParser::ParseAsLongOptions);
         const auto flag = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description}); };
         const auto value = [&](const QString& Name, const QString& Description) { parser.addOption({Name, Description, "value"}); };
@@ -32,7 +34,7 @@ namespace hc::compare
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
         value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
-        value("timeout-ms", "Request deadline in milliseconds (100..3600000).");
+        value("timeout-ms", "Cooperative request deadline in milliseconds (100..3600000); pending native/network I/O may exceed it.");
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
         value("directory-level", "bytes (default) or metadata; metadata does not verify file contents.");

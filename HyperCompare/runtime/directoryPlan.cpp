@@ -22,6 +22,45 @@ namespace hc::compare
         { storage::OperationContext ctx; ctx.deadline_ = Limits.deadline_; ctx.workerRead_ = true; ctx.denyConcurrentMutation_ = true; return ctx; }
         QString revision(const storage::EntrySnapshot& Entry)
         { if (!Entry.id_.revision_) throw Failure("DirectoryRevisionUnavailable"); return QString::fromStdString(Entry.id_.revision_->token_); }
+        QString pathRoot(const QString& Path)
+        {
+            if (!Path.startsWith("//"))
+            {
+                if (Path.size() < 3 || !Path[0].isLetter() || Path[1] != ':' || Path[2] != '/') throw Failure("InvalidDirectoryPath");
+                return Path.left(3);
+            }
+            const auto parts = Path.split('/');
+            if (parts.size() < 4 || parts[2].isEmpty() || parts[3].isEmpty()) throw Failure("InvalidDirectoryPath");
+            return "//" + parts[2] + '/' + parts[3];
+        }
+        bool textualOverlap(const QString& A, const QString& B)
+        { return A == B || A.startsWith(B.endsWith('/') ? B : B + '/') || B.startsWith(A.endsWith('/') ? A : A + '/'); }
+        QHash<QString, QString> ancestorIdentities(const QString& Path)
+        {
+            QHash<QString, QString> result; auto at = Path; QString suffix; const auto root = pathRoot(Path);
+            for (;;)
+            {
+                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(at).utf16()),
+                    FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (handle != INVALID_HANDLE_VALUE)
+                {
+                    BY_HANDLE_FILE_INFORMATION info{}; const auto ok = GetFileInformationByHandle(handle, &info); CloseHandle(handle);
+                    if (!ok) throw Failure("DirectoryIdentityUnavailable");
+                    if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
+                    if (!info.nFileIndexHigh && !info.nFileIndexLow) throw Failure("DirectoryIdentityUnavailable");
+                    const auto key = QString::number(info.dwVolumeSerialNumber) + ':' + QString::number(info.nFileIndexHigh) + ':' + QString::number(info.nFileIndexLow);
+                    result.insert(key, suffix.toCaseFolded());
+                }
+                else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) throw Failure("DirectoryPathUnavailable");
+                if (at.compare(root, Qt::CaseInsensitive) == 0) break;
+                suffix = QFileInfo(at).fileName() + (suffix.isEmpty() ? QString{} : '/' + suffix);
+                const auto parent = QFileInfo(at).absolutePath();
+                if (parent == at || parent.size() >= at.size()) throw Failure("InvalidDirectoryPath");
+                at = parent;
+            }
+            return result;
+        }
         QJsonObject inventory(const DirectorySnapshot& Snapshot, const Budget& Limits)
         {
             QJsonArray entries;
@@ -36,8 +75,9 @@ namespace hc::compare
     QString CheckedDirectoryPath(const QString& Path)
     {
         if (Path.isEmpty() || Path.contains(QChar(0))) throw Failure("InvalidDirectoryPath");
-        const auto native = QDir::fromNativeSeparators(Path);
+        auto native = Path; native.replace('\\', '/');
         if (!QDir::isAbsolutePath(native) || native.startsWith("//?/") || native.startsWith("//./")) throw Failure("InvalidDirectoryPath");
+        const auto root = pathRoot(native);
         const auto parts = native.split('/');
         for (qsizetype i = native.startsWith("//") ? 2 : 1; i < parts.size(); ++i)
         {
@@ -56,6 +96,8 @@ namespace hc::compare
             if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("ReparseDirectoryUnsupported");
             if (attributes == INVALID_FILE_ATTRIBUTES && GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
                 throw Failure("DirectoryPathUnavailable");
+            // A UNC server is not a filesystem directory. Stop at its share root.
+            if (at.compare(root, Qt::CaseInsensitive) == 0) break;
             const auto parent = QFileInfo(at).absolutePath(); if (parent == at || parent.size() >= at.size()) break; at = parent;
         }
         // Canonicalize the nearest existing ancestor, including short-name aliases.
@@ -67,8 +109,16 @@ namespace hc::compare
     }
     bool DirectoryPathsOverlap(const QString& A, const QString& B)
     {
-        const auto a = A.toCaseFolded(), b = B.toCaseFolded();
-        return a == b || a.startsWith(b.endsWith('/') ? b : b + '/') || b.startsWith(a.endsWith('/') ? a : a + '/');
+        const auto a = QDir::cleanPath(QDir::fromNativeSeparators(A)).toCaseFolded(), b = QDir::cleanPath(QDir::fromNativeSeparators(B)).toCaseFolded();
+        if (textualOverlap(a, b)) return true;
+        if (pathRoot(a) == pathRoot(b)) return false;
+        // Drive letters, UNC host aliases and overlapping shares can address the
+        // same tree. Compare existing ancestors plus the not-yet-created suffix.
+        const auto aa = ancestorIdentities(a), bb = ancestorIdentities(b);
+        for (auto it = aa.cbegin(); it != aa.cend(); ++it)
+            if (const auto other = bb.constFind(it.key()); other != bb.cend() &&
+                (it.value().isEmpty() || other.value().isEmpty() || textualOverlap(it.value(), other.value()))) return true;
+        return false;
     }
     QByteArray DirectoryFileDigest(const storage::EntrySnapshot& Entry, const Budget& Limits)
     {
