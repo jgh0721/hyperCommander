@@ -181,7 +181,15 @@ namespace hc::compare
         if (begin >= end || Target->send(SCI_GETREADONLY)) return true;
         const bool whole = begin == SourceBegin && end == SourceEnd;
         const auto* pair = currentPair();
-        if (!merge_ && editors_.size() == 2 && pair && pair->alignment_->HasSimilarLines())
+        // Hold the projection across edits: the first mutation invalidates multi_.
+        auto correspondence = pair ? pair->alignment_ : std::shared_ptr<const AlignmentMap>{};
+        const bool shared = !merge_ && multi_ && pair;
+        if (shared)
+        {
+            correspondence = multi_->Pair(editors_[pair->inputs_[0]], editors_[pair->inputs_[1]]);
+            if (!correspondence) { state_->setText(tr("전체 정렬이 끝난 뒤 범위 병합을 다시 시도하십시오.")); return true; }
+        }
+        if (!merge_ && correspondence && (shared || correspondence->HasSimilarLines()))
         {
             const unsigned from = Source == editors_[pair->inputs_[0]] ? 0 : 1, to = 1 - from;
             const auto position = [](ScintillaEditBase* Editor, std::size_t Line) {
@@ -189,11 +197,21 @@ namespace hc::compare
             };
             struct Replacement { sptr_t begin_, end_; QByteArray text_; };
             QVector<Replacement> replacements; const auto sourceText = bytes(Source);
-            for (const auto& run : pair->alignment_->Runs())
+            const auto& runs = correspondence->Runs();
+            const auto firstLine = std::size_t(Source->send(SCI_LINEFROMPOSITION, begin));
+            auto at = std::upper_bound(runs.begin(), runs.end(), firstLine,
+                [from](std::size_t Line, const AlignmentRun& Run) { return Line < Run.end_[from]; });
+            for (; at != runs.end(); ++at)
             {
+                const auto& run = *at;
                 if (run.begin_[from] == run.end_[from]) continue; // Preserve target-only rows.
                 const auto runBegin = position(Source, run.begin_[from]), runEnd = position(Source, run.end_[from]);
+                if (runBegin >= end) break;
                 const auto first = std::max(begin, runBegin), last = std::min(end, runEnd); if (first >= last) continue;
+                // A common-anchor projection may cross this pair's original chunk.
+                // Do not clamp such a mapping into unrelated target text.
+                if (shared && (position(Target, run.begin_[to]) < TargetBegin || position(Target, run.end_[to]) > TargetEnd))
+                { state_->setText(tr("선택 범위의 대응이 청크 경계를 넘습니다. 범위를 줄이거나 청크 전체를 적용하십시오.")); return true; }
                 const auto count = run.end_[to] - run.begin_[to];
                 const auto mapPosition = [&](sptr_t At) {
                     const auto line = At == runEnd ? run.end_[from] : std::size_t(Source->send(SCI_LINEFROMPOSITION, At));

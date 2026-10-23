@@ -451,6 +451,48 @@ private slots:
             window.close();
         }
     }
+    void threeFileSelectedRangeUsesSharedRows()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        const QByteArray a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
+        const QByteArray b = "head\n// new log\nalpha_value = 9;\n// keep inserted\nomega_counter = 8;\ntail\n";
+        const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};
+        for (int pairIndex = 0; pairIndex < 3; ++pairIndex) for (bool reverse : {false, true}) for (int selection = 0; selection < 3; ++selection)
+        {
+            QTemporaryDir dir; Request r; r.file1_ = dir.filePath("one"); r.file2_ = dir.filePath("two"); r.file3_ = dir.filePath("three");
+            const auto fromIndex = pairs[pairIndex][reverse ? 1 : 0], toIndex = pairs[pairIndex][reverse ? 0 : 1];
+            const std::array<QString, 3> paths{r.file1_, r.file2_, r.file3_};
+            for (int i = 0; i < 3; ++i) write(paths[i], i == toIndex ? b : a);
+            CompareWindow window(r); window.resize(1400, 800); window.show();
+            QTRY_VERIFY(window.findChild<ScintillaEditBase*>("FILE 3"));
+            window.findChild<QComboBox*>("comparePairSelector")->setCurrentIndex(pairIndex);
+            QTRY_VERIFY(window.findChild<MultiPaneAlignment*>() && window.findChild<MultiPaneAlignment*>()->Ready());
+            auto* from = window.findChild<ScintillaEditBase*>(QString("FILE %1").arg(fromIndex + 1));
+            auto* to = window.findChild<ScintillaEditBase*>(QString("FILE %1").arg(toIndex + 1));
+            QCOMPARE(from->send(SCI_VISIBLEFROMDOCLINE, 1), to->send(SCI_VISIBLEFROMDOCLINE, 2));
+            QByteArray expected = b;
+            if (selection == 0) { const auto digit = a.indexOf('1'); from->send(SCI_SETSEL, digit, digit + 1); expected.replace("alpha_value = 9", "alpha_value = 1"); }
+            else if (selection == 1) { from->send(SCI_SETSEL, 5, a.indexOf("tail")); expected.replace("alpha_value = 9", "alpha_value = 1"); expected.replace("omega_counter = 8", "omega_counter = 2"); }
+            else { from->send(SCI_SETSEL, 5, 5); expected = a; }
+            auto* gutter = window.findChild<ChunkGutter*>(); const auto name = QString("chunk1_action%1").arg(reverse ? 1 : 0);
+            QTRY_VERIFY(gutter->findChild<QToolButton*>(name) && gutter->findChild<QToolButton*>(name)->isVisible());
+            if (selection == 0)
+            {
+                auto* alignment = window.findChild<MultiPaneAlignment*>(); alignment->Refresh(); QVERIFY(!alignment->Ready());
+                gutter->findChild<QToolButton*>(name)->click(); QCOMPARE(contents(to), b);
+                QTRY_VERIFY(alignment->Ready());
+                QTRY_VERIFY(gutter->findChild<QToolButton*>(name)->isVisible());
+            }
+            QTest::mouseClick(gutter->findChild<QToolButton*>(name), Qt::LeftButton);
+            QCOMPARE(contents(to), expected); QCOMPARE(contents(from), a); QCOMPARE(readBytes(paths[toIndex]), b);
+            QCOMPARE(contents(window.findChild<ScintillaEditBase*>(QString("FILE %1").arg(4 - fromIndex - toIndex))), a);
+            to->send(SCI_UNDO); QCOMPARE(contents(to), b);
+            to->send(SCI_REDO); QCOMPARE(contents(to), expected);
+            to->send(SCI_UNDO); QCOMPARE(contents(to), b);
+            QTRY_VERIFY(window.findChild<MultiPaneAlignment*>() && window.findChild<MultiPaneAlignment*>()->Ready());
+            window.close();
+        }
+    }
     void selectedChunkRejectsUnrelatedAndRectangle()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
