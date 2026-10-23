@@ -3,6 +3,7 @@
 #include "session.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QDir>
+#include <thread>
 
 namespace hc::compare
 {
@@ -16,7 +17,7 @@ namespace hc::compare
         storage::OperationContext context(const Budget& Limits)
         {
             storage::OperationContext ctx; ctx.deadline_ = Limits.deadline_; ctx.workerRead_ = true;
-            ctx.denyConcurrentMutation_ = true; ctx.incrementalEnumeration_ = true; ctx.maxEnumerationEntries_ = 100000;
+            ctx.denyConcurrentMutation_ = true; ctx.incrementalEnumeration_ = true;
             return ctx;
         }
         bool matches(const QStringList& Patterns, const QString& Relative)
@@ -27,7 +28,7 @@ namespace hc::compare
         }
         bool recoverable(const Failure& Error)
         { return Error.code_.starts_with("win32:") || Error.code_ == "ChangedDuringRead"; }
-        void enumerate(DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete)
+        void enumerate(DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete, const std::function<void(const DirectoryEntry&)>& Discovered)
         {
             auto& result = Snapshot.entries_; const auto provider = reader(Snapshot.root_); auto ctx = context(Limits);
             // Retain listing metadata until filters run; included unavailable entries
@@ -37,7 +38,6 @@ namespace hc::compare
             if (!root.directory_) throw Failure("ExpectedDirectory");
             if (root.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
             std::vector<std::pair<storage::Locator, QString>> pending{{root.locator_, {}}};
-            std::size_t visited = 0;
             while (!pending.empty())
             {
                 Limits.Check(); auto [at, prefix] = std::move(pending.back()); pending.pop_back();
@@ -49,11 +49,6 @@ namespace hc::compare
                         Limits.Check(); auto page = require(cursor->Next(256, ctx).get());
                         for (auto& entry : page.entries_)
                         {
-                            if (++visited > 100000)
-                            {
-                                if (!AllowIncomplete) throw Failure("DirectoryEntryLimit");
-                                Snapshot.issues_.insert({}, "DirectoryEntryLimit"); return;
-                            }
                             const auto relative = prefix + QString::fromStdString(entry.name_);
                             if (matches(Policy.exclude_, relative)) continue;
                             if (!entry.directory_ && !Policy.include_.isEmpty() && !matches(Policy.include_, relative)) continue;
@@ -68,9 +63,9 @@ namespace hc::compare
                                 if (!AllowIncomplete) throw Failure(error.toStdString());
                                 Snapshot.issues_.insert(key, error);
                             }
-                            entry.hints_["relativePath"] = relative.toUtf8().toStdString();
                             if (entry.directory_ && error.isEmpty()) pending.push_back({entry.locator_, relative + '/'});
-                            result.insert(key, std::move(entry));
+                            const auto inserted = result.insert(key, {relative, std::move(entry.id_.revision_), entry.size_, entry.createdUtcMs_, entry.modifiedUtcMs_, entry.attributes_, entry.directory_});
+                            if (Discovered) Discovered(*inserted);
                         }
                         if (page.end_) break;
                     }
@@ -101,13 +96,15 @@ namespace hc::compare
             const auto boundA = require(pa->Resolve(A.locator_, ctx).get()), boundB = require(pb->Resolve(B.locator_, ctx).get());
             if (boundA.id_.revision_ != A.id_.revision_ || boundB.id_.revision_ != B.id_.revision_) throw Failure("ChangedDuringRead");
             auto a = require(pa->OpenRead(boundA.id_, ctx).get()), b = require(pb->OpenRead(boundB.id_, ctx).get());
+            // Small SDK headers must not allocate/zero a megabyte for every read and EOF probe.
+            const auto readBytes = std::size_t(std::clamp<std::uint64_t>(A.size_, 1, 1024 * 1024));
             // Streams may return different short-read sizes, so compare a rolling byte window.
             std::vector<std::byte> aa, bb; std::size_t ai = 0, bi = 0; bool ae = false, be = false, equal = true;
             for (;;)
             {
                 Limits.Check();
-                if (ai == aa.size() && !ae) { auto chunk = require(a->Read(1024 * 1024, ctx).get()); aa = std::move(chunk.bytes_); ai = 0; ae = chunk.eof_; if (aa.empty() && !ae) throw Failure("ReadMadeNoProgress"); }
-                if (bi == bb.size() && !be) { auto chunk = require(b->Read(1024 * 1024, ctx).get()); bb = std::move(chunk.bytes_); bi = 0; be = chunk.eof_; if (bb.empty() && !be) throw Failure("ReadMadeNoProgress"); }
+                if (ai == aa.size() && !ae) { auto chunk = require(a->Read(readBytes, ctx).get()); aa = std::move(chunk.bytes_); ai = 0; ae = chunk.eof_; if (aa.empty() && !ae) throw Failure("ReadMadeNoProgress"); }
+                if (bi == bb.size() && !be) { auto chunk = require(b->Read(readBytes, ctx).get()); bb = std::move(chunk.bytes_); bi = 0; be = chunk.eof_; if (bb.empty() && !be) throw Failure("ReadMadeNoProgress"); }
                 const auto count = std::min(aa.size() - ai, bb.size() - bi);
                 if (count && !std::equal(aa.begin() + ai, aa.begin() + ai + count, bb.begin() + bi)) { equal = false; break; }
                 ai += count; bi += count;
@@ -119,16 +116,16 @@ namespace hc::compare
             return equal;
         }
 
-        QString relative(const storage::EntrySnapshot* Entry)
-        { return Entry ? QString::fromStdString(Entry->hints_.at("relativePath")) : QString{}; }
-        QJsonObject describe(const storage::EntrySnapshot* Entry)
+        QString relative(const DirectoryEntry* Entry)
+        { return Entry ? Entry->path_ : QString{}; }
+        QJsonObject describe(const DirectoryEntry* Entry)
         {
             if (!Entry) return {{"present", false}};
             return {{"present", true}, {"path", relative(Entry)}, {"directory", Entry->directory_},
                 {"size", QString::number(Entry->size_)}, {"modifiedUtcMs", QString::number(Entry->modifiedUtcMs_)}};
         }
-        QString relation(const storage::EntrySnapshot* A, const storage::EntrySnapshot* B,
-            const DirectoryPolicy& Policy, const Budget& Limits)
+        QString relation(const DirectoryEntry* A, const DirectoryEntry* B,
+            const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const DirectoryPolicy& Policy, const Budget& Limits)
         {
             if (!A && !B) return "Equal";
             if (!A) return "RightOnly";
@@ -138,10 +135,72 @@ namespace hc::compare
             if (A->directory_) return "Equal";
             if (Policy.level_ == "metadata")
                 return A->size_ == B->size_ && A->modifiedUtcMs_ == B->modifiedUtcMs_ ? "Equal" : "Different";
-            return sameContent(*A, *B, Limits) ? "Equal" : "Different";
+            return sameContent(RootA.Expand(*A), RootB.Expand(*B), Limits) ? "Equal" : "Different";
         }
     }
-    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete)
+    namespace
+    {
+        const QStringList& statusNames()
+        {
+            static const QStringList names{"", "Equal", "Different", "LeftOnly", "RightOnly", "TypeConflict", "NameDifferent", "LeftChanged", "RightChanged",
+                "LeftAdded", "RightAdded", "LeftDeleted", "RightDeleted", "BothDeleted", "BothSame", "Conflict", "MirrorExtra", "Error", "Pending"};
+            return names;
+        }
+    }
+    void DirectoryProgressChannel::Push(DirectoryProgress Value, const Budget& Limits)
+    {
+        // Bound queued data even if painting is slower than enumeration. Cancellation
+        // remains observable while the UI is closing and waiting for its worker.
+        for (;;)
+        {
+            Limits.Check();
+            { std::lock_guard lock(mutex_); if (queue_.size() < 4) { queue_.push_back(std::move(Value)); return; } }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    std::optional<DirectoryProgress> DirectoryProgressChannel::Take()
+    {
+        std::lock_guard lock(mutex_); if (queue_.empty()) return {};
+        auto value = std::move(queue_.front()); queue_.pop_front(); return value;
+    }
+    DirectoryRow::DirectoryRow(const QJsonObject& Object) : path_(Object["path"].toString()), errors_(Object["errors"].toArray())
+    {
+        static const QStringList fields{"status", "leftRight", "leftBase", "rightBase"}, sides{"left", "right", "base"};
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto index = statusNames().indexOf(Object[fields[i]].toString());
+            if (index < 0) throw Failure("InvalidDirectoryStatus"); statuses_[i] = quint8(index);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto side = Object[sides[i]].toObject(); auto& target = sides_[i];
+            target.present_ = side["present"].toBool(); target.directory_ = side["directory"].toBool();
+            const auto path = side["path"].toString(path_); if (path != path_) target.path_ = path;
+            target.size_ = side["size"].toString().toULongLong(); target.modified_ = side["modifiedUtcMs"].toString().toLongLong();
+        }
+    }
+    QString DirectoryRow::Status(int Index) const { return statusNames()[statuses_[Index]]; }
+    QJsonObject DirectoryRow::toObject() const
+    {
+        QJsonObject result{{"path", path_}, {"status", Status()}, {"leftRight", Status(1)}, {"leftBase", Status(2)}, {"rightBase", Status(3)}, {"errors", errors_}};
+        static const QStringList sides{"left", "right", "base"};
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto& side = sides_[i]; QJsonObject value{{"present", side.present_}};
+            if (side.present_) { value["path"] = side.path_.isEmpty() ? path_ : side.path_; value["directory"] = side.directory_;
+                value["size"] = QString::number(side.size_); value["modifiedUtcMs"] = QString::number(side.modified_); }
+            result[sides[i]] = value;
+        }
+        return result;
+    }
+    storage::EntrySnapshot DirectorySnapshot::Expand(const DirectoryEntry& Entry) const
+    {
+        storage::EntrySnapshot result; result.locator_ = locator(QDir(root_).filePath(Entry.path_));
+        result.id_.revision_ = Entry.revision_; result.directory_ = Entry.directory_; result.size_ = Entry.size_;
+        result.createdUtcMs_ = Entry.createdUtcMs_; result.modifiedUtcMs_ = Entry.modifiedUtcMs_; result.attributes_ = Entry.attributes_;
+        result.name_ = Entry.path_.section('/', -1).toStdString(); result.hints_["relativePath"] = Entry.path_.toStdString(); return result;
+    }
+    DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete, const std::function<void(const DirectoryEntry&)>& Discovered)
     {
         if (Policy.level_ != "bytes" && Policy.level_ != "metadata") throw Failure("InvalidDirectoryLevel");
         for (const auto& patterns : {Policy.include_, Policy.exclude_})
@@ -152,7 +211,7 @@ namespace hc::compare
         }
         Limits.Check(); DirectorySnapshot snapshot; snapshot.root_ = Root;
         snapshot.entry_ = require(reader(Root)->Resolve(locator(Root), context(Limits)).get());
-        enumerate(snapshot, Policy, Limits, AllowIncomplete);
+        enumerate(snapshot, Policy, Limits, AllowIncomplete, Discovered);
         return snapshot;
     }
     void ValidateDirectory(const DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits)
@@ -165,7 +224,7 @@ namespace hc::compare
         for (; before != Snapshot.entries_.cend(); ++before, ++after)
         {
             Limits.Check();
-            if (before.key() != after.key() || before->id_.revision_ != after->id_.revision_ ||
+            if (before.key() != after.key() || before->revision_ != after->revision_ ||
                 before->directory_ != after->directory_ || relative(&*before) != relative(&*after)) throw Failure("DirectoryChanged");
         }
     }
@@ -173,9 +232,29 @@ namespace hc::compare
     {
         if (!Input.file3_.isEmpty()) throw Failure("DirectoryIndependentThreeUnsupported");
         auto captured = std::make_shared<std::vector<DirectorySnapshot>>();
-        captured->push_back(CaptureDirectory(Input.file1_, Input.directory_, Limits, true));
-        captured->push_back(CaptureDirectory(Input.file2_, Input.directory_, Limits, true));
-        if (!Input.base_.isEmpty()) captured->push_back(CaptureDirectory(Input.base_, Input.directory_, Limits, true));
+        DirectoryProgress progress; progress.phase_ = "scan";
+        auto flushed = std::chrono::steady_clock::now();
+        const auto flush = [&](bool Force) {
+            if (!Input.directoryProgress_) return;
+            const auto now = std::chrono::steady_clock::now();
+            if (!Force && progress.rows_.size() < 512 && now - flushed < std::chrono::milliseconds(100)) return;
+            DirectoryProgress batch; batch.phase_ = progress.phase_; batch.side_ = progress.side_; batch.processed_ = progress.processed_; batch.total_ = progress.total_;
+            batch.rows_ = std::move(progress.rows_); Input.directoryProgress_->Push(std::move(batch), Limits);
+            progress.rows_ = {}; flushed = now;
+        };
+        const QStringList roots = Input.base_.isEmpty() ? QStringList{Input.file1_, Input.file2_} : QStringList{Input.file1_, Input.file2_, Input.base_};
+        for (int side = 0; side < roots.size(); ++side)
+        {
+            progress.side_ = side; progress.phase_ = "scan";
+            captured->push_back(CaptureDirectory(roots[side], Input.directory_, Limits, true, [&](const DirectoryEntry& Entry) {
+                ++progress.processed_;
+                if (!Input.directoryProgress_) return;
+                DirectoryRow row; row.path_ = Entry.path_; row.statuses_[0] = 18;
+                row.sides_[side] = {{}, Entry.size_, Entry.modifiedUtcMs_, true, Entry.directory_};
+                progress.rows_.append(row); flush(false);
+            }));
+            flush(true);
+        }
         const bool three = captured->size() == 3;
         Value.operation_ = three ? "directory3" : "directory2";
         Value.directoryLevel_ = Input.directory_.level_;
@@ -184,6 +263,7 @@ namespace hc::compare
         for (const auto& tree : *captured) for (auto it = tree.entries_.cbegin(); it != tree.entries_.cend(); ++it) keys.insert(it.key());
         auto sorted = keys.values(); std::sort(sorted.begin(), sorted.end());
         bool different = false, conflict = false;
+        progress.phase_ = "compare"; progress.side_ = -1; progress.processed_ = 0; progress.total_ = sorted.size(); flush(true);
         for (const auto& snapshot : *captured) for (auto it = snapshot.issues_.cbegin(); it != snapshot.issues_.cend(); ++it)
         {
             Value.directoryComplete_ = false;
@@ -191,7 +271,7 @@ namespace hc::compare
         }
         for (const auto& key : sorted)
         {
-            Limits.Check(); std::array<const storage::EntrySnapshot*, 3> entries{};
+            Limits.Check(); std::array<const DirectoryEntry*, 3> entries{};
             for (std::size_t i = 0; i < captured->size(); ++i)
             {
                 const auto found = (*captured)[i].entries_.constFind(key);
@@ -205,7 +285,7 @@ namespace hc::compare
             }
             const auto safeRelation = [&](int A, int B) -> QString {
                 if (!errors.isEmpty()) return "Error";
-                try { return relation(entries[A], entries[B], Input.directory_, Limits); }
+                try { return relation(entries[A], entries[B], (*captured)[A], (*captured)[B], Input.directory_, Limits); }
                 catch (const Failure& error)
                 {
                     if (!recoverable(error)) throw;
@@ -230,7 +310,9 @@ namespace hc::compare
             Value.entries_.append(QJsonObject{{"path", relative(item)}, {"status", status},
                 {"leftRight", lr}, {"leftBase", lb}, {"rightBase", rb}, {"errors", errors},
                 {"left", describe(entries[0])}, {"right", describe(entries[1])}, {"base", describe(entries[2])}});
+            ++progress.processed_; if (Input.directoryProgress_) { progress.rows_.append(Value.entries_.last()); flush(false); }
         }
+        flush(true); progress.phase_ = "validate"; flush(true);
         // Two traversals detect membership/revision changes; this is not an atomic filesystem snapshot.
         if (Value.directoryComplete_) for (const auto& snapshot : *captured) ValidateDirectory(snapshot, Input.directory_, Limits);
         Value.directories_ = std::move(captured);

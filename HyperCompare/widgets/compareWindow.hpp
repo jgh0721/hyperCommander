@@ -92,7 +92,8 @@ namespace hc::compare
         struct BufferComparison { Result result_; std::uint64_t generation_ = 0; };
         QFutureWatcher<BufferComparison> bufferWatcher_;
         QFutureWatcher<InputSaveResult> inputSaveWatcher_;
-        QTimer bufferTimer_;
+        QTimer bufferTimer_, directoryTimer_;
+        bool directoryStreaming_ = false;
         std::shared_ptr<std::atomic_bool> bufferCanceled_;
         std::uint64_t bufferGeneration_ = 0;
         bool sourceEditing_ = false, sourcePending_ = false, sourceValid_ = true;

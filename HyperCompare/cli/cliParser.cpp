@@ -36,7 +36,7 @@ namespace hc::compare
         value("takeall", "Explicit whole-side selection for two-way merge: left or right.");
         value("planout", "Export a text merge decision template or directory merge plan to a new JSON file (headless only).");
         value("decisions", "Apply a JSON decision plan bound to the current inputs (headless only).");
-        value("memory-mib", "Controller analysis admission budget (256..1024 MiB, default 1024); cooperative parent checks plus shared worker reservations, not an OS-wide hard cap.");
+        value("memory-mib", "Controller analysis admission budget (256..2048 MiB, default 2048); cooperative parent checks plus shared worker reservations, not an OS-wide hard cap.");
         value("timeout-ms", "Cooperative request deadline in milliseconds (100..3600000); pending native/network I/O may exceed it.");
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
@@ -139,7 +139,7 @@ namespace hc::compare
         if (parser.isSet("memory-mib"))
         {
             bool valid = false; request.memoryMiB_ = parser.value("memory-mib").toInt(&valid);
-            if (!valid || request.memoryMiB_ < 256 || request.memoryMiB_ > 1024) return fail("Invalid memory-mib.");
+            if (!valid || request.memoryMiB_ < 256 || request.memoryMiB_ > 2048) return fail("Invalid memory-mib.");
         }
         if (parser.isSet("timeout-ms"))
         {

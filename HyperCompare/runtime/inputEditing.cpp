@@ -7,6 +7,8 @@
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "commonLibs/document/documentSaveCoordinator.hpp"
+#include <QDir>
+#include <QFileInfo>
 namespace hc::compare
 {
     namespace
@@ -67,7 +69,22 @@ namespace hc::compare
             const storage::Locator target{Original.path_.startsWith("//") || Original.path_.startsWith("\\\\") ? storage::LocatorKind::Smb : storage::LocatorKind::Local, Original.path_.toStdString()};
             auto writer = storage::MakeNativeWritableStorage(target.kind_, storage::MakeNativeReadProvider(target.kind_));
             SaveRecoveryJournal journal; storage::OperationContext ctx; ctx.deadline_ = Limits.deadline_; ctx.writeCheckpoint_ = journal.Checkpoint();
-            const auto saved = document::SaveDocumentBytes(*writer, target, {true, Original.entry_.id_.revision_},
+            if (!Original.exists_)
+            {
+                // Creation happens only on explicit Save. Inspect propagates access errors;
+                // native MakeDirectory/BeginWrite reject reparse parents and racing files.
+                QStringList parents; auto parent = QFileInfo(Original.path_).absolutePath();
+                for (;;)
+                {
+                    Limits.Check(); const storage::Locator at{target.kind_, parent.toStdString()};
+                    const auto existing = require(writer->Inspect(at, ctx));
+                    if (existing) { if (!existing->directory_) throw Failure("ExpectedDirectory"); break; }
+                    parents.prepend(parent); const auto next = QFileInfo(parent).absolutePath();
+                    if (next == parent) throw Failure("MissingDestinationRoot"); parent = next;
+                }
+                for (const auto& path : parents) { Limits.Check(); require(writer->MakeDirectory({target.kind_, path.toStdString()}, ctx)); }
+            }
+            const auto saved = document::SaveDocumentBytes(*writer, target, {Original.exists_, Original.entry_.id_.revision_},
                 {reinterpret_cast<const std::byte*>(encoded.constData()), std::size_t(encoded.size())}, ctx);
             if (journal.Exists()) result.recovery_.append(journal.Path());
             const auto receipt = require(saved); result.committed_ = receipt.destinationCommitted_;

@@ -64,11 +64,20 @@ namespace hc::compare
             result.incrementalEnumeration_ = true; result.maxEnumerationEntries_ = 100000;
             return result;
         }
-        Snapshot readSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits)
+        std::optional<storage::EntrySnapshot> resolveInput(const QString& Path, bool AllowMissing, const Budget& Limits)
+        {
+            const auto provider = reader(Path);
+            if (!AllowMissing) return require(provider->Resolve(locator(Path), context(Limits)).get());
+            return require(storage::MakeNativeWritableStorage(locator(Path).kind_, provider)->Inspect(locator(Path), context(Limits)));
+        }
+        Snapshot readSnapshot(const QString& Path, qsizetype MaxBytes, const Budget& Limits, bool AllowMissing = false)
         {
             Limits.Check(); const auto provider = reader(Path); auto ctx = context(Limits);
             Snapshot result; result.path_ = Path;
-            result.entry_ = require(provider->Resolve(locator(Path), ctx).get());
+            const auto entry = AllowMissing ? require(storage::MakeNativeWritableStorage(locator(Path).kind_, provider)->Inspect(locator(Path), ctx)) :
+                std::optional<storage::EntrySnapshot>{require(provider->Resolve(locator(Path), ctx).get())};
+            if (!entry) { result.exists_ = false; return result; }
+            result.entry_ = *entry;
             if (result.entry_.directory_) throw Failure("ExpectedFile");
             if (result.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseInputUnsupported");
             if (result.entry_.size_ > std::uint64_t(MaxBytes)) throw Failure("InputSizeLimit");
@@ -85,9 +94,9 @@ namespace hc::compare
             if (after.id_.revision_ != result.entry_.id_.revision_) throw Failure("ChangedDuringRead");
             return result;
         }
-        Snapshot load(const QString& Path, const QString& Encoding, const Budget& Limits)
+        Snapshot load(const QString& Path, const QString& Encoding, const Budget& Limits, bool AllowMissing = false)
         {
-            auto result = readSnapshot(Path, textLimit, Limits);
+            auto result = readSnapshot(Path, textLimit, Limits, AllowMissing);
             auto encoding = Encoding;
             const auto bomEncoding = result.raw_.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : result.raw_.startsWith("\xff\xfe") ? QString("UTF-16LE") : result.raw_.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
             if (!Encoding.isEmpty() && !bomEncoding.isEmpty() && Encoding != bomEncoding) throw Failure("EncodingBomMismatch");
@@ -174,7 +183,7 @@ namespace hc::compare
                 {"merge", "regular-same-mode-index-stages-123-or-23"}, {"writesConfig", false}, {"writesIndex", false}}},
             {"requestFiles", true}, {"requestSchema", 1}, {"maxRequestBytes", 1048576}, {"roleEncodings", true},
             {"batch", true}, {"maxBatchJobs", 1000}, {"maxConcurrentJobs", 2}, {"batchFormat", "ndjson"},
-            {"controllerMemoryMiB", QJsonArray{256, 1024}}, {"controllerMemoryPolicy", "cooperative-private-commit-and-worker-reservations"},
+            {"controllerMemoryMiB", QJsonArray{256, 2048}}, {"controllerMemoryPolicy", "cooperative-private-commit-and-worker-reservations"},
             {"controllerMemoryScope", "process-active-requests-minimum"}, {"diffAlgorithm", "myers-bounded-trace-linear-fallback"},
             {"maxDecodedBytes", double(textLimit)}, {"maxLines", 300000}, {"maxLineBytes", 262144}};
     }
@@ -182,7 +191,8 @@ namespace hc::compare
     {
         Result result; result.requestId_ = Input.requestId_; Budget limits; limits.canceled_ = Canceled.get();
         std::array<std::shared_ptr<PairComparison>, 3> views;
-        limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
+        limits.deadline_ = Input.directoryProgress_ && Input.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() :
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         try
         {
             ConfigureMemoryBudget(limits, Input.memoryMiB_);
@@ -204,10 +214,12 @@ namespace hc::compare
                 checkArtifactPaths(Input, limits);
                 if (!Input.decisions_.isEmpty()) result.decisionsSnapshot_ = readSnapshot(Input.decisions_, decisionPlanBytes, limits);
             }
-            const auto first = require(reader(Input.file1_)->Resolve(locator(Input.file1_), context(limits)).get());
-            const auto second = require(reader(Input.file2_)->Resolve(locator(Input.file2_), context(limits)).get());
-            if (first.directory_ != second.directory_) throw Failure("MixedInputKinds");
-            if (Input.mode_ == "directory" || Input.mode_ == "directory-merge" || (Input.mode_ == "auto" && first.directory_))
+            const bool allowMissing = Input.allowMissingInputs_[0] || Input.allowMissingInputs_[1];
+            if (allowMissing && Input.mode_ != "compare") throw Failure("MissingInputsRequireCompare");
+            const auto first = resolveInput(Input.file1_, Input.allowMissingInputs_[0], limits);
+            const auto second = resolveInput(Input.file2_, Input.allowMissingInputs_[1], limits);
+            if ((!first && !second) || (first && first->directory_) != (second && second->directory_)) throw Failure("MixedInputKinds");
+            if (Input.mode_ == "directory" || Input.mode_ == "directory-merge" || (Input.mode_ == "auto" && first && first->directory_))
             {
                 CompareDirectory(Input, result, limits);
                 if (Input.mode_ == "directory-merge" && Input.headless_)
@@ -220,10 +232,10 @@ namespace hc::compare
             else
             {
                 if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
-                if (TryExtensionComparison(Input, result, limits)) { result.completion_ = "Complete"; return result; }
+                if (!allowMissing && TryExtensionComparison(Input, result, limits)) { result.completion_ = "Complete"; return result; }
                 result.operation_ = Input.mode_ == "merge" ? (Input.base_.isEmpty() ? "merge2" : "merge3") : "compare2";
-                result.inputs_.push_back(load(Input.file1_, InputEncoding(Input, 0), limits));
-                result.inputs_.push_back(load(Input.file2_, InputEncoding(Input, 1), limits));
+                result.inputs_.push_back(load(Input.file1_, InputEncoding(Input, 0), limits, Input.allowMissingInputs_[0]));
+                result.inputs_.push_back(load(Input.file2_, InputEncoding(Input, 1), limits, Input.allowMissingInputs_[1]));
                 if (!Input.base_.isEmpty()) result.inputs_.push_back(load(Input.base_, InputEncoding(Input, 2), limits));
                 else if (!Input.file3_.isEmpty()) result.inputs_.push_back(load(Input.file3_, InputEncoding(Input, 2), limits));
                 const auto left = view(result.inputs_[0].utf8_), right = view(result.inputs_[1].utf8_);
@@ -374,7 +386,8 @@ namespace hc::compare
             [](const auto& Block) { return Block.resolution_ == Resolution::Unresolved; }))) throw Failure("DecisionsRequired");
         if (Input.dryRun_) throw Failure("DryRunCannotSave");
         if (Utf8.size() > 32 * 1024 * 1024) throw Failure("ResultSizeLimit");
-        Budget limits; limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
+        Budget limits; limits.deadline_ = Input.directoryProgress_ && Input.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() :
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
         CheckProtectedInputs(Input, {Input.output_}, limits);
         auto ctx = context(limits);
         for (const auto& input : Value.inputs_)
@@ -418,7 +431,7 @@ namespace hc::compare
     QJsonObject Result::Json(bool IncludeContent) const
     {
         QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
-        for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"encoding", input.encoding_}, {"bom", input.bom_},
+        for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"exists", input.exists_}, {"encoding", input.encoding_}, {"bom", input.bom_},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(input.raw_, QCryptographicHash::Sha256).toHex())}});
         for (const auto& edit : edits_) changes.append(QJsonObject{{"begin", double(edit.begin_)}, {"end", double(edit.end_)},
             {"otherBegin", double(edit.otherBegin_)}, {"otherEnd", double(edit.otherEnd_)}});
@@ -448,7 +461,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString(textEngineVersion) : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_}, {"textComparison", textComparison_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && directoryComplete_ && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
-            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
+            {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_.Json()}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}, {"saveRecovery", saveRecovery_}};

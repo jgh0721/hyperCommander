@@ -102,7 +102,7 @@ namespace hc::compare
         };
         directory_ = new DirectoryView(layout); layout->addWidget(directory_); directory_->hide();
         directory_->open_ = [this](Request Input) {
-            if (busy()) return; Input.theme_ = dark_ ? "dark" : "light";
+            if (busy() && !directoryStreaming_) return; Input.theme_ = dark_ ? "dark" : "light";
             auto* window = new CompareWindow(std::move(Input)); window->setAttribute(Qt::WA_DeleteOnClose); window->show();
         };
         panes_->setChildrenCollapsible(false); layout->setChildrenCollapsible(false);
@@ -292,7 +292,23 @@ namespace hc::compare
         statusBar()->addPermanentWidget(inlineStatus_); inlineStatus_->hide();
         alignmentStatus_ = new QLabel(this); alignmentStatus_->setObjectName("alignmentStatus");
         statusBar()->addPermanentWidget(alignmentStatus_); alignmentStatus_->hide();
+        directoryTimer_.setInterval(30);
+        connect(&directoryTimer_, &QTimer::timeout, this, [this] {
+            if (!request_.directoryProgress_ || closing_) return;
+            if (auto progress = request_.directoryProgress_->Take())
+            {
+                if (!directoryStreaming_)
+                {
+                    directory_->BeginComparison(request_); directoryStreaming_ = true;
+                    sources_->hide(); details_->hide(); directory_->show(); updateMerge();
+                }
+                directory_->ApplyProgress(*progress);
+                state_->setText(progress->phase_ == "scan" ? tr("폴더 열거 중 — 발견 %1개").arg(progress->processed_) :
+                    progress->phase_ == "compare" ? tr("파일 내용 비교 중 — %1 / %2").arg(progress->processed_).arg(progress->total_) : tr("디렉터리 변경 여부 재확인 중…"));
+            }
+        });
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
+            directoryTimer_.stop(); directoryStreaming_ = false;
             cancel_->setEnabled(false);
             if (refreshing_)
             {
@@ -378,7 +394,7 @@ namespace hc::compare
         if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
-        Request request; request.mode_ = "directory"; request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
+        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
     }
     void CompareWindow::openInputs()
     {
@@ -387,7 +403,7 @@ namespace hc::compare
         const auto left = QFileDialog::getOpenFileName(this, tr("왼쪽 파일")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getOpenFileName(this, tr("오른쪽 파일")); if (right.isEmpty()) return;
         request_.file1_ = left; request_.file2_ = right; request_.base_.clear(); request_.file3_.clear();
-        request_.output_.clear(); request_.mode_ = "compare"; start();
+        request_.output_.clear(); request_.timeoutMs_ = 60000; request_.allowMissingInputs_ = {}; request_.mode_ = "compare"; start();
     }
     void CompareWindow::start(bool Preserve)
     {
@@ -395,6 +411,7 @@ namespace hc::compare
         if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
         sourceEditing_ = false; bufferTimer_.stop(); ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         canceled_ = std::make_shared<std::atomic_bool>(false);
+        request_.directoryProgress_ = std::make_shared<DirectoryProgressChannel>(); directoryStreaming_ = false; directoryTimer_.start();
         refreshing_ = Preserve && merge_;
         if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
         save_->setEnabled(false); state_->setText(tr("비교 중…"));
@@ -490,7 +507,7 @@ namespace hc::compare
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
-        if (result_.completion_ != "Complete") { updateMerge(); state_->setText(result_.error_); return; }
+        if (result_.completion_ != "Complete") { directory_->EndProgress(); updateMerge(); state_->setText(result_.error_); return; }
         if (!result_.extension_.isEmpty())
         {
             try
@@ -542,7 +559,7 @@ namespace hc::compare
         {
             qsizetype differences = 0, conflicts = 0;
             for (const auto& item : result_.entries_)
-            { const auto status = item.toObject()["status"].toString(); differences += status != "Equal"; conflicts += status == "Conflict" || status == "TypeConflict"; }
+            { const auto status = item.Status(); differences += status != "Equal"; conflicts += status == "Conflict" || status == "TypeConflict"; }
             state_->setText((result_.directoryComplete_ ? tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개") : tr("디렉터리 일부 비교 — 미확인 항목 포함 %1개 · 충돌 %2개")).arg(differences).arg(conflicts));
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
@@ -728,7 +745,7 @@ namespace hc::compare
             const auto codec = InputEncoding(request_, role);
             action->setChecked(action->property("codec").toString() == (codec.isEmpty() ? "auto" : codec));
         }
-        directory_->setEnabled(!busy());
+        directory_->setEnabled(!busy() || directoryStreaming_);
         const bool directoryMode = !directory_->isHidden() || extensionView_ != nullptr;
         for (auto* action : wholeActions_) action->setVisible(!directoryMode);
         for (auto* action : blockActions_) action->setVisible(!directoryMode);

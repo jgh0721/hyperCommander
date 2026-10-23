@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QAbstractItemModel>
 #include <QSortFilterProxyModel>
-#include <QJsonArray>
+#include "runtime/directory.hpp"
 #include <QJsonObject>
 #include <QHash>
 #include <memory>
@@ -14,7 +14,9 @@ namespace hc::compare
     public:
         enum { VisibleRole = Qt::UserRole + 1, PathRole, EntryRole };
         explicit DirectoryTreeModel(QObject* Parent = nullptr) : QAbstractItemModel(Parent) {}
-        void SetEntries(QJsonArray Entries);
+        void SetEntries(DirectoryEntries Entries);
+        DirectoryEntries Entries() const { return entries_; }
+        void ApplyProgress(const DirectoryProgress& Progress);
         void SetFilter(const QString& Query, int Status);
         QModelIndex index(int Row, int Column, const QModelIndex& Parent = {}) const override;
         QModelIndex parent(const QModelIndex& Child) const override;
@@ -24,6 +26,7 @@ namespace hc::compare
         QVariant headerData(int Section, Qt::Orientation Orientation, int Role) const override;
         QJsonObject Entry(const QModelIndex& Index) const;
         QModelIndex ForEntry(int Row) const;
+        QModelIndex ForPath(const QString& Path) const { return indexFor(paths_.value(Path.toCaseFolded())); }
         QModelIndex NextDifference(const QModelIndex& Current, int Direction) const;
         int VisibleEntries() const { return visibleEntries_; }
     private:
@@ -37,10 +40,11 @@ namespace hc::compare
         };
         Node* node(const QModelIndex& Index) const;
         QModelIndex indexFor(const Node* Item) const;
+        QHash<QString, Node*> paths_;
         Node root_;
         std::vector<std::unique_ptr<Node>> nodes_;
         std::vector<Node*> order_, entriesToNodes_;
-        QJsonArray entries_;
+        DirectoryEntries entries_;
         int visibleEntries_ = 0;
     };
     class DirectoryTreeFilter final : public QSortFilterProxyModel

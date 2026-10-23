@@ -98,7 +98,7 @@ namespace hc::compare
             Evidence result;
             result.insert({}, DirectoryEntryEvidence(Snapshot.entry_, Limits));
             for (auto it = Snapshot.entries_.cbegin(); it != Snapshot.entries_.cend(); ++it)
-                result.insert(it.key(), DirectoryEntryEvidence(*it, Limits));
+                result.insert(it.key(), DirectoryEntryEvidence(Snapshot.Expand(*it), Limits));
             return result;
         }
         void validateEvidence(const Evidence& Expected, const Evidence& Actual)
@@ -228,7 +228,7 @@ namespace hc::compare
                 if (!textMerge || roots.size() != 3) throw Failure("DirectoryChoiceInvalid");
                 std::array<storage::EntrySnapshot, 3> inputs;
                 for (std::size_t side = 0; side < 3; ++side)
-                { if (!roots[side].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid"); inputs[side] = roots[side].entries_.value(key); }
+                { if (!roots[side].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid"); inputs[side] = roots[side].Expand(roots[side].entries_.value(key)); }
                 const auto merged = MergeDirectoryText(inputs, encoding, Limits); if (!merged) throw Failure("DirectoryTextMergeUnavailable");
                 source = inputs[0]; mergeInputs = inputs;
                 desiredEntry = {{"directory", false}, {"size", QString::number(merged->size())}, {"sha256", QString::fromLatin1(QCryptographicHash::hash(*merged, QCryptographicHash::Sha256).toHex())}};
@@ -237,7 +237,7 @@ namespace hc::compare
             else if (choice != "omit")
             {
                 if (side < 0 || std::size_t(side) >= roots.size() || !roots[std::size_t(side)].entries_.contains(key)) throw Failure("DirectoryChoiceInvalid");
-                source = roots[std::size_t(side)].entries_.value(key); desiredEntry = evidence[std::size_t(side)].value(key);
+                source = roots[std::size_t(side)].Expand(roots[std::size_t(side)].entries_.value(key)); desiredEntry = evidence[std::size_t(side)].value(key);
                 chosen.insert(key, source->directory_);
             }
             const auto before = expected.value(key);

@@ -675,7 +675,7 @@ private slots:
     }
     void controllerMemoryCliAndRequest()
     {
-        for (const auto& value : {"255", "1025", "0", "-1", "256.5", "bad"})
+        for (const auto& value : {"255", "2049", "0", "-1", "256.5", "bad"})
             QVERIFY(!Parse({"hc", "-file1", "a", "-file2", "b", "-memory-mib", value}, true).error_.isEmpty());
         auto parsed = Parse({"hc", "-file1", "a", "-file2", "b", "-memory-mib", "256"}, true);
         QVERIFY(parsed.error_.isEmpty()); QCOMPARE(parsed.request_.memoryMiB_, 256);
@@ -690,7 +690,7 @@ private slots:
         QProcess cli; cli.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-request", path, "-memory-mib", "256", "-format", "json"});
         QVERIFY(cli.waitForFinished(10000)); QCOMPARE(cli.exitCode(), 1);
         const auto report = QJsonDocument::fromJson(cli.readAllStandardOutput()).object(); QCOMPARE(report["completion"].toString(), "Complete");
-        for (const auto& value : {QJsonValue(255), QJsonValue(1025), QJsonValue(256.5), QJsonValue("512")})
+        for (const auto& value : {QJsonValue(255), QJsonValue(2049), QJsonValue(256.5), QJsonValue("512")})
         { json["limits"] = QJsonObject{{"memoryMiB", value}}; write(path, QJsonDocument(json).toJson()); QVERIFY(!Parse({"hc", "-request", path}, true).error_.isEmpty()); }
         Budget limits; ConfigureMemoryBudget(limits, 1024);
         const auto before = ProcessControllerMemory()->Reserved();
@@ -2061,6 +2061,43 @@ private slots:
             QVERIFY(found);
         }
         r.file3_ = r.base_; r.base_.clear(); QCOMPARE(Execute(r, cancel, false).error_, QString("DirectoryIndependentThreeUnsupported"));
+    }
+    void directoryProgressQueueCancellation()
+    {
+        DirectoryProgressChannel channel; std::atomic_bool canceled{false}; Budget limits; limits.canceled_ = &canceled;
+        for (int i = 0; i < 4; ++i) channel.Push({}, limits);
+        auto waiting = std::async(std::launch::async, [&] { try { channel.Push({}, limits); return std::string{}; } catch (const Failure& error) { return error.code_; } });
+        QVERIFY(waiting.wait_for(std::chrono::milliseconds(30)) == std::future_status::timeout);
+        canceled.store(true); QVERIFY(waiting.wait_for(std::chrono::seconds(2)) == std::future_status::ready); QCOMPARE(waiting.get(), std::string("Canceled"));
+        for (int i = 0; i < 4; ++i) QVERIFY(channel.Take()); QVERIFY(!channel.Take());
+    }
+    void compactDirectoryRowsPreserveEvidence()
+    {
+        const QJsonObject side{{"present", true}, {"path", "소스/File.cpp"}, {"directory", false}, {"size", "9007199254740993"}, {"modifiedUtcMs", "1792751958687"}};
+        QJsonObject other = side; other["path"] = "소스/file.cpp";
+        const QJsonObject row{{"path", "소스/File.cpp"}, {"status", "NameDifferent"}, {"leftRight", "NameDifferent"}, {"leftBase", "LeftOnly"}, {"rightBase", "LeftOnly"},
+            {"left", side}, {"right", other}, {"base", QJsonObject{{"present", false}}}, {"errors", QJsonArray{}}};
+        DirectoryEntries entries(QJsonArray{row}); QCOMPARE(entries.Json(), QJsonArray{row});
+        auto copy = entries; copy.append(row); QCOMPARE(entries.size(), 1); QCOMPARE(copy.size(), 2);
+        QCOMPARE(entries.first().sides_[0].size_, std::uint64_t(9007199254740993));
+    }
+    void missingDirectoryFileCreatesOnSaveOnly()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "compare"; r.file1_ = dir.filePath("absent/nested/new.txt"); r.file2_ = dir.filePath("existing.txt");
+        write(r.file2_, "whole file\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        QCOMPARE(Execute(r, cancel, false).completion_, QString("Failed"));
+        r.allowMissingInputs_[0] = true; auto result = Execute(r, cancel, false);
+        QVERIFY2(result.completion_ == "Complete", qPrintable(result.error_)); QCOMPARE(result.edits_.size(), 1);
+        QVERIFY(!result.inputs_[0].exists_); QVERIFY(result.inputs_[0].utf8_.isEmpty()); QVERIFY(!QFileInfo::exists(dir.filePath("absent")));
+        auto saved = SaveInputBuffer(result.inputs_[0], result.inputs_[1].utf8_, {});
+        QVERIFY2(saved.error_.isEmpty(), qPrintable(saved.error_)); QVERIFY(saved.snapshot_.exists_); QCOMPARE(read(r.file1_), read(r.file2_));
+        saved = SaveInputBuffer(result.inputs_[0], "racing overwrite", {});
+        QVERIFY(!saved.error_.isEmpty()); QCOMPARE(read(r.file1_), QByteArray("whole file\n"));
+        r.file1_ = dir.filePath("missing.txt"); r.allowMissingInputs_ = {true, false};
+        result = Execute(r, cancel, false); QVERIFY(!result.inputs_[0].exists_);
+        std::swap(r.file1_, r.file2_); r.allowMissingInputs_ = {false, true};
+        result = Execute(r, cancel, false); QCOMPARE(result.completion_, QString("Complete")); QVERIFY(!result.inputs_[1].exists_);
+        saved = SaveInputBuffer(result.inputs_[1], {}, {}); QVERIFY2(saved.error_.isEmpty(), qPrintable(saved.error_)); QVERIFY(QFileInfo::exists(r.file2_));
     }
     void directoryAccessFailuresPreserveKnownResults()
     {

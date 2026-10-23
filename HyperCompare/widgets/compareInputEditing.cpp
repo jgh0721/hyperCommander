@@ -128,15 +128,15 @@ namespace hc::compare
         for (int i = 0; i < editors_.size(); ++i)
         {
             const bool changed = editors_[i]->send(SCI_GETMODIFY); dirty |= changed;
-            if (i < inputSaveActions_.size()) inputSaveActions_[i]->setEnabled(!busy() && changed);
+            if (i < inputSaveActions_.size()) inputSaveActions_[i]->setEnabled(!busy() && (changed || !result_.inputs_[i].exists_));
             if (i < formatLabels_.size())
             {
                 const auto& input = result_.inputs_[i];
-                formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"), changed ? tr(" · 수정됨 *") : QString{}));
+                formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"), (input.exists_ ? QString{} : tr(" · 파일 없음 (저장 시 생성)")) + (changed ? tr(" · 수정됨 *") : QString{})));
             }
         }
         dirty_ = dirty; auto* active = editors_[activeInput_];
-        save_->setText(tr("FILE %1 저장").arg(activeInput_ + 1)); save_->setEnabled(!busy() && active->send(SCI_GETMODIFY));
+        save_->setText(tr("FILE %1 저장").arg(activeInput_ + 1)); save_->setEnabled(!busy() && (active->send(SCI_GETMODIFY) || !result_.inputs_[activeInput_].exists_));
         undo_->setEnabled(!busy() && active->send(SCI_CANUNDO)); redo_->setEnabled(!busy() && active->send(SCI_CANREDO));
         pairSelector_->setEnabled(!busy() && !sourcePending_ && sourceValid_);
         exportReport_->setEnabled(!busy() && !sourcePending_ && sourceValid_ && result_.completion_ == "Complete");
@@ -169,7 +169,7 @@ namespace hc::compare
     }
     void CompareWindow::saveInput(int Index)
     {
-        if (!sourceEditing_ || busy() || Index < 0 || Index >= result_.inputs_.size() || !editors_[Index]->send(SCI_GETMODIFY)) return;
+        if (!sourceEditing_ || busy() || Index < 0 || Index >= result_.inputs_.size() || (!editors_[Index]->send(SCI_GETMODIFY) && result_.inputs_[Index].exists_)) return;
         savingInput_ = Index; activeInput_ = Index; inputSaveError_.clear();
         const auto text = bytes(editors_[Index]);
         for (auto* editor : editors_) editor->send(SCI_SETREADONLY, 1);

@@ -67,8 +67,8 @@ namespace hc::compare
             QJsonArray entries;
             for (const auto& item : Snapshot.entries_)
             {
-                Limits.Check(); auto evidence = DirectoryEntryEvidence(item, Limits);
-                evidence["path"] = QString::fromStdString(item.hints_.at("relativePath")); entries.append(evidence);
+                Limits.Check(); auto evidence = DirectoryEntryEvidence(Snapshot.Expand(item), Limits);
+                evidence["path"] = item.path_; entries.append(evidence);
             }
             return {{"path", CheckedDirectoryPath(Snapshot.root_)}, {"exists", true}, {"revision", revision(Snapshot.entry_)}, {"entries", entries}};
         }
@@ -175,8 +175,8 @@ namespace hc::compare
                 for (std::size_t side = 0; side < 3; ++side)
                 {
                     const auto& tree = (*Comparison.directories_)[side].entries_; const auto at = tree.constFind(path.toCaseFolded());
-                    if (at == tree.cend() || at->directory_ || QString::fromStdString(at->hints_.at("relativePath")) != path) { eligible = false; break; }
-                    inputs[side] = *at;
+                    if (at == tree.cend() || at->directory_ || at->path_ != path) { eligible = false; break; }
+                    inputs[side] = (*Comparison.directories_)[side].Expand(*at);
                 }
                 if (eligible && MergeDirectoryText(inputs, Input.encoding_, Limits)) choice = "merge";
             }
@@ -185,7 +185,7 @@ namespace hc::compare
         }
         if (Input.mirror_ && capturedOutput)
             for (auto it = capturedOutput->entries_.cbegin(); it != capturedOutput->entries_.cend(); ++it)
-                if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", QString::fromStdString(it->hints_.at("relativePath"))}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
+                if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", it->path_}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
         for (const auto& snapshot : *Comparison.directories_) ValidateDirectory(snapshot, Input.directory_, Limits);
         if (capturedOutput) ValidateDirectory(*capturedOutput, {}, Limits);
         QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", Input.encoding_}}}, {"roots", roots}, {"output", destination},

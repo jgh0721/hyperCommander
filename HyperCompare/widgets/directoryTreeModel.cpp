@@ -28,13 +28,13 @@ namespace hc::compare
     { const auto* n = node(Index); return n->entry_ < 0 ? QJsonObject{} : entries_[n->entry_].toObject(); }
     QModelIndex DirectoryTreeModel::ForEntry(int Row) const
     { return Row >= 0 && std::size_t(Row) < entriesToNodes_.size() ? indexFor(entriesToNodes_[Row]) : QModelIndex{}; }
-    void DirectoryTreeModel::SetEntries(QJsonArray Entries)
+    void DirectoryTreeModel::SetEntries(DirectoryEntries Entries)
     {
         beginResetModel(); root_.children_.clear(); nodes_.clear(); order_.clear(); entries_ = std::move(Entries);
-        entriesToNodes_.assign(std::size_t(entries_.size()), nullptr); QHash<QString, Node*> paths; paths.insert({}, &root_);
+        entriesToNodes_.assign(std::size_t(entries_.size()), nullptr); paths_.clear(); auto& paths = paths_; paths.insert({}, &root_);
         for (int i = 0; i < entries_.size(); ++i)
         {
-            const auto entry = entries_[i].toObject(); const auto path = entry["path"].toString();
+            const auto& entry = entries_.at(i); const auto path = entry.path_;
             QStringList missing; auto at = path;
             while (!paths.contains(at.toCaseFolded()))
             { missing.push_back(at); const auto slash = at.lastIndexOf('/'); at = slash < 0 ? QString{} : at.left(slash); }
@@ -46,8 +46,8 @@ namespace hc::compare
                 parent->folder_ = true; nodes_.push_back(std::move(n)); parent = ptr;
             }
             if (parent == &root_) continue;
-            parent->entry_ = i; parent->different_ = entry["status"] != "Equal";
-            for (const auto* side : {"left", "right", "base"}) parent->folder_ |= entry[side].toObject()["directory"].toBool();
+            parent->entry_ = i; parent->different_ = entry.Status() != "Equal";
+            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
             entriesToNodes_[std::size_t(i)] = parent;
         }
         for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it)
@@ -69,13 +69,44 @@ namespace hc::compare
         }
         SetFilter({}, 0); endResetModel();
     }
+    void DirectoryTreeModel::ApplyProgress(const DirectoryProgress& Progress)
+    {
+        if (paths_.isEmpty()) paths_.insert({}, &root_);
+        for (const auto& row : Progress.rows_)
+        {
+            auto at = row.path_; QStringList missing;
+            while (!paths_.contains(at.toCaseFolded()))
+            { missing.push_back(at); const auto slash = at.lastIndexOf('/'); at = slash < 0 ? QString{} : at.left(slash); }
+            auto* parent = paths_.value(at.toCaseFolded());
+            for (auto it = missing.crbegin(); it != missing.crend(); ++it)
+            {
+                const int index = int(parent->children_.size()); beginInsertRows(indexFor(parent), index, index);
+                auto node = std::make_unique<Node>(); node->path_ = *it; node->parent_ = parent; node->row_ = index;
+                node->order_ = int(order_.size()); auto* added = node.get(); order_.push_back(added);
+                parent->children_.push_back(added); parent->folder_ = true; paths_.insert(it->toCaseFolded(), added);
+                nodes_.push_back(std::move(node)); parent = added; endInsertRows();
+            }
+            if (parent == &root_) continue;
+            if (parent->entry_ < 0)
+            {
+                parent->entry_ = int(entries_.size()); entries_.append(row); entriesToNodes_.push_back(parent); ++visibleEntries_;
+            }
+            else if (Progress.side_ >= 0)
+                entries_[parent->entry_].sides_[Progress.side_] = row.sides_[Progress.side_];
+            else entries_[parent->entry_] = row;
+            const auto& entry = entries_.at(parent->entry_); parent->matched_ = true;
+            parent->different_ = entry.Status() != "Equal";
+            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
+            if (parent->different_) for (auto* ancestor = parent->parent_; ancestor; ancestor = ancestor->parent_) ancestor->different_ = true;
+            const auto index = indexFor(parent); emit dataChanged(index, index.siblingAtColumn(5));
+        }
+    }
     void DirectoryTreeModel::SetFilter(const QString& Query, int Status)
     {
         visibleEntries_ = 0;
         for (const auto& n : nodes_)
         {
-            const auto entry = n->entry_ < 0 ? QJsonObject{} : entries_[n->entry_].toObject();
-            n->matched_ = n->entry_ >= 0 && DirectoryEntryMatches(entry, Query, Status);
+            n->matched_ = n->entry_ >= 0 && DirectoryEntryMatches(entries_.at(n->entry_), Query, Status);
             n->visible_ = n->matched_; if (n->matched_) ++visibleEntries_;
         }
         // Parents precede children in storage; a reverse pass retains ancestor context.
@@ -107,6 +138,7 @@ namespace hc::compare
         }
         if (column == 1)
         {
+            if (entry["status"] == "Pending") return tr("비교 대기");
             if (entry["status"] == "Error") return tr("비교 불가");
             if (!present) return n->entry_ < 0 ? tr("상위 경로") : tr("없음");
             if (entry["status"] == "Equal" && n->different_) return tr("하위 항목 차이");
@@ -128,7 +160,7 @@ namespace hc::compare
         {
             const auto row = current < 0 ? (Direction > 0 ? offset - 1 : count - offset) : (current + (Direction > 0 ? offset : -offset) + count) % count;
             const auto* n = order_[std::size_t(row)];
-            if (n->matched_ && n->entry_ >= 0 && entries_[n->entry_].toObject()["status"] != "Equal") return indexFor(n);
+            if (n->matched_ && n->entry_ >= 0 && entries_.at(n->entry_).Status() != "Equal") return indexFor(n);
         }
         return {};
     }

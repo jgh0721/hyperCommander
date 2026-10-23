@@ -23,6 +23,8 @@ namespace hc::compare
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;
         bool reuse_ = false;
+        // GUI directory drill-down only: confirmed absent sides may open as empty documents.
+        std::array<bool, 2> allowMissingInputs_{};
         int guiWaitMs_ = 0;
         QString requestFile_, requestId_;
         QString manifest_;
@@ -35,7 +37,8 @@ namespace hc::compare
         bool mirror_ = false;
         bool help_ = false, version_ = false;
         DirectoryPolicy directory_;
-        int timeoutMs_ = 60000, memoryMiB_ = 1024;
+        std::shared_ptr<DirectoryProgressChannel> directoryProgress_;
+        int timeoutMs_ = 60000, memoryMiB_ = 2048;
     };
     struct Parsed { Request request_; QString error_, help_; };
     inline QString InputEncoding(const Request& Input, int Index)
@@ -43,7 +46,7 @@ namespace hc::compare
     Parsed Parse(const QStringList& Arguments, bool Console);
     struct Snapshot
     {
-        QString path_, encoding_; QByteArray raw_, utf8_; bool bom_ = false;
+        QString path_, encoding_; QByteArray raw_, utf8_; bool bom_ = false, exists_ = true;
         storage::EntrySnapshot entry_;
     };
     struct PairChange
@@ -84,7 +87,8 @@ namespace hc::compare
         QString directoryLevel_;
         bool directoryFiltered_ = false;
         bool directoryComplete_ = true;
-        QJsonArray entries_, comparisons_, warnings_, recovery_;
+        DirectoryEntries entries_;
+        QJsonArray comparisons_, warnings_, recovery_;
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;
         bool inputsChanged_ = false;

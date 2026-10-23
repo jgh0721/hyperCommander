@@ -16,7 +16,7 @@ namespace hc::compare
         ~WorkerLease() { if (bytes_) { std::lock_guard lock(owner_->mutex_); owner_->reserved_ -= bytes_; owner_->workerBytes_ -= child_; } }
     };
     ControllerMemory::ControllerMemory(std::function<std::uint64_t()> Measure) : measure_(std::move(Measure)) {}
-    std::uint64_t ControllerMemory::ceiling() const { return limits_.empty() ? 1024 * mib : *limits_.begin(); }
+    std::uint64_t ControllerMemory::ceiling() const { return limits_.empty() ? 2048 * mib : *limits_.begin(); }
     void ControllerMemory::checkLocked(bool Fresh)
     {
         const auto now = std::chrono::steady_clock::now();
@@ -26,7 +26,7 @@ namespace hc::compare
     }
     std::shared_ptr<void> ControllerMemory::Enter(std::uint64_t Limit)
     {
-        if (Limit < 256 * mib || Limit > 1024 * mib) throw Failure("InvalidMemoryLimit");
+        if (Limit < 256 * mib || Limit > 2048 * mib) throw Failure("InvalidMemoryLimit");
         auto lease = std::make_shared<RequestLease>(); lease->owner_ = shared_from_this(); lease->limit_ = Limit;
         // The lease is destroyed after this lock on failure, removing its limit.
         std::lock_guard lock(mutex_); limits_.insert(Limit); lease->active_ = true; checkLocked(true); return lease;
@@ -57,7 +57,7 @@ namespace hc::compare
     }
     void ConfigureMemoryBudget(Budget& Limits, int MemoryMiB)
     {
-        if (MemoryMiB < 256 || MemoryMiB > 1024) throw Failure("InvalidMemoryLimit");
+        if (MemoryMiB < 256 || MemoryMiB > 2048) throw Failure("InvalidMemoryLimit");
         const auto pool = ProcessControllerMemory(); const auto lease = pool->Enter(std::uint64_t(MemoryMiB) * mib);
         Limits.memoryCheck_ = [pool, lease] { pool->Check(); };
         Limits.Check();

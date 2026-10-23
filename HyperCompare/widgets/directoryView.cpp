@@ -36,7 +36,7 @@ namespace hc::compare
         };
         QString statusName(const QString& Status)
         {
-            static const QMap<QString, QString> labels{{"Error", QObject::tr("비교 불가")}, {"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
+            static const QMap<QString, QString> labels{{"Pending", QObject::tr("비교 대기")}, {"Error", QObject::tr("비교 불가")}, {"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
                 {"LeftOnly", QObject::tr("왼쪽만 존재")}, {"RightOnly", QObject::tr("오른쪽만 존재")},
                 {"TypeConflict", QObject::tr("파일/폴더 충돌")}, {"NameDifferent", QObject::tr("이름 다름")},
                 {"LeftChanged", QObject::tr("왼쪽 수정")}, {"RightChanged", QObject::tr("오른쪽 수정")},
@@ -46,6 +46,12 @@ namespace hc::compare
             return labels.value(Status, Status);
         }
         bool file(const QJsonObject& Entry) { return Entry["present"].toBool() && !Entry["directory"].toBool(); }
+        bool openable(const QJsonObject& Item)
+        {
+            const auto left = Item["left"].toObject(), right = Item["right"].toObject();
+            return Item["status"] != "Error" && Item["status"] != "Pending" && (file(left) || file(right)) &&
+                !left["directory"].toBool() && !right["directory"].toBool();
+        }
     }
     bool DirectoryEntryMatches(const QJsonObject& Entry, const QString& Query, int Status)
     {
@@ -53,25 +59,31 @@ namespace hc::compare
         return Entry["path"].toString().contains(Query, Qt::CaseInsensitive) &&
             (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
     }
+    bool DirectoryEntryMatches(const DirectoryRow& Entry, const QString& Query, int Status)
+    {
+        const auto status = Entry.Status();
+        return Entry.path_.contains(Query, Qt::CaseInsensitive) &&
+            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
+    }
     QString DirectoryStatusName(const QString& Status) { return statusName(Status); }
-    void DirectoryModel::SetEntries(QJsonArray Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
+    void DirectoryModel::SetEntries(DirectoryEntries Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
     int DirectoryModel::rowCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : int(entries_.size()); }
     int DirectoryModel::columnCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : 5; }
     QJsonObject DirectoryModel::Entry(int Row) const { return Row >= 0 && Row < entries_.size() ? entries_[Row].toObject() : QJsonObject{}; }
     QVariant DirectoryModel::data(const QModelIndex& Index, int Role) const
     {
         if (!Index.isValid() || Index.row() < 0 || Index.row() >= rowCount() || Index.column() < 0 || Index.column() >= columnCount()) return {};
-        const auto item = Entry(Index.row());
-        if (Role == Qt::UserRole) return item;
+        const auto& row = entries_.at(Index.row());
+        if (Role == Qt::UserRole) return row.toObject();
         if (Role == Qt::ToolTipRole)
-            return item["path"].toString() + '\n' + statusName(item["status"].toString()) + '\n' +
-                tr("LEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(item["leftRight"].toString(), item["leftBase"].toString(), item["rightBase"].toString()) + '\n' + QString::fromUtf8(QJsonDocument(item["errors"].toArray()).toJson(QJsonDocument::Compact));
+            return row.path_ + '\n' + statusName(row.Status()) + '\n' +
+                tr("LEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(row.Status(1), row.Status(2), row.Status(3)) + '\n' + QString::fromUtf8(QJsonDocument(row.errors_).toJson(QJsonDocument::Compact));
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
-        if (Index.column() == 0) return item["path"].toString();
-        if (Index.column() == 1) return statusName(item["status"].toString());
-        const auto side = item[QStringList{"left", "right", "base"}[Index.column() - 2]].toObject();
-        if (!side["present"].toBool()) return item["status"] == "Error" ? tr("확인 불가") : tr("없음");
-        return side["directory"].toBool() ? tr("폴더") : tr("%1 B").arg(QLocale().toString(side["size"].toString().toULongLong()));
+        if (Index.column() == 0) return row.path_;
+        if (Index.column() == 1) return statusName(row.Status());
+        const auto& side = row.sides_[Index.column() - 2];
+        if (!side.present_) return row.Status() == "Error" ? tr("확인 불가") : tr("없음");
+        return side.directory_ ? tr("폴더") : tr("%1 B").arg(QLocale().toString(qulonglong(side.size_)));
     }
     QVariant DirectoryModel::headerData(int Section, Qt::Orientation Orientation, int Role) const
     {
@@ -83,8 +95,8 @@ namespace hc::compare
     { beginFilterChange(); query_ = std::move(Query); status_ = Status; endFilterChange(Direction::Rows); }
     bool DirectoryFilter::filterAcceptsRow(int Row, const QModelIndex& Parent) const
     {
-        const auto item = sourceModel()->data(sourceModel()->index(Row, 0, Parent), Qt::UserRole).toJsonObject();
-        return DirectoryEntryMatches(item, query_, status_);
+        Q_UNUSED(Parent);
+        return static_cast<const DirectoryModel*>(sourceModel())->Matches(Row, query_, status_);
     }
     DirectoryView::DirectoryView(QWidget* Parent) : QWidget(Parent)
     {
@@ -96,7 +108,7 @@ namespace hc::compare
         auto* status = new QComboBox(this); status->setObjectName("directoryStatusFilter"); status->setAccessibleName(tr("디렉터리 상태 필터"));
         status->addItems({tr("모든 항목"), tr("차이만"), tr("충돌만"), tr("비교 불가만")});
         openButton_ = new QPushButton(tr("파일 비교 열기"), this); openButton_->setObjectName("directoryOpenFile");
-        openButton_->setToolTip(tr("양쪽에 있는 파일을 현재 디스크 내용으로 비교합니다. BASE 파일이 있으면 함께 엽니다."));
+        openButton_->setToolTip(tr("한쪽에만 있는 파일은 반대편을 빈 문서로 열어 비교·병합합니다. 저장할 때 해당 경로에 파일을 만듭니다."));
         auto* merge = new QPushButton(tr("병합 계획…"), this); merge->setObjectName("directoryMergePlan");
         connect(merge, &QPushButton::clicked, this, [this] {
             auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
@@ -142,7 +154,10 @@ namespace hc::compare
         {
             auto* tree = trees_[side]; auto* other = trees_[1 - side];
             const auto expansion = [this, other](const QModelIndex& Index, bool Expanded) {
-                if (syncing_) return; QScopedValueRollback guard(syncing_, true); other->setExpanded(Index, Expanded);
+                if (syncing_) return;
+                const auto path = Index.data(DirectoryTreeModel::PathRole).toString();
+                if (Expanded) expandedPaths_.insert(path); else expandedPaths_.remove(path);
+                QScopedValueRollback guard(syncing_, true); other->setExpanded(Index, Expanded);
             };
             connect(tree, &QTreeView::expanded, this, [expansion](const QModelIndex& Index) { expansion(Index, true); });
             connect(tree, &QTreeView::collapsed, this, [expansion](const QModelIndex& Index) { expansion(Index, false); });
@@ -167,9 +182,35 @@ namespace hc::compare
         connect(openButton_, &QPushButton::clicked, this, [this] { OpenCurrent(); });
         updateSelection();
     }
+    void DirectoryView::BeginComparison(const Request& Input)
+    {
+        Result pending; pending.directoryComplete_ = false; pending.directoryLevel_ = Input.directory_.level_;
+        SetComparison(Input, pending); streaming_ = true; viewMode_->setCurrentIndex(0); viewMode_->setEnabled(false);
+        findChild<QLineEdit*>("directoryQuery")->clear(); findChild<QLineEdit*>("directoryQuery")->setEnabled(false);
+        findChild<QComboBox*>("directoryStatusFilter")->setCurrentIndex(0); findChild<QComboBox*>("directoryStatusFilter")->setEnabled(false);
+        roots_->setText(tr("폴더를 찾는 대로 표시합니다. 비교 대기 항목은 존재 여부와 내용을 확인 중입니다."));
+    }
+    void DirectoryView::ApplyProgress(const DirectoryProgress& Progress)
+    {
+        if (!streaming_) return;
+        treeModel_->ApplyProgress(Progress);
+        const auto phase = Progress.phase_ == "scan" ? tr("폴더 열거 중") : Progress.phase_ == "compare" ? tr("파일 내용 비교 중") : tr("변경 여부 재확인 중");
+        summary_->setText(Progress.total_ ? tr("%1 — %2 / %3 · 표시 %4개").arg(phase).arg(Progress.processed_).arg(Progress.total_).arg(treeModel_->VisibleEntries()) :
+            tr("%1 — 발견 %2개 · 표시 %3개").arg(phase).arg(Progress.processed_).arg(treeModel_->VisibleEntries()));
+        openButton_->setEnabled(openable(currentEntry()));
+    }
+    void DirectoryView::EndProgress(bool PreserveRows)
+    {
+        if (streaming_ && PreserveRows) model_->SetEntries(treeModel_->Entries());
+        streaming_ = false; viewMode_->setEnabled(true);
+        findChild<QLineEdit*>("directoryQuery")->setEnabled(true); findChild<QComboBox*>("directoryStatusFilter")->setEnabled(true);
+    }
     void DirectoryView::SetComparison(const Request& Input, const Result& Value)
     {
-        request_ = Input; comparison_ = Value;
+        const bool wasStreaming = streaming_;
+        const auto selectedPath = wasStreaming ? currentEntry()["path"].toString() : QString{};
+        const auto expanded = expandedPaths_; expandedPaths_.clear();
+        EndProgress(false); request_ = Input; comparison_ = Value;
         findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
         treeModel_->SetEntries(Value.entries_);
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
@@ -177,7 +218,16 @@ namespace hc::compare
         {
             const auto path = side ? Input.file2_ : Input.file1_;
             treeRoots_[side]->setText((side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
-            trees_[side]->expandToDepth(0);
+            if (!wasStreaming) trees_[side]->expandToDepth(0);
+        }
+        if (wasStreaming)
+        {
+            for (const auto& path : expanded)
+            {
+                const auto index = treeFilter_->mapFromSource(treeModel_->ForPath(path));
+                if (index.isValid()) for (auto* tree : trees_) tree->expand(index);
+            }
+            if (!selectedPath.isEmpty()) selectTree(treeFilter_->mapFromSource(treeModel_->ForPath(selectedPath)));
         }
         updateRoots(); updateSelection();
     }
@@ -189,13 +239,12 @@ namespace hc::compare
         lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교")) +
             (comparison_.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
         if (!comparison_.directoryComplete_) lines << tr("일부 항목을 비교하지 못했습니다. ‘비교 불가만’ 필터에서 경로와 오류를 확인하십시오. 병합 계획은 제한됩니다.");
-        QStringList issues; bool limited = false;
+        QStringList issues;
         for (const auto& warning : comparison_.warnings_)
         {
-            const auto item = warning.toObject(); limited |= item["error"] == "DirectoryEntryLimit";
+            const auto item = warning.toObject();
             if (issues.size() < 32 && item.contains("root")) issues << QDir(item["root"].toString()).filePath(item["path"].toString()) + " — " + item["error"].toString();
         }
-        if (limited) lines << tr("루트당 100,000개 열거 제한에 도달하여 일부 하위 경로는 미확인 상태입니다.");
         roots_->setToolTip(issues.join('\n'));
         roots_->setText(lines.join('\n'));
     }
@@ -233,16 +282,19 @@ namespace hc::compare
     void DirectoryView::updateSelection()
     {
         const auto item = currentEntry();
-        openButton_->setEnabled(file(item["left"].toObject()) && file(item["right"].toObject()));
+        if (streaming_) { openButton_->setEnabled(openable(item)); return; }
+        openButton_->setEnabled(openable(item));
         summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(model_->rowCount()));
     }
     void DirectoryView::OpenCurrent()
     {
         const auto item = currentEntry();
-        if (!file(item["left"].toObject()) || !file(item["right"].toObject()) || !open_) return;
+        if (!openable(item) || !open_) return;
         Request next; next.mode_ = "compare"; next.encoding_ = request_.encoding_; next.theme_ = request_.theme_;
-        next.file1_ = QDir(request_.file1_).filePath(item["left"].toObject()["path"].toString());
-        next.file2_ = QDir(request_.file2_).filePath(item["right"].toObject()["path"].toString());
+        next.allowMissingInputs_ = {!file(item["left"].toObject()), !file(item["right"].toObject())};
+        next.file1_ = QDir(request_.file1_).filePath(item["left"].toObject()["path"].toString(item["path"].toString()));
+        next.file2_ = QDir(request_.file2_).filePath(item["right"].toObject()["path"].toString(item["path"].toString()));
+        next.inputEncodings_ = request_.inputEncodings_;
         if (file(item["base"].toObject())) next.base_ = QDir(request_.base_).filePath(item["base"].toObject()["path"].toString());
         open_(std::move(next));
     }

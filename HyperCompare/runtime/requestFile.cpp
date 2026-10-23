@@ -60,7 +60,7 @@ namespace hc::compare
                 const auto codec = string(it.value()); if (!inputs.contains(it.key()) || !QStringList{"auto", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(codec)) throw Failure("InvalidRoleEncoding"); codecs[roles[it.key()]] = codec;
             }
             const auto limits = object(json, "limits"); keys(limits, {"timeoutMs", "memoryMiB"});
-            if (limits.contains("memoryMiB") && !Overrides.contains("-memory-mib")) args << "-memory-mib" << QString::number(number(limits["memoryMiB"], 256, 1024));
+            if (limits.contains("memoryMiB") && !Overrides.contains("-memory-mib")) args << "-memory-mib" << QString::number(number(limits["memoryMiB"], 256, 2048));
             if (limits.contains("timeoutMs") && !Overrides.contains("-timeout-ms")) args << "-timeout-ms" << QString::number(number(limits["timeoutMs"], 100, 3600000));
             const auto options = object(json, "options"); keys(options, {"takeall", "planout", "decisions", "plan", "journal", "resume", "allowdelete", "mirror", "dryrun"});
             for (auto it = options.begin(); it != options.end(); ++it)
