@@ -30,7 +30,7 @@ namespace hc::compare
     { return Row >= 0 && std::size_t(Row) < entriesToNodes_.size() ? indexFor(entriesToNodes_[Row]) : QModelIndex{}; }
     void DirectoryTreeModel::SetEntries(DirectoryEntries Entries)
     {
-        beginResetModel(); root_.children_.clear(); nodes_.clear(); order_.clear(); entries_ = std::move(Entries);
+        streaming_ = false; beginResetModel(); root_.children_.clear(); nodes_.clear(); order_.clear(); entries_ = std::move(Entries);
         entriesToNodes_.assign(std::size_t(entries_.size()), nullptr); paths_.clear(); auto& paths = paths_; paths.insert({}, &root_);
         for (int i = 0; i < entries_.size(); ++i)
         {
@@ -71,6 +71,7 @@ namespace hc::compare
     }
     void DirectoryTreeModel::ApplyProgress(const DirectoryProgress& Progress)
     {
+        streaming_ = true;
         if (paths_.isEmpty()) paths_.insert({}, &root_);
         QHash<Node*, std::vector<Node*>> additions; std::vector<Node*> parents;
         QSet<Node*> changed;
@@ -92,6 +93,10 @@ namespace hc::compare
             if (parent == &root_) continue;
             if (parent->entry_ < 0)
             { parent->entry_ = int(entries_.size()); entries_.append(row); entriesToNodes_.push_back(parent); ++visibleEntries_; }
+            else if (Progress.side_ == -2)
+            {
+                for (int side = 0; side < 3; ++side) if (row.sides_[side].present_) entries_[parent->entry_].sides_[side] = row.sides_[side];
+            }
             else if (Progress.side_ >= 0) entries_[parent->entry_].sides_[Progress.side_] = row.sides_[Progress.side_];
             else entries_[parent->entry_] = row;
             const auto& entry = entries_.at(parent->entry_); parent->matched_ = true;
@@ -121,8 +126,19 @@ namespace hc::compare
         for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
             emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), roles);
     }
+    bool DirectoryTreeModel::AwaitingChildren(const QModelIndex& Index) const
+    { return streaming_ && Index.isValid() && node(Index)->folder_ && node(Index)->children_.empty(); }
+    bool DirectoryTreeModel::hasChildren(const QModelIndex& Parent) const
+    { return !(Parent.isValid() && Parent.column()) && (rowCount(Parent) > 0 || AwaitingChildren(Parent)); }
+    bool DirectoryTreeFilter::hasChildren(const QModelIndex& Parent) const
+    {
+        const auto* model = static_cast<DirectoryTreeModel*>(sourceModel());
+        return model && (QSortFilterProxyModel::hasChildren(Parent) ||
+            (!(Parent.isValid() && Parent.column()) && model->AwaitingChildren(mapToSource(Parent))));
+    }
     void DirectoryTreeModel::FinishProgress()
     {
+        streaming_ = false;
         std::vector<bool> previous; previous.reserve(nodes_.size());
         for (const auto& item : nodes_)
         { previous.push_back(item->different_); item->different_ = item->entry_ >= 0 && !DirectoryContentEqual(entries_.at(item->entry_).Status()); }

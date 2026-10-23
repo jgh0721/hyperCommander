@@ -21,6 +21,8 @@ namespace hc::compare
         DirectoryEntries Entries() const { return entries_; }
         void ApplyProgress(const DirectoryProgress& Progress);
         void FinishProgress();
+        bool AwaitingChildren(const QModelIndex& Index) const;
+        bool hasChildren(const QModelIndex& Parent = {}) const override;
         void SetFilter(const QString& Query, int Status);
         QModelIndex index(int Row, int Column, const QModelIndex& Parent = {}) const override;
         QModelIndex parent(const QModelIndex& Child) const override;
@@ -50,6 +52,7 @@ namespace hc::compare
         std::vector<Node*> order_, entriesToNodes_;
         DirectoryEntries entries_;
         int visibleEntries_ = 0;
+        bool streaming_ = false;
         mutable QPointer<QStyle> iconStyle_;
         mutable qint64 iconPalette_ = 0;
         mutable QIcon folderIcon_, fileIcon_;
@@ -59,6 +62,7 @@ namespace hc::compare
     public:
         explicit DirectoryTreeFilter(QObject* Parent) : QSortFilterProxyModel(Parent) { setFilterRole(DirectoryTreeModel::VisibleRole); }
         void SetQuery(const QString& Query, int Status);
+        bool hasChildren(const QModelIndex& Parent = {}) const override;
     protected:
         bool filterAcceptsRow(int Row, const QModelIndex& Parent) const override;
     };

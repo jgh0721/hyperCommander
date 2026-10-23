@@ -2259,6 +2259,50 @@ private slots:
         }
         r.file3_ = r.base_; r.base_.clear(); QCOMPARE(Execute(r, cancel, false).error_, QString("DirectoryIndependentThreeUnsupported"));
     }
+    void directoryInterleavedScanAndPriority()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        for (const auto& root : {r.file1_, r.file2_})
+        {
+            QVERIFY(QDir().mkpath(root + "/ztarget/deep/child")); write(root + "/ztarget/deep/child/first.txt", "target");
+            for (int i = 0; i < 80; ++i)
+            { const auto folder = root + QString("/a%1/sub").arg(i, 3, 10, QChar('0')); QVERIFY(QDir().mkpath(folder)); write(folder + "/other.txt", "other"); }
+        }
+        r.directoryProgress_ = std::make_shared<DirectoryProgressChannel>();
+        r.directoryProgress_->Prioritize("ztarget/deep/child/first.txt");
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto task = std::async(std::launch::async, [&] { return Execute(r, cancel, false); });
+        QStringList scanned[2], compared; bool bothRootsBeforeChildren = true; bool roots[2]{};
+        QElapsedTimer timer; timer.start();
+        const auto consume = [&](const DirectoryProgress& Progress) {
+            for (const auto& row : Progress.rows_)
+            {
+                if (Progress.phase_ == "scan") { for (int side = 0; side < 2; ++side) if (row.sides_[side].present_)
+                {
+                    if (!row.path_.contains('/')) roots[side] = true;
+                    else bothRootsBeforeChildren &= roots[0] && roots[1];
+                    scanned[side] << row.path_;
+                } }
+                else if (Progress.phase_ == "compare") compared << row.path_;
+            }
+        };
+        while (task.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        {
+            if (auto progress = r.directoryProgress_->Take()) consume(*progress);
+            else QTest::qSleep(1);
+            if (timer.elapsed() > 15000) cancel->store(true);
+        }
+        while (auto progress = r.directoryProgress_->Take()) consume(*progress);
+        const auto result = task.get(); QCOMPARE(result.completion_, QString("Complete")); QVERIFY(bothRootsBeforeChildren);
+        for (int side = 0; side < 2; ++side)
+        {
+            QVERIFY(scanned[side].indexOf("ztarget/deep/child/first.txt") >= 0);
+            QVERIFY(scanned[side].indexOf("ztarget/deep/child/first.txt") < scanned[side].indexOf("a000/sub/other.txt"));
+        }
+        QVERIFY(!compared.isEmpty()); QCOMPARE(compared.first(), QString("ztarget/deep/child/first.txt"));
+        r.directoryProgress_.reset(); const auto ordinary = Execute(r, cancel, false);
+        QCOMPARE(result.entries_.Json(), ordinary.entries_.Json());
+    }
     void directoryProgressQueueCancellation()
     {
         DirectoryProgressChannel channel; std::atomic_bool canceled{false}; Budget limits; limits.canceled_ = &canceled;

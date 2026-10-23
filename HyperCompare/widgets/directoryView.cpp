@@ -58,7 +58,7 @@ namespace hc::compare
         bool openable(const QJsonObject& Item)
         {
             const auto left = Item["left"].toObject(), right = Item["right"].toObject();
-            return Item["status"] != "Error" && Item["status"] != "Pending" && (file(left) || file(right)) &&
+            return Item["status"] != "Error" && (file(left) || file(right)) &&
                 !left["directory"].toBool() && !right["directory"].toBool();
         }
     }
@@ -198,7 +198,12 @@ namespace hc::compare
             const auto expansion = [this, other](const QModelIndex& Index, bool Expanded) {
                 if (syncing_) return;
                 const auto path = Index.data(DirectoryTreeModel::PathRole).toString();
-                if (Expanded) expandedPaths_.insert(path); else expandedPaths_.remove(path);
+                if (Expanded)
+                {
+                    expandedPaths_.insert(path);
+                    if (streaming_ && request_.directoryProgress_) request_.directoryProgress_->Prioritize(path);
+                }
+                else expandedPaths_.remove(path);
                 QScopedValueRollback guard(syncing_, true); other->setExpanded(Index, Expanded);
             };
             connect(tree, &QTreeView::expanded, this, [expansion](const QModelIndex& Index) { expansion(Index, true); });
@@ -267,6 +272,7 @@ namespace hc::compare
     {
         if (streaming_ && PreserveRows)
         {
+            treeModel_->FinishProgress();
             listDeferred_ = treeMode_ && treeModel_->Entries().size() > 10000;
             if (!listDeferred_) model_->SetEntries(treeModel_->Entries());
         }
@@ -370,12 +376,14 @@ namespace hc::compare
     {
         const auto item = currentEntry();
         if (!openable(item) || !open_) return;
+        if (streaming_ && request_.directoryProgress_) request_.directoryProgress_->Prioritize(item["path"].toString());
         Request next; next.mode_ = "compare"; next.encoding_ = request_.encoding_; next.theme_ = request_.theme_;
         next.allowMissingInputs_ = {!file(item["left"].toObject()), !file(item["right"].toObject())};
         next.file1_ = QDir(request_.file1_).filePath(item["left"].toObject()["path"].toString(item["path"].toString()));
         next.file2_ = QDir(request_.file2_).filePath(item["right"].toObject()["path"].toString(item["path"].toString()));
         next.inputEncodings_ = request_.inputEncodings_;
-        if (file(item["base"].toObject())) next.base_ = QDir(request_.base_).filePath(item["base"].toObject()["path"].toString());
+        if (file(item["base"].toObject()) || (item["status"] == "Pending" && !request_.base_.isEmpty()))
+            next.base_ = QDir(request_.base_).filePath(item["base"].toObject()["path"].toString(item["path"].toString()));
         open_(std::move(next));
     }
     void DirectoryView::NavigateDifference(int Direction)

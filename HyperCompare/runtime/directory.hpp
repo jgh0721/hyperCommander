@@ -57,7 +57,7 @@ namespace hc::compare
     {
         DirectoryEntries rows_;
         QString phase_;
-        int side_ = -1;
+        int side_ = -1; // -1: final comparison row; -2: mixed-side discovery batch.
         qsizetype processed_ = 0, total_ = 0;
     };
     class DirectoryProgressChannel
@@ -65,9 +65,12 @@ namespace hc::compare
     public:
         void Push(DirectoryProgress Value, const Budget& Limits);
         std::optional<DirectoryProgress> Take();
+        void Prioritize(const QString& Path);
+        QString Priority();
     private:
         std::mutex mutex_;
         std::deque<DirectoryProgress> queue_;
+        QString priority_;
     };
     struct DirectorySnapshot
     {

@@ -993,12 +993,12 @@ private slots:
         QElapsedTimer elapsed; elapsed.start(); CompareWindow window(r); window.resize(1400, 850); window.show();
         auto* tree = window.findChild<QTreeView*>("directoryLeftTree");
         QVector<qint64> eventGaps; QElapsedTimer heartbeat; heartbeat.start(); QTimer interaction;
+        bool navigationReady = false;
         int ticks = 0, scrollChanges = 0; connect(&interaction, &QTimer::timeout, &interaction, [&] {
             eventGaps.append(heartbeat.restart());
-            if (tree->isVisible() && ++ticks % 10 == 0)
+            if (navigationReady && tree->isVisible() && ++ticks % 10 == 0)
             {
-                // A directory discovered before its children cannot yet be expanded.
-                // Retry a bounded number of branches as enumeration fills them.
+                // Exercise additional branches while comparison remains active.
                 for (int row = 0; row < std::min(3, tree->model()->rowCount()); ++row)
                 {
                     const auto root = tree->model()->index(row, 0); if (tree->model()->rowCount(root)) tree->expand(root);
@@ -1014,6 +1014,37 @@ private slots:
         QVERIFY2(tree->isVisible(), qPrintable(window.findChild<QLabel*>("compareStatus")->text()));
         QVERIFY(tree->isEnabled());
         auto* streamedModel = window.findChild<QAbstractItemModel*>("directoryTreeModel"); QSignalSpy resets(streamedModel, &QAbstractItemModel::modelReset);
+        if (QDir(leftPath).exists("src/qtbase/src/corelib"))
+        {
+            auto* source = static_cast<DirectoryTreeModel*>(streamedModel);
+            auto* proxy = static_cast<QSortFilterProxyModel*>(tree->model());
+            for (const auto& path : {QString("src"), QString("src/qtbase"), QString("src/qtbase/src"), QString("src/qtbase/src/corelib")})
+            {
+                QTRY_VERIFY_WITH_TIMEOUT(source->ForPath(path).isValid(), 20000);
+                const auto index = proxy->mapFromSource(source->ForPath(path)); QVERIFY(index.isValid());
+                tree->scrollTo(index); tree->setCurrentIndex(index); tree->expand(index);
+                QVERIFY(tree->isExpanded(index)); QVERIFY(action(window, "취소")->isEnabled());
+                qInfo("Interactive Qt branch %s at %lld ms", qPrintable(path), elapsed.elapsed());
+            }
+            const QString filePath = "src/qtbase/src/corelib/CMakeLists.txt";
+            QTRY_VERIFY_WITH_TIMEOUT(source->ForPath(filePath).isValid(), 20000);
+            const auto fileIndex = proxy->mapFromSource(source->ForPath(filePath)); tree->setCurrentIndex(fileIndex);
+            QCOMPARE(source->Entry(source->ForPath(filePath))["status"].toString(), QString("Pending"));
+            const auto existing = QApplication::topLevelWidgets();
+            QVERIFY(QMetaObject::invokeMethod(tree, "activated", Qt::DirectConnection, Q_ARG(QModelIndex, fileIndex)));
+            CompareWindow* opened = nullptr;
+            for (auto* widget : QApplication::topLevelWidgets()) if (!existing.contains(widget))
+                if (auto* candidate = dynamic_cast<CompareWindow*>(widget)) { opened = candidate; break; }
+            QVERIFY(opened);
+            QTRY_VERIFY_WITH_TIMEOUT(opened->findChild<ScintillaEditBase*>("FILE 1"), 20000);
+            QVERIFY(!contents(opened->findChild<ScintillaEditBase*>("FILE 1")).isEmpty());
+            QVERIFY(!contents(opened->findChild<ScintillaEditBase*>("FILE 2")).isEmpty());
+            QVERIFY(action(window, "취소")->isEnabled());
+            qInfo("Pending Qt file opened in separate comparison at %lld ms", elapsed.elapsed());
+            QVERIFY(opened->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-priority-file.png"));
+            opened->close();
+        }
+        navigationReady = true;
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, tree->visualRect(tree->model()->index(0, 0)).center());
         QVERIFY(tree->currentIndex().isValid());
         qInfo("First incremental directory display: %lld ms", elapsed.elapsed());
@@ -1034,6 +1065,39 @@ private slots:
         QTest::qWait(100); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-directory-acceptance.png"));
         window.close();
     }
+    void directoryPendingBranchesAndImmediateOpen()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        request.directoryProgress_ = std::make_shared<DirectoryProgressChannel>();
+        for (const auto& root : {request.file1_, request.file2_}) { QVERIFY(QDir().mkpath(root + "/src/deep/child")); write(root + "/src/deep/child/file.txt", "actual"); }
+        DirectoryView view; view.BeginComparison(request); view.resize(1000, 600); view.show();
+        auto* tree = view.findChild<QTreeView*>("directoryLeftTree");
+        auto* source = static_cast<DirectoryTreeModel*>(view.findChild<QAbstractItemModel*>("directoryTreeModel"));
+        QAbstractItemModelTester tester(source, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        QPersistentModelIndex parent;
+        for (const auto& path : {QString("src"), QString("src/deep"), QString("src/deep/child")})
+        {
+            DirectoryProgress progress; progress.phase_ = "scan"; progress.side_ = -2;
+            DirectoryRow row; row.path_ = path; row.statuses_[0] = 18; row.sides_[0].present_ = true; row.sides_[0].directory_ = true;
+            progress.rows_.append(row); view.ApplyProgress(progress);
+            const auto index = tree->model()->index(0, 0, parent); QVERIFY(index.isValid());
+            QCOMPARE(tree->model()->rowCount(index), 0); QVERIFY(tree->model()->hasChildren(index));
+            tree->expand(index); QCoreApplication::processEvents(); QVERIFY(tree->isExpanded(index));
+            QCOMPARE(request.directoryProgress_->Priority(), path); parent = index;
+        }
+        DirectoryProgress progress; progress.phase_ = "scan"; progress.side_ = -2;
+        DirectoryRow row; row.path_ = "src/deep/child/file.txt"; row.statuses_[0] = 18; row.sides_[0].present_ = true;
+        progress.rows_.append(row); view.ApplyProgress(progress);
+        const auto file = tree->model()->index(0, 0, parent); tree->setCurrentIndex(file); QVERIFY(file.isValid());
+        Request opened; bool called = false; view.open_ = [&](Request Input) { opened = std::move(Input); called = true; };
+        QVERIFY(view.findChild<QPushButton*>("directoryOpenFile")->isEnabled());
+        QVERIFY(QMetaObject::invokeMethod(tree, "activated", Qt::DirectConnection, Q_ARG(QModelIndex, file))); QVERIFY(called);
+        QCOMPARE(request.directoryProgress_->Priority(), row.path_);
+        // Right has not been enumerated, but its real content must not become empty.
+        const auto actual = Execute(opened, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(actual.exitCode_, 0); QCOMPARE(actual.inputs_.size(), std::size_t(2)); QCOMPARE(actual.inputs_[1].utf8_, QByteArray("actual"));
+        view.EndProgress(); QVERIFY(tree->isExpanded(parent)); view.close();
+    }
     void directoryProgressKeepsSelectionAndUpdatesStatus()
     {
         DirectoryView view; Request request; request.file1_ = "D:/left"; request.file2_ = "D:/right";
@@ -1044,7 +1108,7 @@ private slots:
         batch.rows_.append(QJsonObject{{"path", "src/a.txt"}, {"status", "Pending"}, {"left", QJsonObject{{"present", true}, {"path", "src/a.txt"}}}});
         view.ApplyProgress(batch); const auto root = tree->model()->index(0, 0); tree->expand(root);
         const QPersistentModelIndex selected(tree->model()->index(0, 0, root)); tree->setCurrentIndex(selected);
-        QVERIFY(!view.findChild<QPushButton*>("directoryOpenFile")->isEnabled());
+        QVERIFY(view.findChild<QPushButton*>("directoryOpenFile")->isEnabled());
         batch.rows_ = {}; batch.rows_.append(QJsonObject{{"path", "src/b.txt"}, {"status", "Pending"}, {"left", QJsonObject{{"present", true}}}});
         view.ApplyProgress(batch); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected)); QVERIFY(tree->isExpanded(root));
         batch.side_ = -1; batch.phase_ = "compare"; batch.rows_ = {};
