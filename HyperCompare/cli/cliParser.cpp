@@ -113,8 +113,8 @@ namespace hc::compare
         if (!request.base_.isEmpty() && !request.file3_.isEmpty()) return fail("-base and -file3 are mutually exclusive.");
         if (request.mode_ == "directory-merge")
         {
-            if (!request.headless_ || request.planOut_.isEmpty() || request.output_.isEmpty() || !request.decisions_.isEmpty() || !request.file3_.isEmpty() || request.dryRun_)
-                return fail("directory-merge requires headless -planout and -output; use -base for three-way.");
+            if ((request.headless_ && request.planOut_.isEmpty()) || request.output_.isEmpty() || !request.decisions_.isEmpty() || !request.file3_.isEmpty() || request.dryRun_)
+                return fail("directory-merge requires -output and headless requests also require -planout; use -base for three-way.");
             if (!request.takeAll_.isEmpty() && (!request.base_.isEmpty() || (request.takeAll_ != "left" && request.takeAll_ != "right"))) return fail("Invalid directory selection.");
         }
         else if (request.mode_ == "merge")

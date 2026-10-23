@@ -890,6 +890,15 @@ private slots:
         const auto parsed = Parse({"app", "-mode", "directory-merge", "-file1", r.file1_, "-file2", r.file2_, "-output", r.output_, "-planout", dir.filePath("cli.json"), "-takeall", "left"}, true);
         QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_));
     }
+    void directoryMergeGuiRequestDoesNotWrite()
+    {
+        QTemporaryDir dir; const auto left = dir.filePath("left"), right = dir.filePath("right"), output = dir.filePath("output");
+        QVERIFY(QDir().mkpath(left)); QVERIFY(QDir().mkpath(right)); write(left + "/a", "left");
+        const auto parsed = Parse({"app", "-mode", "directory-merge", "-file1", left, "-file2", right, "-output", output}, false);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_));
+        const auto result = Execute(parsed.request_, std::make_shared<std::atomic_bool>(false), false);
+        QCOMPARE(result.completion_, QString("Complete")); QCOMPARE(result.operation_, QString("directory2")); QVERIFY(!QFileInfo::exists(output));
+    }
     void directoryPlanBaseMirrorAndBoundaries()
     {
         QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true;

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include "directoryMergeDialog.hpp"
 #include <QDir>
 #include <QLocale>
 #include <QFontMetrics>
@@ -24,11 +25,12 @@ namespace hc::compare
                 {"LeftChanged", QObject::tr("왼쪽 수정")}, {"RightChanged", QObject::tr("오른쪽 수정")},
                 {"LeftAdded", QObject::tr("왼쪽 추가")}, {"RightAdded", QObject::tr("오른쪽 추가")},
                 {"LeftDeleted", QObject::tr("왼쪽 삭제")}, {"RightDeleted", QObject::tr("오른쪽 삭제")},
-                {"BothDeleted", QObject::tr("양쪽 삭제")}, {"BothSame", QObject::tr("양쪽 동일 변경")}, {"Conflict", QObject::tr("충돌")}};
+                {"BothDeleted", QObject::tr("양쪽 삭제")}, {"BothSame", QObject::tr("양쪽 동일 변경")}, {"Conflict", QObject::tr("충돌")}, {"MirrorExtra", QObject::tr("출력에만 존재")}};
             return labels.value(Status, Status);
         }
         bool file(const QJsonObject& Entry) { return Entry["present"].toBool() && !Entry["directory"].toBool(); }
     }
+    QString DirectoryStatusName(const QString& Status) { return statusName(Status); }
     void DirectoryModel::SetEntries(QJsonArray Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
     int DirectoryModel::rowCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : int(entries_.size()); }
     int DirectoryModel::columnCount(const QModelIndex& Parent) const { return Parent.isValid() ? 0 : 5; }
@@ -74,6 +76,11 @@ namespace hc::compare
         status->addItems({tr("모든 항목"), tr("차이만"), tr("충돌만")});
         openButton_ = new QPushButton(tr("파일 비교 열기"), this); openButton_->setObjectName("directoryOpenFile");
         openButton_->setToolTip(tr("양쪽에 있는 파일을 현재 디스크 내용으로 비교합니다. BASE 파일이 있으면 함께 엽니다."));
+        auto* merge = new QPushButton(tr("병합 계획…"), this); merge->setObjectName("directoryMergePlan");
+        connect(merge, &QPushButton::clicked, this, [this] {
+            auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
+        });
+        searchRow->addWidget(merge);
         searchRow->addWidget(query, 1); searchRow->addWidget(status); searchRow->addWidget(openButton_); box->addLayout(searchRow);
         model_ = new DirectoryModel(this); model_->setObjectName("directoryModel"); filter_ = new DirectoryFilter(this); filter_->setSourceModel(model_);
         filter_->setSortCaseSensitivity(Qt::CaseInsensitive);
@@ -93,7 +100,7 @@ namespace hc::compare
     }
     void DirectoryView::SetComparison(const Request& Input, const Result& Value)
     {
-        request_ = Input; model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
+        request_ = Input; comparison_ = Value; model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
         roots_->setText(tr("LEFT  %1\nRIGHT  %2%3\n%4%5").arg(Input.file1_, Input.file2_,
             Input.base_.isEmpty() ? QString{} : "\nBASE  " + Input.base_,
             Value.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교"),

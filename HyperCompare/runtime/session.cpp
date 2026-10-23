@@ -184,7 +184,7 @@ namespace hc::compare
             if (Input.mode_ == "directory" || Input.mode_ == "directory-merge" || (Input.mode_ == "auto" && first.directory_))
             {
                 CompareDirectory(Input, result, limits);
-                if (Input.mode_ == "directory-merge")
+                if (Input.mode_ == "directory-merge" && Input.headless_)
                 {
                     if (!Input.headless_ || Input.planOut_.isEmpty() || !Input.decisions_.isEmpty()) throw Failure("DirectoryPlanOptionsRequired");
                     result.completion_ = "Complete"; ExportDirectoryPlan(Input, result, limits);

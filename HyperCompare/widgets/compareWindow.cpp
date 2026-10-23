@@ -5,6 +5,7 @@
 #include "findBar.hpp"
 #include "overviewBar.hpp"
 #include "directoryView.hpp"
+#include "directoryMergeDialog.hpp"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -344,6 +345,11 @@ namespace hc::compare
         if (result_.operation_.startsWith("directory"))
         {
             directory_->SetComparison(request_, result_); sources_->hide(); changes_->hide(); directory_->show();
+            if (request_.mode_ == "directory-merge")
+            {
+                auto* dialog = new DirectoryMergeDialog(request_, result_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
+                dialog->Prepare(request_.output_, request_.mirror_, request_.overwrite_);
+            }
         }
         else
         {

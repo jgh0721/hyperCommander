@@ -6,6 +6,7 @@
 #include "widgets/findBar.hpp"
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
+#include "widgets/directoryMergeDialog.hpp"
 #include <QTableView>
 #include <QPushButton>
 #include <QAbstractItemModelTester>
@@ -86,6 +87,51 @@ private slots:
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void directoryGuiPlanChoicesSaveApply()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "left"); write(r.file2_ + "/a", "right");
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto compared = Execute(r, cancel, false);
+        DirectoryMergeDialog dialog(r, compared); dialog.show(); QAbstractItemModelTester tester(dialog.Model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        dialog.Prepare(dir.filePath("out")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QVERIFY2(dialog.LastResult().error_.isEmpty(), qPrintable(dialog.LastResult().error_)); QCOMPARE(dialog.Model()->Unresolved(), 1);
+        const auto choice = dialog.Model()->index(0, 1); QVERIFY(!dialog.Model()->setData(choice, "base"));
+        auto* table = dialog.findChild<QTableView*>("directoryPlanTable"); table->setCurrentIndex(choice); table->edit(choice);
+        QTRY_VERIFY(table->findChild<QComboBox*>()); auto* editor = table->findChild<QComboBox*>();
+        editor->setCurrentIndex(editor->findData("right")); QTest::keyClick(editor, Qt::Key_Return); QTRY_COMPARE(dialog.Model()->Unresolved(), 0);
+        fm::style::ThemeManager::instance().setScheme(fm::style::ThemeManager::Scheme::Light);
+        QTest::qWait(40); QVERIFY(dialog.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-plan-light.png"));
+        fm::style::ThemeManager::instance().setScheme(fm::style::ThemeManager::Scheme::Dark);
+        QTest::qWait(40); QVERIFY(dialog.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-plan-dark.png"));
+        const auto plan = dir.filePath("plan.json"); dialog.SavePlan(plan); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QVERIFY2(dialog.LastResult().error_.isEmpty(), qPrintable(dialog.LastResult().error_)); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        dialog.ApplyPlan(false); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QVERIFY2(dialog.LastResult().error_.isEmpty(), qPrintable(dialog.LastResult().error_)); QCOMPARE(dialog.LastResult().commit_, QString("Committed"));
+        QFile file(dir.filePath("out/a")); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), QByteArray("right")); file.close();
+        dialog.ApplyPlan(false, true); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QCOMPARE(dialog.LastResult().exitCode_, 0);
+        // External changes to a saved plan cannot bypass the choices reviewed in the GUI.
+        QFile stored(plan); QVERIFY(stored.open(QIODevice::ReadOnly)); auto document = QJsonDocument::fromJson(stored.readAll()).object(); stored.close();
+        auto actions = document["actions"].toArray(); auto item = actions[0].toObject(); item["choice"] = "left"; actions[0] = item; document["actions"] = actions;
+        write(plan, QJsonDocument(document).toJson()); dialog.ApplyPlan(false, true); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QCOMPARE(dialog.LastResult().error_, QString("DirectoryPlanChanged")); dialog.close();
+    }
+    void directoryGuiPlanFailureAndChoiceInvalidation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l"); r.file2_ = dir.filePath("r");
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a", "left");
+        const auto compared = Execute(r, std::make_shared<std::atomic_bool>(false), false); DirectoryMergeDialog dialog(r, compared); dialog.show();
+        dialog.Prepare(r.file1_ + "/bad"); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QVERIFY(!dialog.Model()->HasPlan());
+        QCOMPARE(dialog.LastResult().error_, QString("DirectoryOutputOverlapsInput"));
+        dialog.Prepare(dir.filePath("out")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        const auto index = dialog.Model()->index(0, 1); QVERIFY(dialog.Model()->setData(index, "left"));
+        dialog.SavePlan(dir.filePath("plan.json")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        auto* output = dialog.findChild<QLineEdit*>("directoryOutput"); output->setText(dir.filePath("different-output"));
+        dialog.ApplyPlan(true); QVERIFY(!dialog.Busy()); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); output->setText(dir.filePath("out"));
+        QVERIFY(dialog.Model()->setData(index, "omit")); dialog.ApplyPlan(true); QVERIFY(!dialog.Busy()); QVERIFY(!QFileInfo::exists(dir.filePath("out")));
+        dialog.SavePlan(dir.filePath("changed.json")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        write(r.file1_ + "/a", "changed input"); dialog.ApplyPlan(true); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QCOMPARE(dialog.LastResult().error_, QString("DirectorySnapshotMismatch")); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); dialog.close();
     }
     void directoryVirtualModelAndNavigation()
     {

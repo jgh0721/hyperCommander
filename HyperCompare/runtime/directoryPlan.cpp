@@ -129,14 +129,13 @@ namespace hc::compare
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
         return result;
     }
-    void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits)
+    void SaveDirectoryPlan(const QJsonObject& Plan, const QString& Path, Result& Value, const Budget& Limits)
     {
-        const auto destination = CheckedDirectoryPath(Input.planOut_);
-        if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Input.output_))) throw Failure("DirectoryArtifactOverlapsRoot");
-        for (const auto& snapshot : *Value.directories_)
-            if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(snapshot.root_))) throw Failure("DirectoryArtifactOverlapsRoot");
-        Value.directoryPlan_ = MakeDirectoryPlan(Input, Value, Limits);
-        auto data = QJsonDocument(Value.directoryPlan_).toJson(); data.replace("\n", "\r\n");
+        const auto destination = CheckedDirectoryPath(Path);
+        if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Plan["output"].toObject()["path"].toString()))) throw Failure("DirectoryArtifactOverlapsRoot");
+        for (const auto& snapshot : Plan["roots"].toArray())
+            if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(snapshot.toObject()["path"].toString()))) throw Failure("DirectoryArtifactOverlapsRoot");
+        auto data = QJsonDocument(Plan).toJson(); data.replace("\n", "\r\n");
         if (data.size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
         const auto at = locator(destination); const auto provider = storage::MakeNativeReadProvider(at.kind_);
         const auto writer = storage::MakeNativeWritableStorage(at.kind_, provider);
@@ -146,6 +145,16 @@ namespace hc::compare
         if (!receipt.destinationCommitted_) throw Failure("PlanNotCommitted");
         for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
         for (const auto& path : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(path.root_));
+        Value.planWritten_ = destination;
+    }
+    void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits)
+    {
+        const auto destination = CheckedDirectoryPath(Input.planOut_);
+        if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Input.output_))) throw Failure("DirectoryArtifactOverlapsRoot");
+        for (const auto& snapshot : *Value.directories_)
+            if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(snapshot.root_))) throw Failure("DirectoryArtifactOverlapsRoot");
+        Value.directoryPlan_ = MakeDirectoryPlan(Input, Value, Limits);
+        SaveDirectoryPlan(Value.directoryPlan_, destination, Value, Limits);
         Value.planWritten_ = destination; Value.outcome_ = "Planned";
         qsizetype unresolved = 0;
         for (const auto& action : Value.directoryPlan_["actions"].toArray()) unresolved += action.toObject()["choice"] == "unresolved";

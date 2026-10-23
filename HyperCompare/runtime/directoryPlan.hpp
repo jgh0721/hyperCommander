@@ -8,6 +8,7 @@ namespace hc::compare
     struct Result;
     constexpr qsizetype directoryPlanLimit = 64 * 1024 * 1024;
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits);
+    void SaveDirectoryPlan(const QJsonObject& Plan, const QString& Path, Result& Value, const Budget& Limits);
     void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits);
     // Shared by export/apply. Rejects reparse ancestors and ambiguous native path syntax.
     QString CheckedDirectoryPath(const QString& Path);

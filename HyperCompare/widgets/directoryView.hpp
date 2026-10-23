@@ -10,6 +10,7 @@ class QLabel;
 class QPushButton;
 namespace hc::compare
 {
+    QString DirectoryStatusName(const QString& Status);
     class DirectoryModel final : public QAbstractTableModel
     {
     public:
@@ -52,5 +53,6 @@ namespace hc::compare
         QLabel* summary_ = nullptr;
         QPushButton* openButton_ = nullptr;
         Request request_;
+        Result comparison_;
     };
 }

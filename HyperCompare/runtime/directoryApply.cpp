@@ -161,6 +161,8 @@ namespace hc::compare
         QFile file(planPath); if (!file.open(QIODevice::ReadOnly) || file.size() > directoryPlanLimit) throw Failure("DirectoryPlanReadFailed");
         const auto bytes = file.readAll(); if (file.error() != QFileDevice::NoError) throw Failure("DirectoryPlanReadFailed"); file.close();
         const auto plan = json(bytes); Value.directoryPlan_ = plan;
+        if (!Input.applyPlanDigest_.isEmpty() && Input.applyPlanDigest_ != QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(plan).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()))
+            throw Failure("DirectoryPlanChanged");
         keys(plan, {"kind", "schemaVersion", "roots", "output", "include", "exclude", "overwrite", "mirror", "actions"});
         if (plan["kind"] != "HyperCompareDirectoryPlan" || plan["schemaVersion"] != 1 || !plan["roots"].isArray() ||
             !plan["output"].isObject() || !plan["actions"].isArray() || !plan["overwrite"].isBool() || !plan["mirror"].isBool()) throw Failure("DirectorySchemaInvalid");
