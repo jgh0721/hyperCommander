@@ -93,6 +93,9 @@ namespace hc::compare
     Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,
         std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled);
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8);
+    struct ReportFile { QJsonArray warnings_, recovery_; };
+    ReportFile SaveComparisonReport(const QString& Path, const Request& Input, const Result& Session,
+        const QJsonObject& ViewState, bool ReplaceExisting, const Budget& Limits);
     int WriteReport(const Request& Input, const Result& Value);
     QJsonObject Capabilities();
     Snapshot ReadTextSnapshot(const QString& Path, const QString& Encoding, const Budget& Limits);

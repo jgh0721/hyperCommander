@@ -10,6 +10,7 @@
 #include "widgets/scintillaPadding.hpp"
 #include "widgets/findBar.hpp"
 #include <QDockWidget>
+#include <QCryptographicHash>
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
 #include "widgets/saveRecoveryDialog.hpp"
@@ -976,6 +977,33 @@ private slots:
         action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger();
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
+    }
+    void reportExportWorkingBuffersAndMergeState()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt"); r.semantic_ = "off";
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); CompareWindow window(r); window.show();
+        auto* exportAction = window.findChild<QAction*>("exportComparisonReport"); QVERIFY(exportAction);
+        QTRY_VERIFY_WITH_TIMEOUT(exportAction->isEnabled(), 10000); auto* left = window.findChild<ScintillaEditBase*>("FILE 1");
+        left->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("working\n")); QVERIFY(!exportAction->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(exportAction->isEnabled(), 10000); const auto undo = left->send(SCI_GETUNDOCURRENT); const auto text = contents(left);
+        const auto path = dir.filePath("compare.json"); window.ExportReport(path); QTRY_VERIFY_WITH_TIMEOUT(exportAction->isEnabled(), 10000);
+        QFile report(path); QVERIFY(report.open(QIODevice::ReadOnly)); const auto object = QJsonDocument::fromJson(report.readAll()).object(); report.close();
+        QCOMPARE(object["viewState"].toObject()["scope"].toString(), QString("working-buffers"));
+        QVERIFY(object["viewState"].toObject()["workingInputs"].toArray()[0].toObject()["modified"].toBool());
+        QCOMPARE(object["viewState"].toObject()["workingInputs"].toArray()[0].toObject()["utf8Sha256"].toString(), QString::fromLatin1(QCryptographicHash::hash(text, QCryptographicHash::Sha256).toHex()));
+        QCOMPARE(contents(left), text); QCOMPARE(left->send(SCI_GETUNDOCURRENT), undo); QVERIFY(left->send(SCI_GETMODIFY));
+        window.ExportReport(r.file1_, true); QTRY_VERIFY(exportAction->isEnabled()); QFile original(r.file1_); QVERIFY(original.open(QIODevice::ReadOnly)); QCOMPARE(original.readAll(), QByteArray("left\n")); original.close();
+        left->send(SCI_UNDO); QTRY_VERIFY(!left->send(SCI_GETMODIFY)); window.close();
+        r.mode_ = "merge"; r.output_ = dir.filePath("out.txt"); CompareWindow merge(r); merge.show();
+        auto* mergeExport = merge.findChild<QAction*>("exportComparisonReport"); QTRY_VERIFY_WITH_TIMEOUT(mergeExport->isEnabled(), 10000);
+        auto* output = merge.findChild<ScintillaEditBase*>("RESULT");
+        action(merge, "오른쪽 전체 선택")->trigger(); const auto mergeUndo = output->send(SCI_GETUNDOCURRENT);
+        merge.ExportReport(dir.filePath("merge.json")); QTRY_VERIFY_WITH_TIMEOUT(mergeExport->isEnabled(), 10000);
+        QFile mergeReport(dir.filePath("merge.json")); QVERIFY(mergeReport.open(QIODevice::ReadOnly)); const auto state = QJsonDocument::fromJson(mergeReport.readAll()).object(); mergeReport.close();
+        QCOMPARE(state["unresolvedCount"].toInt(), 0); QCOMPARE(state["resolutions"].toArray()[0].toObject()["choice"].toString(), QString("right"));
+        QVERIFY(!state["viewState"].toObject()["workingResult"].toObject()["saved"].toBool());
+        QCOMPARE(contents(output), QByteArray("right\n")); QCOMPARE(output->send(SCI_GETUNDOCURRENT), mergeUndo); QVERIFY(!QFileInfo::exists(r.output_));
+        action(merge, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(merge.ExitCode(), 0, 10000); merge.close();
     }
     void findAllHighlightsResultsAndInvalidation()
     {

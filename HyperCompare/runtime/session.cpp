@@ -441,6 +441,41 @@ namespace hc::compare
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},
             {"warnings", warnings_}, {"recovery", recovery_}, {"saveRecovery", saveRecovery_}};
     }
+    ReportFile SaveComparisonReport(const QString& Path, const Request& Input, const Result& Session,
+        const QJsonObject& ViewState, bool ReplaceExisting, const Budget& OriginalLimits)
+    {
+        auto Limits = OriginalLimits; ConfigureMemoryBudget(Limits, Input.memoryMiB_);
+        Limits.Check(); const auto target = CheckedDirectoryPath(Path);
+        auto protectedInput = Input;
+        for (const auto& path : {Input.planOut_, Input.decisions_, Input.applyPlan_, Input.journal_})
+            if (!path.isEmpty()) protectedInput.protectedInputs_.append(path);
+        CheckProtectedInputs(protectedInput, {target}, Limits);
+        auto paths = Input; paths.planOut_ = target; paths.report_.clear(); checkArtifactPaths(paths, Limits);
+        for (const auto& path : {Input.file1_, Input.file2_, Input.file3_, Input.base_, Input.output_})
+            if (!path.isEmpty() && QFileInfo(path).isDir() && DirectoryPathsOverlap(target, CheckedDirectoryPath(path))) throw Failure("ReportInsideComparedTree");
+        const auto provider = reader(target); const auto writer = storage::MakeNativeWritableStorage(locator(target).kind_, provider);
+        storage::DestinationExpectation expected;
+        if (const auto entry = require(writer->Inspect(locator(target), context(Limits))))
+        {
+            if (!ReplaceExisting) throw Failure("ReportAlreadyExists");
+            for (const auto& input : Session.inputs_)
+                if (!identity(*entry).isEmpty() && identity(*entry) == identity(input.entry_)) throw Failure("ArtifactPathAlias");
+            expected = {true, entry->id_.revision_};
+        }
+        auto report = Session.Json(false); report["reportKind"] = "gui-comparison-snapshot"; report["viewState"] = ViewState;
+        auto extension = report["extension"].toObject(); auto documents = extension["documents"].toArray();
+        for (int i = 0; i < documents.size(); ++i) { auto document = documents[i].toObject(); document.remove("rgba"); documents[i] = document; }
+        if (extension.contains("documents")) { extension["documents"] = documents; report["extension"] = extension; }
+        const auto data = QJsonDocument(report).toJson(QJsonDocument::Indented);
+        if (data.size() > 64 * 1024 * 1024) throw Failure("ReportSizeLimit"); Limits.Check();
+        ReportFile file; SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
+        const auto saved = document::SaveDocumentBytes(*writer, locator(target), expected,
+            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
+        journal.Track(file.recovery_);
+        if (!saved.HasValue()) throw SaveRecoveryFailure(saved.Failure().code_, file.recovery_);
+        if (!saved.Value().destinationCommitted_) throw SaveRecoveryFailure("ReportNotCommitted", file.recovery_);
+        journal.Complete(saved.Value(), file.warnings_, file.recovery_); return file;
+    }
     int WriteReport(const Request& Input, const Result& Value)
     {
         if (Input.mode_ == "recover" && !Input.report_.isEmpty() && Input.report_ != "-") return 2;

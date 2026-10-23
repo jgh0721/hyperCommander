@@ -45,6 +45,7 @@ namespace hc::compare
         void CancelRemoteRequest();
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
+        void ExportReport(const QString& Path, bool ReplaceExisting = false);
     protected:
         void closeEvent(QCloseEvent* Event) override;
     private:
@@ -98,6 +99,9 @@ namespace hc::compare
         QVector<QAction*> inputSaveActions_;
         struct WorkTransfer { MergeWorkFile file_; QString path_, error_; bool loading_ = false; };
         QFutureWatcher<WorkTransfer> workWatcher_;
+        struct ReportTransfer { ReportFile file_; QString path_, error_; };
+        QFutureWatcher<ReportTransfer> reportWatcher_;
+        QAction* exportReport_ = nullptr;
         QString workPath_;
         std::optional<storage::DestinationExpectation> workExpected_;
         std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);

@@ -525,6 +525,32 @@ private slots:
         const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object(); QCOMPARE(report["extension"].toObject()["payloadSchema"].toString(), "image.rgba.v1");
         QVERIFY(!report["extension"].toObject()["documents"].toArray()[0].toObject().contains("rgba"));
     }
+    void comparisonReportStorageAndCoverage()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt");
+        write(r.file1_, "left secret"); write(r.file2_, "right secret"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto session = Execute(r, cancel, false); QCOMPARE(session.completion_, QString("Complete")); const auto path = dir.filePath("report.json");
+        const auto receipt = SaveComparisonReport(path, r, session, {{"scope", "loaded-snapshots"}}, false, {});
+        QVERIFY(receipt.warnings_.isEmpty()); QVERIFY(receipt.recovery_.isEmpty()); const auto original = read(path);
+        QVERIFY(!original.contains("left secret")); QVERIFY(!original.contains("right secret"));
+        QCOMPARE(QJsonDocument::fromJson(original).object()["reportKind"].toString(), QString("gui-comparison-snapshot"));
+        QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(path, r, session, {}, false, {}), Failure); QCOMPARE(read(path), original);
+        SaveComparisonReport(path, r, session, {{"updated", true}}, true, {});
+        QVERIFY(QJsonDocument::fromJson(read(path)).object()["viewState"].toObject()["updated"].toBool());
+        QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(r.file1_, r, session, {}, true, {}), Failure); QCOMPARE(read(r.file1_), QByteArray("left secret"));
+        const auto alias = dir.filePath("alias.json"); QVERIFY(CreateHardLinkW(reinterpret_cast<const wchar_t*>(alias.utf16()), reinterpret_cast<const wchar_t*>(r.file1_.utf16()), nullptr));
+        QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(alias, r, session, {}, true, {}), Failure); QCOMPARE(read(alias), QByteArray("left secret"));
+        auto protectedRequest = r; protectedRequest.protectedInputs_.append(path);
+        QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(path, protectedRequest, session, {}, true, {}), Failure);
+        Budget stopped; std::atomic_bool canceled{true}; stopped.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(dir.filePath("canceled.json"), r, session, {}, false, stopped), Failure);
+        QVERIFY(!QFileInfo::exists(dir.filePath("canceled.json")));
+        session.extension_ = {{"payloadSchema", "image.rgba.v1"}, {"documents", QJsonArray{QJsonObject{{"rgba", "secret-raster"}, {"width", 1}}}}};
+        SaveComparisonReport(path, r, session, {}, true, {}); QVERIFY(!read(path).contains("secret-raster"));
+        r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_));
+        session = Execute(r, cancel, false); QVERIFY_EXCEPTION_THROWN(SaveComparisonReport(r.file1_ + "/report.json", r, session, {}, false, {}), Failure);
+        QVERIFY(!QFileInfo::exists(r.file1_ + "/report.json"));
+    }
     void controllerMemoryAdmission()
     {
         constexpr std::uint64_t mib = 1024 * 1024;

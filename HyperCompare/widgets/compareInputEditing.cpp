@@ -139,6 +139,7 @@ namespace hc::compare
         save_->setText(tr("FILE %1 저장").arg(activeInput_ + 1)); save_->setEnabled(!busy() && active->send(SCI_GETMODIFY));
         undo_->setEnabled(!busy() && active->send(SCI_CANUNDO)); redo_->setEnabled(!busy() && active->send(SCI_CANREDO));
         pairSelector_->setEnabled(!busy() && !sourcePending_ && sourceValid_);
+        exportReport_->setEnabled(!busy() && !sourcePending_ && sourceValid_ && result_.completion_ == "Complete");
         alignRows_->setEnabled(scroll_ && !busy() && !sourcePending_ && sourceValid_ && !multi_);
         alignAll_->setEnabled(currentPair() && editors_.size() >= 3 && !busy());
         for (auto* action : encodingActions_) if (dirty_) action->setEnabled(false);

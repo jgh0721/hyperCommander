@@ -20,6 +20,8 @@
 #include <QFontDialog>
 #include <QLabel>
 #include <QJsonDocument>
+#include <QDateTime>
+#include <QCryptographicHash>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollBar>
@@ -140,6 +142,13 @@ namespace hc::compare
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
         auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        exportReport_ = fileMenu->addAction(tr("비교 보고서 내보내기…"), this, [this] {
+            if (!exportReport_->isEnabled()) return;
+            QFileDialog dialog(this, tr("비교 보고서 내보내기"), {}, tr("JSON 보고서 (*.json)"));
+            dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix("json");
+            if (dialog.exec() == QDialog::Accepted) ExportReport(dialog.selectedFiles().front(), true);
+        });
+        exportReport_->setObjectName("exportComparisonReport"); exportReport_->setEnabled(false);
         recoveryAction_ = fileMenu->addAction(tr("저장 복구…"), this, [this] {
             if (busy()) return;
             if (recoveryDialog_) { recoveryDialog_->show(); recoveryDialog_->raise(); recoveryDialog_->activateWindow(); return; }
@@ -296,6 +305,14 @@ namespace hc::compare
                 {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
             if (closing_) close();
         });
+        connect(&reportWatcher_, &QFutureWatcher<ReportTransfer>::finished, this, [this] {
+            cancel_->setEnabled(false); const auto transfer = reportWatcher_.result(); updateMerge();
+            if (!transfer.error_.isEmpty()) state_->setText(tr("보고서 저장 중단: ") + transfer.error_);
+            else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ? tr("비교 보고서 저장 완료") : tr("보고서 저장 완료 — 정리 확인 필요"));
+            state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
+                {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
+            if (closing_) close();
+        });
         connect(changes_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
             if (!Item || editors_.size() < 2 || result_.operation_.startsWith("directory")) return;
             selectBlock(); if (merge_) updateMerge();
@@ -305,7 +322,7 @@ namespace hc::compare
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
-    CompareWindow::~CompareWindow() { sourceEditing_ = false; bufferTimer_.stop(); if (bufferCanceled_) bufferCanceled_->store(true); bufferWatcher_.waitForFinished(); inputSaveWatcher_.waitForFinished(); canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
+    CompareWindow::~CompareWindow() { sourceEditing_ = false; bufferTimer_.stop(); if (bufferCanceled_) bufferCanceled_->store(true); bufferWatcher_.waitForFinished(); inputSaveWatcher_.waitForFinished(); canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); reportWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
     void CompareWindow::openDirectories()
     {
         if (busy()) return;
@@ -653,6 +670,7 @@ namespace hc::compare
     void CompareWindow::updateMerge()
     {
         recoveryAction_->setEnabled(!busy());
+        exportReport_->setEnabled(!busy() && result_.completion_ == "Complete" && (!sourceEditing_ || (!sourcePending_ && sourceValid_)));
         for (auto* action : encodingActions_)
         {
             const int role = action->data().toInt();
@@ -786,6 +804,38 @@ namespace hc::compare
         }));
         updateMerge(); state_->setText(Loading ? tr("작업 불러오는 중…") : tr("작업 저장 중…"));
     }
+    void CompareWindow::ExportReport(const QString& Path, bool ReplaceExisting)
+    {
+        if (Path.isEmpty() || !exportReport_->isEnabled() || busy() || (sourceEditing_ && (sourcePending_ || !sourceValid_))) return;
+        auto session = result_; QJsonArray workingInputs;
+        for (int i = 0; i < session.inputs_.size(); ++i)
+        {
+            const auto& text = session.inputs_[i].utf8_;
+            workingInputs.append(QJsonObject{{"index", i + 1}, {"utf8Sha256", QString::fromLatin1(QCryptographicHash::hash(text, QCryptographicHash::Sha256).toHex())},
+                {"modified", sourceEditing_ && i < editors_.size() && bool(editors_[i]->send(SCI_GETMODIFY))}});
+        }
+        QJsonObject view{{"capturedUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+            {"scope", sourceEditing_ ? "working-buffers" : "loaded-snapshots"}, {"workingInputs", workingInputs}, {"guiExitCode", exitCode_}};
+        if (!session.extension_.isEmpty()) view.remove("workingInputs");
+        if (merge_)
+        {
+            auto plan = std::make_shared<MergePlan>(*session.plan_); plan->initial_ = merge_->Model().State(); session.plan_ = plan;
+            const auto text = contents(output_);
+            view["workingResult"] = QJsonObject{{"utf8Sha256", QString::fromLatin1(QCryptographicHash::hash(text, QCryptographicHash::Sha256).toHex())},
+                {"bytes", text.size()}, {"modified", merge_->Dirty()}, {"saved", merge_->Saved()}, {"reviewRequired", merge_->Model().ReviewRequired()}};
+        }
+        auto input = request_; if (!workPath_.isEmpty()) input.protectedInputs_.append(workPath_);
+        canceled_ = std::make_shared<std::atomic_bool>(false);
+        reportWatcher_.setFuture(QtConcurrent::run([path = QFileInfo(Path).absoluteFilePath(), input, session, view, ReplaceExisting, cancel = canceled_] {
+            ReportTransfer transfer; transfer.path_ = path;
+            Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
+            try { transfer.file_ = SaveComparisonReport(path, input, session, view, ReplaceExisting, limits); }
+            catch (const SaveRecoveryFailure& error) { transfer.error_ = QString::fromUtf8(error.what()); transfer.file_.recovery_ = error.recovery_; }
+            catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
+            return transfer;
+        }));
+        updateMerge(); cancel_->setEnabled(true); state_->setText(tr("비교 보고서 저장 중…"));
+    }
     void CompareWindow::applyInlineHighlights()
     {
         const auto* pair = currentPair();
@@ -855,7 +905,7 @@ namespace hc::compare
         completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
         setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
     }
-    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
+    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || reportWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
     void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
