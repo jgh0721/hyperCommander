@@ -132,12 +132,13 @@ namespace hc::compare
             const auto provider = reader(Input.planOut_); const auto writer = storage::MakeNativeWritableStorage(locator(Input.planOut_).kind_, provider);
             if (require(writer->Inspect(locator(Input.planOut_), context(Limits)))) throw Failure("PlanAlreadyExists");
             // Plan export never inherits -overwrite, which authorizes RESULT only.
-            const auto receipt = require(document::SaveDocumentBytes(*writer, locator(Input.planOut_), {},
-                {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, context(Limits)));
+            SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
+            const auto saved = document::SaveDocumentBytes(*writer, locator(Input.planOut_), {},
+                {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
+            journal.Track(Value.recovery_); const auto receipt = require(saved);
             if (!receipt.destinationCommitted_) throw Failure("PlanNotCommitted");
             Value.planWritten_ = Input.planOut_;
-            for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
-            for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
+            journal.Complete(receipt, Value.warnings_, Value.recovery_);
         }
         void inspectOutput(const Request& Request, Result& Result, const Budget& Limits)
         {
@@ -333,21 +334,23 @@ namespace hc::compare
         const auto data = EncodeMergeWork(Input, Session, Work, Limits); Limits.Check();
         // A checkpoint may preserve work based on old inputs. Loading requires a
         // matching live input generation; saving does not discard such work.
-        const auto receipt = require(document::SaveDocumentBytes(*writer, locator(Path), expected,
-            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, context(Limits)));
-        if (!receipt.destinationCommitted_) throw Failure("WorkNotCommitted");
-        MergeWorkFile file;
-        for (const auto& error : receipt.cleanupErrors_) file.warnings_.append(QString::fromStdString(error.code_));
-        for (const auto& artifact : receipt.preservedArtifacts_) file.recovery_.append(QString::fromStdString(artifact.root_));
+        MergeWorkFile file; SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
+        const auto saved = document::SaveDocumentBytes(*writer, locator(Path), expected,
+            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
+        journal.Track(file.recovery_);
+        if (!saved.HasValue()) throw SaveRecoveryFailure(saved.Failure().code_, file.recovery_);
+        const auto& receipt = saved.Value(); if (!receipt.destinationCommitted_) throw SaveRecoveryFailure("WorkNotCommitted", file.recovery_);
+        bool verified = false;
         // Re-read the committed bytes before adopting a revision for the next save.
         // If another writer won the race, leave that revision untrusted.
         try
         {
             const auto updated = readSnapshot(Path, decisionPlanBytes, Budget{});
-            if (updated.raw_ == data) file.expected_ = {true, updated.entry_.id_.revision_};
+            if (updated.raw_ == data) { file.expected_ = {true, updated.entry_.id_.revision_}; verified = true; }
             else file.warnings_.append("WorkChangedAfterSave");
         }
         catch (const std::exception& error) { file.warnings_.append(QString::fromUtf8(error.what())); }
+        journal.Complete(receipt, file.warnings_, file.recovery_, verified);
         return file;
     }
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8)

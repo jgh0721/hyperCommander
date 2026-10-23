@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryApply.hpp"
+#include "saveRecovery.hpp"
 #include "requestFile.hpp"
 #include "directoryText.hpp"
 #include "commonLibs/document/documentSaveCoordinator.hpp"
@@ -129,7 +130,9 @@ namespace hc::compare
             auto destination = writer(Destination); storage::DestinationExpectation expected;
             if (!Before.isEmpty()) expected = {true, storage::ResourceRevision{Before["revision"].toString().toStdString()}};
             storage::CopyOptions options; options.verify_ = true; options.metadata_ = false;
-            auto output = require(destination->BeginCopy(locator(Destination), expected, options, ctx));
+            SaveRecoveryJournal saveJournal; ctx.writeCheckpoint_ = saveJournal.Checkpoint();
+            auto opened = destination->BeginCopy(locator(Destination), expected, options, ctx);
+            saveJournal.Track(Value.recovery_); auto output = require(std::move(opened));
             try
             {
                 QCryptographicHash hash(QCryptographicHash::Sha256); std::uint64_t size = 0;
@@ -148,8 +151,7 @@ namespace hc::compare
                 Limits.Check(); const auto receipt = require(output->Commit(ctx));
                 if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
                 Value.commit_ = "Partial";
-                for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
-                for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
+                saveJournal.Complete(receipt, Value.warnings_, Value.recovery_);
             }
             catch (...)
             {
@@ -343,12 +345,13 @@ namespace hc::compare
                         throw Failure("DirectorySourceChanged");
                     storage::DestinationExpectation expectation;
                     if (!before.isEmpty()) expectation = {true, storage::ResourceRevision{before["revision"].toString().toStdString()}};
-                    const auto receipt = require(document::SaveDocumentBytes(*writer(path), locator(path), expectation,
-                        {reinterpret_cast<const std::byte*>(data->constData()), std::size_t(data->size())}, context(Limits)));
+                    SaveRecoveryJournal saveJournal; auto ctx = context(Limits); ctx.writeCheckpoint_ = saveJournal.Checkpoint();
+                    const auto saved = document::SaveDocumentBytes(*writer(path), locator(path), expectation,
+                        {reinterpret_cast<const std::byte*>(data->constData()), std::size_t(data->size())}, ctx);
+                    saveJournal.Track(Value.recovery_); const auto receipt = require(saved);
                     if (!receipt.destinationCommitted_) throw Failure("NotCommitted");
                     Value.commit_ = "Partial";
-                    for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
-                    for (const auto& artifact : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(artifact.root_));
+                    saveJournal.Complete(receipt, Value.warnings_, Value.recovery_);
                 }
                 else if (action.kind_ == "mkdir") require(writer(path)->MakeDirectory(locator(path), context(Limits)));
                 else

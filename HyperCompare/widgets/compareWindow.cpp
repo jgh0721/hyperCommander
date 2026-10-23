@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "runtime/saveRecovery.hpp"
 #include "mergeController.hpp"
 #include "chunkGutter.hpp"
 #include "scrollSynchronizer.hpp"
@@ -768,6 +769,7 @@ namespace hc::compare
             WorkTransfer transfer; transfer.path_ = path; transfer.loading_ = Loading;
             Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
             try { transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits); }
+            catch (const SaveRecoveryFailure& error) { transfer.error_ = QString::fromUtf8(error.what()); transfer.file_.recovery_ = error.recovery_; }
             catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
             return transfer;
         }));

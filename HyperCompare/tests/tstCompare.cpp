@@ -8,6 +8,7 @@
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "commonLibs/document/documentSaveCoordinator.hpp"
 #include <QStandardPaths>
+#include <QScopeGuard>
 #include <QProcessEnvironment>
 #include "runtime/directoryPlan.hpp"
 #include "runtime/directoryApply.hpp"
@@ -151,6 +152,27 @@ private slots:
         try { RunBatch(request, std::make_shared<std::atomic_bool>(false), [](const auto&) { return true; }); }
         catch (const Failure& failure) { rejected = failure.code_ == "BatchModeUnsupported"; }
         QVERIFY(rejected);
+    }
+    void recoveryJournalFailureProtectsWorkAndDirectoryOutput()
+    {
+        QTemporaryDir dir; Request merge; merge.mode_ = "merge"; merge.file1_ = dir.filePath("left"); merge.file2_ = dir.filePath("right"); merge.output_ = dir.filePath("result");
+        write(merge.file1_, "left\n"); write(merge.file2_, "right\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto session = Execute(merge, cancel, false); const MergeWork work{session.inputs_[0].utf8_, session.plan_->initial_, false};
+        const auto workPath = dir.filePath("work.hcmerge"); const auto saved = SaveMergeWorkFile(workPath, merge, session, work, {}, false, {}); const auto original = read(workPath);
+        Request plan; plan.mode_ = "directory-merge"; plan.headless_ = true; plan.takeAll_ = "left"; plan.overwrite_ = true;
+        plan.file1_ = dir.filePath("l"); plan.file2_ = dir.filePath("r"); plan.output_ = dir.filePath("out"); plan.planOut_ = dir.filePath("plan.json");
+        for (const auto& path : {plan.file1_, plan.file2_, plan.output_}) QVERIFY(QDir{}.mkpath(path));
+        write(plan.file1_ + "/a", "new"); write(plan.output_ + "/a", "old"); QCOMPARE(Execute(plan, cancel, true).exitCode_, 0);
+        const auto oldName = QCoreApplication::applicationName(); QCoreApplication::setApplicationName("RecoveryBlocked-" + QUuid::createUuid().toString(QUuid::Id128));
+        const auto blocked = SaveRecoveryDirectory(); const auto cleanup = qScopeGuard([oldName, blocked] { QFile::remove(blocked); QCoreApplication::setApplicationName(oldName); });
+        QVERIFY(QDir{}.mkpath(QFileInfo(blocked).absolutePath())); write(blocked, "not a directory");
+        QVERIFY_EXCEPTION_THROWN(SaveMergeWorkFile(workPath, merge, session, work, saved.expected_, true, {}), Failure); QCOMPARE(read(workPath), original);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = plan.planOut_;
+        auto result = Execute(apply, cancel, true); QCOMPARE(result.error_, QString("SaveRecoveryDirectory")); QCOMPARE(read(plan.output_ + "/a"), QByteArray("old"));
+        QVERIFY(QFile::remove(blocked)); apply.resume_ = true; result = Execute(apply, cancel, true);
+        QVERIFY2(result.exitCode_ == 0, qPrintable(result.error_)); QCOMPARE(read(plan.output_ + "/a"), QByteArray("new"));
+        const auto updated = SaveMergeWorkFile(workPath, merge, session, work, saved.expected_, true, {}); QVERIFY(updated.recovery_.isEmpty());
+        QVERIFY(QDir(SaveRecoveryDirectory()).entryList({"*.hcsave"}, QDir::Files).isEmpty());
     }
     void inputSavePreservesEncodingAndRevision()
     {

@@ -81,6 +81,19 @@ namespace hc::compare
         };
     }
     bool SaveRecoveryJournal::Remove() { file_.close(); return !Exists() || file_.remove(); }
+    void SaveRecoveryJournal::Track(QJsonArray& Recovery) const
+    { if (Exists() && !Recovery.contains(Path())) Recovery.append(Path()); }
+    void SaveRecoveryJournal::Complete(const storage::WriteReceipt& Receipt, QJsonArray& Warnings, QJsonArray& Recovery, bool Verified)
+    {
+        Track(Recovery);
+        for (const auto& error : Receipt.cleanupErrors_) Warnings.append(QString::fromStdString(error.code_));
+        for (const auto& artifact : Receipt.preservedArtifacts_) Recovery.append(QString::fromStdString(artifact.root_));
+        if (Verified && Receipt.destinationCommitted_ && Receipt.cleanupErrors_.empty() && Receipt.preservedArtifacts_.empty())
+        {
+            if (Remove()) { for (qsizetype i = Recovery.size(); i-- > 0;) if (Recovery[i] == Path()) Recovery.removeAt(i); }
+            else Warnings.append("SaveRecoveryJournalCleanupFailed");
+        }
+    }
     void RecoverSavedFile(const Request& Input, Result& Value, const Budget& Limits)
     {
         Value.operation_ = "recover";

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryPlan.hpp"
+#include "saveRecovery.hpp"
 #include "requestFile.hpp"
 #include "directoryText.hpp"
 #include "session.hpp"
@@ -204,11 +205,12 @@ namespace hc::compare
         const auto at = locator(destination); const auto provider = storage::MakeNativeReadProvider(at.kind_);
         const auto writer = storage::MakeNativeWritableStorage(at.kind_, provider);
         if (require(writer->Inspect(at, context(Limits)))) throw Failure("PlanAlreadyExists");
-        const auto receipt = require(document::SaveDocumentBytes(*writer, at, {},
-            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, context(Limits)));
+        SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
+        const auto saved = document::SaveDocumentBytes(*writer, at, {},
+            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
+        journal.Track(Value.recovery_); const auto receipt = require(saved);
         if (!receipt.destinationCommitted_) throw Failure("PlanNotCommitted");
-        for (const auto& error : receipt.cleanupErrors_) Value.warnings_.append(QString::fromStdString(error.code_));
-        for (const auto& path : receipt.preservedArtifacts_) Value.recovery_.append(QString::fromStdString(path.root_));
+        journal.Complete(receipt, Value.warnings_, Value.recovery_);
         Value.planWritten_ = destination;
     }
     void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits)
