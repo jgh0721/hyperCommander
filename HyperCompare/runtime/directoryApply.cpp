@@ -175,7 +175,9 @@ namespace hc::compare
         if (textMerge)
         {
             const auto policy = plan["textMerge"].toObject(); keys(policy, {"engine", "encoding"}); encoding = text(policy, "encoding");
-            if (policy["engine"] != "myers-bounded-1" || !QStringList{"", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(encoding)) throw Failure("DirectoryTextPolicyUnsupported");
+            if ((policy["engine"] != "myers-bounded-1" && policy["engine"] != "myers-bounded-2") || !QStringList{"", "UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(encoding)) throw Failure("DirectoryTextPolicyUnsupported");
+            if (policy["engine"] == "myers-bounded-1") for (const auto& action : plan["actions"].toArray())
+                if (action.toObject()["choice"] == "merge") throw Failure("DirectoryTextPlanEngineChanged");
         }
         if (plan["kind"] != "HyperCompareDirectoryPlan" || (plan["schemaVersion"] != 1 && !textMerge) || !plan["roots"].isArray() ||
             !plan["output"].isObject() || !plan["actions"].isArray() || !plan["overwrite"].isBool() || !plan["mirror"].isBool()) throw Failure("DirectorySchemaInvalid");

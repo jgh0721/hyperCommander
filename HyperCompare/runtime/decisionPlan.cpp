@@ -111,7 +111,7 @@ namespace hc::compare
         }
         const QJsonObject policy{{"encoding", Input.encoding_}, {"comparison", "exact-lines-v1"},
             {"seed", Session.plan_->hasBase_ ? "base-with-independent-changes" : "left"}, {"outputEncoding", "left"}};
-        QJsonObject result{{"schemaVersion", 1}, {"kind", "text-merge-decisions"}, {"engineVersion", "myers-bounded-1"},
+        QJsonObject result{{"schemaVersion", 1}, {"kind", "text-merge-decisions"}, {"engineVersion", "myers-bounded-2"},
             {"policyDigest", digest(QJsonDocument(policy).toJson(QJsonDocument::Compact))}, {"inputs", inputs}};
         const auto generation = digest(QJsonDocument(result).toJson(QJsonDocument::Compact)); result["generation"] = generation;
         return result;

@@ -98,6 +98,19 @@ private slots:
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
     }
+    void largeEmptySourceAlignment()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("empty.txt"); request.file2_ = dir.filePath("large.txt");
+        QByteArray text; for (int i = 0; i < 20000; ++i) text += "inserted-" + QByteArray::number(i) + '\n';
+        write(request.file1_, {}); write(request.file2_, text); QElapsedTimer elapsed; elapsed.start(); CompareWindow window(request); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2"); QVERIFY(left); QVERIFY(right);
+        QCOMPARE(contents(left), QByteArray{}); QCOMPARE(contents(right), text); QCOMPARE(left->send(GetLeadingRows), sptr_t(20000));
+        left->send(SCI_SETFIRSTVISIBLELINE, 10000); QTRY_COMPARE(right->send(SCI_GETFIRSTVISIBLELINE), sptr_t(10000));
+        QVERIFY(!left->send(SCI_CANUNDO)); QVERIFY(!right->send(SCI_CANUNDO)); QCOMPARE(contents(left), QByteArray{}); qInfo("20000 inserted lines GUI ready and aligned: %lld ms", elapsed.elapsed()); window.close();
+    }
     void docxParagraphViewAndCoverage()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.docx"); request.file2_ = dir.filePath("right.docx");

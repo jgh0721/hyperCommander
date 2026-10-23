@@ -58,6 +58,30 @@ private:
         return row.back();
     }
 private slots:
+    void largeBoundaryExactScripts()
+    {
+        std::string large, different; for (int i = 0; i < 20000; ++i) { large += "line-" + std::to_string(i) + "\r\n"; different += "other-" + std::to_string(i) + "\r\n"; }
+        for (const auto& pair : {std::pair{std::string{}, large}, std::pair{large, std::string{}}, std::pair{large, different}, std::pair{std::string("head\ntail"), "head\n" + large + "tail"}})
+        {
+            const auto edits = Diff(pair.first, pair.second); QCOMPARE(edits.size(), std::size_t(1)); QCOMPARE(Apply(pair.first, edits), pair.second);
+            QCOMPARE(edits[0].otherEnd_ - edits[0].otherBegin_, SplitLines(edits[0].replacement_).size());
+            const auto map = AlignmentMap::Build(SplitLines(pair.first).size(), SplitLines(pair.second).size(), edits); QVERIFY(map.RowCount() >= 20000);
+        }
+        const auto merged = Merge("head\ntail", "head\n" + large + "tail", "head\nTAIL"); QVERIFY(merged.conflicts_.empty()); QCOMPARE(merged.text_, "head\n" + large + "TAIL");
+        const auto shorter = large.substr(0, large.find("line-2500\r\n")), other = different.substr(0, different.find("other-2500\r\n"));
+        const auto edits = Diff(shorter, other); QCOMPARE(edits.size(), std::size_t(1)); QCOMPARE(Apply(shorter, edits), other);
+        Budget low; low.steps_ = 10; QVERIFY_EXCEPTION_THROWN(Diff("", large, low), Failure); QVERIFY_EXCEPTION_THROWN(Diff(large, different, low), Failure);
+        std::atomic_bool stop{true}; low.canceled_ = &stop; QVERIFY_EXCEPTION_THROWN(Diff("", large, low), Failure);
+    }
+    void disjointShortcutRetainsSharedInterior()
+    {
+        std::string left, right;
+        for (int i = 0; i < 500; ++i) { left += "left\n"; right += "right\n"; }
+        for (int i = 0; i < 4000; ++i) { left += "shared\n"; right += "shared\n"; }
+        for (int i = 0; i < 500; ++i) { left += "left\n"; right += "right\n"; }
+        const auto edits = Diff(left, right); QCOMPARE(edits.size(), std::size_t(2)); QCOMPARE(Apply(left, edits), right);
+        QCOMPARE(edits[0].end_, std::size_t(500)); QCOMPARE(edits[1].begin_, std::size_t(4500));
+    }
     void batchResultsConcurrencyAndConsole()
     {
         QTemporaryDir dir; write(dir.filePath("a"), "a"); write(dir.filePath("b"), "b");
@@ -911,6 +935,7 @@ private slots:
         auto duplicate = json; duplicate.insert(1, "\"schemaVersion\":1,"); invalid.push_back(duplicate);
         duplicate = json; duplicate.insert(1, "\"schem\\u0061Version\":1,"); invalid.push_back(duplicate);
         auto mutated = plan; mutated["schemaVersion"] = 2; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["engineVersion"] = "myers-bounded-1"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["policyDigest"] = "wrong"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["generation"] = "old"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["unknown"] = true; invalid.push_back(QJsonDocument(mutated).toJson());
@@ -1261,6 +1286,8 @@ private slots:
         auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(r, cancel, true);
         QCOMPARE(result.exitCode_, 0); QCOMPARE(result.directoryPlan_["actions"].toArray()[0].toObject()["choice"].toString(), QString("merge"));
         Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        const auto originalPlan = read(r.planOut_); auto oldPlan = result.directoryPlan_; auto oldPolicy = oldPlan["textMerge"].toObject(); oldPolicy["engine"] = "myers-bounded-1"; oldPlan["textMerge"] = oldPolicy;
+        write(r.planOut_, QJsonDocument(oldPlan).toJson()); QCOMPARE(Execute(apply, cancel, true).error_, "DirectoryTextPlanEngineChanged"); QVERIFY(!QFileInfo::exists(r.output_)); write(r.planOut_, originalPlan);
         result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
         QCOMPARE(read(r.output_ + "/a"), QByteArray("LEFT\r\nkeep\r\nRIGHT")); apply.resume_ = true; QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);
         // Mixed encodings preserve LEFT's UTF-16LE BOM and byte-level newline policy.

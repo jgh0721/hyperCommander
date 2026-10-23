@@ -20,7 +20,7 @@ namespace hc::compare
     const std::vector<EngineDescriptor>& RegisteredEngines()
     {
         static const std::vector<EngineDescriptor> engines{
-            {"text.myers", "1", "comparison", {"text"}, "bounded-text-codec", "native-verified-replace", "scintilla-text", "text.bytes.v1", true, true, true, true, true, false, 16 * 1024 * 1024},
+            {"text.myers", "2", "comparison", {"text"}, "bounded-text-codec", "native-verified-replace", "scintilla-text", "text.bytes.v1", true, true, true, true, true, false, 16 * 1024 * 1024},
             {"directory.native", "2", "comparison", {"directory"}, "native-directory-snapshot", "reviewed-directory-plan", "virtual-directory", "directory.entry.v1", true, true, true, true, false, false, 0},
             {"image.png", "1", "comparison", {"png"}, "qt-png-isolated", {}, "image-rgba", "image.rect.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
                 {{"maxPixels", 4 * 1024 * 1024}, {"maxDimension", 8192}, {"maxSampleBits", 8}, {"animation", false}}},

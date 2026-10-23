@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compare.hpp"
+#include <functional>
 
 namespace hc::compare
 {
@@ -58,10 +59,37 @@ namespace hc::compare
         Limits.Check(); if (Left == Right) return {};
         const auto left = SplitLines(Left), right = SplitLines(Right);
         if (left.size() + right.size() > 2'000'000) throw Failure("LineLimit");
+        std::uint64_t steps = 0;
+        const auto step = [&] { if (++steps > Limits.steps_) throw Failure("DiffWorkLimit"); if ((steps & 1023) == 0) Limits.Check(); };
+        std::size_t prefix = 0, suffix = 0;
+        while (prefix < left.size() && prefix < right.size() && left[prefix] == right[prefix]) { step(); ++prefix; }
+        while (suffix < left.size() - prefix && suffix < right.size() - prefix && left[left.size() - suffix - 1] == right[right.size() - suffix - 1]) { step(); ++suffix; }
         using Index = std::int64_t;
-        const auto n = static_cast<Index>(left.size()), m = static_cast<Index>(right.size());
+        const auto n = static_cast<Index>(left.size() - prefix - suffix), m = static_cast<Index>(right.size() - prefix - suffix);
+        const auto replace = [&] {
+            Edit edit{prefix, left.size() - suffix, prefix, right.size() - suffix, {}};
+            for (auto i = prefix; i < right.size() - suffix; ++i) { step(); edit.replacement_.append(right[i]); }
+            Limits.Check(); return std::vector<Edit>{std::move(edit)};
+        };
+        if (!n || !m) return replace();
+        if (n + m > 2048 && std::uint64_t(std::min(n, m)) <= Limits.traceBytes_ / sizeof(std::size_t))
+        {
+            // A disjoint hash set proves there is no equal line, so a single
+            // replacement is an exact shortest edit script. Hash collisions
+            // merely disable this shortcut; they never make two lines equal.
+            const auto& small = n <= m ? left : right; const auto& large = n <= m ? right : left;
+            std::vector<std::size_t> hashes; hashes.reserve(std::size_t(std::min(n, m)));
+            for (auto i = prefix; i < small.size() - suffix; ++i) { step(); hashes.push_back(std::hash<std::string_view>{}(small[i])); }
+            const auto less = [&](std::size_t A, std::size_t B) { step(); return A < B; }; std::sort(hashes.begin(), hashes.end(), less);
+            bool common = false;
+            for (auto i = prefix; i < large.size() - suffix; ++i)
+            {
+                step(); if (std::binary_search(hashes.begin(), hashes.end(), std::hash<std::string_view>{}(large[i]), less)) { common = true; break; }
+            }
+            if (!common) return replace();
+        }
         std::vector<std::vector<Index>> trace;
-        std::uint64_t bytes = 0, steps = 0;
+        std::uint64_t bytes = 0;
         Index distance = 0; bool done = false;
         // Keep only reachable diagonals and reject trace growth before allocating.
         for (Index d = 0; d <= n + m && !done; ++d)
@@ -82,7 +110,7 @@ namespace hc::compare
                     else x = previous[std::size_t(i - 1)] + 1;
                 }
                 auto y = x - k;
-                while (x < n && y < m && x >= 0 && y >= 0 && left[std::size_t(x)] == right[std::size_t(y)])
+                while (x < n && y < m && x >= 0 && y >= 0 && left[prefix + std::size_t(x)] == right[prefix + std::size_t(y)])
                 {
                     ++x; ++y;
                     if (++steps > Limits.steps_) throw Failure("DiffWorkLimit");
@@ -107,7 +135,7 @@ namespace hc::compare
         }
         while (x > 0 && y > 0) { operations.push_back('='); --x; --y; }
         std::reverse(operations.begin(), operations.end());
-        std::vector<Edit> edits; std::size_t a = 0, b = 0; bool open = false;
+        std::vector<Edit> edits; std::size_t a = prefix, b = prefix; bool open = false;
         for (const auto op : operations)
         {
             if (op == '=') { ++a; ++b; open = false; continue; }
