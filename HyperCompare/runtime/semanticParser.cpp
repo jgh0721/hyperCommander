@@ -135,25 +135,18 @@ namespace hc::compare
                 {"syntaxErrors", ts_node_has_error(root)}};
         }
     }
-    int SemanticWorkerMain()
+    QJsonObject SemanticWorkerRequest(const QJsonObject& Payload)
     {
-        QFile input, output; if (!input.open(stdin, QIODevice::ReadOnly) || !output.open(stdout, QIODevice::WriteOnly)) return 2;
-        const auto bytes = input.read(24 * 1024 * 1024 + 1); QJsonObject result;
-        if (bytes.size() > 24 * 1024 * 1024) return 2;
-        QJsonParseError error; const auto request = QJsonDocument::fromJson(bytes, &error).object();
-        const auto nonce = request["nonce"].toString(), language = request["language"].toString();
-        if (error.error != QJsonParseError::NoError || request["schema"].toInt() != 1 || nonce.size() != 36 || (language != "c" && language != "cpp")) return 2;
-        try
-        {
-            ParseContext context; context.source_ = QByteArray::fromBase64(request["source"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
-            if (context.source_.size() > 16 * 1024 * 1024 || context.source_.contains('\0')) throw Failure("InputLimit");
-            result = extract(context, language);
-        }
-        catch (const std::exception& failure) { result = {{"status", "Unavailable"}, {"reason", QString::fromUtf8(failure.what())}}; }
-        result["schema"] = 1; result["nonce"] = nonce; result["language"] = language;
-        result["engine"] = "tree-sitter-0.27.1/c-0.24.2/cpp-0.23.4";
-        const auto response = QJsonDocument(result).toJson(QJsonDocument::Compact);
-        if (response.size() > 8 * 1024 * 1024 || output.write(response) != response.size() || !output.flush()) return 2;
-        return 0;
+        const auto language = Payload["language"].toString();
+        if (language != "c" && language != "cpp") throw Failure("LanguageUnsupported");
+        const auto encoded = Payload["source"].toString();
+        if (encoded.size() > 24 * 1024 * 1024) throw Failure("InputLimit");
+        auto decoded = QByteArray::fromBase64Encoding(encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+        if (!decoded) throw Failure("InvalidInputEncoding");
+        ParseContext context; context.source_ = std::move(decoded.decoded);
+        if (context.source_.size() > 16 * 1024 * 1024 || context.source_.contains('\0')) throw Failure("InputLimit");
+        auto result = extract(context, language); result["language"] = language;
+        result["parserVersion"] = "tree-sitter-0.27.1/c-0.24.2/cpp-0.23.4";
+        return result;
     }
 }

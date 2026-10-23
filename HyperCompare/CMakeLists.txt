@@ -11,6 +11,7 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/semantic.cpp runtime/semantic.hpp
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp
+    runtime/workerHost.cpp runtime/workerHost.hpp
     runtime/directoryText.cpp runtime/directoryText.hpp
     runtime/directoryApply.cpp runtime/directoryApply.hpp
     runtime/directoryPlan.cpp runtime/directoryPlan.hpp

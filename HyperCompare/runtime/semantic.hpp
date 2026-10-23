@@ -13,5 +13,5 @@ namespace hc::compare
     struct Result;
     void AnalyzeSourceRelations(const Request& Input, Result& Value, const Budget& Limits);
     // Private CLI entry point. Kept out of the GUI binary and public option parser.
-    int SemanticWorkerMain();
+    QJsonObject SemanticWorkerRequest(const QJsonObject& Payload);
 }

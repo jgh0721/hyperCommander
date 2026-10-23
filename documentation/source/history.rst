@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare 파서 IPC를 버전형 공통 워커로 분리하고 요청 ID·엔진·내용 해시를 검증한다. 같은 로그온 세션의 GUI·CLI 워커를 두 개로 제한하며 비정상 종료 슬롯을 회수한다.
+
 * HyperCompare 텍스트·디렉터리·함수 분석 엔진의 버전·decoder·writer·view·Location schema와 비교/병합 기능을 분리한 registry 추가. 명령행 probe로 입력 형식·전체 텍스트 디코딩·한도·3파일 지원 여부와 미지원 사유를 조회한다.
 
 * HyperCompare C/C++ 함수 이름·scope·서명 대응과 상대 순서 이동·수정 분석 추가. 일반 3파일·BASE 비교 쌍의 함수 변경 탭, 원본 함수 선택·탐색, semantic auto/off 및 JSON 분석 범위·모호성 보고 지원.

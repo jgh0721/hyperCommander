@@ -8,12 +8,16 @@
 #include "runtime/mergeWork.hpp"
 #include "runtime/semantic.hpp"
 #include "runtime/engineRegistry.hpp"
+#include "runtime/workerHost.hpp"
+#include <QCryptographicHash>
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QProcess>
 #include <random>
 #include <numeric>
+#include <future>
+#include <thread>
 #include <Windows.h>
 
 using namespace hc::compare;
@@ -36,6 +40,39 @@ private:
         return row.back();
     }
 private slots:
+    void workerSharedCapacityAndAbandonedLease()
+    {
+        struct Handles { HANDLE values_[2]{}; ~Handles() { for (auto value : values_) if (value) CloseHandle(value); } } handles;
+        const auto owner = QString::fromLatin1(QCryptographicHash::hash(QDir::homePath().toUtf8(), QCryptographicHash::Sha256).toHex());
+        for (int i = 0; i < 2; ++i)
+        { const auto name = QString("Local\\HyperCompare.Worker.%1.%2").arg(owner).arg(i); handles.values_[i] = CreateMutexW(nullptr, FALSE, reinterpret_cast<const wchar_t*>(name.utf16())); QVERIFY(handles.values_[i]); }
+        std::promise<DWORD> acquired; auto ready = acquired.get_future(); std::promise<void> release; auto released = release.get_future();
+        std::thread holder([&] { const auto wait = WaitForMultipleObjects(2, handles.values_, TRUE, 3000); acquired.set_value(wait); released.wait(); });
+        struct Join { std::promise<void>& release_; std::thread& thread_; ~Join() { if (thread_.joinable()) { release_.set_value(); thread_.join(); } } } join{release, holder};
+        const auto held = ready.get(); QVERIFY(held == WAIT_OBJECT_0 || (held >= WAIT_ABANDONED_0 && held < WAIT_ABANDONED_0 + 2));
+        Budget budget; budget.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+        QCOMPARE(RunWorker("source.tree-sitter", {{"language", "cpp"}, {"source", ""}}, budget)["reason"].toString(), "TimeLimit");
+        release.set_value(); holder.join(); // Deliberately exit without ReleaseMutex: both slots become abandoned.
+        QCOMPARE(RunWorker("source.tree-sitter", {{"language", "cpp"}, {"source", ""}}, Budget{})["status"].toString(), "Complete");
+    }
+    void workerProtocolAndPolicyBounds()
+    {
+        const QJsonObject payload{{"language", "cpp"}, {"source", QString::fromLatin1(QByteArray("int f(){}").toBase64())}};
+        const auto response = RunWorker("source.tree-sitter", payload, Budget{});
+        QCOMPARE(response["status"].toString(), "Complete"); QCOMPARE(response["engine"].toString(), "source.tree-sitter");
+        QCOMPARE(response["digest"].toString(), QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(payload).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()));
+        QCOMPARE(RunWorker("unknown", payload, Budget{})["reason"].toString(), "WorkerEngineUnsupported");
+        QCOMPARE(RunWorker("source.tree-sitter", {{"language", "cpp"}, {"source", "%%%"}}, Budget{})["reason"].toString(), "InvalidInputEncoding");
+        WorkerPolicy policy; policy.requestBytes_ = 1;
+        QCOMPARE(RunWorker("source.tree-sitter", payload, Budget{}, policy)["reason"].toString(), "WorkerInputLimit");
+        policy = {}; policy.responseBytes_ = 1;
+        QCOMPARE(RunWorker("source.tree-sitter", payload, Budget{}, policy)["reason"].toString(), "WorkerOutputLimit");
+        policy = {}; policy.memoryBytes_ = 1024ull * 1024 * 1024;
+        QCOMPARE(RunWorker("source.tree-sitter", payload, Budget{}, policy)["reason"].toString(), "WorkerPolicy");
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-worker"}); QVERIFY(process.waitForStarted());
+        const QJsonObject altered{{"schema", 1}, {"nonce", QString(36, 'a')}, {"engine", "source.tree-sitter"}, {"digest", QString(64, '0')}, {"request", payload}};
+        process.write(QJsonDocument(altered).toJson(QJsonDocument::Compact)); process.closeWriteChannel(); QVERIFY(process.waitForFinished()); QCOMPARE(process.exitCode(), 2);
+    }
     void engineRegistryContractsAndSignatures()
     {
         QSet<QString> ids;
@@ -187,7 +224,7 @@ private slots:
         QCOMPARE(anonymous["functions"].toArray().size(), 2);
         Budget shortBudget; shortBudget.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
         QCOMPARE(AnalyzeFunctions("a.cpp", QByteArray(1024 * 1024, ' '), shortBudget)["reason"].toString(), "TimeLimit");
-        QProcess malformed; malformed.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-semantic"});
+        QProcess malformed; malformed.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-worker"});
         QVERIFY(malformed.waitForStarted()); malformed.write("{invalid}"); malformed.closeWriteChannel(); QVERIFY(malformed.waitForFinished());
         QCOMPARE(malformed.exitCode(), 2); QVERIFY(malformed.readAllStandardOutput().isEmpty());
     }
