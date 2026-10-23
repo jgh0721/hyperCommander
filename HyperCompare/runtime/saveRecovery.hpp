@@ -28,5 +28,5 @@ namespace hc::compare
         SaveRecoveryFailure(std::string Code, QJsonArray Recovery) : Failure(std::move(Code)), recovery_(std::move(Recovery)) {}
     };
     QString SaveRecoveryDirectory();
-    void RecoverSavedFile(const Request& Input, Result& Value, const Budget& Limits);
+    void RecoverSavedFile(const Request& Input, Result& Value, const Budget& Limits, const QByteArray& ExpectedJournalHash = {});
 }

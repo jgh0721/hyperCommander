@@ -32,6 +32,7 @@ namespace hc::compare
     class OverviewBar;
     class DirectoryView;
     class DirectoryMergeDialog;
+    class SaveRecoveryDialog;
     class SemanticView;
     class ExtensionView;
     class CompareWindow final : public QMainWindow
@@ -109,6 +110,8 @@ namespace hc::compare
         OverviewBar* overview_ = nullptr;
         DirectoryView* directory_ = nullptr;
         QPointer<DirectoryMergeDialog> directoryMerge_;
+        QPointer<SaveRecoveryDialog> recoveryDialog_;
+        QAction* recoveryAction_ = nullptr;
         SemanticView* semantic_ = nullptr;
         QTabWidget* details_ = nullptr;
         QWidget* sources_ = nullptr;

@@ -130,7 +130,15 @@ private slots:
             Request request; request.mode_ = "recover"; request.journal_ = QDir(dir.filePath("journals")).filePath(files[0]); request.dryRun_ = true;
             auto result = Execute(request, std::make_shared<std::atomic_bool>(false), true); QCOMPARE(result.exitCode_, 0); QCOMPARE(result.outcome_, QString("RecoveryPreview")); QVERIFY(!result.saveRecovery_["identitiesVerified"].toBool());
             QCOMPARE(QFileInfo::exists(path), phase != 2);
-            if (phase == 2) { QFile journal(request.journal_); QVERIFY(journal.open(QIODevice::Append)); journal.write("{torn"); }
+            const auto reviewedHash = result.saveRecovery_["journalSha256"].toString().toLatin1(); QCOMPARE(reviewedHash.size(), 64);
+            if (phase == 2)
+            {
+                { QFile journal(request.journal_); QVERIFY(journal.open(QIODevice::Append)); journal.write("{torn"); }
+                auto apply = request; apply.dryRun_ = false; Result bound; bool refused = false;
+                try { RecoverSavedFile(apply, bound, {}, reviewedHash); }
+                catch (const Failure& error) { refused = error.code_ == "SaveRecoveryPreviewChanged"; }
+                QVERIFY(refused); QVERIFY(!QFileInfo::exists(path));
+            }
             request.dryRun_ = false; result = Execute(request, std::make_shared<std::atomic_bool>(false), true);
             QVERIFY2(result.exitCode_ == 0, qPrintable(result.error_)); QVERIFY(result.saveRecovery_["identitiesVerified"].toBool());
             QCOMPARE(read(path), phase == 3 ? QByteArray("new result\n") : QByteArray("original\n"));

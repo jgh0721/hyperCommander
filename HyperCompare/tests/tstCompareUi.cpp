@@ -11,6 +11,9 @@
 #include "widgets/findBar.hpp"
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
+#include "widgets/saveRecoveryDialog.hpp"
+#include <QProcess>
+#include <QProcessEnvironment>
 #include "widgets/directoryTreeModel.hpp"
 #include "widgets/directoryMergeDialog.hpp"
 #include "widgets/semanticView.hpp"
@@ -54,6 +57,18 @@ class CompareUiTests final : public QObject
     QTemporaryDir settings_;
     static void write(const QString& Path, const QByteArray& Text)
     { QFile file(Path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(Text), Text.size()); }
+    static void recoveryFixture(const QString& Root, QString& Journal)
+    {
+        write(Root + "/destination.txt", "original\n");
+        auto env = QProcessEnvironment::systemEnvironment(); env.insert("HC_SAVE_CRASH_ROOT", Root); env.insert("HC_SAVE_CRASH_PHASE", "2"); env.insert("HC_SAVE_CRASH_JOURNALS", Root + "/journals");
+        QProcess child; child.setProcessEnvironment(env);
+        child.start(QCoreApplication::applicationDirPath() + "/hc_compare_tests.exe", {"recoveryCrashChild", "-o", Root + "/child.txt,txt"});
+        QVERIFY(child.waitForStarted()); QVERIFY(child.waitForFinished(15000)); QCOMPARE(child.exitCode(), 73);
+        const auto files = QDir(Root + "/journals").entryList({"*.hcsave"}, QDir::Files); QCOMPARE(files.size(), 1);
+        Journal = Root + "/journals/" + files[0]; QVERIFY(!QFileInfo::exists(Root + "/destination.txt"));
+    }
+    static QByteArray readBytes(const QString& Path)
+    { QFile file(Path); if (!file.open(QIODevice::ReadOnly)) return {}; return file.readAll(); }
     static QAction* action(CompareWindow& Window, const QString& Text)
     { for (auto* item : Window.findChildren<QAction*>()) if (item->text() == Text) return item; return nullptr; }
     static QByteArray contents(ScintillaEditBase* Editor)
@@ -519,6 +534,58 @@ private slots:
         dialog.SavePlan(dir.filePath("changed.json")); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
         write(r.file1_ + "/a", "changed input"); dialog.ApplyPlan(true); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
         QCOMPARE(dialog.LastResult().error_, QString("DirectorySnapshotMismatch")); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); dialog.close();
+    }
+    void saveRecoveryDialogPreviewRestoreAndMenu()
+    {
+        QTemporaryDir dir; QString journal; recoveryFixture(dir.path(), journal); QVERIFY(!journal.isEmpty());
+        Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); request.theme_ = "light";
+        write(request.file1_, "left\n"); write(request.file2_, "right\n"); CompareWindow window(request); window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.findChildren<ScintillaEditBase*>().size(), 2, 10000);
+        auto* editor = window.findChild<ScintillaEditBase*>("FILE 1"); QVERIFY(editor);
+        editor->setFocus(); editor->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("draft-"));
+        QTRY_COMPARE(contents(editor), QByteArray("draft-left\n"));
+        auto* menuAction = window.findChild<QAction*>("openSaveRecovery"); QVERIFY(menuAction); QTRY_VERIFY(menuAction->isEnabled()); menuAction->trigger();
+        auto* dialog = static_cast<SaveRecoveryDialog*>(window.findChild<QDialog*>("saveRecoveryDialog")); QVERIFY(dialog); QPointer<QDialog> lifetime(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000); auto* apply = dialog->findChild<QPushButton*>("recoveryApply"); QVERIFY(!apply->isEnabled());
+        dialog->OpenJournal(journal); QVERIFY(dialog->Busy()); QVERIFY(!apply->isEnabled()); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
+        QCOMPARE(dialog->LastResult().outcome_, QString("RecoveryPreview")); QVERIFY(apply->isEnabled()); QVERIFY(!QFileInfo::exists(dir.filePath("destination.txt")));
+        QCOMPARE(dialog->findChild<QLineEdit*>("recoveryDestination")->text(), dir.filePath("destination.txt"));
+        const auto stage = dialog->LastResult().saveRecovery_["stage"].toString(); QVERIFY(QFileInfo::exists(stage));
+        QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/recovery-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/recovery-dark.png"));
+        QTest::mouseClick(apply, Qt::LeftButton); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
+        QVERIFY2(dialog->LastResult().error_.isEmpty(), qPrintable(dialog->LastResult().error_)); QCOMPARE(readBytes(dir.filePath("destination.txt")), QByteArray("original\n"));
+        QVERIFY(dialog->LastResult().saveRecovery_["identitiesVerified"].toBool()); QVERIFY(QFileInfo::exists(journal)); QVERIFY(QFileInfo::exists(stage)); QVERIFY(!apply->isEnabled());
+        dialog->OpenJournal(journal); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000); dialog->Recover(); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
+        QCOMPARE(readBytes(dir.filePath("destination.txt")), QByteArray("original\n")); QVERIFY(dialog->LastResult().error_.isEmpty());
+        dialog->close(); QTRY_VERIFY(lifetime.isNull()); QCOMPARE(contents(editor), QByteArray("draft-left\n")); QCOMPARE(readBytes(request.file1_), QByteArray("left\n"));
+        editor->setFocus(); action(window, "실행 취소")->trigger(); QTRY_COMPARE(contents(editor), QByteArray("left\n")); window.close();
+    }
+    void saveRecoveryDialogRejectsChangedRecordAndDestination()
+    {
+        QTemporaryDir dir; QString journal; recoveryFixture(dir.path(), journal); QVERIFY(!journal.isEmpty());
+        SaveRecoveryDialog dialog({}); dialog.show(); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        dialog.OpenJournal(journal); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QCOMPARE(dialog.LastResult().outcome_, QString("RecoveryPreview"));
+        const auto bytes = readBytes(journal); write(journal, bytes + "{torn");
+        dialog.Recover(); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QCOMPARE(dialog.LastResult().error_, QString("SaveRecoveryPreviewChanged"));
+        QVERIFY(!QFileInfo::exists(dir.filePath("destination.txt"))); QVERIFY(!dialog.findChild<QPushButton*>("recoveryApply")->isEnabled());
+        dialog.OpenJournal(journal); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QVERIFY(dialog.LastResult().warnings_.contains("SaveRecoveryIgnoredTornTail"));
+        write(dir.filePath("destination.txt"), "foreign\n"); dialog.Recover(); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QCOMPARE(dialog.LastResult().error_, QString("write-recovery-destination-changed")); QCOMPARE(readBytes(dir.filePath("destination.txt")), QByteArray("foreign\n"));
+        write(journal, bytes + "bad complete record\n"); dialog.OpenJournal(journal); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        QCOMPARE(dialog.LastResult().error_, QString("SaveRecoveryCorrupt")); QVERIFY(!dialog.findChild<QPushButton*>("recoveryApply")->isEnabled()); dialog.close();
+        write(journal, bytes); Request protectedContext; protectedContext.protectedInputs_ = {dir.filePath("destination.txt")}; SaveRecoveryDialog protectedDialog(protectedContext);
+        QTRY_VERIFY_WITH_TIMEOUT(!protectedDialog.Busy(), 10000); protectedDialog.OpenJournal(journal); QTRY_VERIFY_WITH_TIMEOUT(!protectedDialog.Busy(), 10000);
+        QCOMPARE(protectedDialog.LastResult().error_, QString("RequestArtifactAlias")); QVERIFY(!protectedDialog.findChild<QPushButton*>("recoveryApply")->isEnabled());
+        QCOMPARE(readBytes(dir.filePath("destination.txt")), QByteArray("foreign\n"));
+    }
+    void saveRecoveryDialogCloseDuringPreview()
+    {
+        QTemporaryDir dir; QString journal; recoveryFixture(dir.path(), journal); QVERIFY(!journal.isEmpty());
+        SaveRecoveryDialog dialog({}); dialog.show(); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
+        dialog.OpenJournal(journal); QVERIFY(dialog.Busy()); dialog.close();
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QTRY_VERIFY(!dialog.isVisible());
+        QVERIFY(!QFileInfo::exists(dir.filePath("destination.txt"))); QVERIFY(QFileInfo::exists(journal));
     }
     void directoryTreeModelContractsAndFiltering()
     {

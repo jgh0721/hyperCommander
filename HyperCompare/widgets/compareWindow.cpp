@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "mergeController.hpp"
 #include "chunkGutter.hpp"
@@ -139,6 +140,14 @@ namespace hc::compare
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
         auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        recoveryAction_ = fileMenu->addAction(tr("저장 복구…"), this, [this] {
+            if (busy()) return;
+            if (recoveryDialog_) { recoveryDialog_->show(); recoveryDialog_->raise(); recoveryDialog_->activateWindow(); return; }
+            auto* dialog = new SaveRecoveryDialog(request_, this); recoveryDialog_ = dialog; dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->activityChanged_ = [this] { QTimer::singleShot(0, this, [this] { updateMerge(); if (closing_ && !busy()) close(); }); };
+            updateMerge(); dialog->show();
+        });
+        recoveryAction_->setObjectName("openSaveRecovery");
         saveWork_ = fileMenu->addAction(tr("작업 저장..."), this, [this] {
             if (!merge_ || busy()) return;
             QFileDialog dialog(this, tr("병합 작업 저장"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
@@ -642,6 +651,7 @@ namespace hc::compare
     }
     void CompareWindow::updateMerge()
     {
+        recoveryAction_->setEnabled(!busy());
         for (auto* action : encodingActions_)
         {
             const int role = action->data().toInt();
@@ -844,8 +854,8 @@ namespace hc::compare
         completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
         setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
     }
-    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()); }
-    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directoryMerge_) directoryMerge_->Cancel(); }
+    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
+    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
         if (busy()) { CancelRemoteRequest(); closing_ = true; Event->ignore(); return; }

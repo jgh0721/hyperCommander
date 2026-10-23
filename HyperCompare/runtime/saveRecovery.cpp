@@ -3,6 +3,7 @@
 #include "requestFile.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include <QDir>
+#include <QCryptographicHash>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -94,7 +95,7 @@ namespace hc::compare
             else Warnings.append("SaveRecoveryJournalCleanupFailed");
         }
     }
-    void RecoverSavedFile(const Request& Input, Result& Value, const Budget& Limits)
+    void RecoverSavedFile(const Request& Input, Result& Value, const Budget& Limits, const QByteArray& ExpectedJournalHash)
     {
         Value.operation_ = "recover";
         if (!Input.report_.isEmpty() && Input.report_ != "-") throw Failure("SaveRecoveryRequiresStdout");
@@ -112,6 +113,8 @@ namespace hc::compare
         Value.recovery_.append(Input.journal_);
         // Snapshot reader rejects reparse points, bounds size, and detects concurrent mutation.
         const auto bytes = ReadFileSnapshot(Input.journal_, journalLimit, Limits).raw_;
+        const auto hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+        if (!ExpectedJournalHash.isEmpty() && hash != ExpectedJournalHash) throw Failure("SaveRecoveryPreviewChanged");
         std::optional<storage::WriteRecoveryRecord> previous; QJsonObject latest; qsizetype offset = 0; qint64 sequence = 0;
         while (offset < bytes.size())
         {
@@ -134,6 +137,7 @@ namespace hc::compare
         if (!previous) throw Failure("SaveRecoveryEmpty");
         if (offset != bytes.size()) Value.warnings_.append("SaveRecoveryIgnoredTornTail");
         Value.saveRecovery_ = latest; Value.saveRecovery_["identitiesVerified"] = false;
+        Value.saveRecovery_["journalSha256"] = QString::fromLatin1(hash);
         const auto& record = *previous;
         CheckProtectedInputs(Input, {QString::fromStdString(record.destination_.root_), QString::fromStdString(record.stage_.root_), QString::fromStdString(record.backup_.root_)}, Limits);
         if (Input.dryRun_) { Value.outcome_ = "RecoveryPreview"; Value.completion_ = "Complete"; Value.exitCode_ = 0; return; }
