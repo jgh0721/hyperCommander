@@ -96,8 +96,8 @@ namespace hc::compare
         changes_->setRootIsDecorated(false); changes_->setUniformRowHeights(true);
         layout->setStretchFactor(0, 4); layout->setStretchFactor(1, 1); layout->setSizes({560, 140}); setCentralWidget(layout);
         auto* tools = addToolBar(tr("비교"));
-        tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
-        tools->addAction(tr("디렉터리 열기"), this, &CompareWindow::openDirectories);
+        openFiles_ = tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
+        openFolders_ = tools->addAction(tr("디렉터리 열기"), this, &CompareWindow::openDirectories);
         tools->addAction(tr("다시 비교"), this, [this] { start(true); });
         cancel_ = tools->addAction(tr("취소"), this, [this] { canceled_->store(true); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
@@ -257,7 +257,7 @@ namespace hc::compare
             selectBlock(); if (merge_) updateMerge();
         });
         applyAppearance();
-        if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { start(); });
+        if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
     CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); }
@@ -349,6 +349,7 @@ namespace hc::compare
     }
     void CompareWindow::display()
     {
+        delete directoryMerge_; directoryMerge_.clear();
         delete extensionView_; extensionView_ = nullptr;
         if (result_.operation_ != "compare3") pairIndex_ = 0;
         { const QSignalBlocker blocker(pairSelector_); pairSelector_->setCurrentIndex(pairIndex_); }
@@ -383,7 +384,9 @@ namespace hc::compare
             directory_->SetComparison(request_, result_); sources_->hide(); details_->hide(); directory_->show();
             if (request_.mode_ == "directory-merge")
             {
-                auto* dialog = new DirectoryMergeDialog(request_, result_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
+                auto* dialog = new DirectoryMergeDialog(request_, result_, this); directoryMerge_ = dialog; exitCode_ = 3;
+                dialog->statusChanged_ = [this](int Code) { exitCode_ = Code; if (closing_) QTimer::singleShot(0, this, [this] { close(); }); };
+                dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
                 dialog->Prepare(request_.output_, request_.mirror_, request_.overwrite_);
             }
         }
@@ -642,10 +645,17 @@ namespace hc::compare
         auto& font = Role == "ui" ? uiFont_ : Role == "list" ? listFont_ : textFont_; bool ok = false;
         const auto selected = QFontDialog::getFont(&ok, font, this, Role.toUpper()); if (ok) { font = selected; applyAppearance(); }
     }
+    void CompareWindow::BindRequest(std::function<void(int)> Completed)
+    {
+        completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
+        setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
+    }
+    bool CompareWindow::busy() const { return watcher_.isRunning() || workWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()); }
+    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directoryMerge_) directoryMerge_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
-        if (busy()) { canceled_->store(true); closing_ = true; Event->ignore(); return; }
+        if (busy()) { CancelRemoteRequest(); closing_ = true; Event->ignore(); return; }
         if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 닫으시겠습니까?")) != QMessageBox::Yes) { closing_ = false; Event->ignore(); return; }
-        Event->accept();
+        Event->accept(); if (auto completed = std::move(completed_)) completed(exitCode_);
     }
 }

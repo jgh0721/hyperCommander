@@ -1,11 +1,14 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
 #include "runtime/batch.hpp"
+#include "runtime/guiIpc.hpp"
+#include "widgets/guiRequestServer.hpp"
 #include "widgets/compareWindow.hpp"
 #include <QApplication>
 #include <QFile>
 #include <QJsonDocument>
 #include <QMessageBox>
+#include <QTimer>
 #include <fmstyle/ThemeManager.h>
 #include <Windows.h>
 #include <shellapi.h>
@@ -25,7 +28,8 @@ int main(int argc, char** argv)
     int count = 0; auto** wide = CommandLineToArgvW(GetCommandLineW(), &count); QStringList arguments;
     if (!wide) return 2;
     for (int i = 0; i < count; ++i) arguments.push_back(QString::fromWCharArray(wide[i])); LocalFree(wide);
-    const auto parsed = hc::compare::Parse(arguments, false); const auto& request = parsed.request_;
+    const bool host = arguments.size() == 2 && arguments[1] == "-internal-gui-host";
+    const auto parsed = hc::compare::Parse(host ? QStringList{arguments[0]} : arguments, false); const auto& request = parsed.request_;
     if (request.headless_ || request.help_ || request.version_ || request.mode_ == "capabilities")
     {
         QCoreApplication app(argc, argv); SetConsoleCtrlHandler(control, TRUE);
@@ -37,9 +41,22 @@ int main(int argc, char** argv)
         const auto result = hc::compare::Execute(request, canceled, true);
         return hc::compare::WriteReport(request, result);
     }
+    if (!host && parsed.error_.isEmpty() && (request.reuse_ || request.wait_))
+    {
+        QCoreApplication app(argc, argv); SetConsoleCtrlHandler(control, TRUE); QString error;
+        const int code = hc::compare::SubmitGuiRequest(arguments, request, canceled, error);
+        if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
+    }
     QApplication app(argc, argv);
     auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(app);
     if (!parsed.error_.isEmpty()) { QMessageBox::warning(nullptr, "HyperCompare", parsed.error_); return 2; }
+    hc::compare::GuiRequestServer server; const bool listening = server.Listen();
+    if (host)
+    {
+        if (!listening) return 2;
+        QTimer::singleShot(15000, &app, [&] { if (QApplication::topLevelWidgets().isEmpty()) app.quit(); });
+        return app.exec();
+    }
     hc::compare::CompareWindow window(request); window.show(); app.exec();
     return request.wait_ ? window.ExitCode() : 0;
 }

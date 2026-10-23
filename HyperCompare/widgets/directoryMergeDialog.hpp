@@ -46,6 +46,8 @@ namespace hc::compare
         void SavePlan(const QString& Path);
         void ApplyPlan(bool AllowDelete, bool Resume = false);
         bool Busy() const { return active_; }
+        void Cancel() { canceled_->store(true); }
+        std::function<void(int)> statusChanged_;
         DirectoryPlanModel* Model() const { return model_; }
         const Result& LastResult() const { return last_; }
     protected:

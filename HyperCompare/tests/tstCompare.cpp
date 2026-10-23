@@ -58,6 +58,13 @@ private:
         return row.back();
     }
 private slots:
+    void guiTransportOptions()
+    {
+        auto parsed = Parse({"hc", "-gui", "-reuse", "-wait-timeout-ms", "100", "-file1", "left", "-file2", "right"}, true);
+        QVERIFY(parsed.error_.isEmpty()); QVERIFY(parsed.request_.reuse_); QVERIFY(parsed.request_.wait_); QCOMPARE(parsed.request_.guiWaitMs_, 100);
+        QVERIFY(!Parse({"hc", "-reuse", "-file1", "left", "-file2", "right"}, true).error_.isEmpty());
+        QVERIFY(!Parse({"hc", "-wait-timeout-ms", "100", "-file1", "left", "-file2", "right"}, false).error_.isEmpty());
+    }
     void largeBoundaryExactScripts()
     {
         std::string large, different; for (int i = 0; i < 20000; ++i) { large += "line-" + std::to_string(i) + "\r\n"; different += "other-" + std::to_string(i) + "\r\n"; }

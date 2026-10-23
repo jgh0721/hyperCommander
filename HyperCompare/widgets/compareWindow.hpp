@@ -5,6 +5,8 @@
 #include <QFutureWatcher>
 #include <QFont>
 #include <QVector>
+#include <functional>
+#include <QPointer>
 
 class ScintillaEditBase;
 class QTreeWidget;
@@ -25,6 +27,7 @@ namespace hc::compare
     class FindBar;
     class OverviewBar;
     class DirectoryView;
+    class DirectoryMergeDialog;
     class SemanticView;
     class ExtensionView;
     class CompareWindow final : public QMainWindow
@@ -33,13 +36,15 @@ namespace hc::compare
         explicit CompareWindow(Request Input);
         ~CompareWindow() override;
         int ExitCode() const { return exitCode_; }
+        void BindRequest(std::function<void(int)> Completed);
+        void CancelRemoteRequest();
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
     protected:
         void closeEvent(QCloseEvent* Event) override;
     private:
         void start(bool Preserve = false);
-        bool busy() const { return watcher_.isRunning() || workWatcher_.isRunning(); }
+        bool busy() const;
         void transferWork(const QString& Path, bool Loading, bool ReplaceExisting);
         void display();
         void applyPairView();
@@ -74,6 +79,7 @@ namespace hc::compare
         FindBar* find_ = nullptr;
         OverviewBar* overview_ = nullptr;
         DirectoryView* directory_ = nullptr;
+        QPointer<DirectoryMergeDialog> directoryMerge_;
         SemanticView* semantic_ = nullptr;
         QTabWidget* details_ = nullptr;
         QWidget* sources_ = nullptr;
@@ -83,6 +89,9 @@ namespace hc::compare
         QLabel* state_ = nullptr;
         QLabel* inlineStatus_ = nullptr;
         QAction* save_ = nullptr;
+        QAction* openFiles_ = nullptr;
+        QAction* openFolders_ = nullptr;
+        std::function<void(int)> completed_;
         QAction* saveWork_ = nullptr;
         QAction* loadWork_ = nullptr;
         QAction* cancel_ = nullptr;

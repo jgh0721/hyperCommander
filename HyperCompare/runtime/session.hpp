@@ -21,6 +21,8 @@ namespace hc::compare
         QString semantic_ = "auto";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;
+        bool reuse_ = false;
+        int guiWaitMs_ = 0;
         QString requestFile_, requestId_;
         QString manifest_;
         int jobs_ = 1;

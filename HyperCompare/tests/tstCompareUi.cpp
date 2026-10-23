@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include "widgets/guiRequestServer.hpp"
+#include "runtime/guiIpc.hpp"
 #include "widgets/mergeController.hpp"
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
@@ -37,6 +39,7 @@
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QUuid>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
 
@@ -84,6 +87,50 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void guiRequestIsolation()
+    {
+        QTemporaryDir dir; write(dir.filePath("a.txt"), "a"); write(dir.filePath("b.txt"), "b");
+        const auto endpoint = "hc-test-" + QUuid::createUuid().toString(QUuid::Id128); GuiRequestServer server, duplicate;
+        QVERIFY(server.Listen(endpoint)); QVERIFY(!duplicate.Listen(endpoint)); QLocalSocket first, second;
+        const QString token(32, 'a');
+        for (auto* socket : {&first, &second})
+        {
+            socket->connectToServer(endpoint); QTRY_COMPARE(socket->state(), QLocalSocket::ConnectedState);
+            socket->write(GuiFrame({{"version", 1}, {"token", token}, {"wait", true}, {"arguments", QJsonArray{"app", "-gui", "-file1", dir.filePath("a.txt"), "-file2", dir.filePath(socket == &first ? "b.txt" : "a.txt")}}}));
+            socket->flush(); QTRY_VERIFY(socket->canReadLine()); QCOMPARE(QJsonDocument::fromJson(socket->readLine()).object()["kind"].toString(), QString("accepted"));
+        }
+        CompareWindow* different = nullptr; CompareWindow* same = nullptr;
+        for (auto* widget : QApplication::topLevelWidgets()) if (auto* window = dynamic_cast<CompareWindow*>(widget))
+            (window->windowTitle().endsWith("b.txt") ? different : same) = window;
+        QVERIFY(different); QVERIFY(same); QTRY_COMPARE(different->ExitCode(), 1); QTRY_COMPARE(same->ExitCode(), 0);
+        QVERIFY(!action(*different, QString::fromUtf8("파일 열기"))->isEnabled());
+        different->close(); QTRY_VERIFY(first.canReadLine()); QCOMPARE(QJsonDocument::fromJson(first.readLine()).object()["exitCode"].toInt(), 1);
+        QVERIFY(same->isVisible()); QVERIFY(!second.canReadLine()); same->close(); QTRY_VERIFY(second.canReadLine());
+        QCOMPARE(QJsonDocument::fromJson(second.readLine()).object()["exitCode"].toInt(), 0);
+    }
+    void guiRequestDisconnectPreservesResult()
+    {
+        QTemporaryDir dir; write(dir.filePath("a.txt"), "a"); write(dir.filePath("b.txt"), "b");
+        const auto endpoint = "hc-test-" + QUuid::createUuid().toString(QUuid::Id128); GuiRequestServer server; QVERIFY(server.Listen(endpoint));
+        QLocalSocket socket; socket.connectToServer(endpoint); QTRY_COMPARE(socket.state(), QLocalSocket::ConnectedState);
+        socket.write(GuiFrame({{"version", 1}, {"token", QString(32, 'b')}, {"wait", true}, {"arguments", QJsonArray{"app", "-gui", "-mode", "merge", "-file1", dir.filePath("a.txt"), "-file2", dir.filePath("b.txt"), "-output", dir.filePath("out.txt")}}}));
+        socket.flush(); QTRY_VERIFY(socket.canReadLine()); socket.readLine(); CompareWindow* window = nullptr;
+        for (auto* widget : QApplication::topLevelWidgets()) if (auto* candidate = dynamic_cast<CompareWindow*>(widget)) window = candidate;
+        QVERIFY(window); QTRY_VERIFY(window->findChild<ScintillaEditBase*>("RESULT"));
+        action(*window, QString::fromUtf8("오른쪽 전체 선택"))->trigger(); auto* output = window->findChild<ScintillaEditBase*>("RESULT"); QCOMPARE(contents(output), QByteArray("b"));
+        socket.abort(); QTest::qWait(50); QVERIFY(window->isVisible()); QCOMPARE(contents(output), QByteArray("b")); QCOMPARE(window->ExitCode(), 3);
+        action(*window, QString::fromUtf8("결과 저장"))->trigger(); QTRY_COMPARE(window->ExitCode(), 0); window->close();
+    }
+    void guiRequestProtocolBounds()
+    {
+        const auto endpoint = "hc-test-" + QUuid::createUuid().toString(QUuid::Id128); GuiRequestServer server; QVERIFY(server.Listen(endpoint));
+        for (const auto& data : {QByteArray(guiMessageLimit + 1, 'a'), QByteArray("{\"version\":2}\n"), QByteArray("{}\n{}\n")})
+        {
+            QLocalSocket socket; socket.connectToServer(endpoint); QTRY_COMPARE(socket.state(), QLocalSocket::ConnectedState);
+            socket.write(data); socket.flush(); QTRY_VERIFY(socket.state() == QLocalSocket::UnconnectedState || socket.canReadLine());
+            if (socket.canReadLine()) QCOMPARE(QJsonDocument::fromJson(socket.readLine()).object()["kind"].toString(), QString("error"));
+        }
+    }
     void initTestCase()
     {
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);

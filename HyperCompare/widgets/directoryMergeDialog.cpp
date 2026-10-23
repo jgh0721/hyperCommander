@@ -148,8 +148,9 @@ namespace hc::compare
                 ApplyPlan(true, QFileInfo::exists(planPath_ + ".journal"));
         });
         connect(cancel_, &QPushButton::clicked, this, [this] { reject(); });
-        model_->changed_ = [this] { planPath_.clear(); state_->setText(tr("미결정 %1개 — 선택 열은 더블 클릭 또는 F2로 편집합니다.\n계획 출력: %2").arg(model_->Unresolved()).arg(model_->Output())); updateControls(); };
+        model_->changed_ = [this] { planPath_.clear(); if (statusChanged_) statusChanged_(3); state_->setText(tr("미결정 %1개 — 선택 열은 더블 클릭 또는 F2로 편집합니다.\n계획 출력: %2").arg(model_->Unresolved()).arg(model_->Output())); updateControls(); };
         const auto optionsChanged = [this] {
+            if (statusChanged_) statusChanged_(3);
             updateControls();
             if (!Busy() && model_->HasPlan() && !model_->Matches(output_->text(), mirror_->isChecked(), overwrite_->isChecked()))
                 state_->setText(tr("출력 설정이 변경되었습니다. ‘계획 만들기’로 다시 검토하십시오."));
@@ -165,14 +166,14 @@ namespace hc::compare
                 if (kind_ == "apply") state_->setText(tr("적용 완료 — %1").arg(planPath_));
             }
             else state_->setText(tr("%1 · 적용 상태: %2\n%3").arg(last_.error_, last_.commit_, last_.recovery_.isEmpty() ? QString{} : QString::fromUtf8(QJsonDocument(last_.recovery_).toJson())));
-            updateControls(); if (closing_) close();
+            updateControls(); if (statusChanged_) statusChanged_(kind_ == "apply" || !last_.error_.isEmpty() ? last_.exitCode_ : 3); if (closing_) close();
         });
         updateControls();
     }
     DirectoryMergeDialog::~DirectoryMergeDialog() { canceled_->store(true); watcher_.waitForFinished(); }
     void DirectoryMergeDialog::run(QString Kind, std::function<Result()> Work)
     {
-        if (Busy()) return; kind_ = std::move(Kind); canceled_->store(false); active_ = true; state_->setText(tr("처리 중…")); updateControls();
+        if (Busy()) return; kind_ = std::move(Kind); canceled_->store(false); active_ = true; if (statusChanged_) statusChanged_(3); state_->setText(tr("처리 중…")); updateControls();
         watcher_.setFuture(QtConcurrent::run([work = std::move(Work)] {
             try { return work(); } catch (const Failure& error) { Result result; result.error_ = QString::fromStdString(error.code_); return result; }
             catch (const std::exception& error) { Result result; result.error_ = QString::fromUtf8(error.what()); return result; }

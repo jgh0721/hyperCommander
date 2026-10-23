@@ -11,6 +11,7 @@ target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/semantic.cpp runtime/semantic.hpp
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp
@@ -32,10 +33,11 @@ qt_add_library(hc_compare_runtime STATIC
 )
 target_include_directories(hc_compare_runtime BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
 target_include_directories(hc_compare_runtime PUBLIC "${PROJECT_SOURCE_DIR}")
-target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core PRIVATE advapi32 shell32 ole32 uuid netapi32 mpr shlwapi)
+target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core Qt6::Network PRIVATE advapi32 shell32 ole32 uuid netapi32 mpr shlwapi)
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
+    widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp
     widgets/semanticView.cpp widgets/semanticView.hpp
     widgets/imageCompareView.cpp widgets/imageCompareView.hpp
     widgets/archiveCompareView.cpp widgets/archiveCompareView.hpp widgets/extensionView.cpp widgets/extensionView.hpp

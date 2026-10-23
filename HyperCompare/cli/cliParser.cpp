@@ -41,6 +41,8 @@ namespace hc::compare
         value("theme", "GUI theme: light or dark.");
         value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
+        flag("reuse", "Send this GUI request to the current session's HyperCompare host.");
+        value("wait-timeout-ms", "GUI request wait deadline (100..3600000); default unlimited. Timeout keeps the window and unsaved edits.");
         flag("wait", "Return the completed request status."); flag("exitcode", "Return comparison/merge status; GUI requires -wait.");
         flag("overwrite", "Allow replacing an existing output, subject to revision validation.");
         value("plan", "Reviewed directory plan to apply with -mode apply.");
@@ -65,8 +67,8 @@ namespace hc::compare
             for (const auto& name : parser.optionNames())
             {
                 if (name == "request") continue;
-                if (!QStringList{"headless", "gui", "wait", "exitcode", "format", "report", "timeout-ms", "include-content"}.contains(name)) return fail("Option cannot be combined with -request: " + name);
-                overrides << '-' + name; if (QStringList{"format", "report", "timeout-ms"}.contains(name)) overrides << parser.value(name);
+                if (!QStringList{"headless", "gui", "wait", "exitcode", "format", "report", "timeout-ms", "include-content", "reuse", "wait-timeout-ms"}.contains(name)) return fail("Option cannot be combined with -request: " + name);
+                overrides << '-' + name; if (QStringList{"format", "report", "timeout-ms", "wait-timeout-ms"}.contains(name)) overrides << parser.value(name);
             }
             return ParseRequestFile(parser.value("request"), overrides, Console);
         }
@@ -97,6 +99,13 @@ namespace hc::compare
         if (parser.isSet("headless") && parser.isSet("gui")) return fail("-gui and -headless are mutually exclusive.");
         request.gui_ = parser.isSet("gui"); request.headless_ = parser.isSet("headless") || (Console && !request.gui_);
         request.wait_ = parser.isSet("wait") || Console;
+        request.reuse_ = parser.isSet("reuse");
+        if ((request.reuse_ || parser.isSet("wait-timeout-ms")) && request.headless_) return fail("GUI reuse/wait timeout requires GUI mode.");
+        if (parser.isSet("wait-timeout-ms"))
+        {
+            bool valid = false; request.guiWaitMs_ = parser.value("wait-timeout-ms").toInt(&valid);
+            if (!request.wait_ || !valid || request.guiWaitMs_ < 100 || request.guiWaitMs_ > 3600000) return fail("Invalid GUI wait-timeout-ms or missing -wait.");
+        }
         request.overwrite_ = parser.isSet("overwrite"); request.dryRun_ = parser.isSet("dryrun");
         request.includeContent_ = parser.isSet("include-content");
         if (request.includeContent_ && (!request.headless_ || (request.format_ != "json" && request.mode_ != "batch"))) return fail("-include-content requires headless JSON reporting.");

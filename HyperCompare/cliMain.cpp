@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
 #include "runtime/batch.hpp"
+#include "runtime/guiIpc.hpp"
 #include "runtime/semantic.hpp"
 #include "runtime/workerHost.hpp"
 #include <QCoreApplication>
@@ -30,13 +31,8 @@ int main(int argc, char** argv)
     if (request.mode_ == "batch") return hc::compare::RunBatchAndReport(request, canceled);
     if (request.gui_)
     {
-        auto args = app.arguments().mid(1); args.removeAll("-gui"); args.removeAll("--gui");
-        if (!args.contains("-wait") && !args.contains("--wait")) args.push_back("-wait");
-        QProcess process; process.setProcessChannelMode(QProcess::ForwardedChannels);
-        process.start(app.applicationDirPath() + "/HyperCompare.exe", args);
-        if (!process.waitForStarted()) { print(process.errorString().toUtf8() + '\n', stderr); return 2; }
-        if (!process.waitForFinished(-1) || process.exitStatus() != QProcess::NormalExit) return 2;
-        return process.exitCode();
+        QString error; const int code = hc::compare::SubmitGuiRequest(app.arguments(), request, canceled, error);
+        if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
     }
     const auto result = hc::compare::Execute(request, canceled, true);
     return hc::compare::WriteReport(request, result);
