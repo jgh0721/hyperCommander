@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCompare BASE·RESULT를 포함한 전체 패널 정렬과 편집 후 비동기 재정렬을 지원한다.
+
 * HyperCompare 3way 자동 병합 구간의 개별 재선택과 결정 계획 보존 지원
 
 * HyperCompare 청크별 RESULT 적용·제거·결합 버튼과 대응 영역 연결선 추가

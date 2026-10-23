@@ -4,6 +4,7 @@
 #include "runtime/guiIpc.hpp"
 #include "widgets/mergeController.hpp"
 #include "widgets/chunkGutter.hpp"
+#include "widgets/multiPaneAlignment.hpp"
 #include <QToolButton>
 #include "widgets/scrollSynchronizer.hpp"
 #include "widgets/scintillaPadding.hpp"
@@ -89,6 +90,70 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void allPaneAlignmentPreservesEditingAndUndo()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        write(r.base_, "a\ncommon\nz\n"); write(r.file1_, "left\na\ncommon\nz\n"); write(r.file2_, "a\ncommon\nright\nz\n");
+        CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<MultiPaneAlignment*>());
+        auto* alignment = window.findChild<MultiPaneAlignment*>(); QTRY_VERIFY2(alignment->Ready(), qPrintable(alignment->Error()));
+        const auto editors = window.findChildren<ScintillaEditBase*>(); QCOMPARE(editors.size(), 4);
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); const auto initial = contents(output);
+        const auto commonRow = [](ScintillaEditBase* Editor) { return Editor->send(SCI_VISIBLEFROMDOCLINE, Editor->send(SCI_LINEFROMPOSITION, uptr_t(contents(Editor).indexOf("common")))); };
+        for (auto* editor : editors) QCOMPARE(commonRow(editor), commonRow(output));
+        auto* changes = window.findChild<QTreeWidget*>("compareChanges"); changes->setCurrentItem(changes->topLevelItem(0));
+        auto* chooseBase = action(window, QString::fromUtf8("블록 BASE")); QVERIFY(chooseBase); chooseBase->trigger(); QTRY_VERIFY(alignment->Ready());
+        QCOMPARE(contents(output), QByteArray("a\ncommon\nright\nz\n"));
+        for (auto* editor : editors) QCOMPARE(commonRow(editor), commonRow(output));
+        output->send(SCI_UNDO); QTRY_VERIFY(alignment->Ready()); QCOMPARE(contents(output), initial);
+        output->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n"));
+        QTRY_VERIFY2(alignment->Ready(), qPrintable(alignment->Error()));
+        for (auto* editor : editors) QCOMPARE(commonRow(editor), commonRow(output));
+        QCOMPARE(contents(output), QByteArray("manual\n") + initial);
+        output->send(SCI_UNDO); QTRY_VERIFY(alignment->Ready()); QCOMPARE(contents(output), initial);
+        output->send(SCI_REDO); QTRY_VERIFY(alignment->Ready()); QCOMPARE(contents(output), QByteArray("manual\n") + initial);
+        output->send(SCI_SETFIRSTVISIBLELINE, 2); QTest::qWait(40);
+        for (auto* editor : editors) QCOMPARE(editor->send(SCI_GETFIRSTVISIBLELINE), output->send(SCI_GETFIRSTVISIBLELINE));
+        action(window, QString::fromUtf8("전체 패널 표시 줄 정렬"))->setChecked(false);
+        QVERIFY(!window.findChild<MultiPaneAlignment*>()); QCOMPARE(contents(output), QByteArray("manual\n") + initial);
+        output->send(SCI_UNDO); QCOMPARE(contents(output), initial);
+        action(window, QString::fromUtf8("전체 패널 표시 줄 정렬"))->setChecked(true);
+        QTRY_VERIFY(window.findChild<MultiPaneAlignment*>()->Ready());
+        for (auto* editor : editors) QCOMPARE(commonRow(editor), commonRow(output));
+        action(window, "Dark")->setChecked(false); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/all-pane-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/all-pane-dark.png"));
+    }
+    void allPaneAlignmentSwitchesComparePair()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("first"); r.file2_ = dir.filePath("second"); r.file3_ = dir.filePath("third");
+        write(r.file1_, "common"); write(r.file2_, "prefix\ncommon"); write(r.file3_, "common\nsuffix\n");
+        CompareWindow window(r); window.show();
+        QTRY_VERIFY(window.findChild<MultiPaneAlignment*>() && window.findChild<MultiPaneAlignment*>()->Ready());
+        auto* selector = window.findChild<QComboBox*>("comparePairSelector"); QVERIFY(selector);
+        for (int pair : {1, 2, 0})
+        {
+            selector->setCurrentIndex(pair);
+            QTRY_VERIFY(window.findChild<MultiPaneAlignment*>()->Ready());
+            const auto editors = window.findChildren<ScintillaEditBase*>(); QCOMPARE(editors.size(), 3);
+            sptr_t row = -1;
+            for (auto* editor : editors)
+            {
+                const auto current = editor->send(SCI_VISIBLEFROMDOCLINE, editor->send(SCI_LINEFROMPOSITION, uptr_t(contents(editor).indexOf("common"))));
+                if (row < 0) row = current; else QCOMPARE(current, row);
+            }
+        }
+    }
+    void allPaneAlignmentEmptyDocuments()
+    {
+        QWidget host; ScintillaEditBase first(&host), second(&host), third(&host);
+        setText(first, ""); setText(second, "insert"); setText(third, ""); host.resize(600, 300); host.show();
+        MultiPaneAlignment alignment({&first, &second, &third}, &host);
+        QTRY_VERIFY(alignment.Ready()); QCOMPARE(contents(&first), QByteArray{}); QCOMPARE(contents(&second), QByteArray("insert"));
+        QTRY_COMPARE(first.send(SCI_VISIBLEFROMDOCLINE, 0), sptr_t(1));
+        second.send(SCI_CLEARALL); QTRY_VERIFY(alignment.Ready());
+        QCOMPARE(first.send(SCI_VISIBLEFROMDOCLINE, 0), sptr_t(0)); QCOMPARE(third.send(SCI_VISIBLEFROMDOCLINE, 0), sptr_t(0));
+    }
     void automaticThreeWayChunksRemainEditable()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
@@ -265,6 +330,7 @@ private slots:
     void init()
     {
         QSettings settings; settings.setValue("view/alignSourceRows", false);
+        settings.setValue("view/alignAllPanes", false);
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
@@ -903,7 +969,8 @@ private slots:
         qInfo("Sparse padding: 90000 leading + 150000 trailing rows, layout/paint/font change %lld ms (including 40 ms waits)", timer.elapsed());
         editor.send(ClearPaddingRows); QCOMPARE(editor.send(SCI_VISIBLEFROMDOCLINE, 1), sptr_t(1));
         QCOMPARE(editor.send(SetLeadingRows, 2000001), sptr_t(-1));
-        editor.send(SCI_SETREADONLY, 0); QCOMPARE(editor.send(SetLeadingRows, 2), sptr_t(-1));
+        editor.send(SCI_SETREADONLY, 0); QCOMPARE(editor.send(SetLeadingRows, 2), sptr_t(0));
+        editor.send(ClearPaddingRows); editor.send(SCI_SETWRAPMODE, SC_WRAP_WORD); QCOMPARE(editor.send(SetLeadingRows, 2), sptr_t(-1));
         QCOMPARE(contents(&editor), QByteArray("first\nlast")); QCOMPARE(editor.send(SCI_CANUNDO), sptr_t(0));
     }
     void alignedWindowRecompareAndSave()

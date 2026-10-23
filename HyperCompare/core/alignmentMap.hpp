@@ -25,8 +25,29 @@ namespace hc::compare
         const std::vector<AlignmentRun>& Runs() const { return runs_; }
         std::size_t LineCount(unsigned Side) const { return lines_.at(Side); }
     private:
+        friend class MultiAlignmentMap;
         std::array<std::size_t, 2> lines_{};
         std::vector<AlignmentRun> runs_;
+        std::size_t rows_ = 0;
+    };
+    struct MultiAlignmentRun
+    {
+        std::vector<std::size_t> begin_, end_;
+        std::size_t rowBegin_ = 0, rowEnd_ = 0;
+        unsigned changedPairs_ = 0;
+    };
+    class MultiAlignmentMap
+    {
+    public:
+        // Texts[0] is the common anchor (BASE for a three-way merge).
+        static MultiAlignmentMap Build(const std::vector<std::string_view>& Texts, const Budget& Limits = {});
+        const std::vector<MultiAlignmentRun>& Runs() const { return runs_; }
+        std::size_t LineCount(std::size_t Side) const { return lines_.at(Side); }
+        std::size_t RowCount() const { return rows_; }
+        AlignmentMap Pair(std::size_t Left, std::size_t Right) const;
+    private:
+        std::vector<std::size_t> lines_;
+        std::vector<MultiAlignmentRun> runs_;
         std::size_t rows_ = 0;
     };
 }

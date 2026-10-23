@@ -66,14 +66,14 @@ foreach(_name ContractionState.h ContractionState.cxx Editor.cxx EditView.cxx)
 		return displayLines->PartitionFromPosition(line_cast(LinesDisplayed() - leadingRows));]=])
     elseif(_name STREQUAL "Editor.cxx")
         hc_compare_padding_replace([=[	case Message::AnnotationSetText:]=] [=[    case static_cast<Message>(50010): // HyperCompare SetLeadingRows
-        if (wParam > 2000000 || (wParam && (!pdoc->IsReadOnly() || Wrapping()))) return -1;
+        if (wParam > 2000000 || (wParam && Wrapping())) return -1;
         pcs->SetLeadingRows(static_cast<Sci::Line>(wParam));
         SetTopLine(std::min(topLine, MaxScrollPos()));
         SetScrollBars(); Redraw(); return 0;
     case static_cast<Message>(50011):
         return pcs->LeadingRows();
-    case static_cast<Message>(50012): // read-only, unwrapped compare sources only
-        if (!pdoc->IsReadOnly() || Wrapping() || wParam >= static_cast<uptr_t>(pdoc->LinesTotal()) || lParam < 0 || lParam > 2000000) return -1;
+    case static_cast<Message>(50012): // unwrapped compare panes; controller clears stale padding on edits
+        if (Wrapping() || wParam >= static_cast<uptr_t>(pdoc->LinesTotal()) || lParam < 0 || lParam > 2000000) return -1;
         pcs->SetTrailingRows(static_cast<Sci::Line>(wParam), static_cast<int>(lParam));
         SetScrollBars(); Redraw(); return 0;
     case static_cast<Message>(50013):

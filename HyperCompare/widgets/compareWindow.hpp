@@ -25,6 +25,7 @@ namespace hc::compare
     class MergeController;
     class ChunkGutter;
     class ScrollSynchronizer;
+    class MultiPaneAlignment;
     class FindBar;
     class OverviewBar;
     class DirectoryView;
@@ -57,6 +58,8 @@ namespace hc::compare
         void openDirectories();
         void applyAppearance();
         void updateFormats();
+        void rebuildMultiAlignment();
+        void updateAlignmentView();
         void rebuildGutters();
         void updateGutters();
         void chooseGutter(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
@@ -81,6 +84,7 @@ namespace hc::compare
         ScintillaEditBase* output_ = nullptr;
         MergeController* merge_ = nullptr;
         ScrollSynchronizer* scroll_ = nullptr;
+        MultiPaneAlignment* multi_ = nullptr;
         FindBar* find_ = nullptr;
         OverviewBar* overview_ = nullptr;
         DirectoryView* directory_ = nullptr;
@@ -93,6 +97,7 @@ namespace hc::compare
         QTreeWidget* changes_ = nullptr;
         QLabel* state_ = nullptr;
         QLabel* inlineStatus_ = nullptr;
+        QLabel* alignmentStatus_ = nullptr;
         QAction* save_ = nullptr;
         QAction* openFiles_ = nullptr;
         QAction* openFolders_ = nullptr;
@@ -105,6 +110,7 @@ namespace hc::compare
         QAction* baseChoice_ = nullptr;
         QAction* syncScroll_ = nullptr;
         QAction* alignRows_ = nullptr;
+        QAction* alignAll_ = nullptr;
         QAction* inlineHighlights_ = nullptr;
         QAction* showOverview_ = nullptr;
         QAction* pairSelectorAction_ = nullptr;

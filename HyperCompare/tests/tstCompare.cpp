@@ -1198,6 +1198,37 @@ private slots:
         auto first = blocks[0].toObject(); first["choice"] = "base"; blocks[0] = first; plan["blocks"] = blocks;
         ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {}); QCOMPARE(result.output_, QByteArray("a\nkeep\nR\n"));
     }
+    void multiPaneAlignmentSharedRows()
+    {
+        const std::vector<std::string_view> texts{"a\nb\n", "x\na\nb\n", "a\ny\nb\n", "x\na\ny\nb\n"};
+        auto map = MultiAlignmentMap::Build(texts); QCOMPARE(map.RowCount(), std::size_t(4));
+        const auto pair = map.Pair(0, 3); QCOMPARE(pair.DisplayRow(0, 0), std::size_t(1)); QCOMPARE(pair.DisplayRow(1, 1), std::size_t(1));
+        QCOMPARE(pair.DisplayRow(0, 1), std::size_t(3)); QCOMPARE(pair.DisplayRow(1, 3), std::size_t(3));
+        const auto identicalPair = MultiAlignmentMap::Build({"a\n", "a\n", "only third\na\n"}).Pair(0, 1);
+        for (const auto& run : identicalPair.Runs()) QVERIFY(!run.changed_);
+        std::mt19937 random(99172);
+        for (int trial = 0; trial < 500; ++trial)
+        {
+            std::vector<std::string> data(4); std::vector<std::string_view> inputs;
+            for (auto& text : data)
+            {
+                for (unsigned i = 0, n = random() % 20; i < n; ++i) { text += char('a' + random() % 5); text += random() % 2 ? "\r\n" : "\n"; }
+                if (!text.empty() && random() % 3 == 0) text.pop_back(); inputs.push_back(text);
+            }
+            map = MultiAlignmentMap::Build(inputs);
+            for (std::size_t side = 0; side < inputs.size(); ++side)
+            {
+                const auto projection = map.Pair(side, (side + 1) % inputs.size());
+                for (std::size_t line = 0; line < map.LineCount(side); ++line)
+                    QCOMPARE(projection.LineAtRow(0, projection.DisplayRow(0, line)), std::optional<std::size_t>(line));
+                std::string rebuilt; const auto lines = SplitLines(inputs[side]);
+                for (const auto& run : map.Runs()) for (auto i = run.begin_[side]; i < run.end_[side]; ++i) rebuilt += lines[i];
+                QCOMPARE(rebuilt, data[side]);
+            }
+        }
+        std::atomic_bool canceled{true}; Budget budget; budget.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(MultiAlignmentMap::Build(texts, budget), Failure);
+    }
     void commandLine()
     {
         const auto parse = [](QStringList Args) { Args.prepend("HyperCompare.exe"); return Parse(Args, true); };

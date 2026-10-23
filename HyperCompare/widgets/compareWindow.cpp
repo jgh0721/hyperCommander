@@ -3,6 +3,7 @@
 #include "mergeController.hpp"
 #include "chunkGutter.hpp"
 #include "scrollSynchronizer.hpp"
+#include "multiPaneAlignment.hpp"
 #include "findBar.hpp"
 #include "overviewBar.hpp"
 #include "directoryView.hpp"
@@ -79,13 +80,15 @@ namespace hc::compare
         semantic_->reveal_ = [this](int A, const QJsonObject& First, int B, const QJsonObject& Second) {
             if (busy()) return;
             if (scroll_) scroll_->SetEnabled(false);
+            if (multi_) multi_->SetEnabled(false);
             for (const auto& entry : {std::pair{A, First}, std::pair{B, Second}})
             {
                 if (entry.second.isEmpty() || entry.first < 0 || entry.first >= result_.inputs_.size() || entry.first >= editors_.size()) continue;
                 auto* editor = editors_[entry.first]; editor->send(SCI_SETSEL, uptr_t(entry.second["begin"].toInt()), entry.second["end"].toInt());
                 editor->send(SCI_SCROLLRANGE, uptr_t(entry.second["begin"].toInt()), entry.second["end"].toInt());
             }
-            if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked());
+            if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !multi_);
+            if (multi_) multi_->SetEnabled(syncScroll_->isChecked());
         };
         directory_ = new DirectoryView(layout); layout->addWidget(directory_); directory_->hide();
         directory_->open_ = [this](Request Input) {
@@ -111,7 +114,7 @@ namespace hc::compare
         pairSelectorAction_ = tools->addWidget(pairSelector_); pairSelectorAction_->setVisible(false);
         connect(pairSelector_, &QComboBox::currentIndexChanged, this, [this](int Index) {
             if (busy() || result_.operation_ != "compare3" || Index < 0 || Index > 2 || !result_.pairViews_[std::size_t(Index)]) return;
-            pairIndex_ = Index; applyPairView(); rebuildGutters(); applyAppearance(); updateMerge();
+            pairIndex_ = Index; applyPairView(); rebuildGutters(); rebuildMultiAlignment(); applyAppearance(); updateMerge();
             state_->setText(tr("%1 — 차이 %2개 · 전체 3파일: %3").arg(pairSelector_->currentText()).arg(currentPair()->changes_.size()).arg(result_.outcome_));
         });
         wholeActions_.push_back(tools->addAction(tr("왼쪽 전체 선택"), this, [this] { chooseSide(0); }));
@@ -162,6 +165,13 @@ namespace hc::compare
         connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
         connect(find_, &QToolBar::visibilityChanged, closeFind, &QAction::setEnabled);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
+        alignAll_ = viewMenu->addAction(tr("전체 패널 표시 줄 정렬")); alignAll_->setCheckable(true);
+        alignAll_->setChecked(settings.value("view/alignAllPanes", true).toBool()); alignAll_->setEnabled(false);
+        alignAll_->setToolTip(tr("BASE·RESULT를 포함한 모든 패널을 맞춥니다. RESULT 편집 후 다시 계산하며 표시 여백은 복사·저장 내용에 포함되지 않습니다."));
+        connect(alignAll_, &QAction::toggled, this, [this](bool Enabled) {
+            QSettings{}.setValue("view/alignAllPanes", Enabled);
+            if (!busy()) { rebuildMultiAlignment(); updateMerge(); }
+        });
         auto* encodingMenu = menuBar()->addMenu(tr("인코딩"));
         for (int role = 0; role < 3; ++role)
         {
@@ -193,9 +203,10 @@ namespace hc::compare
             QSettings{}.setValue("view/synchronizeSources", Enabled);
             if (scroll_)
             {
-                scroll_->SetEnabled(Enabled && !busy());
-                if (Enabled) scroll_->Synchronize(editors_[currentPair()->inputs_[1]]->hasFocus() ? 1 : 0);
+                scroll_->SetEnabled(Enabled && !busy() && !multi_);
+                if (Enabled && !multi_) scroll_->Synchronize(editors_[currentPair()->inputs_[1]]->hasFocus() ? 1 : 0);
             }
+            if (multi_) multi_->SetEnabled(Enabled && !busy());
         });
         inlineHighlights_ = viewMenu->addAction(tr("줄 내부 차이 강조")); inlineHighlights_->setCheckable(true);
         inlineHighlights_->setChecked(settings.value("view/inlineHighlights", true).toBool());
@@ -220,6 +231,8 @@ namespace hc::compare
         inlineStatus_ = new QLabel(this); inlineStatus_->setObjectName("compareInlineStatus");
         inlineStatus_->setToolTip(tr("일부 변경 줄은 문자 강조 계산 한도를 넘었습니다. 해당 줄의 줄 단위 차이 표시와 비교·병합 결과는 유지됩니다."));
         statusBar()->addPermanentWidget(inlineStatus_); inlineStatus_->hide();
+        alignmentStatus_ = new QLabel(this); alignmentStatus_->setObjectName("alignmentStatus");
+        statusBar()->addPermanentWidget(alignmentStatus_); alignmentStatus_->hide();
         connect(&watcher_, &QFutureWatcher<Result>::finished, this, [this] {
             cancel_->setEnabled(false);
             if (refreshing_)
@@ -279,7 +292,7 @@ namespace hc::compare
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
-    CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); }
+    CompareWindow::~CompareWindow() { canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
     void CompareWindow::openDirectories()
     {
         if (busy()) return;
@@ -325,6 +338,7 @@ namespace hc::compare
         details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
         if (changed)
         {
+            delete multi_; multi_ = nullptr;
             if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
             for (qsizetype i = 0; i < result_.inputs_.size(); ++i)
             {
@@ -335,7 +349,7 @@ namespace hc::compare
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
             applyPairView();
-            showBlocks(); merge_->Refresh(result_.plan_); rebuildGutters(); applyAppearance();
+            showBlocks(); merge_->Refresh(result_.plan_); rebuildGutters(); rebuildMultiAlignment(); applyAppearance();
         }
         updateMerge();
         if (!changed) state_->setText(tr("입력 내용 동일 — RESULT·Undo·해결 상태 보존"));
@@ -384,6 +398,7 @@ namespace hc::compare
         find_->SetEditors({});
         overview_->SetSession(nullptr, nullptr, {}); overview_->hide();
         for (auto* gutter : gutters_) delete gutter; gutters_.clear();
+        delete multi_; multi_ = nullptr; alignmentStatus_->hide();
         delete scroll_; scroll_ = nullptr;
         delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); formatLabels_.clear(); changes_->clear();
         inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
@@ -447,6 +462,7 @@ namespace hc::compare
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
         rebuildGutters();
+        rebuildMultiAlignment();
         QList<int> widths; for (int i = 0; i < panes_->count(); ++i) widths.push_back(1);
         panes_->setSizes(widths);
         auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->setSizes({560, 140});
@@ -464,6 +480,7 @@ namespace hc::compare
     }
     void CompareWindow::applyPairView()
     {
+        delete multi_; multi_ = nullptr;
         semantic_->SetPair(pairIndex_);
         overview_->SetSession(nullptr, nullptr, {});
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); delete scroll_; scroll_ = nullptr; }
@@ -494,6 +511,44 @@ namespace hc::compare
         // Include initial insertion gaps without changing caret/selection bytes.
         first->send(SCI_SETFIRSTVISIBLELINE, 0); second->send(SCI_SETFIRSTVISIBLELINE, 0);
         syncScroll_->setToolTip(tr("%1 / %2의 대응 줄과 가로 위치를 함께 이동합니다.").arg(first->objectName(), second->objectName()));
+    }
+    void CompareWindow::rebuildMultiAlignment()
+    {
+        delete multi_; multi_ = nullptr;
+        if (!currentPair() || !scroll_) { updateAlignmentView(); return; }
+        scroll_->SetEnabled(false); scroll_->ClearPadding();
+        if (alignAll_->isChecked() && editors_.size() >= 3)
+        {
+            scroll_->SetAligned(false);
+            auto ordered = editors_;
+            if (!request_.base_.isEmpty()) ordered.swapItemsAt(0, 2);
+            multi_ = new MultiPaneAlignment(ordered, this);
+            multi_->SetEnabled(syncScroll_->isChecked() && !busy());
+            multi_->changed_ = [this] { updateAlignmentView(); };
+        }
+        else
+        {
+            // ClearPadding does not change the synchronizer's mode bit.
+            scroll_->SetAligned(false); scroll_->SetAligned(alignRows_->isChecked());
+            scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
+        }
+        updateAlignmentView();
+    }
+    void CompareWindow::updateAlignmentView()
+    {
+        const auto* pair = currentPair();
+        if (!pair || editors_.size() < 2) { alignmentStatus_->hide(); return; }
+        auto* left = editors_[pair->inputs_[0]]; auto* right = editors_[pair->inputs_[1]];
+        const auto map = multi_ ? multi_->Pair(left, right) : pair->alignment_;
+        overview_->SetSession(left, right, map ? map : pair->alignment_);
+        overview_->SetAligned(multi_ ? multi_->Ready() : alignRows_->isChecked());
+        alignmentStatus_->setVisible(multi_ && !multi_->Ready());
+        if (multi_)
+        {
+            alignmentStatus_->setText(multi_->Error().isEmpty() ? tr("전체 정렬 계산 중") : tr("전체 정렬 보류"));
+            alignmentStatus_->setToolTip(multi_->Error().isEmpty() ? tr("편집 내용과 Undo는 유지됩니다.") : tr("계산 한도로 개별 패널 표시를 유지합니다. 전체 패널 정렬을 껐다 켜서 다시 시도할 수 있습니다.\n") + multi_->Error());
+        }
+        for (auto* gutter : gutters_) gutter->Refresh();
     }
     void CompareWindow::rebuildGutters()
     {
@@ -614,10 +669,12 @@ namespace hc::compare
         pairSelectorAction_->setVisible(pairSelection); pairSelector_->setEnabled(pairSelection && !busy());
         find_->SetBusy(busy()); for (auto* action : findActions_) action->setEnabled(searchable);
         syncScroll_->setEnabled(scroll_ && !busy());
-        alignRows_->setEnabled(scroll_ && !busy());
+        alignRows_->setEnabled(scroll_ && !busy() && !multi_);
+        alignAll_->setEnabled(currentPair() && editors_.size() >= 3 && !busy());
         showOverview_->setEnabled(scroll_ != nullptr);
         overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
-        if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy());
+        if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_);
+        if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
         for (auto* action : blockActions_) action->setEnabled(false);
@@ -670,6 +727,7 @@ namespace hc::compare
         if (!merge_)
         {
             const auto* item = changes_->currentItem();
+            if (multi_ && multi_->Ready()) { multi_->Reveal(editors_[currentPair()->inputs_[0]], item->data(1, Qt::UserRole).toULongLong()); return; }
             if (scroll_) scroll_->Reveal(item->data(1, Qt::UserRole).toULongLong(), item->data(2, Qt::UserRole).toULongLong());
             return;
         }
@@ -678,6 +736,8 @@ namespace hc::compare
         const auto& state = merge_->Model().State()[std::size_t(at)];
         if (scroll_) scroll_->Reveal(block.leftLine_, block.rightLine_);
         if (state.mapped_) { output_->send(SCI_SETSEL, state.begin_, sptr_t(state.end_)); output_->send(SCI_SCROLLCARET); }
+        if (multi_ && multi_->Ready()) multi_->Reveal(state.mapped_ ? output_ : editors_[0],
+            state.mapped_ ? std::size_t(output_->send(SCI_LINEFROMPOSITION, state.begin_)) : block.leftLine_);
     }
     void CompareWindow::navigateBlock(int Direction)
     {
