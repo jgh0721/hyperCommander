@@ -433,7 +433,7 @@ namespace hc::compare
             }
             extension["documents"] = documents; extension["contentIncluded"] = IncludeContent;
         }
-        return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString("myers-bounded-2") : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
+        return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString(textEngineVersion) : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_}, {"textComparison", textComparison_},
             {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", entries_}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},

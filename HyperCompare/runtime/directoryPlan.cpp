@@ -188,7 +188,7 @@ namespace hc::compare
                 if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", QString::fromStdString(it->hints_.at("relativePath"))}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
         for (const auto& snapshot : *Comparison.directories_) ValidateDirectory(snapshot, Input.directory_, Limits);
         if (capturedOutput) ValidateDirectory(*capturedOutput, {}, Limits);
-        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", "myers-bounded-2"}, {"encoding", Input.encoding_}}}, {"roots", roots}, {"output", destination},
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", Input.encoding_}}}, {"roots", roots}, {"output", destination},
             {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
             {"overwrite", Input.overwrite_}, {"mirror", Input.mirror_}, {"actions", actions}};
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");

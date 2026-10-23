@@ -1082,6 +1082,7 @@ private slots:
         MergeWork work{session.inputs_[0].utf8_, session.plan_->initial_, false};
         const auto json = EncodeMergeWork(r, session, work, {}); const auto original = QJsonDocument::fromJson(json).object();
         QVector<QByteArray> invalid; auto duplicate = json; duplicate.insert(1, "\"reviewRequired\":false,"); invalid.push_back(duplicate);
+        auto legacy = original; auto identity = legacy["identity"].toObject(); identity["engineVersion"] = "myers-bounded-2"; legacy["identity"] = identity; invalid.push_back(QJsonDocument(legacy).toJson());
         for (const auto& key : {QString("schemaVersion"), QString("kind"), QString("identity"), QString("takeAll"), QString("resultBytes"),
             QString("resultSha256"), QString("resultChunks"), QString("blocks"), QString("reviewRequired"), QString("unknown")})
         { auto changed = original; changed[key] = "invalid"; invalid.push_back(QJsonDocument(changed).toJson()); }
@@ -1166,7 +1167,7 @@ private slots:
             ApplyDecisionPlan(r, result, QJsonDocument(plan).toJson(), {});
             QCOMPARE(result.exitCode_, 0); QCOMPARE(result.output_, expected);
             const auto report = result.Json(); QCOMPARE(report["resolutions"].toArray()[0].toObject()["choice"].toString(), name);
-            QCOMPARE(report["engineVersion"].toString(), QString("myers-bounded-2")); QVERIFY(report["extension"].toObject().isEmpty());
+            QCOMPARE(report["engineVersion"].toString(), QString(textEngineVersion)); QVERIFY(report["extension"].toObject().isEmpty());
         }
         auto partial = initial; ApplyDecisionPlan(r, partial, QJsonDocument(templatePlan).toJson(), {});
         QCOMPARE(partial.exitCode_, 1); QVERIFY(!QFile::exists(r.output_));
@@ -1182,6 +1183,7 @@ private slots:
         duplicate = json; duplicate.insert(1, "\"schem\\u0061Version\":1,"); invalid.push_back(duplicate);
         auto mutated = plan; mutated["schemaVersion"] = 2; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["engineVersion"] = "myers-bounded-1"; invalid.push_back(QJsonDocument(mutated).toJson());
+        mutated = plan; mutated["engineVersion"] = "myers-bounded-2"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["policyDigest"] = "wrong"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["generation"] = "old"; invalid.push_back(QJsonDocument(mutated).toJson());
         mutated = plan; mutated["unknown"] = true; invalid.push_back(QJsonDocument(mutated).toJson());
@@ -1653,6 +1655,8 @@ private slots:
         QCOMPARE(result.exitCode_, 0); QCOMPARE(result.directoryPlan_["actions"].toArray()[0].toObject()["choice"].toString(), QString("merge"));
         Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
         const auto originalPlan = read(r.planOut_); auto oldPlan = result.directoryPlan_; auto oldPolicy = oldPlan["textMerge"].toObject(); oldPolicy["engine"] = "myers-bounded-1"; oldPlan["textMerge"] = oldPolicy;
+        write(r.planOut_, QJsonDocument(oldPlan).toJson()); QCOMPARE(Execute(apply, cancel, true).error_, "DirectoryTextPlanEngineChanged"); QVERIFY(!QFileInfo::exists(r.output_)); write(r.planOut_, originalPlan);
+        oldPolicy["engine"] = "myers-bounded-2"; oldPlan["textMerge"] = oldPolicy;
         write(r.planOut_, QJsonDocument(oldPlan).toJson()); QCOMPARE(Execute(apply, cancel, true).error_, "DirectoryTextPlanEngineChanged"); QVERIFY(!QFileInfo::exists(r.output_)); write(r.planOut_, originalPlan);
         result = Execute(apply, cancel, true); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
         QCOMPARE(read(r.output_ + "/a"), QByteArray("LEFT\r\nkeep\r\nRIGHT")); apply.resume_ = true; QCOMPARE(Execute(apply, cancel, true).exitCode_, 0);

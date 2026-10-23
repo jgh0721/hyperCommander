@@ -12,6 +12,7 @@
 
 namespace hc::compare
 {
+    inline constexpr auto textEngineVersion = "myers-bounded-3";
     struct Failure : std::runtime_error
     {
         std::string code_;
