@@ -146,7 +146,7 @@ namespace hc::compare
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
     {
         CheckProtectedInputs(Input, {Input.output_}, Limits);
-        if (!Comparison.directoryComplete_ || !Comparison.directories_ || Comparison.completion_ != "Complete" || Input.directory_.level_ != "bytes") throw Failure("DirectoryPlanRequiresContentComparison");
+        if (!Comparison.directoryComplete_ || !Comparison.directories_ || Comparison.completion_ != "Complete" || (Input.directory_.level_ != "bytes" && Input.directory_.level_ != "text")) throw Failure("DirectoryPlanRequiresContentComparison");
         if (!Input.takeAll_.isEmpty() && (Comparison.directories_->size() == 3 || (Input.takeAll_ != "left" && Input.takeAll_ != "right"))) throw Failure("InvalidDirectorySelection");
         const auto output = CheckedDirectoryPath(Input.output_); QJsonArray roots;
         if (QDir(output).isRoot()) throw Failure("DirectoryOutputRootUnsupported");
@@ -166,7 +166,7 @@ namespace hc::compare
             Limits.Check(); const auto entry = row.toObject(); const auto path = entry["path"].toString(), status = entry["status"].toString();
             QString choice = "unresolved";
             if (!Input.takeAll_.isEmpty()) choice = Input.takeAll_;
-            else if (status == "Equal" || status == "BothSame" || status == "LeftChanged" || status == "LeftAdded") choice = "left";
+            else if (DirectoryContentEqual(status) || status == "BothSame" || status == "LeftChanged" || status == "LeftAdded") choice = "left";
             else if (status == "RightChanged" || status == "RightAdded") choice = "right";
             else if (status == "LeftDeleted" || status == "RightDeleted" || status == "BothDeleted") choice = "omit";
             if (choice == "unresolved" && Comparison.directories_->size() == 3 && status == "Conflict")
@@ -178,7 +178,7 @@ namespace hc::compare
                     if (at == tree.cend() || at->directory_ || at->path_ != path) { eligible = false; break; }
                     inputs[side] = (*Comparison.directories_)[side].Expand(*at);
                 }
-                if (eligible && MergeDirectoryText(inputs, Input.encoding_, Limits)) choice = "merge";
+                if (eligible && InputEncoding(Input, 0) == InputEncoding(Input, 1) && InputEncoding(Input, 0) == InputEncoding(Input, 2) && MergeDirectoryText(inputs, InputEncoding(Input, 0), Limits)) choice = "merge";
             }
             if ((choice == "left" || choice == "right") && !entry[choice].toObject()["present"].toBool()) choice = "omit";
             actions.append(QJsonObject{{"path", path}, {"choice", choice}, {"reason", status}}); selected.insert(path.toCaseFolded());
@@ -188,7 +188,7 @@ namespace hc::compare
                 if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", it->path_}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
         for (const auto& snapshot : *Comparison.directories_) ValidateDirectory(snapshot, Input.directory_, Limits);
         if (capturedOutput) ValidateDirectory(*capturedOutput, {}, Limits);
-        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", Input.encoding_}}}, {"roots", roots}, {"output", destination},
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", InputEncoding(Input, 0)}}}, {"roots", roots}, {"output", destination},
             {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
             {"overwrite", Input.overwrite_}, {"mirror", Input.mirror_}, {"actions", actions}};
         if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");

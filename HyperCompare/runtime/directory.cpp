@@ -2,6 +2,7 @@
 #include "directory.hpp"
 #include "session.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/document/documentTextCodec.hpp"
 #include <QDir>
 #include <thread>
 
@@ -116,6 +117,25 @@ namespace hc::compare
             return equal;
         }
 
+        QString textRelation(const storage::EntrySnapshot& A, const storage::EntrySnapshot& B,
+            const QString& EncodingA, const QString& EncodingB, bool RawEqual, const Budget& Limits)
+        {
+            constexpr qsizetype maxTextBytes = 16 * 1024 * 1024;
+            if (A.size_ > maxTextBytes || B.size_ > maxTextBytes) return RawEqual ? "Equal" : "Different";
+            const auto decode = [&](const storage::EntrySnapshot& Entry, const QString& Encoding) -> std::optional<QString> {
+                Limits.Check(); const auto snapshot = ReadFileSnapshot(QString::fromStdString(Entry.locator_.root_), maxTextBytes, Limits);
+                if (snapshot.entry_.id_.revision_ != Entry.id_.revision_) throw Failure("ChangedDuringRead");
+                const auto& raw = snapshot.raw_;
+                const auto bom = raw.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : raw.startsWith("\xff\xfe") ? QString("UTF-16LE") : raw.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
+                if (!Encoding.isEmpty() && !bom.isEmpty() && Encoding != bom) return {};
+                const auto decoded = document::DecodeDocumentText(raw, Encoding.isEmpty() ? (bom.isEmpty() ? QString("UTF-8") : bom) : Encoding);
+                Limits.Check(); if (!decoded.HasValue()) return {};
+                return decoded.Value().text_;
+            };
+            const auto a = decode(A, EncodingA); if (!a) return RawEqual ? "Equal" : "Different";
+            const auto b = decode(B, EncodingB); if (!b) return RawEqual ? "Equal" : "Different";
+            return *a == *b ? (RawEqual ? "Equal" : "Equivalent") : "Different";
+        }
         QString relative(const DirectoryEntry* Entry)
         { return Entry ? Entry->path_ : QString{}; }
         QJsonObject describe(const DirectoryEntry* Entry)
@@ -125,7 +145,7 @@ namespace hc::compare
                 {"size", QString::number(Entry->size_)}, {"modifiedUtcMs", QString::number(Entry->modifiedUtcMs_)}};
         }
         QString relation(const DirectoryEntry* A, const DirectoryEntry* B,
-            const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const DirectoryPolicy& Policy, const Budget& Limits)
+            const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const Request& Input, int SideA, int SideB, const Budget& Limits)
         {
             if (!A && !B) return "Equal";
             if (!A) return "RightOnly";
@@ -133,9 +153,13 @@ namespace hc::compare
             if (A->directory_ != B->directory_) return "TypeConflict";
             if (relative(A) != relative(B)) return "NameDifferent";
             if (A->directory_) return "Equal";
-            if (Policy.level_ == "metadata")
+            if (Input.directory_.level_ == "metadata")
                 return A->size_ == B->size_ && A->modifiedUtcMs_ == B->modifiedUtcMs_ ? "Equal" : "Different";
-            return sameContent(RootA.Expand(*A), RootB.Expand(*B), Limits) ? "Equal" : "Different";
+            const auto a = RootA.Expand(*A), b = RootB.Expand(*B);
+            const bool rawEqual = sameContent(a, b, Limits);
+            const auto codecA = InputEncoding(Input, SideA), codecB = InputEncoding(Input, SideB);
+            if (Input.directory_.level_ != "text" || (rawEqual && codecA == codecB)) return rawEqual ? "Equal" : "Different";
+            return textRelation(a, b, codecA, codecB, rawEqual, Limits);
         }
     }
     namespace
@@ -143,7 +167,7 @@ namespace hc::compare
         const QStringList& statusNames()
         {
             static const QStringList names{"", "Equal", "Different", "LeftOnly", "RightOnly", "TypeConflict", "NameDifferent", "LeftChanged", "RightChanged",
-                "LeftAdded", "RightAdded", "LeftDeleted", "RightDeleted", "BothDeleted", "BothSame", "Conflict", "MirrorExtra", "Error", "Pending"};
+                "LeftAdded", "RightAdded", "LeftDeleted", "RightDeleted", "BothDeleted", "BothSame", "Conflict", "MirrorExtra", "Error", "Pending", "Equivalent"};
             return names;
         }
     }
@@ -202,7 +226,7 @@ namespace hc::compare
     }
     DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete, const std::function<void(const DirectoryEntry&)>& Discovered)
     {
-        if (Policy.level_ != "bytes" && Policy.level_ != "metadata") throw Failure("InvalidDirectoryLevel");
+        if (Policy.level_ != "bytes" && Policy.level_ != "metadata" && Policy.level_ != "text") throw Failure("InvalidDirectoryLevel");
         for (const auto& patterns : {Policy.include_, Policy.exclude_})
         {
             if (patterns.size() > 32) throw Failure("DirectoryFilterLimit");
@@ -285,7 +309,7 @@ namespace hc::compare
             }
             const auto safeRelation = [&](int A, int B) -> QString {
                 if (!errors.isEmpty()) return "Error";
-                try { return relation(entries[A], entries[B], (*captured)[A], (*captured)[B], Input.directory_, Limits); }
+                try { return relation(entries[A], entries[B], (*captured)[A], (*captured)[B], Input, A, B, Limits); }
                 catch (const Failure& error)
                 {
                     if (!recoverable(error)) throw;
@@ -298,14 +322,14 @@ namespace hc::compare
             {
                 lb = safeRelation(0, 2);
                 rb = safeRelation(1, 2);
-                if (lr == "Equal") status = lb == "Equal" ? "Equal" : !entries[0] ? "BothDeleted" : "BothSame";
-                else if (lb == "Equal") status = !entries[1] ? "RightDeleted" : !entries[2] ? "RightAdded" : "RightChanged";
-                else if (rb == "Equal") status = !entries[0] ? "LeftDeleted" : !entries[2] ? "LeftAdded" : "LeftChanged";
+                if (DirectoryContentEqual(lr)) status = DirectoryContentEqual(lb) ? lr : !entries[0] ? "BothDeleted" : "BothSame";
+                else if (DirectoryContentEqual(lb)) status = !entries[1] ? "RightDeleted" : !entries[2] ? "RightAdded" : "RightChanged";
+                else if (DirectoryContentEqual(rb)) status = !entries[0] ? "LeftDeleted" : !entries[2] ? "LeftAdded" : "LeftChanged";
                 else status = "Conflict";
             }
             if (!errors.isEmpty()) { status = "Error"; Value.directoryComplete_ = false; }
             conflict |= status == "Conflict" || status == "TypeConflict";
-            different |= status != "Equal";
+            different |= !DirectoryContentEqual(status);
             const auto* item = entries[0] ? entries[0] : entries[1] ? entries[1] : entries[2];
             Value.entries_.append(QJsonObject{{"path", relative(item)}, {"status", status},
                 {"leftRight", lr}, {"leftBase", lb}, {"rightBase", rb}, {"errors", errors},

@@ -105,6 +105,9 @@ namespace hc::compare
             if (busy() && !directoryStreaming_) return; Input.theme_ = dark_ ? "dark" : "light";
             auto* window = new CompareWindow(std::move(Input)); window->setAttribute(Qt::WA_DeleteOnClose); window->show();
         };
+        directory_->levelChanged_ = [this](const QString& Level) {
+            if (busy()) return; request_.directory_.level_ = Level; QSettings{}.setValue("directory/level", Level); start();
+        };
         panes_->setChildrenCollapsible(false); layout->setChildrenCollapsible(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽")});
         changes_->setObjectName("compareChanges");
@@ -394,7 +397,7 @@ namespace hc::compare
         if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
-        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
+        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = QSettings{}.value("directory/level", "text").toString(); request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
     }
     void CompareWindow::openInputs()
     {
@@ -559,7 +562,7 @@ namespace hc::compare
         {
             qsizetype differences = 0, conflicts = 0;
             for (const auto& item : result_.entries_)
-            { const auto status = item.Status(); differences += status != "Equal"; conflicts += status == "Conflict" || status == "TypeConflict"; }
+            { const auto status = item.Status(); differences += !DirectoryContentEqual(status); conflicts += status == "Conflict" || status == "TypeConflict"; }
             state_->setText((result_.directoryComplete_ ? tr("디렉터리 비교 — 차이 %1개 · 충돌 %2개") : tr("디렉터리 일부 비교 — 미확인 항목 포함 %1개 · 충돌 %2개")).arg(differences).arg(conflicts));
         }
         if (request_.mode_ == "merge") exitCode_ = 3;
@@ -750,7 +753,7 @@ namespace hc::compare
         {
             const int role = action->data().toInt();
             const auto path = role == 0 ? request_.file1_ : role == 1 ? request_.file2_ : request_.base_.isEmpty() ? request_.file3_ : request_.base_;
-            action->setEnabled(!busy() && !path.isEmpty() && !QFileInfo(path).isDir() && result_.extension_.isEmpty());
+            action->setEnabled(!busy() && !path.isEmpty() && (!QFileInfo(path).isDir() || request_.directory_.level_ == "text") && result_.extension_.isEmpty());
             const auto codec = InputEncoding(request_, role);
             action->setChecked(action->property("codec").toString() == (codec.isEmpty() ? "auto" : codec));
         }

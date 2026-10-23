@@ -50,7 +50,7 @@ namespace hc::compare
             { Model->setData(Index, static_cast<QComboBox*>(Editor)->currentData(), Qt::EditRole); }
         };
         Budget budget(const Request& Request, const std::shared_ptr<std::atomic_bool>& Canceled)
-        { Budget result; result.canceled_ = Canceled.get(); result.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Request.timeoutMs_); return result; }
+        { Budget result; result.canceled_ = Canceled.get(); result.deadline_ = Request.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() : std::chrono::steady_clock::now() + std::chrono::milliseconds(Request.timeoutMs_); return result; }
     }
     void DirectoryPlanModel::SetPlan(QJsonObject Plan)
     {

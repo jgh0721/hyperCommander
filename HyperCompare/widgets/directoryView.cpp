@@ -36,7 +36,7 @@ namespace hc::compare
         };
         QString statusName(const QString& Status)
         {
-            static const QMap<QString, QString> labels{{"Pending", QObject::tr("비교 대기")}, {"Error", QObject::tr("비교 불가")}, {"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
+            static const QMap<QString, QString> labels{{"Equivalent", QObject::tr("내용 동일 · 인코딩/BOM 차이")}, {"Pending", QObject::tr("비교 대기")}, {"Error", QObject::tr("비교 불가")}, {"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
                 {"LeftOnly", QObject::tr("왼쪽만 존재")}, {"RightOnly", QObject::tr("오른쪽만 존재")},
                 {"TypeConflict", QObject::tr("파일/폴더 충돌")}, {"NameDifferent", QObject::tr("이름 다름")},
                 {"LeftChanged", QObject::tr("왼쪽 수정")}, {"RightChanged", QObject::tr("오른쪽 수정")},
@@ -57,13 +57,13 @@ namespace hc::compare
     {
         const auto status = Entry["status"].toString();
         return Entry["path"].toString().contains(Query, Qt::CaseInsensitive) &&
-            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
+            (Status == 0 || (Status == 1 && !DirectoryContentEqual(status)) || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
     }
     bool DirectoryEntryMatches(const DirectoryRow& Entry, const QString& Query, int Status)
     {
         const auto status = Entry.Status();
         return Entry.path_.contains(Query, Qt::CaseInsensitive) &&
-            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
+            (Status == 0 || (Status == 1 && !DirectoryContentEqual(status)) || (Status == 2 && (status == "Conflict" || status == "TypeConflict")) || (Status == 3 && status == "Error"));
     }
     QString DirectoryStatusName(const QString& Status) { return statusName(Status); }
     void DirectoryModel::SetEntries(DirectoryEntries Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
@@ -117,6 +117,11 @@ namespace hc::compare
         viewMode_ = new QComboBox(this); viewMode_->setObjectName("directoryViewMode");
         viewMode_->setAccessibleName(tr("디렉터리 표시 방식")); viewMode_->addItems({tr("좌우 폴더 트리"), tr("경로 목록")});
         searchRow->addWidget(viewMode_);
+        auto* level = new QComboBox(this); level->setObjectName("directoryComparisonLevel"); level->setAccessibleName(tr("디렉터리 비교 기준"));
+        level->addItem(tr("텍스트 내용"), "text"); level->addItem(tr("바이트"), "bytes"); level->addItem(tr("크기·시각"), "metadata");
+        level->setToolTip(tr("기준을 변경하면 다시 비교합니다. 텍스트 기준은 인코딩/BOM만 다른 파일을 내용 동일로 판정합니다."));
+        searchRow->addWidget(level);
+        connect(level, &QComboBox::currentIndexChanged, this, [this, level] { if (!streaming_ && levelChanged_) levelChanged_(level->currentData().toString()); });
         searchRow->addWidget(query, 1); searchRow->addWidget(status); searchRow->addWidget(openButton_); box->addLayout(searchRow);
         model_ = new DirectoryModel(this); model_->setObjectName("directoryModel"); filter_ = new DirectoryFilter(this); filter_->setSourceModel(model_);
         filter_->setSortCaseSensitivity(Qt::CaseInsensitive);
@@ -185,7 +190,7 @@ namespace hc::compare
     void DirectoryView::BeginComparison(const Request& Input)
     {
         Result pending; pending.directoryComplete_ = false; pending.directoryLevel_ = Input.directory_.level_;
-        SetComparison(Input, pending); streaming_ = true; viewMode_->setCurrentIndex(0); viewMode_->setEnabled(false);
+        SetComparison(Input, pending); streaming_ = true; findChild<QComboBox*>("directoryComparisonLevel")->setEnabled(false); viewMode_->setCurrentIndex(0); viewMode_->setEnabled(false);
         findChild<QLineEdit*>("directoryQuery")->clear(); findChild<QLineEdit*>("directoryQuery")->setEnabled(false);
         findChild<QComboBox*>("directoryStatusFilter")->setCurrentIndex(0); findChild<QComboBox*>("directoryStatusFilter")->setEnabled(false);
         roots_->setText(tr("폴더를 찾는 대로 표시합니다. 비교 대기 항목은 존재 여부와 내용을 확인 중입니다."));
@@ -202,7 +207,7 @@ namespace hc::compare
     void DirectoryView::EndProgress(bool PreserveRows)
     {
         if (streaming_ && PreserveRows) model_->SetEntries(treeModel_->Entries());
-        streaming_ = false; viewMode_->setEnabled(true);
+        streaming_ = false; viewMode_->setEnabled(true); findChild<QComboBox*>("directoryComparisonLevel")->setEnabled(true);
         findChild<QLineEdit*>("directoryQuery")->setEnabled(true); findChild<QComboBox*>("directoryStatusFilter")->setEnabled(true);
     }
     void DirectoryView::SetComparison(const Request& Input, const Result& Value)
@@ -211,6 +216,8 @@ namespace hc::compare
         const auto selectedPath = wasStreaming ? currentEntry()["path"].toString() : QString{};
         const auto expanded = expandedPaths_; expandedPaths_.clear();
         EndProgress(false); request_ = Input; comparison_ = Value;
+        auto* level = findChild<QComboBox*>("directoryComparisonLevel");
+        { const QSignalBlocker blocker(level); level->setCurrentIndex(level->findData(Input.directory_.level_)); }
         findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
         treeModel_->SetEntries(Value.entries_);
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
@@ -236,7 +243,7 @@ namespace hc::compare
         QStringList lines;
         if (!treeMode_) lines << tr("LEFT  %1").arg(request_.file1_) << tr("RIGHT  %1").arg(request_.file2_);
         if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(request_.base_);
-        lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교")) +
+        lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : comparison_.directoryLevel_ == "text" ? tr("텍스트 내용 비교 · 인코딩/BOM 차이 구분 · 바이너리/16 MiB 초과는 바이트 비교") : tr("바이트 비교")) +
             (comparison_.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
         if (!comparison_.directoryComplete_) lines << tr("일부 항목을 비교하지 못했습니다. ‘비교 불가만’ 필터에서 경로와 오류를 확인하십시오. 병합 계획은 제한됩니다.");
         QStringList issues;
@@ -310,7 +317,7 @@ namespace hc::compare
         {
             const int row = current < 0 ? (Direction > 0 ? offset - 1 : count - offset) : (current + (Direction > 0 ? offset : -offset) + count) % count;
             const auto index = filter_->index(row, 0); const auto entry = model_->Entry(filter_->mapToSource(index).row());
-            if (entry["status"] != "Equal") { table_->setCurrentIndex(index); table_->scrollTo(index); return; }
+            if (!DirectoryContentEqual(entry["status"].toString())) { table_->setCurrentIndex(index); table_->scrollTo(index); return; }
         }
     }
 }

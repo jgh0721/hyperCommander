@@ -2071,6 +2071,38 @@ private slots:
         canceled.store(true); QVERIFY(waiting.wait_for(std::chrono::seconds(2)) == std::future_status::ready); QCOMPARE(waiting.get(), std::string("Canceled"));
         for (int i = 0; i < 4; ++i) QVERIFY(channel.Take()); QVERIFY(!channel.Take());
     }
+    void directoryTextEquivalenceAndPlan()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.directory_.level_ = "text";
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto utf8 = QString("가\r\n").toUtf8(); write(r.file1_ + "/a.txt", utf8);
+        for (const auto& encoded : {QByteArray::fromHex("efbbbf") + utf8, QByteArray::fromHex("fffe00ac0d000a00"), QByteArray::fromHex("feffac00000d000a")})
+        {
+            write(r.file2_ + "/a.txt", encoded); const auto result = Execute(r, cancel, false);
+            QVERIFY2(result.completion_ == "Complete", qPrintable(result.error_)); QCOMPARE(result.exitCode_, 0);
+            QCOMPARE(result.entries_.first().Status(), QString("Equivalent")); QCOMPARE(result.Json()["entries"].toArray()[0].toObject()["status"].toString(), QString("Equivalent"));
+            auto bytes = r; bytes.directory_.level_ = "bytes"; QCOMPARE(Execute(bytes, cancel, false).exitCode_, 1);
+        }
+        write(r.file2_ + "/a.txt", QByteArray::fromHex("b0a10d0a")); QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        r.inputEncodings_[1] = "CP949"; QCOMPARE(Execute(r, cancel, false).entries_.first().Status(), QString("Equivalent"));
+        r.inputEncodings_[1].clear(); write(r.file2_ + "/a.txt", QString("가\n").toUtf8()); QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        write(r.file1_ + "/a.txt", QByteArray("a\0b", 3)); write(r.file2_ + "/a.txt", QByteArray("a\0c", 3)); QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        write(r.file1_ + "/a.txt", "AB"); write(r.file2_ + "/a.txt", "AB"); r.inputEncodings_[1] = "UTF-16LE";
+        QCOMPARE(Execute(r, cancel, false).exitCode_, 1); r.inputEncodings_[1].clear();
+        r.base_ = dir.filePath("base"); QVERIFY(QDir().mkpath(r.base_)); write(r.base_ + "/a.txt", utf8);
+        write(r.file1_ + "/a.txt", QByteArray::fromHex("fffe00ac0d000a00")); write(r.file2_ + "/a.txt", "changed\r\n");
+        auto result = Execute(r, cancel, false); QCOMPARE(result.entries_.first().Status(), QString("RightChanged"));
+        r.output_ = dir.filePath("out"); const auto plan = MakeDirectoryPlan(r, result, {});
+        QCOMPARE(plan["actions"].toArray()[0].toObject()["choice"].toString(), QString("right"));
+        r.base_.clear(); write(r.file2_ + "/a.txt", utf8); result = Execute(r, cancel, false);
+        const auto equivalentPlan = MakeDirectoryPlan(r, result, {}); QCOMPARE(equivalentPlan["actions"].toArray()[0].toObject()["choice"].toString(), QString("left"));
+        r.planOut_ = dir.filePath("plan.json"); SaveDirectoryPlan(equivalentPlan, r.planOut_, result, {});
+        Request apply; apply.mode_ = "apply"; apply.applyPlan_ = r.planOut_;
+        const auto applied = Execute(apply, cancel, true); QVERIFY2(applied.exitCode_ == 0, qPrintable(applied.error_));
+        QCOMPARE(read(r.output_ + "/a.txt"), read(r.file1_ + "/a.txt"));
+        const auto parsed = Parse({"app", "-mode", "directory", "-file1", r.file1_, "-file2", r.file2_, "-directory-level", "text", "-encoding2", "CP949"}, true);
+        QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QCOMPARE(parsed.request_.directory_.level_, QString("text"));
+    }
     void compactDirectoryRowsPreserveEvidence()
     {
         const QJsonObject side{{"present", true}, {"path", "소스/File.cpp"}, {"directory", false}, {"size", "9007199254740993"}, {"modifiedUtcMs", "1792751958687"}};

@@ -40,7 +40,7 @@ namespace hc::compare
         value("timeout-ms", "Cooperative request deadline in milliseconds (100..3600000); pending native/network I/O may exceed it.");
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
-        value("directory-level", "bytes (default) or metadata; metadata does not verify file contents.");
+        value("directory-level", "bytes (default), text (encoding/BOM-independent, up to 16 MiB per file; binary/oversized uses bytes), or metadata.");
         value("theme", "GUI theme: light or dark.");
         value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
@@ -103,7 +103,7 @@ namespace hc::compare
             (QString(name) == "include" ? request.directory_.include_ : request.directory_.exclude_) = patterns;
         }
         if (parser.isSet("directory-level")) request.directory_.level_ = parser.value("directory-level");
-        if (request.directory_.level_ != "bytes" && request.directory_.level_ != "metadata") return fail("Invalid directory-level.");
+        if (request.directory_.level_ != "bytes" && request.directory_.level_ != "metadata" && request.directory_.level_ != "text") return fail("Invalid directory-level.");
         if ((parser.isSet("include") || parser.isSet("exclude") || parser.isSet("directory-level")) &&
             !QStringList{"auto", "directory", "directory-merge"}.contains(parser.isSet("mode") ? parser.value("mode") : "auto")) return fail("Directory options require auto or directory mode.");
         request.planOut_ = parser.value("planout"); request.decisions_ = parser.value("decisions");

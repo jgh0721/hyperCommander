@@ -812,6 +812,21 @@ private slots:
             QTRY_COMPARE(window.ExitCode(), 0); window.close(); view.close();
         }
     }
+    void directoryTextPolicySwitchAndFilter()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "directory"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.directory_.level_ = "text";
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_)); write(r.file1_ + "/a.txt", "same\n"); write(r.file2_ + "/a.txt", QByteArray::fromHex("efbbbf") + "same\n");
+        CompareWindow window(r); window.resize(1400, 850); window.show();
+        auto* tree = window.findChild<QTreeView*>("directoryLeftTree"); auto* level = window.findChild<QComboBox*>("directoryComparisonLevel");
+        QTRY_COMPARE(window.ExitCode(), 0); QTRY_VERIFY(level->isEnabled()); QCOMPARE(level->currentData().toString(), QString("text"));
+        QVERIFY(tree->model()->index(0, 1).data().toString().contains("인코딩/BOM"));
+        auto* filter = window.findChild<QComboBox*>("directoryStatusFilter"); filter->setCurrentIndex(1); QCOMPARE(tree->model()->rowCount(), 0);
+        filter->setCurrentIndex(0); level->setCurrentIndex(level->findData("bytes")); QTRY_COMPARE(window.ExitCode(), 1);
+        QTRY_VERIFY(level->isEnabled()); QCOMPARE(tree->model()->index(0, 1).data().toString(), QString("다름"));
+        level->setCurrentIndex(level->findData("text")); QTRY_COMPARE(window.ExitCode(), 0); QTRY_VERIFY(level->isEnabled());
+        QVERIFY(window.findChild<QAction*>("encoding2_CP949")->isEnabled());
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-text-policy.png")); window.close();
+    }
     void directoryLargeWorkspaceAcceptance()
     {
         const auto leftPath = qEnvironmentVariable("HC_COMPARE_LARGE_LEFT"), rightPath = qEnvironmentVariable("HC_COMPARE_LARGE_RIGHT");

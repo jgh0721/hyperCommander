@@ -55,6 +55,7 @@ namespace hc::compare
         void NavigateDifference(int Direction);
         void OpenCurrent();
         std::function<void(Request)> open_;
+        std::function<void(QString)> levelChanged_;
     private:
         void updateSelection();
         void updateRoots();

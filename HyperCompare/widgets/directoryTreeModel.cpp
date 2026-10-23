@@ -46,7 +46,7 @@ namespace hc::compare
                 parent->folder_ = true; nodes_.push_back(std::move(n)); parent = ptr;
             }
             if (parent == &root_) continue;
-            parent->entry_ = i; parent->different_ = entry.Status() != "Equal";
+            parent->entry_ = i; parent->different_ = !DirectoryContentEqual(entry.Status());
             for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
             entriesToNodes_[std::size_t(i)] = parent;
         }
@@ -95,7 +95,7 @@ namespace hc::compare
                 entries_[parent->entry_].sides_[Progress.side_] = row.sides_[Progress.side_];
             else entries_[parent->entry_] = row;
             const auto& entry = entries_.at(parent->entry_); parent->matched_ = true;
-            parent->different_ = entry.Status() != "Equal";
+            parent->different_ = !DirectoryContentEqual(entry.Status());
             for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
             if (parent->different_) for (auto* ancestor = parent->parent_; ancestor; ancestor = ancestor->parent_) ancestor->different_ = true;
             const auto index = indexFor(parent); emit dataChanged(index, index.siblingAtColumn(5));
@@ -160,7 +160,7 @@ namespace hc::compare
         {
             const auto row = current < 0 ? (Direction > 0 ? offset - 1 : count - offset) : (current + (Direction > 0 ? offset : -offset) + count) % count;
             const auto* n = order_[std::size_t(row)];
-            if (n->matched_ && n->entry_ >= 0 && entries_.at(n->entry_).Status() != "Equal") return indexFor(n);
+            if (n->matched_ && n->entry_ >= 0 && !DirectoryContentEqual(entries_.at(n->entry_).Status())) return indexFor(n);
         }
         return {};
     }

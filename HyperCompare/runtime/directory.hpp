@@ -12,6 +12,7 @@
 
 namespace hc::compare
 {
+    inline bool DirectoryContentEqual(const QString& Status) { return Status == "Equal" || Status == "Equivalent"; }
     struct Request;
     struct Result;
     struct DirectoryPolicy
