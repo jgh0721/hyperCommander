@@ -309,11 +309,11 @@ namespace hc::compare
         { result.error_ = QString::fromUtf8(error.what()); result.exitCode_ = 2; result.completion_ = "Failed"; }
         return result;
     }
-    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
+    static MergeWorkFile loadWorkArtifact(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits, bool Decisions)
     {
         auto paths = Input; paths.planOut_ = Path; checkArtifactPaths(paths, Limits);
         const auto snapshot = readSnapshot(Path, decisionPlanBytes, Limits); MergeWorkFile file;
-        file.work_ = DecodeMergeWork(Input, Session, snapshot.raw_, Limits);
+        file.work_ = Decisions ? DecodeDecisionWork(Input, Session, snapshot.raw_, Limits) : DecodeMergeWork(Input, Session, snapshot.raw_, Limits);
         for (const auto& input : Session.inputs_)
         {
             Limits.Check(); const auto current = require(reader(input.path_)->Resolve(locator(input.path_), context(Limits)).get());
@@ -321,8 +321,8 @@ namespace hc::compare
         }
         file.expected_ = {true, snapshot.entry_.id_.revision_}; Limits.Check(); return file;
     }
-    MergeWorkFile SaveMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
-        const std::optional<storage::DestinationExpectation>& Expected, bool ReplaceExisting, const Budget& Limits)
+    static MergeWorkFile saveWorkArtifact(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
+        const std::optional<storage::DestinationExpectation>& Expected, bool ReplaceExisting, const Budget& Limits, bool Decisions)
     {
         CheckProtectedInputs(Input, {Path}, Limits);
         auto paths = Input; paths.planOut_ = Path; checkArtifactPaths(paths, Limits);
@@ -333,7 +333,7 @@ namespace hc::compare
             const auto entry = require(writer->Inspect(locator(Path), context(Limits)));
             if (entry) expected = {true, entry->id_.revision_};
         }
-        const auto data = EncodeMergeWork(Input, Session, Work, Limits); Limits.Check();
+        const auto data = Decisions ? EncodeDecisionWork(Input, Session, Work, Limits) : EncodeMergeWork(Input, Session, Work, Limits); Limits.Check();
         // A checkpoint may preserve work based on old inputs. Loading requires a
         // matching live input generation; saving does not discard such work.
         MergeWorkFile file; SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
@@ -355,6 +355,16 @@ namespace hc::compare
         journal.Complete(receipt, file.warnings_, file.recovery_, verified);
         return file;
     }
+    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
+    { return loadWorkArtifact(Path, Input, Session, Limits, false); }
+    MergeWorkFile LoadDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
+    { auto limits = Limits; ConfigureMemoryBudget(limits, Input.memoryMiB_); return loadWorkArtifact(Path, Input, Session, limits, true); }
+    MergeWorkFile SaveMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
+        const std::optional<storage::DestinationExpectation>& Expected, bool ReplaceExisting, const Budget& Limits)
+    { return saveWorkArtifact(Path, Input, Session, Work, Expected, ReplaceExisting, Limits, false); }
+    MergeWorkFile SaveDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
+        bool ReplaceExisting, const Budget& Limits)
+    { auto limits = Limits; ConfigureMemoryBudget(limits, Input.memoryMiB_); return saveWorkArtifact(Path, Input, Session, Work, {}, ReplaceExisting, limits, true); }
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8)
     {
         if (!Value.hasOutputExpectation_ || Value.inputs_.isEmpty()) throw Failure("MissingOutputExpectation");

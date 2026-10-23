@@ -15,6 +15,11 @@ namespace hc::compare
         storage::DestinationExpectation expected_;
         QJsonArray warnings_, recovery_;
     };
+    QByteArray EncodeDecisionWork(const Request& Input, const Result& Session, const MergeWork& Work, const Budget& Limits);
+    MergeWork DecodeDecisionWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits);
+    MergeWorkFile LoadDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits);
+    MergeWorkFile SaveDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
+        bool ReplaceExisting, const Budget& Limits);
     QByteArray EncodeMergeWork(const Request& Input, const Result& Session, const MergeWork& Work, const Budget& Limits);
     MergeWork DecodeMergeWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits);
     MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits);

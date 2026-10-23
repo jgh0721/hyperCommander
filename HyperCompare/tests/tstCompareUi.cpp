@@ -994,6 +994,32 @@ private slots:
         action(window, "전체 수동 완료")->trigger(); QVERIFY(action(window, "결과 저장")->isEnabled());
         action(window, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
     }
+    void decisionPlanImportExportAndUndo()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out"); r.semantic_ = "off";
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); CompareWindow window(r); window.show();
+        auto* importAction = window.findChild<QAction*>("importDecisionPlan"); auto* exportAction = window.findChild<QAction*>("exportDecisionPlan"); QVERIFY(importAction); QVERIFY(exportAction);
+        QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000); auto* output = window.findChild<ScintillaEditBase*>("RESULT"); QVERIFY(output);
+        action(window, "오른쪽 전체 선택")->trigger(); const auto undo = output->send(SCI_GETUNDOCURRENT);
+        const auto path = dir.filePath("plan.json"); window.ExportDecisions(path); QTRY_VERIFY_WITH_TIMEOUT(exportAction->isEnabled(), 10000);
+        QVERIFY(QFileInfo::exists(path)); QCOMPARE(contents(output), QByteArray("right\n")); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo); QVERIFY(!QFileInfo::exists(r.output_));
+        action(window, "왼쪽 전체 선택")->trigger(); QCOMPARE(contents(output), QByteArray("left\n"));
+        window.ImportDecisions(path); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000); QCOMPARE(contents(output), QByteArray("right\n")); QVERIFY(!QFileInfo::exists(r.output_));
+        action(window, "실행 취소")->trigger(); QCOMPARE(contents(output), QByteArray("left\n"));
+        action(window, "다시 실행")->trigger(); QCOMPARE(contents(output), QByteArray("right\n"));
+        write(path, "invalid JSON"); const auto beforeFailure = output->send(SCI_GETUNDOCURRENT);
+        window.ImportDecisions(path); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000);
+        QCOMPARE(contents(output), QByteArray("right\n")); QCOMPARE(output->send(SCI_GETUNDOCURRENT), beforeFailure);
+        // Plan export must not take ownership of the current .hcmerge save path.
+        const auto workPath = dir.filePath("work.hcmerge"); window.SaveWork(workPath); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000);
+        window.ExportDecisions(workPath, true); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000);
+        QFile protectedWork(workPath); QVERIFY(protectedWork.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(protectedWork.readAll()).object()["kind"].toString(), QString("text-merge-work")); protectedWork.close();
+        window.ExportDecisions(path, true); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000);
+        window.SaveWork(workPath); QTRY_VERIFY_WITH_TIMEOUT(importAction->isEnabled(), 10000);
+        QFile work(workPath); QVERIFY(work.open(QIODevice::ReadOnly)); QCOMPARE(QJsonDocument::fromJson(work.readAll()).object()["kind"].toString(), QString("text-merge-work")); work.close();
+        action(window, "결과 저장")->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
+    }
     void reportExportWorkingBuffersAndMergeState()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt"); r.semantic_ = "off";

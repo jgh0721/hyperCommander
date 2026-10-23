@@ -1177,6 +1177,69 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(SaveMergeWorkFile(dir.filePath("canceled.hcmerge"), r, session, work, {}, false, limits), Failure);
         QVERIFY(!QFile::exists(dir.filePath("canceled.hcmerge")));
     }
+    void decisionWorkConversionAndGuards()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, "head\na\nkeep\nz\n"); write(r.file2_, "head\nA\nkeep\nZ\n");
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        for (bool three : {false, true})
+        {
+            if (three) { r.base_ = dir.filePath("base"); write(r.base_, "head\nb\nkeep\nx\n"); }
+            const auto session = Execute(r, cancel, false); QVERIFY(session.plan_); QCOMPARE(session.plan_->blocks_.size(), std::size_t(2));
+            for (const auto resolution : {Resolution::Unresolved, Resolution::Left, Resolution::Right, Resolution::Base,
+                Resolution::LeftThenRight, Resolution::RightThenLeft, Resolution::Manual, Resolution::Omit})
+            {
+                if (!three && resolution == Resolution::Base) continue;
+                MergeModel model(session.plan_); MergeWork work{three ? session.output_ : session.inputs_[0].utf8_, model.State(), false};
+                if (resolution != Resolution::Unresolved)
+                {
+                    const auto edit = model.Prepare(1, model.Revision(), resolution); model.Apply(edit);
+                    if (resolution != Resolution::Manual) work.text_.replace(qsizetype(edit.begin_), qsizetype(edit.end_ - edit.begin_), QByteArray::fromStdString(edit.replacement_));
+                    work.state_ = model.State();
+                    if (resolution == Resolution::Manual)
+                    {
+                        const auto manual = QString::fromUtf8("수동😀\r\n").toUtf8(); const auto old = work.state_[0];
+                        work.text_.replace(qsizetype(old.begin_), qsizetype(old.end_ - old.begin_), manual);
+                        const auto delta = manual.size() - qsizetype(old.end_ - old.begin_); work.state_[0].end_ = old.begin_ + manual.size();
+                        work.state_[1].begin_ += delta; work.state_[1].end_ += delta;
+                    }
+                }
+                const auto bytes = EncodeDecisionWork(r, session, work, {}); const auto decoded = DecodeDecisionWork(r, session, bytes, {});
+                QCOMPARE(decoded.text_, work.text_); QCOMPARE(decoded.state_, work.state_);
+                auto cli = session; ApplyDecisionPlan(r, cli, bytes, {}); QCOMPARE(cli.output_, work.text_);
+            }
+            MergeWork work{three ? session.output_ : session.inputs_[0].utf8_, session.plan_->initial_, false};
+            work.reviewRequired_ = true; QVERIFY_EXCEPTION_THROWN(EncodeDecisionWork(r, session, work, {}), Failure); work.reviewRequired_ = false;
+            work.text_.prepend("outside\n"); for (auto& state : work.state_) { state.begin_ += 8; state.end_ += 8; }
+            QVERIFY_EXCEPTION_THROWN(EncodeDecisionWork(r, session, work, {}), Failure);
+            work.state_[0] = {0, 0, Resolution::Manual, false}; QVERIFY_EXCEPTION_THROWN(EncodeDecisionWork(r, session, work, {}), Failure);
+        }
+    }
+    void decisionWorkStorageAndCli()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto session = Execute(r, cancel, false); MergeModel model(session.plan_); model.Apply(model.Prepare(1, model.Revision(), Resolution::Right));
+        const MergeWork work{QByteArray("right\n"), model.State(), false}; const auto path = dir.filePath("decisions.json");
+        SaveDecisionWorkFile(path, r, session, work, false, {}); QCOMPARE(LoadDecisionWorkFile(path, r, session, {}).work_.text_, work.text_);
+        QVERIFY_EXCEPTION_THROWN(SaveDecisionWorkFile(path, r, session, work, false, {}), Failure);
+        SaveDecisionWorkFile(path, r, session, work, true, {}); const auto original = read(path);
+        for (const auto& alias : {r.file1_, r.file2_, r.output_})
+            QVERIFY_EXCEPTION_THROWN(SaveDecisionWorkFile(alias, r, session, work, true, {}), Failure);
+        const auto hardlink = dir.filePath("alias.json");
+        QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(hardlink.utf16()), reinterpret_cast<LPCWSTR>(r.file1_.utf16()), nullptr));
+        QVERIFY_EXCEPTION_THROWN(SaveDecisionWorkFile(hardlink, r, session, work, true, {}), Failure);
+        auto cli = r; cli.headless_ = true; cli.decisions_ = path; const auto merged = Execute(cli, cancel, true);
+        QCOMPARE(merged.exitCode_, 0); QCOMPARE(read(r.output_), work.text_);
+        auto invalid = work; invalid.text_.prepend("outside"); invalid.state_[0].begin_ += 7; invalid.state_[0].end_ += 7;
+        QVERIFY_EXCEPTION_THROWN(SaveDecisionWorkFile(path, r, session, invalid, true, {}), Failure); QCOMPARE(read(path), original);
+        std::atomic_bool stop{true}; Budget limits; limits.canceled_ = &stop;
+        QVERIFY_EXCEPTION_THROWN(LoadDecisionWorkFile(path, r, session, limits), Failure);
+        QVERIFY_EXCEPTION_THROWN(SaveDecisionWorkFile(dir.filePath("canceled.json"), r, session, work, false, limits), Failure);
+        QVERIFY(!QFile::exists(dir.filePath("canceled.json")));
+        write(r.file2_, "changed\n"); QVERIFY_EXCEPTION_THROWN(LoadDecisionWorkFile(path, r, session, {}), Failure);
+        const auto fresh = Execute(r, cancel, false); QVERIFY_EXCEPTION_THROWN(LoadDecisionWorkFile(path, r, fresh, {}), Failure);
+    }
     void decisionPlanRoundTrip()
     {
         QTemporaryDir dir; Request r; r.headless_ = true; r.mode_ = "merge"; r.file1_ = dir.filePath("왼쪽.cpp");

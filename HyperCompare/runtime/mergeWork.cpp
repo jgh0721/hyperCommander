@@ -57,6 +57,33 @@ namespace hc::compare
             Limits.Check();
         }
     }
+    MergeWork DecodeDecisionWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits)
+    {
+        auto applied = Session; ApplyDecisionPlan(Input, applied, Json, Limits);
+        return {applied.output_, applied.plan_->initial_, false};
+    }
+    QByteArray EncodeDecisionWork(const Request& Input, const Result& Session, const MergeWork& Work, const Budget& Limits)
+    {
+        validate(Session, Work, Limits);
+        if (Work.reviewRequired_) throw Failure("DecisionWorkReviewRequired");
+        auto plan = MakeDecisionPlan(Input, Session, Limits); auto blocks = plan["blocks"].toArray();
+        const QStringList names{"unresolved", "left", "right", "base", "leftThenRight", "rightThenLeft", "manual", "omit"};
+        for (std::size_t i = 0; i < Work.state_.size(); ++i)
+        {
+            Limits.Check(); const auto& state = Work.state_[i];
+            if (!state.mapped_) throw Failure("DecisionWorkNotRepresentable");
+            auto block = blocks[qsizetype(i)].toObject(); block["choice"] = names[int(state.resolution_)];
+            if (state.resolution_ == Resolution::Manual)
+                block["replacement"] = QString::fromUtf8(Work.text_.constData() + state.begin_, qsizetype(state.end_ - state.begin_));
+            blocks[qsizetype(i)] = block;
+        }
+        plan["blocks"] = blocks; const auto json = QJsonDocument(plan).toJson(QJsonDocument::Compact);
+        // Applying through the CLI validator proves that unchanged gaps and all
+        // decisions survive conversion. Never silently discard free-form edits.
+        const auto restored = DecodeDecisionWork(Input, Session, json, Limits);
+        if (restored.text_ != Work.text_ || restored.state_ != Work.state_) throw Failure("DecisionWorkNotRepresentable");
+        return json;
+    }
     QByteArray EncodeMergeWork(const Request& Input, const Result& Session, const MergeWork& Work, const Budget& Limits)
     {
         validate(Session, Work, Limits); QJsonArray chunks, blocks;

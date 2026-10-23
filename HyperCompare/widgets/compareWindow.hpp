@@ -45,6 +45,8 @@ namespace hc::compare
         void CancelRemoteRequest();
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
+        void ImportDecisions(const QString& Path);
+        void ExportDecisions(const QString& Path, bool ReplaceExisting = false);
         void ExportReport(const QString& Path, bool ReplaceExisting = false);
     protected:
         void closeEvent(QCloseEvent* Event) override;
@@ -59,7 +61,7 @@ namespace hc::compare
         void applyInputChunk(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         void inputUndo(bool Redo);
         bool busy() const;
-        void transferWork(const QString& Path, bool Loading, bool ReplaceExisting);
+        void transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions = false);
         void display();
         void applyPairView();
         const PairComparison* currentPair() const
@@ -97,7 +99,7 @@ namespace hc::compare
         int activeInput_ = 0, savingInput_ = -1;
         QString inputError_, inputSaveError_;
         QVector<QAction*> inputSaveActions_;
-        struct WorkTransfer { MergeWorkFile file_; QString path_, error_; bool loading_ = false; };
+        struct WorkTransfer { MergeWorkFile file_; QString path_, error_; bool loading_ = false, decisions_ = false; };
         QFutureWatcher<WorkTransfer> workWatcher_;
         struct ReportTransfer { ReportFile file_; QString path_, error_; };
         QFutureWatcher<ReportTransfer> reportWatcher_;
@@ -131,6 +133,8 @@ namespace hc::compare
         std::function<void(int)> completed_;
         QAction* saveWork_ = nullptr;
         QAction* loadWork_ = nullptr;
+        QAction* importDecisions_ = nullptr;
+        QAction* exportDecisions_ = nullptr;
         QAction* cancel_ = nullptr;
         QAction* undo_ = nullptr;
         QAction* redo_ = nullptr;

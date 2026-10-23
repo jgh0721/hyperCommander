@@ -168,6 +168,21 @@ namespace hc::compare
             const auto path = QFileDialog::getOpenFileName(this, tr("병합 작업 불러오기"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
             if (!path.isEmpty()) LoadWork(path);
         });
+        importDecisions_ = fileMenu->addAction(tr("결정 계획 불러오기…"), this, [this] {
+            if (!importDecisions_->isEnabled()) return;
+            const auto path = QFileDialog::getOpenFileName(this, tr("결정 계획 불러오기"), {}, tr("JSON 결정 계획 (*.json)"));
+            if (!path.isEmpty()) ImportDecisions(path);
+        });
+        exportDecisions_ = fileMenu->addAction(tr("결정 계획 내보내기…"), this, [this] {
+            if (!exportDecisions_->isEnabled()) return;
+            QFileDialog dialog(this, tr("결정 계획 내보내기"), {}, tr("JSON 결정 계획 (*.json)"));
+            dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix("json");
+            if (dialog.exec() == QDialog::Accepted) ExportDecisions(dialog.selectedFiles().front(), true);
+        });
+        importDecisions_->setObjectName("importDecisionPlan"); exportDecisions_->setObjectName("exportDecisionPlan");
+        importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false);
+        importDecisions_->setToolTip(tr("CLI 결정 계획을 RESULT에 적용합니다. 실행 취소할 수 있습니다."));
+        exportDecisions_->setToolTip(tr("현재 블록 선택을 CLI -decisions용 JSON으로 저장합니다."));
         saveWork_->setShortcut(QKeySequence("Ctrl+Shift+S")); loadWork_->setShortcut(QKeySequence("Ctrl+Shift+O"));
         saveWork_->setEnabled(false); loadWork_->setEnabled(false);
         auto* editMenu = menuBar()->addMenu(tr("편집"));
@@ -292,7 +307,7 @@ namespace hc::compare
                 {
                     if (transfer.loading_)
                         merge_->RestoreWork(transfer.file_.work_.text_, transfer.file_.work_.state_, transfer.file_.work_.reviewRequired_);
-                    workPath_ = transfer.path_; workExpected_ = transfer.file_.expected_;
+                    if (!transfer.decisions_) { workPath_ = transfer.path_; workExpected_ = transfer.file_.expected_; }
                 }
                 catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
             }
@@ -301,6 +316,16 @@ namespace hc::compare
             else if (transfer.loading_) state_->setText(transfer.file_.work_.reviewRequired_ ? tr("작업 복원 완료 — 전체 재검토 필요 · 실행 취소로 이전 RESULT 복원 가능") : tr("작업 복원 완료 — 실행 취소로 이전 RESULT 복원 가능"));
             else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
                 tr("작업 파일 저장 완료 — RESULT 저장 상태 유지") : tr("작업 파일 저장 완료 — 정리·파일 변경 확인 필요"));
+            if (transfer.decisions_)
+            {
+                if (transfer.error_ == "DecisionWorkNotRepresentable" || transfer.error_ == "DecisionStringLimit")
+                    state_->setText(tr("결정 계획으로 보존할 수 없는 편집 내용이 있습니다. 작업 저장을 사용하십시오."));
+                else if (transfer.error_ == "DecisionWorkReviewRequired") state_->setText(tr("전체 재검토를 완료한 뒤 결정 계획을 내보내십시오. 현재 내용은 작업 저장으로 보존할 수 있습니다."));
+                else if (!transfer.error_.isEmpty()) state_->setText(tr("결정 계획 처리 중단: ") + transfer.error_);
+                else if (transfer.loading_) state_->setText(tr("결정 계획 적용 완료 — 실행 취소 가능 · RESULT 저장 필요"));
+                else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
+                    tr("결정 계획 내보내기 완료 — RESULT 저장 상태 유지") : tr("결정 계획 저장 완료 — 정리·파일 변경 확인 필요"));
+            }
             state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
                 {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
             if (closing_) close();
@@ -697,6 +722,7 @@ namespace hc::compare
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
+        importDecisions_->setEnabled(ready && request_.takeAll_.isEmpty()); exportDecisions_->setEnabled(ready && request_.takeAll_.isEmpty());
         for (auto* action : blockActions_) action->setEnabled(false);
         for (auto* action : wholeActions_) action->setEnabled(ready);
         undo_->setEnabled(ready && output_->send(SCI_CANUNDO)); redo_->setEnabled(ready && output_->send(SCI_CANREDO));
@@ -786,7 +812,9 @@ namespace hc::compare
     }
     void CompareWindow::SaveWork(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting); }
     void CompareWindow::LoadWork(const QString& Path) { transferWork(Path, true, false); }
-    void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting)
+    void CompareWindow::ImportDecisions(const QString& Path) { transferWork(Path, true, false, true); }
+    void CompareWindow::ExportDecisions(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting, true); }
+    void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions)
     {
         if (!merge_ || busy() || Path.isEmpty()) return;
         const auto absolute = QFileInfo(Path).absoluteFilePath();
@@ -794,15 +822,20 @@ namespace hc::compare
         const MergeWork work = Loading ? MergeWork{} : MergeWork{contents(output_), merge_->Model().State(), merge_->Model().ReviewRequired()};
         canceled_ = std::make_shared<std::atomic_bool>(false);
         output_->send(SCI_SETREADONLY, 1); cancel_->setEnabled(true);
-        workWatcher_.setFuture(QtConcurrent::run([path = absolute, input = request_, session = result_, work, expected, Loading, ReplaceExisting, cancel = canceled_] {
-            WorkTransfer transfer; transfer.path_ = path; transfer.loading_ = Loading;
+        auto input = request_; if (Decisions && !workPath_.isEmpty()) input.protectedInputs_.append(workPath_);
+        workWatcher_.setFuture(QtConcurrent::run([path = absolute, input, session = result_, work, expected, Loading, ReplaceExisting, Decisions, cancel = canceled_] {
+            WorkTransfer transfer; transfer.path_ = path; transfer.loading_ = Loading; transfer.decisions_ = Decisions;
             Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
-            try { transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits); }
+            try
+            {
+                if (Decisions) transfer.file_ = Loading ? LoadDecisionWorkFile(path, input, session, limits) : SaveDecisionWorkFile(path, input, session, work, ReplaceExisting, limits);
+                else transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits);
+            }
             catch (const SaveRecoveryFailure& error) { transfer.error_ = QString::fromUtf8(error.what()); transfer.file_.recovery_ = error.recovery_; }
             catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
             return transfer;
         }));
-        updateMerge(); state_->setText(Loading ? tr("작업 불러오는 중…") : tr("작업 저장 중…"));
+        updateMerge(); state_->setText(Decisions ? (Loading ? tr("결정 계획 불러오는 중…") : tr("결정 계획 내보내는 중…")) : (Loading ? tr("작업 불러오는 중…") : tr("작업 저장 중…")));
     }
     void CompareWindow::ExportReport(const QString& Path, bool ReplaceExisting)
     {
