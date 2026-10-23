@@ -1866,6 +1866,41 @@ private slots:
         QCOMPARE(Last.discoveredItems_.value_or(99), 5ull); QCOMPARE(Last.plannedItems_.value_or(99), 5ull);
         QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty()); QCOMPARE(Probe->alive_, 0);
     }
+    void deleteDirectoryAfterCreationTimeChange_data()
+    {
+        QTest::addColumn<bool>("Streaming");
+        QTest::newRow("prescan") << false; QTest::newRow("streaming") << true;
+    }
+    void deleteDirectoryAfterCreationTimeChange()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local deterministic timestamp fixture.");
+        QFETCH(bool, Streaming);
+        const QString Name = Streaming ? "delete-time-streaming" : "delete-time-prescan";
+        QVERIFY(QDir().mkpath(root_->filePath(Name)));
+        for (int I = 0; I < 37; ++I) QVERIFY(write(Name + "/" + QString::number(I), "payload"));
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}}; Request.confirmDelete_ = false;
+        Request.deleteWhileListing_ = Streaming; Request.calculateSizeBefore_ = !Streaming;
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        bool Changed = false, Completed = false; JobStepContext Context; Context.committing_ = true;
+        for (int I = 0; I < 1000 && !Completed; ++I) {
+            const auto Step = Prepared.Value().task_->Advance(Context);
+            QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "delete failed");
+            if (!Changed && Step.item_ && Step.item_->sourceRemoved_ && Step.item_->source_ && !Step.item_->source_->directory_) {
+                const auto Native = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
+                const auto Handle = CreateFileW(Native.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                QVERIFY(Handle != INVALID_HANDLE_VALUE); const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+                BY_HANDLE_FILE_INFORMATION Info{}; QVERIFY(GetFileInformationByHandle(Handle, &Info));
+                const auto Ticks = ((std::uint64_t(Info.ftCreationTime.dwHighDateTime) << 32) | Info.ftCreationTime.dwLowDateTime) + 10000000;
+                const FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)}; QVERIFY(SetFileTime(Handle, &Time, nullptr, nullptr)); Changed = true;
+            }
+            Completed = Step.next_ == JobState::Completed;
+        }
+        QVERIFY(Changed && Completed); QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+    }
     void nativeDeleteEnumerationYieldsBeforeFolderEnd()
     {
         const auto Prefix = QString("native-delete-pages"); QVERIFY(QDir().mkpath(root_->filePath(Prefix)));

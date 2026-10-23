@@ -263,6 +263,28 @@ private slots:
         auto StaleRead = Provider->OpenRead(Id, {}).get(); QVERIFY(!StaleRead.HasValue());
         QCOMPARE(StaleRead.Failure().category_, ErrorCategory::StaleRevision);
     }
+    void nativeDirectoryCreationTimeIsNotIdentity()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Path = Directory.filePath("folder"); QVERIFY(QDir().mkpath(Path));
+        const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+        const auto Handle = CreateFileW(Native.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(Handle != INVALID_HANDLE_VALUE); const auto Close = qScopeGuard([&] { CloseHandle(Handle); });
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        const Locator At{LocatorKind::Local, QDir::toNativeSeparators(Path).toStdString()};
+        auto Before = Provider->Resolve(At, {}).get(); QVERIFY(Before.HasValue());
+        BY_HANDLE_FILE_INFORMATION Info{}; QVERIFY(GetFileInformationByHandle(Handle, &Info));
+        const auto Ticks = ((std::uint64_t(Info.ftCreationTime.dwHighDateTime) << 32) | Info.ftCreationTime.dwLowDateTime) + 10000000;
+        const FILETIME Changed{DWORD(Ticks), DWORD(Ticks >> 32)};
+        QVERIFY(SetFileTime(Handle, &Changed, nullptr, nullptr));
+        auto After = Provider->Stat(Before.Value().id_, {}).get(); QVERIFY(After.HasValue());
+        QCOMPARE(After.Value().id_.revision_, Before.Value().id_.revision_);
+        QVERIFY(After.Value().createdUtcMs_ != Before.Value().createdUtcMs_);
+        QVERIFY(QDir().rename(Path, Path + ".original")); QVERIFY(QDir().mkpath(Path));
+        auto Replacement = Provider->Stat(Before.Value().id_, {}).get(); QVERIFY(!Replacement.HasValue());
+        QCOMPARE(Replacement.Failure().category_, ErrorCategory::StaleRevision);
+    }
     void nativeHandleRevisionRejectsSameMetadataReplacement()
     {
         QTemporaryDir Directory; QVERIFY(Directory.isValid());

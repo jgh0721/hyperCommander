@@ -19,10 +19,13 @@ namespace hc::storage::native
     {
         const auto Identity = std::to_string(Info.dwVolumeSerialNumber) + ":"
             + std::to_string(Info.nFileIndexHigh) + ":" + std::to_string(Info.nFileIndexLow);
-        // Directory mtime describes its children, so retain the directory's
-        // existing identity policy when a job changes those children.
-        if (Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        // SMB servers may synthesize creation time differently between handles.
+        // A nonzero file ID detects replacement without rejecting child deletion.
+        if (Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (Info.nFileIndexHigh || Info.nFileIndexLow) return {"directory:identity:" + Identity};
+            // Retain the conservative fallback when the server supplies no ID.
             return {"directory:" + std::to_string(FileTimeTicks(Info.ftCreationTime)) + ":" + Identity};
+        }
         const WIN32_FILE_ATTRIBUTE_DATA Data{Info.dwFileAttributes, Info.ftCreationTime,
             Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
         // Fresh snapshots additionally detect replacement by a different file
