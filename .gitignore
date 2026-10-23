@@ -32,7 +32,6 @@ documentation/source/images/watercolor_ui_plan
 
 tools/**/*.ps1
 !tools/imagePerformance/*.ps1
-!tools/hypercompare/*.ps1
 tools/**/__pycache__/
 UniqueLibs/solTypeDefs_Ver.hpp
 
@@ -46,5 +45,4 @@ tools/SignotaurTool.exe
 
 # Public release signing and update scripts
 !tools/update/*.ps1
-!tools/Install-HyperCommander.ps1
 !tools/New-PortableZip.ps1
