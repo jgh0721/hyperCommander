@@ -1,0 +1,54 @@
+﻿#pragma once
+#include <QAbstractItemModel>
+#include <QSortFilterProxyModel>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QHash>
+#include <memory>
+#include <vector>
+
+namespace hc::compare
+{
+    class DirectoryTreeModel final : public QAbstractItemModel
+    {
+    public:
+        enum { VisibleRole = Qt::UserRole + 1, PathRole, EntryRole };
+        explicit DirectoryTreeModel(QObject* Parent = nullptr) : QAbstractItemModel(Parent) {}
+        void SetEntries(QJsonArray Entries);
+        void SetFilter(const QString& Query, int Status);
+        QModelIndex index(int Row, int Column, const QModelIndex& Parent = {}) const override;
+        QModelIndex parent(const QModelIndex& Child) const override;
+        int rowCount(const QModelIndex& Parent = {}) const override;
+        int columnCount(const QModelIndex& = {}) const override { return 6; }
+        QVariant data(const QModelIndex& Index, int Role = Qt::DisplayRole) const override;
+        QVariant headerData(int Section, Qt::Orientation Orientation, int Role) const override;
+        QJsonObject Entry(const QModelIndex& Index) const;
+        QModelIndex ForEntry(int Row) const;
+        QModelIndex NextDifference(const QModelIndex& Current, int Direction) const;
+        int VisibleEntries() const { return visibleEntries_; }
+    private:
+        struct Node
+        {
+            QString path_;
+            Node* parent_ = nullptr;
+            std::vector<Node*> children_;
+            int row_ = 0, entry_ = -1, order_ = -1;
+            bool visible_ = true, matched_ = true, different_ = false, folder_ = false;
+        };
+        Node* node(const QModelIndex& Index) const;
+        QModelIndex indexFor(const Node* Item) const;
+        Node root_;
+        std::vector<std::unique_ptr<Node>> nodes_;
+        std::vector<Node*> order_, entriesToNodes_;
+        QJsonArray entries_;
+        int visibleEntries_ = 0;
+    };
+    class DirectoryTreeFilter final : public QSortFilterProxyModel
+    {
+    public:
+        explicit DirectoryTreeFilter(QObject* Parent) : QSortFilterProxyModel(Parent) {}
+        void SetQuery(const QString& Query, int Status);
+    protected:
+        bool filterAcceptsRow(int Row, const QModelIndex& Parent) const override;
+    };
+}

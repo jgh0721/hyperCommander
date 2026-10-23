@@ -11,6 +11,7 @@
 #include "widgets/findBar.hpp"
 #include "widgets/overviewBar.hpp"
 #include "widgets/directoryView.hpp"
+#include "widgets/directoryTreeModel.hpp"
 #include "widgets/directoryMergeDialog.hpp"
 #include "widgets/semanticView.hpp"
 #include "widgets/imageCompareView.hpp"
@@ -519,6 +520,90 @@ private slots:
         write(r.file1_ + "/a", "changed input"); dialog.ApplyPlan(true); QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000);
         QCOMPARE(dialog.LastResult().error_, QString("DirectorySnapshotMismatch")); QVERIFY(!QFileInfo::exists(dir.filePath("out"))); dialog.close();
     }
+    void directoryTreeModelContractsAndFiltering()
+    {
+        DirectoryTreeModel model; QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        DirectoryTreeFilter filter(nullptr); filter.setSourceModel(&model);
+        QAbstractItemModelTester proxyTester(&filter, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        const auto side = [](QString Path, bool Directory = false) { return QJsonObject{{"path", Path}, {"present", true}, {"directory", Directory}, {"size", "12"}}; };
+        QJsonArray entries{
+            QJsonObject{{"path", "Src/deep/한글.cpp"}, {"status", "Conflict"}, {"left", side("Src/deep/한글.cpp")}, {"right", side("src/deep/한글.cpp")}},
+            QJsonObject{{"path", "src"}, {"status", "NameDifferent"}, {"left", side("Src", true)}, {"right", side("src", true)}},
+            QJsonObject{{"path", "src/deep"}, {"status", "TypeConflict"}, {"left", side("Src/deep", true)}, {"right", side("src/deep")}},
+            QJsonObject{{"path", "only.txt"}, {"status", "LeftOnly"}, {"left", side("only.txt")}},
+            QJsonObject{{"path", "same.txt"}, {"status", "Equal"}, {"left", side("same.txt")}, {"right", side("same.txt")}}
+        };
+        model.SetEntries(entries); QCOMPARE(model.rowCount(), 3);
+        const auto src = model.ForEntry(1), deep = model.ForEntry(2), child = model.ForEntry(0);
+        QCOMPARE(model.parent(child), deep); QCOMPARE(model.parent(deep), src); QCOMPARE(model.rowCount(src), 1);
+        QCOMPARE(src.data().toString(), QString("Src")); QCOMPARE(src.siblingAtColumn(3).data().toString(), QString("src"));
+        QCOMPARE(model.ForEntry(3).siblingAtColumn(4).data().toString(), QString("없음"));
+        QCOMPARE(deep.siblingAtColumn(2).data().toString(), QString("폴더")); QCOMPARE(deep.siblingAtColumn(5).data().toString(), QString("12 B"));
+        filter.SetQuery("한글", 2); QCOMPARE(filter.rowCount(), 1); QCOMPARE(filter.rowCount(filter.index(0, 0)), 1);
+        QVERIFY(filter.mapFromSource(child).isValid()); QCOMPARE(model.VisibleEntries(), 1);
+        QCOMPARE(model.NextDifference({}, 1), child); QCOMPARE(model.NextDifference(child, -1), child);
+        filter.SetQuery("missing", 0); QCOMPARE(filter.rowCount(), 0); QVERIFY(!model.NextDifference({}, 1).isValid());
+        filter.SetQuery({}, 0); model.SetEntries({}); QCOMPARE(filter.rowCount(), 0);
+    }
+    void directoryTreesSynchronizeAndOpenFiles()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.theme_ = "light";
+        for (const auto& root : {r.file1_, r.file2_, r.base_}) { QVERIFY(QDir{}.mkpath(root + "/src/nested")); write(root + "/same.txt", "same"); }
+        for (int i = 0; i < 100; ++i)
+        {
+            const auto name = QString("/src/nested/file%1.cpp").arg(i, 3, 10, QChar('0'));
+            write(r.file1_ + name, "left"); write(r.file2_ + name, "right"); write(r.base_ + name, "base");
+        }
+        write(r.file1_ + "/only-left.txt", "left"); write(r.file2_ + "/only-right.txt", "right");
+        CompareWindow window(r); window.resize(1350, 800); window.show();
+        auto* left = window.findChild<QTreeView*>("directoryLeftTree"); auto* right = window.findChild<QTreeView*>("directoryRightTree");
+        QTRY_VERIFY_WITH_TIMEOUT(left->isVisible() && left->model()->rowCount() == 4, 10000);
+        QCOMPARE(left->model(), right->model()); auto* model = left->model();
+        const auto src = model->index(0, 0), nested = model->index(0, 0, src);
+        QCOMPARE(src.data().toString(), QString("src"));
+        left->collapse(src); QTRY_VERIFY(!right->isExpanded(src)); right->expand(src); QTRY_VERIFY(left->isExpanded(src));
+        right->expand(nested); QTRY_VERIFY(left->isExpanded(nested));
+        const auto target = model->index(50, 3, nested); right->setCurrentIndex(target); right->scrollTo(target);
+        QTRY_COMPARE(left->currentIndex().data(DirectoryTreeModel::PathRole), target.data(DirectoryTreeModel::PathRole));
+        QTRY_COMPARE(left->verticalScrollBar()->value(), right->verticalScrollBar()->value());
+        QCOMPARE(left->visualRect(target.siblingAtColumn(0)).y(), right->visualRect(target).y());
+        right->setFocus(); QTest::keyClick(right, Qt::Key_Down);
+        QTRY_COMPARE(left->currentIndex().data(DirectoryTreeModel::PathRole), right->currentIndex().data(DirectoryTreeModel::PathRole));
+        auto* view = static_cast<DirectoryView*>(window.findChild<QWidget*>("directoryView")); Request child; view->open_ = [&](Request Input) { child = std::move(Input); };
+        auto* open = window.findChild<QPushButton*>("directoryOpenFile"); QVERIFY(open->isEnabled()); QTest::mouseClick(open, Qt::LeftButton);
+        QCOMPARE(child.file1_, r.file1_ + "/src/nested/file051.cpp"); QCOMPARE(child.base_, r.base_ + "/src/nested/file051.cpp");
+        child = {}; right->setFocus(); QTest::keyClick(right, Qt::Key_Return); QCOMPARE(child.file1_, r.file1_ + "/src/nested/file051.cpp");
+        auto* query = window.findChild<QLineEdit*>("directoryQuery"); query->setText("only-left"); view->NavigateDifference(1); QVERIFY(!open->isEnabled());
+        QCOMPARE(right->currentIndex().siblingAtColumn(4).data().toString(), QString("없음"));
+        query->clear(); left->collapseAll(); view->NavigateDifference(1); QVERIFY(left->currentIndex().isValid());
+        query->setText("file099"); auto* status = window.findChild<QComboBox*>("directoryStatusFilter"); status->setCurrentIndex(2);
+        view->NavigateDifference(1); QCOMPARE(left->currentIndex().data().toString(), QString("file099.cpp"));
+        QVERIFY(left->isExpanded(left->currentIndex().parent())); QVERIFY(right->isExpanded(right->currentIndex().parent()));
+        auto* mode = window.findChild<QComboBox*>("directoryViewMode"); mode->setCurrentIndex(1);
+        auto* table = window.findChild<QTableView*>("directoryTable"); QCOMPARE(table->currentIndex().data().toString(), QString("src/nested/file099.cpp"));
+        mode->setCurrentIndex(0); QCOMPARE(left->currentIndex().data().toString(), QString("file099.cpp"));
+        query->clear(); status->setCurrentIndex(0); left->collapse(model->index(0, 0, model->index(0, 0))); left->verticalScrollBar()->setValue(0);
+        QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-dark.png")); window.close();
+    }
+    void directoryTreeLargeModel()
+    {
+        QJsonArray rows;
+        for (int i = 0; i < 100000; ++i) rows.append(QJsonObject{{"path", QString("src/file%1.cpp").arg(i, 6, 10, QChar('0'))}, {"status", i == 99999 ? "Conflict" : "Equal"}});
+        DirectoryView view; view.resize(1200, 700); Result value; value.entries_ = rows;
+        QElapsedTimer timer; timer.start(); view.SetComparison({}, value); const auto setupMs = timer.elapsed(); view.show(); const auto showMs = timer.elapsed();
+        auto* left = view.findChild<QTreeView*>("directoryLeftTree"); auto* right = view.findChild<QTreeView*>("directoryRightTree");
+        QCOMPARE(left->model()->rowCount(), 1); QCOMPARE(left->model()->rowCount(left->model()->index(0, 0)), 100000);
+        auto* status = view.findChild<QComboBox*>("directoryStatusFilter"); status->setCurrentIndex(2); view.NavigateDifference(1);
+        QCOMPARE(left->currentIndex().data().toString(), QString("file099999.cpp"));
+        QCOMPARE(right->currentIndex().data(DirectoryTreeModel::PathRole), left->currentIndex().data(DirectoryTreeModel::PathRole));
+        qInfo("100000-entry paired trees: setup %lld ms, show %lld ms, filter/navigation %lld ms", setupMs, showMs - setupMs, timer.elapsed() - showMs);
+        view.findChild<QLineEdit*>("directoryQuery")->setText("absent"); QCOMPARE(left->model()->rowCount(), 0); view.NavigateDifference(-1);
+        view.findChild<QLineEdit*>("directoryQuery")->clear(); view.NavigateDifference(1);
+        view.SetComparison({}, {}); QCOMPARE(left->model()->rowCount(), 0); QVERIFY(!left->currentIndex().isValid());
+        view.close();
+    }
     void directoryVirtualModelAndNavigation()
     {
         DirectoryModel model; QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
@@ -527,6 +612,7 @@ private slots:
         model.SetEntries(rows); QCOMPARE(model.rowCount(), 100000); QCOMPARE(model.columnCount(), 5);
         QCOMPARE(model.rowCount(model.index(0, 0)), 0); QVERIFY(!model.data({}).isValid());
         DirectoryView view; Request r; Result value; value.entries_ = rows; value.directoryLevel_ = "bytes"; view.SetComparison(r, value);
+        view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(1);
         auto* table = view.findChild<QTableView*>("directoryTable"); auto* filter = view.findChild<QComboBox*>("directoryStatusFilter");
         auto* query = view.findChild<QLineEdit*>("directoryQuery"); QCOMPARE(table->model()->rowCount(), 100000);
         filter->setCurrentIndex(2); QCOMPARE(table->model()->rowCount(), 1);
@@ -542,6 +628,7 @@ private slots:
         write(r.file1_ + "/src/changed.cpp", "left"); write(r.file2_ + "/src/changed.cpp", "right"); write(r.base_ + "/src/changed.cpp", "base");
         write(r.file1_ + "/only-left.txt", "new"); CompareWindow window(r); window.show(); window.activateWindow();
         auto* table = window.findChild<QTableView*>("directoryTable"); QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 4, 10000);
+        window.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(1);
         QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("충돌 1개"));
         QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty()); QVERIFY(!window.findChild<QTreeWidget*>("compareChanges")->isVisible());
         auto* filter = window.findChild<QComboBox*>("directoryStatusFilter"); auto* query = window.findChild<QLineEdit*>("directoryQuery");

@@ -1,10 +1,16 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include "directoryTreeModel.hpp"
 #include "directoryMergeDialog.hpp"
 #include <QDir>
 #include <QLocale>
 #include <QFontMetrics>
 #include <QTableView>
+#include <QTreeView>
+#include <QSplitter>
+#include <QScrollBar>
+#include <QStyledItemDelegate>
+#include <QScopedValueRollback>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -17,6 +23,16 @@ namespace hc::compare
 {
     namespace
     {
+        class TreeDelegate final : public QStyledItemDelegate
+        {
+        public:
+            explicit TreeDelegate(QObject* Parent) : QStyledItemDelegate(Parent) {}
+            QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+            {
+                auto size = QStyledItemDelegate::sizeHint(Option, Index);
+                size.setHeight(std::max(28, Option.fontMetrics.height() + 10)); return size;
+            }
+        };
         QString statusName(const QString& Status)
         {
             static const QMap<QString, QString> labels{{"Equal", QObject::tr("동일")}, {"Different", QObject::tr("다름")},
@@ -29,6 +45,12 @@ namespace hc::compare
             return labels.value(Status, Status);
         }
         bool file(const QJsonObject& Entry) { return Entry["present"].toBool() && !Entry["directory"].toBool(); }
+    }
+    bool DirectoryEntryMatches(const QJsonObject& Entry, const QString& Query, int Status)
+    {
+        const auto status = Entry["status"].toString();
+        return Entry["path"].toString().contains(Query, Qt::CaseInsensitive) &&
+            (Status == 0 || (Status == 1 && status != "Equal") || (Status == 2 && (status == "Conflict" || status == "TypeConflict")));
     }
     QString DirectoryStatusName(const QString& Status) { return statusName(Status); }
     void DirectoryModel::SetEntries(QJsonArray Entries) { beginResetModel(); entries_ = std::move(Entries); endResetModel(); }
@@ -61,9 +83,7 @@ namespace hc::compare
     bool DirectoryFilter::filterAcceptsRow(int Row, const QModelIndex& Parent) const
     {
         const auto item = sourceModel()->data(sourceModel()->index(Row, 0, Parent), Qt::UserRole).toJsonObject();
-        const auto status = item["status"].toString();
-        return item["path"].toString().contains(query_, Qt::CaseInsensitive) &&
-            (status_ == 0 || (status_ == 1 && status != "Equal") || (status_ == 2 && (status == "Conflict" || status == "TypeConflict")));
+        return DirectoryEntryMatches(item, query_, status_);
     }
     DirectoryView::DirectoryView(QWidget* Parent) : QWidget(Parent)
     {
@@ -81,6 +101,9 @@ namespace hc::compare
             auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
         });
         searchRow->addWidget(merge);
+        viewMode_ = new QComboBox(this); viewMode_->setObjectName("directoryViewMode");
+        viewMode_->setAccessibleName(tr("디렉터리 표시 방식")); viewMode_->addItems({tr("좌우 폴더 트리"), tr("경로 목록")});
+        searchRow->addWidget(viewMode_);
         searchRow->addWidget(query, 1); searchRow->addWidget(status); searchRow->addWidget(openButton_); box->addLayout(searchRow);
         model_ = new DirectoryModel(this); model_->setObjectName("directoryModel"); filter_ = new DirectoryFilter(this); filter_->setSourceModel(model_);
         filter_->setSortCaseSensitivity(Qt::CaseInsensitive);
@@ -90,8 +113,53 @@ namespace hc::compare
         table_->verticalHeader()->setVisible(false); table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         for (int column = 1; column < 5; ++column) table_->setColumnWidth(column, 140);
-        box->addWidget(table_, 1); summary_ = new QLabel(this); summary_->setTextFormat(Qt::PlainText); box->addWidget(summary_);
-        const auto change = [this, query, status] { filter_->SetQuery(query->text(), status->currentIndex()); updateSelection(); };
+        box->addWidget(table_, 1); table_->hide();
+        treeModel_ = new DirectoryTreeModel(this); treeModel_->setObjectName("directoryTreeModel");
+        treeFilter_ = new DirectoryTreeFilter(this); treeFilter_->setSourceModel(treeModel_);
+        treeBox_ = new QSplitter(Qt::Horizontal, this); treeBox_->setObjectName("directoryTreeSplitter"); treeBox_->setChildrenCollapsible(false);
+        for (int side = 0; side < 2; ++side)
+        {
+            auto* pane = new QWidget(treeBox_); auto* column = new QVBoxLayout(pane); column->setContentsMargins(0, 0, 0, 0);
+            auto* label = new QLabel(pane); treeRoots_[side] = label; label->setTextFormat(Qt::PlainText);
+            label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+            label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); column->addWidget(label);
+            auto* tree = new QTreeView(pane); trees_[side] = tree;
+            tree->setObjectName(side ? "directoryRightTree" : "directoryLeftTree");
+            tree->setAccessibleName(side ? tr("오른쪽 폴더 트리") : tr("왼쪽 폴더 트리")); tree->setModel(treeFilter_);
+            tree->setUniformRowHeights(true); tree->setItemDelegate(new TreeDelegate(tree));
+            tree->setSelectionMode(QAbstractItemView::SingleSelection); tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+            tree->setEditTriggers(QAbstractItemView::NoEditTriggers); tree->setAlternatingRowColors(true);
+            tree->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel); tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+            tree->setTreePosition(side * 3); tree->header()->setStretchLastSection(false);
+            for (int i = 0; i < 6; ++i) tree->setColumnHidden(i, i / 3 != side);
+            tree->header()->setSectionResizeMode(side * 3, QHeaderView::Stretch);
+            tree->setColumnWidth(side * 3 + 1, 140); tree->setColumnWidth(side * 3 + 2, 100);
+            column->addWidget(tree, 1);
+            connect(tree, &QTreeView::activated, this, [this] { OpenCurrent(); });
+        }
+        for (int side = 0; side < 2; ++side)
+        {
+            auto* tree = trees_[side]; auto* other = trees_[1 - side];
+            const auto expansion = [this, other](const QModelIndex& Index, bool Expanded) {
+                if (syncing_) return; QScopedValueRollback guard(syncing_, true); other->setExpanded(Index, Expanded);
+            };
+            connect(tree, &QTreeView::expanded, this, [expansion](const QModelIndex& Index) { expansion(Index, true); });
+            connect(tree, &QTreeView::collapsed, this, [expansion](const QModelIndex& Index) { expansion(Index, false); });
+            connect(tree->verticalScrollBar(), &QScrollBar::valueChanged, other->verticalScrollBar(), &QScrollBar::setValue);
+            connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this, other, side](const QModelIndex& Index) {
+                if (syncing_) return;
+                { QScopedValueRollback guard(syncing_, true); other->setCurrentIndex(Index.isValid() ? Index.siblingAtColumn((1 - side) * 3) : QModelIndex{}); }
+                updateSelection();
+            });
+        }
+        connect(viewMode_, &QComboBox::currentIndexChanged, this, [this](int Index) { switchView(Index == 0); });
+        box->addWidget(treeBox_, 1); summary_ = new QLabel(this); summary_->setTextFormat(Qt::PlainText); box->addWidget(summary_);
+        const auto change = [this, query, status] {
+            filter_->SetQuery(query->text(), status->currentIndex()); treeFilter_->SetQuery(query->text(), status->currentIndex());
+            if ((!query->text().isEmpty() || status->currentIndex()) && treeModel_->VisibleEntries() <= 2000)
+                for (auto* tree : trees_) tree->expandAll();
+            updateSelection();
+        };
         connect(query, &QLineEdit::textChanged, this, change); connect(status, &QComboBox::currentIndexChanged, this, change);
         connect(table_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] { updateSelection(); });
         connect(table_, &QTableView::doubleClicked, this, [this] { OpenCurrent(); });
@@ -101,23 +169,65 @@ namespace hc::compare
     void DirectoryView::SetComparison(const Request& Input, const Result& Value)
     {
         request_ = Input; comparison_ = Value; model_->SetEntries(Value.entries_); table_->setColumnHidden(4, Input.base_.isEmpty());
-        roots_->setText(tr("LEFT  %1\nRIGHT  %2%3\n%4%5").arg(Input.file1_, Input.file2_,
-            Input.base_.isEmpty() ? QString{} : "\nBASE  " + Input.base_,
-            Value.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교"),
-            Value.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
-        updateSelection();
+        treeModel_->SetEntries(Value.entries_);
+        treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
+        for (int side = 0; side < 2; ++side)
+        {
+            const auto path = side ? Input.file2_ : Input.file1_;
+            treeRoots_[side]->setText((side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
+            trees_[side]->expandToDepth(0);
+        }
+        updateRoots(); updateSelection();
+    }
+    void DirectoryView::updateRoots()
+    {
+        QStringList lines;
+        if (!treeMode_) lines << tr("LEFT  %1").arg(request_.file1_) << tr("RIGHT  %1").arg(request_.file2_);
+        if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(request_.base_);
+        lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : tr("파일 내용 비교")) +
+            (comparison_.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
+        roots_->setText(lines.join('\n'));
     }
     void DirectoryView::SetListFont(const QFont& Font)
-    { table_->setFont(Font); table_->verticalHeader()->setDefaultSectionSize(std::max(28, QFontMetrics(Font).height() + 10)); }
+    {
+        table_->setFont(Font); table_->verticalHeader()->setDefaultSectionSize(std::max(28, QFontMetrics(Font).height() + 10));
+        for (auto* tree : trees_) { tree->setFont(Font); tree->doItemsLayout(); }
+    }
+    QJsonObject DirectoryView::currentEntry() const
+    {
+        return treeMode_ ? treeModel_->Entry(treeFilter_->mapToSource(trees_[0]->currentIndex())) :
+            model_->Entry(filter_->mapToSource(table_->currentIndex()).row());
+    }
+    void DirectoryView::selectTree(const QModelIndex& Index)
+    {
+        if (!Index.isValid()) return;
+        for (auto parent = Index.parent(); parent.isValid(); parent = parent.parent())
+            for (auto* tree : trees_) tree->setExpanded(parent, true);
+        trees_[0]->setCurrentIndex(Index);
+        for (int side = 0; side < 2; ++side) trees_[side]->scrollTo(Index.siblingAtColumn(side * 3), QAbstractItemView::EnsureVisible);
+    }
+    void DirectoryView::switchView(bool Tree)
+    {
+        if (Tree == treeMode_) return;
+        const int row = treeMode_ ? trees_[0]->currentIndex().data(DirectoryTreeModel::EntryRole).toInt() : filter_->mapToSource(table_->currentIndex()).row();
+        const bool selected = treeMode_ ? trees_[0]->currentIndex().isValid() : table_->currentIndex().isValid();
+        treeMode_ = Tree; treeBox_->setVisible(Tree); table_->setVisible(!Tree); updateRoots();
+        if (selected)
+        {
+            if (Tree) selectTree(treeFilter_->mapFromSource(treeModel_->ForEntry(row)));
+            else { const auto index = filter_->mapFromSource(model_->index(row, 0)); table_->setCurrentIndex(index); table_->scrollTo(index); }
+        }
+        updateSelection();
+    }
     void DirectoryView::updateSelection()
     {
-        const auto item = model_->Entry(filter_->mapToSource(table_->currentIndex()).row());
+        const auto item = currentEntry();
         openButton_->setEnabled(file(item["left"].toObject()) && file(item["right"].toObject()));
-        summary_->setText(tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이").arg(filter_->rowCount()).arg(model_->rowCount()));
+        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(model_->rowCount()));
     }
     void DirectoryView::OpenCurrent()
     {
-        const auto item = model_->Entry(filter_->mapToSource(table_->currentIndex()).row());
+        const auto item = currentEntry();
         if (!file(item["left"].toObject()) || !file(item["right"].toObject()) || !open_) return;
         Request next; next.mode_ = "compare"; next.encoding_ = request_.encoding_; next.theme_ = request_.theme_;
         next.file1_ = QDir(request_.file1_).filePath(item["left"].toObject()["path"].toString());
@@ -127,6 +237,10 @@ namespace hc::compare
     }
     void DirectoryView::NavigateDifference(int Direction)
     {
+        if (treeMode_)
+        {
+            selectTree(treeFilter_->mapFromSource(treeModel_->NextDifference(treeFilter_->mapToSource(trees_[0]->currentIndex()), Direction))); return;
+        }
         const int count = filter_->rowCount(); if (!count || !Direction) return;
         const auto current = table_->currentIndex().row();
         for (int offset = 1; offset <= count; ++offset)

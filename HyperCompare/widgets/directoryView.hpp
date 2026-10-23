@@ -6,10 +6,16 @@
 #include <functional>
 
 class QTableView;
+class QTreeView;
+class QSplitter;
+class QComboBox;
 class QLabel;
 class QPushButton;
 namespace hc::compare
 {
+    class DirectoryTreeModel;
+    class DirectoryTreeFilter;
+    bool DirectoryEntryMatches(const QJsonObject& Entry, const QString& Query, int Status);
     QString DirectoryStatusName(const QString& Status);
     class DirectoryModel final : public QAbstractTableModel
     {
@@ -46,6 +52,17 @@ namespace hc::compare
         std::function<void(Request)> open_;
     private:
         void updateSelection();
+        void updateRoots();
+        QJsonObject currentEntry() const;
+        void selectTree(const QModelIndex& Index);
+        void switchView(bool Tree);
+        DirectoryTreeModel* treeModel_ = nullptr;
+        DirectoryTreeFilter* treeFilter_ = nullptr;
+        QTreeView* trees_[2]{};
+        QLabel* treeRoots_[2]{};
+        QSplitter* treeBox_ = nullptr;
+        QComboBox* viewMode_ = nullptr;
+        bool treeMode_ = true, syncing_ = false;
         DirectoryModel* model_ = nullptr;
         DirectoryFilter* filter_ = nullptr;
         QTableView* table_ = nullptr;

@@ -39,6 +39,7 @@ target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core Qt6::N
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
+    widgets/directoryTreeModel.cpp widgets/directoryTreeModel.hpp
     widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp
     widgets/chunkGutter.cpp widgets/chunkGutter.hpp
     widgets/multiPaneAlignment.cpp widgets/multiPaneAlignment.hpp
