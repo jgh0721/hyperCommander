@@ -97,7 +97,7 @@ namespace hc::compare
                 partner[a] = b; used[b] = true; renamed[a] = true; literalChanged[a] = true;
             }
         }
-        if (complete && !python)
+        if (complete)
         {
             QMap<QString, Group> groups;
             for (int side = 0; side < 2; ++side)
@@ -135,6 +135,11 @@ namespace hc::compare
                 };
                 for (int a = 0; a < n; ++a) for (int b = 0; b < m; ++b)
                 {
+                    if (python)
+                    {
+                        const auto from = left[group.sides_[0][a]].toObject(), to = right[group.sides_[1][b]].toObject();
+                        if (from["tokenStructure"].toString().size() != 64 || from["tokenStructure"] != to["tokenStructure"]) continue;
+                    }
                     const auto& x = tokens[0][a]; const auto& y = tokens[1][b]; qsizetype prefix = 0, suffix = 0;
                     while (prefix < x.size() && prefix < y.size()) { step(); if (x[prefix] != y[prefix]) break; ++prefix; }
                     while (suffix < x.size() - prefix && suffix < y.size() - prefix) { step(); if (x[x.size() - suffix - 1] != y[y.size() - suffix - 1]) break; ++suffix; }

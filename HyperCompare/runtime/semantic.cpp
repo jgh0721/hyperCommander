@@ -31,6 +31,7 @@ namespace hc::compare
             if (!function["bodySequence"].isArray()) return unavailable("WorkerProtocol");
             const auto sequence = function["bodySequence"].toArray();
             if (!sequence.isEmpty() && (sequence.size() < 32 || sequence.size() > 256 || sequence.size() != function["bodyTokens"].toInt())) return unavailable("WorkerProtocol");
+            if (language == "python" && !sequence.isEmpty() && function["tokenStructure"].toString().size() != 64) return unavailable("WorkerProtocol");
             qsizetype functionBytes = 0;
             for (const auto& token : sequence)
             {

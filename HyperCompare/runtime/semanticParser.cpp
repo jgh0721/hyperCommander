@@ -169,11 +169,23 @@ namespace hc::compare
                 int numbers = 0;
                 const auto literalShape = (ordinary || pythonRename) && bodyTokens >= 24 && bodyTokens <= 4096
                     ? tokenHash(body, Context, ts_node_end_byte(body), {}, nullptr, &numbers) : QString{};
+                QCryptographicHash tokenStructure(QCryptographicHash::Sha256);
                 QJsonArray bodySequence; std::size_t sequenceBytes = 0; bool boundedSequence = true;
-                if (ordinary && bodyTokens >= 32 && bodyTokens <= 256 && Context.tokenBytes_ < 512 * 1024)
+                if ((ordinary || pythonRename) && bodyTokens >= 32 && bodyTokens <= 256 && Context.tokenBytes_ < 512 * 1024)
                 {
                     walk(body, Context, [&](TSNode child) {
                         if (QByteArrayView(ts_node_type(child)) == "comment") return false;
+                        if (Context.python_)
+                        {
+                            int children = 0;
+                            for (uint32_t i = 0; i < ts_node_child_count(child); ++i)
+                            {
+                                Context.check();
+                                if (QByteArrayView(ts_node_type(ts_node_child(child, i))) != "comment") ++children;
+                            }
+                            tokenStructure.addData(ts_node_is_named(child) ? ts_node_type(child) : "<token>");
+                            tokenStructure.addData(":"); tokenStructure.addData(QByteArray::number(children)); tokenStructure.addData(";");
+                        }
                         if (!ts_node_child_count(child))
                         {
                             const auto value = text(child, Context); sequenceBytes += std::size_t(value.size());
@@ -188,6 +200,7 @@ namespace hc::compare
                 functions.append(QJsonObject{{"name", qualified}, {"scope", separator < 0 ? QString{} : qualified.left(separator)},
                     {"signature", tokenHash(signatureRoot, Context, ts_node_start_byte(body))},
                     {"body", bodyHash}, {"bodyTokens", bodyTokens}, {"literalShape", literalShape}, {"numberTokens", numbers}, {"bodySequence", bodySequence},
+                    {"tokenStructure", Context.python_ && !bodySequence.isEmpty() ? QString::fromLatin1(tokenStructure.result().toHex()) : QString{}},
                     {"renameSignature", (ordinary || pythonRename) ? tokenHash(signatureRoot, Context, ts_node_start_byte(body), nameNode) : QString{}},
                     {"begin", double(ts_node_start_byte(signatureRoot))}, {"end", double(ts_node_end_byte(node))},
                     {"line", int(ts_node_start_point(signatureRoot).row)}, {"endLine", int(ts_node_end_point(node).row)}});
