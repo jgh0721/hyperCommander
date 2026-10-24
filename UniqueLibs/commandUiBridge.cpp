@@ -584,8 +584,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         const auto Arguments = compareArguments(Invocation.context_, Model);
         if (!Arguments.HasValue()) return Arguments.Failure();
         const auto Root = QCoreApplication::applicationDirPath();
-        auto Program = QDir(Root).filePath("HyperCompare/HyperCompare.exe");
-        if (!QFileInfo::exists(Program)) Program = QDir(Root).filePath("HyperCompare.exe");
+        const auto Program = QDir(Root).filePath("HyperCompare.exe");
         if (!QFileInfo::exists(Program)) return Error{ErrorCategory::NotFound, "compare-program-not-installed"};
         if (!QProcess::startDetached(Program, Arguments.Value(), Root)) return Error{ErrorCategory::Unavailable, "compare-launch-failed"};
         return CommandOutcome{};
