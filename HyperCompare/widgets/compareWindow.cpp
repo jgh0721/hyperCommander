@@ -641,7 +641,7 @@ namespace hc::compare
             scroll_->SetAligned(false);
             auto ordered = editors_;
             if (!request_.base_.isEmpty()) ordered.swapItemsAt(0, 2);
-            multi_ = new MultiPaneAlignment(ordered, this);
+            multi_ = new MultiPaneAlignment(ordered, this, request_.memoryMiB_);
             multi_->SetEnabled(syncScroll_->isChecked() && !busy());
             multi_->changed_ = [this] { updateAlignmentView(); };
         }

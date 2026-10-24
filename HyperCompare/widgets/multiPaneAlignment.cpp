@@ -1,13 +1,14 @@
 ﻿#include "stdafx.h"
 #include "multiPaneAlignment.hpp"
 #include "scintillaPadding.hpp"
+#include "runtime/controllerMemory.hpp"
 #include <ScintillaEditBase.h>
 #include <QtConcurrentRun>
 
 namespace hc::compare
 {
-    MultiPaneAlignment::MultiPaneAlignment(QVector<ScintillaEditBase*> Editors, QObject* Parent)
-        : QObject(Parent), editors_(std::move(Editors)), text_(editors_.size()), known_(editors_.size()), dirty_(editors_.size(), true)
+    MultiPaneAlignment::MultiPaneAlignment(QVector<ScintillaEditBase*> Editors, QObject* Parent, int MemoryMiB)
+        : QObject(Parent), editors_(std::move(Editors)), text_(editors_.size()), known_(editors_.size()), dirty_(editors_.size(), true), memoryMiB_(MemoryMiB)
     {
         timer_.setSingleShot(true); timer_.setInterval(120);
         connect(&timer_, &QTimer::timeout, this, &MultiPaneAlignment::launch);
@@ -61,18 +62,33 @@ namespace hc::compare
     void MultiPaneAlignment::launch()
     {
         if (watcher_.isRunning()) return;
-        for (qsizetype i = 0; i < editors_.size(); ++i)
+        Budget budget;
+        try
         {
-            if (!dirty_[i]) continue;
-            const auto length = editors_[i]->send(SCI_GETLENGTH);
-            text_[i].resize(qsizetype(length) + 1); editors_[i]->send(SCI_GETTEXT, uptr_t(text_[i].size()), reinterpret_cast<sptr_t>(text_[i].data())); text_[i].resize(length); dirty_[i] = false;
+            ConfigureMemoryBudget(budget, memoryMiB_);
+            std::uint64_t snapshotBytes = 0;
+            for (qsizetype i = 0; i < editors_.size(); ++i)
+                if (dirty_[i]) snapshotBytes += std::uint64_t(editors_[i]->send(SCI_GETLENGTH)) + 1;
+            // Unchanged QByteArray snapshots share their backing with the worker.
+            // Reserve only dirty buffers, including a potential copy-on-write detach.
+            const auto snapshot = ProcessControllerMemory()->ReserveController(snapshotBytes);
+            for (qsizetype i = 0; i < editors_.size(); ++i)
+            {
+                if (!dirty_[i]) continue;
+                const auto length = editors_[i]->send(SCI_GETLENGTH);
+                text_[i].resize(qsizetype(length) + 1); editors_[i]->send(SCI_GETTEXT, uptr_t(text_[i].size()), reinterpret_cast<sptr_t>(text_[i].data())); text_[i].resize(length); dirty_[i] = false;
+            }
+        }
+        catch (const std::exception& error)
+        {
+            error_ = QString::fromUtf8(error.what()); if (changed_) changed_(); return;
         }
         canceled_ = std::make_shared<std::atomic_bool>(false);
-        watcher_.setFuture(QtConcurrent::run([texts = text_, generation = generation_, canceled = canceled_] {
+        watcher_.setFuture(QtConcurrent::run([texts = text_, generation = generation_, canceled = canceled_, budget] {
             Computed result; result.generation_ = generation;
             try
             {
-                Budget limits; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                auto limits = budget; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
                 std::vector<std::string_view> views; for (const auto& text : texts) views.emplace_back(text.constData(), std::size_t(text.size()));
                 auto map = MultiAlignmentMap::Build(views, limits);
                 auto decoration = limits;

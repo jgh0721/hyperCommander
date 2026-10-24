@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +25,8 @@ namespace hc::compare
         const std::atomic_bool* canceled_ = nullptr;
         std::uint64_t traceBytes_ = 64 * 1024 * 1024, steps_ = 50'000'000;
         std::function<void()> memoryCheck_;
+        // A lease gates new allocations; input snapshots already in private commit are not charged again.
+        std::function<std::shared_ptr<void>(std::uint64_t)> memoryReserve_;
         void Check() const;
     };
     // Lines retain their terminators: EOF and CRLF/LF differences remain edits.

@@ -71,6 +71,7 @@ namespace hc::compare
         if (MemoryMiB < 256 || MemoryMiB > 2048) throw Failure("InvalidMemoryLimit");
         const auto pool = ProcessControllerMemory(); const auto lease = pool->Enter(std::uint64_t(MemoryMiB) * mib);
         Limits.memoryCheck_ = [pool, lease] { pool->Check(); };
+        Limits.memoryReserve_ = [pool, lease](std::uint64_t Bytes) { return pool->ReserveController(Bytes); };
         Limits.Check();
     }
 }

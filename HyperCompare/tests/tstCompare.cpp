@@ -656,6 +656,44 @@ private slots:
         WorkerPolicy shortPolicy; shortPolicy.timeoutMs_ = 1;
         QCOMPARE(RunWorker("search.text", input, {}, shortPolicy)["status"].toString(), QString("Unavailable"));
     }
+    void analysisMemoryAdmission()
+    {
+        constexpr std::uint64_t mib = 1024 * 1024;
+        auto pool = std::make_shared<ControllerMemory>([] { return 100 * mib; });
+        auto scope = pool->Enter(256 * mib);
+        Budget limits; limits.memoryReserve_ = [pool](std::uint64_t Bytes) { return pool->ReserveController(Bytes); };
+        auto occupied = pool->ReserveController(156 * mib);
+        QVERIFY_EXCEPTION_THROWN(Diff("a\nb\n", "a\nc\n", limits), Failure);
+        QVERIFY_EXCEPTION_THROWN(MultiAlignmentMap::Build({"a\nb\n", "a\nc\n", "a\nd\n"}, limits), Failure);
+        // Equal input does not allocate a diff workspace, even with no free budget.
+        QVERIFY(Diff("same\n", "same\n", limits).empty());
+        QCOMPARE(pool->Reserved(), 156 * mib);
+        occupied.reset();
+        const auto edits = Diff("a\nb\n", "a\nc\n", limits); QCOMPARE(edits.size(), std::size_t(1));
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        limits.steps_ = 0;
+        QVERIFY_EXCEPTION_THROWN(Diff("a\nb\n", "a\nc\n", limits), Failure);
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        limits.steps_ = 50'000'000;
+        int calls = 0;
+        limits.memoryReserve_ = [&](std::uint64_t Bytes) -> std::shared_ptr<void> {
+            if (++calls == 5) throw Failure("ControllerMemoryLimit");
+            return pool->ReserveController(Bytes);
+        };
+        // Both diffs succeed; the merge-result allocation is rejected independently.
+        QVERIFY_EXCEPTION_THROWN(Merge("a\n", "b\n", "c\n", limits), Failure);
+        QCOMPARE(calls, 5); QCOMPARE(pool->Reserved(), std::uint64_t(0));
+        limits.memoryReserve_ = [pool](std::uint64_t Bytes) { return pool->ReserveController(Bytes); };
+        std::string left, right;
+        for (int i = 0; i < 20000; ++i) { left += "left" + std::to_string(i) + "\n"; right += "right" + std::to_string(i) + "\n"; }
+        std::vector<std::future<bool>> jobs;
+        for (int i = 0; i < 4; ++i) jobs.push_back(std::async(std::launch::async, [&] {
+            try { return Apply(left, Diff(left, right, limits)) == right; }
+            catch (const Failure& error) { return error.code_ == "ControllerMemoryLimit"; }
+        }));
+        for (auto& job : jobs) QVERIFY(job.get());
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+    }
     void controllerMemoryAdmission()
     {
         constexpr std::uint64_t mib = 1024 * 1024;

@@ -7,6 +7,12 @@ namespace hc::compare
     MultiAlignmentMap MultiAlignmentMap::Build(const std::vector<std::string_view>& Texts, const Budget& Limits)
     {
         Limits.Check(); if (Texts.size() < 2 || Texts.size() > 4) throw Failure("InvalidAlignmentSides");
+        std::uint64_t lineCount = 0, textBytes = 0;
+        for (const auto text : Texts) { lineCount += CountLines(text, Limits); textBytes += text.size(); }
+        // Retained pair edits, line indexes, run-vector growth and per-side run locations.
+        const auto estimate = lineCount * (sizeof(std::string_view) + 2 * sizeof(Edit)
+            + 2 * (sizeof(MultiAlignmentRun) + Texts.size() * 3 * sizeof(std::size_t))) + textBytes * 2;
+        const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(estimate) : std::shared_ptr<void>{};
         MultiAlignmentMap map; std::vector<std::vector<Edit>> edits(Texts.size());
         std::vector<Lines> lines; lines.reserve(Texts.size());
         struct Change { std::size_t side_; const Edit* edit_; }; std::vector<Change> changes;

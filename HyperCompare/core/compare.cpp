@@ -78,6 +78,11 @@ namespace hc::compare
     std::vector<Edit> Diff(std::string_view Left, std::string_view Right, const Budget& Limits)
     {
         Limits.Check(); if (Left == Right) return {};
+        // Count first so line-heavy inputs are rejected before allocating either index.
+        const auto leftCount = CountLines(Left, Limits);
+        const auto rightCount = CountLines(Right, Limits, 2'000'000 - leftCount);
+        const auto count = std::uint64_t(leftCount + rightCount);
+        const auto indexReservation = Limits.memoryReserve_ ? Limits.memoryReserve_(count * sizeof(std::string_view)) : std::shared_ptr<void>{};
         const auto left = SplitLines(Left, Limits);
         const auto right = SplitLines(Right, Limits, 2'000'000 - left.size());
         std::uint64_t steps = 0;
@@ -87,6 +92,14 @@ namespace hc::compare
         while (suffix < left.size() - prefix && suffix < right.size() - prefix && left[left.size() - suffix - 1] == right[right.size() - suffix - 1]) { step(); ++suffix; }
         using Index = std::int64_t;
         const auto n = static_cast<Index>(left.size() - prefix - suffix), m = static_cast<Index>(right.size() - prefix - suffix);
+        // Common prefixes/suffixes need line indexes but no edit/trace workspace.
+        // Reserve only the changed span so a small edit in a large file remains affordable.
+        const auto changed = std::uint64_t(n + m);
+        std::uint64_t replacementBytes = 0;
+        for (auto i = prefix; i < right.size() - suffix; ++i) { step(); replacementBytes += right[i].size(); }
+        const auto history = n && m ? std::min(Limits.traceBytes_, (changed + 1) * (changed + 2) / 2 * sizeof(std::int64_t)) : 0;
+        const auto estimate = changed * (2 * sizeof(Edit) + 64) + replacementBytes * 2 + history;
+        const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(estimate) : std::shared_ptr<void>{};
         const auto replace = [&] {
             Edit edit{prefix, left.size() - suffix, prefix, right.size() - suffix, {}};
             for (auto i = prefix; i < right.size() - suffix; ++i) { step(); edit.replacement_.append(right[i]); }
@@ -189,6 +202,11 @@ namespace hc::compare
     MergeResult Merge(std::string_view Base, std::string_view Left, std::string_view Right, const Budget& Limits)
     {
         const auto l = Diff(Base, Left, Limits), r = Diff(Base, Right, Limits);
+        const auto lines = CountLines(Base, Limits);
+        const auto estimate = std::uint64_t(lines) * sizeof(std::string_view)
+            + std::uint64_t(l.size() + r.size()) * (2 * sizeof(Conflict) + 2 * sizeof(MergeRegion) + 64)
+            + (std::uint64_t(Base.size()) + Left.size() + Right.size()) * 6;
+        const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(estimate) : std::shared_ptr<void>{};
         struct Tagged { const Edit* edit_; bool left_; }; std::vector<Tagged> all;
         for (const auto& e : l) all.push_back({&e, true});
         for (const auto& e : r) all.push_back({&e, false});

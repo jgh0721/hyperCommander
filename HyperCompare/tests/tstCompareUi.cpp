@@ -224,6 +224,23 @@ private slots:
         output.send(SCI_UNDO); QTRY_VERIFY(alignment.Ready()); check(); QCOMPARE(contents(&output), a);
         QCOMPARE(contents(&base), a); QCOMPARE(contents(&left), b); QCOMPARE(contents(&right), c);
     }
+    void allPaneMemoryPressurePreservesEditors()
+    {
+        QWidget host; ScintillaEditBase first(&host), second(&host), third(&host);
+        const QByteArray large(2 * 1024 * 1024, 'a');
+        setText(first, large.toStdString()); setText(second, "second"); setText(third, "third");
+        const auto pool = ProcessControllerMemory(); auto scope = pool->Enter(2048ULL * 1024 * 1024);
+        PROCESS_MEMORY_COUNTERS_EX counters{}; counters.cb = sizeof(counters);
+        QVERIFY(K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)));
+        QVERIFY(counters.PrivateUsage < 2047ULL * 1024 * 1024);
+        auto occupied = pool->ReserveController(2047ULL * 1024 * 1024 - counters.PrivateUsage);
+        MultiPaneAlignment alignment({&first, &second, &third}, &host);
+        QTRY_COMPARE(alignment.Error(), QString("ControllerMemoryLimit"));
+        QVERIFY(!alignment.Ready()); QCOMPARE(contents(&first), large); QCOMPARE(contents(&second), QByteArray("second"));
+        occupied.reset(); setText(first, "first"); alignment.Refresh();
+        QTRY_VERIFY2(alignment.Ready(), qPrintable(alignment.Error()));
+        QCOMPARE(contents(&first), QByteArray("first")); QCOMPARE(contents(&third), QByteArray("third"));
+    }
     void allPaneAlignmentEmptyDocuments()
     {
         QWidget host; ScintillaEditBase first(&host), second(&host), third(&host);

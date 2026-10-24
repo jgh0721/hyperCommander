@@ -16,7 +16,7 @@ namespace hc::compare
     {
         Q_OBJECT
     public:
-        MultiPaneAlignment(QVector<ScintillaEditBase*> Editors, QObject* Parent);
+        MultiPaneAlignment(QVector<ScintillaEditBase*> Editors, QObject* Parent, int MemoryMiB = 2048);
         ~MultiPaneAlignment() override;
         void SetEnabled(bool Enabled);
         void Refresh();
@@ -47,6 +47,7 @@ namespace hc::compare
         QString error_;
         std::uint64_t generation_ = 0;
         qsizetype master_ = 0;
+        int memoryMiB_ = 2048;
         bool enabled_ = true, applying_ = false;
     };
 }
