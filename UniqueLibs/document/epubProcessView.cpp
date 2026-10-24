@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
+#include "epubResourceLease.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 
@@ -303,6 +304,7 @@ namespace hc::document
     }
     void EpubProcessView::run(const std::shared_ptr<Work>& State, WebProcessRuntime Runtime, WebProcessLimits Limits)
     {
+        EpubResourceLease Lease;
         std::unique_ptr<DocumentWebProcess> Owner, Pending;
         WebProcessError Error;
         QString Failure;
@@ -315,6 +317,11 @@ namespace hc::document
         const auto Cancelled = [&] { return State->cancel_.load(); };
         try {
             const auto Process = [&] {
+                if(!Lease.Acquire(Cancelled,[&]{State->Update({{"status","queued"},{"message","EPUB 실행 자원을 기다리고 있습니다."}});})) {Failure=Lease.Error();return;}
+                Metrics["queueMs"]=Elapsed.elapsed();Metrics["aggregateActiveLimit"]=int(EpubResourceLease::ActiveLimit);Metrics["aggregateTotalLimit"]=int(EpubResourceLease::TotalLimit);
+                Limits.jobName_=Lease.JobName();Limits.processes_=Limits.processes_?qMin(Limits.processes_,12u):12u;
+                Limits.memoryBytes_=Limits.memoryBytes_?qMin(Limits.memoryBytes_,std::uint64_t(1024ULL*1024*1024)):1024ULL*1024*1024;
+                State->Update({{"status","loading"}});
                 QDeadlineTimer Deadline(60000);
                 auto Package = epub::Prepare(State->bytes_, Cancelled);
                 Metrics["prepareMs"] = Elapsed.elapsed();

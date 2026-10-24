@@ -37,6 +37,29 @@ private slots:
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
     }
+    void aggregateQueueAndCancellation() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());DocumentWorkspaceWidget Window(Temp.filePath("recovery"));
+        Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));QVERIFY(Window.SetTabbed(true));Window.resize(1280,900);Window.show();
+        Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+        QTimer Trace;Trace.setInterval(500);connect(&Trace,&QTimer::timeout,&Window,[&]{const auto Path=qEnvironmentVariable("HC_EPUB_QUEUE_EVIDENCE");if(!Path.isEmpty()){QFile File(Path);if(File.open(QIODevice::WriteOnly|QIODevice::Truncate))File.write(QJsonDocument(Window.Snapshot()).toJson());}});Trace.start();
+        QStringList Ids;const auto Book=qEnvironmentVariable("HC_EPUB_POC_EPUB");
+        for(int I=0;I<3;++I){const auto Copy=Temp.filePath(QString("book-%1.epub").arg(I));QVERIFY(QFile::copy(Book,Copy));Ids.append(Window.Handle({{"action","open"},{"path",Copy}})["documentId"].toString());}
+        QString Queued;const auto FindQueued=[&]{for(const auto& Id:Ids)if(document(Window,Id)["view"].toObject()["epub"].toObject()["status"]=="queued"){Queued=Id;return true;}return false;};
+        QTRY_VERIFY_WITH_TIMEOUT(FindQueued(),30000);QVERIFY(!Queued.isEmpty());
+        QVERIFY(!Window.Handle({{"action","close"},{"documentId",Queued},{"discard",true}}).contains("error"));QTRY_VERIFY_WITH_TIMEOUT(document(Window,Queued).isEmpty(),10000);Ids.removeAll(Queued);
+        for(const auto& Id:Ids){QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);QCOMPARE(document(Window,Id)["view"].toObject()["epub"].toObject()["metrics"].toObject()["aggregateActiveLimit"].toInt(),2);}
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    void largeBook() {
+        const auto Book=qEnvironmentVariable("HC_EPUB_LARGE_EPUB");if(Book.isEmpty())QSKIP("Large-book corpus not configured");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        QFile File(Book);QVERIFY(File.open(QIODevice::ReadOnly));const auto Hash=QCryptographicHash::hash(File.readAll(),QCryptographicHash::Sha256);File.close();
+        QElapsedTimer Elapsed;Elapsed.start();const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();
+        QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),90000);
+        const auto State=document(Window,Id)["view"].toObject()["epub"].toObject();QVERIFY(State["text"].toString().contains("Chapter 0"));QVERIFY(!State["images"].toArray().isEmpty());
+        qInfo().noquote()<<"Large-book observed startup ms:"<<Elapsed.elapsed()<<"metrics:"<<QJsonDocument(State["metrics"].toObject()).toJson(QJsonDocument::Compact);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);QVERIFY(File.open(QIODevice::ReadOnly));QCOMPARE(QCryptographicHash::hash(File.readAll(),QCryptographicHash::Sha256),Hash);
+    }
     void foreignReaderEscape() {
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
         DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();

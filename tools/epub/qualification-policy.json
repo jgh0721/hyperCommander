@@ -36,11 +36,12 @@
     "jobMemoryBytesPerBook": 1073741824,
     "startupMs": 20000,
     "concurrentBooksMeasured": 2,
-    "aggregateSchedulerImplemented": false,
-    "scope": "small synthetic EPUB2/3 fixtures; not a production default or cold-cache benchmark"
+    "aggregateSchedulerImplemented": true,
+    "scope": "per user Windows session; 1 GiB/12 processes per book; bounded input/snapshot; synthetic large-book evidence only",
+    "aggregateActiveBooks": 2,
+    "aggregatePendingAndActiveBooks": 8
   },
   "pendingGates": [
-    "large documents and aggregate resource scheduler",
     "EPUB content editing",
     "repository reproducibility"
   ],
@@ -100,5 +101,17 @@
     ],
     "foreignHelperEscapeVerified": true,
     "scope": "native IME composition/commit events, accessible search/field names, keyboard routes and layout; real TSF candidate UI and screen-reader acceptance still manual"
+  },
+  "resourceQualification": {
+    "evidence": "_build/epub-validation/resources",
+    "workspaceTestsPassed": 17,
+    "crossProcessTestsPassed": 4,
+    "largeBook": {
+      "chapters": 160,
+      "inputBytes": 11237262,
+      "observedStartupMs": 2953,
+      "observedPeakJobBytes": 430137344
+    },
+    "hiddenTabQueueRegressionFixed": true
   }
 }

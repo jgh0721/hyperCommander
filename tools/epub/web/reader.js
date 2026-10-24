@@ -1,3 +1,4 @@
+import EpubQueue from "epubjs/src/utils/queue.js";
 import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
 import { compileCss } from "./customCss.js";
@@ -6,6 +7,12 @@ import { applyReadingOverrides } from "./readingOverrides.js";
 import { EpubNavigator, EpubPreferences, Injector } from "@readium/navigator";
 import { Manifest, Publication, HttpFetcher, Locator } from "@readium/shared";
 import { typographyProbe } from "./typographyProbe.js";
+
+// EPUB.js 0.3.93 advances its work queue through animation frames. A hidden
+// native tab can suspend those frames before an iframe exists. Yield through
+// timers while keeping every queued operation serialized; painting stays on RAF.
+const runEpubQueue=EpubQueue.prototype.run;
+EpubQueue.prototype.run=function(){this.tick=callback=>setTimeout(callback,0);return runEpubQueue.call(this);};
 
 const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
