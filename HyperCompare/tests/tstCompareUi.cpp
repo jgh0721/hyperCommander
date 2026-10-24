@@ -789,6 +789,21 @@ private slots:
         auto* right = window.findChild<ScintillaEditBase*>("FILE 2"); QCOMPARE(contents(right), "int newName" + changed); QVERIFY(!right->send(SCI_CANUNDO));
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/function-rename-modified.png")); window.close();
     }
+    void sourcePythonFunctionNavigation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.py"); r.file2_ = dir.filePath("right.py");
+        write(r.file1_, "class Box:\n    @staticmethod\n    def value():\n        return 1\n");
+        const QByteArray changed = "class Box:\n    @staticmethod\n    def value():\n        return 2\n"; write(r.file2_, changed);
+        CompareWindow window(r); window.resize(1300, 800); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
+        QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+        window.findChild<QTabWidget*>("comparisonDetails")->setCurrentIndex(1);
+        QCOMPARE(table->model()->data(table->model()->index(0, 0)).toString(), QString("Box::value"));
+        QVERIFY(window.findChild<QLabel*>("semanticCoverage")->toolTip().contains(QString::fromUtf8("중첩 함수")));
+        QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("수정"));
+        table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
+        auto* right = window.findChild<ScintillaEditBase*>("FILE 2"); QCOMPARE(contents(right), changed); QVERIFY(!right->send(SCI_CANUNDO));
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/python-function.png")); window.close();
+    }
     void sourceFunctionRenameTokenEditAnnotation()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");

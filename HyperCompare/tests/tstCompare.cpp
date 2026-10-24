@@ -900,6 +900,34 @@ private slots:
         const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
         QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_); QCOMPARE(annotated.merged_.conflicts_.size(), plain.merged_.conflicts_.size());
     }
+    void pythonFunctionRelations()
+    {
+        const QByteArray first = "@trace\ndef first(x: int = 1):\n    if x:\n        x += 1\n    return x\n";
+        const QByteArray second = "async def second(x):\n    return await x()\n";
+        const auto left = AnalyzeFunctions("left.py", first + second);
+        QCOMPARE(left["status"].toString(), "Complete"); QCOMPARE(left["language"].toString(), "python");
+        QCOMPARE(left["functions"].toArray().size(), 2); QCOMPARE(left["functions"].toArray()[0].toObject()["line"].toInt(), 0);
+        auto changed = first; changed.replace("x += 1", "x += 2");
+        const auto moved = MatchFunctions(left, AnalyzeFunctions("right.PYW", second + changed));
+        QCOMPARE(moved["status"].toString(), "Complete"); QCOMPARE(moved["moved"].toInt(), 1); QCOMPARE(moved["modified"].toInt(), 1);
+        auto indent = first; indent.replace("    return x", "        return x");
+        QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.py", indent + second))["modified"].toInt(), 1);
+        auto spacing = first; spacing.replace("x += 1", "x  +=  1  # comment");
+        QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.py", spacing + second))["modified"].toInt(), 0);
+        auto decorator = first; decorator.replace("@trace", "@other");
+        QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.py", decorator + second))["modified"].toInt(), 1);
+        const auto methods = AnalyzeFunctions("m.pyi", "class A:\n    def same(self): ...\nclass B:\n    def same(self): ...\n");
+        QCOMPARE(methods["status"].toString(), "Complete"); const auto functions = methods["functions"].toArray(); QCOMPARE(functions.size(), 2);
+        QCOMPARE(functions[0].toObject()["name"].toString(), "A::same"); QCOMPARE(functions[1].toObject()["scope"].toString(), "B");
+        const auto nested = AnalyzeFunctions("n.py", "def outer():\n    def inner():\n        return 1\n    return inner()\n");
+        QCOMPARE(nested["functions"].toArray().size(), 1);
+        QCOMPARE(AnalyzeFunctions("bad.py", "def broken(:\n")["status"].toString(), "Partial");
+        auto renamed = first; renamed.replace("def first", "def renamed");
+        QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.py", renamed + second))["renamed"].toInt(), 0);
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l.py"); r.file2_ = dir.filePath("r.py"); write(r.file1_, first + second); write(r.file2_, second + changed);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(r, cancel, false); r.semantic_ = "off"; const auto plain = Execute(r, cancel, false);
+        QCOMPARE(annotated.semantic_["status"].toString(), "Complete"); QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_);
+    }
     void functionRenameSmallTokenEdits()
     {
         const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";

@@ -108,14 +108,15 @@ namespace hc::compare
         const auto values = analysis_["pairs"].toArray(); const int index = pairs_->currentIndex();
         const auto pair = index < 0 || index >= values.size() ? QJsonObject{} : values[index].toObject();
         const auto documents = analysis_["documents"].toArray(); model_->SetPair(pair, documents);
-        QStringList partial;
+        QStringList partial; bool python = false;
         for (const auto& value : pair["inputs"].toArray())
         {
             const int at = value.toInt(-1); if (at < 0 || at >= documents.size()) continue;
-            const auto document = documents[at].toObject();
+            const auto document = documents[at].toObject(); python |= document["language"] == "python";
             if (document["status"] == "Partial") partial << tr("%1: 문법 오류 또는 분석 제외 함수").arg(at + 1);
             else if (document["status"] != "Complete") partial << tr("%1: 분석 불가 (%2)").arg(at + 1).arg(document["reason"].toString());
         }
+        coverage_->setToolTip(python ? tr("Python: 함수와 클래스 메서드의 구문 구조를 비교합니다. 중첩 함수는 바깥 함수 본문에 포함하며 이름 변경 추정과 동적 타입·데코레이터 실행 해석은 수행하지 않습니다.") : QString{});
         if (pair["ambiguous"].toInt()) partial << tr("대응 모호 %1개").arg(pair["ambiguous"].toInt());
         coverage_->setText(tr("이동 %1 · 수정 %2 · 이름 변경 추정 %3 · 구문 구조 분석 (매크로·타입 해석 제외)%4")
             .arg(pair["moved"].toInt()).arg(pair["modified"].toInt()).arg(pair["renamed"].toInt()).arg(partial.isEmpty() ? QString{} : " · " + partial.join(" / ")));

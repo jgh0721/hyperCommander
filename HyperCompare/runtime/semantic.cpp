@@ -9,7 +9,7 @@ namespace hc::compare
     QJsonObject AnalyzeFunctions(const QString& Path, const QByteArray& Utf8, const Budget& Limits)
     {
         const auto suffix = QFileInfo(Path).suffix().toLower();
-        const QString language = suffix == "c" ? "c" : QStringList{"cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "inl", "ipp"}.contains(suffix) ? "cpp" : "";
+        const QString language = QStringList{"py", "pyw", "pyi"}.contains(suffix) ? "python" : suffix == "c" ? "c" : QStringList{"cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "inl", "ipp"}.contains(suffix) ? "cpp" : "";
         if (language.isEmpty()) return {{"status", "Unsupported"}, {"reason", "Language"}};
         const auto unavailable = [&](const QString& Reason) { return QJsonObject{{"status", "Unavailable"}, {"reason", Reason}, {"language", language}}; };
         if (Utf8.size() > 16 * 1024 * 1024) return unavailable("InputLimit");
