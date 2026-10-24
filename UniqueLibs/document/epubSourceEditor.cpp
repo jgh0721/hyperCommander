@@ -39,7 +39,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     status_=new QLabel(this);status_->setWordWrap(true);Layout->addWidget(status_);
     connect(Apply,&QPushButton::clicked,this,[this]{flush();});connect(Replace,&QPushButton::clicked,this,&EpubSourceEditor::importImage);connect(Save,&QPushButton::clicked,this,[this]{validate(true);});
     connect(resources_,&QComboBox::currentIndexChanged,this,[this]{if(!updating_){if(!flush()){const QSignalBlocker Block(resources_);resources_->setCurrentIndex(resources_->findText(current_));return;}select();}});
-    connect(text_,&QPlainTextEdit::textChanged,this,[this]{if(updating_)return;if(text_->toPlainText().toUtf8().size()>2*1024*1024){const QSignalBlocker Block(text_);text_->undo();status_->setText(tr("소스 편집은 리소스당 2 MiB까지 지원합니다."));}emit Changed();});
+    connect(text_,&QPlainTextEdit::textChanged,this,[this]{if(updating_)return;if(text_->document()->toRawText().replace(QChar(0x2029),QChar('\n')).toUtf8().size()>2*1024*1024){const QSignalBlocker Block(text_);text_->undo();status_->setText(tr("소스 편집은 리소스당 2 MiB까지 지원합니다."));}emit Changed();});
     connect(&worker_,&QFutureWatcher<epub::EditModel>::finished,this,[this]{
         model_=worker_.result();ready_=!model_.Publication().isEmpty();error_=model_.Error();setEnabled(ready_);status_->setText(ready_?tr("변경 내용은 원본을 유지하고 사본으로 저장합니다. 출판용 EPUB 표준 검증은 별도입니다."):error_);
         if(ready_){reference_=model_.Fingerprint();updating_=true;resources_->clear();for(const auto& V:model_.Publication()["resources"].toArray()){const auto R=V.toObject();const auto Media=R["mediaType"].toString();if(QStringList{"application/xhtml+xml","application/oebps-package+xml","text/css","image/svg+xml","image/png","image/jpeg","image/gif"}.contains(Media))resources_->addItem(R["path"].toString(),Media);}updating_=false;current_.clear();select();}emit StateChanged();
@@ -56,7 +56,7 @@ void EpubSourceEditor::load(QByteArray Bytes) {
     ready_=false;setEnabled(false);status_->setText(tr("EPUB 편집 구조를 검사하고 있습니다…"));cancel_=std::make_shared<std::atomic_bool>(false);auto Cancel=cancel_;
     worker_.setFuture(QtConcurrent::run([Bytes=std::move(Bytes),Cancel]{epub::EditModel Model;Model.Load(Bytes,[Cancel]{return Cancel->load();});return Model;}));
 }
-QMap<QString,QByteArray> EpubSourceEditor::draft()const {if(ready_ && !current_.isEmpty() && !text_->isHidden() && text_->document()->isModified())return {{current_,text_->toPlainText().toUtf8()}};return {};}
+QMap<QString,QByteArray> EpubSourceEditor::draft()const {if(ready_ && !current_.isEmpty() && !text_->isHidden() && text_->document()->isModified())return {{current_,text_->document()->toRawText().replace(QChar(0x2029),QChar('\n')).toUtf8()}};return {};}
 QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
 bool EpubSourceEditor::flush(){if(!ready_)return false;const auto Draft=draft();for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){status_->setText(Error);return false;}}if(!Draft.isEmpty()){text_->document()->setModified(false);text_->document()->clearUndoRedoStacks();emit Changed();}return true;}
 void EpubSourceEditor::select() {

@@ -55,7 +55,7 @@ qt_add_library(hc_plugin_viewer_sessions STATIC hostedViewerSession.cpp hostedVi
 target_link_libraries(hc_plugin_viewer_sessions PUBLIC hc_plugin_process hc_viewer_core PRIVATE hc_document_broker)
 target_compile_options(hc_plugin_viewer_sessions PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_library(hc_plugin_viewer_qt STATIC ../UniqueLibs/qtPluginViewerSurface.cpp ../UniqueLibs/qtPluginViewerSurface.hpp)
-target_link_libraries(hc_plugin_viewer_qt PUBLIC hc_plugin_viewer_sessions Qt6::Widgets)
+target_link_libraries(hc_plugin_viewer_qt PUBLIC hc_plugin_viewer_sessions Qt6::Widgets PRIVATE fmstyle)
 target_compile_options(hc_plugin_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 qt_add_library(hc_image_archive_transport STATIC imageArchiveTransport.cpp imageArchiveTransport.hpp)

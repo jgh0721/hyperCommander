@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "qualification-in-progress",
+  "status": "phase1-qualified-on-synthetic-corpus",
   "releaseEligible": false,
   "selectedReader": {
     "name": "epubjs",
@@ -29,7 +29,7 @@
     "productWorkspaceCodeInstalled": true,
     "productRuntimeInstalled": true,
     "productSignedRuntimeVerified": true,
-    "productInventorySha256": "490867fa597fc711b610c71da823eb07ca14a4da8a03f65785aa6853decc2ef8"
+    "productInventorySha256": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515"
   },
   "resourceCandidate": {
     "processLimitPerBook": 12,
@@ -41,9 +41,7 @@
     "aggregateActiveBooks": 2,
     "aggregatePendingAndActiveBooks": 8
   },
-  "pendingGates": [
-    "repository reproducibility"
-  ],
+  "pendingGates": [],
   "startupReflow": {
     "fixed": "initial resize can remove an iframe before display completion",
     "strategy": "pixel viewport and serialized/coalesced reflow",
@@ -59,19 +57,19 @@
   },
   "workspaceQualification": {
     "scenarios": "editor/viewer: ready, reload, cancel, invalid; PDF and dirty text preservation; 64 MiB input budget",
-    "passed": 9,
+    "passed": 20,
     "evidence": "_build/epub-validation/workspace/tests-qualified.txt",
     "actualF3F4EndToEnd": true,
     "actualPluginHostEntry": true,
     "installedEditorEpub2Epub3": true,
-    "installedProductHashesVerified": 264,
+    "installedProductHashesVerified": 263,
     "protectedFilesPreserved": 18,
-    "productEvidence": "_build/epub-validation/appearance",
-    "portableMembersVerified": 265,
+    "productEvidence": "_build/epub-validation/final",
+    "portableMembersVerified": 264,
     "hwpPdfDirtyTextCoexistence": true,
     "watercolorAppearancePropagation": true,
     "persistentGlobalAndBookSettings": true,
-    "settingsTestsPassed": 10,
+    "settingsTestsPassed": 13,
     "productKeyScenariosPassed": 4
   },
   "backgroundCssQualification": {
@@ -129,5 +127,28 @@
       "CSS syntax and EPUBCheck acceptance are separate",
       "DRM, signed, fixed layout and active EPUB remain unsupported"
     ]
-  }
+  },
+  "reproducibilityQualification": {
+    "evidence": "_build/epub-validation/final",
+    "cleanTrackedCheckout": true,
+    "lockedNpmInstall": true,
+    "fullReleaseBuildPassed": true,
+    "finalFocusedBuildPassed": true,
+    "productKeyCasesPassed": 4,
+    "workspaceTestsPassed": 20,
+    "signedProductPEs": 86,
+    "productInventoryFiles": 263,
+    "portableMembersVerified": 264,
+    "protectedFilesPreserved": 18,
+    "nativePin": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515",
+    "approvedImagePluginPreserved": "5bc7fa0bb876c9347e8b5f4509b27ccba018858f7f99bd83f5a62a04c0130841",
+    "publisherIdCollisionRegressionVerified": true,
+    "sourceNonBreakingSpacesPreserved": true,
+    "actualSavedBookReopenActionVerified": true
+  },
+  "manualAcceptance": [
+    "Real third-party book compatibility beyond the bounded synthetic EPUB2/3 corpus",
+    "Windows TSF candidate windows and screen-reader user sessions",
+    "Full publication CSS syntax and EPUBCheck validation for authored output"
+  ]
 }

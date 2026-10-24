@@ -47,3 +47,6 @@ tools/SignotaurTool.exe
 !tools/update/*.ps1
 !tools/Install-HyperCommander.ps1
 !tools/New-PortableZip.ps1
+
+# EPUB product admission verifier is required by CMake and the installer.
+!tools/epub/Test-ProductRuntime.ps1

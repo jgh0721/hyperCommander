@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--product-candidate', action='store_true',
                         help='Stage a product-profile candidate; does not install or approve it')
     parser.add_argument('--sign-product', action='store_true', help='Sign all product PE files before sealing the inventory')
+    parser.add_argument('--signing-cache', type=Path, help='Existing local signing cache; never contains approval for EPUB input files')
     args = parser.parse_args()
     if args.sign_product and not args.product_candidate:
         raise ValueError('Signing requires explicit product candidate mode')
@@ -58,8 +59,11 @@ def main():
         signer = Path(__file__).resolve().parents[1]/'update/Sign-ProductFile.ps1'
         for path in sorted(args.output.rglob('*')):
             if path.is_file() and path.suffix.lower() in ('.exe', '.dll'):
-                signed = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                    '-File', str(signer), '-Path', str(path), '-RelativePath', path.relative_to(args.output).as_posix()],
+                command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', str(signer), '-Path', str(path), '-RelativePath', path.relative_to(args.output).as_posix()]
+                if args.signing_cache:
+                    command += ['-CacheRoot', str(args.signing_cache.resolve())]
+                signed = subprocess.run(command,
                     capture_output=True, startupinfo=startup, timeout=180)
                 with (args.output/'deployment.log').open('ab') as log:
                     log.write(signed.stdout+signed.stderr)

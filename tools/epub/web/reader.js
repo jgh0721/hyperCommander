@@ -27,6 +27,7 @@ let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
     backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "" };
 const cssErrors = new WeakMap();
+const profileStyles = new WeakMap();
 let customRules = [], backgroundImage = { asset: "", data: "" };
 let sequence = Promise.resolve();
 let generation = 0;
@@ -78,8 +79,8 @@ function documents() {
 function applyDocument(doc) {
     tools.hook(doc);
     if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
-    let style = doc.getElementById("hc-reading-profile");
-    if (!style) { style = doc.createElement("style"); style.id = "hc-reading-profile"; doc.head.append(style); }
+    let style = profileStyles.get(doc);
+    if (!style) { style = doc.createElement("style"); doc.head.append(style); profileStyles.set(doc,style); }
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
     cssErrors.set(doc, applyReadingOverrides(doc, profile, foreground, background, customRules));

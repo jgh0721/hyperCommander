@@ -12,6 +12,7 @@
 #include <QCryptographicHash>
 #include <QBuffer>
 #include <QImage>
+#include <QPlainTextEdit>
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "commonLibs/document/epub/epubEditModel.hpp"
@@ -47,7 +48,7 @@ private slots:
         for(const auto& V:Publication["resources"].toArray()){const auto R=V.toObject();if(R["mediaType"]=="text/css")Css=R["path"].toString();if(R["mediaType"]=="image/png")Png=R["path"].toString();}
         const auto Baseline=Model.Fingerprint();QCOMPARE(Model.Export().bytes_,Original);QVERIFY(Model.Replace(Png,"broken image").size()>0);QCOMPARE(Model.Fingerprint(),Baseline);
         QVERIFY(Model.Replace(Xhtml,"<html>").isEmpty());QVERIFY(!Model.Export());Model.Undo();QCOMPARE(Model.Fingerprint(),Baseline);Model.Redo();QVERIFY(!Model.Export());Model.Undo();
-        QVERIFY(!Css.isEmpty());QVERIFY(!Png.isEmpty());auto XhtmlText=QString::fromUtf8(Model.Read(Xhtml));XhtmlText.replace("</body>","<p>편집한 문단과 이미지 설명</p></body>");
+        QVERIFY(!Css.isEmpty());QVERIFY(!Png.isEmpty());auto XhtmlText=QString::fromUtf8(Model.Read(Xhtml));XhtmlText.replace("</body>","<p>편집한 문단\u00a0과 이미지 설명</p></body>");
         auto Metadata=QString::fromUtf8(Model.Read(Opf));Metadata.replace(Publication["title"].toString(),"EPUB 편집 검증본");
         DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
         const auto Id=Window.Handle({{"action","open"},{"path",SourcePath}})["documentId"].toString();const auto View=[&]{return document(Window,Id)["view"].toObject();};const auto Editor=[&]{return View()["epubEditor"].toObject();};
@@ -55,6 +56,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Editor()["ready"].toBool(),30000);QVERIFY(!View()["readOnly"].toBool());QVERIFY(!document(Window,Id)["dirty"].toBool());
         const auto Replace=[&](const QString& Path,const QString& Text){return Window.Handle({{"action","epub.edit.replace"},{"documentId",Id},{"resource",Path},{"text",Text}});};
         QVERIFY(!Replace(Xhtml,XhtmlText).contains("error"));QVERIFY(document(Window,Id)["dirty"].toBool());
+        auto* SourceEditor=Window.findChild<QPlainTextEdit*>("epubEditSource");QVERIFY(SourceEditor);QVERIFY(SourceEditor->find("편집한 문단"));auto Cursor=SourceEditor->textCursor();Cursor.insertText("직접 편집한 문단");XhtmlText.replace("편집한 문단","직접 편집한 문단");
         Window.SetClosePrompt([](const QString&){return int(QMessageBox::Cancel);});QVERIFY(!Window.RequestClose());QVERIFY(document(Window,Id)["dirty"].toBool());QCOMPARE(View()["epub"].toObject()["status"].toString(),QString("ready"));Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
         QVERIFY(!Replace(Css,QString::fromUtf8(Model.Read(Css))+"\np { margin-bottom: 1.1em; }\n").contains("error"));QVERIFY(!Replace(Opf,Metadata).contains("error"));
         QImage Image(3,2,QImage::Format_ARGB32);Image.fill(QColor(20,100,150,170));QByteArray ImageBytes;QBuffer Buffer(&ImageBytes);Buffer.open(QIODevice::WriteOnly);QVERIFY(Image.save(&Buffer,"PNG"));
@@ -71,7 +73,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Output) && !document(Window,Id)["dirty"].toBool(),30000);QTRY_VERIFY_WITH_TIMEOUT(Editor()["ready"].toBool(),30000);
         QFile Saved(Output);QVERIFY(Saved.open(QIODevice::ReadOnly));const auto SavedBytes=Saved.readAll();Saved.close();epub::EditModel Reopened;QVERIFY(Reopened.Load(SavedBytes));QCOMPARE(Reopened.Publication()["title"].toString(),QString("EPUB 편집 검증본"));QCOMPARE(Reopened.Read(Xhtml),XhtmlText.toUtf8());QCOMPARE(Reopened.Read(Png),ImageBytes);
         const auto Evidence=qEnvironmentVariable("HC_EPUB_EDIT_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);QFile Before(QDir(Evidence).filePath(Name+".original")),After(QDir(Evidence).filePath(Name));QVERIFY(Before.open(QIODevice::WriteOnly|QIODevice::NewOnly));Before.write(Original);QVERIFY(After.open(QIODevice::WriteOnly|QIODevice::NewOnly));After.write(SavedBytes);QVERIFY(Window.grab().save(QDir(Evidence).filePath(Name+".png")));}
-        QVERIFY(!Window.Handle({{"action","reload"},{"documentId",Id},{"discard",true}}).contains("error"));QTRY_VERIFY_WITH_TIMEOUT(View()["ready"].toBool() && View()["epubEditor"].toObject().isEmpty(),60000);
+        auto* ReopenAction=Window.findChild<QAction*>("epubReopen");QVERIFY(ReopenAction);ReopenAction->trigger();QTRY_VERIFY_WITH_TIMEOUT(View()["ready"].toBool() && View()["epubEditor"].toObject().isEmpty(),60000);
         QTRY_VERIFY_WITH_TIMEOUT(View()["epub"].toObject()["images"].toArray().last().toObject()["naturalWidth"].toInt()==3,15000);
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);QVERIFY(Source.open(QIODevice::ReadOnly));QCOMPARE(Source.readAll(),Original);
         DocumentWorkspaceWidget Viewer(Temp.filePath("viewer"),true);Viewer.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Viewer.show();const auto ReadId=Viewer.Handle({{"action","open"},{"path",SourcePath}})["documentId"].toString();QTRY_VERIFY_WITH_TIMEOUT(document(Viewer,ReadId)["view"].toObject()["ready"].toBool(),60000);
@@ -122,6 +124,7 @@ private slots:
             const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
             const auto Do=[&](const QString& Action,QJsonValue Value=QJsonValue{}){return Window.Handle({{"action","epub.reader."+Action},{"documentId",Id},{"value",Value}});};
             QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool(),60000);
+            QVERIFY(State()["text"].toString().contains("나무 그늘에서 잠시 쉬었다가"));
             QVERIFY(!Do("search","reader-control needle").contains("error"));
             QTRY_VERIFY_WITH_TIMEOUT(State()["readerAction"].toObject()["hits"].toArray().size()==2,15000);
             const auto Hit=State()["readerAction"].toObject()["hits"].toArray().last().toObject();QCOMPARE(Hit["chapter"].toInt(),1);

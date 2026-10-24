@@ -98,7 +98,7 @@ namespace hc::document
                 auto* Bar=new QToolBar(this);Bar->setObjectName("epubEditToolbar");layout()->addWidget(Bar);
                 auto* Edit=Bar->addAction(tr("EPUB 소스 편집"));Edit->setObjectName("epubEdit");Edit->setCheckable(true);
                 connect(Edit,&QAction::toggled,this,[this,Edit](bool Checked){if(Checked && !editEpub()){const QSignalBlocker Block(Edit);Edit->setChecked(false);return;}if(epubEditor_)epubEditor_->setVisible(Checked);epub_->setVisible(!Checked);emit ViewStateChanged();});
-                auto* Reopen=Bar->addAction(tr("저장본 다시 열기"));connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
+                auto* Reopen=Bar->addAction(tr("저장본 다시 열기"));Reopen->setObjectName("epubReopen");connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
             }
             epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
             layout()->addWidget(epub_);epub_->show();

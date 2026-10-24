@@ -113,8 +113,9 @@ namespace hc::document
         void ChooseSavePath(QWidget* Parent,const QString& Current,const QString& ViewId,std::function<void(QString)> Completion)
         {
             const auto Filters=ViewId=="image"?QStringLiteral("PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WebP (*.webp)")
-                :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):QStringLiteral("Text files (*.*)");
-            auto* Dialog=new QFileDialog(Parent,QObject::tr("다른 이름 저장"),Current,Filters);Dialog->setAcceptMode(QFileDialog::AcceptSave);
+                :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):ViewId=="epub"?QStringLiteral("EPUB (*.epub)"):QStringLiteral("Text files (*.*)");
+            const auto Initial=ViewId=="epub"?QFileInfo(Current).dir().filePath(QFileInfo(Current).completeBaseName()+"-edited.epub"):Current;
+            auto* Dialog=new QFileDialog(Parent,QObject::tr("다른 이름 저장"),Initial,Filters);Dialog->setAcceptMode(QFileDialog::AcceptSave);
             Dialog->setDefaultSuffix(ViewId=="image"?"png":ViewId=="pdf"?"pdf":QFileInfo(Current).suffix());
             QObject::connect(Dialog,&QFileDialog::filterSelected,Dialog,[Dialog](const QString& Filter){
                 const auto Match=QRegularExpression("\\*\\.([a-z0-9]+)").match(Filter);if(Match.hasMatch())Dialog->setDefaultSuffix(Match.captured(1));
@@ -636,6 +637,9 @@ namespace hc::document
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;
+            if(Tab->pane_->CanEditEpub() && QFileInfo(Path).canonicalFilePath()==QFileInfo(Tab->path_).canonicalFilePath()) {
+                activate(Tab);findChild<QAction*>("reloadDocument")->trigger();return;
+            }
             if(Tab->pane_->ViewId()=="image")navigateImage(Tab,Path);
             else open(Path,false,{},false);
         });
