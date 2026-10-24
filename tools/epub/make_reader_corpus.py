@@ -23,3 +23,9 @@ with zipfile.ZipFile(source) as before,zipfile.ZipFile(a.output/"epub3-compresse
         if old.filename!="mimetype":
             info.compress_type=zipfile.ZIP_DEFLATED;info.extra=bytes.fromhex("555405000100000000")
         after.writestr(info,before.read(old))
+
+# A legacy cover with percentage heights collapses in a zero-height iframe.
+entries=publication()
+cover="EPUB/Text/첫 장.xhtml"
+entries[cover]=b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Percentage cover</title><style>html,body{height:100%;margin:0;padding:0}.cover{height:100%;display:-webkit-box;-webkit-box-align:center;-webkit-box-pack:center}img{width:100%;height:auto}</style></head><body><div class="cover"><img src="../Images/alpha.png" alt="cover"/></div></body></html>'
+(a.output/"epub3-percentage-cover.epub").write_bytes(archive(entries))

@@ -1,3 +1,4 @@
+import EpubIframeView from "epubjs/src/managers/views/iframe.js";
 import EpubQueue from "epubjs/src/utils/queue.js";
 import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
@@ -13,6 +14,18 @@ import { typographyProbe } from "./typographyProbe.js";
 // timers while keeping every queued operation serialized; painting stays on RAF.
 const runEpubQueue=EpubQueue.prototype.run;
 EpubQueue.prototype.run=function(){this.tick=callback=>setTimeout(callback,0);return runEpubQueue.call(this);};
+
+// Percentage-height covers depend on the iframe viewport. EPUB.js measures
+// them while the iframe is still zero pixels tall in scrolled-doc mode, then
+// feeds that zero back into the iframe. Keep a viewport-sized minimum on the
+// engine-owned frame; leave publisher XHTML and its inline styles intact.
+class ReaderIframeView extends EpubIframeView {
+    expand(force) {
+        if (this.iframe && this.settings.axis === "vertical" && this.layout?.name === "reflowable")
+            this.iframe.style.minHeight = `${Math.max(1, this.layout.height || pane.clientHeight)}px`;
+        return super.expand(force);
+    }
+}
 
 const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -211,7 +224,7 @@ async function start(name) {
         await book.ready;
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: "scrolled-doc",
-            spread: "none", overflow: "scroll", allowScriptedContent: false, allowPopups: false });
+            view: ReaderIframeView, spread: "none", overflow: "scroll", allowScriptedContent: false, allowPopups: false });
         rendition.on("displayerror", error => { if (mine === generation) fail(error); });
         rendition.hooks.content.register(content => applyDocument(content.document));
         window.hcEvidence.stage = "first-display";

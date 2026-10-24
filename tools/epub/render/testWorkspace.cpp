@@ -39,6 +39,17 @@ private slots:
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
     }
+    void percentageCover() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus not configured");
+        const auto Path=QFileInfo(Corpus).dir().filePath("epub3-percentage-cover.epub");QVERIFY(QFile::exists(Path));
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",Path}})["documentId"].toString();
+        const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
+        QTRY_VERIFY_WITH_TIMEOUT(!State()["frameBounds"].toArray().isEmpty() && State()["frameBounds"].toArray().first().toObject()["height"].toInt()>=State()["paneHeight"].toInt()*0.9,15000);
+        QVERIFY(!State()["images"].toArray().isEmpty());const auto Image=State()["images"].toArray().first().toObject();QVERIFY(Image["complete"].toBool());QVERIFY(Image["naturalWidth"].toInt()>0);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void legacyPublication() {
         const auto Book=qEnvironmentVariable("HC_EPUB_COMPAT_BOOK");if(Book.isEmpty())QSKIP("Explicit legacy EPUB compatibility input required");
         QFile File(Book);QVERIFY(File.open(QIODevice::ReadOnly));const auto Original=File.readAll();File.close();
@@ -56,6 +67,7 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(View()["ready"].toBool() || View()["epub"].toObject()["status"]=="error",60000);
             QVERIFY2(View()["ready"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(View()).toJson())));
             QVERIFY(!View()["epub"].toObject()["images"].toArray().isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(View()["epub"].toObject()["frameBounds"].toArray().first().toObject()["height"].toInt()>0,15000);
             QVERIFY(!Window.Handle({{"action","close"},{"documentId",Id},{"discard",true}}).contains("error"));
             QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
         }
