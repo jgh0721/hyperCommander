@@ -54,13 +54,17 @@ namespace hc::compare
                     if (!ts_tree_cursor_goto_parent(&cursor)) return;
             }
         }
-        QString tokenHash(TSNode Node, ParseContext& Context, uint32_t Stop, TSNode Skip = {}, int* Tokens = nullptr)
+        QString tokenHash(TSNode Node, ParseContext& Context, uint32_t Stop, TSNode Skip = {}, int* Tokens = nullptr, int* Numbers = nullptr)
         {
             QCryptographicHash hash(QCryptographicHash::Sha256);
             walk(Node, Context, [&](TSNode child)
             {
                 if (!ts_node_is_null(Skip) && ts_node_eq(child, Skip)) { hash.addData("<function-name>"); return false; }
                 if (ts_node_start_byte(child) >= Stop || QByteArrayView(ts_node_type(child)) == "comment") return false;
+                if (Numbers && QByteArrayView(ts_node_type(child)) == "number_literal")
+                {
+                    ++*Numbers; hash.addData("N;"); return false;
+                }
                 if (!ts_node_child_count(child))
                 {
                     if (Tokens) ++*Tokens;
@@ -140,10 +144,13 @@ namespace hc::compare
                     !ts_node_is_null(ts_node_child_by_field_name(node, "type", 4));
                 int bodyTokens = 0;
                 const auto bodyHash = tokenHash(body, Context, ts_node_end_byte(body), {}, &bodyTokens);
+                int numbers = 0;
+                const auto literalShape = ordinary && bodyTokens >= 24 && bodyTokens <= 4096
+                    ? tokenHash(body, Context, ts_node_end_byte(body), {}, nullptr, &numbers) : QString{};
                 const auto separator = qualified.lastIndexOf("::");
                 functions.append(QJsonObject{{"name", qualified}, {"scope", separator < 0 ? QString{} : qualified.left(separator)},
                     {"signature", tokenHash(signatureRoot, Context, ts_node_start_byte(body))},
-                    {"body", bodyHash}, {"bodyTokens", bodyTokens},
+                    {"body", bodyHash}, {"bodyTokens", bodyTokens}, {"literalShape", literalShape}, {"numberTokens", numbers},
                     {"renameSignature", ordinary ? tokenHash(signatureRoot, Context, ts_node_start_byte(body), nameNode) : QString{}},
                     {"begin", double(ts_node_start_byte(signatureRoot))}, {"end", double(ts_node_end_byte(node))},
                     {"line", int(ts_node_start_point(signatureRoot).row)}, {"endLine", int(ts_node_end_point(node).row)}});

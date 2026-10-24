@@ -869,6 +869,36 @@ private slots:
         request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
         QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.merged_.text_, plain.merged_.text_);
     }
+    void functionRenameWithNumericBodyChange()
+    {
+        const QByteArray body = "(int x){ int y = x * 2; y += x; if (y < x) { y += x; } return y + x; }";
+        auto changed = body; changed.replace("* 2", "* 3");
+        for (const auto& extension : {"c", "cpp"})
+        {
+            const auto left = AnalyzeFunctions(QString("left.") + extension, "int oldName" + body);
+            const auto right = AnalyzeFunctions(QString("right.") + extension, "int newName" + changed);
+            QCOMPARE(left["status"].toString(), "Complete"); QCOMPARE(right["status"].toString(), "Complete");
+            const auto match = MatchFunctions(left, right); QCOMPARE(match["renamed"].toInt(), 1); QCOMPARE(match["modified"].toInt(), 1);
+            const auto row = match["relations"].toArray()[0].toObject(); QCOMPARE(row["status"].toString(), "RenamedModified");
+            QCOMPARE(row["match"].toString(), "UniqueNumericLiteralShape"); QCOMPARE(row["newName"].toString(), "newName");
+            auto partial = left; partial["status"] = "Partial"; QCOMPARE(MatchFunctions(partial, right)["renamed"].toInt(), 0);
+            auto operation = changed; operation.replace("* 3", "+ 3");
+            for (const auto& source : {"int newName" + operation, "long newName" + changed, "int newName" + changed + " int another" + changed})
+                QCOMPARE(MatchFunctions(left, AnalyzeFunctions(QString("right.") + extension, source))["renamed"].toInt(), 0);
+            const auto clones = AnalyzeFunctions(QString("left.") + extension, "int oldName" + body + " int stable" + changed);
+            const auto cloneRight = AnalyzeFunctions(QString("right.") + extension, "int newName" + changed + " int stable" + changed);
+            QCOMPARE(MatchFunctions(clones, cloneRight)["renamed"].toInt(), 0);
+        }
+        const auto moved = MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body + " int stable(){return 7;}"),
+            AnalyzeFunctions("r.cpp", "int stable(){return 7;} int newName" + changed));
+        QCOMPARE(moved["relations"].toArray()[0].toObject()["status"].toString(), "MovedRenamedModified");
+        const auto scoped = MatchFunctions(AnalyzeFunctions("l.cpp", "namespace A { int oldName" + body + "}"),
+            AnalyzeFunctions("r.cpp", "namespace B { int newName" + changed + "}")); QCOMPARE(scoped["renamed"].toInt(), 0);
+        QTemporaryDir dir; Request request; request.mode_ = "merge"; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.base_ = dir.filePath("base.cpp"); request.output_ = dir.filePath("out");
+        write(request.file1_, "int oldName" + body); write(request.file2_, "int newName" + changed); write(request.base_, "int oldName" + body);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
+        QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_); QCOMPARE(annotated.merged_.conflicts_.size(), plain.merged_.conflicts_.size());
+    }
     void functionRelationsRandomOrderOracle()
     {
         std::mt19937 rng(0x51a7); std::vector<int> order(40); std::iota(order.begin(), order.end(), 0);

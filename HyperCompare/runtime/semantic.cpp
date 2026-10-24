@@ -25,6 +25,8 @@ namespace hc::compare
             if (begin < previous || end < begin || end > Utf8.size() || function["name"].toString().isEmpty() || function["name"].toString().size() > 16384 ||
                 function["line"].toInt(-1) < 0 || function["endLine"].toInt(-1) < function["line"].toInt() ||
                 (function["renameSignature"].toString().size() != 0 && function["renameSignature"].toString().size() != 64) ||
+                (!function["literalShape"].toString().isEmpty() && function["literalShape"].toString().size() != 64) ||
+                function["numberTokens"].toInt(-1) < 0 || function["numberTokens"].toInt() > function["bodyTokens"].toInt() ||
                 function["bodyTokens"].toInt(-1) < 0 || function["signature"].toString().size() != 64 || function["body"].toString().size() != 64) return unavailable("WorkerProtocol");
             previous = end;
         }
