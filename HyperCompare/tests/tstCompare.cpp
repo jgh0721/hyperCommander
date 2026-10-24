@@ -1381,7 +1381,7 @@ private slots:
         write(r.file1_, "a\nkeep\nz\n"); write(r.file2_, "A\nkeep\nZ\n"); const auto cancel = std::make_shared<std::atomic_bool>(false);
         const auto session = Execute(r, cancel, false);
         MergeWork work{QByteArray("manually edited result\n"), std::vector<BlockState>(session.plan_->blocks_.size(), {0, 0, Resolution::Manual, false}), false};
-        for (const auto& engine : {"myers-bounded-1", "myers-bounded-2"})
+        for (const auto& engine : {"myers-bounded-1", "myers-bounded-2", "myers-bounded-3"})
         {
             auto json = QJsonDocument::fromJson(EncodeMergeWork(r, session, work, {})).object(); auto identity = json["identity"].toObject();
             identity.remove("generation"); identity["engineVersion"] = engine;
@@ -1814,6 +1814,41 @@ private slots:
             std::size_t cost = 0; for (const auto& edit : edits) cost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
             QCOMPARE(cost, a.size() + b.size() - 2 * lcs(a, b));
             steps = 0; QCOMPARE(LinearDiff(a, b, 0, 0, {}, steps), edits);
+        }
+    }
+    void sparseDiffExactnessAndBounds()
+    {
+        std::mt19937 random(735991);
+        for (int sample = 0; sample < 2500; ++sample)
+        {
+            std::array<std::string, 2> texts;
+            for (auto& text : texts)
+            {
+                for (unsigned i = 0, count = random() % 50; i < count; ++i) { text += char('a' + random() % 12); text += random() % 2 ? "\r\n" : "\n"; }
+                if (!text.empty() && random() % 3 == 0) text.pop_back();
+            }
+            const auto a = SplitLines(texts[0]), b = SplitLines(texts[1]); std::uint64_t steps = 0;
+            const auto edits = SparseDiff(a, b, 0, 0, {}, steps); QVERIFY(edits); QCOMPARE(Apply(texts[0], *edits), texts[1]);
+            std::size_t cost = 0; for (const auto& edit : *edits) cost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+            QCOMPARE(cost, a.size() + b.size() - 2 * lcs(a, b));
+            steps = 0; QCOMPARE(*SparseDiff(a, b, 0, 0, {}, steps), *edits);
+        }
+        const std::string repeated(2000, '\n'); const auto dense = SplitLines(repeated); std::uint64_t steps = 0;
+        QVERIFY(!SparseDiff(dense, dense, 0, 0, {}, steps)); // More than one million matches: bounded fallback.
+        Budget low; low.traceBytes_ = 8; steps = 0; QVERIFY(!SparseDiff(dense, dense, 0, 0, low, steps));
+        low = {}; low.steps_ = 1; steps = 1; QVERIFY_EXCEPTION_THROWN(SparseDiff(dense, dense, 0, 0, low, steps), Failure);
+        std::atomic_bool stop{true}; low = {}; low.canceled_ = &stop; steps = 0; QVERIFY_EXCEPTION_THROWN(SparseDiff(dense, dense, 0, 0, low, steps), Failure);
+        low = {}; low.deadline_ = std::chrono::steady_clock::now(); QVERIFY_EXCEPTION_THROWN(SparseDiff(dense, dense, 0, 0, low, steps), Failure);
+        for (int copies : {1, 2})
+        {
+            std::string a, b; const int groups = 20000 / copies;
+            for (int i = 0; i < groups; ++i) for (int j = 0; j < copies; ++j)
+            { a += "line-" + std::to_string(i) + "\n"; b += "line-" + std::to_string(groups - i - 1) + "\n"; }
+            QElapsedTimer timer; timer.start(); const auto edits = Diff(a, b); QCOMPARE(Apply(a, edits), b);
+            std::size_t cost = 0; for (const auto& edit : edits) cost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+            QCOMPARE(cost, std::size_t(40000 - copies * 2)); qInfo("Sparse LCS: 20000 reversed lines, multiplicity %d, %lld ms", copies, timer.elapsed());
+            QCOMPARE(Apply("head\n" + a + "tail\n", Diff("head\n" + a + "tail\n", "head\n" + b + "tail\n")), "head\n" + b + "tail\n");
+            const auto merged = Merge(a, a, b); QVERIFY(merged.conflicts_.empty()); QCOMPARE(merged.text_, b);
         }
     }
     void linearDiffFallbackAndLimits()

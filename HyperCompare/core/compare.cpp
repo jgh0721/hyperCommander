@@ -123,6 +123,7 @@ namespace hc::compare
             if (cost > traceLimit || bytes > traceLimit - cost)
             {
                 std::vector<std::vector<Index>>{}.swap(trace);
+                if (auto sparse = SparseDiff(left, right, prefix, suffix, Limits, steps)) return std::move(*sparse);
                 return LinearDiff(left, right, prefix, suffix, Limits, steps);
             }
             bytes += cost;

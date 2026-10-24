@@ -115,7 +115,7 @@ namespace hc::compare
             auto saved = object["identity"].toObject(); const auto generation = saved.take("generation");
             if (generation != QJsonValue(digest(QJsonDocument(saved).toJson(QJsonDocument::Compact)))) throw Failure("StaleWork");
             const auto engine = saved["engineVersion"].toString();
-            if (engine != expectedIdentity["engineVersion"].toString() && engine != "myers-bounded-1" && engine != "myers-bounded-2") throw Failure("StaleWork");
+            if (engine != expectedIdentity["engineVersion"].toString() && engine != "myers-bounded-1" && engine != "myers-bounded-2" && engine != "myers-bounded-3") throw Failure("StaleWork");
             auto inputs = saved["inputs"].toArray(); const auto current = expectedIdentity["inputs"].toArray();
             if (inputs.size() != current.size()) throw Failure("StaleWork");
             for (qsizetype i = 0; i < inputs.size(); ++i)
@@ -136,7 +136,7 @@ namespace hc::compare
         else if (object["identity"] != expectedIdentity)
         {
             const auto savedIdentity = object["identity"].toObject(); const auto engine = savedIdentity["engineVersion"].toString();
-            if (engine != "myers-bounded-1" && engine != "myers-bounded-2") throw Failure("StaleWork");
+            if (engine != "myers-bounded-1" && engine != "myers-bounded-2" && engine != "myers-bounded-3") throw Failure("StaleWork");
             expectedIdentity.remove("generation"); expectedIdentity["engineVersion"] = engine;
             expectedIdentity["generation"] = digest(QJsonDocument(expectedIdentity).toJson(QJsonDocument::Compact));
             if (object["identity"] != expectedIdentity) throw Failure("StaleWork");

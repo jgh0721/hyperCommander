@@ -97,4 +97,63 @@ namespace hc::compare
         }
         Limits.Check(); return edits;
     }
+    std::optional<std::vector<Edit>> SparseDiff(const Lines& Left, const Lines& Right, std::size_t Prefix, std::size_t Suffix,
+        const Budget& Limits, std::uint64_t& Steps)
+    {
+        Limits.Check();
+        if (Prefix > Left.size() || Prefix > Right.size() || Suffix > Left.size() - Prefix || Suffix > Right.size() - Prefix)
+            throw Failure("InvalidAlignmentInput");
+        const auto n = Left.size() - Prefix - Suffix, m = Right.size() - Prefix - Suffix, common = std::min(n, m);
+        struct Node { std::size_t a_, b_, previous_; };
+        const auto fixed = std::uint64_t(m) * sizeof(std::size_t) + std::uint64_t(common) * (sizeof(std::size_t) + sizeof(std::pair<std::size_t, std::size_t>));
+        if (fixed >= Limits.traceBytes_) return std::nullopt;
+        const auto maximum = std::min<std::uint64_t>(1'000'000, (Limits.traceBytes_ - fixed) / sizeof(Node));
+        const auto step = [&] { if (Steps >= Limits.steps_) throw Failure("DiffWorkLimit"); ++Steps; if ((Steps & 1023) == 0) Limits.Check(); };
+        std::vector<std::size_t> order; order.reserve(m);
+        for (std::size_t i = 0; i < m; ++i) { step(); order.push_back(i); }
+        std::sort(order.begin(), order.end(), [&](std::size_t A, std::size_t B) {
+            step(); return Right[Prefix + A] != Right[Prefix + B] ? Right[Prefix + A] < Right[Prefix + B] : A < B;
+        });
+        const auto matches = [&](std::size_t A) {
+            const auto text = Left[Prefix + A];
+            const auto first = std::lower_bound(order.begin(), order.end(), text, [&](std::size_t B, std::string_view Text) { step(); return Right[Prefix + B] < Text; });
+            const auto last = std::upper_bound(first, order.end(), text, [&](std::string_view Text, std::size_t B) { step(); return Text < Right[Prefix + B]; });
+            return std::pair{first, last};
+        };
+        std::uint64_t count = 0;
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            step(); const auto [first, last] = matches(i); const auto added = std::uint64_t(last - first);
+            if (added > maximum - count) return std::nullopt;
+            count += added;
+        }
+        Limits.Check(); std::vector<Node> nodes; nodes.reserve(std::size_t(count));
+        std::vector<std::size_t> tails; tails.reserve(common); const auto none = std::numeric_limits<std::size_t>::max();
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            step(); const auto [first, last] = matches(i);
+            // Descending positions prevent two matches from consuming one left line.
+            for (auto at = last; at != first;)
+            {
+                step(); const auto b = *--at;
+                const auto slot = std::lower_bound(tails.begin(), tails.end(), b, [&](std::size_t Index, std::size_t B) { step(); return nodes[Index].b_ < B; });
+                const auto index = std::size_t(slot - tails.begin());
+                nodes.push_back({i, b, index ? tails[index - 1] : none});
+                if (slot == tails.end()) tails.push_back(nodes.size() - 1); else *slot = nodes.size() - 1;
+            }
+        }
+        std::vector<std::pair<std::size_t, std::size_t>> anchors; anchors.reserve(common);
+        for (auto at = tails.empty() ? none : tails.back(); at != none; at = nodes[at].previous_)
+        { step(); anchors.emplace_back(nodes[at].a_, nodes[at].b_); }
+        std::reverse(anchors.begin(), anchors.end()); std::vector<Edit> edits; std::size_t a = 0, b = 0;
+        const auto emit = [&](std::size_t EndA, std::size_t EndB) {
+            if (a == EndA && b == EndB) return;
+            Edit edit{Prefix + a, Prefix + EndA, Prefix + b, Prefix + EndB, {}};
+            for (auto i = b; i < EndB; ++i) { step(); edit.replacement_.append(Right[Prefix + i]); }
+            edits.push_back(std::move(edit));
+        };
+        for (const auto& anchor : anchors) { step(); emit(anchor.first, anchor.second); a = anchor.first + 1; b = anchor.second + 1; }
+        emit(n, m); Limits.Check(); return edits;
+    }
+
 }
