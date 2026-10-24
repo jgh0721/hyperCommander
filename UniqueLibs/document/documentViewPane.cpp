@@ -93,6 +93,7 @@ namespace hc::document
             epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
             layout()->addWidget(epub_);epub_->show();
             contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB");
+            connect(epub_,&EpubProcessView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
             connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             connect(epub_,&EpubProcessView::Loaded,this,[this]{if(isVisible())epub_->FocusInput();});
             return epub_->Load(Input.bytes_);

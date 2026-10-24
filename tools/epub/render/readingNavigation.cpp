@@ -35,10 +35,10 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
         else {path_=QDir(Directory).filePath(Book+".json");try {const auto Root=read(path_);restore_=saved_=Root["locator"].toString();bookmarks_=Root["bookmarks"].toArray();}catch(const QString& Error){error_=Error;readFailed_=true;}}
     }
     auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);Layout->addWidget(Tabs);
-    auto* Search=new QWidget(Tabs);auto* SearchLayout=new QVBoxLayout(Search);query_=new QLineEdit(Search);query_->setMaxLength(128);query_->setPlaceholderText(tr("책 전체에서 검색"));query_->setObjectName("epubSearch");
-    auto* Find=new QPushButton(tr("검색"),Search);results_=new QListWidget(Search);results_->setObjectName("epubSearchResults");results_->setMaximumHeight(140);
+    auto* Search=new QWidget(Tabs);auto* SearchLayout=new QVBoxLayout(Search);query_=new QLineEdit(Search);query_->setMaxLength(128);query_->setPlaceholderText(tr("책 전체에서 검색"));query_->setObjectName("epubSearch");query_->setAccessibleName(tr("책 전체 검색어"));query_->setAccessibleDescription(tr("Ctrl+F로 이동하고 Enter로 검색합니다."));
+    auto* Find=new QPushButton(tr("검색"),Search);results_=new QListWidget(Search);results_->setObjectName("epubSearchResults");results_->setAccessibleName(tr("본문 검색 결과"));results_->setMaximumHeight(140);
     SearchLayout->addWidget(query_);SearchLayout->addWidget(Find);SearchLayout->addWidget(results_);Tabs->addTab(Search,tr("검색"));
-    auto* Marks=new QWidget(Tabs);auto* MarkLayout=new QVBoxLayout(Marks);marks_=new QListWidget(Marks);marks_->setObjectName("epubBookmarks");marks_->setMaximumHeight(140);
+    auto* Marks=new QWidget(Tabs);auto* MarkLayout=new QVBoxLayout(Marks);marks_=new QListWidget(Marks);marks_->setObjectName("epubBookmarks");marks_->setAccessibleName(tr("책갈피 목록"));marks_->setMaximumHeight(140);
     auto* Add=new QPushButton(tr("현재 위치 책갈피"),Marks);auto* Remove=new QPushButton(tr("선택 책갈피 삭제"),Marks);MarkLayout->addWidget(marks_);MarkLayout->addWidget(Add);MarkLayout->addWidget(Remove);Tabs->addTab(Marks,tr("책갈피"));
     status_=new QLabel(this);status_->setWordWrap(true);Layout->addWidget(status_);
     connect(Find,&QPushButton::clicked,this,[this]{Execute("search",query_->text());});connect(query_,&QLineEdit::returnPressed,this,[this]{Execute("search",query_->text());});
@@ -50,6 +50,7 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
 ReadingNavigation::~ReadingNavigation(){saveTimer_.stop();save();}
 void ReadingNavigation::send(const QString& Action,const QJsonValue& Value){send_({{"action",Action},{"value",Value},{"serial",++serial_}});}
 bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
+    if(Action=="focus-search") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(0);query_->setFocus(Qt::ShortcutFocusReason);query_->selectAll();return true;}
     if(!started_ || restoring_)return false;
     if(Action=="search") {if(!Value.isString() || Value.toString().trimmed().isEmpty() || Value.toString().size()>128)return false;results_->clear();status_->setText(tr("책 전체에서 검색 중…"));send(Action,Value);return true;}
     if(Action=="bookmark-add") {

@@ -40,7 +40,6 @@
     "scope": "small synthetic EPUB2/3 fixtures; not a production default or cold-cache benchmark"
   },
   "pendingGates": [
-    "IME and accessibility",
     "large documents and aggregate resource scheduler",
     "EPUB content editing",
     "repository reproducibility"
@@ -88,5 +87,18 @@
     "workspaceTestsPassed": 14,
     "settingsTestsPassed": 12,
     "scope": "EPUB.js bounded full-book literal search; SHA256-scoped persisted CFI and merge-safe bookmarks; passive footnote and original image zoom overlays"
+  },
+  "inputQualification": {
+    "evidence": "_build/epub-validation/input",
+    "workspaceTestsPassed": 15,
+    "settingsTestsPassedPerScale": 13,
+    "scales": [
+      1,
+      1.25,
+      1.5,
+      2
+    ],
+    "foreignHelperEscapeVerified": true,
+    "scope": "native IME composition/commit events, accessible search/field names, keyboard routes and layout; real TSF candidate UI and screen-reader acceptance still manual"
   }
 }

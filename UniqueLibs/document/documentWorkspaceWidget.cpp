@@ -630,6 +630,7 @@ namespace hc::document
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){update();tryFinishClose();}});
+        connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)escapeViewer();});
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;

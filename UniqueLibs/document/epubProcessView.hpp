@@ -26,6 +26,7 @@ namespace hc::document
         static void ReleaseLifecycle();
     signals:
         void Loaded();
+        void EscapeRequested();
         void Failed(const QString& Error);
         void Closed();
         void ViewStateChanged();

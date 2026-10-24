@@ -139,6 +139,7 @@ namespace hc::epub::poc
         auto* Reset = new QPushButton(QStringLiteral("↶"));
         Reset->setFixedWidth(30); Reset->setObjectName("reset_" + Key); Reset->setAccessibleName(Label + tr(" 상속값으로 복원"));
         Layout->addWidget(Reset); resets_[Key] = Reset; Form->addRow(Label, Row);
+        if(auto* Buddy=qobject_cast<QLabel*>(Form->labelForField(Row)))Buddy->setBuddy(Editor);
         connect(Reset, &QPushButton::clicked, this, [this, Key] { draft_.remove(Key); refresh(); emit ProfileChanged(Profile()); });
     }
     void ReadingSettings::addNumber(QFormLayout* Form, const QString& Key, const QString& Label, double Min, double Max, double Step)

@@ -91,5 +91,6 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
             else throw Error("지원하지 않는 읽기 명령입니다.");
         } catch(error) {result={serial,error:String(error)};}
     }
+    window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
     return {hook,action,state:()=>({readerAction:result,popup})};
 }

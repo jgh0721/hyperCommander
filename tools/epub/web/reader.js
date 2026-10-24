@@ -105,6 +105,7 @@ async function applyProfile(next = {}) {
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
     document.body.style.backgroundColor = background;
+    document.body.style.color = foreground;document.body.style.fontFamily=profile.font;document.body.style.fontSize=`${profile.size}px`;
     document.body.style.backgroundImage = profile.background === "paper" ? "radial-gradient(rgba(127,97,48,.10) .6px,transparent .7px)"
         : profile.background === "grid" ? "linear-gradient(rgba(127,127,127,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(127,127,127,.10) 1px,transparent 1px)"
         : profile.background === "image" && backgroundImage.asset === profile.backgroundAsset && backgroundImage.data ? `url("${backgroundImage.data}")` : "none";
@@ -156,6 +157,7 @@ function currentSnapshot() {
         frameBounds: [...pane.querySelectorAll("iframe")].filter(f => getComputedStyle(f).visibility !== "hidden")
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
+        readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
         locator: getLocator(), frameCount: docs.length };
 }
 
@@ -201,7 +203,7 @@ async function start(name) {
         await book.ready;
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: "scrolled-doc",
-            spread: "none", allowScriptedContent: false, allowPopups: false });
+            spread: "none", overflow: "scroll", allowScriptedContent: false, allowPopups: false });
         rendition.on("displayerror", error => { if (mine === generation) fail(error); });
         rendition.hooks.content.register(content => applyDocument(content.document));
         window.hcEvidence.stage = "first-display";
@@ -245,7 +247,7 @@ async function selfTest() {
     }
     const initialProfile = { ...profile };
     const initial = currentSnapshot();
-    const checks = { firstText: initial.text.length > 10,
+    const checks = { noReaderHorizontalScrollbar: !initial.readerHorizontalScrollbar, firstText: initial.text.length > 10,
         imagesDecoded: initial.images.length > 0 && initial.images.every(img => img.complete && img.naturalWidth > 0),
         viewportFilled: initial.frameBounds.length > 0 && initial.frameBounds.every(f => f.width >= initial.paneWidth * 0.9 && f.height >= initial.paneHeight * 0.9),
         readingWidthApplied: initial.viewportWidth <= profile.width + 1,

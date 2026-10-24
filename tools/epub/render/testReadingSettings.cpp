@@ -4,6 +4,9 @@
 
 /// Platform/framework headers
 #include <QComboBox>
+#include <QLineEdit>
+#include <QInputMethodEvent>
+#include <QAccessible>
 #include <QPlainTextEdit>
 #include <QCheckBox>
 #include <QImage>
@@ -26,6 +29,18 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void imeAndAccessibleControls() {
+        QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},QString(64,'a'),[&](const QJsonObject& Value){Request=Value;});Navigation.show();
+        Navigation.Poll({{"status","ready"},{"locator","epubcfi(/6/2!/4/2:0)"}});QVERIFY(Navigation.Execute("focus-search"));
+        auto* Search=Navigation.findChild<QLineEdit*>("epubSearch");QVERIFY(Search);QVERIFY(Search->testAttribute(Qt::WA_InputMethodEnabled));
+        QInputMethodEvent Preedit("고",{});QCoreApplication::sendEvent(Search,&Preedit);QVERIFY(Search->text().isEmpty());QVERIFY(Request.isEmpty());
+        QInputMethodEvent Commit;Commit.setCommitString("골목");QCoreApplication::sendEvent(Search,&Commit);QCOMPARE(Search->text(),QString("골목"));QVERIFY(Request.isEmpty());
+        QTest::keyClick(Search,Qt::Key_Return);QCOMPARE(Request["action"].toString(),QString("search"));QCOMPARE(Request["value"].toString(),QString("골목"));
+        auto* Accessible=QAccessible::queryAccessibleInterface(Search);QVERIFY(Accessible);QCOMPARE(Accessible->text(QAccessible::Name),QString("책 전체 검색어"));
+        ReadingSettings Settings({},QString(64,'a'),"light");auto* Css=Settings.findChild<QPlainTextEdit*>("customCss");QVERIFY(Css);
+        QInputMethodEvent CssPreedit("문",{});QCoreApplication::sendEvent(Css,&CssPreedit);QVERIFY(Settings.Profile()["customCss"].toString().isEmpty());
+        QInputMethodEvent CssCommit;CssCommit.setCommitString("/* 문단 */");QCoreApplication::sendEvent(Css,&CssCommit);QCOMPARE(Settings.Profile()["customCss"].toString(),QString("/* 문단 */"));
+    }
     void durableReaderState() {
         QTemporaryDir Temp;QVERIFY(Temp.isValid());const auto Settings=Temp.filePath("epub-reading.json"),Book=QString(64,'a');
         using hc::epub::poc::ReadingNavigation;

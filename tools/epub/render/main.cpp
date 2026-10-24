@@ -7,6 +7,11 @@
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include <QWindow>
 #include <QPointer>
+#include <QInputMethodEvent>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QShortcut>
 #include <QFileInfo>
 #include <memory>
 #include <QFutureWatcher>
@@ -35,6 +40,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QScrollArea>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QStatusBar>
@@ -123,11 +129,11 @@ namespace
             != Entry["sha256"].toString().toLatin1()) throw QString("Bundle hash mismatch");
         Result.insert("/app/reader.js", {Script, "text/javascript"});
         Result.insert("/app/index.html", {QByteArrayLiteral(
-            "<!doctype html><html><head><meta charset='utf-8'><title>EPUB P0</title>"
+            "<!doctype html><html lang='ko'><head><meta charset='utf-8'><title>EPUB P0</title>"
             "<style>html,body{margin:0;height:100%;overflow:hidden}#viewport{height:100%;margin:auto;max-width:100%}"
             "#reader{position:relative;width:100%;height:100%;margin:auto;max-width:100%}"
             ".readium-navigator-iframe{border:0;inset:0;width:100%;height:100%}</style>"
-            "</head><body><main id='viewport'><div id='reader'></div></main><script src='reader.js'></script></body></html>"), "text/html"});
+            "</head><body><main id='viewport' aria-label='EPUB 본문'><div id='reader'></div></main><script src='reader.js'></script></body></html>"), "text/html"});
         return Result;
     }
 
@@ -216,7 +222,7 @@ namespace
 #else
             setWindowTitle(tr("EPUB · Watercolor 읽기 설정 · P0 엔진 비교"));
 #endif
-            resize(1280, 900);
+            resize(QSize(1280,900).boundedTo(QGuiApplication::primaryScreen()->availableGeometry().size()-QSize(40,60)));
             settingsPath_ = SettingsPath;
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
@@ -295,6 +301,12 @@ namespace
                 });
             });
             if(!Evidence.isEmpty()) QTimer::singleShot(60000, this, [this] { if(!finished_) finish({{"status", "timeout"}}); });
+            Chapters->setAccessibleName(tr("읽을 장 선택"));view_->setAccessibleName(tr("EPUB 본문"));
+            auto* SearchKey=new QShortcut(QKeySequence::Find,this);connect(SearchKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->show();navigation_->Execute("focus-search");}});
+            auto* MarkKey=new QShortcut(QKeySequence("Ctrl+D"),this);connect(MarkKey,&QShortcut::activated,this,[this]{if(!composing_)navigation_->Execute("bookmark-add");});
+            auto* FocusKey=new QShortcut(QKeySequence(Qt::Key_F6),this);connect(FocusKey,&QShortcut::activated,this,[this]{if(!composing_){if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))navigation_->Execute("focus-search");else view_->setFocus(Qt::ShortcutFocusReason);}});
+            auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->setVisible(!settingsScroll_->isVisible());view_->setFocus();}});
+            qApp->installEventFilter(this);
             view_->setUrl(QUrl("epub://app/app/index.html"));
         }
         void Appearance(const QJsonObject& Value) {
@@ -312,7 +324,7 @@ namespace
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = view_->hasFocus();
-                State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
+                State["escapeRequests"]=escapeRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
             }
@@ -346,6 +358,20 @@ namespace
             else return Fail("epub-control-command");
             Reply["accepted"] = true;
             return QJsonDocument(Reply).toJson(QJsonDocument::Compact);
+        }
+    protected:
+        bool eventFilter(QObject* Object,QEvent* Event) override {
+            auto* Widget=qobject_cast<QWidget*>(Object);if(!Widget || (Widget!=this && !isAncestorOf(Widget)))return false;
+            if(Event->type()==QEvent::InputMethod)composing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
+            if(Event->type()==QEvent::KeyPress) {
+                auto* Key=static_cast<QKeyEvent*>(Event);
+                if(Key->key()==Qt::Key_Escape && Key->modifiers()==Qt::NoModifier && !Key->isAutoRepeat() && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+                    if(auto* Input=qobject_cast<QLineEdit*>(Widget);Input && !Input->text().isEmpty()){Input->clear();return true;}
+                    if(settings_->IsDirty()){settings_->Execute("cancel",{},false);return true;}
+                    const QPointer<Window> Guard(this);page_->runJavaScript("!!(window.hcDismissPopup && window.hcDismissPopup())",[Guard](const QVariant& Closed){if(Guard && !Closed.toBool())++Guard->escapeRequests_;});return true;
+                }
+            }
+            return QMainWindow::eventFilter(Object,Event);
         }
     private:
         void command(const QString& Name, const QJsonValue& Value)
@@ -427,7 +453,8 @@ namespace
         hc::epub::poc::ReadingNavigation* navigation_=nullptr;
         QString settingsPath_,engine_,backgroundAsset_,astError_;
         quint64 profileSerial_=0;
-        bool shellReady_=false,started_=false;
+        bool shellReady_=false,started_=false,composing_=false;
+        int escapeRequests_=0;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QScrollArea* settingsScroll_ = nullptr;

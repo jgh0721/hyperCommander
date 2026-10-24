@@ -2,6 +2,7 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
 #include <QFile>
+#include <Windows.h>
 #include <QTemporaryDir>
 #include <QJsonArray>
 #include <QMessageBox>
@@ -35,6 +36,18 @@ private slots:
         QVERIFY(File.open(QIODevice::WriteOnly));QVERIFY(File.resize(65LL*1024*1024));File.close();
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
+    }
+    void foreignReaderEscape() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",qEnvironmentVariable("HC_EPUB_POC_EPUB")}})["documentId"].toString();
+        QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
+        HWND Reader=nullptr;EnumChildWindows(reinterpret_cast<HWND>(Window.winId()),[](HWND Child,LPARAM Data)->BOOL {wchar_t Title[128]{};GetWindowTextW(Child,Title,128);if(QString::fromWCharArray(Title)==QString("EPUB 읽기 설정"))*reinterpret_cast<HWND*>(Data)=Child;return TRUE;},reinterpret_cast<LPARAM>(&Reader));
+        QVERIFY(Reader);DWORD Pid=0;const auto Thread=GetWindowThreadProcessId(Reader,&Pid);QVERIFY(Pid!=GetCurrentProcessId());
+        GUITHREADINFO Info{sizeof(Info)};QVERIFY(GetGUIThreadInfo(Thread,&Info));const auto Target=Info.hwndFocus?Info.hwndFocus:Reader;
+        QVERIFY(PostMessageW(Target,WM_KEYDOWN,VK_ESCAPE,1));QVERIFY(PostMessageW(Target,WM_KEYUP,VK_ESCAPE,1));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.Snapshot()["closeRequested"].toBool(),15000);
+        QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
     void readingControls() {
         QTemporaryDir Temp;QVERIFY(Temp.isValid());qApp->setProperty("documentViewsConfigDir",Temp.path());
