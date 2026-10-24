@@ -17,6 +17,7 @@ namespace hc::document
         void RequestClose();
         // Explicit activation request; hidden/closing views reject it.
         bool FocusInput();
+        bool ChangeReadingSettings(const QString& Action, const QJsonObject& Profile = {}, bool Global = false);
         QJsonObject ViewState() const;
         static void InitializeLifecycle();
         static void RequestShutdown();

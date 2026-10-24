@@ -21,6 +21,7 @@
 #include <QTimer>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <mutex>
 #include <system_error>
 #include <thread>
@@ -42,6 +43,8 @@ namespace hc::document
         QJsonObject metrics_;
         QJsonObject appearance_;
         QString settingsPath_;
+        std::deque<QJsonObject> settingsRequests_;
+        QJsonObject settingsResult_;
         void Metrics(QJsonObject Value) { std::lock_guard Lock(mutex_); metrics_ = std::move(Value); }
         std::thread worker_;
         void Update(QJsonObject Value) { std::lock_guard Lock(mutex_); state_ = std::move(Value); }
@@ -205,6 +208,13 @@ namespace hc::document
         if(work_) work_->cancel_.store(true);
         if(native_ && !native_->retired_) Registry::Instance().Invalidate(native_);
     }
+    bool EpubProcessView::ChangeReadingSettings(const QString& Action,const QJsonObject& Profile,bool Global) {
+        if(!work_ || !native_ || !native_->valid_ || !native_->attached_ || work_->cancel_.load() || work_->done_.load()
+            || !QStringList{"preview","apply","cancel","reload"}.contains(Action)
+            || QJsonDocument(Profile).toJson(QJsonDocument::Compact).size()>65536)return false;
+        std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
+        work_->settingsRequests_.push_back({{"kind","reading-settings"},{"action",Action},{"profile",Profile},{"global",Global}});return true;
+    }
     bool EpubProcessView::FocusInput()
     {
         if(!work_ || !isVisible() || work_->cancel_.load() || work_->done_.load()) return false;
@@ -249,6 +259,7 @@ namespace hc::document
         std::lock_guard Lock(work_->mutex_);
         auto Result = work_->state_;
         Result["metrics"] = work_->metrics_;
+        Result["settingsResult"] = work_->settingsResult_;
         Result["attached"] = native_ && native_->valid_ && native_->attached_;
         Result["retired"] = native_ ? native_->retired_ : work_->done_.load();
         return Result;
@@ -338,6 +349,20 @@ namespace hc::document
                         if(!Owner->Exchange(ThemeRequest, ThemeReply, 5000, Error)
                             || !QJsonDocument::fromJson(ThemeReply).object()["accepted"].toBool()) { Failure = "epub-appearance-rejected"; return; }
                         Applied = Next;
+                    }
+                    QJsonObject Settings;
+                    {std::lock_guard Lock(State->mutex_);if(!State->settingsRequests_.empty()){Settings=std::move(State->settingsRequests_.front());State->settingsRequests_.pop_front();}}
+                    if(!Settings.isEmpty()) {
+                        Settings["protocolVersion"]=1;Settings["documentId"]=Id;Settings["generation"]=State->generation_;
+                        QByteArray Reply;
+                        if(!Owner->Exchange(QJsonDocument(Settings).toJson(QJsonDocument::Compact),Reply,5000,Error)){Failure=Error.code_;return;}
+                        QJsonParseError SettingsError;const auto SettingsDocument=QJsonDocument::fromJson(Reply,&SettingsError);
+                        auto Result=SettingsDocument.object();
+                        if(SettingsError.error!=QJsonParseError::NoError || !SettingsDocument.isObject()
+                            || Result["protocolVersion"]!=QJsonValue(1) || Result["documentId"]!=QJsonValue(Id)
+                            || Result["generation"]!=QJsonValue(State->generation_)) {Failure="epub-settings-reply-identity";return;}
+                        Result["action"]=Settings["action"];
+                        {std::lock_guard Lock(State->mutex_);State->settingsResult_=Result;}
                     }
                     QByteArray Bytes;
                     if(!Owner->Exchange(Request, Bytes, 5000, Error)) { Failure = Error.code_; return; }

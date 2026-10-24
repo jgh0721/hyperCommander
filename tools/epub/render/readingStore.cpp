@@ -29,7 +29,11 @@ namespace hc::epub::poc
                 if(Limits.contains(Key))
                     Valid = Value.isDouble() && std::isfinite(Value.toDouble())
                         && Value.toDouble() >= Limits[Key].first && Value.toDouble() <= Limits[Key].second;
-                else if(Key == "override") Valid = Value.isBool();
+                else if(Key == "override" || Key=="cssEnabled" || Key=="cssForce") Valid = Value.isBool();
+                else if(Key=="customCss") Valid=Value.isString() && Value.toString().size()<=16384 && Value.toString().toUtf8().size()<=32768;
+                else if(Key=="background") Valid=Value.isString() && QStringList{"theme","color","paper","grid","image"}.contains(Value.toString());
+                else if(Key=="backgroundColor" || Key=="textColor") Valid=Value.isString() && (Value.toString().isEmpty() || QRegularExpression("^#[0-9a-fA-F]{6}$").match(Value.toString()).hasMatch());
+                else if(Key=="backgroundAsset") Valid=Value.isString() && (Value.toString().isEmpty() || QRegularExpression("^[0-9a-f]{64}$").match(Value.toString()).hasMatch());
                 else if(Key == "theme") Valid = Value.isString() && QStringList{"system", "light", "dark", "sepia", "green"}.contains(Value.toString());
                 else if(Key == "align") Valid = Value.isString() && QStringList{"left", "center", "right", "justify"}.contains(Value.toString());
                 else if(Key == "font")
@@ -69,10 +73,12 @@ namespace hc::epub::poc
         { return {Root["global"].toObject(), Root["books"].toObject()[Book].toObject(), {}}; }
     }
 
+    bool ReadingStore::Valid(const QJsonObject& Profile) { try {validateProfile(Profile);return true;} catch(const QString&) {return false;} }
     QJsonObject ReadingStore::Defaults()
     {
         return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
             {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
+            {"background","theme"},{"backgroundColor",""},{"textColor",""},{"backgroundAsset",""},{"customCss",""},{"cssEnabled",false},{"cssForce",true},
             {"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
     }
     QJsonObject ReadingStore::Resolve(const QJsonObject& Global, const QJsonObject& Book)

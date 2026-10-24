@@ -1,38 +1,44 @@
-// Display-only CSSOM overrides. Never rewrite package resources or engine root layout.
+// Display-only CSSOM overrides. Package bytes are never rewritten.
+import { applyCustomCss } from "./customCss.js";
 const states = new WeakMap();
 const textSelector = "p, li, blockquote, td, dd";
-
-export function applyReadingOverrides(doc, profile, foreground) {
+export function applyReadingOverrides(doc, profile, foreground, background, custom = []) {
     let state = states.get(doc);
     if (!state) { state = new Map(); states.set(doc, state); }
-    // Restore exact publisher attributes before deriving the next display profile.
-    for (const [node, original] of state) {
-        if (original === null) node.removeAttribute("style");
-        else node.setAttribute("style", original);
-    }
-    // Keep exact publisher attributes for the lifetime of this read-only document.
-    if (!profile.override) return;
-    const nodes = [...doc.body.querySelectorAll("*")].filter(node =>
-        node.namespaceURI === "http://www.w3.org/1999/xhtml"
-        && !node.closest("rt, rp, svg, math, img, video, audio, script, style")
-        && (node.matches(textSelector) || node.closest(textSelector)));
-    if (nodes.length > 32768) throw Error("Reading override element budget exceeded");
-    for (const node of nodes) {
-        if(!state.has(node)) state.set(node, node.getAttribute("style"));
-        const declaration = doc.createElementNS("http://www.w3.org/1999/xhtml", "span").style;
-        declaration.cssText = state.get(node) || "";
-        const values = { "font-family": JSON.stringify(profile.font), "font-size": `${profile.size}px`,
-            "font-weight": String(profile.weight), "line-height": String(profile.line),
-            "letter-spacing": `${profile.letter}em`, "word-spacing": `${profile.word}em`,
-            "text-align": profile.align, color: foreground };
-        if (node.matches("p")) Object.assign(values, {
-            "margin-block-start": `${profile.before}em`, "margin-block-end": `${profile.after}em`,
-            "text-indent": `${profile.indent}em` });
-        for (const [name, value] of Object.entries(values)) {
-            // Reinsert logical margins after physical/shorthand declarations in author order.
-            declaration.removeProperty(name);
-            declaration.setProperty(name, value, "important");
+    for (const [node, record] of state) {
+        if (node.getAttribute("style") === record.applied) {
+            if (record.original === null) node.removeAttribute("style"); else node.setAttribute("style", record.original);
+        } else {
+            // Preserve layout changes made by the engine between profiles.
+            for (const property of record.owned) {
+                const value = record.base.getPropertyValue(property);
+                if (value) node.style.setProperty(property, value, record.base.getPropertyPriority(property)); else node.style.removeProperty(property);
+            }
+            if (!node.style.cssText && record.original === null) node.removeAttribute("style");
+            record.original = node.getAttribute("style");
         }
-        node.setAttribute("style", declaration.cssText);
+        record.owned.clear(); record.base.cssText = record.original || "";
     }
+    if (!profile.override) return "";
+    const remember = (node, property) => {
+        if (!state.has(node)) {
+            const original = node.getAttribute("style"); const base = doc.createElementNS("http://www.w3.org/1999/xhtml", "span").style;
+            base.cssText = original || ""; state.set(node, { original, base, owned: new Set(), applied: original });
+        }
+        state.get(node).owned.add(property);
+    };
+    const set = (node, name, value) => { remember(node, name); node.style.removeProperty(name); node.style.setProperty(name, value, "important"); };
+    const nodes = [...doc.body.querySelectorAll("*")].filter(node => node.namespaceURI === "http://www.w3.org/1999/xhtml"
+        && !node.closest("rt, rp, svg, math, img, video, audio, script, style") && (node.matches(textSelector) || node.closest(textSelector)));
+    if (nodes.length > 32768) throw Error("Reading override element budget exceeded");
+    for (const node of [doc.documentElement, doc.body]) set(node, "background-color", profile.background && profile.background !== "theme" ? "transparent" : background);
+    for (const node of nodes) {
+        const values = { "font-family": JSON.stringify(profile.font), "font-size": `${profile.size}px`, "font-weight": String(profile.weight),
+            "line-height": String(profile.line), "letter-spacing": `${profile.letter}em`, "word-spacing": `${profile.word}em`, "text-align": profile.align, color: foreground };
+        if (node.matches("p")) Object.assign(values, { "margin-block-start": `${profile.before}em`, "margin-block-end": `${profile.after}em`, "text-indent": `${profile.indent}em` });
+        for (const [name, value] of Object.entries(values)) set(node, name, value);
+    }
+    const error = applyCustomCss(doc, custom, remember, profile.cssForce !== false);
+    for (const [node, record] of state) record.applied = node.getAttribute("style");
+    return error || "";
 }

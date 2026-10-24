@@ -5,6 +5,10 @@
 #include <QJsonObject>
 #include <QWidget>
 #include <QStringList>
+#include "readingAssets.hpp"
+class QPlainTextEdit;
+class QCheckBox;
+class QTabWidget;
 
 class QComboBox;
 class QDoubleSpinBox;
@@ -25,6 +29,7 @@ namespace hc::epub::poc
     class ReadingStore
     {
     public:
+        static bool Valid(const QJsonObject& Profile);
         static QJsonObject Defaults();
         static QJsonObject Resolve(const QJsonObject& Global, const QJsonObject& Book);
         static ReadingSnapshot Load(const QString& Path, const QString& Book);
@@ -39,11 +44,17 @@ namespace hc::epub::poc
         ReadingSettings(const QString& Path, const QString& Book, const QString& Theme, QWidget* Parent = nullptr);
         QJsonObject Profile() const;
         void SetBookFonts(const QStringList& Families);
+        void SetCssValidation(const QString& Css, const QString& Error);
+        bool CssValid() const;
+        bool Execute(const QString& Action, const QJsonObject& Patch, bool Global);
+        QString CssError() const { return cssError_; }
         bool IsBusy() const { return busy_; }
         bool IsDirty() const { return draft_ != base_; }
     signals:
         void ProfileChanged(const QJsonObject& Profile);
     private:
+        void addAppearance(QTabWidget* Tabs);
+        void importBackground();
         void addNumber(QFormLayout* Form, const QString& Key, const QString& Label, double Min, double Max, double Step);
         void addField(QFormLayout* Form, const QString& Key, const QString& Label, QWidget* Editor);
         void edit(const QString& Key, const QJsonValue& Value);
@@ -52,7 +63,12 @@ namespace hc::epub::poc
         void acceptSnapshot(const ReadingSnapshot& Snapshot);
         void save();
         void reload();
-        QString path_, book_;
+        QString path_, book_, validatedCss_, cssError_;
+        QComboBox* background_=nullptr;
+        QCheckBox *cssEnabled_=nullptr,*cssForce_=nullptr;
+        QPlainTextEdit* css_=nullptr;
+        QPushButton *backgroundColor_=nullptr,*textColor_=nullptr,*backgroundImport_=nullptr;
+        QFutureWatcher<ReadingAsset> assetWorker_;
         QStringList bookFonts_, systemFonts_;
         ReadingSnapshot snapshot_;
         QJsonObject base_, draft_;

@@ -5,6 +5,8 @@
 #include "inputTransfer.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include <QWindow>
+#include <QPointer>
+#include <QFileInfo>
 #include <memory>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
@@ -207,7 +209,12 @@ namespace
         Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1)
             : evidence_(Evidence), documentId_(Publication["sourceSha256"].toString()), generation_(Generation)
         {
+            engine_=Engine;
+#ifdef HC_EPUB_PRODUCT_HELPER
+            setWindowTitle(tr("EPUB 읽기 설정"));
+#else
             setWindowTitle(tr("EPUB · Watercolor 읽기 설정 · P0 엔진 비교"));
+#endif
             resize(1280, 900);
             settingsPath_ = SettingsPath;
             auto* Central = new QWidget(this);
@@ -223,6 +230,9 @@ namespace
             Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
             auto* EngineBox = new QComboBox(Panel); EngineBox->addItems({"EPUB.js", "Readium Web"});
             EngineBox->setCurrentIndex(Engine == "readium" ? 1 : 0); Form->addRow(tr("엔진"), EngineBox);
+#ifdef HC_EPUB_PRODUCT_HELPER
+            Form->setRowVisible(EngineBox,false); EngineBox->setEnabled(false);
+#endif
             auto* Chapters = new QComboBox(Panel);
             Chapters->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Chapters->setMinimumContentsLength(12);
             for(const auto Value : Publication["navigation"].toArray()) Chapters->addItem(Value.toObject()["label"].toString());
@@ -252,7 +262,7 @@ namespace
             connect(Chapters, &QComboBox::currentIndexChanged, this, [this](int Index) { command("chapter", Index); });
             connect(page_, &QWebEnginePage::loadFinished, this, [this, Engine](bool Ok) {
                 if(!Ok) { finish({{"status", "error"}, {"message", "shell load failed"}}); return; }
-                sendProfile(); command("start", Engine); poll_.start(250);
+                shellReady_=true; sendProfile();
             });
             connect(&poll_, &QTimer::timeout, this, [this] {
                 if(pending_) return;
@@ -261,6 +271,8 @@ namespace
                     pending_ = false; if(finished_) return;
                     const auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
                     latest_ = Result;
+                    if(Result["profile"].toObject()["customCss"]==settings_->Profile()["customCss"])
+                        settings_->SetCssValidation(settings_->Profile()["customCss"].toString(),astError_.isEmpty()?Result["cssError"].toString():astError_);
                     QStringList Families;
                     for(const auto& Family : Result["bookFonts"].toArray()) if(Family.isString()) Families.append(Family.toString());
                     settings_->SetBookFonts(Families);
@@ -298,7 +310,11 @@ namespace
                 auto State = latest_; State["inputFocused"] = view_->hasFocus();
                 State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
-                State["readingProfile"] = settings_->Profile(); Reply["state"] = State;
+                State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
+            }
+            else if(Kind == "reading-settings") {
+                if(Request.size()!=7 || !Request["profile"].isObject() || !Request["global"].isBool()
+                    || !settings_->Execute(Request["action"].toString(),Request["profile"].toObject(),Request["global"].toBool())) return Fail("epub-settings-rejected");
             }
             else if(Kind == "appearance") {
                 if(!hc::document::epubui::ApplyAppearance(Request["appearance"].toObject())) return Fail("epub-appearance-invalid");
@@ -307,6 +323,9 @@ namespace
             else if(Kind == "start") {
                 const auto Engine = Request["engine"].toString();
                 if(Engine != "epubjs" && Engine != "readium") return Fail("epub-control-engine");
+#ifdef HC_EPUB_PRODUCT_HELPER
+                if(Engine != "epubjs") return Fail("epub-product-engine");
+#endif
                 latest_ = {{"status", "loading"}}; command("start", Engine);
             }
             else if(Kind == "test") { latest_ = {{"status", "testing"}}; command("test", QJsonValue()); }
@@ -330,11 +349,38 @@ namespace
         }
         void sendProfile()
         {
-            const auto Values = settings_->Profile();
-            if(hostAppearance_.isEmpty()) hc::document::DocumentThemeAdapter::SetMode(Values["theme"] == "dark" ? "dark" : "light");
-            const auto Palette = fm::style::ThemeManager::instance().colors().toPalette();
-            command("palette", QJsonObject{{"background", Palette.color(QPalette::Base).name()}, {"foreground", Palette.color(QPalette::Text).name()}});
-            command("profile", Values);
+            if(!shellReady_) return;
+            const auto Values=settings_->Profile(); const auto Css=Values["customCss"].toString();
+            const auto Serial=++profileSerial_; const QPointer<Window> Guard(this);
+            const auto Apply=[Guard,Values,Serial](const QString& CssError) {
+                if(!Guard || Guard->profileSerial_!=Serial)return;
+                auto* Self=Guard.data(); const auto Css=Values["customCss"].toString();
+                Self->astError_=CssError; Self->settings_->SetCssValidation(Css,CssError);
+                auto Rendered=Values; if(!CssError.isEmpty()) Rendered["cssEnabled"]=false;
+                if(Self->hostAppearance_.isEmpty()) hc::document::DocumentThemeAdapter::SetMode(Values["theme"]=="dark"?"dark":"light");
+                const auto Palette=fm::style::ThemeManager::instance().colors().toPalette();
+                Self->command("palette",QJsonObject{{"background",Palette.color(QPalette::Base).name()},{"foreground",Palette.color(QPalette::Text).name()}});
+                const auto Asset=Values["background"]=="image"?Values["backgroundAsset"].toString():QString{};
+                if(Asset!=Self->backgroundAsset_) {
+                    QString Error; const auto Data=Asset.isEmpty()?QByteArray{}:hc::epub::poc::ReadingAssets::Load(Self->settingsPath_,Asset,Error);
+                    Self->command("background",QJsonObject{{"asset",Data.isEmpty()?QString{}:Asset},
+                        {"data",Data.isEmpty()?QString{}:QString("data:image/png;base64,")+QString::fromLatin1(Data.toBase64())}});
+                    Self->backgroundAsset_=Error.isEmpty()?Asset:QString{};
+                    if(!Error.isEmpty()) Self->statusBar()->showMessage(Error);
+                }
+                Self->command("profile",Rendered);
+                if(!Self->started_) {Self->started_=true;Self->command("start",Self->engine_);Self->poll_.start(250);}
+            };
+            if(Css.size()>16384 || Css.toUtf8().size()>32768) {Apply(tr("CSS 크기 한도를 초과했습니다."));return;}
+            const auto Encoded=QJsonDocument(QJsonArray{Css}).toJson(QJsonDocument::Compact);
+            const auto Literal=QString::fromUtf8(Encoded.mid(1,Encoded.size()-2));
+            page_->runJavaScript("JSON.stringify(window.hcValidateCss ? window.hcValidateCss("+Literal+") : {ready:false})",
+                [Guard,Apply](const QVariant& Value) {
+                    if(!Guard)return;
+                    const auto Result=QJsonDocument::fromJson(Value.toString().toUtf8()).object();
+                    if(!Result["ready"].toBool())return;
+                    Apply(Result["ok"].toBool()?QString{}:tr("%1행 %2열: %3").arg(Result["line"].toInt()).arg(Result["column"].toInt()).arg(Result["error"].toString()));
+                });
         }
         void finish(QJsonObject Result)
         {
@@ -371,7 +417,9 @@ namespace
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}};
         QJsonObject hostAppearance_;
-        QString settingsPath_;
+        QString settingsPath_,engine_,backgroundAsset_,astError_;
+        quint64 profileSerial_=0;
+        bool shellReady_=false,started_=false;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QScrollArea* settingsScroll_ = nullptr;

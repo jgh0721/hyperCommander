@@ -40,7 +40,6 @@
     "scope": "small synthetic EPUB2/3 fixtures; not a production default or cold-cache benchmark"
   },
   "pendingGates": [
-    "advanced backgrounds and safe custom CSS",
     "search, bookmarks, footnotes and image zoom",
     "IME and accessibility",
     "large documents and aggregate resource scheduler",
@@ -76,5 +75,13 @@
     "persistentGlobalAndBookSettings": true,
     "settingsTestsPassed": 10,
     "productKeyScenariosPassed": 4
+  },
+  "backgroundCssQualification": {
+    "evidence": "_build/epub-validation/background",
+    "workspaceTestsPassed": 13,
+    "settingsTestsPassed": 11,
+    "readerEnginesRegressionPassed": 2,
+    "parser": "css-tree 3.2.1",
+    "scope": "bounded display-only CSS subset and managed immutable backgrounds; publisher bytes preserved"
   }
 }

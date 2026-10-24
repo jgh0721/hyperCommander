@@ -9,6 +9,8 @@
 #include <QPainter>
 #include <QtTest>
 #include <QCryptographicHash>
+#include <QBuffer>
+#include <QImage>
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 
@@ -34,6 +36,48 @@ private slots:
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
     }
+    void advancedProfiles_data() {
+        QTest::addColumn<QString>("Background");for(const auto* Value:{"paper","grid","image","invalid"})QTest::newRow(Value)<<QString(Value);
+    }
+    void advancedProfiles() {
+        QFETCH(QString,Background);QTemporaryDir Temp;QVERIFY(Temp.isValid());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Book=qEnvironmentVariable("HC_EPUB_POC_EPUB");QFile Source(Book);QVERIFY(Source.open(QIODevice::ReadOnly));const auto Original=Source.readAll();Source.close();
+        const auto Hash=QCryptographicHash::hash(Original,QCryptographicHash::Sha256).toHex();
+        QJsonObject Profile{{"background",Background=="invalid"?"paper":Background},{"backgroundColor","#f2e7d5"},{"textColor","#344455"},{"cssEnabled",true},
+            {"customCss",Background=="invalid"?QString("@import 'https://invalid';"):QString("p { color: #52331e; text-indent: 1.25em; margin-block-start: .5em; }")}};
+        if(Background=="image") {
+            QImage Image(32,24,QImage::Format_ARGB32);Image.fill(QColor(20,90,130,180));QByteArray Data;QBuffer Buffer(&Data);Buffer.open(QIODevice::WriteOnly);QVERIFY(Image.save(&Buffer,"PNG"));
+            const auto Id=QString::fromLatin1(QCryptographicHash::hash(Data,QCryptographicHash::Sha256).toHex());QVERIFY(QDir().mkpath(Temp.filePath("epub-assets")));
+            QFile Asset(Temp.filePath("epub-assets/bg-"+Id+".png"));QVERIFY(Asset.open(QIODevice::WriteOnly));QCOMPARE(Asset.write(Data),Data.size());Asset.close();Profile["backgroundAsset"]=Id;
+        }
+        QFile Preferences(Temp.filePath("epub-reading.json"));QVERIFY(Preferences.open(QIODevice::WriteOnly));
+        Preferences.write(QJsonDocument(QJsonObject{{"schemaVersion",1},{"global",Profile},{"books",QJsonObject{}}}).toJson());Preferences.close();
+        const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();QVERIFY(!Id.isEmpty());
+        const auto Epub=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
+        if(Background=="invalid") {QVERIFY(!Epub()["cssValid"].toBool());QVERIFY(!Epub()["cssValidationError"].toString().isEmpty());}
+        else {
+            QTRY_COMPARE_WITH_TIMEOUT(Epub()["paragraphs"].toArray().first().toObject()["color"].toString(),QString("rgb(82, 51, 30)"),15000);
+            QCOMPARE(Epub()["paragraphs"].toArray().first().toObject()["indent"].toString(),QString("23.75px"));
+            QVERIFY(Epub()["backgroundImageApplied"].toBool());QCOMPARE(Epub()["canvasColor"].toString(),QString("rgb(242, 231, 213)"));
+            QVERIFY(Epub()["cssValid"].toBool());
+        }
+        const auto Execute=[&](const QString& Action,QJsonObject Patch=QJsonObject{}){return Window.Handle({{"action","epub.settings."+Action},{"documentId",Id},{"profile",Patch}});};
+        QVERIFY(!Execute("preview",{{"cssEnabled",false},{"background","theme"}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Epub()["settingsDirty"].toBool(),10000);
+        QTRY_COMPARE_WITH_TIMEOUT(Epub()["profile"].toObject()["cssEnabled"].toBool(),false,10000);
+        QVERIFY(!Execute("cancel").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(!Epub()["settingsDirty"].toBool(),10000);
+        QVERIFY(!Execute("preview",{{"cssEnabled",false},{"size",25}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Epub()["settingsDirty"].toBool() && Epub()["cssValid"].toBool(),10000);
+        QVERIFY(!Execute("apply").contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Epub()["settingsBusy"].toBool() && !Epub()["settingsDirty"].toBool(),10000);
+        QVERIFY(Preferences.open(QIODevice::ReadOnly));const auto Saved=QJsonDocument::fromJson(Preferences.readAll()).object();Preferences.close();
+        QCOMPARE(Saved["books"].toObject()[QString::fromLatin1(Hash)].toObject()["size"].toInt(),25);
+        QVERIFY(!document(Window,Id)["dirty"].toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+        QVERIFY(Source.open(QIODevice::ReadOnly));QCOMPARE(Source.readAll(),Original);
+    }
     void sharedWorkspace_data() {
         QTest::addColumn<bool>("Hosted");QTest::addColumn<QString>("Mode");
         for(bool Hosted:{false,true})for(const auto* Mode:{"ready","cancel","invalid"})
@@ -49,7 +93,7 @@ private slots:
         DocumentWorkspaceWidget Window(Temp.filePath("recovery"),Hosted);
         Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));
         const auto Hwp=qEnvironmentVariable("HC_EPUB_HWP");
-        if(!Hwp.isEmpty()) Window.ConfigureHwp(MakeProductHwpRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION"), qgetenv("HC_EPUB_HWP_PIN")));
+        if(!Hwp.isEmpty()) Window.ConfigureHwp(MakeProductHwpRuntime(qEnvironmentVariable("HC_EPUB_HWP_APPLICATION",qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")), qgetenv("HC_EPUB_HWP_PIN")));
         Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
         QVERIFY(Window.SetTabbed(true));Window.resize(1280,900);Window.show();
         const auto TextId=Window.Handle({{"action","open"},{"path",Text.fileName()}})["documentId"].toString();QVERIFY(!TextId.isEmpty());

@@ -3,6 +3,10 @@
 
 /// Platform/framework headers
 #include <QComboBox>
+#include <QCheckBox>
+#include <QPlainTextEdit>
+#include <QColorDialog>
+#include <QFileDialog>
 #include <QDoubleSpinBox>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -25,6 +29,7 @@ namespace hc::epub::poc
         auto* Tabs = new QTabWidget(this); editors_ = Tabs; Layout->addWidget(Tabs);
         auto* Quick = new QWidget(Tabs); auto* Detail = new QWidget(Tabs);
         Tabs->addTab(Quick, tr("빠른 설정")); Tabs->addTab(Detail, tr("상세 설정"));
+        addAppearance(Tabs);
         auto* QuickForm = new QFormLayout(Quick); auto* DetailForm = new QFormLayout(Detail);
         for(auto* Form : {QuickForm, DetailForm})
         { Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); }
@@ -164,13 +169,20 @@ namespace hc::epub::poc
             It.value()->setEnabled(draft_.contains(It.key()));
             It.value()->setToolTip(scope_->currentIndex() == 1 ? tr("내장 기본값으로 복원") : tr("이 책의 지정을 해제하고 기본값 상속"));
         }
+        background_->setCurrentIndex(background_->findData(Values["background"].toString()));
+        backgroundColor_->setText(Values["backgroundColor"].toString().isEmpty()?tr("색상 선택…"):Values["backgroundColor"].toString());
+        textColor_->setText(Values["textColor"].toString().isEmpty()?tr("테마 글자색"):Values["textColor"].toString());
+        cssEnabled_->setChecked(Values["cssEnabled"].toBool()); cssForce_->setChecked(Values["cssForce"].toBool());
+        if(css_->toPlainText()!=Values["customCss"].toString()) css_->setPlainText(Values["customCss"].toString());
+        backgroundImport_->setEnabled(!path_.isEmpty());
         const bool Dirty = IsDirty();
         editors_->setEnabled(!busy_ && !loadFailed_); clear_->setEnabled(!busy_ && !loadFailed_ && !draft_.isEmpty());
         clear_->setText(scope_->currentIndex() == 1 ? tr("기본값 초기화") : tr("이 책의 모든 지정 해제"));
-        apply_->setEnabled(!busy_ && !loadFailed_ && Dirty); cancel_->setEnabled(!busy_ && Dirty);
+        apply_->setEnabled(!busy_ && !loadFailed_ && Dirty && CssValid()); cancel_->setEnabled(!busy_ && Dirty);
         reload_->setEnabled(!busy_ && !Dirty && !path_.isEmpty()); scope_->setEnabled(!busy_ && !Dirty && !loadFailed_);
         status_->setText(busy_ ? tr("설정을 처리하고 있습니다…") : Dirty ? tr("미리보기 · 아직 적용하지 않음")
             : scope_->currentIndex() == 1 ? tr("기본값 미리보기 · 책별 지정 제외") : tr("적용된 설정"));
+        if(!CssValid()) status_->setText(tr("CSS 검사: %1").arg(cssError_.isEmpty()?tr("검사 중…"):cssError_));
         updating_ = false;
     }
     void ReadingSettings::acceptSnapshot(const ReadingSnapshot& Snapshot)
@@ -186,7 +198,7 @@ namespace hc::epub::poc
     }
     void ReadingSettings::save()
     {
-        if(busy_ || loadFailed_ || !IsDirty()) return;
+        if(busy_ || loadFailed_ || !IsDirty() || !CssValid()) return;
         if(path_.isEmpty())
         {
             auto Next = snapshot_; if(scope_->currentIndex() == 1) Next.global = draft_; else Next.book = draft_;
@@ -197,4 +209,64 @@ namespace hc::epub::poc
             return ReadingStore::Save(Path, Book, Global, Base, Draft);
         }));
     }
+}
+
+namespace hc::epub::poc {
+bool ReadingSettings::CssValid() const {
+    const auto Value=Profile(); const auto Css=Value["customCss"].toString();
+    return !Value["cssEnabled"].toBool() || Css.isEmpty() || (validatedCss_==Css && cssError_.isEmpty());
+}
+void ReadingSettings::SetCssValidation(const QString& Css,const QString& Error) {
+    if(Css!=Profile()["customCss"].toString()) return;
+    validatedCss_=Css; cssError_=Error; refresh();
+}
+void ReadingSettings::addAppearance(QTabWidget* Tabs) {
+    auto* Panel=new QWidget(Tabs); auto* Form=new QFormLayout(Panel); Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    Tabs->addTab(Panel,tr("배경 · CSS"));
+    background_=new QComboBox(Panel);
+    const QStringList Names{tr("테마 배경"),tr("단색"),tr("종이 무늬"),tr("격자 무늬"),tr("사용자 이미지")};
+    const QStringList Values{"theme","color","paper","grid","image"};
+    for(int I=0;I<Values.size();++I) background_->addItem(Names[I],Values[I]);
+    addField(Form,"background",tr("배경 종류"),background_);
+    backgroundColor_=new QPushButton(Panel); addField(Form,"backgroundColor",tr("배경색"),backgroundColor_);
+    textColor_=new QPushButton(Panel); addField(Form,"textColor",tr("글자색"),textColor_);
+    backgroundImport_=new QPushButton(tr("이미지 선택…"),Panel); addField(Form,"backgroundAsset",tr("배경 이미지"),backgroundImport_);
+    cssEnabled_=new QCheckBox(tr("사용자 CSS 사용"),Panel); addField(Form,"cssEnabled",tr("CSS 재정의"),cssEnabled_);
+    cssForce_=new QCheckBox(tr("선택한 CSS를 우선 적용"),Panel); addField(Form,"cssForce",tr("적용 우선순위"),cssForce_);
+    css_=new QPlainTextEdit(Panel); css_->setMinimumHeight(150); css_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)); css_->setPlaceholderText("p { margin-block-end: 1em; text-align: justify; }"); addField(Form,"customCss",tr("사용자 CSS"),css_);
+    auto* Hint=new QLabel(tr("문자·문단·이미지 폭·테두리의 CSS를 미리보기합니다. 외부 리소스와 동적 선택자는 지원하지 않습니다. 출판사 서식에서는 재정의를 적용하지 않습니다."),Panel); Hint->setWordWrap(true);Form->addRow(Hint);
+    connect(background_,&QComboBox::currentIndexChanged,this,[this](int I){if(I>=0)edit("background",background_->itemData(I).toString());});
+    connect(backgroundColor_,&QPushButton::clicked,this,[this]{const auto Color=QColorDialog::getColor(QColor(Profile()["backgroundColor"].toString()),this,tr("읽기 배경색"));if(Color.isValid())edit("backgroundColor",Color.name());});
+    connect(textColor_,&QPushButton::clicked,this,[this]{const auto Color=QColorDialog::getColor(QColor(Profile()["textColor"].toString()),this,tr("읽기 글자색"));if(Color.isValid())edit("textColor",Color.name());});
+    connect(backgroundImport_,&QPushButton::clicked,this,&ReadingSettings::importBackground);
+    connect(cssEnabled_,&QCheckBox::toggled,this,[this](bool Value){edit("cssEnabled",Value);});
+    connect(cssForce_,&QCheckBox::toggled,this,[this](bool Value){edit("cssForce",Value);});
+    connect(css_,&QPlainTextEdit::textChanged,this,[this]{edit("customCss",css_->toPlainText());});
+    connect(&assetWorker_,&QFutureWatcher<ReadingAsset>::finished,this,[this]{
+        const auto Result=assetWorker_.result(); busy_=false;
+        if(Result.error.isEmpty()) {draft_["backgroundAsset"]=Result.id;draft_["background"]="image";refresh();emit ProfileChanged(Profile());}
+        else {refresh();status_->setText(Result.error);}
+    });
+}
+void ReadingSettings::importBackground() {
+    if(busy_ || path_.isEmpty())return;
+    const auto Input=QFileDialog::getOpenFileName(this,tr("읽기 배경 이미지"),{},tr("이미지 (*.png *.jpg *.jpeg *.bmp)"));if(Input.isEmpty())return;
+    busy_=true;refresh();assetWorker_.setFuture(QtConcurrent::run([Input,Path=path_]{return ReadingAssets::Import(Input,Path);}));
+}
+}
+
+namespace hc::epub::poc {
+bool ReadingSettings::Execute(const QString& Action,const QJsonObject& Patch,bool Global) {
+    if(busy_ || loadFailed_)return false;
+    if(Action=="preview") {
+        if(scope_->currentIndex()!=(Global?1:0)) {if(IsDirty())return false;scope_->setCurrentIndex(Global?1:0);}
+        auto Next=draft_;for(auto I=Patch.begin();I!=Patch.end();++I) {if(I.value().isNull())Next.remove(I.key());else Next[I.key()]=I.value();}
+        if(!ReadingStore::Valid(Next))return false;
+        draft_=Next;refresh();emit ProfileChanged(Profile());return true;
+    }
+    if(Action=="apply") {if(!CssValid())return false;if(IsDirty())save();return true;}
+    if(Action=="cancel") {draft_=base_;refresh();emit ProfileChanged(Profile());return true;}
+    if(Action=="reload") {if(IsDirty())return false;reload();return true;}
+    return false;
+}
 }

@@ -3,6 +3,9 @@
 
 /// Platform/framework headers
 #include <QComboBox>
+#include <QPlainTextEdit>
+#include <QCheckBox>
+#include <QImage>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QJsonDocument>
@@ -12,6 +15,7 @@
 #include <QtTest>
 
 using hc::epub::poc::ReadingStore;
+using hc::epub::poc::ReadingAssets;
 using hc::epub::poc::ReadingSettings;
 
 class ReadingTests final : public QObject
@@ -45,6 +49,25 @@ private slots:
         Panel.findChild<QPushButton*>("cancel")->click(); QCOMPARE(Panel.Profile()["font"].toString(), QString("HCFixtureFont"));
         ReadingSettings Other({}, otherBook, "light");
         QVERIFY(Other.findChild<QComboBox*>("font")->findData("HCFixtureFont") < 0);
+    }
+    void backgroundsAndCssDrafts() {
+        QTemporaryDir Dir; const auto Path=Dir.filePath("reading.json");
+        QImage Image(32,24,QImage::Format_ARGB32);Image.fill(QColor(35,80,120,128));const auto Input=Dir.filePath("input.png");QVERIFY(Image.save(Input));
+        const auto Before=bytes(Input);const auto Asset=ReadingAssets::Import(Input,Path);QVERIFY2(Asset.error.isEmpty(),qPrintable(Asset.error));
+        QString Error;const auto Loaded=ReadingAssets::Load(Path,Asset.id,Error);QVERIFY(!Loaded.isEmpty());QCOMPARE(QImage::fromData(Loaded).size(),Image.size());QCOMPARE(bytes(Input),Before);
+        QVERIFY(ReadingAssets::Load(Path,"../outside",Error).isEmpty());QVERIFY(!Error.isEmpty());
+        ReadingSettings Panel(Path,book,"light");QTRY_VERIFY(!Panel.IsBusy());
+        auto* Css=Panel.findChild<QPlainTextEdit*>("customCss");auto* Enabled=Panel.findChild<QCheckBox*>("cssEnabled");QVERIFY(Css&&Enabled);
+        Css->setPlainText("p { line-height: 2.4; }");Enabled->setChecked(true);
+        QVERIFY(!Panel.CssValid());QVERIFY(!Panel.findChild<QPushButton*>("apply")->isEnabled());
+        Panel.SetCssValidation(Css->toPlainText(),{});QVERIFY(Panel.CssValid());Panel.findChild<QPushButton*>("apply")->click();QTRY_VERIFY(!Panel.IsBusy());
+        QCOMPARE(ReadingStore::Load(Path,book).book["customCss"].toString(),Css->toPlainText());
+        Css->setPlainText("@import 'https://invalid';");Panel.SetCssValidation(Css->toPlainText(),"1:1 unsupported @import");
+        QVERIFY(!Panel.findChild<QPushButton*>("apply")->isEnabled());Panel.findChild<QPushButton*>("cancel")->click();
+        QCOMPARE(Css->toPlainText(),QString("p { line-height: 2.4; }"));
+        const auto Saved=ReadingStore::Save(Path,book,false,ReadingStore::Load(Path,book).book,{{"background","image"},{"backgroundAsset",Asset.id},{"backgroundColor","#f3eadb"}});
+        QVERIFY2(Saved.error.isEmpty(),qPrintable(Saved.error));QCOMPARE(ReadingStore::Load(Path,book).book["backgroundAsset"].toString(),Asset.id);
+        QImage Large(4097,1,QImage::Format_RGB32);Large.fill(Qt::white);QVERIFY(Large.save(Dir.filePath("large.png")));QVERIFY(!ReadingAssets::Import(Dir.filePath("large.png"),Path).error.isEmpty());
     }
     void applicationThemeInheritance() {
         QTemporaryDir Dir; const auto Path = Dir.filePath("reading.json");

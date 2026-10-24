@@ -6,6 +6,7 @@
   "dependencies": {
     "@readium/navigator": "2.13.2",
     "@readium/shared": "2.8.0",
+    "css-tree": "3.2.1",
     "epubjs": "0.3.93"
   },
   "devDependencies": {

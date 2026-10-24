@@ -356,7 +356,11 @@ namespace hc::document
     {
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
-        if(epub_)return Error("epub-read-only");
+        if(epub_) {
+            if(Action.startsWith("epub.settings.")) return epub_->ChangeReadingSettings(Action.mid(14),Request["profile"].toObject(),Request["global"].toBool())
+                ? QJsonObject{{"accepted",true}} : Error("epub-settings-not-ready");
+            return Error("epub-read-only");
+        }
         if(hwp_){
             if(Action!="print")return Error("document-view-command-unsupported");
             if(IsBusy()||!ViewState()["ready"].toBool())return Error("document-not-ready");

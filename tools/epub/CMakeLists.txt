@@ -42,6 +42,8 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
         render/readingSettings.hpp
         render/readingSettings.cpp
         render/readingStore.cpp
+        render/readingAssets.cpp
+        render/readingAssets.hpp
         render/ownerMode.hpp
         render/ownerMode.cpp
         render/inputTransfer.hpp
@@ -88,6 +90,8 @@ if(BUILD_TESTING AND HC_BUILD_EPUB_POC)
         render/readingSettings.hpp
         render/readingSettings.cpp
         render/readingStore.cpp
+        render/readingAssets.cpp
+        render/readingAssets.hpp
         render/stdafx.h
     )
     target_precompile_headers(hc_epub_settings_tests PRIVATE render/stdafx.h)

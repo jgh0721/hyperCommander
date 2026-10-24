@@ -1,4 +1,5 @@
 import ePub from "epubjs";
+import { compileCss } from "./customCss.js";
 import { buildBookFontCatalog, applyBookFont, activeBookFonts } from "./bookFontCatalog.js";
 import { applyReadingOverrides } from "./readingOverrides.js";
 import { EpubNavigator, EpubPreferences, Injector } from "@readium/navigator";
@@ -14,7 +15,10 @@ let publication, engine, book, rendition, navigator;
 let fontCatalog;
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
-    align: "left", margin: 28, width: 760, override: true };
+    align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
+    backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "" };
+const cssErrors = new WeakMap();
+let customRules = [], backgroundImage = { asset: "", data: "" };
 let sequence = Promise.resolve();
 let generation = 0;
 let renditionSize = null;
@@ -66,10 +70,11 @@ function applyDocument(doc) {
     if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
     let style = doc.getElementById("hc-reading-profile");
     if (!style) { style = doc.createElement("style"); style.id = "hc-reading-profile"; doc.head.append(style); }
-    const [background, foreground] = colors[profile.theme];
-    applyReadingOverrides(doc, profile, foreground);
+    const [themeBackground, themeForeground] = colors[profile.theme];
+    const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
+    cssErrors.set(doc, applyReadingOverrides(doc, profile, foreground, background, customRules));
     style.textContent = profile.override ? `
-      html, body { background-color:${background}!important; color:${foreground}!important; }
+      html, body { background-color:${profile.background === "theme" ? background : "transparent"}!important; color:${foreground}!important; }
       body, body p, body li, body blockquote, body td, body dd {
         font-family:${CSS.escape(profile.font)}!important; font-size:${profile.size}px!important;
         font-weight:${profile.weight}!important; line-height:${profile.line}!important;
@@ -90,9 +95,19 @@ async function applyProfile(next = {}) {
         line: [1, 3], before: [0, 3], after: [0, 3], indent: [0, 3], margin: [8, 80], width: [400, 1200] };
     for (const [key, [min, max]] of Object.entries(limits))
         if (!Number.isFinite(candidate[key]) || candidate[key] < min || candidate[key] > max) throw Error(`Invalid ${key}`);
+    if (!["theme", "color", "paper", "grid", "image"].includes(candidate.background)
+        || ![candidate.backgroundColor, candidate.textColor].every(v => typeof v === "string" && (!v || /^#[0-9a-f]{6}$/i.test(v)))) throw Error("Invalid background profile");
+    customRules = candidate.cssEnabled ? compileCss(candidate.customCss) : [];
     profile = candidate;
-    const [background, foreground] = colors[profile.theme];
+    const [themeBackground, themeForeground] = colors[profile.theme];
+    const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
     document.body.style.backgroundColor = background;
+    document.body.style.backgroundImage = profile.background === "paper" ? "radial-gradient(rgba(127,97,48,.10) .6px,transparent .7px)"
+        : profile.background === "grid" ? "linear-gradient(rgba(127,127,127,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(127,127,127,.10) 1px,transparent 1px)"
+        : profile.background === "image" && backgroundImage.asset === profile.backgroundAsset && backgroundImage.data ? `url("${backgroundImage.data}")` : "none";
+    document.body.style.backgroundSize = profile.background === "paper" ? "5px 5px" : profile.background === "grid" ? "24px 24px" : "cover";
+    document.body.style.backgroundPosition = "center";
+    document.body.style.backgroundAttachment = "fixed";
     viewport.style.width = `min(calc(100% - ${profile.margin * 2}px), ${profile.width}px)`;
     if (navigator) await navigator.submitPreferences(new EpubPreferences({
         scroll: true, columnCount: 1, backgroundColor: profile.override ? background : null,
@@ -123,7 +138,7 @@ window.hcBookFonts = bookFonts;
 
 function currentSnapshot() {
     const docs = documents();
-    return { engine, profile, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
@@ -285,6 +300,10 @@ async function selfTest() {
 }
 
 function fail(error) { window.hcEvidence = { status: "error", phase: "P0-B", stage: window.hcEvidence?.stage, engine, message: String(error?.stack || error) }; }
+window.hcValidateCss = source => {
+    try { const rules = compileCss(source); return { ready: true, ok: true, rules: rules.length }; }
+    catch (error) { return { ready: true, ok: false, error: error.message, line: error.line || 1, column: error.column || 1 }; }
+};
 window.hcCommand = (command, value) => {
     sequence = sequence.then(async () => {
         if (command === "start") await start(value);
@@ -293,6 +312,14 @@ window.hcCommand = (command, value) => {
             if (!/^#[0-9a-f]{6}$/i.test(value?.background) || !/^#[0-9a-f]{6}$/i.test(value?.foreground)) throw Error("Invalid host palette");
             colors.system = [value.background, value.foreground];
             if (profile.theme === "system") await applyProfile(profile);
+        }
+        else if (command === "background") {
+            if (!value.asset && !value.data) backgroundImage = { asset: "", data: "" };
+            else {
+                if (!/^[0-9a-f]{64}$/.test(value.asset) || typeof value.data !== "string" || value.data.length > 12*1024*1024
+                    || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.data)) throw Error("Invalid managed background");
+                const image = new Image(); image.src = value.data; await image.decode(); backgroundImage = value;
+            }
         }
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
