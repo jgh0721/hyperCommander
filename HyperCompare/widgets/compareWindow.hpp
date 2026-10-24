@@ -52,7 +52,7 @@ namespace hc::compare
     protected:
         void closeEvent(QCloseEvent* Event) override;
     private:
-        void start(bool Preserve = false);
+        void start(bool Preserve = false, bool Reintegrate = false);
         void setupInputEditing();
         void bindInputEditors();
         void invalidateInputComparison();
@@ -139,6 +139,7 @@ namespace hc::compare
         QAction* saveWork_ = nullptr;
         QAction* loadWork_ = nullptr;
         QAction* recoverWork_ = nullptr;
+        QAction* reintegrate_ = nullptr;
         QAction* importDecisions_ = nullptr;
         QAction* exportDecisions_ = nullptr;
         QAction* cancel_ = nullptr;

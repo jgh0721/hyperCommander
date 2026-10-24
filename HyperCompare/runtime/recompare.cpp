@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
 #include "controllerMemory.hpp"
+#include "UniqueLibs/document/documentTextCodec.hpp"
 #include <QCryptographicHash>
 #include <QHash>
 
@@ -30,7 +31,7 @@ namespace hc::compare
         }
     }
     Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,
-        std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled)
+        std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled, const std::optional<QByteArray>& Manual)
     {
         Budget limits; limits.canceled_ = Canceled.get();
         limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);
@@ -53,6 +54,26 @@ namespace hc::compare
                 result.inputsChanged_ |= before.raw_ != after.raw_ || before.encoding_ != after.encoding_;
             }
             limits.Check();
+            const auto seed = [&](const Result& Value) {
+                return Value.plan_->hasBase_ || Value.decisionsSnapshot_ ? Value.output_ : Value.inputs_[Input.takeAll_ == "right" ? 1 : 0].utf8_;
+            };
+            result.integrationSeed_ = Previous.integrationSeed_.value_or(seed(Previous));
+            if (Manual)
+            {
+                if (Manual->size() > 32 * 1024 * 1024 || std::size_t(Manual->size()) != ResultBytes || Manual->contains('\0') ||
+                    !document::DecodeDocumentText(*Manual, "UTF-8").HasValue()) throw Failure("InvalidReintegrationText");
+                if (!result.plan_->hasBase_ && result.inputs_[0].utf8_ != result.inputs_[1].utf8_)
+                    throw Failure("ReintegrationRequiresBase");
+                const auto currentSeed = seed(result);
+                const auto view = [](const QByteArray& Text) { return std::string_view(Text.constData(), std::size_t(Text.size())); };
+                const auto merged = Merge(view(*result.integrationSeed_), view(*Manual), view(currentSeed), limits);
+                if (!merged.conflicts_.empty()) throw Failure("ReintegrationConflict");
+                if (merged.text_.size() > 32 * 1024 * 1024) throw Failure("ResultSizeLimit");
+                auto plan = std::make_shared<MergePlan>(*result.plan_);
+                for (auto& state : plan->initial_) state = {0, 0, Resolution::Unresolved, false};
+                result.plan_ = std::move(plan); result.reintegratedText_ = QByteArray::fromStdString(merged.text_);
+                result.integrationSeed_ = currentSeed; limits.Check(); return result;
+            }
             if (!result.inputsChanged_) { result.plan_ = Previous.plan_; return result; }
             QHash<QByteArray, qsizetype> old; QHash<QByteArray, int> counts;
             for (std::size_t i = 0; i < Previous.plan_->blocks_.size(); ++i)

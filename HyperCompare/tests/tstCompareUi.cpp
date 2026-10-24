@@ -1632,6 +1632,25 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
     }
+    void reintegrateResultPreservesManualUndoAndConflict()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+        for (const auto& path : {r.file1_, r.file2_, r.base_}) write(path, "a\nkeep\nz\n");
+        CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT"));
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT");
+        output->send(SCI_SETTARGETRANGE, 0, 1); output->send(SCI_REPLACETARGET, 6, reinterpret_cast<sptr_t>("manual"));
+        const auto manual = contents(output); QCOMPARE(manual, QByteArray("manual\nkeep\nz\n"));
+        write(r.file1_, "a\nkeep\nnew\n"); write(r.file2_, "a\nkeep\nnew\n");
+        action(window, "다시 비교")->trigger(); QTRY_VERIFY(!action(window, "취소")->isEnabled()); QCOMPARE(contents(output), manual);
+        auto* reintegrate = window.findChild<QAction*>("reintegrateResult"); QVERIFY(reintegrate); QVERIFY(reintegrate->isEnabled()); reintegrate->trigger();
+        QTRY_VERIFY(!action(window, "취소")->isEnabled()); const QByteArray expected = "manual\nkeep\nnew\n"; QCOMPARE(contents(output), expected);
+        QVERIFY(!action(window, "결과 저장")->isEnabled()); QVERIFY(!QFileInfo::exists(r.output_));
+        output->send(SCI_UNDO); QCOMPARE(contents(output), manual); output->send(SCI_REDO); QCOMPARE(contents(output), expected);
+        const auto undo = output->send(SCI_GETUNDOCURRENT);
+        write(r.file1_, "changed\nkeep\nnew\n"); write(r.file2_, "changed\nkeep\nnew\n"); reintegrate->trigger();
+        QTRY_VERIFY(!action(window, "취소")->isEnabled()); QCOMPARE(contents(output), expected); QCOMPARE(output->send(SCI_GETUNDOCURRENT), undo);
+        QVERIFY(window.findChild<QLabel*>("compareStatus")->text().contains("겹칩니다")); QVERIFY(!QFileInfo::exists(r.output_));
+    }
     void changedInputWorkRecoveryRequiresReview()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");

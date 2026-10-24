@@ -93,11 +93,14 @@ namespace hc::compare
         storage::DestinationExpectation expected_;
         bool hasOutputExpectation_ = false;
         bool inputsChanged_ = false;
+        // Preserve the pre-refresh seed until explicit reintegration succeeds.
+        std::optional<QByteArray> integrationSeed_;
+        std::optional<QByteArray> reintegratedText_;
         QJsonObject Json(bool IncludeContent = false, bool IncludeEntries = true) const;
     };
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save);
     Result Recompare(const Request& Input, const Result& Previous, const std::vector<BlockState>& State,
-        std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled);
+        std::size_t ResultBytes, const std::shared_ptr<std::atomic_bool>& Canceled, const std::optional<QByteArray>& Manual = std::nullopt);
     void SaveResult(const Request& Input, Result& Value, const QByteArray& Utf8);
     struct ReportFile { QJsonArray warnings_, recovery_; };
     ReportFile SaveComparisonReport(const QString& Path, const Request& Input, const Result& Session,

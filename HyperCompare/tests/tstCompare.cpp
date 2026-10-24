@@ -1722,6 +1722,38 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(SaveResult(r, changed, right), Failure); QCOMPARE(read(r.output_), QByteArray("external output\n"));
         cancel->store(true); QCOMPARE(Recompare(r, previous, model.State(), std::size_t(right.size()), cancel).completion_, QString("Canceled"));
     }
+    void reintegrateManualAndNewSources()
+    {
+        for (bool threeWay : {false, true})
+        {
+            QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+            const QByteArray original = "a\r\nkeep\r\nz\r\n", manual = QString::fromUtf8("수동😀\r\nkeep\r\nz\r\n").toUtf8();
+            write(r.file1_, original); write(r.file2_, original);
+            if (threeWay) { r.base_ = dir.filePath("base"); write(r.base_, original); }
+            const auto cancel = std::make_shared<std::atomic_bool>(false); const auto previous = Execute(r, cancel, false);
+            write(r.file1_, "a\r\nkeep\r\nnew\r\n"); write(r.file2_, "a\r\nkeep\r\nnew\r\n");
+            auto refreshed = Recompare(r, previous, previous.plan_->initial_, manual.size(), cancel);
+            QCOMPARE(refreshed.completion_, QString("Complete")); QVERIFY(refreshed.integrationSeed_.has_value());
+            auto result = Recompare(r, refreshed, refreshed.plan_->initial_, manual.size(), cancel, manual);
+            QCOMPARE(result.completion_, QString("Complete")); QVERIFY(result.reintegratedText_.has_value());
+            auto expected = manual; expected.replace("z\r\n", "new\r\n"); QCOMPARE(*result.reintegratedText_, expected);
+            for (const auto& state : result.plan_->initial_) { QVERIFY(!state.mapped_); QCOMPARE(state.resolution_, Resolution::Unresolved); }
+            const auto again = Recompare(r, result, result.plan_->initial_, expected.size(), cancel, expected);
+            QCOMPARE(again.completion_, QString("Complete")); QCOMPARE(*again.reintegratedText_, expected);
+            write(r.output_, "external"); QVERIFY_EXCEPTION_THROWN(SaveResult(r, result, expected), Failure); QCOMPARE(read(r.output_), QByteArray("external"));
+            write(r.file1_, "changed\r\nkeep\r\nnew\r\n"); write(r.file2_, "changed\r\nkeep\r\nnew\r\n");
+            const auto conflict = Recompare(r, result, result.plan_->initial_, expected.size(), cancel, expected);
+            QCOMPARE(conflict.completion_, QString("Failed")); QCOMPARE(conflict.error_, QString("ReintegrationConflict")); QVERIFY(!conflict.reintegratedText_);
+            const QByteArray invalid(1, char(0xff));
+            QCOMPARE(Recompare(r, result, result.plan_->initial_, invalid.size(), cancel, invalid).error_, QString("InvalidReintegrationText"));
+            if (!threeWay)
+            {
+                write(r.file2_, "different right\r\n");
+                QCOMPARE(Recompare(r, result, result.plan_->initial_, expected.size(), cancel, expected).error_, QString("ReintegrationRequiresBase"));
+            }
+            cancel->store(true); QCOMPARE(Recompare(r, result, result.plan_->initial_, expected.size(), cancel, expected).completion_, QString("Canceled"));
+        }
+    }
     void recompareDuplicateContexts()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left");

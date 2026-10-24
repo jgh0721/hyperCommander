@@ -118,6 +118,9 @@ namespace hc::compare
         openFiles_ = tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
         openFolders_ = tools->addAction(tr("디렉터리 열기"), this, &CompareWindow::openDirectories);
         tools->addAction(tr("다시 비교"), this, [this] { start(true); });
+        reintegrate_ = tools->addAction(tr("원본 변경 재통합"), this, [this] { if (merge_ && !busy()) start(true, true); });
+        reintegrate_->setObjectName("reintegrateResult"); reintegrate_->setEnabled(false);
+        reintegrate_->setToolTip(tr("수동 RESULT와 새 원본의 변경을 재통합합니다. 겹치는 수정은 적용하지 않으며, 성공 후 전체 재검토가 필요합니다. 실행 취소할 수 있습니다."));
         cancel_ = tools->addAction(tr("취소"), this, [this] { CancelRemoteRequest(); state_->setText(tr("취소 요청 중")); });
         cancel_->setEnabled(false);
         save_ = tools->addAction(tr("결과 저장"), this, &CompareWindow::save); save_->setEnabled(false);
@@ -420,7 +423,7 @@ namespace hc::compare
         request_.file1_ = left; request_.file2_ = right; request_.base_.clear(); request_.file3_.clear();
         request_.output_.clear(); request_.timeoutMs_ = 60000; request_.allowMissingInputs_ = {}; request_.mode_ = "compare"; start();
     }
-    void CompareWindow::start(bool Preserve)
+    void CompareWindow::start(bool Preserve, bool Reintegrate)
     {
         if (busy() || request_.file1_.isEmpty()) return;
         if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
@@ -435,7 +438,8 @@ namespace hc::compare
         if (output_) output_->send(SCI_SETREADONLY, 1);
         if (refreshing_)
             watcher_.setFuture(QtConcurrent::run([input = request_, previous = result_, states = merge_->Model().State(),
-                bytes = std::size_t(output_->send(SCI_GETLENGTH)), cancel = canceled_] { return Recompare(input, previous, states, bytes, cancel); }));
+                bytes = std::size_t(output_->send(SCI_GETLENGTH)), manual = Reintegrate ? std::optional<QByteArray>(contents(output_)) : std::nullopt,
+                cancel = canceled_] { return Recompare(input, previous, states, bytes, cancel, manual); }));
         else watcher_.setFuture(QtConcurrent::run([input = request_, cancel = canceled_] { return Execute(input, cancel, false); }));
         updateMerge();
     }
@@ -444,9 +448,10 @@ namespace hc::compare
         output_->send(SCI_SETREADONLY, 0);
         if (Value.completion_ != "Complete")
         {
-            updateMerge(); state_->setText(tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
+            updateMerge(); state_->setText(Value.error_ == "ReintegrationRequiresBase" ? tr("재통합 보류 — BASE 없는 비교에서 새 좌우 내용이 다릅니다. 현재 RESULT를 보존했습니다.") : Value.error_ == "ReintegrationConflict" ? tr("재통합 보류 — 수동 수정과 원본 변경이 겹칩니다. 현재 RESULT와 실행 취소 이력을 보존했습니다.") : tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
         }
-        const bool changed = Value.inputsChanged_; result_ = std::move(Value);
+        const bool changed = Value.inputsChanged_ || Value.reintegratedText_.has_value();
+        auto reintegrated = std::move(Value.reintegratedText_); Value.reintegratedText_.reset(); result_ = std::move(Value);
         updateFormats();
         semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
         details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
@@ -463,10 +468,13 @@ namespace hc::compare
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
             applyPairView();
-            showBlocks(); merge_->Refresh(result_.plan_); rebuildGutters(); rebuildMultiAlignment(); applyAppearance();
+            showBlocks(); merge_->Refresh(result_.plan_);
+            if (reintegrated) merge_->RestoreWork(*reintegrated, result_.plan_->initial_, true);
+            rebuildGutters(); rebuildMultiAlignment(); applyAppearance();
         }
         updateMerge();
-        if (!changed) state_->setText(tr("입력 내용 동일 — RESULT·Undo·해결 상태 보존"));
+        if (reintegrated) state_->setText(tr("원본 변경 재통합 완료 — 전체 재검토 필요 · 실행 취소로 이전 RESULT 복원 가능"));
+        else if (!changed) state_->setText(tr("입력 내용 동일 — RESULT·Undo·해결 상태 보존"));
     }
     void CompareWindow::showBlocks()
     {
@@ -788,7 +796,7 @@ namespace hc::compare
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
-        saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready);
+        saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready); reintegrate_->setEnabled(ready);
         importDecisions_->setEnabled(ready && request_.takeAll_.isEmpty()); exportDecisions_->setEnabled(ready && request_.takeAll_.isEmpty());
         for (auto* action : blockActions_) action->setEnabled(false);
         for (auto* action : wholeActions_) action->setEnabled(ready);
