@@ -871,7 +871,7 @@ private slots:
     }
     void functionRenameWithNumericBodyChange()
     {
-        const QByteArray body = "(int x){ int y = x * 2; y += x; if (y < x) { y += x; } return y + x; }";
+        const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
         auto changed = body; changed.replace("* 2", "* 3");
         for (const auto& extension : {"c", "cpp"})
         {
@@ -883,7 +883,8 @@ private slots:
             QCOMPARE(row["match"].toString(), "UniqueNumericLiteralShape"); QCOMPARE(row["newName"].toString(), "newName");
             auto partial = left; partial["status"] = "Partial"; QCOMPARE(MatchFunctions(partial, right)["renamed"].toInt(), 0);
             auto operation = changed; operation.replace("* 3", "+ 3");
-            for (const auto& source : {"int newName" + operation, "long newName" + changed, "int newName" + changed + " int another" + changed})
+            QCOMPARE(MatchFunctions(left, AnalyzeFunctions(QString("right.") + extension, "int newName" + operation))["renamed"].toInt(), 1);
+            for (const auto& source : {"long newName" + changed, "int newName" + changed + " int another" + changed})
                 QCOMPARE(MatchFunctions(left, AnalyzeFunctions(QString("right.") + extension, source))["renamed"].toInt(), 0);
             const auto clones = AnalyzeFunctions(QString("left.") + extension, "int oldName" + body + " int stable" + changed);
             const auto cloneRight = AnalyzeFunctions(QString("right.") + extension, "int newName" + changed + " int stable" + changed);
@@ -898,6 +899,41 @@ private slots:
         write(request.file1_, "int oldName" + body); write(request.file2_, "int newName" + changed); write(request.base_, "int oldName" + body);
         const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
         QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_); QCOMPARE(annotated.merged_.conflicts_.size(), plain.merged_.conflicts_.size());
+    }
+    void functionRenameSmallTokenEdits()
+    {
+        const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
+        for (const auto& extension : {"c", "cpp"})
+        {
+            const auto left = AnalyzeFunctions(QString("l.") + extension, "int oldName" + body);
+            for (int kind = 0; kind < 4; ++kind)
+            {
+                auto changed = body;
+                if (kind == 0) changed.replace("* 2", "/ 2");
+                if (kind == 1) changed.replace("return y + x", "return y + x + 1");
+                if (kind == 2) changed.replace("return y + x", "return y");
+                if (kind == 3) changed.replace("return y + x", "return x + x");
+                const auto right = AnalyzeFunctions(QString("r.") + extension, "int newName" + changed);
+                const auto result = MatchFunctions(left, right); QCOMPARE(result["renamed"].toInt(), 1); QCOMPARE(result["modified"].toInt(), 1);
+                QCOMPARE(result["relations"].toArray()[0].toObject()["match"].toString(), "UniqueTokenEdit");
+                auto missing = right; auto functions = missing["functions"].toArray(); auto f = functions[0].toObject(); f["bodySequence"] = QJsonArray{}; functions[0] = f; missing["functions"] = functions;
+                const auto limited = MatchFunctions(left, missing); QCOMPARE(limited["renamed"].toInt(), 0); QVERIFY(limited["bodySimilarityLimited"].toBool());
+                auto partial = left; partial["status"] = "Partial"; QCOMPARE(MatchFunctions(partial, right)["renamed"].toInt(), 0);
+                Budget low; low.steps_ = 1; QVERIFY_EXCEPTION_THROWN(MatchFunctions(left, right, low), Failure);
+            }
+        }
+        auto changed = body; changed.replace("* 2", "/ 2");
+        const auto clones = MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body + " int stable" + body),
+            AnalyzeFunctions("r.cpp", "int newName" + changed + " int stable" + changed)); QCOMPARE(clones["renamed"].toInt(), 0);
+        auto distantBody = changed; distantBody.replace("return y + x", "return x - y");
+        QCOMPARE(MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body), AnalyzeFunctions("r.cpp", "int newName" + distantBody))["renamed"].toInt(), 0);
+        QByteArray a, b;
+        for (int i = 0; i < 33; ++i) { a += "int old" + QByteArray::number(i) + body; b += "int new" + QByteArray::number(i) + changed; }
+        const auto crowded = MatchFunctions(AnalyzeFunctions("l.cpp", a), AnalyzeFunctions("r.cpp", b));
+        QCOMPARE(crowded["renamed"].toInt(), 0); QVERIFY(crowded["bodySimilarityLimited"].toBool());
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l.cpp"); r.file2_ = dir.filePath("r.cpp"); write(r.file1_, "int oldName" + body); write(r.file2_, "int newName" + changed);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(r, cancel, false); r.semantic_ = "off"; const auto plain = Execute(r, cancel, false); QCOMPARE(annotated.edits_, plain.edits_);
+        for (const auto& document : annotated.semantic_["documents"].toArray()) for (const auto& function : document.toObject()["functions"].toArray()) QVERIFY(!function.toObject().contains("bodySequence"));
     }
     void functionRelationsRandomOrderOracle()
     {

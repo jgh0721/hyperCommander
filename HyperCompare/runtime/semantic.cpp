@@ -18,7 +18,7 @@ namespace hc::compare
         auto result = RunWorker("source.tree-sitter", {{"language", language}, {"source", QString::fromLatin1(Utf8.toBase64())}}, Limits);
         if (result["status"] == "Unavailable") { result["language"] = language; return result; }
         if (result["language"] != language || result["functions"].toArray().size() > 10000) return unavailable("WorkerProtocol");
-        int previous = -1;
+        int previous = -1; qsizetype tokenBytes = 0;
         for (const auto value : result["functions"].toArray())
         {
             const auto function = value.toObject(); const int begin = function["begin"].toInt(-1), end = function["end"].toInt(-1);
@@ -28,6 +28,17 @@ namespace hc::compare
                 (!function["literalShape"].toString().isEmpty() && function["literalShape"].toString().size() != 64) ||
                 function["numberTokens"].toInt(-1) < 0 || function["numberTokens"].toInt() > function["bodyTokens"].toInt() ||
                 function["bodyTokens"].toInt(-1) < 0 || function["signature"].toString().size() != 64 || function["body"].toString().size() != 64) return unavailable("WorkerProtocol");
+            if (!function["bodySequence"].isArray()) return unavailable("WorkerProtocol");
+            const auto sequence = function["bodySequence"].toArray();
+            if (!sequence.isEmpty() && (sequence.size() < 32 || sequence.size() > 256 || sequence.size() != function["bodyTokens"].toInt())) return unavailable("WorkerProtocol");
+            qsizetype functionBytes = 0;
+            for (const auto& token : sequence)
+            {
+                if (!token.isString() || token.toString().toUtf8().size() > 128) return unavailable("WorkerProtocol");
+                functionBytes += token.toString().toUtf8().size();
+            }
+            tokenBytes += functionBytes;
+            if (functionBytes > 8192 || tokenBytes > 512 * 1024) return unavailable("WorkerProtocol");
             previous = end;
         }
         return result;

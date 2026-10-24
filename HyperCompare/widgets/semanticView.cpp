@@ -36,6 +36,8 @@ namespace hc::compare
         if (!Index.isValid() || Index.row() < 0 || Index.row() >= rows_.size() || Index.column() < 0 || Index.column() >= 4) return {};
         const auto row = rows_[Index.row()].toObject();
         if (Role == Qt::UserRole) return row;
+        if (Role == Qt::ToolTipRole && row["match"] == "UniqueTokenEdit")
+            return tr("같은 scope·선언에서 본문 토큰의 90% 이상이 일치하고, 한 구간에서 각 3토큰 이내 차이가 나는 상호 유일 후보입니다. 구문 기반 추정이며 병합 결정은 변경하지 않습니다.");
         if (Role == Qt::ToolTipRole && row["match"] == "UniqueNumericLiteralShape")
             return tr("같은 scope와 선언 구조에서 숫자 리터럴을 제외한 본문 토큰이 유일하게 일치하는 이름 변경 후보입니다. 의미적 동일성을 보장하거나 병합 결정을 바꾸지 않습니다.");
         if (Role == Qt::ToolTipRole) return tr("함수의 구문 구조와 상대 순서를 비교합니다. 매크로·타입 해석 및 자동 충돌 해결은 수행하지 않습니다.");

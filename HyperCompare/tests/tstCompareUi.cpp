@@ -778,7 +778,7 @@ private slots:
     void sourceFunctionRenameModifiedAnnotation()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");
-        const QByteArray body = "(int x){ int y = x * 2; y += x; if (y < x) { y += x; } return y + x; }";
+        const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
         auto changed = body; changed.replace("* 2", "* 3"); write(r.file1_, "int oldName" + body); write(r.file2_, "int newName" + changed);
         CompareWindow window(r); window.resize(1300, 800); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
         QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
@@ -788,6 +788,20 @@ private slots:
         table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
         auto* right = window.findChild<ScintillaEditBase*>("FILE 2"); QCOMPARE(contents(right), "int newName" + changed); QVERIFY(!right->send(SCI_CANUNDO));
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/function-rename-modified.png")); window.close();
+    }
+    void sourceFunctionRenameTokenEditAnnotation()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");
+        const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
+        auto changed = body; changed.replace("* 2", "/ 2"); write(r.file1_, "int oldName" + body); write(r.file2_, "int newName" + changed);
+        CompareWindow window(r); window.resize(1300, 800); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
+        QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000); QTRY_VERIFY(!action(window, "취소")->isEnabled());
+        window.findChild<QTabWidget*>("comparisonDetails")->setCurrentIndex(1);
+        QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("이름 변경 추정 + 본문 수정"));
+        QVERIFY(table->model()->data(table->model()->index(0, 1), Qt::ToolTipRole).toString().contains("90%"));
+        table->setCurrentIndex(table->model()->index(0, 0)); window.findChild<QPushButton*>("semanticReveal")->click();
+        auto* right = window.findChild<ScintillaEditBase*>("FILE 2"); QCOMPARE(contents(right), "int newName" + changed); QVERIFY(!right->send(SCI_CANUNDO));
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/function-rename-token-edit.png")); window.close();
     }
     void sourceFunctionsBaseAndPartialCoverage()
     {
