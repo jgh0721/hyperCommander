@@ -332,11 +332,11 @@ namespace hc::compare
         { result.error_ = QString::fromUtf8(error.what()); result.exitCode_ = 2; result.completion_ = "Failed"; }
         return result;
     }
-    static MergeWorkFile loadWorkArtifact(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits, bool Decisions)
+    static MergeWorkFile loadWorkArtifact(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits, bool Decisions, bool RecoverText = false)
     {
         auto paths = Input; paths.planOut_ = Path; checkArtifactPaths(paths, Limits);
         const auto snapshot = readSnapshot(Path, decisionPlanBytes, Limits); MergeWorkFile file;
-        file.work_ = Decisions ? DecodeDecisionWork(Input, Session, snapshot.raw_, Limits) : DecodeMergeWork(Input, Session, snapshot.raw_, Limits);
+        file.work_ = Decisions ? DecodeDecisionWork(Input, Session, snapshot.raw_, Limits) : DecodeMergeWork(Input, Session, snapshot.raw_, Limits, RecoverText);
         for (const auto& input : Session.inputs_)
         {
             Limits.Check(); const auto current = require(reader(input.path_)->Resolve(locator(input.path_), context(Limits)).get());
@@ -378,8 +378,8 @@ namespace hc::compare
         journal.Complete(receipt, file.warnings_, file.recovery_, verified);
         return file;
     }
-    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
-    { return loadWorkArtifact(Path, Input, Session, Limits, false); }
+    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits, bool RecoverText)
+    { return loadWorkArtifact(Path, Input, Session, Limits, false, RecoverText); }
     MergeWorkFile LoadDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits)
     { auto limits = Limits; ConfigureMemoryBudget(limits, Input.memoryMiB_); return loadWorkArtifact(Path, Input, Session, limits, true); }
     MergeWorkFile SaveMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,

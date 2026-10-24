@@ -196,6 +196,13 @@ namespace hc::compare
             const auto path = QFileDialog::getOpenFileName(this, tr("병합 작업 불러오기"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
             if (!path.isEmpty()) LoadWork(path);
         });
+        recoverWork_ = fileMenu->addAction(tr("작업 결과 텍스트 복구…"), this, [this] {
+            if (!recoverWork_->isEnabled()) return;
+            const auto path = QFileDialog::getOpenFileName(this, tr("변경된 입력의 작업 결과 복구"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
+            if (!path.isEmpty()) RecoverWork(path);
+        });
+        recoverWork_->setObjectName("recoverMergeWork"); recoverWork_->setEnabled(false);
+        recoverWork_->setToolTip(tr("같은 입력 경로의 저장된 RESULT만 복원합니다. 이전 해결 상태는 폐기하며 전체 재검토가 필요합니다. 실행 취소할 수 있습니다."));
         importDecisions_ = fileMenu->addAction(tr("결정 계획 불러오기…"), this, [this] {
             if (!importDecisions_->isEnabled()) return;
             const auto path = QFileDialog::getOpenFileName(this, tr("결정 계획 불러오기"), {}, tr("JSON 결정 계획 (*.json)"));
@@ -781,7 +788,7 @@ namespace hc::compare
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         const bool ready = merge_ && !busy();
-        saveWork_->setEnabled(ready); loadWork_->setEnabled(ready);
+        saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready);
         importDecisions_->setEnabled(ready && request_.takeAll_.isEmpty()); exportDecisions_->setEnabled(ready && request_.takeAll_.isEmpty());
         for (auto* action : blockActions_) action->setEnabled(false);
         for (auto* action : wholeActions_) action->setEnabled(ready);
@@ -872,9 +879,10 @@ namespace hc::compare
     }
     void CompareWindow::SaveWork(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting); }
     void CompareWindow::LoadWork(const QString& Path) { transferWork(Path, true, false); }
+    void CompareWindow::RecoverWork(const QString& Path) { transferWork(Path, true, false, false, true); }
     void CompareWindow::ImportDecisions(const QString& Path) { transferWork(Path, true, false, true); }
     void CompareWindow::ExportDecisions(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting, true); }
-    void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions)
+    void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions, bool RecoverText)
     {
         if (!merge_ || busy() || Path.isEmpty()) return;
         const auto absolute = QFileInfo(Path).absoluteFilePath();
@@ -883,13 +891,13 @@ namespace hc::compare
         canceled_ = std::make_shared<std::atomic_bool>(false);
         output_->send(SCI_SETREADONLY, 1); cancel_->setEnabled(true);
         auto input = request_; if (Decisions && !workPath_.isEmpty()) input.protectedInputs_.append(workPath_);
-        workWatcher_.setFuture(QtConcurrent::run([path = absolute, input, session = result_, work, expected, Loading, ReplaceExisting, Decisions, cancel = canceled_] {
+        workWatcher_.setFuture(QtConcurrent::run([path = absolute, input, session = result_, work, expected, Loading, ReplaceExisting, Decisions, RecoverText, cancel = canceled_] {
             WorkTransfer transfer; transfer.path_ = path; transfer.loading_ = Loading; transfer.decisions_ = Decisions;
             Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(input.timeoutMs_);
             try
             {
                 if (Decisions) transfer.file_ = Loading ? LoadDecisionWorkFile(path, input, session, limits) : SaveDecisionWorkFile(path, input, session, work, ReplaceExisting, limits);
-                else transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits);
+                else transfer.file_ = Loading ? LoadMergeWorkFile(path, input, session, limits, RecoverText) : SaveMergeWorkFile(path, input, session, work, expected, ReplaceExisting, limits);
             }
             catch (const SaveRecoveryFailure& error) { transfer.error_ = QString::fromUtf8(error.what()); transfer.file_.recovery_ = error.recovery_; }
             catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }

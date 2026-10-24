@@ -21,8 +21,8 @@ namespace hc::compare
     MergeWorkFile SaveDecisionWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
         bool ReplaceExisting, const Budget& Limits);
     QByteArray EncodeMergeWork(const Request& Input, const Result& Session, const MergeWork& Work, const Budget& Limits);
-    MergeWork DecodeMergeWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits);
-    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits);
+    MergeWork DecodeMergeWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits, bool RecoverText = false);
+    MergeWorkFile LoadMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const Budget& Limits, bool RecoverText = false);
     MergeWorkFile SaveMergeWorkFile(const QString& Path, const Request& Input, const Result& Session, const MergeWork& Work,
         const std::optional<storage::DestinationExpectation>& Expected, bool ReplaceExisting, const Budget& Limits);
 }

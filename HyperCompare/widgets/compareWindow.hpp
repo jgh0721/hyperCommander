@@ -45,6 +45,7 @@ namespace hc::compare
         void CancelRemoteRequest();
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
+        void RecoverWork(const QString& Path);
         void ImportDecisions(const QString& Path);
         void ExportDecisions(const QString& Path, bool ReplaceExisting = false);
         void ExportReport(const QString& Path, bool ReplaceExisting = false);
@@ -64,7 +65,7 @@ namespace hc::compare
             std::uint64_t Id, std::uint64_t Revision);
         void inputUndo(bool Redo);
         bool busy() const;
-        void transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions = false);
+        void transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions = false, bool RecoverText = false);
         void display();
         void applyPairView();
         const PairComparison* currentPair() const
@@ -137,6 +138,7 @@ namespace hc::compare
         std::function<void(int)> completed_;
         QAction* saveWork_ = nullptr;
         QAction* loadWork_ = nullptr;
+        QAction* recoverWork_ = nullptr;
         QAction* importDecisions_ = nullptr;
         QAction* exportDecisions_ = nullptr;
         QAction* cancel_ = nullptr;

@@ -1397,6 +1397,48 @@ private slots:
             QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, changed, QJsonDocument(json).toJson(), {}), Failure); write(r.file2_, "A\nkeep\nZ\n");
         }
     }
+    void changedInputWorkTextRecovery()
+    {
+        for (bool threeWay : {false, true})
+        {
+            QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+            write(r.file1_, "left\n"); write(r.file2_, "right\n");
+            if (threeWay) { r.base_ = dir.filePath("base"); write(r.base_, "base\n"); }
+            const auto cancel = std::make_shared<std::atomic_bool>(false); const auto old = Execute(r, cancel, false);
+            MergeWork work{QString::fromUtf8("수동😀\r\n결과\n").toUtf8(), std::vector<BlockState>(old.plan_->blocks_.size(), {0, 0, Resolution::Manual, false}), false};
+            const auto json = EncodeMergeWork(r, old, work, {});
+            write(r.file1_, "new\nkeep\nleft\n"); write(r.file2_, "NEW\nkeep\nRIGHT\n");
+            if (threeWay) write(r.base_, "base\nkeep\nBASE\n");
+            const auto current = Execute(r, cancel, false);
+            QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, current, json, {}), Failure);
+            const auto restored = DecodeMergeWork(r, current, json, {}, true);
+            QCOMPARE(restored.text_, work.text_); QVERIFY(restored.reviewRequired_); QCOMPARE(restored.state_.size(), current.plan_->blocks_.size());
+            for (const auto& state : restored.state_) { QVERIFY(!state.mapped_); QCOMPARE(state.resolution_, Resolution::Unresolved); }
+            const auto rewriteIdentity = [](QJsonObject& Object, QJsonObject Identity) {
+                Identity.remove("generation"); Identity["generation"] = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(Identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()); Object["identity"] = Identity;
+            };
+            const auto original = QJsonDocument::fromJson(json).object();
+            for (const auto& key : {"path", "role", "encoding", "sha256", "extra"})
+            {
+                auto bad = original; auto identity = bad["identity"].toObject(); auto inputs = identity["inputs"].toArray(); auto first = inputs[0].toObject();
+                first[key] = (QByteArray(key) == "encoding" ? QJsonValue(7) : QJsonValue("invalid")); inputs[0] = first; identity["inputs"] = inputs; rewriteIdentity(bad, identity);
+                QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, current, QJsonDocument(bad).toJson(), {}, true), Failure);
+            }
+            for (const auto& key : {"policyDigest", "engineVersion", "generation"})
+            {
+                auto bad = original; auto identity = bad["identity"].toObject(); identity[key] = "invalid";
+                if (QByteArray(key) == "generation") bad["identity"] = identity; else rewriteIdentity(bad, identity);
+                QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, current, QJsonDocument(bad).toJson(), {}, true), Failure);
+            }
+            auto bad = original; bad["resultSha256"] = "invalid";
+            QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, current, QJsonDocument(bad).toJson(), {}, true), Failure);
+            std::atomic_bool canceled{true}; Budget limits; limits.canceled_ = &canceled;
+            QVERIFY_EXCEPTION_THROWN(DecodeMergeWork(r, current, json, limits, true), Failure);
+            const auto path = dir.filePath("work.hcmerge"); write(path, json);
+            QCOMPARE(LoadMergeWorkFile(path, r, current, {}, true).work_.text_, work.text_);
+            write(r.file1_, "changed again"); QVERIFY_EXCEPTION_THROWN(LoadMergeWorkFile(path, r, current, {}, true), Failure);
+        }
+    }
     void mergeWorkStrictValidation()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");

@@ -1632,6 +1632,24 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
     }
+    void changedInputWorkRecoveryRequiresReview()
+    {
+        QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.output_ = dir.filePath("out");
+        write(r.file1_, "left\n"); write(r.file2_, "right\n"); const auto old = Execute(r, std::make_shared<std::atomic_bool>(false), false);
+        MergeWork work{QByteArray("manual result\r\n"), std::vector<BlockState>(old.plan_->blocks_.size(), {0, 0, Resolution::Manual, false}), false};
+        const auto path = dir.filePath("work.hcmerge"); const auto checkpoint = EncodeMergeWork(r, old, work, {}); write(path, checkpoint);
+        write(r.file1_, "new left\n"); write(r.file2_, "new right\n");
+        CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT"));
+        auto* output = window.findChild<ScintillaEditBase*>("RESULT"); const auto initial = contents(output);
+        auto* recover = window.findChild<QAction*>("recoverMergeWork"); QVERIFY(recover); QVERIFY(recover->isEnabled());
+        window.LoadWork(path); QTRY_VERIFY(!action(window, "취소")->isEnabled()); QCOMPARE(contents(output), initial);
+        window.RecoverWork(path); QTRY_COMPARE(contents(output), work.text_);
+        QVERIFY(!action(window, "결과 저장")->isEnabled()); QVERIFY(!QFileInfo::exists(r.output_)); QCOMPARE(readBytes(path), checkpoint);
+        output->send(SCI_UNDO); QCOMPARE(contents(output), initial); output->send(SCI_REDO); QCOMPARE(contents(output), work.text_);
+        QVERIFY(!action(window, "결과 저장")->isEnabled());
+        action(window, "전체 수동 완료")->trigger(); action(window, "결과 저장")->trigger(); QTRY_COMPARE(window.ExitCode(), 0);
+        QCOMPARE(readBytes(r.output_), work.text_); QCOMPARE(readBytes(path), checkpoint); window.close();
+    }
     void legacyWorkRestoresTextWithReviewAndUndo()
     {
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.txt"); r.file2_ = dir.filePath("right.txt"); r.output_ = dir.filePath("out.txt"); r.semantic_ = "off";

@@ -102,13 +102,38 @@ namespace hc::compare
         const auto json = QJsonDocument(object).toJson(QJsonDocument::Compact);
         if (json.size() > decisionPlanBytes) throw Failure("WorkSizeLimit"); Limits.Check(); return json;
     }
-    MergeWork DecodeMergeWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits)
+    MergeWork DecodeMergeWork(const Request& Input, const Result& Session, const QByteArray& Json, const Budget& Limits, bool RecoverText)
     {
         auto object = ReadCompareJson(Json, Limits);
         QStringList keys{"schemaVersion", "kind", "identity", "takeAll", "resultBytes", "resultSha256", "resultChunks", "blocks", "reviewRequired"}; keys.sort();
         if (object.keys() != keys || object["schemaVersion"] != QJsonValue(1) || object["kind"] != QJsonValue("text-merge-work")) throw Failure("InvalidWorkSchema");
         auto expectedIdentity = DecisionIdentity(Input, Session, Limits); bool legacy = false;
-        if (object["identity"] != expectedIdentity)
+        if (RecoverText)
+        {
+            // Recovery accepts changed bytes/encoding only for the same roles,
+            // paths and comparison policy. Saved block authority is never reused.
+            auto saved = object["identity"].toObject(); const auto generation = saved.take("generation");
+            if (generation != QJsonValue(digest(QJsonDocument(saved).toJson(QJsonDocument::Compact)))) throw Failure("StaleWork");
+            const auto engine = saved["engineVersion"].toString();
+            if (engine != expectedIdentity["engineVersion"].toString() && engine != "myers-bounded-1" && engine != "myers-bounded-2") throw Failure("StaleWork");
+            auto inputs = saved["inputs"].toArray(); const auto current = expectedIdentity["inputs"].toArray();
+            if (inputs.size() != current.size()) throw Failure("StaleWork");
+            for (qsizetype i = 0; i < inputs.size(); ++i)
+            {
+                Limits.Check(); auto before = inputs[i].toObject(); const auto after = current[i].toObject();
+                const auto hash = before["sha256"].toString();
+                if (before.keys() != after.keys() || hash.size() != 64 ||
+                    std::any_of(hash.begin(), hash.end(), [](QChar C) { return !(C >= '0' && C <= '9') && !(C >= 'a' && C <= 'f'); }) ||
+                    !before["encoding"].isString() || before["encoding"].toString().isEmpty() || !before["bom"].isBool()) throw Failure("StaleWork");
+                for (const auto* key : {"sha256", "encoding", "bom"}) before[key] = after[key];
+                inputs[i] = before;
+            }
+            saved["inputs"] = inputs; saved["engineVersion"] = expectedIdentity["engineVersion"];
+            saved["generation"] = digest(QJsonDocument(saved).toJson(QJsonDocument::Compact));
+            if (saved != expectedIdentity) throw Failure("StaleWork");
+            legacy = true;
+        }
+        else if (object["identity"] != expectedIdentity)
         {
             const auto savedIdentity = object["identity"].toObject(); const auto engine = savedIdentity["engineVersion"].toString();
             if (engine != "myers-bounded-1" && engine != "myers-bounded-2") throw Failure("StaleWork");
