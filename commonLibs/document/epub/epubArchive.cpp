@@ -3,6 +3,7 @@
 
 /// Framework headers
 #include <QSet>
+#include <QRegularExpression>
 #include <QStringDecoder>
 #include <QtEndian>
 #include <algorithm>
@@ -38,6 +39,19 @@ namespace hc::document::epub::detail
         return Text;
     }
 
+    bool PassiveDoctype(const QXmlStreamReader& Reader)
+    {
+        // Legacy EPUB2 XHTML declarations are labels only. Never admit an
+        // internal subset, custom entities, or an arbitrary external DTD.
+        static const QRegularExpression Declaration(QStringLiteral(
+            R"hc(^<!DOCTYPE\s+html(?:\s+PUBLIC\s+(["'])(-//W3C//DTD XHTML (?:1[.]1|1[.]0 (?:Strict|Transitional))//EN)\1\s+(["'])(http://www[.]w3[.]org/TR/(?:xhtml11/DTD/xhtml11[.]dtd|xhtml1/DTD/xhtml1-(?:strict|transitional)[.]dtd))\3)?\s*>$)hc"));
+        static const QRegularExpression Ncx(QStringLiteral(
+            R"hc(^<!DOCTYPE\s+ncx\s+PUBLIC\s+(["'])-//NISO//DTD ncx 2005-1//EN\1\s+(["'])http://www[.]daisy[.]org/z3986/2005/ncx-2005-1[.]dtd\2\s*>$)hc"));
+        const auto Text = Reader.text().trimmed();
+        return Reader.entityDeclarations().isEmpty() && Reader.notationDeclarations().isEmpty()
+            && (Declaration.match(Text).hasMatch() || Ncx.match(Text).hasMatch());
+    }
+
     QString Canonical(const QString& Name)
     {
         if(Name.toUtf8().size() > 4096) Reject("entry-path-limit");
@@ -52,11 +66,27 @@ namespace hc::document::epub::detail
     {
         Check(cancel_);
         if(Bytes.size() > InputLimit) Reject("input-limit");
-        qsizetype End = -1;
-        for(qsizetype At = Bytes.size() - 22; At >= std::max<qsizetype>(0, Bytes.size() - 65557); --At)
-            if(u32(Bytes, At) == 0x06054b50 && At + 22 + u16(Bytes, At + 20) == Bytes.size()) { End = At; break; }
+        qsizetype End = -1, ArchiveEnd = Bytes.size();
+        // Some EPUB exporters leave one PKCS#7 block's padding after EOCD.
+        // Accept only a complete 1..16 byte repeated padding value; arbitrary
+        // trailers and truncated comments must still fail. Check ZIP first so
+        // an actual archive comment ending in padding-like bytes is preserved.
+        const auto FindEnd = [&](qsizetype Size) -> qsizetype {
+            for(qsizetype At = Size - 22; At >= std::max<qsizetype>(0, Size - 65557); --At)
+                if(u32(Bytes, At) == 0x06054b50 && At + 22 + u16(Bytes, At + 20) == Size) return At;
+            return -1;
+        };
+        End = FindEnd(ArchiveEnd);
+        if(End < 0 && !Bytes.isEmpty()) {
+            const auto Padding = static_cast<unsigned char>(Bytes.back());
+            if(Padding >= 1 && Padding <= 16 && Bytes.size() >= Padding
+                && Bytes.right(Padding) == QByteArray(Padding, char(Padding))) {
+                ArchiveEnd -= Padding;
+                End = FindEnd(ArchiveEnd);
+            }
+        }
         if(End < 0) Reject("zip-end-missing");
-        comment_=Bytes.mid(End+22);
+        comment_=Bytes.mid(End+22, ArchiveEnd-End-22);
         const auto Count = u16(Bytes, End + 10);
         if(u16(Bytes, End + 4) || u16(Bytes, End + 6) || u16(Bytes, End + 8) != Count) Reject("zip-multidisk-unsupported");
         if(!Count || Count > 4096) Reject("entry-count-limit");
@@ -118,7 +148,9 @@ namespace hc::document::epub::detail
                     || (u32(Bytes, Local + 22) && u32(Bytes, Local + 22) != Item.size_)) Reject("zip-local-size", Path);
             } else if(u32(Bytes, Local + 14) != Item.crc_ || u32(Bytes, Local + 18) != Item.compressed_ || u32(Bytes, Local + 22) != Item.size_)
                 Reject("zip-local-size", Path);
-            if(Path == "mimetype" && (Local || Method || LocalExtra || (Flags & 8))) Reject("invalid-mimetype-layout");
+            // Compatibility: compressed/descriptor-backed mimetype is safe
+            // after the same size, descriptor and CRC checks as every entry.
+            if(Path == "mimetype" && (Local || LocalExtra)) Reject("invalid-mimetype-layout");
             Ranges.append({Local, Item.end_}); entries_.insert(Path, Item); At = Next;
         }
         if(At != End) Reject("zip-central-count");

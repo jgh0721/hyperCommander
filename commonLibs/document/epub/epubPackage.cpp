@@ -68,6 +68,8 @@ namespace hc::document::epub
                 const auto Source = Utf8(Bytes, Path);
                 if(Source.contains(QChar(0))) Reject("xml-dtd-or-entity", Path);
                 QXmlStreamReader Reader(Source);
+                XhtmlEntities Entities;
+                Reader.setEntityResolver(&Entities);
                 QList<int> Stack;
                 while(!Reader.atEnd()) {
                     Check(Cancel);
@@ -75,7 +77,10 @@ namespace hc::document::epub
                     if(Token == QXmlStreamReader::StartDocument) {
                         const auto Encoding = Reader.documentEncoding().toString().toLower();
                         if(!Encoding.isEmpty() && Encoding != "utf-8" && Encoding != "utf8") Reject("xml-encoding-unsupported", Path);
-                    } else if(Token == QXmlStreamReader::DTD || Token == QXmlStreamReader::EntityReference) Reject("xml-dtd-or-entity", Path);
+                    } else if(Token == QXmlStreamReader::DTD) {
+                        if(!PassiveDoctype(Reader)) Reject("xml-dtd-or-entity", Path);
+                        Entities.enabled_ = Reader.dtdName() == "html";
+                    } else if(Token == QXmlStreamReader::EntityReference) Reject("xml-dtd-or-entity", Path);
                     else if(Token == QXmlStreamReader::StartElement) {
                         if(nodes_.size() >= 32768 || Stack.size() >= 64 || Reader.attributes().size() > 256) Reject("xml-complexity-limit", Path);
                         const auto Index = static_cast<int>(nodes_.size());

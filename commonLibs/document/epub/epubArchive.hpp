@@ -3,12 +3,21 @@
 
 /// Framework headers
 #include <QMap>
+#include <QXmlStreamReader>
 
 namespace hc::document::epub::detail
 {
     struct Rejected { QString code_; QString location_; };
     [[noreturn]] inline void Reject(const QString& Code, const QString& Location = {}) { throw Rejected{Code, Location}; }
     inline void Check(const Cancellation& Cancel) { if(Cancel && Cancel()) Reject("cancelled"); }
+    bool PassiveDoctype(const QXmlStreamReader& Reader);
+    class XhtmlEntities final : public QXmlStreamEntityResolver
+    {
+    public:
+        bool enabled_ = false;
+        QString resolveUndeclaredEntity(const QString& Name) override
+        { return enabled_ && Name == "nbsp" ? QString(QChar(0x00a0)) : QString{}; }
+    };
     QString Canonical(const QString& Name);
     QString Utf8(const QByteArray& Bytes, const QString& Location);
 

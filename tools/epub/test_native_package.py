@@ -16,7 +16,7 @@ from prepare_render import prepare
 EXECUTABLE = Path(sys.argv.pop(1)).resolve()
 
 
-def compressed(entries, descriptor=False):
+def compressed(entries, descriptor=False, legacy=False):
     class ForwardOnly(io.BytesIO):
         def seekable(self):
             return False
@@ -25,8 +25,8 @@ def compressed(entries, descriptor=False):
     stream = ForwardOnly() if descriptor else io.BytesIO()
     with zipfile.ZipFile(stream, "w") as book:
         for name, raw in entries.items():
-            book.writestr(name, raw, compress_type=zipfile.ZIP_STORED if name == "mimetype" else zipfile.ZIP_DEFLATED)
-    if not descriptor:
+            book.writestr(name, raw, compress_type=zipfile.ZIP_STORED if name == "mimetype" and not legacy else zipfile.ZIP_DEFLATED)
+    if not descriptor or legacy:
         return stream.getvalue()
     data = bytearray(stream.getvalue())
     end = data.rindex(b"PK\x05\x06")
@@ -76,6 +76,12 @@ class NativePackageTests(unittest.TestCase):
             with self.subTest(case=case["id"]):
                 path = self.root / "corpus" / case["file"]
                 error = codes.get(case["id"], case["expectedCode"])
+                # The Python research inspector keeps strict EPUB conformance;
+                # the native reader also admits safe legacy ZIP layouts.
+                if case["id"] == "compressed-mimetype":
+                    native = self.run_bytes(path.read_bytes())
+                    self.assertEqual(len(native["spine"]), 2)
+                    continue
                 native = self.run_bytes(path.read_bytes(), error)
                 if not error:
                     oracle = prepare(path)
@@ -90,6 +96,54 @@ class NativePackageTests(unittest.TestCase):
                 self.assertEqual(len(result["spine"]), 2)
         entries = publication(); entries["EPUB/Styles/book.css"] = b""
         self.run_bytes(compressed(entries))
+
+    def test_legacy_zip_and_passive_doctypes(self):
+        entries = publication()
+        chapter = "EPUB/Text/second.xhtml"
+        declaration = b'<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'
+        entries[chapter] = entries[chapter].replace(b'<html', declaration + b'<html', 1).replace(b'</body>', b'<p>space&nbsp;kept</p></body>')
+        base = compressed(entries, descriptor=True, legacy=True)
+        for padding in range(17):
+            with self.subTest(padding=padding):
+                self.run_bytes(base + bytes([padding]) * padding)
+        # An ordinary ZIP comment that happens to end in padding is not trimmed.
+        data = bytearray(archive(publication()))
+        struct.pack_into("<H", data, len(data) - 2, 4)
+        self.run_bytes(bytes(data) + b'\x04' * 4)
+        maximum = bytearray(archive(publication()))
+        struct.pack_into("<H", maximum, len(maximum) - 2, 65535)
+        self.run_bytes(bytes(maximum) + b'c' * 65535 + b'\x10' * 16)
+        for suffix in (b'x', b'\x04' * 3, b'\x11' * 17, b'\x00' * 4):
+            self.run_bytes(base + suffix, "zip-end-missing")
+        # CRC enforcement still applies to the compatibility layout.
+        broken = bytearray(base)
+        central = broken.index(b'PK\x01\x02')
+        broken[central + 16] ^= 1
+        self.run_bytes(bytes(broken), "zip-descriptor")
+
+    def test_passive_epub2_ncx_doctype(self):
+        entries = publication("2.0")
+        entries["EPUB/toc.ncx"] = b'<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">' + entries["EPUB/toc.ncx"]
+        result = self.run_bytes(compressed(entries, descriptor=True, legacy=True) + b'\x04' * 4)
+        self.assertEqual(result["packageVersion"], "2.0")
+        self.assertEqual(len(result["navigation"]), 2)
+
+    def test_doctype_allowlist_rejects_entities_and_custom_dtd(self):
+        chapter = "EPUB/Text/second.xhtml"
+        good = b'<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'
+        for declaration in (
+            b'<!DOCTYPE html SYSTEM "https://invalid.example/evil.dtd">',
+            b'<!DOCTYPE html [<!ENTITY local "EXPANDED">]>',
+            good[:-1] + b' [<!ENTITY secret SYSTEM "file:///C:/private">]>',
+            b'<!DOCTYPE html [<!ENTITY % remote SYSTEM "https://invalid.example/evil.dtd">%remote;]>',
+        ):
+            entries = publication()
+            entries[chapter] = entries[chapter].replace(b'<html', declaration + b'<html', 1)
+            self.run_bytes(archive(entries), "xml-dtd-or-entity")
+        for declaration in (b'<!DOCTYPE html>', good.replace(b'"', b"'")):
+            entries = publication()
+            entries[chapter] = entries[chapter].replace(b'<html', declaration + b'<html', 1)
+            self.run_bytes(archive(entries))
 
     def test_zip_header_mutations(self):
         base = archive(publication())
