@@ -157,6 +157,10 @@ namespace hc::compare
                 const bool ordinary = !Context.python_ && !ts_node_is_null(nameNode) &&
                     (QByteArrayView(ts_node_type(nameNode)) == "identifier" || QByteArrayView(ts_node_type(nameNode)) == "field_identifier") &&
                     !ts_node_is_null(ts_node_child_by_field_name(node, "type", 4));
+                // Python decorators and special methods can depend on the declared name.
+                // Only bare ordinary functions use exact structural rename matching.
+                const bool pythonRename = Context.python_ && !ts_node_is_null(nameNode) &&
+                    ts_node_eq(signatureRoot, node) && !(name.startsWith("__") && name.endsWith("__"));
                 int bodyTokens = 0;
                 const auto bodyHash = tokenHash(body, Context, ts_node_end_byte(body), {}, &bodyTokens);
                 int numbers = 0;
@@ -181,7 +185,7 @@ namespace hc::compare
                 functions.append(QJsonObject{{"name", qualified}, {"scope", separator < 0 ? QString{} : qualified.left(separator)},
                     {"signature", tokenHash(signatureRoot, Context, ts_node_start_byte(body))},
                     {"body", bodyHash}, {"bodyTokens", bodyTokens}, {"literalShape", literalShape}, {"numberTokens", numbers}, {"bodySequence", bodySequence},
-                    {"renameSignature", ordinary ? tokenHash(signatureRoot, Context, ts_node_start_byte(body), nameNode) : QString{}},
+                    {"renameSignature", (ordinary || pythonRename) ? tokenHash(signatureRoot, Context, ts_node_start_byte(body), nameNode) : QString{}},
                     {"begin", double(ts_node_start_byte(signatureRoot))}, {"end", double(ts_node_end_byte(node))},
                     {"line", int(ts_node_start_point(signatureRoot).row)}, {"endLine", int(ts_node_end_point(node).row)}});
                 return false;

@@ -11,6 +11,9 @@ namespace hc::compare
     {
         const auto ready = [](const QJsonObject& Value) { return Value["status"] == "Complete" || Value["status"] == "Partial"; };
         if (!ready(Left) || !ready(Right)) return {{"status", "Unavailable"}, {"relations", QJsonArray{}}};
+        const bool python = Left["language"] == "python" || Right["language"] == "python";
+        if (python && Left["language"] != Right["language"])
+            return {{"status", "Unavailable"}, {"reason", "LanguageMismatch"}, {"relations", QJsonArray{}}};
         const auto left = Left["functions"].toArray(), right = Right["functions"].toArray();
         if (left.size() > 10000 || right.size() > 10000) throw Failure("FunctionLimit");
         struct Group { QVector<int> sides_[2]; };
@@ -66,7 +69,7 @@ namespace hc::compare
                 partner[a] = b; used[b] = true; renamed[a] = true;
             }
         }
-        if (complete)
+        if (complete && !python)
         {
             QMap<QString, Group> candidates;
             for (int side = 0; side < 2; ++side)
@@ -94,7 +97,7 @@ namespace hc::compare
                 partner[a] = b; used[b] = true; renamed[a] = true; literalChanged[a] = true;
             }
         }
-        if (complete)
+        if (complete && !python)
         {
             QMap<QString, Group> groups;
             for (int side = 0; side < 2; ++side)

@@ -900,6 +900,35 @@ private slots:
         const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
         QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_); QCOMPARE(annotated.merged_.conflicts_.size(), plain.merged_.conflicts_.size());
     }
+    void pythonConservativeRename()
+    {
+        const QByteArray body = "(x: int = 1):\n    y = x * 2\n    if y > x:\n        y += x\n    return y + x\n";
+        const auto left = AnalyzeFunctions("l.py", "def before" + body);
+        const auto right = AnalyzeFunctions("r.py", "def after" + body);
+        const auto match = MatchFunctions(left, right); QCOMPARE(match["status"].toString(), "Complete");
+        QCOMPARE(match["renamed"].toInt(), 1); QCOMPARE(match["modified"].toInt(), 0);
+        QCOMPARE(match["relations"].toArray()[0].toObject()["match"].toString(), "UniqueBodySignature");
+        const auto stable = QByteArray("def stable():\n    return 0\n");
+        QCOMPARE(MatchFunctions(AnalyzeFunctions("l.py", "def before" + body + stable), AnalyzeFunctions("r.py", stable + "def after" + body))["moved"].toInt(), 1);
+        auto changed = body; changed.replace("y += x", "y -= x");
+        auto indent = body; indent.replace("    return", "        return");
+        auto argument = body; argument.replace("= 1", "= 2");
+        for (const auto& rejected : {"def after" + changed, "def after" + indent, "def after" + argument,
+            "@trace\ndef after" + body, "async def after" + body, "def __init__" + body})
+            QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.py", rejected))["renamed"].toInt(), 0);
+        auto partial = left; partial["status"] = "Partial"; QCOMPARE(MatchFunctions(partial, right)["renamed"].toInt(), 0);
+        const auto duplicates = AnalyzeFunctions("l.py", "def before" + body + "def stable" + body);
+        QCOMPARE(MatchFunctions(duplicates, AnalyzeFunctions("r.py", "def after" + body + "def stable" + body))["renamed"].toInt(), 0);
+        QCOMPARE(MatchFunctions(AnalyzeFunctions("l.py", "def a():\n    return 1\n"), AnalyzeFunctions("r.py", "def b():\n    return 1\n"))["renamed"].toInt(), 0);
+        const auto method = QByteArray(body).replace("\n", "\n    ");
+        const auto classLeft = AnalyzeFunctions("l.py", "class A:\n    def before" + method);
+        QCOMPARE(MatchFunctions(classLeft, AnalyzeFunctions("r.py", "class A:\n    def after" + method))["renamed"].toInt(), 1);
+        QCOMPARE(MatchFunctions(classLeft, AnalyzeFunctions("r.py", "class B:\n    def after" + method))["renamed"].toInt(), 0);
+        QCOMPARE(MatchFunctions(left, AnalyzeFunctions("r.cpp", "int before(){return 1;}"))["reason"].toString(), "LanguageMismatch");
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("l.py"); r.file2_ = dir.filePath("r.py"); write(r.file1_, "def before" + body); write(r.file2_, "def after" + body);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(r, cancel, false); r.semantic_ = "off"; const auto plain = Execute(r, cancel, false);
+        QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_);
+    }
     void pythonFunctionRelations()
     {
         const QByteArray first = "@trace\ndef first(x: int = 1):\n    if x:\n        x += 1\n    return x\n";
