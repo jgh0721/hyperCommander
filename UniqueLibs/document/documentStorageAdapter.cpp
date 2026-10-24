@@ -1,4 +1,5 @@
 ﻿#include "documentStorageAdapter.hpp"
+#include "commonLibs/document/epub/epubPackage.hpp"
 #include "imagePerformance.hpp"
 #include "imageDecodeCache.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -32,18 +33,18 @@ namespace hc::document
             if(Native.startsWith("\\\\tsclient\\",Qt::CaseInsensitive)&&Source.id_.revision_)
                 Source.id_.revision_=native::MetadataRevision(*Source.id_.revision_);
         }
-        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr)
+        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr, qint64 Limit = DocumentByteLimit)
         {
             ImageTraceSpan ReadTrace("file.read-and-hash",Path);
             if (auto Stop = Context.Check({"document"})) return *Stop;
             QFile File(Path);
             if (!File.open(QIODevice::ReadOnly)) return Error{ErrorCategory::AccessDenied, "document-open-denied"};
             const auto FileSize=File.size();
-            if (!Image && FileSize > DocumentByteLimit) return Error{ErrorCategory::BudgetExceeded, "p0-text-byte-limit"};
+            if (!Image && FileSize > Limit) return Error{ErrorCategory::BudgetExceeded, "p0-text-byte-limit"};
             const auto Before=Revision?ImageDecodeCache::Signature(File):QByteArray{};
             QByteArray Bytes;if(FileSize>=0&&FileSize<=64*1024*1024)Bytes.reserve(FileSize);
-            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};if(Digest)Digest->addData(Chunk);Bytes+=Chunk;if(!Image && Bytes.size()>DocumentByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
-            if (File.error() != QFileDevice::NoError || (!Image && Bytes.size() > DocumentByteLimit) || !File.atEnd())
+            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};if(Digest)Digest->addData(Chunk);Bytes+=Chunk;if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
+            if (File.error() != QFileDevice::NoError || (!Image && Bytes.size() > Limit) || !File.atEnd())
                 return Error{ErrorCategory::Unavailable, "document-read-incomplete"};
             if(Revision){const auto After=ImageDecodeCache::Signature(File);if(!Before.isEmpty()&&Before!=After)return Error{ErrorCategory::StaleRevision,"document-changed-during-read"};*Revision=After;}
             return Bytes;
@@ -83,7 +84,12 @@ namespace hc::document
         // Metadata-only sources have no reliable per-handle identity to cache;
         // their exact version is rechecked by Stat and their bytes by SHA-256.
         const bool HasIdentity=Before.Value().id_.revision_&&Before.Value().id_.revision_->token_.find(":identity:")!=std::string::npos;
-        auto Bytes=Read(Canonical,Context,ImageContent||Unlimited,&Digest,HasIdentity?&Revision:nullptr);if(!Bytes.HasValue())return Bytes.Failure();
+        const bool Epub=QFileInfo(Path).suffix().compare("epub",Qt::CaseInsensitive)==0;
+        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit);
+        if(!Bytes.HasValue()) {
+            if(Epub&&Bytes.Failure().category_==ErrorCategory::BudgetExceeded)return Error{ErrorCategory::BudgetExceeded,"epub-input-budget"};
+            return Bytes.Failure();
+        }
         auto After=Reader->Stat(Before.Value().id_,Context).get();if(!After.HasValue())return After.Failure();
         documentReadRevision(After.Value(),Canonical);
         TextInput Input;Input.path_=Canonical;Input.source_=After.Value();Input.bytes_=std::move(Bytes.Value());
@@ -91,6 +97,7 @@ namespace hc::document
         const auto Suffix=QFileInfo(Path).suffix().toLower();
         // RHWP validates the container and renders in its isolated process.
         // Never decode an HWPX ZIP or binary HWP as text or an image book.
+        if(Suffix=="epub"){Input.viewId_="epub";return Input;}
         if(Suffix=="hwp"||Suffix=="hwpx") {Input.viewId_=Suffix;return Input;}
         if(Input.bytes_.startsWith("%PDF-")) {Input.viewId_="pdf";return Input;}
         if(Suffix=="pdf")return Invalid("document-pdf-invalid-header");

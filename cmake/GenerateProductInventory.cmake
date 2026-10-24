@@ -140,6 +140,28 @@ if(RHWP_SOURCE)
         list(APPEND FILES "${RHWP_NAME}")
     endforeach()
 endif()
+if(EPUB_SOURCE)
+    execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_LIST_DIR}/../tools/epub/Test-ProductRuntime.ps1"
+        -RuntimeRoot "${EPUB_SOURCE}" -ExpectedSha256 "${EPUB_PIN}" -AsJson
+        RESULT_VARIABLE EPUB_RESULT OUTPUT_VARIABLE EPUB_VALIDATED ERROR_VARIABLE EPUB_ERROR)
+    if(NOT EPUB_RESULT EQUAL 0)
+        message(FATAL_ERROR "EPUB runtime rejected: ${EPUB_ERROR}")
+    endif()
+    execute_process(COMMAND "${EPUB_PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/../tools/epub/deploy_product_runtime.py"
+        --runtime "${EPUB_SOURCE}" --manifest-sha256 "${EPUB_PIN}"
+        --source "${CMAKE_CURRENT_LIST_DIR}/../tools/epub/web" --application "${SOURCE}"
+        RESULT_VARIABLE EPUB_COPY_RESULT)
+    if(NOT EPUB_COPY_RESULT EQUAL 0)
+        message(FATAL_ERROR "EPUB isolated runtime staging failed")
+    endif()
+    string(JSON EPUB_COUNT LENGTH "${EPUB_VALIDATED}" files)
+    math(EXPR EPUB_LAST "${EPUB_COUNT}-1")
+    foreach(EPUB_INDEX RANGE ${EPUB_LAST})
+        string(JSON EPUB_NAME GET "${EPUB_VALIDATED}" files ${EPUB_INDEX} path)
+        list(APPEND FILES "Libs/Epub/${EPUB_NAME}")
+    endforeach()
+endif()
 list(REMOVE_DUPLICATES FILES)
 list(SORT FILES)
 set(ENTRIES "[]")
@@ -169,6 +191,9 @@ string(JSON INVENTORY SET "${INVENTORY}" updaterProtocol 1)
 string(JSON INVENTORY SET "${INVENTORY}" files "${ENTRIES}")
 if(RHWP_SOURCE)
     string(JSON INVENTORY SET "${INVENTORY}" rhwpInventorySha256 "\"${RHWP_PIN}\"")
+endif()
+if(EPUB_SOURCE)
+    string(JSON INVENTORY SET "${INVENTORY}" epubInventorySha256 "\"${EPUB_PIN}\"")
 endif()
 file(CONFIGURE OUTPUT "${SOURCE}/product-inventory.json" CONTENT "${INVENTORY}
 " NEWLINE_STYLE CRLF @ONLY)

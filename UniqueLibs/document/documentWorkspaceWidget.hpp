@@ -43,6 +43,7 @@ namespace hc::document
         void Checkpoint();
         QString RecoveryRoot() const { return recoveryRoot_; }
         void SetClipboardBroker(bool Enabled);
+        void ConfigureEpub(WebProcessRuntime Runtime) { epubRuntime_ = std::move(Runtime); }
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
@@ -83,6 +84,7 @@ namespace hc::document
         QJsonObject clipboardRequest_, pendingHostOpen_, recoveryList_, clipboardSelection_;
         QJsonObject editRequest_;
         WebProcessRuntime hwpRuntime_;
+        std::optional<WebProcessRuntime> epubRuntime_;
         QTextCursor clipboardCursor_;
         bool clipboardBroker_ = false, negotiated_ = false;
         quint64 lastMessage_ = 0;

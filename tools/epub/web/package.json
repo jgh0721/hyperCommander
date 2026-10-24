@@ -1,0 +1,19 @@
+{
+  "name": "hc-epub-p0-renderer-comparison",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@readium/navigator": "2.13.2",
+    "@readium/shared": "2.8.0",
+    "epubjs": "0.3.93"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "overrides": {
+    "epubjs": {
+      "@xmldom/xmldom": "0.9.12"
+    }
+  }
+}

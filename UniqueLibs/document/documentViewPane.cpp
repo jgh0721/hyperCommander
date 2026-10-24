@@ -1,4 +1,5 @@
 ﻿#include "documentViewPane.hpp"
+#include "epubProcessView.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "documentThemeAdapter.hpp"
 #include "imageReadingView.hpp"
@@ -44,6 +45,7 @@ namespace hc::document
 {
     DocumentViewPane::DocumentViewPane(QWidget* Parent):QWidget(Parent)
     {
+        epubRuntime_ = MakeProductEpubRuntime(QCoreApplication::applicationDirPath());
         InitializePortedViewResources();setObjectName("documentViewPane");
         auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
         // Retain the P1 control adapter for callers; Scintilla owns visible text,
@@ -84,6 +86,17 @@ namespace hc::document
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
+        if(epub_){delete epub_;epub_=nullptr;}
+        epubClosing_=false;
+        if(IsEpub()) {
+            epubSourceHash_=Input.hash_;
+            epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
+            layout()->addWidget(epub_);epub_->show();
+            contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB");
+            connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
+            connect(epub_,&EpubProcessView::Loaded,this,[this]{if(isVisible())epub_->FocusInput();});
+            return epub_->Load(Input.bytes_);
+        }
         if(IsHwp()) {
             hwpFocusPending_=true;
             hwp_=new HwpOpenWindow(Input.path_,QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/rhwp",hwpRuntime_);
@@ -234,6 +247,7 @@ namespace hc::document
 }
     QByteArray DocumentViewPane::SessionContent() const
     {
+        if(epub_)return "epub:"+epubSourceHash_.toHex();
         if (!image_) return Content();
         if (!image_->isModified()) return "image:" + originalImageHash_.toHex();
         const auto Bytes = image_->SerializeContent();
@@ -241,6 +255,7 @@ namespace hc::document
     }
     storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination) const
     {
+        if(epub_)return storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"};
         if(reading_&&!reading_->isHidden()){
             const auto Image=reading_->CurrentImage();if(Image.isNull())return storage::Error{storage::ErrorCategory::Unavailable,"image-page-not-ready"};
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
@@ -255,6 +270,7 @@ namespace hc::document
         return Bytes;
     }
     bool DocumentViewPane::IsBusy() const {
+        if(epub_){const auto State=epub_->ViewState();return !State["retired"].toBool()&&(epubClosing_||State["status"]!="ready");}
         if(hwp_&&!hwp_->IsClosed()) {
             const auto* Document=hwp_->Document();
             return hwp_->IsBusy()||(!Document&&hwp_->Error().isEmpty())
@@ -262,7 +278,7 @@ namespace hc::document
         }
         return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());
     }
-    bool DocumentViewPane::RequestClose(){if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
+    bool DocumentViewPane::RequestClose(){if(epub_){epubClosing_=true;epub_->RequestClose();return epub_->ViewState()["retired"].toBool();}if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
     bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing();}
     bool DocumentViewPane::CanUndo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
     bool DocumentViewPane::CanRedo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
@@ -285,7 +301,7 @@ namespace hc::document
             && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()){
             if(QApplication::activeWindow()!=window())QApplication::setActiveWindow(window());
         }
-        if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+        if(epub_)epub_->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
     void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
@@ -322,6 +338,12 @@ namespace hc::document
         if(image_){State["filter"]=image_->DisplayFilter();State["width"]=image_->Content().width();State["height"]=image_->Content().height();State["rendering"]=image_->IsRendering();State["renderError"]=image_->RenderError();}
         if(reading_&&!reading_->isHidden())State["reading"]=reading_->State();
         if(animation_)State["animationPlaying"]=animation_->Playing();
+        if(epub_){
+            const auto Epub=epub_->ViewState();State["epub"]=Epub;State["readOnly"]=true;
+            State["closed"]=Epub["retired"].toBool();
+            State["ready"]=Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool();
+            State["error"]=Epub["status"]=="error"?Epub["message"].toString():QString();
+        }
         if(hwp_){
             State["readOnly"]=true;State["closed"]=hwp_->IsClosed();State["error"]=hwp_->Error();
             const auto* Document=hwp_->Document();
@@ -334,6 +356,7 @@ namespace hc::document
     {
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
+        if(epub_)return Error("epub-read-only");
         if(hwp_){
             if(Action!="print")return Error("document-view-command-unsupported");
             if(IsBusy()||!ViewState()["ready"].toBool())return Error("document-not-ready");
@@ -395,7 +418,7 @@ namespace hc::document
 }
 
 namespace hc::document {
-QWidget* DocumentViewPane::InputWidget() const {return hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {return epub_?static_cast<QWidget*>(epub_):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();
@@ -453,7 +476,7 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
 }
 }
 
-namespace hc::document {void DocumentViewPane::Cancel(){if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
+namespace hc::document {void DocumentViewPane::Cancel(){if(epub_){epubClosing_=true;epub_->RequestClose();}if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
 
 namespace hc::document {
 DocumentViewPane::~DocumentViewPane(){

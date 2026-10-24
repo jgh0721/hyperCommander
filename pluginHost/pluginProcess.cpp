@@ -315,7 +315,7 @@ namespace hc::plugins
         JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{JOB_OBJECT_UILIMIT_HANDLES | JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
             | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_EXITWINDOWS};
         if (Limits.purpose_ == HostPurpose::Configuration) Ui.UIRestrictionsClass &= ~JOB_OBJECT_UILIMIT_HANDLES;
-#ifdef HC_RHWP_HOST_RUNTIME
+#if defined(HC_RHWP_HOST_RUNTIME) || defined(HC_EPUB_HOST_RUNTIME)
         // A reviewed, signed built-in workspace must create nested WebEngine
         // Jobs and native print dialogs. UI-restricted Jobs cannot do that.
         // Third-party plugin hosts keep the restrictions above.

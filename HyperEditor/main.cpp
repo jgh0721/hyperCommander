@@ -45,6 +45,7 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
+    Parser.addOption(QCommandLineOption("verify-epub-runtime", "Verify the installed EPUB reader without changing the book", "file"));
     Parser.addOption(QCommandLineOption("verify-runtime", "Verify installed codecs, fonts and document saves using temporary files"));
     Parser.addOption(QCommandLineOption("config-dir", "Settings directory", "path"));
     Parser.addOption(QCommandLineOption("portable", "Use the executable directory (default)"));
@@ -53,6 +54,7 @@ int main(int Argc, char** Argv)
     const auto Config = hc::settings::DocumentPaths();
     if (!Config.error_.isEmpty()) { QMessageBox::critical(nullptr, QObject::tr("설정 경로 오류"), Config.error_); return 11; }
     hc::document::DocumentThemeAdapter::Install(App);
+    if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
     if (Parser.isSet("verify-runtime")) return VerifyDocumentRuntime();
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
     if (Parser.isSet("rhwp-view") || RhwpEdit) {
