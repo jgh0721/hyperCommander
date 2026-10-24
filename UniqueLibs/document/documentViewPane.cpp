@@ -1,5 +1,7 @@
-﻿#include "documentViewPane.hpp"
+﻿#include "stdafx.h"
+#include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
+#include "epubSourceEditor.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "documentThemeAdapter.hpp"
 #include "imageReadingView.hpp"
@@ -80,6 +82,8 @@ namespace hc::document
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
         originalImageHash_ = viewId_ == "image" ? Input.hash_ : QByteArray{};
         originalImagePath_ = viewId_ == "image" ? Input.path_ : QString{};
+        if(auto* EpubBar=findChild<QToolBar*>("epubEditToolbar"))delete EpubBar;
+        if(epubEditor_){delete epubEditor_;epubEditor_=nullptr;}
         if(auto* EditBar=findChild<QToolBar*>("imageEditToolbar"))delete EditBar;
         if(animation_){delete animation_;animation_=nullptr;}
         if(reading_){delete reading_;reading_=nullptr;}
@@ -89,7 +93,13 @@ namespace hc::document
         if(epub_){delete epub_;epub_=nullptr;}
         epubClosing_=false;
         if(IsEpub()) {
-            epubSourceHash_=Input.hash_;
+            epubSourceHash_=Input.hash_;epubBytes_=Input.bytes_;epubPath_=Input.path_;
+            if(epubEditingAllowed_) {
+                auto* Bar=new QToolBar(this);Bar->setObjectName("epubEditToolbar");layout()->addWidget(Bar);
+                auto* Edit=Bar->addAction(tr("EPUB 소스 편집"));Edit->setObjectName("epubEdit");Edit->setCheckable(true);
+                connect(Edit,&QAction::toggled,this,[this,Edit](bool Checked){if(Checked && !editEpub()){const QSignalBlocker Block(Edit);Edit->setChecked(false);return;}if(epubEditor_)epubEditor_->setVisible(Checked);epub_->setVisible(!Checked);emit ViewStateChanged();});
+                auto* Reopen=Bar->addAction(tr("저장본 다시 열기"));connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
+            }
             epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
             layout()->addWidget(epub_);epub_->show();
             contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB");
@@ -241,6 +251,14 @@ namespace hc::document
         if(syncing_||!text_)return;QScopedValueRollback<bool> Guard(syncing_,true);
         const QSignalBlocker Block(editor_);const auto Text=text_->Content();editor_->setProperty("scalarText",Text);editor_->setPlainText(Text);
     }
+    bool DocumentViewPane::CanEditEpub()const{return epubEditingAllowed_ && epubEditor_ && epubEditor_->IsReady();}
+    bool DocumentViewPane::PrepareEpubSave(){if(CanEditEpub() && !CanSaveEpub()){epubEditor_->RequestSave();return false;}return true;}
+    bool DocumentViewPane::CanSaveEpub()const{return CanEditEpub() && epubEditor_->IsValidated();}
+    bool DocumentViewPane::editEpub() {
+        if(!epubEditingAllowed_ || !epub_ || epubClosing_)return false;
+        if(!epubEditor_){epubEditor_=new EpubSourceEditor(epubBytes_,epubPath_,this);layout()->addWidget(epubEditor_);connect(epubEditor_,&EpubSourceEditor::Changed,this,&DocumentViewPane::ContentChanged);connect(epubEditor_,&EpubSourceEditor::StateChanged,this,&DocumentViewPane::ViewStateChanged);connect(epubEditor_,&EpubSourceEditor::SaveRequested,this,&DocumentViewPane::SaveRequested);}
+        epub_->hide();epubEditor_->show();return true;
+    }
     QByteArray DocumentViewPane::Content() const
     {
         if(text_){auto Bytes=EncodeDocumentText(text_->Content(),encoding_,bom_);return Bytes.HasValue()?Bytes.Value():text_->Content().toUtf8();}
@@ -248,7 +266,7 @@ namespace hc::document
 }
     QByteArray DocumentViewPane::SessionContent() const
     {
-        if(epub_)return "epub:"+epubSourceHash_.toHex();
+        if(epub_)return "epub:"+(epubEditor_?epubEditor_->Token():epubSourceHash_).toHex();
         if (!image_) return Content();
         if (!image_->isModified()) return "image:" + originalImageHash_.toHex();
         const auto Bytes = image_->SerializeContent();
@@ -256,7 +274,7 @@ namespace hc::document
     }
     storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination) const
     {
-        if(epub_)return storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"};
+        if(epub_)return epubEditor_?epubEditor_->Export(Destination):storage::Result<QByteArray>{storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"}};
         if(reading_&&!reading_->isHidden()){
             const auto Image=reading_->CurrentImage();if(Image.isNull())return storage::Error{storage::ErrorCategory::Unavailable,"image-page-not-ready"};
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
@@ -271,7 +289,7 @@ namespace hc::document
         return Bytes;
     }
     bool DocumentViewPane::IsBusy() const {
-        if(epub_){const auto State=epub_->ViewState();return !State["retired"].toBool()&&(epubClosing_||State["status"]!="ready");}
+        if(epub_){const auto State=epub_->ViewState();if(CanEditEpub())return epubEditor_->Snapshot()["validating"].toBool() || (epubClosing_ && !State["retired"].toBool());return !State["retired"].toBool()&&(epubClosing_||State["status"]!="ready");}
         if(hwp_&&!hwp_->IsClosed()) {
             const auto* Document=hwp_->Document();
             return hwp_->IsBusy()||(!Document&&hwp_->Error().isEmpty())
@@ -281,12 +299,13 @@ namespace hc::document
     }
     bool DocumentViewPane::RequestClose(){if(epub_){epubClosing_=true;epub_->RequestClose();return epub_->ViewState()["retired"].toBool();}if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
     bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing();}
-    bool DocumentViewPane::CanUndo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
-    bool DocumentViewPane::CanRedo() const {return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
-    void DocumentViewPane::Undo(){if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);else if(image_)image_->undoEdit();}
-    void DocumentViewPane::Redo(){if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_REDO);else if(image_)image_->redoEdit();}
+    bool DocumentViewPane::CanUndo() const {if(epubEditor_)return epubEditor_->CanUndo();return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
+    bool DocumentViewPane::CanRedo() const {if(epubEditor_)return epubEditor_->CanRedo();return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
+    void DocumentViewPane::Undo(){if(epubEditor_)epubEditor_->Undo();else if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);else if(image_)image_->undoEdit();}
+    void DocumentViewPane::Redo(){if(epubEditor_)epubEditor_->Redo();else if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_REDO);else if(image_)image_->redoEdit();}
     void DocumentViewPane::Commit(const QString& Path, const QByteArray& Bytes)
     {
+        if(epubEditor_){epubEditor_->Commit(Path,Bytes);epubBytes_=Bytes;epubPath_=Path;}
         if(text_)text_->CommitContent();if(pdf_)pdf_->CommitContent();
         if(image_) {
             if (!Path.isEmpty() && !Bytes.isEmpty()) {
@@ -302,7 +321,7 @@ namespace hc::document
             && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()){
             if(QApplication::activeWindow()!=window())QApplication::setActiveWindow(window());
         }
-        if(epub_)epub_->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+        if(epubEditor_ && !epubEditor_->isHidden()){if(auto* Source=epubEditor_->findChild<QPlainTextEdit*>())Source->setFocus();}else if(epub_)epub_->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
     void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
@@ -340,10 +359,10 @@ namespace hc::document
         if(reading_&&!reading_->isHidden())State["reading"]=reading_->State();
         if(animation_)State["animationPlaying"]=animation_->Playing();
         if(epub_){
-            const auto Epub=epub_->ViewState();State["epub"]=Epub;State["readOnly"]=true;
+            const auto Epub=epub_->ViewState();State["epub"]=Epub;State["readOnly"]=!CanEditEpub();State["epubEditor"]=epubEditor_?epubEditor_->Snapshot():QJsonObject{};
             State["closed"]=Epub["retired"].toBool();
-            State["ready"]=Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool();
-            State["error"]=Epub["status"]=="error"?Epub["message"].toString():QString();
+            State["ready"]=CanEditEpub() || (Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool());
+            State["error"]=!CanEditEpub() && Epub["status"]=="error"?Epub["message"].toString():QString();
         }
         if(hwp_){
             State["readOnly"]=true;State["closed"]=hwp_->IsClosed();State["error"]=hwp_->Error();
@@ -358,6 +377,8 @@ namespace hc::document
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
         if(epub_) {
+            if(Action=="epub.edit.begin")return editEpub()?QJsonObject{{"accepted",true}}:Error("epub-edit-unavailable");
+            if(Action.startsWith("epub.edit."))return epubEditor_?epubEditor_->Execute(Request):Error("epub-edit-not-open");
             if(Action.startsWith("epub.reader."))return epub_->ReaderAction(Action.mid(12),Request["value"])
                 ? QJsonObject{{"accepted",true}} : Error("epub-reader-not-ready");
             if(Action.startsWith("epub.settings.")) return epub_->ChangeReadingSettings(Action.mid(14),Request["profile"].toObject(),Request["global"].toBool())
@@ -425,7 +446,7 @@ namespace hc::document
 }
 
 namespace hc::document {
-QWidget* DocumentViewPane::InputWidget() const {return epub_?static_cast<QWidget*>(epub_):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {return epubEditor_&&!epubEditor_->isHidden()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(epub_):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();

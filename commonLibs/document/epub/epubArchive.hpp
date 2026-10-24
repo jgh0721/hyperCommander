@@ -19,6 +19,7 @@ namespace hc::document::epub::detail
         quint16 method_ = 0;
         bool directory_ = false;
         qsizetype data_ = 0, end_ = 0;
+        QByteArray central_;
     };
 
     // Borrows an immutable snapshot for the duration of Prepare().
@@ -29,9 +30,11 @@ namespace hc::document::epub::detail
         QByteArray Read(const QString& Path) const;
         bool Contains(const QString& Path) const { return entries_.contains(Path); }
         void VerifyAll() const;
+        QByteArray Rewrite(const QMap<QString,QByteArray>& Replacements) const;
     private:
         const QByteArray& bytes_;
         const Cancellation& cancel_;
         QMap<QString, Entry> entries_;
+        QByteArray comment_;
     };
 }

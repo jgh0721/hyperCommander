@@ -11,3 +11,14 @@ for version,name in [("3.0","epub3-images.epub"),("2.0","epub2-ncx.epub")]:
             text=text.replace("</body>",'<p>reader-<em>control</em> needle <a epub:type="noteref" href="#hc-note">각주</a></p><aside id="hc-note" epub:type="footnote"><p>각주 팝업 검증 내용</p></aside></body>')
             entries[path]=text.encode()
     (a.output/name).write_bytes(archive(entries))
+
+# Exercise compressed local records and ZIP metadata preservation as well.
+import io,zipfile
+source=a.output/"epub3-images.epub"
+with zipfile.ZipFile(source) as before,zipfile.ZipFile(a.output/"epub3-compressed.epub","w") as after:
+    after.comment=b"Original CC0 ZIP metadata preservation fixture"
+    for old in before.infolist():
+        info=zipfile.ZipInfo(old.filename,(2026,10,23,12,34,56));info.create_system=3;info.external_attr=0o100644<<16;info.comment=b"Retain entry comment"
+        if old.filename!="mimetype":
+            info.compress_type=zipfile.ZIP_DEFLATED;info.extra=bytes.fromhex("555405000100000000")
+        after.writestr(info,before.read(old))

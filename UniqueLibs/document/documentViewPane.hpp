@@ -13,6 +13,7 @@ class QImageView;
 namespace hc::document
 {
     class EpubProcessView;
+    class EpubSourceEditor;
     class ImageReadingView;
     class ImageFramePlayer;
     class DocumentViewPane final : public QWidget
@@ -26,7 +27,8 @@ namespace hc::document
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
-        void ConfigureEpub(WebProcessRuntime Runtime) { epubRuntime_ = std::move(Runtime); }
+        void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubEditingAllowed_=Editing; }
+        bool CanEditEpub()const;bool CanSaveEpub()const;bool PrepareEpubSave();
         bool IsEpub() const { return viewId_ == "epub"; }
         bool IsProcessDocument() const { return IsHwp() || IsEpub(); }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
@@ -65,6 +67,7 @@ namespace hc::document
         void EscapeRequested();
     private:
         void syncText();
+        bool editEpub();
         void applyTheme();
         QPlainTextEdit* editor_;
         QToolBar* toolbar_ = nullptr;
@@ -78,7 +81,8 @@ namespace hc::document
         bool hwpFocusPending_ = false;
         WebProcessRuntime hwpRuntime_, epubRuntime_;
         EpubProcessView* epub_ = nullptr;
-        bool epubClosing_ = false;
+        bool epubClosing_ = false,epubEditingAllowed_=false;
+        EpubSourceEditor* epubEditor_=nullptr;QByteArray epubBytes_;QString epubPath_;
         QByteArray epubSourceHash_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;

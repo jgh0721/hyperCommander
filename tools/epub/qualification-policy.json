@@ -42,7 +42,6 @@
     "aggregatePendingAndActiveBooks": 8
   },
   "pendingGates": [
-    "EPUB content editing",
     "repository reproducibility"
   ],
   "startupReflow": {
@@ -113,5 +112,22 @@
       "observedPeakJobBytes": 430137344
     },
     "hiddenTabQueueRegressionFixed": true
+  },
+  "editingQualification": {
+    "evidence": "_build/epub-validation/editing",
+    "workspaceTestsPassed": 20,
+    "saveAsCases": [
+      "EPUB2",
+      "EPUB3",
+      "compressed EPUB3 with ZIP metadata"
+    ],
+    "untouchedZipRecordsPerCase": 5,
+    "sourceAndHardlinkOverwriteDenied": true,
+    "scope": "native HyperEditor XHTML/CSS/OPF and same-format image editing; background structural/XML/reference/image validation; source undo/redo and validated Save As plus reopen",
+    "limits": [
+      "source drafts have no crash recovery",
+      "CSS syntax and EPUBCheck acceptance are separate",
+      "DRM, signed, fixed layout and active EPUB remain unsupported"
+    ]
   }
 }

@@ -271,7 +271,7 @@ namespace hc::document::epub
                 {"title", Title}, {"languages", Languages}, {"readingProgression", Progression},
                 {"packageVersion", Version}, {"rootfile", Rootfile}, {"spine", Spine}, {"navigation", Navigation}, {"images", Images}, {"resources", Entries},
                 {"limitations", QJsonArray{"UTF-8 XML and ZIP names only", "ZIP64, fixed layout, encrypted, signed and active publications rejected",
-                    "CSS URLs, SVG references and srcset not structurally validated; renderer allowlist remains required", "no editing or saving; not EPUBCheck"}}};
+                    "CSS URLs, SVG references and srcset not structurally validated; renderer allowlist remains required", "immutable reader preparation; authoring requires separate Save As validation; not EPUBCheck"}}};
         }
     }
 
