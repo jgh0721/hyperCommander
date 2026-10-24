@@ -66,10 +66,11 @@ include(cmake/ProductLayout.cmake)
 include(cmake/ProductSigning.cmake)
 option(HC_PRODUCT_SIGNING "Require code signatures on distributed Release products" ON)
 set(HC_SIGNING_CACHE "${PROJECT_SOURCE_DIR}/_build/signing-cache" CACHE PATH "Verified canonical code signing cache")
+set(HC_SIGNING_SCRIPT "${PROJECT_SOURCE_DIR}/tools/update/Sign-ProductFile.ps1" CACHE FILEPATH "Product signer for isolated worktree builds")
 set(HC_PACKAGE_SIGN_ARGS "-DCONFIG=$<CONFIG>")
 if(HC_PRODUCT_SIGNING)
     list(APPEND HC_PACKAGE_SIGN_ARGS
-        "-DHC_SIGNING_SCRIPT=${PROJECT_SOURCE_DIR}/tools/update/Sign-ProductFile.ps1"
+        "-DHC_SIGNING_SCRIPT=${HC_SIGNING_SCRIPT}"
         "-DHC_SIGNING_CACHE=${HC_SIGNING_CACHE}")
 endif()
 set(HC_SELECTED_SCRIPT_RUNTIME "sol2")
@@ -110,6 +111,7 @@ target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core hc_plugin_viewer_qt Qt6
 target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 add_subdirectory(pluginHost)
+include(cmake/TextEditorEngines.cmake)
 add_subdirectory(HyperEditor)
 qt_add_library(hc_document_open STATIC
     UniqueLibs/document/documentOpenController.cpp UniqueLibs/document/documentOpenController.hpp

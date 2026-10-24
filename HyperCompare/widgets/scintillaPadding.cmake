@@ -5,8 +5,9 @@ macro(hc_compare_padding_replace before after)
     endif()
     string(REPLACE "${before}" "${after}" _text "${_text}")
 endmacro()
-# Applied after ScintillaWrapEnd, to the standalone utility's generated copy.
-# Upstream files and other products' engines are untouched. Fail closed when
+# Applied after ScintillaWrapEnd to the generated engine copy. In a combined
+# product build the engine is shared; padding stays inactive unless requested.
+# Upstream files are untouched. Fail closed when
 # upstream context changes. Prefix rows have no document positions or undo data.
 foreach(_name ContractionState.h ContractionState.cxx Editor.cxx EditView.cxx)
     file(READ "${MV_SCINTILLA_CORE_ROOT}/${_name}" _text)
