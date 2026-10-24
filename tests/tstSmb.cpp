@@ -246,7 +246,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -259,6 +259,85 @@ private slots:
     }
 
 
+
+    void fileCompareUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Saved); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{}));
+        TyStCommandMgr::GetInstance()->Refresh();
+        QTemporaryDir Left, Right;
+        for (const auto& Name : {"a file.txt", "b.txt", "c.txt", "d.txt"}) { QFile File(Left.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("left"); }
+        { QFile File(Right.filePath("right file.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("right"); }
+        QVERIFY(QDir(Left.path()).mkdir("folderA")); QVERIFY(QDir(Left.path()).mkdir("folderB"));
+        auto* L = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* R = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(L && R);
+        L->ChangeCurrentPath(Left.path(), {}); R->ChangeCurrentPath(Right.path(), {});
+        QTRY_VERIFY(!model(L)->IsLoading() && !model(R)->IsLoading());
+        QTRY_COMPARE(model(L)->rowCount(), 7); QTRY_COMPARE(model(R)->rowCount(), 2);
+        const auto Select = [&](CmpPanel* Panel, const QStringList& Names, bool Mark = true) {
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            auto* Grid = View->BaseView(); Grid->deselectAll(); QModelIndex First;
+            for (const auto& Name : Names) for (int Row = 0; Row < Grid->getRowCount(); ++Row) {
+                auto Index = Grid->getRow(Row).modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (!Index.isValid() || model(Panel)->GetName(Index) != Name) continue;
+                if (!First.isValid()) { First = Index; Grid->setFocusedRowIndex(Row); }
+                if (Mark) Grid->selectRow(Row, Qtitan::Select);
+            }
+            return First;
+        };
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge->Action("hc.file.compare"));
+        auto Index = Select(L, {"a file.txt", "b.txt"}); auto Args = Bridge->CompareArguments(Index); QVERIFY(Args.HasValue());
+        QCOMPARE(Args.Value().size(), 6); QCOMPARE(Args.Value()[1], "compare");
+        QVERIFY(Args.Value().contains(QDir::toNativeSeparators(Left.filePath("a file.txt"))));
+        Index = Select(L, {"a file.txt", "b.txt", "c.txt"}); Args = Bridge->CompareArguments(Index); QVERIFY(Args.HasValue()); QCOMPARE(Args.Value().size(), 8); QCOMPARE(Args.Value()[6], "-file3");
+        Index = Select(L, {"a file.txt", "b.txt", "c.txt", "d.txt"}); QVERIFY(!Bridge->CompareArguments(Index).HasValue());
+        Index = Select(L, {"folderA", "folderB"}); Args = Bridge->CompareArguments(Index); QVERIFY(Args.HasValue()); QCOMPARE(Args.Value()[1], "directory");
+        Index = Select(L, {"a file.txt", "folderA"}); QVERIFY(!Bridge->CompareArguments(Index).HasValue());
+        Index = Select(L, {"a file.txt"}, false); auto OtherIndex = Select(R, {"right file.txt"}, false);
+        Args = Bridge->CompareArguments(Index); QVERIFY(Args.HasValue());
+        QCOMPARE(Args.Value()[3], QDir::toNativeSeparators(Left.filePath("a file.txt"))); QCOMPARE(Args.Value()[5], QDir::toNativeSeparators(Right.filePath("right file.txt")));
+        const auto Reverse = Bridge->CompareArguments(OtherIndex); QVERIFY(Reverse.HasValue()); QCOMPARE(Reverse.Value(), Args.Value());
+        Select(L, {"a file.txt", "b.txt"}); QVERIFY(!Bridge->CompareArguments(OtherIndex).HasValue());
+        Index = Select(L, {"a file.txt"}); Select(R, {"right file.txt"}); QVERIFY(Bridge->CompareArguments(Index).HasValue());
+        Select(R, {".."}, false); QVERIFY(!Bridge->CompareArguments(Index).HasValue());
+        R->ChangeCurrentPath(Left.path(), {}); QTRY_VERIFY(!model(R)->IsLoading()); QTRY_COMPARE(model(R)->rowCount(), 7);
+        Select(R, {"a file.txt"}); const auto Same = Bridge->CompareArguments(Index); QVERIFY(!Same.HasValue()); QCOMPARE(Same.Failure().code_, std::string("compare-same-path"));
+        const auto CompareWindows = [] {
+            struct Scan { QString executable_; QList<HWND> windows_; } State{QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + "/HyperCompare.exe"), {}};
+            EnumWindows([](HWND Window, LPARAM Data) -> BOOL {
+                auto& ScanState = *reinterpret_cast<Scan*>(Data); DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+                const auto Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+                if (Process) {
+                    wchar_t Path[32768]{}; DWORD Length = 32768;
+                    if (QueryFullProcessImageNameW(Process, 0, Path, &Length) && ScanState.executable_.compare(QString::fromWCharArray(Path, int(Length)), Qt::CaseInsensitive) == 0 && IsWindowVisible(Window))
+                        ScanState.windows_.append(Window);
+                    CloseHandle(Process);
+                }
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&State));
+            return State.windows_;
+        };
+        const auto Before = CompareWindows();
+        const auto CloseCompare = qScopeGuard([&] { for (auto Window : CompareWindows()) if (!Before.contains(Window)) PostMessageW(Window, WM_CLOSE, 0, 0); });
+        Select(L, {"a file.txt", "b.txt"});
+        auto* View = qobject_cast<CGridView*>(L->GetFocusView(L->CurrentTabIndex())); View->EnsureKeyboardFocusOnView();
+        QTRY_VERIFY(Bridge->Action("hc.file.compare")->isEnabled());
+        QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+        auto* GridWidget = QApplication::focusWidget();
+        QTest::keyClick(GridWidget, Qt::Key_O, Qt::ControlModifier);
+        const auto Launched = [&] {
+            for (auto Window : CompareWindows()) if (!Before.contains(Window)) {
+                wchar_t Title[1024]{}; GetWindowTextW(Window, Title, 1024);
+                const auto Text = QString::fromWCharArray(Title);
+                if (Text == "HyperCompare" || (Text.contains("a file.txt") && Text.contains("b.txt"))) return true;
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Launched(), 15000);
+    }
 
     void fileDeleteCursorUi()
     {

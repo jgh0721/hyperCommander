@@ -182,6 +182,8 @@ DECLARE_CMD( BuiltInCMD_OPs_ShellMenu,            QObject::tr( "동작" ),    "h
 DECLARE_CMD( BuiltInCMD_OPs_ShellMenuOnKeypad,    QObject::tr( "동작" ),    "hc.file.shellMenu",
              Qt::ShiftModifier | Qt::KeypadModifier | Qt::Key_Enter,    QObject::tr( "탐색기 메뉴" ) );
 
+DECLARE_CMD( BuiltInCMD_File_Compare,            QObject::tr( "동작" ),    "hc.file.compare",
+             Qt::ControlModifier | Qt::Key_O,                           QObject::tr( "파일·폴더 비교" ) );
 DECLARE_CMD( BuiltInCMD_Etc_ExternalMenu,         QObject::tr( "기타" ),    "hc.file.edit",
              Qt::Key_F4,                                                QObject::tr( "문서 편집 · 프로그램 선택" ) );
 
@@ -310,6 +312,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Etc_ContextMenu,
     BuiltInCMD_OPs_ShellMenu,
     BuiltInCMD_OPs_ShellMenuOnKeypad,
+    BuiltInCMD_File_Compare,
     BuiltInCMD_Etc_ExternalMenu,
     BuiltInCMD_OPs_Move,
     BuiltInCMD_Jobs,
@@ -444,6 +447,7 @@ namespace hc::defaults
                  { "hc.view.columns" },
                  { "hc.viewer.open",          1, { { "requestToken", { ParameterType::String, false } } } },
                  { "hc.file.edit",            1, { { "requestToken", { ParameterType::String, false } } } },
+                 { "hc.file.compare" },
                  { "hc.viewer.quick" },
                  { "hc.viewer.preview" },
                  { "hc.viewer.close" },

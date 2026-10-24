@@ -152,6 +152,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         if (auto* Window = qobject_cast<QMainWindow*>(Guard.data()))
             Window->statusBar()->showMessage(std::get<std::string>(Event.payload_.at("command")).starts_with("hc.navigate.")
                 ? QObject::tr("폴더 이동을 완료하지 못했습니다. 경로와 연결 상태를 확인하세요.")
+                : std::get<std::string>(Event.payload_.at("command")) == "hc.file.compare"
+                ? QObject::tr("비교할 파일 2~3개 또는 폴더 2개를 선택하세요. 양쪽 패널에서는 각각 1개를 선택할 수 있습니다. 오류: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code"))))
                 : QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
     });
     errorSubscription_ = std::move(Subscription.Value());
@@ -578,6 +580,16 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.forceRefresh" && Id != "hc.navigate.cancel" && Model->IsSearchResults())
         Panel->StopEverythingSearch(false);
     if (Id == "hc.viewer.open" || Id == "hc.file.edit") return executeDocument(Invocation, Model);
+    if (Id == "hc.file.compare") {
+        const auto Arguments = compareArguments(Invocation.context_, Model);
+        if (!Arguments.HasValue()) return Arguments.Failure();
+        const auto Root = QCoreApplication::applicationDirPath();
+        auto Program = QDir(Root).filePath("HyperCompare/HyperCompare.exe");
+        if (!QFileInfo::exists(Program)) Program = QDir(Root).filePath("HyperCompare.exe");
+        if (!QFileInfo::exists(Program)) return Error{ErrorCategory::NotFound, "compare-program-not-installed"};
+        if (!QProcess::startDetached(Program, Arguments.Value(), Root)) return Error{ErrorCategory::Unavailable, "compare-launch-failed"};
+        return CommandOutcome{};
+    }
     if (Id.starts_with("hc.file.")) return executeFile(Invocation, Model);
     if (Id.starts_with("hc.viewer.")) return executeViewer(Invocation, Model);
     if ((Id.starts_with("hc.navigate.") && Id != "hc.navigate.cancel") || Id == "hc.tab.close")
@@ -881,7 +893,7 @@ void CommandUiBridge::refreshActionState()
     for (const auto* Id : {"hc.file.shellMenu", "hc.file.context"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
     for (const auto* Id : {"hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new", "hc.file.batchRename",
-        "hc.file.edit", "hc.viewer.open", "hc.viewer.quick", "hc.file.permissions", "hc.archive.create", "hc.archive.extract", "hc.iso.create"})
+        "hc.file.compare", "hc.file.edit", "hc.viewer.open", "hc.viewer.quick", "hc.file.permissions", "hc.archive.create", "hc.archive.extract", "hc.iso.create"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready);
     // These legacy handlers are still empty. Keep their IDs for old settings,
     // but don't advertise an operation which cannot change anything yet.
@@ -921,6 +933,7 @@ void CommandUiBridge::createCommandUi()
         Command->setProperty("hc.commandId", Id); Command->setProperty("hc.baseLabel", Label);
         connect(Command, &QAction::triggered, this, std::move(Invoke));
     };
+    Add("hc.file.compare", tr("파일·폴더 비교"), [this] { Dispatch("hc.file.compare", {}, "ui", commandIndex()); });
     Add("hc.file.edit", tr("문서 편집"), [this] { Dispatch("hc.file.edit", {}, "ui", commandIndex()); });
     Add("hc.app.exit", tr("종료"), [Window] { Window->close(); });
     Add("hc.menu.reload", tr("메뉴 파일 다시 읽기"), [this] { QTimer::singleShot(0, this, [this] { if (userMenu_) userMenu_->Reload(); }); });
@@ -1515,6 +1528,80 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
     if (Invocation.id_ == "hc.viewer.quick")
         if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) Grid->EnsureKeyboardFocusOnView();
     return CommandOutcome{};
+}
+
+Result<QStringList> CommandUiBridge::CompareArguments(const QModelIndex& Index)
+{
+    const auto Context = captureFiles(Index, false);
+    return compareArguments(Context, findModel(Context.tabId_));
+}
+
+Result<QStringList> CommandUiBridge::compareArguments(const CommandContext& Context, CFSModel* Model)
+{
+    struct Item { QString path_; bool directory_; };
+    const auto Collect = [](const CommandContext& Captured, CFSModel* Source) -> Result<QList<Item>> {
+        if (!Source || !Source->GetRoot() || Source->IsLoading() || !(Captured.location_ == Source->WorkspaceLocation()))
+            return Error{ErrorCategory::Unavailable, "compare-panel-not-ready"};
+        if (Captured.selectionManifest_ || Captured.selection_.empty() || Captured.selection_.size() > 3)
+            return Error{ErrorCategory::InvalidRequest, "compare-select-two-or-three-files"};
+        auto* Panel = PanelOf(Source);
+        auto* View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
+        if (!View || View->BaseModel() != Source) return Error{ErrorCategory::Unavailable, "compare-panel-not-ready"};
+        auto Candidates = View->SelectedSourceIndexes();
+        const auto Row = View->BaseView()->focusedRow();
+        const auto Focused = Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? SourceIndex(Row.modelIndex(0)) : QModelIndex{};
+        if (Focused.isValid()) Candidates.append(Focused);
+        QList<Item> Items;
+        for (const auto& Id : Captured.selection_) {
+            bool Found = false;
+            for (const auto& Index : Candidates) {
+                if (!Index.isValid() || Index.model() != Source) continue;
+                const auto Entry = Source->GetFileInfo(Index);
+                if (!Entry || Entry->Name_ == "..") continue;
+                const auto Current = Entry->storageEntry_ ? Entry->storageEntry_->id_ : ResourceId{{"legacy"}, Entry->Name_.toStdString(), IdentityScope::NavigationSession, {}};
+                if (!(Current == Id)) continue;
+                const auto Location = Entry->storageEntry_ ? Entry->storageEntry_->locator_ : Source->WorkspaceLocation();
+                if (Location.kind_ != LocatorKind::Local && Location.kind_ != LocatorKind::Smb)
+                    return Error{ErrorCategory::Unsupported, "compare-native-path-required"};
+                const auto Path = QDir::toNativeSeparators(Source->GetFileFullPath(Index));
+                if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "compare-invalid-path"};
+                Items.append({Path, bool(Entry->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)}); Found = true; break;
+            }
+            if (!Found) return Error{ErrorCategory::StaleRevision, "compare-selection-changed"};
+        }
+        return Items;
+    };
+    auto Selected = Collect(Context, Model); if (!Selected.HasValue()) return Selected.Failure();
+    auto Items = Selected.Value();
+    if (Items.size() == 1) {
+        const auto* Active = PanelOf(Model); CmpPanel* Other = nullptr;
+        for (auto* Panel : main_->findChildren<CmpPanel*>())
+            if (Panel != Active && (Panel->objectName() == "cmpLeftPanel" || Panel->objectName() == "cmpRightPanel")) { Other = Panel; break; }
+        auto* OtherModel = PanelModel(Other);
+        if (!OtherModel) return Error{ErrorCategory::Unavailable, "compare-other-panel-not-ready"};
+        // Passing the other model's index captures that panel's selection/cursor,
+        // without activating it or changing the user's focus.
+        auto* OtherView = qobject_cast<CGridView*>(Other->GetFocusView(Other->CurrentTabIndex()));
+        if (!OtherView) return Error{ErrorCategory::Unavailable, "compare-other-panel-not-ready"};
+        const auto Row = OtherView->BaseView()->focusedRow();
+        const auto Cursor = Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? SourceIndex(Row.modelIndex(0)) : QModelIndex{};
+        if (!Cursor.isValid()) return Error{ErrorCategory::InvalidRequest, "compare-other-panel-selection-required"};
+        const auto OtherContext = captureFiles(Cursor, false);
+        auto Opposite = Collect(OtherContext, OtherModel); if (!Opposite.HasValue()) return Opposite.Failure();
+        if (Opposite.Value().size() != 1) return Error{ErrorCategory::InvalidRequest, "compare-one-item-per-panel"};
+        if (Active && Active->objectName() == "cmpRightPanel") Items.prepend(Opposite.Value().front());
+        else Items.append(Opposite.Value().front());
+    }
+    for (int i = 0; i < Items.size(); ++i) {
+        if (Items[i].directory_ != Items[0].directory_) return Error{ErrorCategory::InvalidRequest, "compare-mixed-files-and-folders"};
+        for (int j = 0; j < i; ++j)
+            if (QDir::cleanPath(Items[i].path_).compare(QDir::cleanPath(Items[j].path_), Qt::CaseInsensitive) == 0)
+                return Error{ErrorCategory::InvalidRequest, "compare-same-path"};
+    }
+    if (Items[0].directory_ && Items.size() != 2) return Error{ErrorCategory::InvalidRequest, "compare-select-two-folders"};
+    QStringList Arguments{"-mode", Items[0].directory_ ? "directory" : "compare"};
+    for (int i = 0; i < Items.size(); ++i) Arguments << QString("-file%1").arg(i + 1) << Items[i].path_;
+    return Arguments;
 }
 
 CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Single)

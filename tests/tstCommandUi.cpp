@@ -26,6 +26,19 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void compareCommandShortcut()
+    {
+        for (const auto& Preset : {"legacy", "prototype"}) {
+            const auto Keys = EffectiveShortcuts({{"shortcutPreset", Preset}}, {});
+            QCOMPARE(CommandId(Keys.value(QKeyCombination(Qt::ControlModifier, Qt::Key_O))), QString("hc.file.compare"));
+            QString Invoked; const QKeyEvent Event(QEvent::KeyPress, Qt::Key_O, Qt::ControlModifier);
+            QVERIFY(InvokeShortcut(Event, Keys, [&](const QString& Id) { Invoked = Id; return true; })); QCOMPARE(Invoked, QString("hc.file.compare"));
+            QCOMPARE(CommandId(EffectiveShortcuts({{"shortcutPreset", Preset}}, {{"Ctrl+O", "hc.jobs.show"}}).value(QKeyCombination(Qt::ControlModifier, Qt::Key_O))), QString("hc.jobs.show"));
+            QVERIFY(!EffectiveShortcuts({{"shortcutPreset", Preset}}, {{"Ctrl+O", QJsonValue::Null}}).contains(QKeyCombination(Qt::ControlModifier, Qt::Key_O)));
+        }
+        bool Found = false; for (const auto& Command : hc::defaults::BusCommands()) Found |= Command.id_ == "hc.file.compare";
+        QVERIFY(Found);
+    }
     void itemSelectionConditionsAndGroups()
     {
         using namespace hc::selection;
