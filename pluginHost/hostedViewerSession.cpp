@@ -352,12 +352,16 @@ namespace hc::plugins
                         // An empty helper is idle before the queued SDK load starts.
                         // Wait for that specific slot, otherwise its delayed load can
                         // overwrite the original-provider binding with a read-only slot.
-                        if (Slots.size() == 1 && Current.Value()["idle"].toBool()) {
+                        if (Slots.size() == 1) {
                             const auto Slot = Slots[0].toObject();
                             if (Slot["hostSlot"].toBool() && QFileInfo(Slot["path"].toString()).absoluteFilePath().compare(
                                 QFileInfo(QString::fromStdString(Lease->LocalPath())).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
                                 if (!Slot["error"].toString().isEmpty()) return Error{ErrorCategory::Unavailable, Slot["error"].toString().toStdString()};
-                                if (!Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready") break;
+                                // EPUB needs the presented native surface to finish its first frame.
+                                // Its immutable input and matching hash are stable before rendering.
+                                const bool EpubSource = Slot["view"].toObject()["viewId"] == "epub" && Slot["sourceReady"].toBool()
+                                    && !Slot["canSave"].toBool() && !Slot["canSaveAs"].toBool();
+                                if (EpubSource || (Current.Value()["idle"].toBool() && !Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready")) break;
                             }
                         }
                         if (auto Stop = Context.Check({"document"})) return *Stop;

@@ -227,8 +227,14 @@ void QtPluginViewerSurface::poll()
         }
     }
     if(ContentReady&&Details.documentChannel_){
-        const auto Documents=Details.documentState_["documents"].toArray();ContentReady=!Documents.isEmpty()&&Details.documentState_["idle"].toBool();
-        for(const auto& Item:Documents){const auto Record=Item.toObject();ContentReady&=!Record["loading"].toBool()&&Record["lifecycle"].toString()=="ready"&&!Record["sourceToken"].toString().isEmpty();}
+        const auto Documents=Details.documentState_["documents"].toArray();ContentReady=!Documents.isEmpty();
+        for(const auto& Item:Documents){
+            const auto Record=Item.toObject();
+            const bool EpubSource=Record["view"].toObject()["viewId"]=="epub" && Record["sourceReady"].toBool()
+                && !Record["canSave"].toBool() && !Record["canSaveAs"].toBool();
+            ContentReady &= !Record["sourceToken"].toString().isEmpty() && (EpubSource ||
+                (Details.documentState_["idle"].toBool() && !Record["loading"].toBool() && Record["lifecycle"].toString()=="ready"));
+        }
     }
     if (ContentReady && !ready_)
     {

@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "runtimeVerification.hpp"
+#include <QJsonArray>
 #include "UniqueLibs/document/hwpStartupTrace.hpp"
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
@@ -108,6 +109,17 @@ int main(int Argc, char** Argv)
                 if (!Settings.Replace(Root)) Current->ShowShellError(QObject::tr("표시 설정을 저장하지 못했습니다."));
                 else Current->ShowShellError({});
             });
+        QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::StateChanged, Current, [Current] {
+            const auto Documents = Current->Snapshot()["documents"].toArray();
+            for(const auto& Item : Documents) {
+                const auto Record = Item.toObject();
+                if(Record["view"].toObject()["viewId"] != "epub") continue;
+                const auto State = !Record["error"].toString().isEmpty() ? QObject::tr("열기 실패")
+                    : Record["view"].toObject()["ready"].toBool() ? QObject::tr("읽기 전용") : QObject::tr("불러오는 중");
+                Current->setWindowTitle(Record["displayName"].toString() + " — " + State + " — HyperEditor"); return;
+            }
+            Current->setWindowTitle("HyperEditor");
+        });
         Current->show();
         if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));

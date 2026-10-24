@@ -928,6 +928,7 @@ namespace hc::document
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
             Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
                 {"displayName", Tab->displayName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->displayName_},
+                {"sourceReady", Tab->pane_->IsEpub() && !Tab->loading_ && !Tab->closeRequested_ && !closingWorkspace_ && !Tab->input_.hash_.isEmpty() && Tab->error_.isEmpty()},
                 {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsProcessDocument()&&State.lifecycle_==DocumentLifecycle::Opening)},
                 {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
@@ -989,7 +990,7 @@ namespace hc::document
                 bool Bound = false;
                 if(Item["bindExistingHost"].toBool() && Item["hostSlot"].toBool() && Item["sourceToken"].toString().size()==32) {
                     for(const auto& Tab:documents_) if(Tab->hostSlot_ && Tab->sourceToken_.isEmpty() && !Tab->loading_ && !Tab->saving_
-                        && !Tab->Dirty() && !Tab->pane_->IsBusy() && Tab->session_->Snapshot().lifecycle_==DocumentLifecycle::Ready
+                        && !Tab->closeRequested_ && !closingWorkspace_ && !Tab->Dirty() && (!Tab->pane_->IsBusy() || Tab->pane_->IsEpub()) && Tab->session_->Snapshot().lifecycle_==DocumentLifecycle::Ready
                         && QFileInfo(Tab->path_).absoluteFilePath().compare(QFileInfo(Item["path"].toString()).absoluteFilePath(),Qt::CaseInsensitive)==0
                         && QString::fromLatin1(Tab->input_.hash_.toHex())==Item["sha256"].toString()) {
                         // The SDK already decoded this exact snapshot. Transfer its

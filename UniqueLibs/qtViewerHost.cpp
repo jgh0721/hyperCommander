@@ -250,11 +250,25 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         if (!Completion) return;
         if (!Surface->Details().documentChannel_) { Completion(true, {}); return; }
         auto* Timer = new QTimer(Phase); auto Elapsed = std::make_shared<QElapsedTimer>(); Elapsed->start();
-        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Phase, Expected, Completion, Standalone] {
+        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Phase, Expected, Completion, Standalone, EpubPresented=false]() mutable {
             const auto Details = Surface->Details(); const auto Documents = Details.documentState_["documents"].toArray();
             QString Error; bool Loading = Documents.size() != Expected;
             if (Details.commandError_) Error = QString::fromStdString(Details.commandError_->code_);
             for (const auto& Item : Documents) { const auto Record = Item.toObject(); Loading |= Record["loading"].toBool(); if (!Record["error"].toString().isEmpty()) Error = Record["error"].toString(); }
+            if(Standalone && !EpubPresented && Error.isEmpty() && Documents.size()==Expected) {
+                bool EpubSource=false, Bound=true;
+                for(const auto& Item:Documents) {
+                    const auto Record=Item.toObject(); Bound &= !Record["sourceToken"].toString().isEmpty();
+                    EpubSource |= Record["view"].toObject()["viewId"]=="epub" && Record["sourceReady"].toBool();
+                }
+                if(EpubSource && Bound) {
+                    // The EPUB first frame requires a visible surface. Original-provider
+                    // bindings are complete; completion still waits for actual rendering.
+                    const auto Presented=Surface->SendDocument({{"action","present"}});
+                    if(Presented.HasValue()) { EpubPresented=true; Window->hide(); }
+                    else Error=QString::fromStdString(Presented.Failure().code_);
+                }
+            }
             if (Error.isEmpty() && Loading && Elapsed->elapsed() < 30000) return;
             if (Error.isEmpty() && Loading) Error = "document-open-timeout";
             Timer->stop(); Timer->deleteLater();
