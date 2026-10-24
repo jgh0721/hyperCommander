@@ -60,7 +60,7 @@ qt_add_library(hc_epub_host STATIC
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubProcessView.hpp")
 target_precompile_headers(hc_epub_host PRIVATE "${PROJECT_SOURCE_DIR}/tools/epub/render/stdafx.h")
 target_include_directories(hc_epub_host PRIVATE "${PROJECT_SOURCE_DIR}/tools/epub/render")
-target_link_libraries(hc_epub_host PUBLIC hc_epub_package hc_document_broker Qt6::Widgets)
+target_link_libraries(hc_epub_host PUBLIC hc_epub_package hc_document_broker Qt6::Widgets PRIVATE Fm::style)
 target_compile_options(hc_epub_host PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 qt_add_library(hc_document_sdi STATIC

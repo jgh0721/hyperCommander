@@ -8,6 +8,9 @@
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtTest>
+#include <QCryptographicHash>
+#include <QJsonDocument>
+#include "commonLibs/document/epub/epubAppearance.hpp"
 
 using namespace hc::document;
 namespace {
@@ -39,6 +42,7 @@ private slots:
     void sharedWorkspace() {
         QFETCH(bool,Hosted);QFETCH(QString,Mode);
         QTemporaryDir Temp;QVERIFY(Temp.isValid());
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
         QFile Text(Temp.filePath("keep.txt"));QVERIFY(Text.open(QIODevice::WriteOnly));Text.write("original");Text.close();
         const auto PdfPath=Temp.filePath("keep.pdf");
         { QPdfWriter Pdf(PdfPath);QPainter Painter(&Pdf);Painter.drawText(100,100,"Keep PDF tab"); }
@@ -61,6 +65,10 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(document(Window,HwpId)["view"].toObject()["ready"].toBool(),60000);
         }
         QString Book=qEnvironmentVariable("HC_EPUB_POC_EPUB");
+        QFile Source(Book); QVERIFY(Source.open(QIODevice::ReadOnly)); const auto Hash=QCryptographicHash::hash(Source.readAll(),QCryptographicHash::Sha256).toHex();
+        QFile Preferences(Temp.filePath("epub-reading.json")); QVERIFY(Preferences.open(QIODevice::WriteOnly));
+        Preferences.write(QJsonDocument(QJsonObject{{"schemaVersion",1},{"global",QJsonObject{{"line",2.2},{"after",1.1}}},
+            {"books",QJsonObject{{QString::fromLatin1(Hash),QJsonObject{{"before",0.5}}}}}}).toJson()); Preferences.close();
         if(Mode=="invalid") {Book=Temp.filePath("invalid.epub");QFile Bad(Book);QVERIFY(Bad.open(QIODevice::WriteOnly));Bad.write("invalid epub");}
         const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();QVERIFY(!Id.isEmpty());
         if(Mode=="cancel")QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["viewId"]=="epub",30000);
@@ -70,6 +78,18 @@ private slots:
                 QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
                 QVERIFY(document(Window,Id)["view"].toObject()["readOnly"].toBool());
                 QVERIFY(!document(Window,Id)["view"].toObject()["epub"].toObject()["images"].toArray().isEmpty());
+                QVERIFY(document(Window,Id)["view"].toObject()["epub"].toObject()["settingsPersistent"].toBool());
+                QTRY_COMPARE_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["epub"].toObject()["readingProfile"].toObject()["line"].toDouble(),2.2,10000);
+                QCOMPARE(document(Window,Id)["view"].toObject()["epub"].toObject()["readingProfile"].toObject()["before"].toDouble(),0.5);
+                auto& Theme = fm::style::ThemeManager::instance();
+                Theme.setScheme(fm::style::ThemeManager::Scheme::Dark);
+                Theme.setDarkTone(fm::style::ThemeManager::DarkTone::Navy);
+                Theme.setOverride(fm::style::Variant::Navy, fm::style::Token::Accent, QColor("#b95c87"));
+                const auto Expected = epubui::Appearance();
+                QTRY_COMPARE_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["epub"].toObject()["appearance"].toObject(), Expected, 15000);
+                const auto TextColor=Theme.colors().toPalette().color(QPalette::Text);
+                const auto CssColor=QString("rgb(%1, %2, %3)").arg(TextColor.red()).arg(TextColor.green()).arg(TextColor.blue());
+                QTRY_COMPARE_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["epub"].toObject()["paragraphs"].toArray().first().toObject()["color"].toString(),CssColor,15000);
                 QVERIFY(!document(Window,Id)["canSave"].toBool());QVERIFY(!document(Window,Id)["canSaveAs"].toBool());
                 QVERIFY(Window.Handle({{"action","saveAs"},{"documentId",Id},{"path",Temp.filePath("out.epub")}}).contains("error"));
                 QVERIFY(!QFile::exists(Temp.filePath("out.epub")));

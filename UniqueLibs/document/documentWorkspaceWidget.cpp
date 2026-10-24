@@ -13,6 +13,7 @@
 #include "imageFullscreen.hpp"
 #include "imageReadingView.hpp"
 #include "documentThemeAdapter.hpp"
+#include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentSettingsDialog.hpp"
 #include "documentShortcutRouter.hpp"
 #include "text/ScintillaQtDirectBackend.h"
@@ -1028,6 +1029,8 @@ namespace hc::document
     {
         const auto Action = Request["action"].toString();
         if (Request.contains("protocolVersion") && Request["protocolVersion"].toInt() != HostVersion) return Error("document-protocol-version");
+        if (Action == "setDocumentAppearance") return epubui::ApplyAppearance(Request["appearance"].toObject())
+            ? QJsonObject{{"accepted", true}} : Error("document-appearance-invalid");
         if (Action == "state") return Snapshot();
         if (Action == "present" || Action == "conceal") return {{"accepted", hosted_}};
         if (Action == "escape") { escapeViewer(); return {{"accepted", hosted_ && closeViewerOnEscape_}}; }

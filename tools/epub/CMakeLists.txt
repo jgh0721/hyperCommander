@@ -79,7 +79,7 @@ if(BUILD_TESTING AND HC_BUILD_EPUB_POC)
     set_target_properties(hc_epub_owner_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/epub-poc")
     qt_add_executable(hc_epub_workspace_tests render/testWorkspace.cpp render/stdafx.h)
     target_precompile_headers(hc_epub_workspace_tests PRIVATE render/stdafx.h)
-    target_link_libraries(hc_epub_workspace_tests PRIVATE hc_document_widgets hc_epub_host Qt6::Test)
+    target_link_libraries(hc_epub_workspace_tests PRIVATE hc_document_widgets hc_epub_host Qt6::Test Fm::style)
     target_compile_options(hc_epub_workspace_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(hc_epub_workspace_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/epub-poc")
     # Run explicitly with independently pinned development runtime and evidence paths.

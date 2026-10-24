@@ -29,7 +29,7 @@
     "productWorkspaceCodeInstalled": true,
     "productRuntimeInstalled": true,
     "productSignedRuntimeVerified": true,
-    "productInventorySha256": "15499cb73c7bafd1feecd2fc4936ca4ec6e91bc2d1378fcaf3f7f503e0e15e2d"
+    "productInventorySha256": "490867fa597fc711b610c71da823eb07ca14a4da8a03f65785aa6853decc2ef8"
   },
   "resourceCandidate": {
     "processLimitPerBook": 12,
@@ -40,11 +40,12 @@
     "scope": "small synthetic EPUB2/3 fixtures; not a production default or cold-cache benchmark"
   },
   "pendingGates": [
-    "physical F3/F4 file-panel input and HWP coexistence",
+    "advanced backgrounds and safe custom CSS",
+    "search, bookmarks, footnotes and image zoom",
     "IME and accessibility",
     "large documents and aggregate resource scheduler",
-    "Watercolor propagation",
-    "EPUB content editing"
+    "EPUB content editing",
+    "repository reproducibility"
   ],
   "startupReflow": {
     "fixed": "initial resize can remove an iframe before display completion",
@@ -63,12 +64,17 @@
     "scenarios": "editor/viewer: ready, reload, cancel, invalid; PDF and dirty text preservation; 64 MiB input budget",
     "passed": 9,
     "evidence": "_build/epub-validation/workspace/tests-qualified.txt",
-    "actualF3F4EndToEnd": false,
+    "actualF3F4EndToEnd": true,
     "actualPluginHostEntry": true,
     "installedEditorEpub2Epub3": true,
     "installedProductHashesVerified": 264,
     "protectedFilesPreserved": 18,
-    "productEvidence": "_build/epub-validation/product-package",
-    "portableMembersVerified": 265
+    "productEvidence": "_build/epub-validation/appearance",
+    "portableMembersVerified": 265,
+    "hwpPdfDirtyTextCoexistence": true,
+    "watercolorAppearancePropagation": true,
+    "persistentGlobalAndBookSettings": true,
+    "settingsTestsPassed": 10,
+    "productKeyScenariosPassed": 4
   }
 }

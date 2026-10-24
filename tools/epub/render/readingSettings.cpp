@@ -29,7 +29,7 @@ namespace hc::epub::poc
         for(auto* Form : {QuickForm, DetailForm})
         { Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); }
         mode_ = new QComboBox; mode_->addItems({tr("사용자 설정"), tr("출판사 서식")}); addField(QuickForm, "override", tr("본문 서식"), mode_);
-        theme_ = new QComboBox; theme_->addItems({tr("라이트"), tr("다크"), tr("세피아"), tr("연녹색")}); addField(QuickForm, "theme", tr("배경"), theme_);
+        theme_ = new QComboBox; theme_->addItems({tr("라이트"), tr("다크"), tr("세피아"), tr("연녹색"), tr("앱 테마 따름")}); addField(QuickForm, "theme", tr("배경"), theme_);
         font_ = new QComboBox;
         systemFonts_ = QFontDatabase::families();
         rebuildFonts();
@@ -74,7 +74,7 @@ namespace hc::epub::poc
             : tr("미리보기 후 적용하면 저장됩니다.\n책별 지정 값은 기본값보다 우선합니다.\nEPUB 원본은 변경하지 않습니다."), this);
         StorageNote->setWordWrap(true); Layout->addWidget(StorageNote);
         connect(mode_, &QComboBox::currentIndexChanged, this, [this](int I) { edit("override", I == 0); });
-        connect(theme_, &QComboBox::currentIndexChanged, this, [this](int I) { if(I >= 0) edit("theme", QStringList{"light", "dark", "sepia", "green"}.at(I)); });
+        connect(theme_, &QComboBox::currentIndexChanged, this, [this](int I) { if(I >= 0) edit("theme", QStringList{"light", "dark", "sepia", "green", "system"}.at(I)); });
         connect(font_, &QComboBox::currentIndexChanged, this, [this](int I) {
             if(I >= 0 && font_->itemData(I).isValid()) edit("font", font_->itemData(I).toString());
         });
@@ -152,7 +152,7 @@ namespace hc::epub::poc
         updating_ = true;
         const auto Values = Profile();
         mode_->setCurrentIndex(Values["override"].toBool() ? 0 : 1);
-        theme_->setCurrentIndex(QStringList{"light", "dark", "sepia", "green"}.indexOf(Values["theme"].toString()));
+        theme_->setCurrentIndex(QStringList{"light", "dark", "sepia", "green", "system"}.indexOf(Values["theme"].toString()));
         const auto Family = Values["font"].toString();
         auto FontIndex = font_->findData(Family);
         if(FontIndex < 0) { font_->addItem(tr("%1 · 현재 조건에서 확인되지 않음").arg(Family), Family); FontIndex = font_->count() - 1; }

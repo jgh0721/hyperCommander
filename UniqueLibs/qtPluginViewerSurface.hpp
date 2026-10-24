@@ -65,6 +65,7 @@ private:
     QLabel* status_ = nullptr;
     QTimer* timer_ = nullptr;
     std::shared_ptr<hc::plugins::HostedViewerSession> session_;
+    bool appearancePending_ = true;
     bool ready_ = false;
     std::uint64_t preparedSequence_ = 0;
     QString lastSearch_, clipboardToken_;

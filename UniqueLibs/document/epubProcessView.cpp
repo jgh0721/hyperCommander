@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
+#include "commonLibs/document/epub/epubAppearance.hpp"
+#include "UniqueLibs/settings/appSettings.hpp"
 
 /// Internal libraries
 #include "commonLibs/document/epub/epubPackage.hpp"
@@ -38,6 +40,8 @@ namespace hc::document
         mutable std::mutex mutex_;
         QJsonObject state_{{"status", "opening"}};
         QJsonObject metrics_;
+        QJsonObject appearance_;
+        QString settingsPath_;
         void Metrics(QJsonObject Value) { std::lock_guard Lock(mutex_); metrics_ = std::move(Value); }
         std::thread worker_;
         void Update(QJsonObject Value) { std::lock_guard Lock(mutex_); state_ = std::move(Value); }
@@ -183,6 +187,11 @@ namespace hc::document
     EpubProcessView::EpubProcessView(WebProcessRuntime Runtime, WebProcessLimits Limits, QWidget* Parent)
         : QWidget(Parent), runtime_(std::move(Runtime)), limits_(Limits), timer_(new QTimer(this))
     {
+        const auto Changed = [this] {
+            if(work_) { const auto Value = epubui::Appearance(); std::lock_guard Lock(work_->mutex_); work_->appearance_ = Value; }
+        };
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, Changed);
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::fontsChanged, this, Changed);
         timer_->setInterval(20);
         connect(timer_, &QTimer::timeout, this, &EpubProcessView::collect);
     }
@@ -250,6 +259,10 @@ namespace hc::document
         bound_ = true;
         timer_->start();
         work_ = std::make_shared<Work>();
+        work_->appearance_ = epubui::Appearance();
+        auto Config = qApp->property("documentViewsConfigDir").toString();
+        if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
+        work_->settingsPath_ = QDir(Config).absoluteFilePath("epub-reading.json");
         if((runtime_.kind_ != WebProcessKind::EpubPrototype && runtime_.kind_ != WebProcessKind::EpubReadOnly) || Generation < 1 || Generation > 9007199254740991LL
             || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) {
             work_->Update({{"status", "error"}, {"message", "epub-view-admission"}});
@@ -299,6 +312,13 @@ namespace hc::document
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 if(Cancelled()) return;
                 if(Deadline.hasExpired()) { Failure = "epub-view-attach-timeout"; return; }
+                QJsonObject Applied;
+                { std::lock_guard Lock(State->mutex_); Applied = State->appearance_; }
+                const auto Configure = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
+                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_}}).toJson(QJsonDocument::Compact);
+                QByteArray ConfigureReply;
+                if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
+                    || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()) { Failure = "epub-configuration-rejected"; return; }
                 auto Sent = epub::SendInput(Payload, Id, State->generation_, "epubjs",
                     [&](const QByteArray& Request, QByteArray& Reply, int Timeout) {
                         return Owner->Exchange(Request, Reply, Timeout, Error);
@@ -309,6 +329,16 @@ namespace hc::document
                 bool DocumentReady = false;
                 bool FocusAcknowledged = false;
                 while(!Cancelled()) {
+                    QJsonObject Next;
+                    { std::lock_guard Lock(State->mutex_); Next = State->appearance_; }
+                    if(Next != Applied) {
+                        const auto ThemeRequest = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
+                            {"generation", State->generation_}, {"kind", "appearance"}, {"appearance", Next}}).toJson(QJsonDocument::Compact);
+                        QByteArray ThemeReply;
+                        if(!Owner->Exchange(ThemeRequest, ThemeReply, 5000, Error)
+                            || !QJsonDocument::fromJson(ThemeReply).object()["accepted"].toBool()) { Failure = "epub-appearance-rejected"; return; }
+                        Applied = Next;
+                    }
                     QByteArray Bytes;
                     if(!Owner->Exchange(Request, Bytes, 5000, Error)) { Failure = Error.code_; return; }
                     QJsonParseError ParseError;

@@ -30,7 +30,7 @@ namespace hc::epub::poc
                     Valid = Value.isDouble() && std::isfinite(Value.toDouble())
                         && Value.toDouble() >= Limits[Key].first && Value.toDouble() <= Limits[Key].second;
                 else if(Key == "override") Valid = Value.isBool();
-                else if(Key == "theme") Valid = Value.isString() && QStringList{"light", "dark", "sepia", "green"}.contains(Value.toString());
+                else if(Key == "theme") Valid = Value.isString() && QStringList{"system", "light", "dark", "sepia", "green"}.contains(Value.toString());
                 else if(Key == "align") Valid = Value.isString() && QStringList{"left", "center", "right", "justify"}.contains(Value.toString());
                 else if(Key == "font")
                 {
@@ -71,7 +71,7 @@ namespace hc::epub::poc
 
     QJsonObject ReadingStore::Defaults()
     {
-        return {{"theme", "light"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
+        return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
             {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
             {"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
     }

@@ -102,7 +102,7 @@ qt_add_library(hc_document_open STATIC
 target_include_directories(hc_document_open PRIVATE
     ${PROJECT_SOURCE_DIR}/HyperCommander ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
-target_link_libraries(hc_document_open PUBLIC hc_document_core hc_viewer_qt PRIVATE hc_passwords Qt6::Concurrent advapi32 shell32 ole32)
+target_link_libraries(hc_document_open PUBLIC hc_document_core hc_viewer_qt PRIVATE Fm::style hc_passwords Qt6::Concurrent advapi32 shell32 ole32)
 target_compile_options(hc_document_open PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderBuiltInPlugin)
 add_subdirectory(UniqueLibs/archive)

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "commonLibs/document/epub/epubAppearance.hpp"
 #include "ownerMode.hpp"
 #include "inputTransfer.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
@@ -208,6 +209,7 @@ namespace
         {
             setWindowTitle(tr("EPUB · Watercolor 읽기 설정 · P0 엔진 비교"));
             resize(1280, 900);
+            settingsPath_ = SettingsPath;
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
             auto* Layout = new QVBoxLayout(Central);
@@ -279,6 +281,9 @@ namespace
             if(!Evidence.isEmpty()) QTimer::singleShot(60000, this, [this] { if(!finished_) finish({{"status", "timeout"}}); });
             view_->setUrl(QUrl("epub://app/app/index.html"));
         }
+        void Appearance(const QJsonObject& Value) {
+            if(hc::document::epubui::ApplyAppearance(Value)) { hostAppearance_ = Value; sendProfile(); }
+        }
         ~Window() override { finished_ = true; poll_.stop(); delete view_; view_ = nullptr; delete profile_; profile_ = nullptr; }
         QByteArray Control(const QByteArray& Bytes)
         {
@@ -290,7 +295,14 @@ namespace
                 || Request["documentId"] != documentId_ || Request["generation"] != QJsonValue(generation_)) return Fail("epub-control-identity");
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot") {
-                auto State = latest_; State["inputFocused"] = view_->hasFocus(); Reply["state"] = State;
+                auto State = latest_; State["inputFocused"] = view_->hasFocus();
+                State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
+                State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
+                State["readingProfile"] = settings_->Profile(); Reply["state"] = State;
+            }
+            else if(Kind == "appearance") {
+                if(!hc::document::epubui::ApplyAppearance(Request["appearance"].toObject())) return Fail("epub-appearance-invalid");
+                Appearance(Request["appearance"].toObject());
             }
             else if(Kind == "start") {
                 const auto Engine = Request["engine"].toString();
@@ -319,7 +331,9 @@ namespace
         void sendProfile()
         {
             const auto Values = settings_->Profile();
-            hc::document::DocumentThemeAdapter::SetMode(Values["theme"] == "dark" ? "dark" : "light");
+            if(hostAppearance_.isEmpty()) hc::document::DocumentThemeAdapter::SetMode(Values["theme"] == "dark" ? "dark" : "light");
+            const auto Palette = fm::style::ThemeManager::instance().colors().toPalette();
+            command("palette", QJsonObject{{"background", Palette.color(QPalette::Base).name()}, {"foreground", Palette.color(QPalette::Text).name()}});
             command("profile", Values);
         }
         void finish(QJsonObject Result)
@@ -356,6 +370,8 @@ namespace
         QString evidence_, documentId_, expectedBookFont_;
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}};
+        QJsonObject hostAppearance_;
+        QString settingsPath_;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QScrollArea* settingsScroll_ = nullptr;
@@ -400,6 +416,14 @@ namespace
             if(Kind == "input-begin" && Request["engine"] != QJsonValue("epubjs"))
                 return {{"error", "epub-product-engine"}};
 #endif
+            if(Kind == "configure") {
+                const auto Path = Request["settingsPath"].toString();
+                if(configured_ || preparing_ || reader_ || Request.size() != 6 || !QFileInfo(Path).isAbsolute()
+                    || !Path.endsWith("/epub-reading.json") || !hc::document::epubui::ApplyAppearance(Request["appearance"].toObject()))
+                    return {{"error", "epub-configuration-invalid"}};
+                settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); configured_ = true;
+                return {{"accepted", true}};
+            }
             if(Kind.startsWith("input-")) {
                 if(Kind == "input-cancel" && preparing_ && Request.size() == 4 && transfer_.Matches(Request)) {
                     cancelled_ = true;
@@ -416,7 +440,8 @@ namespace
                         const auto Result = Watcher->result(); Watcher->deleteLater(); preparing_ = false;
                         if(cancelled_) return;
                         if(!Result.error.isEmpty()) { error_ = Result.error; return; }
-                        reader_ = new Window(Result.assets, Result.publication, Engine, "light", {}, {}, Generation);
+                        reader_ = new Window(Result.assets, Result.publication, Engine, "light", {}, settingsPath_, Generation);
+                        if(!appearance_.isEmpty()) reader_->Appearance(appearance_);
                         reader_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
                         reader_->winId(); reader_->windowHandle()->setParent(nativeParent_);
                         nativeReader_ = static_cast<std::uintptr_t>(reader_->winId()); reader_->show();
@@ -445,7 +470,9 @@ namespace
             else if(preparing_) State["status"] = "preparing";
             return {{"protocolVersion", 1}, {"documentId", Request["documentId"]}, {"generation", Request["generation"]}, {"state", State}};
         }
-        QString bundle_, error_;
+        QString bundle_, error_, settingsPath_;
+        QJsonObject appearance_;
+        bool configured_ = false;
         hc::epub::poc::InputTransfer transfer_;
         QWindow* nativeParent_ = nullptr;
         std::uintptr_t nativeReader_ = 0;

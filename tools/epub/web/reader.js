@@ -53,7 +53,7 @@ Injector.prototype.injectForDocument = async function (doc, link) {
     }
 };
 window.hcEvidence = { status: "loading", phase: "P0-B", checks: {} };
-const colors = { light: ["#fffdf7", "#303840"], dark: ["#242831", "#e9e6dd"],
+const colors = { system: ["#ffffff", "#303840"], light: ["#fffdf7", "#303840"], dark: ["#242831", "#e9e6dd"],
     sepia: ["#eee1c5", "#453e32"], green: ["#e4eddf", "#293d2e"] };
 
 function documents() {
@@ -289,9 +289,15 @@ window.hcCommand = (command, value) => {
     sequence = sequence.then(async () => {
         if (command === "start") await start(value);
         else if (command === "profile") await applyProfile(value);
+        else if (command === "palette") {
+            if (!/^#[0-9a-f]{6}$/i.test(value?.background) || !/^#[0-9a-f]{6}$/i.test(value?.foreground)) throw Error("Invalid host palette");
+            colors.system = [value.background, value.foreground];
+            if (profile.theme === "system") await applyProfile(profile);
+        }
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
         else throw Error("Unknown command");
+        if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot() };
     }).catch(fail);
 };
 window.addEventListener("error", event => fail(event.error || event.message));

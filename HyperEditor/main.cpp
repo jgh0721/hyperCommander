@@ -1,6 +1,9 @@
 ﻿#include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "runtimeVerification.hpp"
+#include <fmstyle/ThemeManager.h>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/document/hwpStartupTrace.hpp"
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
@@ -46,6 +49,7 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
+    Parser.addOption(QCommandLineOption("document-appearance", "Initial Watercolor appearance supplied by Commander", "base64"));
     Parser.addOption(QCommandLineOption("verify-epub-runtime", "Verify the installed EPUB reader without changing the book", "file"));
     Parser.addOption(QCommandLineOption("verify-runtime", "Verify installed codecs, fonts and document saves using temporary files"));
     Parser.addOption(QCommandLineOption("config-dir", "Settings directory", "path"));
@@ -55,6 +59,13 @@ int main(int Argc, char** Argv)
     const auto Config = hc::settings::DocumentPaths();
     if (!Config.error_.isEmpty()) { QMessageBox::critical(nullptr, QObject::tr("설정 경로 오류"), Config.error_); return 11; }
     hc::document::DocumentThemeAdapter::Install(App);
+    QJsonObject ParentAppearance;
+    if(Parser.isSet("document-appearance")) {
+        const auto Encoded=Parser.value("document-appearance").toLatin1(); if(Encoded.size()>16384)return 9;
+        const auto Decoded=QJsonDocument::fromJson(QByteArray::fromBase64(Encoded,QByteArray::AbortOnBase64DecodingErrors));
+        if(!Decoded.isObject() || !hc::document::epubui::ApplyAppearance(Decoded.object()))return 9;
+        ParentAppearance=Decoded.object();
+    }
     if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
     if (Parser.isSet("verify-runtime")) return VerifyDocumentRuntime();
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
@@ -91,6 +102,11 @@ int main(int Argc, char** Argv)
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
     const auto Appearance = Settings.Object()["appearance"].toObject();
+    const auto General = Settings.Object()["general"].toObject();
+    auto& Theme = fm::style::ThemeManager::instance();
+    Theme.setColorScheme(fm::style::ColorScheme::fromJson(Appearance["watercolorTheme"].toObject()).value_or(fm::style::ColorScheme{}));
+    Theme.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
+    hc::document::DocumentThemeAdapter::SetMode(General["themeMode"].toString("system"));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     std::vector<std::unique_ptr<Workspace>> Windows;
     auto Files = Parser.positionalArguments();
@@ -101,6 +117,7 @@ int main(int Argc, char** Argv)
         Window->ConfigureHwp(hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         if (Appearance.contains("documentWorkspace") && !Window->ApplyChromeSettings(Appearance["documentWorkspace"].toObject()))
             Window->ShowShellError(QObject::tr("문서 표시 설정을 적용하지 못하여 기본 표시를 사용합니다."));
+        if(!ParentAppearance.isEmpty()) hc::document::epubui::ApplyAppearance(ParentAppearance);
         auto* Current = Window.get();
         QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::ChromeSettingsChanged, &App,
             [Current, &Settings](const QJsonObject& Chrome) {

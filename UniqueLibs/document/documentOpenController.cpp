@@ -1,4 +1,5 @@
 ﻿#include "documentOpenController.hpp"
+#include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentHandlerMenu.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -161,7 +162,12 @@ void DocumentOpenController::prepare(const QString& Token, DocumentOpenRequest R
             connect(Process, &QProcess::started, this, [this, Token, StartsLeft, StartFailed] { if (--*StartsLeft == 0 && !*StartFailed) report(Token, "started"); });
             auto Args = Arguments(Target.arguments_, Files);
             if (Target.rhwpEditor_ && NonNative) Args.replaceInStrings("--rhwp-edit", "--rhwp-edit-copy");
-            if (Target.productEditor_) Args = QStringList{"--config-dir", hc::settings::DocumentPaths().directory_, "--"} + Args;
+            if (Target.productEditor_) {
+                QStringList Prefix{"--config-dir", hc::settings::DocumentPaths().directory_};
+                if(std::any_of(Files.begin(),Files.end(),[](const QString& File){return QFileInfo(File).suffix().compare("epub",Qt::CaseInsensitive)==0;}))
+                    Prefix << "--document-appearance" << QString::fromLatin1(QJsonDocument(epubui::Appearance()).toJson(QJsonDocument::Compact).toBase64());
+                Args = Prefix + QStringList{"--"} + Args;
+            }
             Process->start(Target.executable_, Args);
         };
         if (Target.descriptor_.delivery_ == FileDelivery::OnePerProcess) {

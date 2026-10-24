@@ -6605,6 +6605,7 @@ private slots:
             QPointer<QProcess> Process=Controller->findChild<QProcess*>();
             QTRY_COMPARE_WITH_TIMEOUT(Process->state(), QProcess::Running, 15000);
             auto Cleanup=qScopeGuard([&] { if(Process && Process->state()!=QProcess::NotRunning) { Process->kill(); Process->waitForFinished(); } });
+            QVERIFY(Process->arguments().contains("--document-appearance"));
             struct Search { DWORD pid; HWND window=nullptr; } State{DWORD(Process->processId())};
             const auto Find=[&] {
                 EnumWindows([](HWND Window,LPARAM Value)->BOOL {

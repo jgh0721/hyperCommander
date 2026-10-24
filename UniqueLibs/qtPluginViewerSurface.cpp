@@ -1,4 +1,5 @@
 ﻿#include "qtPluginViewerSurface.hpp"
+#include "commonLibs/document/epub/epubAppearance.hpp"
 #include <QEvent>
 #include <qt_windows.h>
 #include "pluginHost/wlxWindowMessage.hpp"
@@ -100,6 +101,8 @@ void QtPluginViewerController::collect()
 }
 QtPluginViewerSurface::QtPluginViewerSurface(QtPluginViewerController* Controller, QWidget* Parent) : QWidget(Parent), controller_(Controller)
 {
+    connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] { appearancePending_ = true; });
+    connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::fontsChanged, this, [this] { appearancePending_ = true; });
     setObjectName("hc.viewer.wlx"); setFocusPolicy(Qt::StrongFocus);
     auto* Layout = new QStackedLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
     status_ = new QLabel(tr("뷰어를 닫았습니다."), this); status_->setWordWrap(true);status_->setAlignment(Qt::AlignCenter);status_->setAutoFillBackground(true);Layout->addWidget(status_);
@@ -175,6 +178,9 @@ void QtPluginViewerSurface::poll()
 {
     if (!session_) return;
     const auto Details = session_->Details();
+    if(appearancePending_ && Details.documentChannel_ && Details.viewer_.status_ == ViewerStatus::Ready) {
+        if(session_->SendDocument({{"action", "setDocumentAppearance"}, {"appearance", hc::document::epubui::Appearance()}}).HasValue()) appearancePending_ = false;
+    }
     if (Details.documentChannel_) {
         // A recycled viewer still reports the old close until the replacing open completes.
         if (Details.commandSequence_ >= preparedSequence_ && Details.documentState_["closeRequested"].toBool()) {

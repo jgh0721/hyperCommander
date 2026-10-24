@@ -46,6 +46,21 @@ private slots:
         ReadingSettings Other({}, otherBook, "light");
         QVERIFY(Other.findChild<QComboBox*>("font")->findData("HCFixtureFont") < 0);
     }
+    void applicationThemeInheritance() {
+        QTemporaryDir Dir; const auto Path = Dir.filePath("reading.json");
+        ReadingSettings Panel(Path, book, "dark");
+        QTRY_VERIFY_WITH_TIMEOUT(!Panel.IsBusy(), 5000);
+        QCOMPARE(Panel.Profile()["theme"].toString(), QString("system"));
+        auto* Theme = Panel.findChild<QComboBox*>("theme"); QVERIFY(Theme);
+        QVERIFY(Theme->currentText().contains(QString::fromUtf8("앱 테마")));
+        Theme->setCurrentIndex(1); Panel.findChild<QPushButton*>("apply")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!Panel.IsBusy(), 5000);
+        QCOMPARE(ReadingStore::Load(Path, book).book["theme"].toString(), QString("dark"));
+        Panel.findChild<QPushButton*>("reset_theme")->click(); Panel.findChild<QPushButton*>("apply")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!Panel.IsBusy(), 5000);
+        QVERIFY(!ReadingStore::Load(Path, book).book.contains("theme"));
+        QCOMPARE(Panel.Profile()["theme"].toString(), QString("system"));
+    }
     void inheritanceAndRestart()
     {
         QTemporaryDir Dir; QVERIFY(Dir.isValid()); const auto Path = Dir.filePath("reading.json");
