@@ -4,6 +4,7 @@
 #include "runtime/guiIpc.hpp"
 #include "runtime/controllerMemory.hpp"
 #include "widgets/mergeController.hpp"
+#include "widgets/boundedEditor.hpp"
 #include "widgets/chunkGutter.hpp"
 #include "widgets/multiPaneAlignment.hpp"
 #include <QToolButton>
@@ -255,6 +256,115 @@ private slots:
             QCOMPARE(ProcessControllerMemory()->Reserved(), std::uint64_t(0));
             qInfo("Concurrent comparison cycle %d: 3 windows, sampled peak private %llu bytes, reservations returned", cycle + 1, peak);
         }
+    }
+    void largeConcurrentWindowsAdmission_data()
+    {
+        QTest::addColumn<int>("memoryMiB");
+        QTest::newRow("bounded-admission") << 512;
+        QTest::newRow("default-budget") << 2048;
+    }
+    void largeConcurrentWindowsAdmission()
+    {
+        QFETCH(int, memoryMiB);
+        QSettings{}.setValue("view/alignAllPanes", true);
+        QTemporaryDir dir; const auto left = dir.filePath("left.txt"), right = dir.filePath("right.txt");
+        const auto original = lines(0, 80000); auto modified = original; modified.replace("common40000", "edited40000");
+        write(left, original); write(right, modified);
+        std::uint64_t peak = 0; QTimer sampler;
+        connect(&sampler, &QTimer::timeout, &sampler, [&] {
+            PROCESS_MEMORY_COUNTERS_EX counters{}; counters.cb = sizeof(counters);
+            if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+                peak = std::max<std::uint64_t>(peak, counters.PrivateUsage);
+        }); sampler.start(10);
+        std::vector<std::unique_ptr<CompareWindow>> windows;
+        for (int i = 0; i < 3; ++i) {
+            Request r; r.file1_ = left; r.file2_ = right; r.file3_ = left; r.memoryMiB_ = memoryMiB;
+            windows.push_back(std::make_unique<CompareWindow>(r)); windows.back()->show();
+        }
+        int completed = 0, rejected = 0;
+        for (auto& window : windows) {
+            QTRY_VERIFY_WITH_TIMEOUT((window->findChild<MultiPaneAlignment*>() && (window->findChild<MultiPaneAlignment*>()->Ready() || window->findChild<MultiPaneAlignment*>()->Error() == "ControllerMemoryLimit")) || window->ExitCode() == 2, 30000);
+            if (window->ExitCode() == 2) {
+                QVERIFY2(window->findChild<QLabel*>("compareStatus")->text().contains("ControllerMemoryLimit"), qPrintable(window->findChild<QLabel*>("compareStatus")->text())); ++rejected;
+            } else {
+                QCOMPARE(contents(window->findChild<ScintillaEditBase*>("FILE 1")), original);
+                QCOMPARE(contents(window->findChild<ScintillaEditBase*>("FILE 2")), modified);
+                if (window->findChild<MultiPaneAlignment*>()->Ready()) ++completed; else ++rejected;
+            }
+        }
+        for (auto& window : windows) window->close(); windows.clear(); QCoreApplication::processEvents();
+        QCOMPARE(completed + rejected, 3); QCOMPARE(ProcessControllerMemory()->Reserved(), std::uint64_t(0));
+        qInfo("Three large windows under %d MiB: %d completed, %d safely limited, sampled peak private %llu bytes", memoryMiB, completed, rejected, peak);
+        if (memoryMiB == 2048) QCOMPARE(completed, 3);
+        QCOMPARE(readBytes(left), original); QCOMPARE(readBytes(right), modified);
+    }
+    void boundedEditorMemoryAndUndo()
+    {
+        constexpr std::uint64_t mib = 1024 * 1024;
+        auto pool = std::make_shared<ControllerMemory>([] { return 100 * mib; });
+        QWidget host; BoundedEditor editor(&host, 256, 1024, pool); setText(editor, "seed"); editor.EnableProtection(1024);
+        editor.send(SCI_SETSEL, 1, 3); const auto cursor = editor.send(SCI_GETUNDOCURRENT);
+        auto occupied = pool->ReserveController(1948 * mib); // default ceiling is 2 GiB outside a request
+        QCOMPARE(editor.send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>("replacement")), sptr_t(-1));
+        QCOMPARE(contents(&editor), QByteArray("seed")); QCOMPARE(editor.send(SCI_GETSELECTIONSTART), sptr_t(1));
+        QCOMPARE(editor.send(SCI_GETUNDOCURRENT), cursor);
+        QTest::keyClick(&editor, Qt::Key_X); QCOMPARE(contents(&editor), QByteArray("seed"));
+        QInputMethodEvent ime; ime.setCommitString(QString::fromUtf8("한글")); QApplication::sendEvent(&editor, &ime);
+        QCOMPARE(contents(&editor), QByteArray("seed"));
+        QMimeData dragText; dragText.setText("move");
+        QDragEnterEvent enter(QPoint(1, 1), Qt::MoveAction, &dragText, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(editor.viewport(), &enter);
+        QDropEvent drop(QPointF(1, 1), Qt::MoveAction, &dragText, Qt::LeftButton, Qt::NoModifier);
+        drop.acceptProposedAction(); QApplication::sendEvent(editor.viewport(), &drop);
+        QVERIFY(!drop.isAccepted()); QCOMPARE(contents(&editor), QByteArray("seed"));
+        editor.send(SCI_SETREADONLY, 1);
+        QVERIFY_EXCEPTION_THROWN(editor.BeginEdit(4, 4, false, false, true), Failure);
+        QCOMPARE(contents(&editor), QByteArray("seed"));
+        occupied.reset();
+        { const auto refresh = editor.BeginEdit(4, 4, false, false, true); QVERIFY(bool(refresh)); }
+        editor.send(SCI_SETREADONLY, 0); editor.send(SCI_SETSEL, 4, 4);
+        editor.send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>("abc")); QCOMPARE(contents(&editor), QByteArray("seedabc"));
+        occupied = pool->ReserveController(1948 * mib);
+        QCOMPARE(editor.send(SCI_UNDO), sptr_t(-1)); QCOMPARE(contents(&editor), QByteArray("seedabc"));
+        occupied.reset(); editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray("seed"));
+        editor.send(SCI_REDO); QCOMPARE(contents(&editor), QByteArray("seedabc"));
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+    }
+    void boundedEditorSizeAndHistoryLimits()
+    {
+        auto pool = std::make_shared<ControllerMemory>([] { return 100ULL * 1024 * 1024; });
+        QWidget host; BoundedEditor editor(&host, 256, 256, pool); setText(editor, "seed"); editor.EnableProtection(512);
+        const QByteArray tooLarge(300, 'x');
+        QCOMPARE(editor.send(SCI_APPENDTEXT, tooLarge.size(), reinterpret_cast<sptr_t>(tooLarge.constData())), sptr_t(-1));
+        QCOMPARE(contents(&editor), QByteArray("seed"));
+        const QByteArray first(80, 'a'), next(200, 'b');
+        editor.send(SCI_APPENDTEXT, first.size(), reinterpret_cast<sptr_t>(first.constData())); QCOMPARE(contents(&editor), QByteArray("seed") + first);
+        // A whole-document replacement fits the document limit but exceeds the retained Undo allowance.
+        editor.send(SCI_SETTARGETRANGE, 0, editor.send(SCI_GETLENGTH));
+        QCOMPARE(editor.send(SCI_REPLACETARGET, next.size(), reinterpret_cast<sptr_t>(next.constData())), sptr_t(-1));
+        QCOMPARE(contents(&editor), QByteArray("seed") + first);
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray("seed"));
+        editor.send(SCI_REDO); QCOMPARE(contents(&editor), QByteArray("seed") + first);
+        editor.send(SCI_EMPTYUNDOBUFFER); editor.EnableProtection(1024);
+        editor.send(SCI_SETTARGETRANGE, 0, editor.send(SCI_GETLENGTH));
+        editor.send(SCI_REPLACETARGET, next.size(), reinterpret_cast<sptr_t>(next.constData())); QCOMPARE(contents(&editor), next);
+        QCOMPARE(pool->Reserved(), std::uint64_t(0));
+    }
+    void boundedMergeRejectsBeforeDecisionChange()
+    {
+        constexpr std::uint64_t mib = 1024 * 1024;
+        auto pool = std::make_shared<ControllerMemory>([] { return 100 * mib; });
+        QWidget host; BoundedEditor editor(&host, 256, 1024, pool); setText(editor, "left\n"); editor.EnableProtection();
+        const std::string left = "left\n", right = "right\n";
+        MergeController controller(&editor, std::make_shared<MergePlan>(TwoWayPlan(left, right, Diff(left, right))), &host);
+        const auto before = controller.Model().State(); const auto revision = controller.Model().Revision();
+        auto occupied = pool->ReserveController(1948 * mib);
+        QVERIFY_EXCEPTION_THROWN(controller.ChooseAll(Resolution::Right, "right\n"), Failure);
+        QCOMPARE(contents(&editor), QByteArray("left\n")); QCOMPARE(controller.Model().Revision(), revision);
+        QCOMPARE(controller.Model().State().size(), before.size());
+        for (std::size_t i = 0; i < before.size(); ++i) QCOMPARE(controller.Model().State()[i].resolution_, before[i].resolution_);
+        occupied.reset(); controller.ChooseAll(Resolution::Right, "right\n"); QCOMPARE(contents(&editor), QByteArray("right\n"));
+        editor.send(SCI_UNDO); QCOMPARE(contents(&editor), QByteArray("left\n")); QCOMPARE(pool->Reserved(), std::uint64_t(0));
     }
     void allPaneMemoryPressurePreservesEditors()
     {

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "boundedEditor.hpp"
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "runtime/gitTool.hpp"
@@ -353,7 +354,11 @@ namespace hc::compare
                 return;
             }
             if (closing_) { close(); return; }
-            display();
+            try { display(); }
+            catch (const std::exception& error) {
+                result_.error_ = QString::fromUtf8(error.what()); exitCode_ = 2;
+                state_->setText(tr("화면 구성 중단 — 입력은 보존됨: %1").arg(result_.error_));
+            }
         });
         connect(&workWatcher_, &QFutureWatcher<WorkTransfer>::finished, this, [this] {
             cancel_->setEnabled(false); if (output_) output_->send(SCI_SETREADONLY, 0);
@@ -451,6 +456,23 @@ namespace hc::compare
             updateMerge(); state_->setText(Value.error_ == "ReintegrationRequiresBase" ? tr("재통합 보류 — BASE 없는 비교에서 새 좌우 내용이 다릅니다. 현재 RESULT를 보존했습니다.") : Value.error_ == "ReintegrationConflict" ? tr("재통합 보류 — 수동 수정과 원본 변경이 겹칩니다. 현재 RESULT와 실행 취소 이력을 보존했습니다.") : tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
         }
         const bool changed = Value.inputsChanged_ || Value.reintegratedText_.has_value();
+        std::vector<std::shared_ptr<void>> editorAdmissions;
+        if (changed) {
+            try {
+                // Admit every source refresh and RESULT restoration before changing
+                // result identity, panes, decision metadata or existing Undo.
+                for (qsizetype i = 0; i < Value.inputs_.size(); ++i)
+                    if (const auto* bounded = dynamic_cast<BoundedEditor*>(editors_[i]))
+                        editorAdmissions.push_back(bounded->BeginEdit(std::uint64_t(Value.inputs_[i].utf8_.size()),
+                            std::uint64_t(editors_[i]->send(SCI_GETLENGTH)), false, false, true));
+                if (Value.reintegratedText_)
+                    if (const auto* bounded = dynamic_cast<BoundedEditor*>(output_))
+                        editorAdmissions.push_back(bounded->BeginEdit(std::uint64_t(Value.reintegratedText_->size()),
+                            std::uint64_t(output_->send(SCI_GETLENGTH))));
+            } catch (const std::exception& error) {
+                updateMerge(); state_->setText(tr("재비교 중단 — 문서·실행 취소·병합 상태 보존: %1").arg(QString::fromUtf8(error.what()))); return;
+            }
+        }
         auto reintegrated = std::move(Value.reintegratedText_); Value.reintegratedText_.reset(); result_ = std::move(Value);
         updateFormats();
         semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
@@ -494,7 +516,7 @@ namespace hc::compare
         label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); box->addWidget(label);
         auto* format = new QLabel(pane); format->setObjectName("format_" + Title);
         format->setTextFormat(Qt::PlainText); box->addWidget(format); formatLabels_.push_back(format);
-        auto* editor = new ScintillaEditBase(pane); editor->setObjectName(Title); box->addWidget(editor); editors_.push_back(editor);
+        auto* editor = new BoundedEditor(pane, request_.memoryMiB_, Title == "RESULT" ? 32 * 1024 * 1024 : 16 * 1024 * 1024); editor->setObjectName(Title); box->addWidget(editor); editors_.push_back(editor);
         panes_->addWidget(pane); pane->setMinimumWidth(120);
         editor->send(SCI_SETCODEPAGE, SC_CP_UTF8); editor->send(SCI_SETWRAPMODE, SC_WRAP_NONE);
         editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER); editor->send(SCI_SETMARGINWIDTHN, 0, 56);
@@ -504,10 +526,26 @@ namespace hc::compare
         static constexpr char keywords[] = "alignas auto bool break case catch char class const constexpr continue default delete do double else enum explicit extern false float for friend if inline int long namespace new noexcept nullptr operator private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while";
         editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(keywords));
         editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND);
+        editor->EnableProtection();
+        editor->blocked_ = [this](const QString& Error) {
+            QTimer::singleShot(0, this, [this, Error] { state_->setText(tr("편집 중단 — 내용과 실행 취소 이력 보존: %1").arg(Error)); });
+        };
         return editor;
     }
     void CompareWindow::display()
     {
+        // Admit native editor/style/line storage before replacing any existing pane.
+        Budget nativeBudget; std::shared_ptr<void> nativeReservation;
+        if (result_.extension_.isEmpty() && !result_.operation_.startsWith("directory") && !result_.inputs_.isEmpty()) {
+            ConfigureMemoryBudget(nativeBudget, request_.memoryMiB_);
+            std::uint64_t bytes = 1024 * 1024;
+            const auto count = [&](const QByteArray& Text) {
+                bytes += std::uint64_t(Text.size()) * 8 + CountLines({Text.constData(), std::size_t(Text.size())}, nativeBudget) * 128;
+            };
+            for (const auto& input : result_.inputs_) count(input.utf8_);
+            if (request_.mode_ == "merge") count(result_.error_ == "DecisionsRequired" ? result_.inputs_[0].utf8_ : result_.output_);
+            nativeReservation = ProcessControllerMemory()->ReserveController(bytes);
+        }
         sourceEditing_ = false; sourcePending_ = false; bufferTimer_.stop(); ++bufferGeneration_;
         if (bufferCanceled_) bufferCanceled_->store(true);
         save_->setText(tr("결과 저장"));
@@ -748,7 +786,8 @@ namespace hc::compare
             catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
             return;
         }
-        applyInputChunk(Id, Revision, Choice);
+        try { applyInputChunk(Id, Revision, Choice); }
+        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {

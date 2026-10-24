@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "mergeController.hpp"
+#include "boundedEditor.hpp"
 #include <ScintillaEditBase.h>
 
 namespace hc::compare
@@ -49,6 +50,9 @@ namespace hc::compare
         const auto length = static_cast<std::size_t>(editor_->send(SCI_GETLENGTH));
         if (Begin > End || End > length) throw Failure("InvalidMergeLocation");
         if (TextChange && length - (End - Begin) + std::size_t(Text.size()) > 32 * 1024 * 1024) throw Failure("ResultSizeLimit");
+        // Admission precedes text changes and decision metadata changes.
+        const auto* bounded = dynamic_cast<BoundedEditor*>(editor_);
+        const auto admission = bounded ? bounded->BeginEdit(TextChange ? std::uint64_t(Text.size()) : 0, TextChange ? End - Begin : 0) : std::shared_ptr<void>{};
         applying_ = true; editor_->send(SCI_SETSTATUS, SC_STATUS_OK); editor_->send(SCI_BEGINUNDOACTION);
         auto written = sptr_t(Text.size());
         if (TextChange)
@@ -98,6 +102,8 @@ namespace hc::compare
         }
         // Preserve intervening target-only text, then commit one replacement so
         // native Undo and conflict metadata move together through one history step.
+        const auto* bounded = dynamic_cast<BoundedEditor*>(editor_);
+        const auto snapshot = bounded ? bounded->ReserveSnapshot(3) : BoundedEditor::Admission{};
         QByteArray text(qsizetype(length) + 1, '\0');
         editor_->send(SCI_GETTEXT, uptr_t(text.size()), reinterpret_cast<sptr_t>(text.data())); text.chop(1);
         const auto begin = Ranges.front().begin_, end = Ranges.back().end_;

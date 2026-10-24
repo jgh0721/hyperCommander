@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "boundedEditor.hpp"
 #include "chunkGutter.hpp"
 #include "mergeController.hpp"
 #include "scrollSynchronizer.hpp"
@@ -115,7 +116,16 @@ namespace hc::compare
     {
         if (!sourceEditing_ || !sourcePending_) return;
         if (bufferWatcher_.isRunning()) return;
-        QVector<QByteArray> texts; for (auto* editor : editors_) texts.push_back(bytes(editor));
+        QVector<QByteArray> texts;
+        try {
+            for (auto* editor : editors_) {
+                const auto* bounded = dynamic_cast<BoundedEditor*>(editor);
+                const auto snapshot = bounded ? bounded->ReserveSnapshot() : BoundedEditor::Admission{};
+                texts.push_back(bytes(editor));
+            }
+        } catch (const std::exception& error) {
+            sourcePending_ = false; sourceValid_ = false; inputError_ = QString::fromUtf8(error.what()); updateMerge(); return;
+        }
         bufferCanceled_ = std::make_shared<std::atomic_bool>(false);
         bufferWatcher_.setFuture(QtConcurrent::run([input = request_, previous = result_, texts, cancel = bufferCanceled_, generation = bufferGeneration_] {
             Budget limits; limits.canceled_ = cancel.get(); limits.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -165,6 +175,8 @@ namespace hc::compare
         const auto begin = position(target, to ? change.otherBegin_ : change.begin_), end = position(target, to ? change.otherEnd_ : change.end_);
         if (applySelectedChunk(source, target, a, b, begin, end, Id, Revision)) return;
         const auto replacement = bytes(source).mid(a, b - a); activeInput_ = pair->inputs_[to];
+        const auto* bounded = dynamic_cast<BoundedEditor*>(target);
+        const auto admission = bounded ? bounded->BeginEdit(std::uint64_t(replacement.size()), std::uint64_t(end - begin)) : std::shared_ptr<void>{};
         target->send(SCI_BEGINUNDOACTION); target->send(SCI_SETTARGETRANGE, begin, end);
         target->send(SCI_REPLACETARGET, uptr_t(replacement.size()), reinterpret_cast<sptr_t>(replacement.constData())); target->send(SCI_ENDUNDOACTION);
         target->send(SCI_SETSEL, begin + replacement.size(), begin + replacement.size()); target->setFocus(Qt::OtherFocusReason); updateMerge();
@@ -237,6 +249,10 @@ namespace hc::compare
                 merge_->ReplaceRanges(Id, Revision, ranges);
                 Target->send(SCI_SETSEL, cursor, cursor); Target->setFocus(Qt::OtherFocusReason); updateMerge(); return true;
             }
+            std::uint64_t inserted = 0, removed = 0;
+            for (const auto& replacement : replacements) { inserted += std::uint64_t(replacement.text_.size()); removed += std::uint64_t(replacement.end_ - replacement.begin_); }
+            const auto* bounded = dynamic_cast<BoundedEditor*>(Target);
+            const auto admission = bounded ? bounded->BeginEdit(inserted, removed) : std::shared_ptr<void>{};
             activeInput_ = editors_.indexOf(Target); Target->send(SCI_BEGINUNDOACTION);
             // Snapshot all ranges before the first mutation invalidates comparison state.
             for (auto it = replacements.crbegin(); it != replacements.crend(); ++it)
@@ -267,6 +283,8 @@ namespace hc::compare
         else
         {
             activeInput_ = editors_.indexOf(Target);
+            const auto* bounded = dynamic_cast<BoundedEditor*>(Target);
+            const auto admission = bounded ? bounded->BeginEdit(std::uint64_t(replacement.size()), std::uint64_t(destinationEnd - destinationBegin)) : std::shared_ptr<void>{};
             Target->send(SCI_BEGINUNDOACTION); Target->send(SCI_SETTARGETRANGE, destinationBegin, destinationEnd);
             Target->send(SCI_REPLACETARGET, uptr_t(replacement.size()), reinterpret_cast<sptr_t>(replacement.constData()));
             Target->send(SCI_ENDUNDOACTION);
