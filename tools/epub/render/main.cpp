@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "readingNavigation.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "ownerMode.hpp"
 #include "inputTransfer.hpp"
@@ -220,7 +221,7 @@ namespace
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
             auto* Layout = new QVBoxLayout(Central);
-            auto* Header = new QLabel(Publication["title"].toString() + tr(" — 읽기 전용 개발 도구"), Central);
+            auto* Header = new QLabel(Publication["title"].toString() + tr(" — EPUB 읽기"), Central);
             Header->setTextFormat(Qt::PlainText); Layout->addWidget(Header);
             auto* Splitter = new QSplitter(Central); Layout->addWidget(Splitter, 1);
             auto* Scroll = new QScrollArea(Splitter); settingsScroll_ = Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(400);
@@ -241,6 +242,8 @@ namespace
             for(const auto Value : Publication["spine"].toArray()) Chapters->addItem(Value.toObject()["path"].toString());
             Form->addRow(tr("장"), Chapters);
             settings_ = new hc::epub::poc::ReadingSettings(SettingsPath, Publication["sourceSha256"].toString(), Theme, Panel);
+            navigation_=new hc::epub::poc::ReadingNavigation(SettingsPath,documentId_,[this](const QJsonObject& Request){command("read",Request);},Panel);
+            Form->addRow(navigation_);
             Form->addRow(settings_);
             view_ = new QWebEngineView(Splitter); Splitter->setSizes({400, 880});
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::NoCache);
@@ -267,10 +270,11 @@ namespace
             connect(&poll_, &QTimer::timeout, this, [this] {
                 if(pending_) return;
                 pending_ = true;
-                page_->runJavaScript("JSON.stringify({...window.hcEvidence, startup: window.hcStartupDiagnostics ? window.hcStartupDiagnostics() : {}, bookFonts: window.hcBookFonts ? window.hcBookFonts() : []})", [this](const QVariant& Value) {
+                page_->runJavaScript("JSON.stringify({...((window.hcSnapshot && window.hcSnapshot()) || window.hcEvidence), startup: window.hcStartupDiagnostics ? window.hcStartupDiagnostics() : {}, bookFonts: window.hcBookFonts ? window.hcBookFonts() : []})", [this](const QVariant& Value) {
                     pending_ = false; if(finished_) return;
                     const auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
                     latest_ = Result;
+                    navigation_->Poll(Result);
                     if(Result["profile"].toObject()["customCss"]==settings_->Profile()["customCss"])
                         settings_->SetCssValidation(settings_->Profile()["customCss"].toString(),astError_.isEmpty()?Result["cssError"].toString():astError_);
                     QStringList Families;
@@ -307,7 +311,7 @@ namespace
                 || Request["documentId"] != documentId_ || Request["generation"] != QJsonValue(generation_)) return Fail("epub-control-identity");
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot") {
-                auto State = latest_; State["inputFocused"] = view_->hasFocus();
+                auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = view_->hasFocus();
                 State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
@@ -315,6 +319,9 @@ namespace
             else if(Kind == "reading-settings") {
                 if(Request.size()!=7 || !Request["profile"].isObject() || !Request["global"].isBool()
                     || !settings_->Execute(Request["action"].toString(),Request["profile"].toObject(),Request["global"].toBool())) return Fail("epub-settings-rejected");
+            }
+            else if(Kind=="reader-action") {
+                if(Request.size()!=6 || !navigation_->Execute(Request["action"].toString(),Request["value"]))return Fail("epub-reader-action-rejected");
             }
             else if(Kind == "appearance") {
                 if(!hc::document::epubui::ApplyAppearance(Request["appearance"].toObject())) return Fail("epub-appearance-invalid");
@@ -417,6 +424,7 @@ namespace
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}};
         QJsonObject hostAppearance_;
+        hc::epub::poc::ReadingNavigation* navigation_=nullptr;
         QString settingsPath_,engine_,backgroundAsset_,astError_;
         quint64 profileSerial_=0;
         bool shellReady_=false,started_=false;

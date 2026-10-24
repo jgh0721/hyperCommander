@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "readingNavigation.hpp"
 
 /// Platform/framework headers
 #include <QComboBox>
@@ -25,6 +26,21 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void durableReaderState() {
+        QTemporaryDir Temp;QVERIFY(Temp.isValid());const auto Settings=Temp.filePath("epub-reading.json"),Book=QString(64,'a');
+        using hc::epub::poc::ReadingNavigation;
+        ReadingNavigation First(Settings,Book,[](const QJsonObject&){}),Second(Settings,Book,[](const QJsonObject&){});
+        const QJsonObject State{{"status","ready"},{"locator","epubcfi(/6/2!/4/2:0)"}};First.Poll(State);Second.Poll(State);
+        QVERIFY(First.Execute("bookmark-add","first"));QTest::qWait(900);QVERIFY(Second.Execute("bookmark-add","second"));QTest::qWait(900);
+        const auto Path=Temp.filePath("epub-state/"+Book+".json");const auto Read=[&]{QFile File(Path);if(!File.open(QIODevice::ReadOnly))return QJsonObject{};return QJsonDocument::fromJson(File.readAll()).object();};
+        QTRY_COMPARE(Read()["bookmarks"].toArray().size(),2);
+        QVERIFY(First.Execute("bookmark-remove",First.Snapshot()["bookmarks"].toArray().first().toObject()["id"]));QTest::qWait(900);
+        QCOMPARE(Read()["bookmarks"].toArray().size(),1);QCOMPARE(Read()["bookmarks"].toArray().first().toObject()["label"].toString(),QString("second"));
+        QFile File(Path);QVERIFY(File.open(QIODevice::WriteOnly|QIODevice::Truncate));File.write("broken");File.close();
+        {ReadingNavigation Broken(Settings,Book,[](const QJsonObject&){});QVERIFY(!Broken.Snapshot()["readingStateError"].toString().isEmpty());Broken.Poll(State);QVERIFY(Broken.Execute("bookmark-add","keep damaged original"));}
+        QVERIFY(File.open(QIODevice::ReadOnly));QCOMPARE(File.readAll(),QByteArray("broken"));
+    }
+
     void bookFontsSelectionAndRefresh()
     {
         QTemporaryDir Dir; QVERIFY(Dir.isValid()); const auto Path = Dir.filePath("fonts.json");

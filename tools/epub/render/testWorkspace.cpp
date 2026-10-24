@@ -36,6 +36,36 @@ private slots:
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
     }
+    void readingControls() {
+        QTemporaryDir Temp;QVERIFY(Temp.isValid());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Book=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Book.isEmpty())QSKIP("Reader-control corpus not configured");
+        const auto Open=[&](DocumentWorkspaceWidget& Window){Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();return Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();};
+        QString SavedLocator;
+        {
+            DocumentWorkspaceWidget Window(Temp.filePath("recovery"));const auto Id=Open(Window);QVERIFY(!Id.isEmpty());
+            const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+            const auto Do=[&](const QString& Action,QJsonValue Value=QJsonValue{}){return Window.Handle({{"action","epub.reader."+Action},{"documentId",Id},{"value",Value}});};
+            QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool(),60000);
+            QVERIFY(!Do("search","reader-control needle").contains("error"));
+            QTRY_VERIFY_WITH_TIMEOUT(State()["readerAction"].toObject()["hits"].toArray().size()==2,15000);
+            const auto Hit=State()["readerAction"].toObject()["hits"].toArray().last().toObject();QCOMPARE(Hit["chapter"].toInt(),1);
+            QVERIFY(!Do("locate",Hit["cfi"]).contains("error"));QTRY_VERIFY_WITH_TIMEOUT(State()["text"].toString().contains("돌아오는 길"),15000);
+            QVERIFY(!Do("bookmark-add","두 번째 장").contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["bookmarks"].toArray().size(),1,10000);
+            SavedLocator=State()["bookmarks"].toArray().first().toObject()["locator"].toString();QVERIFY(!SavedLocator.isEmpty());
+            QVERIFY(!Do("image",0).contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["popup"].toObject()["kind"].toString(),QString("image"),10000);
+            QVERIFY(!Do("close-popup").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(State()["popup"].isNull(),10000);
+            QVERIFY(!Do("footnote","#hc-note").contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["popup"].toObject()["text"].toString(),QString("각주 팝업 검증 내용"),10000);
+            QVERIFY(!Do("close-popup").contains("error"));
+            QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+        }
+        {
+            DocumentWorkspaceWidget Window(Temp.filePath("recovery2"));const auto Id=Open(Window);const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+            QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool() && !State()["readingStateRestoring"].toBool(),60000);
+            QCOMPARE(State()["bookmarks"].toArray().size(),1);QCOMPARE(State()["bookmarks"].toArray().first().toObject()["locator"].toString(),SavedLocator);
+            QVERIFY(State()["text"].toString().contains("돌아오는 길"));QVERIFY(State()["readingStateError"].toString().isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+        }
+    }
     void advancedProfiles_data() {
         QTest::addColumn<QString>("Background");for(const auto* Value:{"paper","grid","image","invalid"})QTest::newRow(Value)<<QString(Value);
     }

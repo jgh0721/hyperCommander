@@ -42,6 +42,8 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
         render/readingSettings.hpp
         render/readingSettings.cpp
         render/readingStore.cpp
+        render/readingNavigation.cpp
+        render/readingNavigation.hpp
         render/readingAssets.cpp
         render/readingAssets.hpp
         render/ownerMode.hpp
@@ -90,6 +92,8 @@ if(BUILD_TESTING AND HC_BUILD_EPUB_POC)
         render/readingSettings.hpp
         render/readingSettings.cpp
         render/readingStore.cpp
+        render/readingNavigation.cpp
+        render/readingNavigation.hpp
         render/readingAssets.cpp
         render/readingAssets.hpp
         render/stdafx.h

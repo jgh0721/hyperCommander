@@ -1,3 +1,4 @@
+import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
 import { compileCss } from "./customCss.js";
 import { buildBookFontCatalog, applyBookFont, activeBookFonts } from "./bookFontCatalog.js";
@@ -13,6 +14,7 @@ const pane = document.getElementById("reader");
 const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
 let fontCatalog;
+const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument});
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
@@ -67,6 +69,7 @@ function documents() {
 }
 
 function applyDocument(doc) {
+    tools.hook(doc);
     if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
     let style = doc.getElementById("hc-reading-profile");
     if (!style) { style = doc.createElement("style"); style.id = "hc-reading-profile"; doc.head.append(style); }
@@ -138,7 +141,7 @@ window.hcBookFonts = bookFonts;
 
 function currentSnapshot() {
     const docs = documents();
-    return { engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { ...tools.state(), engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
@@ -321,6 +324,7 @@ window.hcCommand = (command, value) => {
                 const image = new Image(); image.src = value.data; await image.decode(); backgroundImage = value;
             }
         }
+        else if (command === "read") await tools.action(value);
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
         else throw Error("Unknown command");
@@ -340,3 +344,5 @@ window.hcStartupDiagnostics = () => ({
         readyState: frame.contentDocument?.readyState, width: frame.clientWidth, height: frame.clientHeight
     }))
 });
+
+window.hcSnapshot = () => window.hcEvidence.status === "ready" ? {...window.hcEvidence,...currentSnapshot()} : window.hcEvidence;

@@ -357,6 +357,8 @@ namespace hc::document
         const auto Action=Request["action"].toString();
         auto Error=[](const char* Code){return QJsonObject{{"error",Code}};};
         if(epub_) {
+            if(Action.startsWith("epub.reader."))return epub_->ReaderAction(Action.mid(12),Request["value"])
+                ? QJsonObject{{"accepted",true}} : Error("epub-reader-not-ready");
             if(Action.startsWith("epub.settings.")) return epub_->ChangeReadingSettings(Action.mid(14),Request["profile"].toObject(),Request["global"].toBool())
                 ? QJsonObject{{"accepted",true}} : Error("epub-settings-not-ready");
             return Error("epub-read-only");
