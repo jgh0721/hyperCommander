@@ -341,7 +341,7 @@ inline void GridIncrementalRegression()
 
 inline void GridCacheAndSortRegression()
 {
-    QCOMPARE(QByteArray(Qtitan::getGridVersion()), QByteArray("9.3.0"));
+    QCOMPARE(QByteArray(Qtitan::getGridVersion()), QByteArray("10.0.0"));
     GridCountingModel Model(100000);
     Qtitan::Grid Grid;
     auto* View = SetupGrid(Grid, Model);

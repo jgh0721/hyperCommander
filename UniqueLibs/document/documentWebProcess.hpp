@@ -9,18 +9,27 @@
 
 namespace hc::document
 {
+    enum class WebProcessKind { Rhwp, EpubPrototype, EpubReadOnly };
     struct WebProcessRuntime
     {
         // Supplied only by the trusted built-in package admission layer. This
         // launcher checks pinned bytes; it does not grant package approval.
         QString root_;
-        QMap<QString, QByteArray> sha256_; // Relative paths, including HyperEditorWeb.exe.
+        QMap<QString, QByteArray> sha256_; // Relative paths, including the kind's fixed executable.
         // Product callers select inventory admission and supply a native policy pin.
         // Empty pin denies admission. Nullopt retains the explicit trusted-map port
         // used by diagnostic fixtures; never populate maps from adjacent files.
         // Inventory admission and a caller-provided map are mutually exclusive.
         std::optional<QByteArray> approvedInventorySha256_;
+        // EpubPrototype uses its own diagnostic manifest/profile and independent
+        // pin. It cannot consume an RHWP inventory or authorize a product release.
+        WebProcessKind kind_ = WebProcessKind::Rhwp;
     };
+    // Trusted native policy supplies the pin. Never reads adjacent metadata to grant approval.
+    // Empty pin remains an explicit denial; the runtime lives outside shared RHWP/Qt paths.
+    WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory, const QByteArray& ApprovedInventorySha256);
+    // Product entry points use the build-time policy; no runtime/environment pin lookup.
+    WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory);
     struct WebProcessLimits
     {
         // Zero delegates process/memory capacity to Windows.

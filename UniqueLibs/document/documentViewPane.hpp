@@ -12,6 +12,7 @@ class QPDFView;
 class QImageView;
 namespace hc::document
 {
+    class EpubProcessView;
     class ImageReadingView;
     class ImageFramePlayer;
     class DocumentViewPane final : public QWidget
@@ -25,6 +26,9 @@ namespace hc::document
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
+        void ConfigureEpub(WebProcessRuntime Runtime) { epubRuntime_ = std::move(Runtime); }
+        bool IsEpub() const { return viewId_ == "epub"; }
+        bool IsProcessDocument() const { return IsHwp() || IsEpub(); }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
         bool RequestClose();
         void SetReadingSource(const QString& Path,const QString& Entry);
@@ -71,7 +75,10 @@ namespace hc::document
         ImageFramePlayer* animation_ = nullptr;
         HwpOpenWindow* hwp_ = nullptr;
         bool hwpFocusPending_ = false;
-        WebProcessRuntime hwpRuntime_;
+        WebProcessRuntime hwpRuntime_, epubRuntime_;
+        EpubProcessView* epub_ = nullptr;
+        bool epubClosing_ = false;
+        QByteArray epubSourceHash_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
         bool unlimitedBytes_ = false;

@@ -350,7 +350,7 @@ namespace hc::document
         connect(tabs_, &QTabWidget::currentChanged, this, [this] {
             if(auto Tab=active()){
                 setFocusProxy(Tab->pane_->InputWidget());
-                if(Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsHwp())Tab->pane_->Focus();
+                if(Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsProcessDocument())Tab->pane_->Focus();
             }
             update();
         });
@@ -555,7 +555,7 @@ namespace hc::document
     {
         if (!QFileInfo(Path).isAbsolute() || Path.contains(QChar::Null)) return Error("document-open-path");
         for (const auto& Tab : documents_) if (Tab->hostSlot_ && HostSlot) {
-            if(Tab->pane_->IsHwp()&&!Tab->pane_->RequestClose()) {
+            if(Tab->pane_->IsProcessDocument()&&!Tab->pane_->RequestClose()) {
                 pendingHostOpen_={{"path",Path},{"sourceToken",SourceToken},{"broker",Broker},{"displayName",DisplayName}};
                 return {{"replacing",true},{"documentId",Tab->id_}};
             }
@@ -710,7 +710,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::load(const std::shared_ptr<Tab>& Tab, bool Discard, const QString& RecoveryPath)
     {
         if (Tab->choosingSavePath_ || Tab->saving_ || Tab->navigating_ || !Tab->pendingToken_.isEmpty()) return;
-        if(Tab->pane_->IsHwp()&&!Tab->pane_->RequestClose()) {Tab->reloadAfterClose_=true;return;}
+        if(Tab->pane_->IsProcessDocument()&&!Tab->pane_->RequestClose()) {Tab->reloadAfterClose_=true;return;}
         Tab->reloadAfterClose_=false;
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         Tab->cancellation_->request_stop(); Tab->cancellation_ = std::make_shared<std::stop_source>();
@@ -735,7 +735,7 @@ namespace hc::document
                     Tab->input_.bom_ = Tab->input_.encoding_ != "CP949" && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
-                const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
+                const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx"||Tab->input_.viewId_=="epub";
                 Tab->originalSave_ = !Hwp && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
                 if(Hwp)Tab->broker_=false;
                 if (Tab->input_.book_) Tab->broker_ = false;
@@ -744,6 +744,7 @@ namespace hc::document
                 Tab->loading_=true;
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
+                if(epubRuntime_)Tab->pane_->ConfigureEpub(*epubRuntime_);
                 const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty());
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}
@@ -776,7 +777,7 @@ namespace hc::document
     }
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)
     {
-        if(Tab&&Tab->pane_->IsHwp())return Error("document-edit-in-hypereditor");
+        if(Tab&&Tab->pane_->IsProcessDocument())return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
         if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) return Error("document-source-token-required");
         auto Started = Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
@@ -799,7 +800,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite)
     {
-        if(Tab&&Tab->pane_->IsHwp()){Tab->error_="document-edit-in-hypereditor";update();return;}
+        if(Tab&&Tab->pane_->IsProcessDocument()){Tab->error_=Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor";update();return;}
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
         const auto TargetCanonical = QFileInfo(Destination).canonicalFilePath();
         const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
@@ -917,7 +918,7 @@ namespace hc::document
         QJsonArray Tabs, Pending;
         for (const auto& Tab : documents_) {
             auto State = Tab->session_->Snapshot(); auto Capability = Tab->session_->Capabilities();
-            if(Tab->pane_->IsHwp()){
+            if(Tab->pane_->IsProcessDocument()){
                 const auto View=Tab->pane_->ViewState();Capability.save_=Capability.saveAs_=false;
                 if(!View["error"].toString().isEmpty())State.error_=storage::Error{storage::ErrorCategory::Unavailable,View["error"].toString().toStdString()};
                 if(State.error_)State.lifecycle_=DocumentLifecycle::Failed;
@@ -927,7 +928,7 @@ namespace hc::document
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
             Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
                 {"displayName", Tab->displayName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->displayName_},
-                {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsHwp()&&State.lifecycle_==DocumentLifecycle::Opening)},
+                {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsProcessDocument()&&State.lifecycle_==DocumentLifecycle::Opening)},
                 {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
@@ -995,7 +996,7 @@ namespace hc::document
                         // original-provider binding without decoding/creating a second view.
                         const auto Begun=Tab->session_->BeginOpen(true);
                         if(!Begun.HasValue())break;
-                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_&&!Tab->pane_->IsHwp();
+                        Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_&&!Tab->pane_->IsProcessDocument();
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
@@ -1104,7 +1105,7 @@ namespace hc::document
         if (Request.contains("revision") && Action != "commitSave" && Action != "saveRead" && Request["revision"].toString() != QString::number(Tab->Revision())) return Error("document-stale-revision");
         if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
-        if(Tab->pane_->IsHwp()&&(Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error("document-edit-in-hypereditor");
+        if(Tab->pane_->IsProcessDocument()&&(Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (Action == "close") {
             if (Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
@@ -1212,8 +1213,12 @@ namespace hc::document
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
             if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("%1 · 읽기 전용 · 편집 버튼으로 HyperEditor 열기").arg(Tab->pane_->ViewId().toUpper()));
         }
-        findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
-        findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
+        if(Tab&&Tab->pane_->IsEpub()){
+            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
+            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("EPUB ? ?? ??"));
+        }
+        findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
+        findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
@@ -1245,7 +1250,7 @@ namespace hc::document
         if (Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
-        if(Target->pane_->IsHwp()&&!Target->pane_->RequestClose())return;
+        if(Target->pane_->IsProcessDocument()&&!Target->pane_->RequestClose())return;
         if (Target->choosingSavePath_ || Target->saving_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;

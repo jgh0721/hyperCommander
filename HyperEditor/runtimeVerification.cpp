@@ -1,4 +1,5 @@
 ﻿#include "runtimeVerification.hpp"
+#include "UniqueLibs/document/epubProcessView.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include <QApplication>
 #include <QTemporaryDir>
@@ -66,5 +67,44 @@ int VerifyDocumentRuntime() {
     }
     Report["saves"] = Saves; Report["errors"] = Errors; Report["ok"] = Errors.empty();
     const auto Output = QJsonDocument(Report).toJson(QJsonDocument::Compact); std::cout.write(Output.constData(), Output.size()); std::cout << std::endl;
+    return Errors.empty() ? 0 : 10;
+}
+
+int VerifyEpubRuntime(const QString& Path) {
+    using namespace hc::document;
+    QTemporaryDir Temp;
+    QJsonArray Errors;
+    QJsonObject Report{{"applicationDirectory", QCoreApplication::applicationDirPath()}};
+    {
+        DocumentWorkspaceWidget Workspace(Temp.filePath("recovery"));
+        Workspace.resize(1100, 800); Workspace.show();
+        const auto Opened = Workspace.Handle({{"action", "open"}, {"path", Path}});
+        const auto Id = Opened["documentId"].toString();
+        if (Id.isEmpty()) Errors.append("open-rejected");
+        else {
+            const bool Loaded = Wait([&] {
+                const auto State = Document(Workspace.Snapshot(), Id);
+                return State["view"].toObject()["ready"].toBool() || !State["error"].toString().isEmpty();
+            });
+            const auto State = Document(Workspace.Snapshot(), Id);
+            const auto View = State["view"].toObject();
+            Report["document"] = State;
+            if (!Loaded || !View["ready"].toBool() || View["viewId"].toString() != "epub") Errors.append("epub-not-ready");
+            if (!View["readOnly"].toBool() || State["canSave"].toBool()) Errors.append("epub-not-read-only");
+            const auto Save = Workspace.Handle({{"action", "saveAs"}, {"documentId", Id}, {"path", Temp.filePath("forbidden.epub")}});
+            Report["saveRejected"] = Save.contains("error") && !QFile::exists(Temp.filePath("forbidden.epub"));
+            if (!Report["saveRejected"].toBool()) Errors.append("epub-save-allowed");
+        }
+        Workspace.RequestClose();
+        EpubProcessView::RequestShutdown();
+        if (!Wait([] { return EpubProcessView::IsDrained(); })) Errors.append("epub-drain-timeout");
+    }
+    // Owners are gone; their registry retains retiring workers until the Job drains.
+    if (!Wait([] { return EpubProcessView::IsDrained(); })) Errors.append("epub-retirement-timeout");
+    EpubProcessView::ReleaseLifecycle();
+    Report["drained"] = EpubProcessView::IsDrained();
+    Report["errors"] = Errors; Report["ok"] = Errors.empty();
+    const auto Output = QJsonDocument(Report).toJson(QJsonDocument::Compact);
+    std::cout.write(Output.constData(), Output.size()); std::cout << std::endl;
     return Errors.empty() ? 0 : 10;
 }

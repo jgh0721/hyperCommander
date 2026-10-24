@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <Sddl.h>
 #include "documentWebProcess.hpp"
+#include "epubProductPolicy.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include "commonLibs/win/restrictedEnvironment.hpp"
@@ -47,13 +48,21 @@ namespace hc::document
         }
         bool ReadApprovedInventory(WebProcessRuntime& Runtime, QString& Error)
         {
-            const auto Fail = [&](const char* Code) { Error = QString::fromLatin1(Code); return false; };
+            const bool ProductEpub = Runtime.kind_ == WebProcessKind::EpubReadOnly;
+            const bool Epub = ProductEpub || Runtime.kind_ == WebProcessKind::EpubPrototype;
+            const auto InventoryName = ProductEpub ? QStringLiteral("epub-runtime-inventory.json")
+                : Epub ? QStringLiteral("poc-runtime.json") : QStringLiteral("runtime-inventory.json");
+            const auto Fail = [&](const char* Code) {
+                Error = QString::fromLatin1(Code);
+                if(Epub) Error.replace(0, 4, "epub");
+                return false;
+            };
             const auto Pin = *Runtime.approvedInventorySha256_;
             if (!Runtime.sha256_.isEmpty()) return Fail("rhwp-runtime-mixed-authority");
             if (Pin.size() != 64 || QByteArray::fromHex(Pin).toHex() != Pin)
                 return Fail("rhwp-runtime-policy-unavailable");
             if (!QFileInfo(Runtime.root_).isAbsolute()) return Fail("rhwp-runtime-root");
-            QFile Manifest(QDir(Runtime.root_).filePath("runtime-inventory.json"));
+            QFile Manifest(QDir(Runtime.root_).filePath(InventoryName));
             if (!Manifest.open(QIODevice::ReadOnly)) return Fail("rhwp-runtime-inventory-missing");
             const auto Bytes = Manifest.read(256 * 1024 + 1);
             if (Manifest.error() != QFileDevice::NoError || !Manifest.atEnd() || Bytes.size() > 256 * 1024)
@@ -65,12 +74,33 @@ namespace hc::document
             if (Parse.error != QJsonParseError::NoError || !Document.isObject())
                 return Fail("rhwp-runtime-inventory-json");
             const auto Object = Document.object();
-            if (Object.value("schemaVersion") != QJsonValue(1)
+            if(ProductEpub) {
+                if(Object.value("schemaVersion") != QJsonValue(3)
+                    || Object.value("profile") != QJsonValue("epub-passive-read-only")
+                    || Object.value("protocolVersion") != QJsonValue(1)
+                    || Object.value("diagnosticOnly") != QJsonValue(false)
+                    || Object.value("releaseEligible") != QJsonValue(true)
+                    || Object.value("readOnly") != QJsonValue(true)
+                    || Object.value("readerEngine") != QJsonValue("epubjs")
+                    || Object.value("readerVersion") != QJsonValue("0.3.93")
+                    || Object.value("helper") != QJsonValue("HyperEpubWeb.exe"))
+                    return Fail("rhwp-runtime-not-approved");
+            } else if(Epub) {
+                // Development-only authority, separate from the RHWP release policy.
+                // The caller supplies this pin independently; adjacent manifests never grant trust.
+                if(Object.value("schemaVersion") != QJsonValue(2)
+                    || Object.value("profile") != QJsonValue("epub-passive-read-only-poc")
+                    || Object.value("protocolVersion") != QJsonValue(1)
+                    || Object.value("diagnosticOnly") != QJsonValue(true)
+                    || Object.value("releaseEligible") != QJsonValue(false)
+                    || Object.value("helper") != QJsonValue("hc_epub_render_poc.exe"))
+                    return Fail("rhwp-runtime-not-approved");
+            } else if (Object.value("schemaVersion") != QJsonValue(1)
                 || (Object.value("profile") != QJsonValue("native-read-only") && Object.value("profile") != QJsonValue("native-editor"))
                 || Object.value("sourceCommit") != QJsonValue("1a76570e833917d15817415a53c09ad61ab3203f")
                 || Object.value("releaseEligible") != QJsonValue(true))
                 return Fail("rhwp-runtime-not-approved");
-            const auto BundlePin = Object.value("assetManifestSha256").toString().toLatin1();
+            const auto BundlePin = Object.value(Epub ? "bundleManifestSha256" : "assetManifestSha256").toString().toLatin1();
             if (BundlePin.size() != 64 || QByteArray::fromHex(BundlePin).toHex() != BundlePin)
                 return Fail("rhwp-runtime-bundle-pin");
             if (!Object.value("files").isArray()) return Fail("rhwp-runtime-files");
@@ -87,7 +117,7 @@ namespace hc::document
                 const auto Parts = Path.split('/');
                 if (Path.isEmpty() || Path.contains('\\') || Path.contains(':') || QDir::isAbsolutePath(Path)
                     || Parts.size() > 32 || Parts.contains("") || Parts.contains(".") || Parts.contains("..")
-                    || Seen.contains(Path.toCaseFolded()) || Path.compare("runtime-inventory.json", Qt::CaseInsensitive) == 0
+                    || Seen.contains(Path.toCaseFolded()) || Path.compare(InventoryName, Qt::CaseInsensitive) == 0
                     || Sha.size() != 64 || QByteArray::fromHex(Sha).toHex() != Sha)
                     return Fail("rhwp-runtime-entry");
                 for (const auto& Part : Parts) {
@@ -100,14 +130,16 @@ namespace hc::document
                 }
                 Seen.insert(Path.toCaseFolded()); Pins.insert(Path, Sha);
             }
-            if (!Pins.contains("HyperEditorWeb.exe") || !Pins.contains("QtWebEngineProcess.exe")
-                || Pins.value(QString(hc::layout::RhwpBundle) + "/asset-manifest.json") != BundlePin)
+            if (!Pins.contains(ProductEpub ? "HyperEpubWeb.exe" : Epub ? "hc_epub_render_poc.exe" : "HyperEditorWeb.exe") || !Pins.contains("QtWebEngineProcess.exe")
+                || Pins.value(Epub ? QStringLiteral("bundle/bundle.json") : QString(hc::layout::RhwpBundle) + "/asset-manifest.json") != BundlePin
+                || (Epub && !Pins.contains("bundle/reader.js"))
+                || (ProductEpub && !Pins.contains("bundle/THIRD-PARTY-NOTICES.txt")))
                 return Fail("rhwp-runtime-required-files");
             // Pin the inventory itself as well: the existing native acquisition
             // locks and rehashes ALL files before CreateProcess, closing the
             // manifest-read/launch replacement race. Helper independently admits
             // its bundle against the pin compiled into HyperEditorWeb.
-            Pins.insert("runtime-inventory.json", Pin);
+            Pins.insert(InventoryName, Pin);
             Runtime.sha256_ = std::move(Pins);
             return true;
         }
@@ -183,6 +215,18 @@ namespace hc::document
     };
     DocumentWebProcess::DocumentWebProcess(std::unique_ptr<State> Value):state_(std::move(Value)) {}
     DocumentWebProcess::~DocumentWebProcess() = default;
+    WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory, const QByteArray& ApprovedInventorySha256)
+    {
+        WebProcessRuntime Runtime;
+        Runtime.root_ = QDir(ApplicationDirectory).filePath("Libs/Epub");
+        Runtime.kind_ = WebProcessKind::EpubReadOnly;
+        Runtime.approvedInventorySha256_ = ApprovedInventorySha256;
+        return Runtime;
+    }
+    WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory)
+    {
+        return MakeProductEpubRuntime(ApplicationDirectory, QByteArray(HC_EPUB_APPROVED_INVENTORY_SHA256));
+    }
     std::unique_ptr<DocumentWebProcess> DocumentWebProcess::Start(const WebProcessRuntime& RequestedRuntime,
         WebProcessLimits Limits,std::uintptr_t ParentWindow,WebProcessError& Error,
         std::unique_ptr<DocumentWebProcess>* PendingRetirement, const std::function<bool()>& Cancelled)
@@ -190,6 +234,15 @@ namespace hc::document
         startup::Scope StartupSpan("editor.nativeBackendStart");
         Error={};
         auto Runtime = RequestedRuntime;
+        const auto Executable = Runtime.kind_ == WebProcessKind::Rhwp ? QStringLiteral("HyperEditorWeb.exe")
+            : Runtime.kind_ == WebProcessKind::EpubPrototype ? QStringLiteral("hc_epub_render_poc.exe")
+            : Runtime.kind_ == WebProcessKind::EpubReadOnly ? QStringLiteral("HyperEpubWeb.exe") : QString();
+        if(Executable.isEmpty()) {
+            Error.code_ = "web-owner-runtime-policy"; return {};
+        }
+        if(Runtime.kind_ == WebProcessKind::EpubReadOnly && !Runtime.approvedInventorySha256_) {
+            Error.code_ = "epub-runtime-policy-unavailable"; return {};
+        }
         { startup::Scope Inventory("runtime.inventory");
           if (Runtime.approvedInventorySha256_ && !ReadApprovedInventory(Runtime, Error.code_)) return {}; }
         auto S=std::make_unique<State>();
@@ -232,7 +285,7 @@ namespace hc::document
         }
         const auto Root=QFileInfo(Runtime.root_).canonicalFilePath();
         if(Root.isEmpty() || !QFileInfo(Root).isDir() || Runtime.sha256_.isEmpty() || Runtime.sha256_.size()>512
-            || !Runtime.sha256_.contains("HyperEditorWeb.exe")) return Fail("web-owner-runtime");
+            || !Runtime.sha256_.contains(Executable)) return Fail("web-owner-runtime");
         startup::Scope LeasesAndHash("runtime.leasesAndHash");
         startup::Scope ProviderInit("runtime.shaProviderInitialize");
         HwpRuntimeSha256 RuntimeHash;
@@ -317,7 +370,7 @@ namespace hc::document
         if(!SetInformationJobObject(S->job_.value_,JobObjectExtendedLimitInformation,&Job,sizeof(Job))) return Fail("web-owner-job-limits");
         // No UI restrictions and no breakaway flags: Chromium can nest its own
         // sandbox Job while this owner retains termination and resource limits.
-        const auto Program=Root+"/HyperEditorWeb.exe";
+        const auto Program=Root+"/"+Executable;
         auto Command=Quote(Program)+L" --web-owner --pipe "+Quote(PipeName)+L" --connection "+QString::fromLatin1(Nonce.toHex()).toStdWString()
             +L" --parent-process "+std::to_wstring(GetCurrentProcessId())+L" --parent "+std::to_wstring(ParentWindow);
         auto Environment=hc::win::RestrictedEnvironment(Root+";"+qEnvironmentVariable("SystemRoot")+"/System32");

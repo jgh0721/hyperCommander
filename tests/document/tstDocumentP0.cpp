@@ -298,11 +298,49 @@ private slots:
         };
         const auto Inf = Root.filePath("setup.inf"); QVERIFY(Put(Inf, "[Version]\r\nSignature=\"$Windows NT$\"\r\n"));
         QVERIFY(Query(Inf));
+        const auto Epub = Root.filePath("book.EPUB"); QVERIFY(Put(Epub, "PK")); QVERIFY(Query(Epub));
         const auto Binary = Root.filePath("data.unknown"); QVERIFY(Put(Binary, QByteArray("\0\1", 2)));
         QVERIFY(!Query(Binary));
         const auto Image = Root.filePath("large.jpg"); QFile File(Image); QVERIFY(File.open(QIODevice::WriteOnly));
         QVERIFY(File.seek(qint64(DocumentByteLimit) + 1)); QVERIFY(File.putChar('\0')); File.close();
         QVERIFY(Query(Image));
+    }
+    void isolatedEpubViewerEntry()
+    {
+        const auto Path = qEnvironmentVariable("HC_EPUB_POC_EPUB");
+        if (Path.isEmpty()) QSKIP("Set HC_EPUB_POC_EPUB to an image-bearing EPUB fixture");
+        const auto Package = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/hyperviewer.json";
+        auto Inspected = InspectManifestFile(Package); QVERIFY(Inspected.HasValue());
+        const auto Manifest = Inspected.Value().manifest_;
+        PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
+        auto Started = Worker([&] { return PluginProcess::Start(QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe", Package, Approval); });
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
+        auto Process = std::move(Started.Value());
+        auto Cleanup = qScopeGuard([&] { Worker([&] { Process->Close(); return 0; }); });
+        QWidget Parent; Parent.resize(1100, 800); Parent.show();
+        auto Opened = Worker([&] { return Process->ViewerCall(WireKind::ViewerOpen, {{"parent", QString::number(Parent.winId(), 16)}, {"file", Path}, {"width", 1100}, {"height", 800}, {"flags", 0}}); });
+        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+        auto Call = [&](QJsonObject Request) {
+            auto Reply = Worker([&] { return Process->ViewerCall(WireKind::DocumentCommand, Request); });
+            return Reply.HasValue() ? Reply.Value() : QJsonObject{{"error", QString::fromStdString(Reply.Failure().code_)}};
+        };
+        QJsonObject State;
+        QTRY_VERIFY_WITH_TIMEOUT((State = Call({{"action", "state"}}))["documents"].toArray().size() == 1, 15000);
+        const auto Id = State["documents"].toArray()[0].toObject()["documentId"].toString();
+        QVERIFY(Call({{"action", "present"}})["accepted"].toBool());
+        QJsonObject Loaded;
+        QTRY_VERIFY_WITH_TIMEOUT((Loaded = Document(Call({{"action", "state"}}), Id))["view"].toObject()["ready"].toBool()
+            || !Loaded["error"].toString().isEmpty(), 60000);
+        QVERIFY2(Loaded["view"].toObject()["ready"].toBool(), QJsonDocument(Loaded).toJson(QJsonDocument::Compact).constData());
+        const auto DocumentState = Document(Call({{"action", "state"}}), Id);
+        const auto View = DocumentState["view"].toObject();
+        QCOMPARE(View["viewId"].toString(), QString("epub")); QVERIFY(View["readOnly"].toBool());
+        QVERIFY(!View["epub"].toObject()["images"].toArray().isEmpty());
+        QVERIFY(!DocumentState["canSave"].toBool());
+        QVERIFY(Call({{"action", "save"}, {"documentId", Id}}).contains("error"));
+        QVERIFY(Worker([&] { return Process->ViewerCall(WireKind::ViewerClose, {}); }).HasValue());
+        Worker([&] { Process->Close(); return 0; });
+        const auto Snapshot = Process->Snapshot(); QVERIFY(!Snapshot.running_); QCOMPARE(Snapshot.activeProcesses_, 0u);
     }
     void isolatedJobBrokerClipboardAndHelperReap_data()
     { QTest::addColumn<bool>("Forced"); QTest::newRow("normal-close") << false; QTest::newRow("forced-host-exit") << true; }

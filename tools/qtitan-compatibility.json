@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "componentVersion": "9.3.0",
-  "solutionVersion": "2026.2.0",
+  "componentVersion": "10.0.0",
+  "solutionVersion": "2026.3.0",
   "integration": [
     "HyperCommander/UIs/Components/cmpView.cpp",
     "UniqueLibs/qtitanColumnAdapter.cpp"
@@ -26,13 +26,17 @@
     {
       "id": "HC-QTN-010",
       "purpose": "Independent group identity, order and caption; stable incremental grouping without changing file sort roles"
+    },
+    {
+      "id": "HC-QTN-011",
+      "purpose": "Preserve external search and rename keyboard focus during logical file-manager cursor updates in Qtitan 10.0"
     }
   ],
   "integrated": {
     "submodule": "externalLibs/waterColorStyle/third_party/QtitanDataGrid",
     "sourceManifest": "integration.json",
-    "upstreamVersion": "9.3.0",
-    "baseVersion": "3.3.0",
+    "upstreamVersion": "10.0.0",
+    "baseVersion": "4.0.0",
     "requiredApis": {
       "src/grid/QtnGridBase.h": [
         "GridRecordPainter",

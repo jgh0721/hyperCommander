@@ -34,8 +34,35 @@ qt_add_library(hc_document_broker STATIC
 target_include_directories(hc_document_broker PRIVATE
     ${PROJECT_SOURCE_DIR}/HyperCommander ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+# Native authority is configured independently of the adjacent runtime inventory.
+include("${PROJECT_SOURCE_DIR}/cmake/EpubProductPolicy.cmake")
+configure_file(epubProductPolicy.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/epubProductPolicy.hpp" @ONLY NEWLINE_STYLE CRLF)
+target_include_directories(hc_document_broker PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+
 target_link_libraries(hc_document_broker PUBLIC hc_document_core Qt6::Core PRIVATE Qt6::ZlibPrivate Qt6::Widgets advapi32 shell32 ole32 bcrypt)
 target_compile_options(hc_document_broker PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+find_package(Qt6 6.12.0 REQUIRED COMPONENTS ZlibPrivate)
+qt_add_library(hc_epub_package STATIC
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubInputSender.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubInputSender.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubPackage.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubPackage.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h"
+)
+target_precompile_headers(hc_epub_package PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h")
+target_include_directories(hc_epub_package PUBLIC "${PROJECT_SOURCE_DIR}")
+target_link_libraries(hc_epub_package PUBLIC Qt6::Core PRIVATE Qt6::ZlibPrivate)
+target_compile_options(hc_epub_package PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+qt_add_library(hc_epub_host STATIC
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubProcessView.cpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubProcessView.hpp")
+target_precompile_headers(hc_epub_host PRIVATE "${PROJECT_SOURCE_DIR}/tools/epub/render/stdafx.h")
+target_include_directories(hc_epub_host PRIVATE "${PROJECT_SOURCE_DIR}/tools/epub/render")
+target_link_libraries(hc_epub_host PUBLIC hc_epub_package hc_document_broker Qt6::Widgets)
+target_compile_options(hc_epub_host PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
 qt_add_library(hc_document_sdi STATIC
     ../UniqueLibs/document/documentFocusRestore.hpp
     ../UniqueLibs/document/hwpHostSession.cpp ../UniqueLibs/document/hwpHostSession.hpp
@@ -73,7 +100,7 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
-target_link_libraries(hc_document_widgets PRIVATE hc_builtin_sevenzip hc_image_archive_transport hc_passwords)
+target_link_libraries(hc_document_widgets PRIVATE hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND NOT HC_RHWP_APPROVED_INVENTORY_SHA256)

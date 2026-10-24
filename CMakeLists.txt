@@ -153,6 +153,11 @@ if(TARGET hc_smb_tests)
 endif()
 
 include(CTest)
+option(HC_BUILD_EPUB_POC "Build developer-only EPUB P0 validation tools" OFF)
+option(HC_BUILD_EPUB_PRODUCT "Build authenticated EPUB product helper candidate" OFF)
+if(HC_BUILD_EPUB_POC OR HC_BUILD_EPUB_PRODUCT)
+    add_subdirectory(tools/epub)
+endif()
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
@@ -185,6 +190,9 @@ add_custom_target(hc_product_inventory ALL
     COMMAND "${CMAKE_COMMAND}" "-DSOURCE=$<TARGET_FILE_DIR:HyperCommander>" "-DCONFIG=$<CONFIG>"
         "-DRHWP_SOURCE=${HC_RHWP_PRODUCT_RUNTIME_DIRECTORY}"
         "-DRHWP_PIN=${HC_RHWP_APPROVED_INVENTORY_SHA256}"
+        "-DEPUB_SOURCE=${HC_EPUB_PRODUCT_RUNTIME_DIRECTORY}"
+        "-DEPUB_PIN=${HC_EPUB_APPROVED_INVENTORY_SHA256}"
+        "-DEPUB_PYTHON=${HC_EPUB_PYTHON_EXECUTABLE}"
         "-DHC_VIEWER=$<TARGET_FILE:HyperViewer>"
         "-DPRODUCT_VERSION=${HC_PRODUCT_VERSION}"
         ${HC_PACKAGE_SIGN_ARGS}
