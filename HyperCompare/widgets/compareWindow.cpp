@@ -652,6 +652,7 @@ namespace hc::compare
             alignmentStatus_->setText(multi_->Error().isEmpty() ? tr("전체 정렬 계산 중") : tr("전체 정렬 보류"));
             alignmentStatus_->setToolTip(multi_->Error().isEmpty() ? tr("편집 내용과 Undo는 유지됩니다.") : tr("계산 한도로 개별 패널 표시를 유지합니다. 전체 패널 정렬을 껐다 켜서 다시 시도할 수 있습니다.\n") + multi_->Error());
         }
+        applyInlineHighlights();
         for (auto* gutter : gutters_) gutter->Refresh();
     }
     void CompareWindow::rebuildGutters()
@@ -933,8 +934,13 @@ namespace hc::compare
         const auto* pair = currentPair();
         const bool enabled = inlineHighlights_->isChecked() && pair;
         inlineHighlights_->setEnabled(pair != nullptr);
-        inlineStatus_->setVisible(enabled && pair->inline_.skippedLines_ != 0);
-        inlineStatus_->setText(tr("문자 강조 일부 생략 (%1줄)").arg(pair ? pair->inline_.skippedLines_ : 0));
+        const auto* detail = pair ? &pair->inline_ : nullptr;
+        if (multi_ && pair) detail = multi_->Inline(editors_[pair->inputs_[0]], editors_[pair->inputs_[1]]);
+        const auto* resultDetail = multi_ && !request_.base_.isEmpty() && output_ && editors_.size() == 4 ? multi_->Inline(editors_[2], output_) : nullptr;
+        const auto skipped = (detail ? detail->skippedLines_ : 0) + (resultDetail ? resultDetail->skippedLines_ : 0);
+        inlineStatus_->setVisible(enabled && skipped != 0);
+        inlineStatus_->setText(tr("문자 강조 일부 생략 (%1줄)").arg(skipped));
+        inlineHighlights_->setToolTip(resultDetail ? tr("원본 비교 쌍과 BASE ↔ RESULT의 문자 차이를 공통 정렬 기준으로 표시합니다.") : tr("선택한 비교 쌍의 문자 차이를 표시합니다."));
         for (qsizetype index = 0; index < editors_.size(); ++index)
         {
             auto* editor = editors_[index];
@@ -947,9 +953,11 @@ namespace hc::compare
             editor->send(SCI_INDICSETOUTLINEALPHA, sourceDifferenceIndicator, 160);
             editor->send(SCI_INDICSETUNDER, sourceDifferenceIndicator, 1);
             editor->send(SCI_SETINDICATORVALUE, 1);
-            const int side = pair && index == pair->inputs_[0] ? 0 : pair && index == pair->inputs_[1] ? 1 : -1;
-            if (enabled && side >= 0)
-                for (const auto& range : pair->inline_.ranges_[std::size_t(side)])
+            int side = pair && index == pair->inputs_[0] ? 0 : pair && index == pair->inputs_[1] ? 1 : -1;
+            const auto* decoration = detail;
+            if (resultDetail && (index == 2 || editor == output_)) { decoration = resultDetail; side = index == 2 ? 0 : 1; }
+            if (enabled && decoration && side >= 0)
+                for (const auto& range : decoration->ranges_[std::size_t(side)])
                     editor->send(SCI_INDICATORFILLRANGE, uptr_t(range.begin_), sptr_t(range.end_ - range.begin_));
             editor->send(SCI_SETINDICATORCURRENT, uptr_t(current)); editor->send(SCI_SETINDICATORVALUE, uptr_t(value));
         }

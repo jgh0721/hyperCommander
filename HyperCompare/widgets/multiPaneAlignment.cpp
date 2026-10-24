@@ -28,7 +28,7 @@ namespace hc::compare
         connect(&watcher_, &QFutureWatcher<Computed>::finished, this, [this] {
             const auto result = watcher_.result();
             if (result.generation_ != generation_) { timer_.start(); return; }
-            map_ = result.map_; error_ = result.error_;
+            map_ = result.map_; inline_ = result.inline_; error_ = result.error_;
             if (map_) apply();
             if (changed_) changed_();
         });
@@ -51,7 +51,7 @@ namespace hc::compare
             editor->send(ClearPaddingRows);
             editor->send(SCI_SETFIRSTVISIBLELINE, std::max<sptr_t>(0, editor->send(SCI_VISIBLEFROMDOCLINE, line)));
         }
-        map_.reset(); remember(); applying_ = false;
+        map_.reset(); inline_.reset(); remember(); applying_ = false;
     }
     void MultiPaneAlignment::Refresh()
     {
@@ -78,6 +78,21 @@ namespace hc::compare
                 auto decoration = limits;
                 decoration.deadline_ = std::min(limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
                 result.map_ = std::make_shared<MultiAlignmentMap>(map.WithSimilarLines(views, decoration));
+                // All projections share one decoration deadline and cell budget.
+                // Publish them with the map, never against a later editor snapshot.
+                decoration.steps_ = std::min<std::uint64_t>(decoration.steps_, 4'000'000);
+                result.inline_ = std::make_shared<InlinePairs>();
+                for (std::size_t a = 0; a < views.size(); ++a) for (std::size_t b = a + 1; b < views.size(); ++b)
+                {
+                    const auto pair = result.map_->Pair(a, b); std::vector<Edit> edits;
+                    for (const auto& run : pair.Runs()) if (run.changed_)
+                        edits.push_back({run.begin_[0], run.end_[0], run.begin_[1], run.end_[1], {}});
+                    auto& forward = (*result.inline_)[a * 4 + b];
+                    forward = BuildInlineDiff(views[a], views[b], edits, decoration);
+                    decoration.steps_ -= forward.cells_;
+                    auto& reverse = (*result.inline_)[b * 4 + a]; reverse = forward;
+                    std::swap(reverse.ranges_[0], reverse.ranges_[1]);
+                }
             }
             catch (const std::exception& error) { result.error_ = QString::fromUtf8(error.what()); }
             return result;
@@ -140,6 +155,12 @@ namespace hc::compare
         const auto a = editors_.indexOf(Left), b = editors_.indexOf(Right);
         if (!map_ || a < 0 || b < 0 || a == b) return {};
         return std::make_shared<AlignmentMap>(map_->Pair(a, b));
+    }
+    const InlineDiff* MultiPaneAlignment::Inline(ScintillaEditBase* Left, ScintillaEditBase* Right) const
+    {
+        const auto a = editors_.indexOf(Left), b = editors_.indexOf(Right);
+        if (!map_ || !inline_ || a < 0 || b < 0 || a == b) return nullptr;
+        return &(*inline_)[std::size_t(a * 4 + b)];
     }
     void MultiPaneAlignment::Reveal(ScintillaEditBase* Editor, std::size_t Line)
     {

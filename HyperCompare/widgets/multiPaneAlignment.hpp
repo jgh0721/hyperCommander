@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "core/alignmentMap.hpp"
+#include "core/inlineDiff.hpp"
 #include <QObject>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -22,6 +23,7 @@ namespace hc::compare
         bool Ready() const { return bool(map_); }
         QString Error() const { return error_; }
         std::shared_ptr<const AlignmentMap> Pair(ScintillaEditBase* Left, ScintillaEditBase* Right) const;
+        const InlineDiff* Inline(ScintillaEditBase* Left, ScintillaEditBase* Right) const;
         void Reveal(ScintillaEditBase* Editor, std::size_t Line);
         std::function<void()> changed_;
     private:
@@ -31,7 +33,9 @@ namespace hc::compare
         void scrolled(qsizetype Side);
         void remember();
         struct View { std::intptr_t top_ = 0, x_ = 0; };
-        struct Computed { std::shared_ptr<MultiAlignmentMap> map_; QString error_; std::uint64_t generation_ = 0; };
+        using InlinePairs = std::array<InlineDiff, 16>;
+        std::shared_ptr<const InlinePairs> inline_;
+        struct Computed { std::shared_ptr<InlinePairs> inline_; std::shared_ptr<MultiAlignmentMap> map_; QString error_; std::uint64_t generation_ = 0; };
         QVector<ScintillaEditBase*> editors_;
         QVector<QByteArray> text_;
         QVector<View> known_;

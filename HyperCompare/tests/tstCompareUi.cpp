@@ -470,6 +470,9 @@ private slots:
             auto* from = window.findChild<ScintillaEditBase*>(QString("FILE %1").arg(fromIndex + 1));
             auto* to = window.findChild<ScintillaEditBase*>(QString("FILE %1").arg(toIndex + 1));
             QCOMPARE(from->send(SCI_VISIBLEFROMDOCLINE, 1), to->send(SCI_VISIBLEFROMDOCLINE, 2));
+            QCOMPARE(from->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, a.indexOf("alpha")), sptr_t(0));
+            QCOMPARE(from->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, a.indexOf('1')), sptr_t(1));
+            QCOMPARE(to->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, b.indexOf('9')), sptr_t(1));
             QByteArray expected = b;
             if (selection == 0) { const auto digit = a.indexOf('1'); from->send(SCI_SETSEL, digit, digit + 1); expected.replace("alpha_value = 9", "alpha_value = 1"); }
             else if (selection == 1) { from->send(SCI_SETSEL, 5, a.indexOf("tail")); expected.replace("alpha_value = 9", "alpha_value = 1"); expected.replace("omega_counter = 8", "omega_counter = 2"); }
@@ -479,6 +482,7 @@ private slots:
             if (selection == 0)
             {
                 auto* alignment = window.findChild<MultiPaneAlignment*>(); alignment->Refresh(); QVERIFY(!alignment->Ready());
+                QCOMPARE(from->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, a.indexOf('1')), sptr_t(0));
                 gutter->findChild<QToolButton*>(name)->click(); QCOMPARE(contents(to), b);
                 QTRY_VERIFY(alignment->Ready());
                 QTRY_VERIFY(gutter->findChild<QToolButton*>(name)->isVisible());
@@ -527,6 +531,10 @@ private slots:
             const auto initial = contents(output); const auto state = controller->Model().State().front();
             controller->ReplaceRange(1, controller->Model().Revision(), state.begin_, state.end_, b);
             QTRY_VERIFY(window.findChild<MultiPaneAlignment*>()->Ready());
+            auto* base = window.findChild<ScintillaEditBase*>("BASE"); QVERIFY(base);
+            QCOMPARE(base->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, contents(base).indexOf('3')), sptr_t(1));
+            QCOMPARE(output->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, contents(output).indexOf('9')), sptr_t(1));
+            QCOMPARE(output->send(SCI_INDICATORVALUEAT, sourceDifferenceIndicator, contents(output).indexOf("alpha")), sptr_t(0));
             const auto before = contents(output); const auto states = controller->Model().State();
             QVERIFY(before.contains("// keep middle"));
             const auto revision = controller->Model().Revision();
