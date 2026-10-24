@@ -69,7 +69,7 @@ namespace hc::compare
                 partner[a] = b; used[b] = true; renamed[a] = true;
             }
         }
-        if (complete && !python)
+        if (complete)
         {
             QMap<QString, Group> candidates;
             for (int side = 0; side < 2; ++side)

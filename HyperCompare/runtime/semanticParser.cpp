@@ -75,7 +75,10 @@ namespace hc::compare
                     hash.addData(ts_node_type(child)); hash.addData(":");
                     hash.addData(QByteArray::number(children)); hash.addData(";");
                 }
-                if (Numbers && QByteArrayView(ts_node_type(child)) == "number_literal")
+                const QByteArrayView kind(ts_node_type(child));
+                const bool pythonNumber = Numbers && Context.python_ && (kind == "integer" || kind == "float") &&
+                    !text(child, Context).endsWith('j') && !text(child, Context).endsWith('J');
+                if (Numbers && (kind == "number_literal" || pythonNumber))
                 {
                     ++*Numbers; hash.addData("N;"); return false;
                 }
@@ -158,13 +161,13 @@ namespace hc::compare
                     (QByteArrayView(ts_node_type(nameNode)) == "identifier" || QByteArrayView(ts_node_type(nameNode)) == "field_identifier") &&
                     !ts_node_is_null(ts_node_child_by_field_name(node, "type", 4));
                 // Python decorators and special methods can depend on the declared name.
-                // Only bare ordinary functions use exact structural rename matching.
+                // Only bare ordinary functions use structural rename matching.
                 const bool pythonRename = Context.python_ && !ts_node_is_null(nameNode) &&
                     ts_node_eq(signatureRoot, node) && !(name.startsWith("__") && name.endsWith("__"));
                 int bodyTokens = 0;
                 const auto bodyHash = tokenHash(body, Context, ts_node_end_byte(body), {}, &bodyTokens);
                 int numbers = 0;
-                const auto literalShape = ordinary && bodyTokens >= 24 && bodyTokens <= 4096
+                const auto literalShape = (ordinary || pythonRename) && bodyTokens >= 24 && bodyTokens <= 4096
                     ? tokenHash(body, Context, ts_node_end_byte(body), {}, nullptr, &numbers) : QString{};
                 QJsonArray bodySequence; std::size_t sequenceBytes = 0; bool boundedSequence = true;
                 if (ordinary && bodyTokens >= 32 && bodyTokens <= 256 && Context.tokenBytes_ < 512 * 1024)
