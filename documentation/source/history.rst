@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperCommander: ``hc.file.compare`` 명령과 기본 Ctrl+O를 추가했다. 같은 패널의 파일 2~3개, 양쪽 패널의 항목 각 1개 또는 폴더 2개를 설치 루트의 HyperCompare로 열고, 키보드 설정에서 명령을 조회·할당할 수 있다.
+
 * SMB 폴더 삭제 중 생성 시각 차이를 항목 교체로 오인하던 검사 보완. 작업 실패 시 경로와 오류 원인을 별도 창에 표시.
 
 * HyperViewer·HyperEditor의 PDF 엔진을 PDFium 150.0.7834.0에서 158.0.8111.0(chromium/8111)으로 갱신하고 Windows x64 배포 패키지의 SHA256 고정값과 소스 잠금 정보 동기화.
