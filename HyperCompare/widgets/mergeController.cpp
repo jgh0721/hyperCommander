@@ -81,6 +81,31 @@ namespace hc::compare
         // it unresolved, with text and decision metadata in the same undo step.
         replace(Begin, End, Text, std::move(next), true);
     }
+    void MergeController::ReplaceRanges(std::uint64_t Id, std::uint64_t Revision, const std::vector<RangeReplacement>& Ranges)
+    {
+        const auto block = model_.Prepare(Id, Revision, Resolution::Manual);
+        if (Ranges.empty()) return;
+        const auto length = std::size_t(editor_->send(SCI_GETLENGTH));
+        auto finalLength = length; auto previous = block.begin_;
+        for (const auto& range : Ranges)
+        {
+            if (range.begin_ < previous || range.begin_ > range.end_ || range.end_ > block.end_ || range.end_ > length)
+                throw Failure("InvalidMergeLocation");
+            previous = range.end_; finalLength -= range.end_ - range.begin_;
+            if (std::size_t(range.text_.size()) > 32 * 1024 * 1024 || finalLength > 32 * 1024 * 1024 - std::size_t(range.text_.size()))
+                throw Failure("ResultSizeLimit");
+            finalLength += std::size_t(range.text_.size());
+        }
+        // Preserve intervening target-only text, then commit one replacement so
+        // native Undo and conflict metadata move together through one history step.
+        QByteArray text(qsizetype(length) + 1, '\0');
+        editor_->send(SCI_GETTEXT, uptr_t(text.size()), reinterpret_cast<sptr_t>(text.data())); text.chop(1);
+        const auto begin = Ranges.front().begin_, end = Ranges.back().end_;
+        auto replacement = text.mid(qsizetype(begin), qsizetype(end - begin));
+        for (auto it = Ranges.rbegin(); it != Ranges.rend(); ++it)
+            replacement.replace(qsizetype(it->begin_ - begin), qsizetype(it->end_ - it->begin_), it->text_);
+        ReplaceRange(Id, Revision, begin, end, replacement);
+    }
     void MergeController::ChooseAll(Resolution Choice, const QByteArray& Text)
     {
         auto next = model_; next.SelectAll(Choice);

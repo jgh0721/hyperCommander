@@ -183,15 +183,15 @@ namespace hc::compare
         const auto* pair = currentPair();
         // Hold the projection across edits: the first mutation invalidates multi_.
         auto correspondence = pair ? pair->alignment_ : std::shared_ptr<const AlignmentMap>{};
-        const bool shared = !merge_ && multi_ && pair;
+        const bool shared = multi_ && pair;
         if (shared)
         {
-            correspondence = multi_->Pair(editors_[pair->inputs_[0]], editors_[pair->inputs_[1]]);
+            correspondence = multi_->Pair(Source, Target);
             if (!correspondence) { state_->setText(tr("전체 정렬이 끝난 뒤 범위 병합을 다시 시도하십시오.")); return true; }
         }
-        if (!merge_ && correspondence && (shared || correspondence->HasSimilarLines()))
+        if (correspondence && (shared || (!merge_ && correspondence->HasSimilarLines())))
         {
-            const unsigned from = Source == editors_[pair->inputs_[0]] ? 0 : 1, to = 1 - from;
+            const unsigned from = shared || Source == editors_[pair->inputs_[0]] ? 0 : 1, to = 1 - from;
             const auto position = [](ScintillaEditBase* Editor, std::size_t Line) {
                 const auto at = Editor->send(SCI_POSITIONFROMLINE, Line); return at < 0 ? Editor->send(SCI_GETLENGTH) : at;
             };
@@ -230,6 +230,13 @@ namespace hc::compare
             if (replacements.isEmpty()) return true;
             sptr_t cursor = replacements.back().begin_ + replacements.back().text_.size();
             for (qsizetype i = 0; i + 1 < replacements.size(); ++i) cursor += replacements[i].text_.size() - (replacements[i].end_ - replacements[i].begin_);
+            if (merge_)
+            {
+                std::vector<MergeController::RangeReplacement> ranges;
+                for (const auto& replacement : replacements) ranges.push_back({std::size_t(replacement.begin_), std::size_t(replacement.end_), replacement.text_});
+                merge_->ReplaceRanges(Id, Revision, ranges);
+                Target->send(SCI_SETSEL, cursor, cursor); Target->setFocus(Qt::OtherFocusReason); updateMerge(); return true;
+            }
             activeInput_ = editors_.indexOf(Target); Target->send(SCI_BEGINUNDOACTION);
             // Snapshot all ranges before the first mutation invalidates comparison state.
             for (auto it = replacements.crbegin(); it != replacements.crend(); ++it)

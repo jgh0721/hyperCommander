@@ -511,6 +511,41 @@ private slots:
         QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
         QCOMPARE(contents(target), QByteArray("A\nkeep\nD\n")); target->send(SCI_UNDO); window.close();
     }
+    void selectedResultRangesPreserveInsertionsAndHistory()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        for (int side : {0, 1})
+        {
+            const QByteArray a = "alpha_value = 1;\nomega_counter = 2;\n";
+            const QByteArray b = "// keep leading\nalpha_value = 9;\n// keep middle\nomega_counter = 8;\n";
+            QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
+            write(r.file1_, side ? b : a); write(r.file2_, side ? a : b); write(r.base_, "alpha_value = 3;\nomega_counter = 4;\n");
+            CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT"));
+            auto* output = window.findChild<ScintillaEditBase*>("RESULT"); auto* source = window.findChild<ScintillaEditBase*>(side ? "RIGHT" : "LEFT");
+            MergeController* controller = nullptr; for (auto* object : window.findChildren<QObject*>()) if (auto* value = dynamic_cast<MergeController*>(object)) controller = value;
+            QVERIFY(controller); QCOMPARE(controller->Model().State().size(), std::size_t(1));
+            const auto initial = contents(output); const auto state = controller->Model().State().front();
+            controller->ReplaceRange(1, controller->Model().Revision(), state.begin_, state.end_, b);
+            QTRY_VERIFY(window.findChild<MultiPaneAlignment*>()->Ready());
+            const auto before = contents(output); const auto states = controller->Model().State();
+            QVERIFY(before.contains("// keep middle"));
+            const auto revision = controller->Model().Revision();
+            QVERIFY_EXCEPTION_THROWN(controller->ReplaceRanges(1, revision, {{2, 4, "x"}, {3, 5, "y"}}), Failure);
+            QCOMPARE(contents(output), before); QVERIFY(controller->Model().State() == states);
+            source->send(SCI_SETSEL, 0, a.size()); ChunkGutter* gutter = nullptr;
+            for (auto* value : window.findChildren<ChunkGutter*>()) if (value->SourceSide() == side) gutter = value;
+            QVERIFY(gutter); QTRY_VERIFY(gutter->findChild<QToolButton*>("chunk1_action0") && gutter->findChild<QToolButton*>("chunk1_action0")->isVisible());
+            QTest::mouseClick(gutter->findChild<QToolButton*>("chunk1_action0"), Qt::LeftButton);
+            auto expected = before; expected.replace("alpha_value = 9", "alpha_value = 1"); expected.replace("omega_counter = 8", "omega_counter = 2");
+            QCOMPARE(contents(output), expected); QCOMPARE(controller->Model().UnresolvedCount(), std::size_t(1));
+            output->send(SCI_UNDO); QCOMPARE(contents(output), before); QVERIFY(controller->Model().State() == states);
+            output->send(SCI_REDO); QCOMPARE(contents(output), expected); QCOMPARE(controller->Model().UnresolvedCount(), std::size_t(1));
+            QVERIFY(!QFileInfo::exists(r.output_));
+            output->send(SCI_UNDO); output->send(SCI_UNDO); QCOMPARE(contents(output), initial);
+            action(window, QString::fromUtf8("전체 수동 완료"))->trigger(); action(window, QString::fromUtf8("결과 저장"))->trigger();
+            QTRY_COMPARE(window.ExitCode(), 0); window.close();
+        }
+    }
     void selectedThreeWayRangeKeepsConflictAndUndo()
     {
         for (int side : {0, 1})
