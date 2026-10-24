@@ -1,5 +1,10 @@
 ﻿#include "qtitanRegression.hpp"
 #include <QPainter>
+#include <QLineEdit>
+#include <QVBoxLayout>
+#include <QStyleFactory>
+#include <QtnCommonStyle.h>
+#include <QtnStyleOption.h>
 #include "qtitanGroupingRegression.hpp"
 
 class RecordPainter final : public Qtitan::GridRecordPainter
@@ -23,6 +28,115 @@ class QtitanIntegration final : public QObject
 {
     Q_OBJECT
 private slots:
+    void externalFocusDuringCursorMove()
+    {
+        hc::tests::GridCountingModel Model(24);
+        QWidget Window;
+        QVBoxLayout Layout(&Window);
+        QLineEdit Search;
+        Qtitan::Grid Grid;
+        Layout.addWidget(&Search);
+        Layout.addWidget(&Grid);
+        auto* View = hc::tests::SetupGrid(Grid, Model);
+        View->setFileManagerMode(true);
+        View->setFocusedRowIndex(1);
+        connect(&Search, &QLineEdit::textChanged, &Window, [View] {
+            View->setFocusedRowIndex(7);
+        });
+        Window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        Search.setFocus();
+        QTRY_VERIFY(Search.hasFocus());
+        QTest::keyClicks(&Search, "query");
+        QCOMPARE(Search.text(), QString("query"));
+        QVERIFY(Search.hasFocus());
+        QCOMPARE(View->focusedRowIndex(), 7);
+        Model.Touch(0, 23);
+        QCoreApplication::processEvents();
+        QVERIFY(Search.hasFocus());
+        QLineEdit Rename(Grid.viewport());
+        Rename.setGeometry(30, 90, 160, 24);
+        Rename.show();
+        connect(&Rename, &QLineEdit::textChanged, &Window, [View] {
+            View->setFocusedRowIndex(12);
+        });
+        Rename.setFocus();
+        QTRY_VERIFY(Rename.hasFocus());
+        QTest::keyClicks(&Rename, "edit");
+        QCOMPARE(Rename.text(), QString("edit"));
+        QVERIFY(Rename.hasFocus());
+        Grid.viewport()->setFocus();
+        QTest::keyClick(Grid.viewport(), Qt::Key_Down);
+        QCOMPARE(View->focusedRowIndex(), 13);
+    }
+    void compactStyledHeaders()
+    {
+        class HeaderStyle final : public Qtitan::CommonStyle
+        {
+        public:
+            HeaderStyle() : Qtitan::CommonStyle(QStyleFactory::create("Fusion")) {}
+            void drawPrimitive(QStyle::PrimitiveElement Element, const QStyleOption* Option,
+                QPainter* Painter, const QWidget* Widget = nullptr) const override
+            {
+                if (Element == QStyle::PE_IndicatorHeaderArrow)
+                {
+                    ++arrows_;
+                    direction_ = qstyleoption_cast<const QStyleOptionHeader*>(Option)->sortIndicator;
+                    arrowRect_ = Option->rect;
+                }
+                Qtitan::CommonStyle::drawPrimitive(Element, Option, Painter, Widget);
+            }
+            mutable int arrows_ = 0;
+            mutable QStyleOptionHeader::SortIndicator direction_ = QStyleOptionHeader::None;
+            mutable QRect arrowRect_;
+            mutable QRect requestedArrowRect_;
+            QRect subElementRect(QStyle::SubElement Element, const QStyleOption* Option,
+                const QWidget* Widget = nullptr) const override
+            {
+                const QRect Rect = Qtitan::CommonStyle::subElementRect(Element, Option, Widget);
+                if (Element == QStyle::SE_HeaderArrow)
+                    requestedArrowRect_ = Rect;
+                return Rect;
+            }
+        } Style;
+        QWidget Widget;
+        Widget.setStyle(&Style);
+        QFont Font = Widget.font();
+        Font.setPixelSize(14);
+        Qtitan::GridHeaderStyleOption Option;
+        Option.initFrom(&Widget);
+        Option.font = Font;
+        Option.fontMetrics = QFontMetrics(Font);
+        Option.rect = QRect(0, 0, 240, 22);
+        Option.text = "Header text";
+        Option.textAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+        Option.sortIndicatorStyled = true;
+        const auto TextRect = [&] {
+            return Style.subControlRect(QStyle::ComplexControl(Qtitan::CommonStyle::CC_GridHeaderSection),
+                &Option, QStyle::SubControl(Qtitan::CommonStyle::SC_GridHeaderText), &Widget);
+        };
+        const QRect Plain = TextRect();
+        QVERIFY(Plain.height() >= Option.fontMetrics.height());
+        Option.captionIndent = 8;
+        QCOMPARE(TextRect().left(), Plain.left() + 8);
+        QImage Image(Option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        Image.fill(Qt::transparent);
+        QPainter Painter(&Image);
+        for (const auto LayoutDirection : {Qt::LeftToRight, Qt::RightToLeft})
+        for (const auto Direction : {QStyleOptionHeader::SortUp, QStyleOptionHeader::SortDown})
+        {
+            Option.direction = LayoutDirection;
+            Option.sortIndicator = Direction;
+            const int Before = Style.arrows_;
+            Style.drawComplexControl(QStyle::ComplexControl(Qtitan::CommonStyle::CC_GridHeaderSection),
+                &Option, &Painter, &Widget);
+            QCOMPARE(Style.arrows_, Before + 1);
+            QCOMPARE(Style.direction_, Direction == QStyleOptionHeader::SortUp ?
+                QStyleOptionHeader::SortDown : QStyleOptionHeader::SortUp);
+            QCOMPARE(Style.arrowRect_, Style.requestedArrowRect_);
+            QVERIFY(TextRect().width() < Plain.width() - 8);
+        }
+    }
     void independentGrouping() { hc::tests::GridIndependentGroupingRegression(); }
     void fileManager() { hc::tests::GridFileManagerRegression(); }
     void cacheAndSort() { hc::tests::GridCacheAndSortRegression(); }

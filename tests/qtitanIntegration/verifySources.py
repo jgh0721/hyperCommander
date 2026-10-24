@@ -19,6 +19,11 @@ def main():
     Manifest = json.loads((Vendor / "integration.json").read_text(encoding="utf-8"))
     Contract = json.loads((Root / "tools/qtitan-compatibility.json").read_text(encoding="utf-8"))["integrated"]
     Failures = []
+    Upstream = Vendor / "upstream" / Manifest["upstreamVersion"]
+    ActualUpstream = {File.relative_to(Upstream).as_posix(): hashlib.sha256(File.read_bytes()).hexdigest()
+                      for File in Upstream.rglob("*") if File.is_file()}
+    if ActualUpstream != Manifest["upstreamFiles"]:
+        Failures.append("official upstream bytes or file set")
     for Name, Expected in Manifest["generatedSources"].items():
         File = Args.generated / Name
         if not File.is_file() or hashlib.sha256(File.read_bytes()).hexdigest() != Expected:
@@ -28,7 +33,7 @@ def main():
         Failures.extend(Name + ": " + Symbol for Symbol in Symbols if Symbol not in Text)
     if Failures:
         raise RuntimeError("Source contract mismatch: " + ", ".join(Failures))
-    Results = {"generatedSources": len(Manifest["generatedSources"]), "apiContract": "passed"}
+    Results = {"upstreamFiles": len(ActualUpstream), "generatedSources": len(Manifest["generatedSources"]), "apiContract": "passed"}
     if Args.exercise_generator:
         Work = Args.work.resolve()
         if not Work.is_relative_to((Root / "_build").resolve()) or Work.exists():
@@ -39,7 +44,8 @@ def main():
         for Name in ("CMakeLists.txt", "integration.json"):
             shutil.copy2(Vendor / Name, Copied / Name)
         shutil.copytree(Vendor / "patches", Copied / "patches")
-        shutil.copytree(Vendor / "upstream/9.3.0", Copied / "upstream/9.3.0")
+        UpstreamRelative = "upstream/" + Manifest["upstreamVersion"]
+        shutil.copytree(Upstream, Copied / UpstreamRelative)
         (Source / "CMakeLists.txt").write_text(
             "cmake_minimum_required(VERSION 3.21)\n"
             "project(QtitanGeneratorCheck LANGUAGES CXX)\n"
@@ -69,19 +75,19 @@ def main():
         Before = Stamp.stat().st_mtime_ns
         configure("unchanged")
         assert Stamp.stat().st_mtime_ns == Before
-        Input = Copied / "upstream/9.3.0/src/grid/QtnGridDef.h"
+        Input = Copied / UpstreamRelative / "src/grid/QtnGridDef.h"
         Original = Input.read_bytes()
         Input.write_bytes(Original + b"\n// generator content-change probe\n")
-        configure("upstream-content")
-        assert b"content-change probe" in (Generated / "src/grid/QtnGridDef.h").read_bytes()
+        configure("upstream-content", False)
         Input.write_bytes(Original)
-        Added = Copied / "upstream/9.3.0/probe.txt"
+        Added = Copied / UpstreamRelative / "probe.txt"
         Added.write_bytes(b"new input")
-        configure("upstream-add")
-        assert (Generated / "probe.txt").is_file()
+        configure("upstream-add", False)
         Added.unlink()
-        configure("upstream-remove")
-        assert not (Generated / "probe.txt").exists()
+        Input.unlink()
+        configure("upstream-remove", False)
+        Input.write_bytes(Original)
+        configure("upstream-restored")
         Patch = Copied / "patches" / Manifest["patches"][0]
         OriginalPatch = Patch.read_bytes()
         Before = Stamp.read_bytes()
