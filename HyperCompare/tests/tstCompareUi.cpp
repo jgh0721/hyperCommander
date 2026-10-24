@@ -224,6 +224,38 @@ private slots:
         output.send(SCI_UNDO); QTRY_VERIFY(alignment.Ready()); check(); QCOMPARE(contents(&output), a);
         QCOMPARE(contents(&base), a); QCOMPARE(contents(&left), b); QCOMPARE(contents(&right), c);
     }
+    void concurrentWindowsMemoryAndCancellation()
+    {
+        QSettings{}.setValue("view/alignAllPanes", true);
+        QTemporaryDir dir; const auto left = dir.filePath("left.txt"), right = dir.filePath("right.txt"), third = dir.filePath("third.txt");
+        const auto original = lines(0, 8000); auto modified = original; modified.replace("common4000", "edited4000");
+        write(left, original); write(right, modified); write(third, original);
+        std::uint64_t peak = 0; QTimer sampler;
+        connect(&sampler, &QTimer::timeout, &sampler, [&] {
+            PROCESS_MEMORY_COUNTERS_EX counters{}; counters.cb = sizeof(counters);
+            if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+                peak = std::max<std::uint64_t>(peak, counters.PrivateUsage);
+        }); sampler.start(10);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            std::vector<std::unique_ptr<CompareWindow>> windows;
+            for (int i = 0; i < 3; ++i) {
+                Request request; request.file1_ = left; request.file2_ = right; request.file3_ = third; request.memoryMiB_ = 512;
+                windows.push_back(std::make_unique<CompareWindow>(request)); windows.back()->show();
+            }
+            if (!cycle) windows.back()->CancelRemoteRequest();
+            for (std::size_t i = 0; i < windows.size(); ++i) {
+                auto& window = *windows[i];
+                if (!cycle && i == 2) { QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 3, 15000); continue; }
+                QTRY_VERIFY_WITH_TIMEOUT(window.findChild<MultiPaneAlignment*>() && window.findChild<MultiPaneAlignment*>()->Ready(), 15000);
+                QCOMPARE(contents(window.findChild<ScintillaEditBase*>("FILE 1")), original);
+                QCOMPARE(contents(window.findChild<ScintillaEditBase*>("FILE 2")), modified);
+                QCOMPARE(contents(window.findChild<ScintillaEditBase*>("FILE 3")), original);
+            }
+            for (auto& window : windows) window->close(); windows.clear(); QCoreApplication::processEvents();
+            QCOMPARE(ProcessControllerMemory()->Reserved(), std::uint64_t(0));
+            qInfo("Concurrent comparison cycle %d: 3 windows, sampled peak private %llu bytes, reservations returned", cycle + 1, peak);
+        }
+    }
     void allPaneMemoryPressurePreservesEditors()
     {
         QWidget host; ScintillaEditBase first(&host), second(&host), third(&host);
