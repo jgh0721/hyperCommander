@@ -17,6 +17,8 @@
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
 #include "UniqueLibs/document/documentWebPeer.hpp"
+#include "UniqueLibs/document/documentShortcutRouter.hpp"
+#include <QAbstractSpinBox>
 
 /// Product integration
 #include "UniqueLibs/document/documentThemeAdapter.hpp"
@@ -315,9 +317,15 @@ namespace
             });
             if(!Evidence.isEmpty()) QTimer::singleShot(60000, this, [this] { if(!finished_) finish({{"status", "timeout"}}); });
             view_->setAccessibleName(tr("EPUB 본문"));
-            auto* SearchKey=new QShortcut(QKeySequence::Find,this);connect(SearchKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->show();navigation_->Execute("focus-search");}});
-            auto* MarkKey=new QShortcut(QKeySequence("Ctrl+D"),this);connect(MarkKey,&QShortcut::activated,this,[this]{if(!composing_)navigation_->Execute("bookmark-add");});
-            auto* FocusKey=new QShortcut(QKeySequence(Qt::Key_F6),this);connect(FocusKey,&QShortcut::activated,this,[this]{if(!composing_){if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))navigation_->Execute("focus-search");else view_->setFocus(Qt::ShortcutFocusReason);}});
+            shortcuts_=new hc::document::DocumentShortcutRouter(this);
+            for(const auto& Entry:hc::document::DocumentShortcutRegistry::Commands())if(Entry.scope_=="epub") {
+                auto* Action=new QAction(Entry.label_,this);addAction(Action);shortcuts_->Register(Entry.id_,Action);
+                connect(Action,&QAction::triggered,this,[this,Name=Entry.id_.mid(5)]{readAction(Name,{});});
+            }
+            shortcuts_->SetEligibility([this](const QString& Id,QWidget* Focus){return Id.startsWith("epub.") && !composing_
+                && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus))
+                    || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
+            shortcuts_->Apply({});
             auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->setVisible(!settingsScroll_->isVisible());view_->setFocus();}});
             qApp->installEventFilter(this);
             view_->setUrl(QUrl("epub://app/app/index.html"));
@@ -336,7 +344,7 @@ namespace
                 || Request["documentId"] != documentId_ || Request["generation"] != QJsonValue(generation_)) return Fail("epub-control-identity");
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot") {
-                auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = view_->hasFocus();
+                auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
                 State["escapeRequests"]=escapeRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
@@ -346,7 +354,7 @@ namespace
                     || !settings_->Execute(Request["action"].toString(),Request["profile"].toObject(),Request["global"].toBool())) return Fail("epub-settings-rejected");
             }
             else if(Kind=="reader-action") {
-                if(Request.size()!=6 || !navigation_->Execute(Request["action"].toString(),Request["value"]))return Fail("epub-reader-action-rejected");
+                if(Request.size()!=6 || !readAction(Request["action"].toString(),Request["value"]))return Fail("epub-reader-action-rejected");
             }
             else if(Kind == "appearance") {
                 if(!hc::document::epubui::ApplyAppearance(Request["appearance"].toObject())) return Fail("epub-appearance-invalid");
@@ -365,7 +373,7 @@ namespace
                 // Native ancestors include the owner tab and its parking window.
                 // A late command must not activate a tab that has been hidden.
                 const bool Visible = IsWindowVisible(reinterpret_cast<HWND>(winId()));
-                if(Visible) { activateWindow(); view_->setFocus(Qt::OtherFocusReason); }
+                if(Visible) focusReading();
                 Reply["focusRequested"] = Visible;
             }
             else return Fail("epub-control-command");
@@ -378,15 +386,40 @@ namespace
             if(Event->type()==QEvent::InputMethod)composing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
             if(Event->type()==QEvent::KeyPress) {
                 auto* Key=static_cast<QKeyEvent*>(Event);
+                const bool Body=Widget==view_ || view_->isAncestorOf(Widget);
+                if(Body && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()
+                    && Key->key()==Qt::Key_Space && (Key->modifiers()==Qt::NoModifier || Key->modifiers()==Qt::ShiftModifier)) {
+                    readAction(Key->modifiers()==Qt::ShiftModifier?"previous":"next",{});return true;
+                }
                 if(Key->key()==Qt::Key_Escape && Key->modifiers()==Qt::NoModifier && !Key->isAutoRepeat() && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
-                    if(auto* Input=qobject_cast<QLineEdit*>(Widget);Input && !Input->text().isEmpty()){Input->clear();return true;}
-                    if(settings_->IsDirty()){settings_->Execute("cancel",{},false);return true;}
-                    const QPointer<Window> Guard(this);page_->runJavaScript("!!(window.hcDismissPopup && window.hcDismissPopup())",[Guard](const QVariant& Closed){if(Guard && !Closed.toBool())++Guard->escapeRequests_;});return true;
+                    const QPointer<Window> Guard(this);const QPointer<QWidget> Receiver(Widget);
+                    page_->runJavaScript("!!(window.hcDismissPopup && window.hcDismissPopup())",[Guard,Receiver](const QVariant& Closed){
+                        if(!Guard || Closed.toBool())return;
+                        if(auto* Input=qobject_cast<QLineEdit*>(Receiver.data());Input && !Input->text().isEmpty()){Input->clear();return;}
+                        if(Guard->settings_->IsDirty()){Guard->settings_->Execute("cancel",{},false);return;}
+                        if(Guard->settingsScroll_->isVisible()){Guard->settingsScroll_->hide();Guard->focusReading();return;}
+                        ++Guard->escapeRequests_;
+                    });return true;
                 }
             }
             return QMainWindow::eventFilter(Object,Event);
         }
     private:
+        void focusReading() {
+            activateWindow();view_->setFocus(Qt::OtherFocusReason);
+            page_->runJavaScript("window.hcFocusReading && window.hcFocusReading()");
+        }
+        bool readAction(const QString& Action,const QJsonValue& Value) {
+            if(Action=="bindings")return Value.isObject() && shortcuts_->Apply(Value.toObject()).isEmpty();
+            if(Action=="cycle-focus") {
+                if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget())){settingsScroll_->show();navigation_->Execute("focus-toc");}
+                else if(navigation_->isAncestorOf(QApplication::focusWidget())){settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);}
+                else focusReading();return true;
+            }
+            if(Action=="focus-settings"){settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);return true;}
+            if(Action=="focus-search" || Action=="focus-toc")settingsScroll_->show();
+            return navigation_->Execute(Action,Value);
+        }
         void command(const QString& Name, const QJsonValue& Value)
         {
             auto Args = QJsonDocument(QJsonArray{Name, Value}).toJson(QJsonDocument::Compact);
@@ -471,6 +504,7 @@ namespace
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QLabel* location_=nullptr;
+        hc::document::DocumentShortcutRouter* shortcuts_=nullptr;
         QScrollArea* settingsScroll_ = nullptr;
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;

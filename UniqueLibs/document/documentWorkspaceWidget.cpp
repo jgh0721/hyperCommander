@@ -16,6 +16,8 @@
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentSettingsDialog.hpp"
 #include "documentShortcutRouter.hpp"
+#include "epubProcessView.hpp"
+#include <QLineEdit>
 #include "text/ScintillaQtDirectBackend.h"
 #include <Scintilla.h>
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -366,6 +368,13 @@ namespace hc::document
                 if (auto Tab = active()) Tab->pane_->Focus();
             });
         }
+        auto* EpubMenu=ViewMenu->addMenu(tr("EPUB"));
+        EpubMenu->menuAction()->setProperty("documentIconName","toc-toggle");
+        for(const auto& Command:DocumentShortcutRegistry::Commands())if(Command.scope_=="epub") {
+            auto* Action=EpubMenu->addAction(Command.label_);Action->setObjectName(Command.id_);addAction(Action);
+            Action->setProperty("documentIconName",Command.id_.endsWith("next")?"chevron-right":Command.id_.endsWith("previous")?"chevron-left":"toc-toggle");
+            connect(Action,&QAction::triggered,this,[this,Id=Command.id_]{if(auto Tab=active();Tab && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing())Tab->pane_->Execute({{"action","epub.reader."+Id.mid(5)}});});
+        }
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
             if (!Command.id_.startsWith("text.") && !QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Command.id_)) continue;
             auto* Action = EditMenu->addAction(Command.label_); Action->setObjectName(Command.id_); addAction(Action);
@@ -406,6 +415,7 @@ namespace hc::document
         }
         shortcutRouter_->SetEligibility([this](const QString& Id, QWidget* Focus) {
             auto Tab = active();
+            if(Id.startsWith("epub."))return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
             if (Id.startsWith("text.")) return Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text";
             if (Id.startsWith("edit.")) {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
@@ -500,6 +510,7 @@ namespace hc::document
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
+        for(auto* Epub:findChildren<EpubProcessView*>())Epub->ReaderAction("bindings",Bindings);
         if (!ShortcutError.isEmpty()) ShowShellError(tr("단축키 설정 오류 · 기본값을 사용합니다: %1").arg(ShortcutError));
         else if (const auto Unknown = DocumentShortcutRegistry::Unknown(Bindings); !Unknown.isEmpty())
             ShowShellError(tr("지원하지 않는 단축키 항목을 보존했습니다: %1").arg(Unknown.join(", ")));

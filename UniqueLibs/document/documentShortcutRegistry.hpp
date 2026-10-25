@@ -40,7 +40,17 @@ public:
             {"text.goToLine", QObject::tr("줄 이동"), "Ctrl+G", "text"},
             {"text.wordWrap", QObject::tr("자동 줄바꿈 전환"), "Alt+Z", "text"},
             {"text.foldAll", QObject::tr("전체 접기"), "Ctrl+Shift+-", "text"},
-            {"text.unfoldAll", QObject::tr("전체 펼치기"), "Ctrl+Shift++", "text"}
+            {"text.unfoldAll", QObject::tr("전체 펼치기"), "Ctrl+Shift++", "text"},
+            {"epub.next", QObject::tr("EPUB 다음 화면"), "PgDown", "epub"},
+            {"epub.previous", QObject::tr("EPUB 이전 화면"), "PgUp", "epub"},
+            {"epub.next-chapter", QObject::tr("EPUB 다음 장"), "Ctrl+Alt+Right", "epub"},
+            {"epub.previous-chapter", QObject::tr("EPUB 이전 장"), "Ctrl+Alt+Left", "epub"},
+            {"epub.back", QObject::tr("EPUB 이전 위치"), "Alt+Left", "epub"},
+            {"epub.focus-toc", QObject::tr("EPUB 목차"), "Ctrl+Alt+T", "epub"},
+            {"epub.focus-settings", QObject::tr("EPUB 읽기 설정"), "Ctrl+Shift+E", "epub"},
+            {"epub.focus-search", QObject::tr("EPUB 검색"), "Ctrl+F", "epub"},
+            {"epub.bookmark-add", QObject::tr("EPUB 책갈피 추가"), "Ctrl+D", "epub"},
+            {"epub.cycle-focus", QObject::tr("EPUB 영역 포커스 이동"), "F6", "epub"}
         };
     }
     static QJsonObject Bindings(const QJsonObject& Stored)
@@ -77,16 +87,19 @@ public:
             const auto First = Key[0]; const auto Mods = First.keyboardModifiers();
             const bool Tab = (First.key() == Qt::Key_Tab || First.key() == Qt::Key_Backtab)
                 && (Mods == Qt::ControlModifier || Mods == (Qt::ControlModifier | Qt::ShiftModifier));
+            const bool Reader = Item.scope_ == "epub";
             if ((!Tab && QList<Qt::Key>{Qt::Key_Tab, Qt::Key_Backtab, Qt::Key_Return, Qt::Key_Enter, Qt::Key_Escape,
                 Qt::Key_Delete, Qt::Key_Backspace, Qt::Key_Insert, Qt::Key_Left, Qt::Key_Right, Qt::Key_Up,
-                Qt::Key_Down, Qt::Key_Home, Qt::Key_End, Qt::Key_PageUp, Qt::Key_PageDown}.contains(First.key()))
+                Qt::Key_Down, Qt::Key_Home, Qt::Key_End, Qt::Key_PageUp, Qt::Key_PageDown}.contains(First.key()) && !Reader)
                 || (First.key() < Qt::Key_Escape && !(Mods & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))))
                 return QObject::tr("%1: 문자 입력·이동·선택 기본키와 겹칩니다.").arg(Item.label_);
-            for (const auto& ReservedKey : Reserved) if (Overlaps(Key, QKeySequence(ReservedKey)))
+            if(Reader && QList<Qt::Key>{Qt::Key_Tab,Qt::Key_Backtab,Qt::Key_Return,Qt::Key_Enter,Qt::Key_Escape}.contains(First.key()))
+                return QObject::tr("%1: 포커스·입력 기본키는 유지해야 합니다.").arg(Item.label_);
+            for (const auto& ReservedKey : Reserved) if (!Reader && Overlaps(Key, QKeySequence(ReservedKey)))
                 return QObject::tr("%1: 편집 기본키 또는 입력기 키 %2와 겹칩니다.").arg(Item.label_, ReservedKey);
-            for (auto It = Used.begin(); It != Used.end(); ++It) if (Overlaps(Key, It.value()))
+            for (auto It = Used.begin(); It != Used.end(); ++It) if (Overlaps(Key, It.value()) && !(Reader && It.key().startsWith("text:") || !Reader && Item.scope_=="text" && It.key().startsWith("epub:")))
                 return QObject::tr("단축키 충돌: %1 / %2 (%3)").arg(Item.label_, It.key(), Key.toString(QKeySequence::NativeText));
-            Used[Item.label_] = Key;
+            Used[Item.scope_+":"+Item.label_] = Key;
             const QMap<QString, QString> Aliases{{"edit.redo", "Ctrl+Shift+Z"}, {"edit.copy", "Ctrl+Insert"}, {"edit.cut", "Shift+Delete"}, {"edit.paste", "Shift+Insert"}};
             if (Key == QKeySequence(Item.key_) && Aliases.contains(Item.id_)) {
                 const auto Alias = QKeySequence(Aliases[Item.id_]);

@@ -3,6 +3,7 @@
 #include "epubResourceLease.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "UniqueLibs/settings/unifiedConfig.hpp"
 
 /// Internal libraries
 #include "commonLibs/document/epub/epubPackage.hpp"
@@ -257,7 +258,7 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value}});return true;
@@ -283,6 +284,9 @@ namespace hc::document
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
         work_->settingsPath_ = QDir(Config).absoluteFilePath("epub-reading.json");
+        QJsonObject Preferences;QString PreferencesError;
+        if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError))
+            work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"]}});
         if((runtime_.kind_ != WebProcessKind::EpubPrototype && runtime_.kind_ != WebProcessKind::EpubReadOnly) || Generation < 1 || Generation > 9007199254740991LL
             || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) {
             work_->Update({{"status", "error"}, {"message", "epub-view-admission"}});
@@ -366,7 +370,7 @@ namespace hc::document
                         Applied = Next;
                     }
                     QJsonObject Settings;
-                    {std::lock_guard Lock(State->mutex_);if(!State->settingsRequests_.empty()){Settings=std::move(State->settingsRequests_.front());State->settingsRequests_.pop_front();}}
+                    {std::lock_guard Lock(State->mutex_);if(DocumentReady && !State->settingsRequests_.empty()){Settings=std::move(State->settingsRequests_.front());State->settingsRequests_.pop_front();}}
                     if(!Settings.isEmpty()) {
                         Settings["protocolVersion"]=1;Settings["documentId"]=Id;Settings["generation"]=State->generation_;
                         QByteArray Reply;

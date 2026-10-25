@@ -182,7 +182,7 @@ function currentSnapshot() {
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
-        locator: getLocator(), frameCount: docs.length };
+        readerFocused:docs.some(doc=>doc.hasFocus()), locator: getLocator(), frameCount: docs.length };
 }
 
 function getLocator() {
@@ -420,3 +420,8 @@ window.hcStartupDiagnostics = () => ({
 });
 
 window.hcSnapshot = () => window.hcEvidence.status === "ready" ? {...window.hcEvidence,...currentSnapshot()} : window.hcEvidence;
+window.hcFocusReading=()=>{
+    const doc=documents()[0];if(!doc)return false;
+    const frame=doc.defaultView.frameElement;frame.tabIndex=0;frame.focus();
+    doc.body.tabIndex=-1;doc.body.focus({preventScroll:true});return doc.hasFocus();
+};

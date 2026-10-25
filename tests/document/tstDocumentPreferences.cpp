@@ -46,6 +46,14 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void epubShortcutScope() {
+        using hc::document::DocumentShortcutRegistry;
+        QVERIFY(DocumentShortcutRegistry::Validate({}).isEmpty());
+        QVERIFY(DocumentShortcutRegistry::Validate({{"epub.next","Ctrl+Alt+N"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epub.next","PgUp"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epub.next","Tab"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epub.next","Ctrl+S"}}).isEmpty());
+    }
     void workspaceScrollbarsAndIcons_data()
     {
         QTest::addColumn<bool>("hosted"); QTest::addColumn<QString>("mode");
