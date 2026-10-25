@@ -15,6 +15,7 @@ class QMainUI;
 class CFSProxyModel;
 class CFSModel;
 class CViewT;
+namespace hc::ui { class PanelPathBar; }
 
 namespace Qtitan
 {
@@ -163,7 +164,7 @@ private:
     QVector< TySpTabState >         vecTabStates;
     bool                            workspaceRestored_ = false;
     fm::ui::PanelTabStrip*           tabs_ = nullptr;
-    fm::ui::BreadcrumbBar*           path_ = nullptr;
+    hc::ui::PanelPathBar*            path_ = nullptr;
     fm::ui::ProgressBar*             navigationProgress_ = nullptr;
     fm::ui::DriveButton*             drive_ = nullptr;
     fm::ui::SegmentedControl*        viewMode_ = nullptr;

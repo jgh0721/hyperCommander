@@ -71,6 +71,8 @@ set(PROJECT_UI_SRC
         UIs/cmpPanel.cpp
         UIs/cmpPanel.hpp
         UIs/cmpPanel.ui
+        UIs/panelPathBar.cpp
+        UIs/panelPathBar.hpp
         UIs/cmpViewer.cpp
         UIs/cmpViewer.hpp
         UIs/cmpViewer.ui

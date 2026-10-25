@@ -274,6 +274,15 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
                 -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
                 -Executable "$<TARGET_FILE:hc_smb_tests>" -WorkspaceOnly -Dpr ${HC_WORKSPACE_DPR})
         set_tests_properties(hc.workspace_ui_${HC_WORKSPACE_DPR} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+        foreach(HC_BREADCRUMB_TEST IN ITEMS panelBreadcrumbUi panelBreadcrumbNavigationUi)
+            add_test(NAME hc.breadcrumb_ui_${HC_BREADCRUMB_TEST}_${HC_WORKSPACE_DPR}
+                COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                    -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"
+                    -Executable "$<TARGET_FILE:hc_smb_tests>" -TestFunctions ${HC_BREADCRUMB_TEST}
+                    -Dpr ${HC_WORKSPACE_DPR} -TimeoutSeconds 90)
+            set_tests_properties(hc.breadcrumb_ui_${HC_BREADCRUMB_TEST}_${HC_WORKSPACE_DPR}
+                PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+        endforeach()
         add_test(NAME hc.qtitan_ui_${HC_WORKSPACE_DPR}
             COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                 -File "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1"

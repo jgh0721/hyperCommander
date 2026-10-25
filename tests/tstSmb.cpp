@@ -24,6 +24,7 @@
 #include <fmwidgets/RenameComparisonView.h>
 #include <fmwidgets/SegmentedControl.h>
 #include <fmwidgets/BreadcrumbBar.h>
+#include "HyperCommander/UIs/panelPathBar.hpp"
 #include <fmwidgets/ProgressBar.h>
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmwidgets/CommandLine.h>
@@ -288,6 +289,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbNavigationUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
@@ -1903,6 +1906,127 @@ private slots:
         auto* View = static_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex())); QTRY_VERIFY(View->IsThumbnailMode()); QCOMPARE(View->ListMode(), QString("thumbnails"));
         const auto Settings = hc::ui::ReadThumbnailSettings(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["thumbnails"].toObject());
         QCOMPARE(Settings.appearance_.size, 160); QCOMPARE(Settings.appearance_.nameLines, 0); QCOMPARE(Settings.threads_, 3); QCOMPARE(Settings.cacheMb_, 8); QVERIFY(Settings.appearance_.fill);
+    }
+
+    void panelBreadcrumbUi()
+    {
+        using hc::ui::PanelPathBar;
+        QWidget Window;
+        Window.resize(1100, 90);
+        PanelPathBar Bar(&Window); Bar.setGeometry(10, 10, 1050, 26);
+        QLineEdit Other(&Window); Other.setGeometry(10, 50, 300, 25);
+        Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        Bar.setFullPath("D:\\Clouds\\QSync");
+        QSignalSpy Navigated(&Bar, &fm::ui::BreadcrumbBar::pathEntered);
+        QSignalSpy Activated(&Bar, &PanelPathBar::activated);
+        const auto Root = QPoint(12, Bar.height() / 2);
+        const auto Hover = [&] {
+            QMouseEvent Move(QEvent::MouseMove, QPointF(Root), QPointF(Bar.mapToGlobal(Root)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(&Bar, &Move);
+        };
+        const auto Leave = [&] { QEvent Event(QEvent::Leave); QApplication::sendEvent(&Bar, &Event); };
+        QTest::mouseMove(&Other, Other.rect().center()); QTest::qWait(40);
+        Leave();
+        const auto Idle = Bar.grab().toImage();
+        QTest::mouseMove(&Bar, Root); Hover(); QTest::qWait(20);
+        QVERIFY(Idle != Bar.grab().toImage());
+        QTest::mouseMove(&Other, Other.rect().center()); QTest::qWait(20);
+        Leave();
+        QTRY_COMPARE(Idle, Bar.grab().toImage());
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        QVERIFY(!Activated.isEmpty());
+        QTRY_COMPARE(Navigated.size(), 1);
+        QCOMPARE(Navigated.takeFirst().at(0).toString(), QString("D:\\"));
+
+        // The first click of a double click must not navigate to its ancestor.
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        QTest::mouseDClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        auto* Editor = Bar.findChild<QLineEdit*>("hc.panelPath.editor"); QVERIFY(Editor);
+        QTRY_VERIFY(Editor->isVisible()); QCOMPARE(Editor->selectedText(), QString("D:\\Clouds\\QSync"));
+        QTest::qWait(QApplication::doubleClickInterval() + 30); QVERIFY(Navigated.isEmpty());
+        QTest::keyClick(Editor, Qt::Key_Escape); QTRY_VERIFY(!Editor->isVisible());
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, QPoint(Bar.width() - 15, 12));
+        QTRY_VERIFY(Editor->isVisible()); QCOMPARE(Editor->selectedText(), QString("D:\\Clouds\\QSync"));
+        Editor->setText("D:\\Other"); QTest::keyClick(Editor, Qt::Key_Return);
+        QTRY_COMPARE(Navigated.size(), 1); QCOMPARE(Navigated.takeFirst().at(0).toString(), QString("D:\\Other"));
+        QVERIFY(!Editor->isVisible());
+
+        Bar.resize(130, 26); QTest::mouseMove(&Other, Other.rect().center());
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        auto* Overflow = Bar.findChild<QMenu*>("hc.panelPath.folders"); QVERIFY(Overflow);
+        QTRY_VERIFY(Overflow->isVisible()); QVERIFY(!Overflow->actions().isEmpty());
+        QCOMPARE(Overflow->actions().front()->data().toString(), QString("D:\\"));
+        Overflow->close();
+
+        // UNC roots stay intact even when the earlier ancestors are folded.
+        Bar.setFullPath("\\\\server\\share\\folder\\child");
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        QMenu* Unc = nullptr;
+        for (auto* Menu : Bar.findChildren<QMenu*>("hc.panelPath.folders")) if (Menu->isVisible()) Unc = Menu;
+        QVERIFY(Unc); QCOMPARE(Unc->actions().front()->data().toString(), QString("\\\\server\\share")); Unc->close();
+
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QVERIFY(QDir(Directory.path()).mkdir("child & folder")); QVERIFY(QDir(Directory.path()).mkdir("zeta"));
+        Bar.resize(1050, 26); Bar.setFullPath(QDir::toNativeSeparators(Directory.path()));
+        // Down opens the current folder's separator menu without pointer input.
+        Bar.setFocus(); QTest::keyClick(&Bar, Qt::Key_Down);
+        QMenu* Folders = nullptr;
+        for (auto* Menu : Bar.findChildren<QMenu*>("hc.panelPath.folders")) if (Menu->isVisible()) Folders = Menu;
+        QVERIFY(Folders);
+        const auto Child = QDir::toNativeSeparators(Directory.filePath("child & folder"));
+        const auto FindChild = [&]() -> QAction* { for (auto* Action : Folders->actions()) if (Action->data().toString() == Child) return Action; return nullptr; };
+        QTRY_VERIFY(FindChild());
+        FindChild()->trigger();
+        QTRY_COMPARE(Navigated.size(), 1); QCOMPARE(Navigated.takeFirst().at(0).toString(), Child);
+
+        // An old menu cannot publish into a replacement location.
+        Bar.setFocus(); QTest::keyClick(&Bar, Qt::Key_Down);
+        Bar.setFullPath("D:\\Clouds\\QSync"); QTest::qWait(50);
+        for (auto* Menu : Bar.findChildren<QMenu*>("hc.panelPath.folders")) QVERIFY(!Menu->isVisible());
+        Bar.SetBreadcrumbsEnabled(false);
+        QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);
+        QTRY_VERIFY(Editor->isVisible()); QTest::keyClick(Editor, Qt::Key_Escape);
+        Bar.SetBreadcrumbsEnabled(true);
+        Bar.setFullPath(QDir::toNativeSeparators(Directory.filePath("missing")));
+        Bar.setFocus(); QTest::keyClick(&Bar, Qt::Key_Down);
+        QMenu* Missing = nullptr;
+        for (auto* Menu : Bar.findChildren<QMenu*>("hc.panelPath.folders")) if (Menu->isVisible()) Missing = Menu;
+        QVERIFY(Missing);
+        QTRY_VERIFY(Missing->actions().front()->text().contains("win32:"));
+        QVERIFY(!Missing->actions().front()->isEnabled()); Missing->close();
+    }
+
+    void panelBreadcrumbNavigationUi()
+    {
+        using hc::ui::PanelPathBar;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        main_->resize(1400, 900); main_->show();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QVERIFY(QDir(Directory.path()).mkpath("parent/child"));
+        auto* Panel = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Panel);
+        const auto Target = QDir::toNativeSeparators(Directory.filePath("parent/child"));
+        Panel->ChangeCurrentPath(Target, {}); QTRY_COMPARE(Panel->CurrentPath(), Target);
+        auto* Bar = Panel->findChild<PanelPathBar*>("hc.panelPath"); QVERIFY(Bar);
+        main_->findChild<CmpPanel*>("cmpLeftPanel")->sig_NotifyPanelActivated(); QVERIFY(!Bar->IsPaneActive());
+        Bar->EditPath(); QVERIFY(Bar->IsPaneActive());
+        auto* Editor = Bar->findChild<QLineEdit*>("hc.panelPath.editor"); QVERIFY(Editor);
+        const auto Parent = QDir::toNativeSeparators(Directory.filePath("parent"));
+        Editor->setText(Parent); QTest::keyClick(Editor, Qt::Key_Return);
+        QTRY_COMPARE(Panel->CurrentPath(), Parent);
+        Bar->setFocus(); QTest::keyClick(Bar, Qt::Key_Down);
+        auto* Menu = Bar->findChild<QMenu*>("hc.panelPath.folders"); QVERIFY(Menu);
+        const auto ChildAction = [&]() -> QAction* { for (auto* Action : Menu->actions()) if (Action->data().toString() == Target) return Action; return nullptr; };
+        QTRY_VERIFY(ChildAction()); ChildAction()->trigger();
+        QTRY_COMPARE(Panel->CurrentPath(), Target);
+        const auto Dir = QCoreApplication::applicationDirPath();
+        QTest::mouseMove(main_, QPoint(5, main_->height() - 5)); QTest::qWait(20);
+        QEvent Leave(QEvent::Leave); QApplication::sendEvent(Bar, &Leave);
+        QVERIFY(Bar->grab().save(Dir + "/breadcrumb-idle.png"));
+        QTest::mouseMove(Bar, QPoint(12, Bar->height() / 2)); QTest::qWait(20);
+        QMouseEvent Move(QEvent::MouseMove, QPointF(12, Bar->height() / 2), QPointF(Bar->mapToGlobal(QPoint(12, Bar->height() / 2))), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(Bar, &Move);
+        QVERIFY(Bar->grab().save(Dir + "/breadcrumb-hover.png"));
     }
 
     void activePanelAppearanceUi()

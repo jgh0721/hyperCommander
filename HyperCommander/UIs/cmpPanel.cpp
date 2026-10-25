@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "panelPathBar.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
 #include "dlgGridStyle.hpp"
@@ -1050,7 +1051,8 @@ void CmpPanel::initializeUIs()
     });
     auto* Controls = new QWidget(this); auto* Layout = new QHBoxLayout(Controls);
     Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(2);
-    path_ = new fm::ui::BreadcrumbBar(Controls); path_->setObjectName("hc.panelPath"); path_->SetFullPathMode(true);
+    path_ = new hc::ui::PanelPathBar(Controls); path_->setObjectName("hc.panelPath");
+    connect(path_, &hc::ui::PanelPathBar::activated, this, &CmpPanel::sig_NotifyPanelActivated);
     history_ = new QComboBox(this); history_->setObjectName("hc.workspaceHistory"); history_->hide();
     historyButton_ = new QToolButton(Controls); historyButton_->setText(QStringLiteral("▾"));
     historyButton_->setObjectName("hc.panelHistory"); historyButton_->setToolTip(tr("방문 기록"));
@@ -1077,7 +1079,7 @@ void CmpPanel::initializeUIs()
     search_ = new QLineEdit(this); search_->setObjectName("hc.workspaceSearch"); search_->hide();
     connect(search_, &QLineEdit::textChanged, this, [this](const QString& Text) { SetSearch(Text); });
     connect(path_, &fm::ui::BreadcrumbBar::pathEntered, this, [this](const QString& Path) {
-        emit sig_NotifyPanelActivated(); ChangeCurrentPath(Path, {});
+        emit sig_NotifyPanelActivated(); ChangeCurrentPath(Path, {}); SetFocusView(CurrentTabIndex());
     });
     connect(tabs_, &fm::ui::PanelTabStrip::newTabRequested, this, [this] { emit sig_NotifyPanelActivated(); AddTab(); SetFocusView(CurrentTabIndex()); });
     connect(tabs_, &fm::ui::PanelTabStrip::closeTabRequested, this, &CmpPanel::closeTabAt);
@@ -1219,6 +1221,9 @@ void CmpPanel::syncPanelChrome()
     Bar->setCurrentIndex(ui.tabWidget->currentIndex());
     Bar->setMaximumWidth(std::max(30, Bar->sizeHint().width()));
     const auto* SearchModel = static_cast<CFSModel*>(retrieveFocusState()->Model);
+    const auto Kind = SearchModel->WorkspaceLocation().kind_;
+    path_->SetBreadcrumbsEnabled(!SearchModel->IsSearchResults()
+        && (Kind == hc::storage::LocatorKind::Local || Kind == hc::storage::LocatorKind::Smb));
     path_->setFullPath(SearchModel->IsSearchResults() ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath());
     { QSignalBlocker ViewBlocker(viewMode_);
       auto* View = static_cast<CGridView*>(retrieveFocusState()->View);
