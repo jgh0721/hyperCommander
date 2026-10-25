@@ -19,17 +19,7 @@ QByteArray read(const QString& Path) {
     const auto Data=File.read(MaxBytes+1); return Data.size()<=MaxBytes ? Data : QByteArray{};
 }
 bool dimensions(const QSize& Size) { return Size.isValid() && Size.width()<=4096 && Size.height()<=4096 && qint64(Size.width())*Size.height()<=4194304; }
-}
-ReadingAsset ReadingAssets::Import(const QString& Input,const QString& Settings) {
-    if(Settings.isEmpty()) return {{},QStringLiteral("설정 저장 경로가 없는 모드에서는 이미지를 보관할 수 없습니다.")};
-    const auto Data=read(Input); QBuffer Buffer; Buffer.setData(Data); Buffer.open(QIODevice::ReadOnly);
-    QImageReader Reader(&Buffer); Reader.setAutoTransform(true); const auto Format=Reader.format();
-    if(Data.isEmpty() || !QList<QByteArray>{"png","jpeg","bmp"}.contains(Format) || !dimensions(Reader.size()))
-        return {{},QStringLiteral("배경은 8 MiB·400만 화소·한 변 4096 픽셀 이하의 PNG/JPEG/BMP를 사용하세요.")};
-    QImageReader::setAllocationLimit(32); const auto Image=Reader.read();
-    if(Image.isNull() || !dimensions(Image.size())) return {{},QStringLiteral("배경 이미지를 읽을 수 없습니다.")};
-    QByteArray Encoded; QBuffer Output(&Encoded); Output.open(QIODevice::WriteOnly);
-    if(!Image.save(&Output,"PNG") || Encoded.size()>MaxBytes) return {{},QStringLiteral("변환한 배경 이미지가 8 MiB를 초과합니다.")};
+ReadingAsset store(const QByteArray& Encoded,const QString& Settings) {
     const auto Id=QString::fromLatin1(QCryptographicHash::hash(Encoded,QCryptographicHash::Sha256).toHex());
     const auto Directory=directory(Settings); QDir Folder(Directory); const auto Path=Folder.filePath("bg-"+Id+".png");
     if(QFileInfo(Directory).isSymLink() || QFileInfo(Path).isSymLink()) return {{},QStringLiteral("연결된 자산 경로에는 저장하지 않습니다.")};
@@ -42,6 +32,25 @@ ReadingAsset ReadingAssets::Import(const QString& Input,const QString& Settings)
     QSaveFile File(Path); File.setDirectWriteFallback(false);
     if(!File.open(QIODevice::WriteOnly) || File.write(Encoded)!=Encoded.size() || !File.commit()) return {{},QStringLiteral("배경 이미지를 보관하지 못했습니다.")};
     return {Id,{}};
+}
+}
+ReadingAsset ReadingAssets::Import(const QString& Input,const QString& Settings) {
+    if(Settings.isEmpty()) return {{},QStringLiteral("설정 저장 경로가 없는 모드에서는 이미지를 보관할 수 없습니다.")};
+    const auto Data=read(Input); QBuffer Buffer; Buffer.setData(Data); Buffer.open(QIODevice::ReadOnly);
+    QImageReader Reader(&Buffer); Reader.setAutoTransform(true); const auto Format=Reader.format();
+    if(Data.isEmpty() || !QList<QByteArray>{"png","jpeg","bmp"}.contains(Format) || !dimensions(Reader.size()))
+        return {{},QStringLiteral("배경은 8 MiB·400만 화소·한 변 4096 픽셀 이하의 PNG/JPEG/BMP를 사용하세요.")};
+    QImageReader::setAllocationLimit(32); const auto Image=Reader.read();
+    if(Image.isNull() || !dimensions(Image.size())) return {{},QStringLiteral("배경 이미지를 읽을 수 없습니다.")};
+    QByteArray Encoded; QBuffer Output(&Encoded); Output.open(QIODevice::WriteOnly);
+    if(!Image.save(&Output,"PNG") || Encoded.size()>MaxBytes) return {{},QStringLiteral("변환한 배경 이미지가 8 MiB를 초과합니다.")};
+    return store(Encoded,Settings);
+}
+ReadingAsset ReadingAssets::Install(const QByteArray& Png,const QString& Settings,const QString& ExpectedId) {
+    if(Settings.isEmpty() || Png.isEmpty() || Png.size()>MaxBytes || !QRegularExpression("^[0-9a-f]{64}$").match(ExpectedId).hasMatch() || QCryptographicHash::hash(Png,QCryptographicHash::Sha256).toHex()!=ExpectedId.toLatin1())return {{},QStringLiteral("가져올 배경 이미지의 크기 또는 SHA-256이 올바르지 않습니다.")};
+    QBuffer Buffer;Buffer.setData(Png);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);QImageReader::setAllocationLimit(32);
+    if(Reader.format()!="png" || !dimensions(Reader.size()) || Reader.read().isNull())return {{},QStringLiteral("가져올 PNG 배경을 해석할 수 없거나 화소 제한을 초과했습니다.")};
+    return store(Png,Settings);
 }
 QByteArray ReadingAssets::Load(const QString& Settings,const QString& Id,QString& Error) {
     if(Settings.isEmpty() || !QRegularExpression("^[0-9a-f]{64}$").match(Id).hasMatch()) { Error=QStringLiteral("배경 식별자가 올바르지 않습니다."); return {}; }

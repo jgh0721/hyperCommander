@@ -84,6 +84,8 @@ target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>
 qt_add_library(hc_document_widgets STATIC
     ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp
     ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
+    ../tools/epub/render/readingProfiles.cpp ../tools/epub/render/readingProfiles.hpp
+    ../tools/epub/render/readingProfilePanel.cpp
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
     ../UniqueLibs/document/epubSourceRecovery.cpp
     ../UniqueLibs/document/epubSourcePreview.cpp

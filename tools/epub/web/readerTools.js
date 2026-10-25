@@ -1,3 +1,5 @@
+import { createReadingAnnotations } from "./readingAnnotations.js";
+
 // Trusted reader controls; all publication markup remains passive.
 export function findText(section, query, limit = 200) {
     if (typeof query !== "string" || !query.trim() || query.length > 128) throw Error("검색어는 1~128자입니다.");
@@ -23,6 +25,7 @@ export function findText(section, query, limit = 200) {
 }
 export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && /^epubcfi\([^\u0000-\u001f\u007f-\u009f\u2028\u2029]+\)$/u.test(value); }
 export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{} }) {
+    const annotations=createReadingAnnotations({book,documents});
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
     const hooked = new WeakSet();
     const close = () => { dialog?.remove(); dialog=null; popup=null; if(focus?.isConnected)focus.focus();else window.hcFocusReading?.(); };
@@ -60,7 +63,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         show("footnote",{text:target.textContent.trim().slice(0,8192)});
     }
     function hook(doc) {
-        if(hooked.has(doc))return;hooked.add(doc);
+        if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);
         for(const image of doc.images){image.tabIndex=0;image.setAttribute("role","button");image.setAttribute("aria-label",image.alt||"책 이미지 확대");}
         doc.addEventListener("keydown",event=>{if(!event.isComposing && event.target.matches?.("img") && ["Enter"," "].includes(event.key)){event.preventDefault();event.target.click();}});
         doc.addEventListener("click",e=>{
@@ -76,7 +79,8 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     async function action(request) {
         const {action,value,serial}=request;result={serial,busy:true};
         try {
-            if(action==="search") {
+            if(["annotations-set","annotation-capture","annotation-resolve"].includes(action)){await annotations.action(request);result={serial,annotation:true};}
+            else if(action==="search") {
                 const b=book();if(!b)throw Error("EPUB.js 검색을 사용할 수 없습니다.");
                 const hits=[];let characters=0,limited=false;
                 for(const section of b.spine.spineItems) {
@@ -87,7 +91,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
                     await new Promise(resolve=>setTimeout(resolve,0));
                 }
                 result={serial,hits,limited:limited||hits.length>=200};
-            } else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {if(popup)close();await navigate(action,value);result={serial,located:true};}
+            } else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {annotations.clearSelection();if(popup)close();await navigate(action,value);result={serial,located:true};}
             else if(action==="locate" || action==="preview-location") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);if(action==="locate")window.hcFocusReading?.();result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
@@ -96,5 +100,5 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         } catch(error) {result={serial,error:String(error)};}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,state:()=>({readerAction:result,popup})};
+    return {hook,action,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),readerAction:result,popup})};
 }

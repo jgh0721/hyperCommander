@@ -6,6 +6,8 @@
 #include <QWidget>
 #include <QStringList>
 #include "readingAssets.hpp"
+#include "readingProfiles.hpp"
+class QLineEdit;
 class QPlainTextEdit;
 class QCheckBox;
 class QTabWidget;
@@ -49,7 +51,7 @@ namespace hc::epub::poc
         bool CssValid() const;
         bool Execute(const QString& Action, const QJsonObject& Patch, bool Global);
         QString CssError() const { return cssError_; }
-        bool IsBusy() const { return busy_; }
+        bool IsBusy() const { return busy_ || profilesBusy_; }
         bool IsDirty() const { return draft_ != base_; }
         void SetGlobalOnly();
         void SetFixedLayout(bool Fixed);
@@ -59,6 +61,10 @@ namespace hc::epub::poc
         void ProfileChanged(const QJsonObject& Profile);
     private:
         void addAppearance(QTabWidget* Tabs);
+        void addProfiles(QTabWidget* Tabs);
+        void useNamedProfile(const QJsonObject& Profile);
+        void profilesOperation(const QString& Operation,const QString& Argument,bool Overwrite=false);
+        void profileTransfer(bool Import);
         void importBackground();
         void addNumber(QFormLayout* Form, const QString& Key, const QString& Label, double Min, double Max, double Step);
         void addField(QFormLayout* Form, const QString& Key, const QString& Label, QWidget* Editor);
@@ -74,6 +80,9 @@ namespace hc::epub::poc
         QPlainTextEdit* css_=nullptr;
         QPushButton *backgroundColor_=nullptr,*textColor_=nullptr,*backgroundImport_=nullptr;
         QFutureWatcher<ReadingAsset> assetWorker_;
+        QFutureWatcher<ReadingProfileResult> profilesWorker_;
+        QComboBox* namedProfiles_=nullptr;QLineEdit* profileName_=nullptr;QCheckBox* profileOverwrite_=nullptr;
+        bool profilesBusy_=false,profilesLoaded_=false;QString profileOperation_;
         QStringList bookFonts_, systemFonts_;
         ReadingSnapshot snapshot_;
         QJsonObject base_, draft_;

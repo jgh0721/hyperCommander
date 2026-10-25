@@ -12,6 +12,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -109,6 +110,7 @@ namespace hc::epub::poc
             if(Result.error.isEmpty()) { loadFailed_ = false; acceptSnapshot(Result); }
             else { refresh(); status_->setText(Result.error); }
         });
+        addProfiles(Tabs);
         if(path_.isEmpty())
         {
             snapshot_.global["theme"] = Theme == "dark" ? "dark" : "light";
@@ -161,11 +163,12 @@ namespace hc::epub::poc
     }
     void ReadingSettings::edit(const QString& Key, const QJsonValue& Value)
     {
-        if(updating_ || busy_) return;
+        if(updating_ || IsBusy()) return;
         draft_[Key] = Value; refresh(); emit ProfileChanged(Profile());
     }
     void ReadingSettings::refresh()
     {
+        const bool Busy=IsBusy();
         updating_ = true;
         const auto Values = Profile();
         mode_->setCurrentIndex(Values["override"].toBool() ? 0 : 1);
@@ -191,11 +194,11 @@ namespace hc::epub::poc
         if(css_->toPlainText()!=Values["customCss"].toString()) css_->setPlainText(Values["customCss"].toString());
         backgroundImport_->setEnabled(!path_.isEmpty());
         const bool Dirty = IsDirty();
-        editors_->setEnabled(!busy_ && !loadFailed_); clear_->setEnabled(!busy_ && !loadFailed_ && !draft_.isEmpty());
+        editors_->setEnabled(!Busy && !loadFailed_); clear_->setEnabled(!Busy && !loadFailed_ && !draft_.isEmpty());
         clear_->setText(scope_->currentIndex() == 1 ? tr("기본값 초기화") : tr("이 책의 모든 지정 해제"));
-        apply_->setEnabled(!busy_ && !loadFailed_ && Dirty && CssValid()); cancel_->setEnabled(!busy_ && Dirty);
-        reload_->setEnabled(!busy_ && !Dirty && !path_.isEmpty()); scope_->setEnabled(!busy_ && !Dirty && !loadFailed_);
-        status_->setText(busy_ ? tr("설정을 처리하고 있습니다…") : Dirty ? tr("미리보기 · 아직 적용하지 않음")
+        apply_->setEnabled(!Busy && !loadFailed_ && Dirty && CssValid()); cancel_->setEnabled(!Busy && Dirty);
+        reload_->setEnabled(!Busy && !Dirty && !path_.isEmpty()); scope_->setEnabled(!Busy && !Dirty && !loadFailed_);
+        status_->setText(Busy ? tr("설정을 처리하고 있습니다…") : Dirty ? tr("미리보기 · 아직 적용하지 않음")
             : scope_->currentIndex() == 1 ? tr("기본값 미리보기 · 책별 지정 제외") : tr("적용된 설정"));
         if(!CssValid()) status_->setText(tr("CSS 검사: %1").arg(cssError_.isEmpty()?tr("검사 중…"):cssError_));
         const bool Editable=!fixedLayout_;
@@ -205,8 +208,14 @@ namespace hc::epub::poc
         for(const auto& Key:QStringList{"override","font","align","layout","columns","size","weight","line","letter","word","before","after","indent","customCss","cssEnabled","cssForce","textColor"})if(resets_.contains(Key))resets_[Key]->setEnabled(Editable && draft_.contains(Key));
         for(int I=0;I<3;++I)if(auto* Button=findChild<QPushButton*>("preset"+QString::number(I)))Button->setEnabled(Editable);
         fixedNote_->setVisible(fixedLayout_);
+        const bool ProfilesReady=!Busy && !path_.isEmpty() && !loadFailed_;
+        if(namedProfiles_){namedProfiles_->setEnabled(ProfilesReady);profileName_->setEnabled(ProfilesReady);profileOverwrite_->setEnabled(ProfilesReady);
+            for(const auto& Name:QStringList{"epubProfileUse","epubProfileRemove"})if(auto* Button=findChild<QPushButton*>(Name))Button->setEnabled(ProfilesReady && namedProfiles_->currentIndex()>=0);
+            for(const auto& Name:QStringList{"epubProfileSave","epubProfileExport"})if(auto* Button=findChild<QPushButton*>(Name))Button->setEnabled(ProfilesReady && CssValid());
+            for(const auto& Name:QStringList{"epubProfileImport","epubProfileReload"})if(auto* Button=findChild<QPushButton*>(Name))Button->setEnabled(ProfilesReady);
+        }
         updating_ = false;
-        if(clearPositions_)clearPositions_->setEnabled(!busy_ && !Dirty && !loadFailed_);
+        if(clearPositions_)clearPositions_->setEnabled(!Busy && !Dirty && !loadFailed_);
     }
     void ReadingSettings::SetFixedLayout(bool Fixed) {if(fixedLayout_==Fixed)return;fixedLayout_=Fixed;refresh();}
     void ReadingSettings::acceptSnapshot(const ReadingSnapshot& Snapshot)
@@ -216,13 +225,13 @@ namespace hc::epub::poc
     }
     void ReadingSettings::reload()
     {
-        if(busy_ || IsDirty() || path_.isEmpty()) return;
+        if(IsBusy() || IsDirty() || path_.isEmpty()) return;
         busy_ = true; loadFailed_ = true; refresh();
         worker_.setFuture(QtConcurrent::run([Path = path_, Book = book_] { return ReadingStore::Load(Path, Book); }));
     }
     void ReadingSettings::save()
     {
-        if(busy_ || loadFailed_ || !IsDirty() || !CssValid()) return;
+        if(IsBusy() || loadFailed_ || !IsDirty() || !CssValid()) return;
         if(path_.isEmpty())
         {
             auto Next = snapshot_; if(scope_->currentIndex() == 1) Next.global = draft_; else Next.book = draft_;
@@ -324,13 +333,13 @@ void ReadingSettings::SetGlobalOnly() {
 }
 bool ReadingSettings::CommitGlobal(QString& Error) {
     if(!IsDirty())return true;
-    if(!globalOnly_ || busy_ || loadFailed_){Error=tr("EPUB 설정을 읽는 중이거나 읽기에 실패했습니다.");return false;}
+    if(!globalOnly_ || IsBusy() || loadFailed_){Error=tr("EPUB 설정을 읽는 중이거나 읽기에 실패했습니다.");return false;}
     const auto Result=ReadingStore::Save(path_,book_,true,base_,draft_);if(!Result.error.isEmpty()){Error=Result.error;return false;}
     acceptSnapshot(Result);return true;
 }
 void ReadingSettings::ResetDraft(){draft_={};refresh();emit ProfileChanged(Profile());}
 bool ReadingSettings::Execute(const QString& Action,const QJsonObject& Patch,bool Global) {
-    if(busy_ || loadFailed_)return false;
+    if(IsBusy() || loadFailed_)return false;
     if(Action=="preview") {
         if(scope_->currentIndex()!=(Global?1:0)) {if(IsDirty())return false;scope_->setCurrentIndex(Global?1:0);}
         auto Next=draft_;for(auto I=Patch.begin();I!=Patch.end();++I) {if(I.value().isNull())Next.remove(I.key());else Next[I.key()]=I.value();}

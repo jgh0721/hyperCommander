@@ -115,6 +115,9 @@ async function settleFrame() {
     await rendition.q.enqueue(() => {});
     await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
     await Promise.all(documents().map(doc => doc.fonts.ready));
+    // Annotation rectangles follow the final font metrics and iframe placement.
+    // Do not rebuild publication frames merely to update these SVG overlays.
+    for(const view of rendition.manager.views.all())try{view.pane?.render();}catch{}
     await new Promise(resolve => {
         const timer=setTimeout(resolve,80);
         requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve();}));
@@ -553,6 +556,7 @@ window.hcValidateCss = source => {
     catch (error) { return { ready: true, ok: false, error: error.message, line: error.line || 1, column: error.column || 1 }; }
 };
 window.hcCommand = (command, value) => {
+    if(command==="read" && value?.action==="annotation-cancel"){tools.cancelAnnotations();return;}
     const pageMove=command==="read" && ["next","previous"].includes(value?.action);
     if(pageMove && pendingPageMoves>=2)return;
     if(pageMove)++pendingPageMoves;
@@ -595,6 +599,7 @@ window.addEventListener("unhandledrejection", event => fail(event.reason));
 // Trusted-shell diagnostics only: no book script or mutable document authority.
 window.hcStartupDiagnostics = () => ({
     activeCommand, reflowStage, pendingCommands, pendingPageMoves,
+    layoutState:rendition?.manager?{axis:rendition.manager.settings.axis,flow:rendition.manager.viewSettings.flow,writingMode:rendition.manager.writingMode,paginated:rendition.manager.isPaginated,props:rendition._layout.props}:null,
     profileApplications,profileSkips,
     jsHeapBytes:performance.memory?.usedJSHeapSize || 0,
     managedViews:rendition?.manager?.views?.length || 0,

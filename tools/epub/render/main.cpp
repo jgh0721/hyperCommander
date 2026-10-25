@@ -271,7 +271,7 @@ namespace
             settingsScroll_=new QScrollArea(Splitter);settingsScroll_->setObjectName("epubQuickSettings");settingsScroll_->setWidgetResizable(true);settingsScroll_->setMinimumWidth(320);settingsScroll_->setWidget(settings_);
             view_ = new QWebEngineView(Splitter);view_->setFocusPolicy(InitiallyInteractive?Qt::StrongFocus:Qt::NoFocus); Splitter->setSizes({260,360,880});
             navigationScroll_->hide();settingsScroll_->hide();
-            for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
+            for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-notes",tr("형광펜·메모")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
                 Action->setCheckable(true);
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{readAction("toggle-"+Name.mid(6),{});});
@@ -325,6 +325,7 @@ namespace
                     if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
                     if(!Result["readerBusy"].toBool()) {
                         navigation_->Poll(Result);
+                        const auto Click=Result["annotationClicked"].toObject();if(Click["serial"].toInteger()>annotationClickSeen_){annotationClickSeen_=Click["serial"].toInteger();readAction("annotation-select",Click["id"]);}
                         while(!pendingBookmarks_.isEmpty())navigation_->Execute("bookmark-add",pendingBookmarks_.takeAt(0));
                     }
                     const bool Fixed=Result["contentLayout"]=="pre-paginated";settings_->SetFixedLayout(Fixed);
@@ -461,11 +462,11 @@ namespace
             if(settingsScroll_->isVisible())return "settings";
             if(!navigationScroll_->isVisible())return {};
             const auto Index=navigation_->findChild<QTabWidget*>()->currentIndex();
-            return Index==1?"search":Index==2?"bookmarks":"toc";
+            return Index==1?"search":Index==2?"bookmarks":Index==3?"notes":"toc";
         }
         void updatePanelActions() {
             const auto Panel=openPanel();
-            for(const auto& Name:QStringList{"toc","search","bookmarks","settings"})
+            for(const auto& Name:QStringList{"toc","search","bookmarks","notes","settings"})
                 if(auto* Action=findChild<QAction*>("epub.focus-"+Name)){QSignalBlocker Block(Action);Action->setChecked(Panel==Name);}
         }
         void focusReading() {
@@ -479,7 +480,7 @@ namespace
                 if(!Value.isObject() || !shortcuts_->Apply(Value.toObject()).isEmpty())return false;
                 command("bindings",hc::document::DocumentShortcutRegistry::Bindings(Value.toObject()));return true;
             }
-            if(Action.startsWith("toggle-") && QStringList{"toc","search","bookmarks","settings"}.contains(Action.mid(7))) {
+            if(Action.startsWith("toggle-") && QStringList{"toc","search","bookmarks","notes","settings"}.contains(Action.mid(7))) {
                 if(openPanel()==Action.mid(7)){settingsScroll_->hide();navigationScroll_->hide();updatePanelActions();focusReading();return true;}
                 return readAction("focus-"+Action.mid(7),Value);
             }
@@ -489,7 +490,8 @@ namespace
                 focusReading();return true;
             }
             if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();updatePanelActions();settings_->findChild<QTabWidget*>()->setFocus(Qt::ShortcutFocusReason);return true;}
-            if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks"){settingsScroll_->hide();navigationScroll_->show();}
+            if(Action=="annotation-select"){settingsScroll_->hide();navigationScroll_->show();navigation_->Execute("focus-notes");}
+            if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks" || Action=="focus-notes"){settingsScroll_->hide();navigationScroll_->show();}
             if(Action=="bookmark-add" && latest_["readerBusy"].toBool()) {
                 if(pendingBookmarks_.size()>=16)return false;
                 pendingBookmarks_.append(Value);return true;
@@ -572,6 +574,7 @@ namespace
             });
         }
         QString evidence_, documentId_, expectedBookFont_;
+        qint64 annotationClickSeen_=0;
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}};
         QJsonObject hostAppearance_;
