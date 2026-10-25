@@ -546,12 +546,16 @@ namespace hc::document
             const auto Reply=open(Copy,false,{},false,{},tr("복구 초안 · %1").arg(QFileInfo(Result.snapshot_.sourcePath_).fileName()));
             auto Tab=find(Reply["documentId"].toString());if(!Tab){QFile::remove(Copy);ShowShellError(Reply["error"].toString());return;}
             Tab->temporarySource_=Copy;Tab->originalAuthority_=false;Tab->originalSave_=false;Tab->recovered_=true;
-            auto* Timer=new QTimer(this);Timer->setInterval(50);auto Elapsed=std::make_shared<QElapsedTimer>();Elapsed->start();
+            auto* Timer=new QTimer(this);Timer->setInterval(100);auto Elapsed=std::make_shared<QElapsedTimer>();
             connect(Timer,&QTimer::timeout,this,[this,Timer,Elapsed,Id=Tab->id_,Path]{
-                auto Current=find(Id);if(!Current || closingWorkspace_ || Elapsed->elapsed()>60000){Timer->stop();Timer->deleteLater();return;}
+                auto Current=find(Id);if(!Current || closingWorkspace_ || (Elapsed->isValid() && Elapsed->elapsed()>60000)){Timer->stop();Timer->deleteLater();return;}
                 if(Current->loading_)return;
                 if(!Current->pane_->IsEpub()){Timer->stop();Timer->deleteLater();ShowShellError(tr("보관된 EPUB을 열지 못했습니다. 초안 파일은 유지됩니다."));return;}
-                if(!Current->pane_->CanEditEpub()){Current->pane_->Execute({{"action","epub.edit.begin"}});return;}
+                // Opening a recovery entry also starts in reader mode. Only the
+                // EPUB Edit action authorizes entering the source editor.
+                if(!Current->pane_->IsEpubEditing())return;
+                if(!Elapsed->isValid())Elapsed->start();
+                if(!Current->pane_->CanEditEpub())return;
                 Current->pane_->Execute({{"action","epub.edit.recover"},{"path",Path}});Timer->stop();Timer->deleteLater();
             });Timer->start();update();
         });
@@ -704,6 +708,7 @@ namespace hc::document
             else open(Path,false,{},false);
         });
         connect(Pane,&DocumentViewPane::SaveRequested,this,[this,Tab] {activate(Tab);findChild<QAction*>("saveDocumentAs")->trigger();});
+        connect(Pane,&DocumentViewPane::EditEpubRequested,this,[this,Tab]{const auto Result=editEpub(Tab);if(Result.contains("error")){Tab->error_=Result["error"].toString();update();}});
         connect(Pane,&DocumentViewPane::EditImageRequested,this,[this](const QImage& Image){
             const auto Path=recoveryRoot_+"/image-copy-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QDir().mkpath(recoveryRoot_);
@@ -1189,6 +1194,7 @@ namespace hc::document
         if (Tab->loading_ || Tab->navigating_ || !Tab->editor_) return Error("document-not-ready");
         if (Action == "activate") { activate(Tab); Tab->pane_->Focus(); }
         else if(Action=="editHwp")return editHwp(Tab);
+        else if(Action=="editEpub")return editEpub(Tab);
         else if (Action == "replaceText") {
             if (!Request["text"].toString().isValidUtf16()) return Error("p0-utf8-text-required");
             if(Tab->pane_->ViewId()!="text")return Error("document-text-command-on-binary");
@@ -1248,6 +1254,16 @@ namespace hc::document
         }
         update();return {{"accepted",true}};
     }
+    QJsonObject DocumentWorkspaceWidget::editEpub(const std::shared_ptr<Tab>& Tab)
+    {
+        if(!Tab || !hosted_ || !Tab->pane_->IsEpub() || Tab->loading_ || Tab->pane_->IsBusy() || !Tab->pane_->ViewState()["ready"].toBool())return Error("document-edit-unavailable");
+        if(!editRequest_.isEmpty())return Error("document-edit-busy");
+        const auto State=Tab->pane_->ViewState()["epub"].toObject();
+        editRequest_={{"token",QUuid::createUuid().toString(QUuid::Id128)},{"documentId",Tab->id_},
+            {"generation",QString::number(Tab->session_->Snapshot().generation_)},{"format","epub"},
+            {"locator",State["locator"]},{"chapter",State["chapterIndex"]},{"appearance",epubui::Appearance()}};
+        update();return {{"accepted",true}};
+    }
     void DocumentWorkspaceWidget::update()
     {
         if (externalWatcher_) {
@@ -1291,8 +1307,8 @@ namespace hc::document
             if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("%1 · 읽기 전용 · 편집 버튼으로 HyperEditor 열기").arg(Tab->pane_->ViewId().toUpper()));
         }
         if(Tab&&Tab->pane_->IsEpub()){
-            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
-            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("EPUB · 읽기 전용 · 원본 유지"));
+            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(!hosted_ && !Tab->loading_ && !Tab->pane_->IsBusy() && Tab->pane_->CanEditEpub());
+            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(Tab->pane_->IsEpubEditing()?tr("EPUB · 편집 중 · 다른 이름으로 저장 · 원본 유지"):tr("EPUB · 읽기 전용 · 원본 유지"));
         }
         findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
         findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());

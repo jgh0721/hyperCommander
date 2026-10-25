@@ -98,6 +98,9 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
                 else {updating_=true;text_->setPlainText(QString::fromUtf8(Snapshot.currentDraft_));text_->document()->setModified(true);auto Cursor=text_->textCursor();Cursor.setPosition(qBound(0,Snapshot.cursor_,text_->document()->characterCount()-1));text_->setTextCursor(Cursor);text_->verticalScrollBar()->setValue(Snapshot.scroll_);updating_=false;}
             }
             recoveryLocator_=Snapshot.locator_;recoverySourceChanged_=recoveryReadingSourceChanged_;recoveredFrom_=readingRecoveryPath_;
+            previewPreferredChapter_=-1;previewRestoreChapter_=-1;previewRecoveryPosition_=true;
+            const auto Spine=model_.Publication()["spine"].toArray();
+            if(!recoveryLocator_.isEmpty())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)previewRestoreChapter_=I;
             protectSourcePath(Snapshot.sourcePath_);sourcePath_=Snapshot.sourcePath_;
             resetRecoverySession();text_->setReadOnly(false);
             recoveryStatus_->setText(recoverySourceChanged_?tr("원본의 변경 또는 삭제를 감지했습니다. 보관된 판본의 초안을 복원했습니다. 다른 이름으로 저장하여 비교하세요."):tr("보관된 편집 초안을 복원했습니다. 원본 EPUB은 변경하지 않았습니다."));

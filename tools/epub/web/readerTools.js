@@ -87,8 +87,8 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
                     await new Promise(resolve=>setTimeout(resolve,0));
                 }
                 result={serial,hits,limited:limited||hits.length>=200};
-            } else if(["toc","next","previous","back","next-chapter","previous-chapter"].includes(action)) {if(popup)close();await navigate(action,value);result={serial,located:true};}
-            else if(action==="locate") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);window.hcFocusReading?.();result={serial,located:true};}
+            } else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {if(popup)close();await navigate(action,value);result={serial,located:true};}
+            else if(action==="locate" || action==="preview-location") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);if(action==="locate")window.hcFocusReading?.();result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
             else if(action==="close-popup") {close();result={serial};}

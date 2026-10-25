@@ -78,6 +78,7 @@ namespace hc::document
         QJsonObject prepareSave(const std::shared_ptr<Tab>& Tab);
         void update();
         QJsonObject editHwp(const std::shared_ptr<Tab>& Tab);
+        QJsonObject editEpub(const std::shared_ptr<Tab>& Tab);
         void tryFinishClose();
         void escapeViewer();
         void finishWindowClose();

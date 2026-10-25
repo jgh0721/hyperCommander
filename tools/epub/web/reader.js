@@ -317,6 +317,7 @@ function readingLocation() {
 }
 
 async function navigate(action,value) {
+    if(action==="chapter") {if(!Number.isInteger(value) || value<0 || value>=publication.spine.length)throw Error("Invalid chapter");remember();await goChapter(value);return;}
     if(action==="back") {const locator=history.pop();if(locator)await restoreLocator(locator);window.hcFocusReading?.();return;}
     if(action==="next" || action==="previous") {
         if(rendition)await rendition[action==="next"?"next":"prev"]();

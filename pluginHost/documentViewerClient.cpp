@@ -1,4 +1,5 @@
-﻿#include "documentViewerClient.hpp"
+﻿#include "stdafx.h"
+#include "documentViewerClient.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -73,21 +74,30 @@ namespace hc::plugins
         broker_.Retain(Tokens);
         const auto Edit=state_["editRequest"].toObject();
         if(!Edit.isEmpty()){
+            const bool Epub=Edit["format"]=="epub";
             std::optional<document::DocumentHostBroker::EditorInput> Input;
             for(const auto& Item:state_["documents"].toArray()){
                 const auto Tab=Item.toObject();const auto View=Tab["view"].toObject();
                 if(Tab["documentId"]!=Edit["documentId"]||Tab["generation"]!=Edit["generation"]
                     ||Tab["lifecycle"]!="ready"||Tab["loading"].toBool()||!View["ready"].toBool()
-                    ||(View["viewId"]!="hwp"&&View["viewId"]!="hwpx"))continue;
+                    ||(Epub?View["viewId"]!="epub":(View["viewId"]!="hwp"&&View["viewId"]!="hwpx")))continue;
                 const auto SourceToken=Tab["sourceToken"].toString();
                 if(!SourceToken.isEmpty())Input=broker_.ResolveEditorInput(SourceToken);
                 else if(!Tab["hostSlot"].toBool())Input=document::DocumentHostBroker::EditorInput{Tab["path"].toString(),true,{}};
                 break;
             }
             bool Started=false;
-            if(Input&&QFileInfo(Input->path_).isAbsolute()&&QStringList{"hwp","hwpx"}.contains(QFileInfo(Input->path_).suffix().toLower())){
+            if(Input&&QFileInfo(Input->path_).isAbsolute()&&(Epub?QFileInfo(Input->path_).suffix().compare("epub",Qt::CaseInsensitive)==0:QStringList{"hwp","hwpx"}.contains(QFileInfo(Input->path_).suffix().toLower()))){
                 const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
-                const QStringList Args{Input->original_?"--rhwp-edit":"--rhwp-edit-copy","--config-dir",hc::settings::DocumentPaths().directory_,"--",Input->path_};
+                QStringList Args{Epub?"--epub-edit":Input->original_?"--rhwp-edit":"--rhwp-edit-copy","--config-dir",hc::settings::DocumentPaths().directory_};
+                if(Epub) {
+                    const auto Locator=Edit["locator"].toString();const auto Chapter=Edit["chapter"].toInt(-1);
+                    if(Locator.size()<=4096 && Locator.startsWith("epubcfi(") && Locator.endsWith(')') && !Locator.contains(QChar::Null))Args<<"--epub-locator"<<Locator;
+                    if(Chapter>=0 && Chapter<4096)Args<<"--epub-chapter"<<QString::number(Chapter);
+                    const auto Appearance=QJsonDocument(Edit["appearance"].toObject()).toJson(QJsonDocument::Compact).toBase64();
+                    if(!Edit["appearance"].toObject().isEmpty() && Appearance.size()<=16384)Args<<"--document-appearance"<<QString::fromLatin1(Appearance);
+                }
+                Args<<"--"<<Input->path_;
                 auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();
                 // Run outside the restricted viewer Job. Retain provider input
                 // until the independent editor exits, even after the tab closes.

@@ -47,6 +47,7 @@ namespace hc::document
         QJsonObject metrics_;
         QJsonObject appearance_;
         QString settingsPath_;
+        bool initiallyInteractive_=true;
         std::deque<QJsonObject> settingsRequests_;
         QJsonObject settingsResult_;
         void Metrics(QJsonObject Value) { std::lock_guard Lock(mutex_); metrics_ = std::move(Value); }
@@ -264,7 +265,7 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","chapter","next-chapter","previous-chapter","toc","focus-toc","search","locate","preview-location","enable-input","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
@@ -280,19 +281,20 @@ namespace hc::document
         Result["retired"] = native_ ? native_->retired_ : work_->done_.load();
         return Result;
     }
-    bool EpubProcessView::Load(QByteArray Bytes, qint64 Generation)
+    bool EpubProcessView::Load(QByteArray Bytes, qint64 Generation,const QString& SettingsDirectory,bool InitiallyInteractive)
     {
         if(bound_) return false;
         bound_ = true;
         timer_->start();
         work_ = std::make_shared<Work>();
+        work_->initiallyInteractive_=InitiallyInteractive;
         work_->appearance_ = epubui::Appearance();
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
-        work_->settingsPath_ = QDir(Config).absoluteFilePath("epub-reading.json");
+        work_->settingsPath_ = QDir(SettingsDirectory.isEmpty()?Config:SettingsDirectory).absoluteFilePath("epub-reading.json");
         QJsonObject Preferences;QString PreferencesError;
         if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError))
-            work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"]}});
+            work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject()}});
         if((runtime_.kind_ != WebProcessKind::EpubPrototype && runtime_.kind_ != WebProcessKind::EpubReadOnly) || Generation < 1 || Generation > 9007199254740991LL
             || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) {
             work_->Update({{"status", "error"}, {"message", "epub-view-admission"}});
@@ -352,7 +354,7 @@ namespace hc::document
                 QJsonObject Applied;
                 { std::lock_guard Lock(State->mutex_); Applied = State->appearance_; }
                 const auto Configure = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
-                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_}}).toJson(QJsonDocument::Compact);
+                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_}}).toJson(QJsonDocument::Compact);
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
                     || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()) { Failure = "epub-configuration-rejected"; return; }

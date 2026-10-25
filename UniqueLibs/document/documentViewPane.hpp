@@ -71,9 +71,11 @@ namespace hc::document
         void EscapeRequested();
         void FullscreenRequested();
         void RetryRequested();
+        void EditEpubRequested();
     private:
         void syncText();
-        bool editEpub();
+        bool editEpub(const QString& Locator={},int Chapter=-1);
+        EpubProcessView* currentEpub()const;
         void applyTheme();
         QPlainTextEdit* editor_;
         QToolBar* toolbar_ = nullptr;

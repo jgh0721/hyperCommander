@@ -28,6 +28,6 @@ private:
     QJsonArray navigation_;
     bool resume_=true,remember_=true;
     qint64 historyEpoch_=-1;
-    int currentToc_=-1;
+    int currentToc_=-1,spineCount_=0;
 };
 }

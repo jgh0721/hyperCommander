@@ -13,7 +13,7 @@ namespace hc::document
     public:
         EpubProcessView(WebProcessRuntime Runtime, WebProcessLimits Limits, QWidget* Parent = nullptr);
         ~EpubProcessView() override;
-        bool Load(QByteArray Bytes, qint64 Generation = 1);
+        bool Load(QByteArray Bytes, qint64 Generation = 1,const QString& SettingsDirectory = {},bool InitiallyInteractive=true);
         void RequestClose();
         // Explicit activation request; hidden/closing views reject it.
         bool FocusInput();

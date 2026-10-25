@@ -85,6 +85,7 @@ qt_add_library(hc_document_widgets STATIC
     ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
     ../UniqueLibs/document/epubSourceRecovery.cpp
+    ../UniqueLibs/document/epubSourcePreview.cpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp
@@ -125,6 +126,7 @@ if(NOT HC_RHWP_APPROVED_INVENTORY_SHA256 STREQUAL "")
 endif()
 configure_file(hwpProductPolicy.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/hwpProductPolicy.hpp" @ONLY NEWLINE_STYLE CRLF)
 qt_add_executable(HyperEditor WIN32 main.cpp runtimeVerification.cpp runtimeVerification.hpp)
+target_precompile_headers(HyperEditor PRIVATE stdafx.h)
 hc_add_version_resource(HyperEditor "HyperEditor" ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app/hypereditor.ico")
 target_include_directories(HyperEditor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(HyperEditor PRIVATE hc_document_widgets hc_document_sdi fmstyle Qt6::Network)

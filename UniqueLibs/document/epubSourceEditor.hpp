@@ -2,14 +2,17 @@
 #include "commonLibs/document/epub/epubEditModel.hpp"
 #include "commonLibs/document/epub/epubDraftStore.hpp"
 #include "commonLibs/storage/storage.hpp"
+#include "documentWebProcess.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
+#include <QPointer>
 #include <atomic>
 #include <optional>
 #include <utility>
-class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;
+class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;class QSplitter;class QStackedLayout;class QCheckBox;class QTemporaryDir;class QResizeEvent;
 namespace hc::document {
+class EpubProcessView;
 class EpubSourceEditor final:public QWidget {
     Q_OBJECT
 public:
@@ -21,6 +24,7 @@ public:
     storage::Result<QByteArray> Export(const QString& Destination)const;
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
+    bool IsModified()const{return ready_ && Token()!=baseToken_;}
     bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !validation_.isRunning() && validatedToken_==Token() && !validatedBytes_.isEmpty();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
@@ -29,7 +33,14 @@ public:
     void DiscardRecovery();
     void SetRecoveryEnabled(bool Enabled);
     void SetReadingLocator(QString Locator){recoveryLocator_=std::move(Locator);}
-signals:void Changed();void StateChanged();void SaveRequested();
+    void ConfigurePreview(const WebProcessRuntime& Runtime,int Chapter=-1);
+    EpubProcessView* PreviewView()const{return previewView_;}
+    void SetSourceVisible(bool Visible);
+    bool IsSourceVisible()const;
+    bool RequestPreviewClose();
+    bool IsPreviewClosed()const;
+signals:void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
+protected:void resizeEvent(QResizeEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter);void select();bool flush();void importImage();
     QMap<QString,QByteArray> draft()const;
@@ -40,6 +51,14 @@ private:
     void beginRecoveryRead(const QString& Path);
     void resetRecoverySession();
     void protectSourcePath(const QString& Path);
+    bool previewOwnerActive()const;
+    void suspendInactivePreview();
+    void requestPreview(bool Force=false);
+    void showPreview(const QByteArray& Bytes);
+    void admitPreview(EpubProcessView* Candidate);
+    void retirePreview(EpubProcessView* View);
+    void syncPreviewSource(bool Force=false);
+    QJsonObject previewSnapshot()const;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
     QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false;
     std::shared_ptr<std::atomic_bool> cancel_;
@@ -58,5 +77,14 @@ private:
     QComboBox* recoveries_=nullptr;QLabel* recoveryStatus_=nullptr;QWidget* recoveryPanel_=nullptr;
     QPushButton *recoverDraft_=nullptr,*removeDraft_=nullptr;
     bool recoveryEnabled_=true,recoverySourceChanged_=false,recoveryReadingSourceChanged_=false,discardedRecovery_=false;
+    QWidget* sourcePanel_=nullptr;QSplitter* previewSplitter_=nullptr;QStackedLayout* previewStack_=nullptr;
+    QLabel* previewStatus_=nullptr;QCheckBox *previewAutomatic_=nullptr,*previewSynchronize_=nullptr;
+    std::optional<WebProcessRuntime> previewRuntime_;std::unique_ptr<QTemporaryDir> previewDirectory_;
+    QFutureWatcher<epub::EditOutput> previewWorker_;QTimer previewTimer_;
+    EpubProcessView *previewView_=nullptr,*previewCandidate_=nullptr;QList<QPointer<EpubProcessView>> previewRetiring_;
+    std::shared_ptr<std::atomic_bool> previewCancel_;QByteArray previewWorkToken_,previewCandidateToken_,previewActiveToken_;
+    quint64 previewEpoch_=0,previewWorkEpoch_=0,previewCandidateEpoch_=0;bool previewClosing_=false,previewPending_=false,previewSyncing_=false;
+    QString previewError_,previewSettings_;int previewChapter_=-1,previewPreferredChapter_=-1,previewRestoreChapter_=-1;qint64 previewNavigationSerial_=-1,previewCandidateSerial_=-2;
+    bool previewCandidateInputRequested_=false,previewRecoveryPosition_=false;
 };
 }

@@ -1,4 +1,5 @@
-﻿#include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+﻿#include "stdafx.h"
+#include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "runtimeVerification.hpp"
 #include <fmstyle/ThemeManager.h>
 #include <QJsonArray>
@@ -49,6 +50,9 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
+    Parser.addOption(QCommandLineOption("epub-edit", "Open one DRM-free EPUB in edit mode"));
+    Parser.addOption(QCommandLineOption("epub-locator", "Initial EPUB reading position", "cfi"));
+    Parser.addOption(QCommandLineOption("epub-chapter", "Initial EPUB spine index", "index"));
     Parser.addOption(QCommandLineOption("document-appearance", "Initial Watercolor appearance supplied by Commander", "base64"));
     Parser.addOption(QCommandLineOption("verify-epub-runtime", "Verify the installed EPUB reader without changing the book", "file"));
     Parser.addOption(QCommandLineOption("verify-runtime", "Verify installed codecs, fonts and document saves using temporary files"));
@@ -69,6 +73,14 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
     if (Parser.isSet("verify-runtime")) return VerifyDocumentRuntime();
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
+    const bool EpubEdit=Parser.isSet("epub-edit");
+    const auto EpubLocator=Parser.value("epub-locator");bool ChapterValid=true;
+    const int EpubChapter=Parser.isSet("epub-chapter")?Parser.value("epub-chapter").toInt(&ChapterValid):-1;
+    if((!EpubEdit && (Parser.isSet("epub-locator") || Parser.isSet("epub-chapter"))) || (EpubEdit &&
+        (RhwpEdit || Parser.isSet("rhwp-view") || Parser.positionalArguments().size()!=1
+        || QFileInfo(Parser.positionalArguments().value(0)).suffix().compare("epub",Qt::CaseInsensitive)!=0
+        || !ChapterValid || EpubChapter < -1 || EpubChapter>=4096 || EpubLocator.size()>4096
+        || (!EpubLocator.isEmpty() && (!EpubLocator.startsWith("epubcfi(") || !EpubLocator.endsWith(')') || EpubLocator.contains(QChar::Null))))))return 10;
     if (Parser.isSet("rhwp-view") || RhwpEdit) {
         if ((Parser.isSet("rhwp-view") && RhwpEdit) || (Parser.isSet("rhwp-edit") && Parser.isSet("rhwp-edit-copy"))) return 10;
         if (Parser.positionalArguments().size() != 1) return 10;
@@ -126,13 +138,23 @@ int main(int Argc, char** Argv)
                 if (!Settings.Replace(Root)) Current->ShowShellError(QObject::tr("표시 설정을 저장하지 못했습니다."));
                 else Current->ShowShellError({});
             });
-        QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::StateChanged, Current, [Current] {
+        const auto EditPending=std::make_shared<bool>(EpubEdit);
+        QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::StateChanged, Current, [Current,EditPending,EpubLocator,EpubChapter] {
             const auto Documents = Current->Snapshot()["documents"].toArray();
             for(const auto& Item : Documents) {
                 const auto Record = Item.toObject();
                 if(Record["view"].toObject()["viewId"] != "epub") continue;
+                const auto View=Record["view"].toObject();
+                if(*EditPending && !Record["loading"].toBool() && Record["error"].toString().isEmpty()) {
+                    *EditPending=false;const auto Id=Record["documentId"].toString();
+                    QTimer::singleShot(0,Current,[Current,Id,EpubLocator,EpubChapter]{
+                        const auto Result=Current->Handle({{"action","epub.edit.begin"},{"documentId",Id},{"locator",EpubLocator},{"chapter",EpubChapter}});
+                        if(Result.contains("error"))Current->ShowShellError(QObject::tr("EPUB 편집 모드를 열지 못했습니다: %1").arg(Result["error"].toString()));
+                    });
+                }
                 const auto State = !Record["error"].toString().isEmpty() ? QObject::tr("열기 실패")
-                    : Record["view"].toObject()["ready"].toBool() ? QObject::tr("읽기 전용") : QObject::tr("불러오는 중");
+                    : View["epubMode"]=="edit" ? QObject::tr("EPUB 편집")
+                    : View["ready"].toBool() ? QObject::tr("읽기 전용") : QObject::tr("불러오는 중");
                 Current->setWindowTitle(Record["displayName"].toString() + " — " + State + " — HyperEditor"); return;
             }
             Current->setWindowTitle("HyperEditor");

@@ -62,6 +62,7 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
     if(Action=="focus-bookmarks") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(2);marks_->setFocus(Qt::ShortcutFocusReason);return true;}
     if(!started_ || restoring_)return false;
     if(QStringList{"next","previous","back","next-chapter","previous-chapter"}.contains(Action)){send(Action,Value);return true;}
+    if(Action=="chapter"){if(!Value.isDouble() || Value.toDouble()!=Value.toInt(-1) || Value.toInt(-1)<0 || Value.toInt()>=spineCount_)return false;send(Action,Value);return true;}
     if(Action=="toc") {if(!Value.isDouble() || Value.toInt()<0 || Value.toInt()>=navigation_.size() || navigation_[Value.toInt()].toObject()["path"].toString().isEmpty())return false;send(Action,Value);return true;}
     if(Action=="search") {if(!Value.isString() || Value.toString().trimmed().isEmpty() || Value.toString().size()>128)return false;results_->clear();status_->setText(tr("책 전체에서 검색 중…"));send(Action,Value);return true;}
     if(Action=="bookmark-add") {
@@ -70,8 +71,8 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
         bookmarks_.append(Mark);additions_.append(Mark);saveTimer_.start();refresh();return true;
     }
     if(Action=="bookmark-remove") {for(qsizetype I=0;I<bookmarks_.size();++I)if(bookmarks_[I].toObject()["id"]==Value){removals_.append(Value.toString());bookmarks_.removeAt(I);saveTimer_.start();refresh();return true;}return false;}
-    if(Action=="locate" && !cfi(Value.toString()))return false;
-    if(QStringList{"locate","image","footnote","close-popup"}.contains(Action)){send(Action,Value);return true;}
+    if((Action=="locate" || Action=="preview-location") && !cfi(Value.toString()))return false;
+    if(QStringList{"locate","preview-location","image","footnote","close-popup"}.contains(Action)){send(Action,Value);return true;}
     return false;
 }
 void ReadingNavigation::Poll(const QJsonObject& State) {
@@ -92,6 +93,7 @@ void ReadingNavigation::Poll(const QJsonObject& State) {
     }
 }
 void ReadingNavigation::SetPublication(const QJsonObject& Publication) {
+    spineCount_=Publication["spine"].toArray().size();
     navigation_=Publication["navigation"].toArray();currentToc_=-1;toc_->clear();QList<QTreeWidgetItem*> Parents;
     for(int Index=0;Index<navigation_.size();++Index) {
         const auto Entry=navigation_[Index].toObject();const int Depth=qBound(0,Entry["depth"].toInt(),static_cast<int>(Parents.size()));
