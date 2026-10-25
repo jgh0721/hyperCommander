@@ -284,6 +284,7 @@ private slots:
             const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -299,6 +300,49 @@ private slots:
     }
 
 
+
+    void keyboardCommandColumnsUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Original); TyStCommandMgr::GetInstance()->Refresh(); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["useBuiltInShortcuts"] = true; General["shortcutPreset"] = "legacy";
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{{"Ctrl+Alt+Y", "hc.file.compare"}}));
+        hc::ui::KeyboardSettingsPage Keys;
+        auto* Table = Keys.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
+        const QStringList Headers{QStringLiteral("범위"), QStringLiteral("명령"), QStringLiteral("설명"), QStringLiteral("현재 키"), QStringLiteral("기본값")};
+        QCOMPARE(Table->columnCount(), Headers.size());
+        for (int Column = 0; Column < Headers.size(); ++Column) QCOMPARE(Table->horizontalHeaderItem(Column)->text(), Headers[Column]);
+        auto* Search = Keys.findChild<QLineEdit*>("hc.keys.search");
+        auto* Scope = Keys.findChild<QComboBox*>("hc.keys.scope");
+        auto* Preset = Keys.findChild<QComboBox*>("hc.keys.preset");
+        auto* Selector = static_cast<hc::ui::CommandSelector*>(Keys.findChild<QComboBox*>("hc.keys.command"));
+        const auto CompareRow = [&] { for (int Row = 0; Row < Table->rowCount(); ++Row) if (Table->item(Row, 1)->text() == "hc.file.compare") return Row; return -1; };
+        const int Row = CompareRow(); QVERIFY(Row >= 0);
+        Search->setText("hc.file.compare");
+        int Visible = 0; for (int R = 0; R < Table->rowCount(); ++R) if (!Table->isRowHidden(R)) ++Visible;
+        QCOMPARE(Visible, 1); QCOMPARE(Table->item(Row, 0)->text(), QStringLiteral("파일 작업"));
+        QCOMPARE(Table->item(Row, 2)->text(), Selector->itemText(Selector->findData("hc.file.compare")).section(" · ", 0, 0));
+        QVERIFY(Table->item(Row, 3)->text().contains("Ctrl+Alt+Y")); QVERIFY(Table->item(Row, 4)->text().contains("Ctrl+O"));
+        Selector->SetCommand("hc.app.about"); Table->setCurrentCell(Row, 2); QCOMPARE(Selector->Command(), QString("hc.file.compare"));
+        Search->setText(Table->item(Row, 2)->text()); QVERIFY(!Table->isRowHidden(Row));
+        Search->setText("Ctrl+Alt+Y"); QVERIFY(!Table->isRowHidden(Row));
+        Scope->setCurrentIndex(3); QVERIFY(Table->isRowHidden(Row)); Scope->setCurrentIndex(1); QVERIFY(!Table->isRowHidden(Row));
+        Preset->setCurrentIndex(1);
+        QCOMPARE(hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(QKeySequence("Ctrl+Alt+Y")[0])), QString("hc.file.compare"));
+        QVERIFY(Table->item(CompareRow(), 3)->text().contains("Ctrl+Alt+Y"));
+        QCOMPARE(hc::ui::CommandId(hc::ui::DefaultShortcuts(Settings.Read(hc::settings::Section::General).toObject()).value(QKeySequence("F5")[0])), QString("hc.navigate.refresh"));
+        General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = false;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); Keys.Refresh();
+        QCOMPARE(Table->item(CompareRow(), 3)->text(), QString("Ctrl+Alt+Y"));
+        QVERIFY(Table->item(CompareRow(), 4)->text().contains("Ctrl+O"));
+        QMainOpts Dialog(main_); Dialog.show(); Dialog.LoadSettings();
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+        const auto Keyboard = Categories->findItems(QStringLiteral("키보드"), Qt::MatchExactly); QCOMPARE(Keyboard.size(), 1);
+        Categories->setCurrentItem(Keyboard.front()); QTest::qWait(80);
+        QVERIFY(Dialog.grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("keyboard-columns.png"))); Dialog.reject();
+    }
 
     void fileCompareUi()
     {
@@ -337,9 +381,9 @@ private slots:
             auto* Table = Keys.findChild<QTableWidget*>("hc.keys.commands");
             Search->setText("hc.file.compare"); int Visible = 0;
             for (int Row = 0; Row < Table->rowCount(); ++Row) if (!Table->isRowHidden(Row)) {
-                ++Visible; QCOMPARE(Table->item(Row, 0)->data(Qt::UserRole).toString(), QString("hc.file.compare"));
-                QCOMPARE(QKeySequence(Table->item(Row, 1)->text()), QKeySequence("Ctrl+O"));
-                QCOMPARE(QKeySequence(Table->item(Row, 2)->text()), QKeySequence("Ctrl+O"));
+                ++Visible; QCOMPARE(Table->item(Row, 1)->data(Qt::UserRole).toString(), QString("hc.file.compare"));
+                QCOMPARE(QKeySequence(Table->item(Row, 3)->text()), QKeySequence("Ctrl+O"));
+                QCOMPARE(QKeySequence(Table->item(Row, 4)->text()), QKeySequence("Ctrl+O"));
             }
             QCOMPARE(Visible, 1);
         }
