@@ -78,10 +78,12 @@ namespace hc::compare
             start([Session, retained, Anchor, document = document_](const Budget& Limits) {
                 auto session = *Session;
                 if (retained) for (const auto& cache : retained->session_->pairCache_) if (cache->indexes_[0] == session.documents_[cache->pair_[0]].index_ && cache->indexes_[1] == session.documents_[cache->pair_[1]].index_ && std::none_of(session.pairCache_.begin(), session.pairCache_.end(), [&](const auto& Existing) { return Existing->pair_ == cache->pair_ && Existing->indexes_ == cache->indexes_; })) session.pairCache_.push_back(cache);
-                const auto reference = session.result_ >= 0 ? session.result_ : 0; auto value = PairLargeTextSession(std::move(session), {document, reference}, Limits);
+                const auto reference = session.result_ >= 0 ? session.result_ : 1; auto value = PairLargeTextSession(std::move(session), {document, reference}, Limits);
                 const auto& target = value->lines_[1]; const auto line = std::int64_t(std::upper_bound(target.begin(), target.end(), std::min(Anchor, value->documents_[1].bytes_)) - target.begin() - 1);
                 std::int64_t sourceLine = line, delta = 0; for (const auto& edit : value->changes_) { if (line < std::int64_t(edit.otherBegin_)) { sourceLine = line + delta; break; } if (line <= std::int64_t(edit.otherEnd_)) { sourceLine = std::int64_t(edit.begin_) + std::min<std::int64_t>(line - edit.otherBegin_, edit.end_ - edit.begin_); break; } delta = std::int64_t(edit.end_) - std::int64_t(edit.otherEnd_); sourceLine = line + delta; }
-                sourceLine = std::clamp<std::int64_t>(sourceLine, 0, std::int64_t(value->lines_[0].size() - 1)); Response response; response.value_ = value; response.begin_ = value->lines_[0][sourceLine]; return response;
+                sourceLine = std::clamp<std::int64_t>(sourceLine, 0, std::int64_t(value->lines_[0].size() - 1)); Response response; response.value_ = value;
+                const auto sourceBegin = value->lines_[0][sourceLine], sourceEnd = std::size_t(sourceLine + 1) < value->lines_[0].size() ? value->lines_[0][sourceLine + 1] : value->documents_[0].bytes_;
+                response.begin_ = sourceBegin + std::min(Anchor - target[line], sourceEnd - sourceBegin); return response;
             });
         }
         void Find(const QString& Query, bool Backwards, Qt::CaseSensitivity Case, bool Regex) {
@@ -108,7 +110,7 @@ namespace hc::compare
     };
     LargeTextMultiView::LargeTextMultiView(Request Input, std::shared_ptr<LargeTextComparison> Value, QWidget* Parent) : LargeTextView(std::move(Input), std::move(Value), Parent)
     {
-        auto* row = new QHBoxLayout(); static_cast<QVBoxLayout*>(layout())->insertLayout(0, row); row->addWidget(new QLabel(tr("보기"), this)); layoutMode_ = new QComboBox(this); layoutMode_->setObjectName("largeLayoutMode"); layoutMode_->addItems({tr("비교 쌍 편집"), merging() ? tr("3입력 + RESULT 동시 보기") : tr("3파일 동시 보기(읽기 전용)")}); layoutMode_->setCurrentIndex(1); row->addWidget(layoutMode_); row->addStretch();
+        auto* row = new QHBoxLayout(); static_cast<QVBoxLayout*>(layout())->insertLayout(0, row); row->addWidget(new QLabel(tr("보기"), this)); layoutMode_ = new QComboBox(this); layoutMode_->setObjectName("largeLayoutMode"); layoutMode_->addItems({tr("비교 쌍 편집"), merging() ? tr("%1입력 + RESULT 동시 보기").arg(value_->session_->result_) : tr("3파일 동시 보기(읽기 전용)")}); layoutMode_->setCurrentIndex(1); row->addWidget(layoutMode_); row->addStretch();
         for (int document = 0; document < int(value_->session_->documents_.size()); ++document) if (document != 0 && document != (merging() ? value_->session_->result_ : 1)) {
             auto* pane = new LargeTextSourcePane(document, input_.memoryMiB_, this); sources_.push_back(pane); if (merging()) panes_->insertWidget(int(sources_.size()), pane, 1); else panes_->addWidget(pane, 1);
             pane->changed_ = [this] { changed(); if (stateChanged_) stateChanged_(); }; pane->copy_ = [this, pane] { applySource(pane); };

@@ -46,6 +46,7 @@ namespace hc::compare
         bool mirror_ = false;
         bool help_ = false, version_ = false;
         DirectoryPolicy directory_;
+        std::array<int, 2> directoryPair_{0, 1};
         std::shared_ptr<DirectoryProgressChannel> directoryProgress_;
         int timeoutMs_ = 60000, memoryMiB_ = 2048;
     };

@@ -27,7 +27,7 @@ namespace hc::compare
         QModelIndex index(int Row, int Column, const QModelIndex& Parent = {}) const override;
         QModelIndex parent(const QModelIndex& Child) const override;
         int rowCount(const QModelIndex& Parent = {}) const override;
-        int columnCount(const QModelIndex& = {}) const override { return 6; }
+        int columnCount(const QModelIndex& = {}) const override { return 9; }
         QVariant data(const QModelIndex& Index, int Role = Qt::DisplayRole) const override;
         QVariant headerData(int Section, Qt::Orientation Orientation, int Role) const override;
         QJsonObject Entry(const QModelIndex& Index) const;

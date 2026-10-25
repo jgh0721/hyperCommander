@@ -41,12 +41,24 @@
 #include <thread>
 #include <Windows.h>
 #include <sddl.h>
+#include <winioctl.h>
 
 using namespace hc::compare;
 class CompareTests final : public QObject
 {
     Q_OBJECT
 private:
+    static void junction(const QString& Path, const QString& Target)
+    {
+        const auto native = QDir::toNativeSeparators(Path); if (!CreateDirectoryW(reinterpret_cast<const wchar_t*>(native.utf16()), nullptr)) qFatal("Junction directory failed: %lu", GetLastError());
+        const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(native.utf16()), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) qFatal("Junction handle failed: %lu", GetLastError());
+        const auto close = qScopeGuard([&] { CloseHandle(handle); }); const auto target = QString("\\??\\") + QDir::toNativeSeparators(QFileInfo(Target).absoluteFilePath());
+        const auto print = QDir::toNativeSeparators(Target); QByteArray bytes(16 + (target.size() + print.size() + 2) * 2, '\0');
+        qToLittleEndian<quint32>(IO_REPARSE_TAG_MOUNT_POINT, bytes.data()); qToLittleEndian<quint16>(quint16(bytes.size() - 8), bytes.data() + 4); qToLittleEndian<quint16>(quint16(target.size() * 2), bytes.data() + 10); qToLittleEndian<quint16>(quint16((target.size() + 1) * 2), bytes.data() + 12); qToLittleEndian<quint16>(quint16(print.size() * 2), bytes.data() + 14);
+        std::memcpy(bytes.data() + 16, target.utf16(), target.size() * 2); std::memcpy(bytes.data() + 16 + (target.size() + 1) * 2, print.utf16(), print.size() * 2); DWORD count = 0;
+        if (!DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, bytes.data(), DWORD(bytes.size()), nullptr, 0, &count, nullptr)) qFatal("Junction create failed: %lu", GetLastError());
+    }
     static QByteArray png(const QImage& Image)
     { QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); if (!Image.save(&buffer, "PNG")) qFatal("PNG fixture failed"); return bytes; }
     static void write(const QString& Path, const QByteArray& Data)
@@ -3034,7 +3046,47 @@ private slots:
             { QCOMPARE(row.toObject()["status"].toString(), QString(item.status)); found = true; }
             QVERIFY(found);
         }
-        r.file3_ = r.base_; r.base_.clear(); QCOMPARE(Execute(r, cancel, false).error_, QString("DirectoryIndependentThreeUnsupported"));
+        r.file3_ = r.base_; r.base_.clear(); const auto independent = Execute(r, cancel, false); QCOMPARE(independent.operation_, QString("directory-compare3")); QCOMPARE(independent.completion_, QString("Complete"));
+        for (const auto& row : independent.entries_) QVERIFY(row.Status() == "Equal" || row.Status() == "Different");
+    }
+    void directoryIndependentThreePairPlansAndRename()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "directory"; request.file1_ = dir.filePath("a"); request.file2_ = dir.filePath("b"); request.file3_ = dir.filePath("c");
+        for (const auto& root : {request.file1_, request.file2_, request.file3_}) { QVERIFY(QDir().mkpath(root + "/sub")); write(root + "/sub/same.txt", "equal"); }
+        write(request.file1_ + "/first.txt", "one"); write(request.file3_ + "/third.txt", "three");
+        auto cancel = std::make_shared<std::atomic_bool>(false); const auto compared = Execute(request, cancel, false); QVERIFY2(compared.directoryComplete_, qPrintable(compared.error_)); QCOMPARE(compared.operation_, QString("directory-compare3")); QCOMPARE(compared.Json(false)["coverage"].toObject()["directoryThirdRole"].toString(), QString("FILE3"));
+        request.directoryPair_ = {0, 2}; Request pair; Result projected; ProjectDirectoryPair(request, compared, pair, projected, {}); QCOMPARE(pair.file2_, request.file3_); QVERIFY(pair.file3_.isEmpty()); QCOMPARE(projected.directories_->size(), std::size_t(2));
+        const auto transfer = MakeDirectoryTransferPlan(request, compared, 1, "third.txt", {}); QCOMPARE(transfer["roots"].toArray()[0].toObject()["path"].toString(), request.file3_); QCOMPARE(transfer["output"].toObject()["path"].toString(), request.file1_);
+        request.output_ = request.file2_; QVERIFY_EXCEPTION_THROWN(MakeDirectoryPlan(request, compared, {}), Failure);
+        request.output_ = dir.filePath("output"); request.takeAll_ = "right"; const auto plan = MakeDirectoryPlan(request, compared, {}); QCOMPARE(plan["roots"].toArray().size(), 2); QCOMPARE(plan["roots"].toArray()[1].toObject()["path"].toString(), request.file3_);
+        Result saved; const auto path = dir.filePath("plan.json"); SaveDirectoryPlan(plan, path, saved, {}); Request apply; apply.mode_ = "apply"; apply.applyPlan_ = path; const auto result = Execute(apply, cancel, true); QCOMPARE(result.exitCode_, 0); QCOMPARE(read(request.output_ + "/third.txt"), QByteArray("three")); QVERIFY(!QFileInfo::exists(request.output_ + "/first.txt"));
+        const auto renamed = RenameDirectoryEntry(request, compared, 2, "third.txt", "renamed.txt", {}); QCOMPARE(renamed.exitCode_, 0); QVERIFY(QFileInfo::exists(request.file3_ + "/renamed.txt")); QCOMPARE(read(request.file1_ + "/first.txt"), QByteArray("one"));
+        const auto parsed = Parse({"hc", "-mode", "directory-merge", "-file1", request.file1_, "-file2", request.file2_, "-file3", request.file3_, "-directory-pair", "2:3", "-output", dir.filePath("cli-output"), "-planout", dir.filePath("cli-plan.json")}, true); QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QCOMPARE(parsed.request_.directoryPair_, (std::array{1, 2}));
+    }
+    void directorySymbolicFilesCompareLiteralTargets()
+    {
+        QTemporaryDir dir; Request input; input.mode_ = "directory"; input.file1_ = dir.filePath("left"); input.file2_ = dir.filePath("right"); QVERIFY(QDir().mkpath(input.file1_)); QVERIFY(QDir().mkpath(input.file2_)); QVERIFY(QDir().mkpath(dir.filePath("outside"))); write(dir.filePath("outside/file.txt"), "outside");
+        const auto create = [](const QString& Path, const QString& Target) { const auto native = QDir::toNativeSeparators(Path); const auto target = QDir::toNativeSeparators(Target); return CreateSymbolicLinkW(reinterpret_cast<const wchar_t*>(native.utf16()), reinterpret_cast<const wchar_t*>(target.utf16()), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) || CreateSymbolicLinkW(reinterpret_cast<const wchar_t*>(native.utf16()), reinterpret_cast<const wchar_t*>(target.utf16()), 0); };
+        const auto left = input.file1_ + "/relative.txt", right = input.file2_ + "/relative.txt";
+        if (!create(left, "../outside/file.txt")) QSKIP("File symbolic link privilege/developer mode unavailable; junction tests cover non-traversal separately");
+        const auto cleanup = qScopeGuard([&] { for (const auto& path : {left, right}) { const auto native = QDir::toNativeSeparators(path); DeleteFileW(reinterpret_cast<const wchar_t*>(native.utf16())); } }); QVERIFY(create(right, "../outside/file.txt"));
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto same = Execute(input, cancel, false); QVERIFY2(same.directoryComplete_, qPrintable(same.error_)); QCOMPARE(same.entries_.size(), 1); QCOMPARE(same.exitCode_, 0); QVERIFY(same.entries_[0].sides_[0].reparse_); QCOMPARE(same.entries_[0].sides_[0].link_->target_, QString("..\\outside\\file.txt"));
+        const auto native = QDir::toNativeSeparators(right); QVERIFY(DeleteFileW(reinterpret_cast<const wchar_t*>(native.utf16()))); write(right, "outside"); const auto different = Execute(input, cancel, false); QCOMPARE(different.entries_[0].Status(), QString("TypeConflict"));
+    }
+    void directoryLinksCompareObjectsWithoutTraversal()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "directory"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); const auto outside = dir.filePath("outside"); const auto elsewhere = dir.filePath("elsewhere");
+        for (const auto& root : {request.file1_, request.file2_, outside, elsewhere}) QVERIFY(QDir().mkpath(root)); write(outside + "/not-traversed.txt", "private");
+        QStringList links;
+        const auto add = [&](const QString& At, const QString& To) { junction(At, To); links.append(At); };
+        const auto cleanup = qScopeGuard([&] { for (const auto& path : links) { const auto native = QDir::toNativeSeparators(path); RemoveDirectoryW(reinterpret_cast<const wchar_t*>(native.utf16())); } });
+        add(request.file1_ + "/shared", outside); add(request.file2_ + "/shared", outside); add(request.file1_ + "/loop", request.file1_); add(request.file2_ + "/loop", request.file2_); add(request.file1_ + "/broken", dir.filePath("absent")); add(request.file2_ + "/broken", dir.filePath("absent"));
+        const auto cancel = std::make_shared<std::atomic_bool>(false); const auto compared = Execute(request, cancel, false); QVERIFY2(compared.directoryComplete_, qPrintable(compared.error_)); QCOMPARE(compared.entries_.size(), 3); QCOMPARE(compared.exitCode_, 1);
+        for (const auto& row : compared.entries_) { QVERIFY(row.sides_[0].reparse_); QVERIFY(row.sides_[0].link_); QVERIFY(!row.sides_[0].link_->target_.isEmpty()); QCOMPARE(row.Status(), row.path_ == "loop" ? QString("Different") : QString("Equal")); QVERIFY(!row.path_.contains('/')); }
+        request.output_ = dir.filePath("output"); QVERIFY_EXCEPTION_THROWN(MakeDirectoryPlan(request, compared, {}), Failure); QVERIFY_EXCEPTION_THROWN(CaptureDirectory(request.file1_, {}, {}), Failure);
+        auto roots = request; roots.file1_ += "/shared"; roots.file2_ += "/shared"; const auto rootLinks = Execute(roots, cancel, false); QVERIFY2(rootLinks.directoryComplete_, qPrintable(rootLinks.error_)); QCOMPARE(rootLinks.entries_.size(), 1); QCOMPARE(rootLinks.entries_[0].path_, QString(".")); QCOMPARE(rootLinks.exitCode_, 0);
+        const auto captured = CaptureDirectory(request.file1_, {}, {}, true); const auto native = QDir::toNativeSeparators(request.file1_ + "/shared"); QVERIFY(RemoveDirectoryW(reinterpret_cast<const wchar_t*>(native.utf16()))); junction(request.file1_ + "/shared", elsewhere); QVERIFY_EXCEPTION_THROWN(ValidateDirectory(captured, {}, {}), Failure);
+        request.directory_.exclude_ = {"shared", "loop", "broken"}; const auto excluded = Execute(request, cancel, false); QVERIFY(excluded.directoryComplete_); QVERIFY(MakeDirectoryPlan(request, excluded, {}).contains("actions"));
     }
     void directoryInterleavedScanAndPriority()
     {

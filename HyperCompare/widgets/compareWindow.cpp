@@ -163,6 +163,8 @@ namespace hc::compare
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
         auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        auto* threeFolders = fileMenu->addAction(tr("독립 3폴더 열기…"), this, [this] { openDirectories(true); }); threeFolders->setObjectName("openThreeDirectories");
+        connect(openFolders_, &QAction::changed, threeFolders, [this, threeFolders] { threeFolders->setEnabled(openFolders_->isEnabled()); });
         exportReport_ = fileMenu->addAction(tr("비교 보고서 내보내기…"), this, [this] {
             if (!exportReport_->isEnabled()) return;
             QFileDialog dialog(this, tr("비교 보고서 내보내기"), {}, tr("JSON 보고서 (*.json)"));
@@ -418,13 +420,14 @@ namespace hc::compare
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
     CompareWindow::~CompareWindow() { sourceEditing_ = false; bufferTimer_.stop(); if (bufferCanceled_) bufferCanceled_->store(true); bufferWatcher_.waitForFinished(); inputSaveWatcher_.waitForFinished(); canceled_->store(true); watcher_.waitForFinished(); workWatcher_.waitForFinished(); reportWatcher_.waitForFinished(); delete multi_; multi_ = nullptr; }
-    void CompareWindow::openDirectories()
+    void CompareWindow::openDirectories(bool Three)
     {
         if (busy()) return;
         if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
-        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = QSettings{}.value("directory/level", "text").toString(); request.file1_ = left; request.file2_ = right; request_ = request; dirty_ = false; start();
+        const auto third = Three ? QFileDialog::getExistingDirectory(this, tr("FILE 3 디렉터리(BASE 아님)")) : QString{}; if (Three && third.isEmpty()) return;
+        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = QSettings{}.value("directory/level", "text").toString(); request.file1_ = left; request.file2_ = right; request.file3_ = third; request_ = request; dirty_ = false; start();
     }
     void CompareWindow::openInputs()
     {

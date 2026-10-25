@@ -194,6 +194,7 @@ namespace hc::compare
     }
     QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy)
     {
+        if (Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("DirectoryLinksRequireExcludeFilter");
         QJsonObject result{{"directory", Entry.directory_}, {"size", QString::number(Entry.size_)}, {"revision", revision(Entry)},
             {"sha256", Entry.directory_ ? QString{} : QString::fromLatin1(DirectoryFileDigest(Entry, Limits))}};
         if (!Entry.directory_ && DirectoryCopyExtras(Copy)) result["copy"] = DirectoryCopyEvidence(Entry, Limits, Copy);
@@ -201,6 +202,7 @@ namespace hc::compare
     }
     QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
     {
+        if (!Input.file3_.isEmpty()) { Request input; Result comparison; ProjectDirectoryPair(Input, Comparison, input, comparison, Limits); return MakeDirectoryPlan(input, comparison, Limits); }
         CheckProtectedInputs(Input, {Input.output_}, Limits);
         if (!Comparison.directoryComplete_ || !Comparison.directories_ || Comparison.completion_ != "Complete" || (Input.directory_.level_ != "bytes" && Input.directory_.level_ != "text")) throw Failure("DirectoryPlanRequiresContentComparison");
         if (!Input.takeAll_.isEmpty() && (Comparison.directories_->size() == 3 || (Input.takeAll_ != "left" && Input.takeAll_ != "right"))) throw Failure("InvalidDirectorySelection");
@@ -254,6 +256,7 @@ namespace hc::compare
     }
     QJsonObject MakeDirectoryTransferPlan(const Request& Input, const Result& Comparison, int Source, const QString& Path, const Budget& Limits)
     {
+        if (!Input.file3_.isEmpty()) { Request input; Result comparison; ProjectDirectoryPair(Input, Comparison, input, comparison, Limits); return MakeDirectoryTransferPlan(input, comparison, Source, Path, Limits); }
         if (Source < 0 || Source > 1 || !Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Comparison.directories_->size() != 2)
             throw Failure("DirectoryTransferRequiresCompleteComparison");
         const auto& source = (*Comparison.directories_)[Source]; const auto& target = (*Comparison.directories_)[1 - Source];

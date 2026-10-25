@@ -73,7 +73,7 @@ namespace hc::compare
         void refresh(Result Value);
         void showBlocks();
         void openInputs();
-        void openDirectories();
+        void openDirectories(bool Three = false);
         void applyAppearance();
         void updateFormats();
         void rebuildMultiAlignment();

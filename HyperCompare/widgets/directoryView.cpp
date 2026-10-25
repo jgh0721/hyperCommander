@@ -54,12 +54,13 @@ namespace hc::compare
                 {"BothDeleted", QObject::tr("양쪽 삭제")}, {"BothSame", QObject::tr("양쪽 동일 변경")}, {"Conflict", QObject::tr("충돌")}, {"MirrorExtra", QObject::tr("출력에만 존재")}};
             return labels.value(Status, Status);
         }
-        bool file(const QJsonObject& Entry) { return Entry["present"].toBool() && !Entry["directory"].toBool(); }
+        const QStringList sideKeys{"left", "right", "base"};
+        QString rootPath(const Request& Input, int Side) { return Side == 0 ? Input.file1_ : Side == 1 ? Input.file2_ : Input.file3_; }
+        bool file(const QJsonObject& Entry) { return Entry["present"].toBool() && !Entry["directory"].toBool() && !Entry["reparse"].toBool(); }
         bool openable(const QJsonObject& Item)
         {
-            const auto left = Item["left"].toObject(), right = Item["right"].toObject();
-            return Item["status"] != "Error" && (file(left) || file(right)) &&
-                !left["directory"].toBool() && !right["directory"].toBool();
+            bool any = false; for (const auto& key : sideKeys) { const auto entry = Item[key].toObject(); if (entry["reparse"].toBool() || entry["directory"].toBool()) return false; any |= file(entry); }
+            return Item["status"] != "Error" && any;
         }
     }
     bool DirectoryEntryMatches(const QJsonObject& Entry, const QString& Query, int Status)
@@ -92,13 +93,13 @@ namespace hc::compare
         if (Index.column() == 1) return statusName(row.Status());
         const auto& side = row.sides_[Index.column() - 2];
         if (!side.present_) return row.Status() == "Error" ? tr("확인 불가") : tr("없음");
-        return side.directory_ ? tr("폴더") : tr("%1 B").arg(QLocale().toString(qulonglong(side.size_)));
+        return side.reparse_ ? tr("링크(읽기 전용)") : side.directory_ ? tr("폴더") : tr("%1 B").arg(QLocale().toString(qulonglong(side.size_)));
     }
     QVariant DirectoryModel::headerData(int Section, Qt::Orientation Orientation, int Role) const
     {
         if (Role != Qt::DisplayRole) return {};
         if (Orientation == Qt::Vertical) return Section + 1;
-        return Section >= 0 && Section < 5 ? QStringList{tr("경로"), tr("상태"), "LEFT", "RIGHT", "BASE"}[Section] : QVariant{};
+        return Section >= 0 && Section < 5 ? QStringList{tr("경로"), tr("상태"), "LEFT", "RIGHT", property("independentThird").toBool() ? "FILE 3" : "BASE"}[Section] : QVariant{};
     }
     void DirectoryFilter::SetQuery(QString Query, int Status)
     { beginFilterChange(); query_ = std::move(Query); status_ = Status; endFilterChange(Direction::Rows); }
@@ -123,6 +124,8 @@ namespace hc::compare
             auto* dialog = new DirectoryMergeDialog(request_, comparison_, this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->show();
         });
         searchRow->addWidget(merge);
+        pair_ = new QComboBox(this); pair_->setObjectName("directoryPairSelector"); pair_->addItems({"FILE 1 ↔ FILE 2", "FILE 1 ↔ FILE 3", "FILE 2 ↔ FILE 3"}); pair_->setToolTip(tr("독립 3폴더에서 파일 열기·병합 계획·선택 복사에 사용할 두 폴더")); pair_->hide(); searchRow->addWidget(pair_);
+        connect(pair_, &QComboBox::currentIndexChanged, this, [this](int Index) { request_.directoryPair_ = Index == 1 ? std::array{0, 2} : Index == 2 ? std::array{1, 2} : std::array{0, 1}; updateSelection(); });
         for (int source = 0; source < 2; ++source)
         {
             auto* transfer = new QPushButton(source == 0 ? tr("선택 →") : tr("← 선택"), this);
@@ -139,8 +142,8 @@ namespace hc::compare
         }
         auto* rename = new QToolButton(this); rename->setText(tr("이름 변경")); rename->setPopupMode(QToolButton::InstantPopup);
         rename->setObjectName("directoryRenameMenu"); rename->setAccessibleName(tr("선택 항목 이름 변경")); auto* menu = new QMenu(rename); rename->setMenu(menu);
-        for (int side = 0; side < 2; ++side)
-        { auto* action = menu->addAction(side == 0 ? tr("왼쪽 이름 변경…") : tr("오른쪽 이름 변경…"), this, [this, side] { promptRename(side); }); action->setObjectName(side == 0 ? "directoryRenameLeft" : "directoryRenameRight"); }
+        for (int side = 0; side < 3; ++side)
+        { auto* action = menu->addAction(side == 0 ? tr("왼쪽 이름 변경…") : side == 1 ? tr("오른쪽 이름 변경…") : tr("FILE 3 이름 변경…"), this, [this, side] { promptRename(side); }); action->setObjectName(side == 0 ? "directoryRenameLeft" : side == 1 ? "directoryRenameRight" : "directoryRenameThird"); }
         searchRow->addWidget(rename);
         connect(&renameWatcher_, &QFutureWatcher<Result>::finished, this, [this] {
             renaming_ = false; mutation_ = renameWatcher_.result(); setEnabled(true);
@@ -170,15 +173,15 @@ namespace hc::compare
         treeModel_ = new DirectoryTreeModel(this); treeModel_->setObjectName("directoryTreeModel");
         treeFilter_ = new DirectoryTreeFilter(this); treeFilter_->setSourceModel(treeModel_);
         treeBox_ = new QSplitter(Qt::Horizontal, this); treeBox_->setObjectName("directoryTreeSplitter"); treeBox_->setChildrenCollapsible(false);
-        for (int side = 0; side < 2; ++side)
+        for (int side = 0; side < 3; ++side)
         {
             auto* pane = new QWidget(treeBox_); auto* column = new QVBoxLayout(pane); column->setContentsMargins(0, 0, 0, 0);
             auto* label = new QLabel(pane); treeRoots_[side] = label; label->setTextFormat(Qt::PlainText);
             label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
             label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); column->addWidget(label);
             auto* tree = new QTreeView(pane); trees_[side] = tree;
-            tree->setObjectName(side ? "directoryRightTree" : "directoryLeftTree");
-            tree->setAccessibleName(side ? tr("오른쪽 폴더 트리") : tr("왼쪽 폴더 트리")); tree->setModel(treeFilter_);
+            tree->setObjectName(side == 0 ? "directoryLeftTree" : side == 1 ? "directoryRightTree" : "directoryThirdTree");
+            tree->setAccessibleName(side == 0 ? tr("왼쪽 폴더 트리") : side == 1 ? tr("오른쪽 폴더 트리") : tr("FILE 3 폴더 트리")); tree->setModel(treeFilter_);
             auto* renameKey = new QShortcut(QKeySequence(Qt::Key_F2), tree); renameKey->setContext(Qt::WidgetWithChildrenShortcut);
             connect(renameKey, &QShortcut::activated, this, [this, side] { promptRename(side); });
             tree->setUniformRowHeights(true); tree->setItemDelegate(new TreeDelegate(tree));
@@ -187,20 +190,21 @@ namespace hc::compare
             tree->setExpandsOnDoubleClick(false);
             tree->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel); tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
             tree->setTreePosition(side * 3); tree->header()->setStretchLastSection(false);
-            for (int i = 0; i < 6; ++i) tree->setColumnHidden(i, i / 3 != side);
+            for (int i = 0; i < treeModel_->columnCount(); ++i) tree->setColumnHidden(i, i / 3 != side);
             tree->header()->setSectionResizeMode(side * 3, QHeaderView::Stretch);
             tree->setColumnWidth(side * 3 + 1, 140); tree->setColumnWidth(side * 3 + 2, 100);
             column->addWidget(tree, 1);
+            if (side == 2) pane->hide();
             connect(tree, &QTreeView::activated, this, [this] { OpenCurrent(); });
             connect(tree, &QTreeView::doubleClicked, this, [this, tree](const QModelIndex& Index) {
                 const auto branch = Index.siblingAtColumn(0);
                 if (branch.isValid() && treeFilter_->hasChildren(branch)) tree->setExpanded(branch, !tree->isExpanded(branch));
             });
         }
-        for (int side = 0; side < 2; ++side)
+        for (int side = 0; side < 3; ++side)
         {
-            auto* tree = trees_[side]; auto* other = trees_[1 - side];
-            const auto expansion = [this, other](const QModelIndex& Index, bool Expanded) {
+            auto* tree = trees_[side];
+            const auto expansion = [this, tree](const QModelIndex& Index, bool Expanded) {
                 if (syncing_) return;
                 const auto path = Index.data(DirectoryTreeModel::PathRole).toString();
                 if (Expanded)
@@ -209,14 +213,14 @@ namespace hc::compare
                     if (streaming_ && request_.directoryProgress_) request_.directoryProgress_->Prioritize(path);
                 }
                 else expandedPaths_.remove(path);
-                QScopedValueRollback guard(syncing_, true); other->setExpanded(Index, Expanded);
+                QScopedValueRollback guard(syncing_, true); for (int other = 0; other < activeSides(); ++other) if (trees_[other] != tree) trees_[other]->setExpanded(Index, Expanded);
             };
             connect(tree, &QTreeView::expanded, this, [expansion](const QModelIndex& Index) { expansion(Index, true); });
             connect(tree, &QTreeView::collapsed, this, [expansion](const QModelIndex& Index) { expansion(Index, false); });
-            connect(tree->verticalScrollBar(), &QScrollBar::valueChanged, other->verticalScrollBar(), &QScrollBar::setValue);
-            connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this, other, side](const QModelIndex& Index) {
+            connect(tree->verticalScrollBar(), &QScrollBar::valueChanged, this, [this, tree](int Value) { if (syncing_) return; QScopedValueRollback guard(syncing_, true); for (int other = 0; other < activeSides(); ++other) if (trees_[other] != tree) trees_[other]->verticalScrollBar()->setValue(Value); });
+            connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this, side](const QModelIndex& Index) {
                 if (syncing_) return;
-                { QScopedValueRollback guard(syncing_, true); other->setCurrentIndex(Index.isValid() ? Index.siblingAtColumn((1 - side) * 3) : QModelIndex{}); }
+                { QScopedValueRollback guard(syncing_, true); for (int other = 0; other < activeSides(); ++other) if (other != side) trees_[other]->setCurrentIndex(Index.isValid() ? Index.siblingAtColumn(other * 3) : QModelIndex{}); }
                 updateSelection();
             });
         }
@@ -225,7 +229,7 @@ namespace hc::compare
         const auto change = [this, query, status] {
             filter_->SetQuery(query->text(), status->currentIndex()); treeFilter_->SetQuery(query->text(), status->currentIndex());
             if ((!query->text().isEmpty() || status->currentIndex()) && treeModel_->VisibleEntries() <= 2000)
-                for (auto* tree : trees_) tree->expandAll();
+                for (int side = 0; side < activeSides(); ++side) trees_[side]->expandAll();
             updateSelection();
         };
         connect(query, &QLineEdit::textChanged, this, change); connect(status, &QComboBox::currentIndexChanged, this, change);
@@ -238,14 +242,15 @@ namespace hc::compare
     void DirectoryView::promptRename(int Side)
     {
         if (Busy() || streaming_ || !comparison_.directoryComplete_) return;
-        const auto item = currentEntry(); const auto entry = item[Side == 0 ? "left" : "right"].toObject(); if (!entry["present"].toBool()) return;
+        if (Side == 2 && request_.file3_.isEmpty()) return;
+        const auto item = currentEntry(); const auto entry = item[sideKeys[Side]].toObject(); if (!entry["present"].toBool() || entry["reparse"].toBool()) return;
         const auto path = entry["path"].toString(item["path"].toString()); bool ok = false;
-        const auto name = QInputDialog::getText(this, Side == 0 ? tr("왼쪽 이름 변경") : tr("오른쪽 이름 변경"), tr("새 이름:"), QLineEdit::Normal, QFileInfo(path).fileName(), &ok);
+        const auto name = QInputDialog::getText(this, Side == 0 ? tr("왼쪽 이름 변경") : Side == 1 ? tr("오른쪽 이름 변경") : tr("FILE 3 이름 변경"), tr("새 이름:"), QLineEdit::Normal, QFileInfo(path).fileName(), &ok);
         if (ok) RenameCurrent(Side, name);
     }
     void DirectoryView::RenameCurrent(int Side, const QString& Name)
     {
-        if (Busy() || streaming_ || !comparison_.directoryComplete_ || Side < 0 || Side > 1) return;
+        if (Busy() || streaming_ || !comparison_.directoryComplete_ || Side < 0 || Side > (request_.file3_.isEmpty() ? 1 : 2)) return;
         const auto path = currentEntry()["path"].toString(); if (path.isEmpty()) return;
         renameCanceled_->store(false); renaming_ = true; setEnabled(false); summary_->setText(tr("이름 변경 중…"));
         renameWatcher_.setFuture(QtConcurrent::run([input = request_, comparison = comparison_, cancel = renameCanceled_, Side, path, Name] {
@@ -293,25 +298,30 @@ namespace hc::compare
         EndProgress(false); request_ = Input; comparison_ = Value;
         auto* level = findChild<QComboBox*>("directoryComparisonLevel");
         { const QSignalBlocker blocker(level); level->setCurrentIndex(level->findData(Input.directory_.level_)); }
-        findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); table_->setColumnHidden(4, Input.base_.isEmpty());
+        const bool independent = !Input.file3_.isEmpty(); pair_->setVisible(independent);
+        model_->setProperty("independentThird", independent);
+        { const QSignalBlocker blocker(pair_); pair_->setCurrentIndex(Input.directoryPair_ == std::array{0, 2} ? 1 : Input.directoryPair_ == std::array{1, 2} ? 2 : 0); }
+        findChild<QAction*>("directoryRenameThird")->setVisible(independent);
+        findChild<QPushButton*>("directoryMergePlan")->setEnabled(Value.directoryComplete_); table_->setColumnHidden(4, Input.base_.isEmpty() && !independent);
         if (reuse) treeModel_->FinishProgress(); else treeModel_->SetEntries(Value.entries_);
         // A hidden flat proxy sorts every row when populated. Build it only when
         // requested for large trees, using the same entry order for selection mapping.
         listDeferred_ = treeMode_ && Value.entries_.size() > 10000;
         model_->SetEntries(listDeferred_ ? DirectoryEntries{} : treeModel_->Entries());
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
-        for (int side = 0; side < 2; ++side)
+        for (int side = 0; side < 3; ++side)
         {
-            const auto path = side ? Input.file2_ : Input.file1_;
-            treeRoots_[side]->setText((side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
-            if (!wasStreaming) trees_[side]->expandToDepth(0);
+            const auto path = rootPath(Input, side);
+            trees_[side]->parentWidget()->setVisible(side < 2 || independent);
+            treeRoots_[side]->setText((independent ? QString("FILE %1  ").arg(side + 1) : side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
+            if (!wasStreaming && side < activeSides()) trees_[side]->expandToDepth(0);
         }
         if (wasStreaming && !reuse)
         {
             for (const auto& path : expanded)
             {
                 const auto index = treeFilter_->mapFromSource(treeModel_->ForPath(path));
-                if (index.isValid()) for (auto* tree : trees_) tree->expand(index);
+                if (index.isValid()) for (int side = 0; side < activeSides(); ++side) trees_[side]->expand(index);
             }
             if (!selectedPath.isEmpty()) selectTree(treeFilter_->mapFromSource(treeModel_->ForPath(selectedPath)));
         }
@@ -322,6 +332,9 @@ namespace hc::compare
         QStringList lines;
         if (!treeMode_) lines << tr("LEFT  %1").arg(request_.file1_) << tr("RIGHT  %1").arg(request_.file2_);
         if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(request_.base_);
+        if (!treeMode_ && !request_.file3_.isEmpty()) lines << tr("FILE 3  %1").arg(request_.file3_);
+        if (!request_.file3_.isEmpty()) lines << tr("독립 3폴더 비교 · 세 번째 폴더를 BASE로 해석하지 않음 · 선택한 비교 쌍으로 병합");
+        lines << tr("링크·정션은 링크 자체만 비교하며 대상을 탐색하지 않습니다. 병합 전에 링크를 제외 필터로 제거하십시오.");
         lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : comparison_.directoryLevel_ == "text" ? tr("텍스트 내용 비교 · 인코딩/BOM 차이 구분 · 바이너리/16 MiB 초과는 바이트 비교") : tr("바이트 비교")) +
             (comparison_.directoryFiltered_ ? tr(" · 포함/제외 필터 적용") : QString{}));
         if (!comparison_.directoryComplete_) lines << tr("일부 항목을 비교하지 못했습니다. ‘비교 불가만’ 필터에서 경로와 오류를 확인하십시오. 병합 계획은 제한됩니다.");
@@ -348,9 +361,9 @@ namespace hc::compare
     {
         if (!Index.isValid()) return;
         for (auto parent = Index.parent(); parent.isValid(); parent = parent.parent())
-            for (auto* tree : trees_) tree->setExpanded(parent, true);
+            for (int side = 0; side < activeSides(); ++side) trees_[side]->setExpanded(parent, true);
         trees_[0]->setCurrentIndex(Index);
-        for (int side = 0; side < 2; ++side) trees_[side]->scrollTo(Index.siblingAtColumn(side * 3), QAbstractItemView::EnsureVisible);
+        for (int side = 0; side < activeSides(); ++side) trees_[side]->scrollTo(Index.siblingAtColumn(side * 3), QAbstractItemView::EnsureVisible);
     }
     void DirectoryView::switchView(bool Tree)
     {
@@ -369,10 +382,16 @@ namespace hc::compare
     void DirectoryView::updateSelection()
     {
         const auto item = currentEntry();
-        for (int side = 0; side < 2; ++side)
-            findChild<QPushButton*>(side == 0 ? "directoryCopyRight" : "directoryCopyLeft")->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
-        for (int side = 0; side < 2; ++side)
-            findChild<QAction*>(side == 0 ? "directoryRenameLeft" : "directoryRenameRight")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && item[side == 0 ? "left" : "right"].toObject()["present"].toBool());
+        const bool independent = !request_.file3_.isEmpty(); pair_->setEnabled(!streaming_);
+        for (int side = 0; side < 2; ++side) {
+            auto* button = findChild<QPushButton*>(side == 0 ? "directoryCopyRight" : "directoryCopyLeft");
+            const auto source = independent ? request_.directoryPair_[side] : side, target = independent ? request_.directoryPair_[1 - side] : 1 - side; const auto entry = item[sideKeys[source]].toObject();
+            button->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && entry["present"].toBool() && !entry["reparse"].toBool());
+            button->setText(independent ? QString("FILE %1 → FILE %2").arg(source + 1).arg(target + 1) : side == 0 ? tr("선택 →") : tr("← 선택"));
+            button->setToolTip(tr("선택한 항목을 복사하는 계획 검토: %1 → %2").arg(rootPath(request_, source), rootPath(request_, target)));
+        }
+        for (int side = 0; side < 3; ++side) { const auto entry = item[sideKeys[side]].toObject();
+            findChild<QAction*>(side == 0 ? "directoryRenameLeft" : side == 1 ? "directoryRenameRight" : "directoryRenameThird")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && entry["present"].toBool() && !entry["reparse"].toBool()); }
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
         summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
@@ -383,11 +402,18 @@ namespace hc::compare
         if (!openable(item) || !open_) return;
         if (streaming_ && request_.directoryProgress_) request_.directoryProgress_->Prioritize(item["path"].toString());
         Request next; next.mode_ = "compare"; next.encoding_ = request_.encoding_; next.theme_ = request_.theme_;
+        if (!request_.file3_.isEmpty()) {
+            const auto path = [&](int Side) { return QDir(rootPath(request_, Side)).filePath(item[sideKeys[Side]].toObject()["path"].toString(item["path"].toString())); };
+            if (file(item["left"].toObject()) && file(item["right"].toObject()) && file(item["base"].toObject())) { next.file1_ = path(0); next.file2_ = path(1); next.file3_ = path(2); next.inputEncodings_ = request_.inputEncodings_; }
+            else { auto pair = request_.directoryPair_; if (!file(item[sideKeys[pair[0]]].toObject()) && !file(item[sideKeys[pair[1]]].toObject())) pair = {0, 2};
+                next.file1_ = path(pair[0]); next.file2_ = path(pair[1]); next.allowMissingInputs_ = {!file(item[sideKeys[pair[0]]].toObject()), !file(item[sideKeys[pair[1]]].toObject())}; next.inputEncodings_ = {request_.inputEncodings_[pair[0]], request_.inputEncodings_[pair[1]], QString{}}; }
+            open_(std::move(next)); return;
+        }
         next.allowMissingInputs_ = {!file(item["left"].toObject()), !file(item["right"].toObject())};
         next.file1_ = QDir(request_.file1_).filePath(item["left"].toObject()["path"].toString(item["path"].toString()));
         next.file2_ = QDir(request_.file2_).filePath(item["right"].toObject()["path"].toString(item["path"].toString()));
         next.inputEncodings_ = request_.inputEncodings_;
-        if (file(item["base"].toObject()) || (item["status"] == "Pending" && !request_.base_.isEmpty()))
+        if (!request_.base_.isEmpty() && (file(item["base"].toObject()) || item["status"] == "Pending"))
             next.base_ = QDir(request_.base_).filePath(item["base"].toObject()["path"].toString(item["path"].toString()));
         open_(std::move(next));
     }

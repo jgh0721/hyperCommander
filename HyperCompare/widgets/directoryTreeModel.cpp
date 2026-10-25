@@ -16,7 +16,7 @@ namespace hc::compare
     { return Item && Item != &root_ ? createIndex(Item->row_, 0, const_cast<Node*>(Item)) : QModelIndex{}; }
     QModelIndex DirectoryTreeModel::index(int Row, int Column, const QModelIndex& Parent) const
     {
-        if (Row < 0 || Column < 0 || Column >= 6 || (Parent.isValid() && Parent.column())) return {};
+        if (Row < 0 || Column < 0 || Column >= columnCount() || (Parent.isValid() && Parent.column())) return {};
         const auto* p = node(Parent);
         return std::size_t(Row) < p->children_.size() ? createIndex(Row, Column, p->children_[Row]) : QModelIndex{};
     }
@@ -47,7 +47,7 @@ namespace hc::compare
             }
             if (parent == &root_) continue;
             parent->entry_ = i; parent->different_ = !DirectoryContentEqual(entry.Status());
-            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
+            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_ && !side.reparse_;
             entriesToNodes_[std::size_t(i)] = parent;
         }
         for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it)
@@ -101,7 +101,7 @@ namespace hc::compare
             else entries_[parent->entry_] = row;
             const auto& entry = entries_.at(parent->entry_); parent->matched_ = true;
             parent->different_ = !DirectoryContentEqual(entry.Status());
-            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_;
+            for (const auto& side : entry.sides_) parent->folder_ |= side.directory_ && !side.reparse_;
             changed.insert(parent);
             if (parent->different_) for (auto* ancestor = parent->parent_; ancestor && !ancestor->different_; ancestor = ancestor->parent_)
             { ancestor->different_ = true; changed.insert(ancestor); }
@@ -124,7 +124,7 @@ namespace hc::compare
         }
         const QList<int> roles{Qt::DisplayRole, Qt::AccessibleTextRole, Qt::FontRole, Qt::DecorationRole, Qt::ToolTipRole, Qt::UserRole};
         for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
-            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), roles);
+            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, columnCount() - 1, indexFor(it.key())), roles);
     }
     bool DirectoryTreeModel::AwaitingChildren(const QModelIndex& Index) const
     { return streaming_ && Index.isValid() && node(Index)->folder_ && node(Index)->children_.empty(); }
@@ -176,7 +176,7 @@ namespace hc::compare
             else { it->first = std::min(it->first, item->row_); it->second = std::max(it->second, item->row_); }
         }
         for (auto it = ranges.cbegin(); it != ranges.cend(); ++it)
-            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, 5, indexFor(it.key())), {Qt::DisplayRole, Qt::AccessibleTextRole, Qt::FontRole});
+            emit dataChanged(index(it->first, 0, indexFor(it.key())), index(it->second, columnCount() - 1, indexFor(it.key())), {Qt::DisplayRole, Qt::AccessibleTextRole, Qt::FontRole});
     }
     void DirectoryTreeModel::SetFilter(const QString& Query, int Status)
     {
@@ -200,7 +200,7 @@ namespace hc::compare
         if (Role == Qt::UserRole) return Entry(Index);
         if (Role != Qt::FontRole && Role != Qt::DecorationRole && Role != Qt::ToolTipRole && Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
         const DirectoryRow empty; const auto& entry = n->entry_ >= 0 ? entries_.at(n->entry_) : empty;
-        const auto& side = entry.sides_[Index.column() < 3 ? 0 : 1];
+        const auto& side = entry.sides_[Index.column() / 3];
         const bool present = side.present_; const auto column = Index.column() % 3;
         if (Role == Qt::FontRole) { QFont font; font.setBold(n->different_); font.setItalic(!present); return font; }
         if (Role == Qt::DecorationRole)
@@ -216,7 +216,7 @@ namespace hc::compare
         const auto status = entry.Status();
         if (Role == Qt::ToolTipRole)
             return n->path_ + '\n' + DirectoryStatusName(status) +
-                tr("\nLEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(entry.Status(1), entry.Status(2), entry.Status(3)) + '\n' + QString::fromUtf8(QJsonDocument(entry.errors_).toJson(QJsonDocument::Compact));
+                tr("\n1↔2: %1 · 1↔3/BASE: %2 · 2↔3/BASE: %3").arg(entry.Status(1), entry.Status(2), entry.Status(3)) + (side.link_ ? tr("\n링크 대상(탐색하지 않음): ") + side.link_->target_ : QString{}) + '\n' + QString::fromUtf8(QJsonDocument(entry.errors_).toJson(QJsonDocument::Compact));
         if (!column)
         {
             const auto& path = present ? (side.path_.isEmpty() ? entry.path_ : side.path_) : n->path_;
@@ -231,12 +231,13 @@ namespace hc::compare
             return DirectoryStatusName(status);
         }
         if (!present) return QString{};
+        if (side.reparse_) return tr("링크(읽기 전용)");
         return side.directory_ ? tr("폴더") : tr("%1 B").arg(QLocale().toString(qulonglong(side.size_)));
     }
 
     QVariant DirectoryTreeModel::headerData(int Section, Qt::Orientation Orientation, int Role) const
     {
-        if (Orientation != Qt::Horizontal || Role != Qt::DisplayRole || Section < 0 || Section >= 6) return {};
+        if (Orientation != Qt::Horizontal || Role != Qt::DisplayRole || Section < 0 || Section >= columnCount()) return {};
         return QStringList{tr("이름"), tr("상태"), tr("크기")}[Section % 3];
     }
     QModelIndex DirectoryTreeModel::NextDifference(const QModelIndex& Current, int Direction) const

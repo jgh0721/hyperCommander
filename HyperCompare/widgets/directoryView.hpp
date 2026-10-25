@@ -64,6 +64,7 @@ namespace hc::compare
         std::function<void(Request)> open_;
         std::function<void(QString)> levelChanged_;
     private:
+        int activeSides() const { return request_.file3_.isEmpty() ? 2 : 3; }
         void promptRename(int Side);
         void updateSelection();
         void updateRoots();
@@ -72,10 +73,11 @@ namespace hc::compare
         void switchView(bool Tree);
         DirectoryTreeModel* treeModel_ = nullptr;
         DirectoryTreeFilter* treeFilter_ = nullptr;
-        QTreeView* trees_[2]{};
-        QLabel* treeRoots_[2]{};
+        QTreeView* trees_[3]{};
+        QLabel* treeRoots_[3]{};
         QSplitter* treeBox_ = nullptr;
         QComboBox* viewMode_ = nullptr;
+        QComboBox* pair_ = nullptr;
         QSet<QString> expandedPaths_;
         bool treeMode_ = true, syncing_ = false, streaming_ = false, listDeferred_ = false;
         DirectoryModel* model_ = nullptr;

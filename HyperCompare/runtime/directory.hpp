@@ -20,6 +20,7 @@ namespace hc::compare
         QStringList include_, exclude_;
         QString level_ = "bytes";
     };
+    struct DirectoryLink { QByteArray data_; QString target_; };
     struct DirectoryEntry
     {
         QString path_;
@@ -28,12 +29,13 @@ namespace hc::compare
         std::int64_t createdUtcMs_ = 0, modifiedUtcMs_ = 0;
         std::uint32_t attributes_ = 0;
         bool directory_ = false;
+        std::shared_ptr<const DirectoryLink> link_;
     };
     // Keep native locators and provider session IDs out of the per-entry inventory.
     using DirectoryTree = QMap<QString, DirectoryEntry>;
     struct DirectoryRow
     {
-        struct Side { QString path_; std::uint64_t size_ = 0; std::int64_t modified_ = 0; bool present_ = false, directory_ = false; };
+        struct Side { QString path_; std::uint64_t size_ = 0; std::int64_t modified_ = 0; bool present_ = false, directory_ = false, reparse_ = false; std::shared_ptr<const DirectoryLink> link_; };
         QString path_;
         std::array<Side, 3> sides_;
         std::array<quint8, 4> statuses_{};
@@ -83,4 +85,5 @@ namespace hc::compare
     DirectorySnapshot CaptureDirectory(const QString& Root, const DirectoryPolicy& Policy, const Budget& Limits, bool AllowIncomplete = false, const std::function<void(const DirectoryEntry&)>& Discovered = {});
     void ValidateDirectory(const DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits);
     void CompareDirectory(const Request& Input, Result& Value, const Budget& Limits);
+    void ProjectDirectoryPair(const Request& Input, const Result& Comparison, Request& PairInput, Result& PairComparison, const Budget& Limits);
 }

@@ -178,7 +178,7 @@ namespace hc::compare
     Result RenameDirectoryEntry(const Request& Input, const Result& Comparison, int Side, const QString& Path, const QString& Name, const Budget& Limits)
     {
         Limits.Check();
-        if (!Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Side < 0 || Side > 1 || std::size_t(Side) >= Comparison.directories_->size())
+        if (!Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Side < 0 || Side > (Input.file3_.isEmpty() ? 1 : 2) || std::size_t(Side) >= Comparison.directories_->size())
             throw Failure("DirectoryRenameRequiresCompleteComparison");
         if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('/') || Name.contains('\\') || Name.contains(':') || Name.contains(QChar(0)))
             throw Failure("DirectoryRenameInvalidName");

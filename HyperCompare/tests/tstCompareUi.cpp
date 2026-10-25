@@ -119,6 +119,31 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void directoryIndependentThreeTreesAndPairTransfer()
+    {
+        QTemporaryDir dir; Request input; input.mode_ = "directory"; input.file1_ = dir.filePath("first"); input.file2_ = dir.filePath("second"); input.file3_ = dir.filePath("third");
+        for (const auto& root : {input.file1_, input.file2_, input.file3_}) { QVERIFY(QDir().mkpath(root + "/sub")); write(root + "/sub/common.txt", root.toUtf8()); } write(input.file3_ + "/third-only.txt", "only third");
+        const auto comparison = Execute(input, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(comparison.directoryComplete_, qPrintable(comparison.error_));
+        DirectoryView view; view.resize(1700, 850); view.SetComparison(input, comparison); view.show(); auto* first = view.findChild<QTreeView*>("directoryLeftTree"); auto* second = view.findChild<QTreeView*>("directoryRightTree"); auto* third = view.findChild<QTreeView*>("directoryThirdTree"); QVERIFY(third->isVisible()); QCOMPARE(third->model()->columnCount(), 9);
+        auto* model = static_cast<DirectoryTreeModel*>(view.findChild<QAbstractItemModel*>("directoryTreeModel")); auto* proxy = qobject_cast<QSortFilterProxyModel*>(third->model()); const auto folder = proxy->mapFromSource(model->ForPath("sub")); QVERIFY(folder.isValid()); third->setCurrentIndex(folder.siblingAtColumn(6)); QVERIFY(first->currentIndex().isValid()); QVERIFY(second->currentIndex().isValid());
+        third->setExpanded(folder, false); third->scrollTo(folder.siblingAtColumn(6)); third->setFocus(); QTest::qWait(30); const auto point = third->visualRect(folder.siblingAtColumn(6)).center(); QTest::mouseClick(third->viewport(), Qt::LeftButton, {}, point); QTest::mouseDClick(third->viewport(), Qt::LeftButton, {}, point); QTRY_VERIFY(third->isExpanded(folder)); QVERIFY(first->isExpanded(folder)); QVERIFY(second->isExpanded(folder));
+        Request opened; view.open_ = [&](Request Request) { opened = std::move(Request); }; const auto common = proxy->mapFromSource(model->ForPath("sub/common.txt")); third->setCurrentIndex(common.siblingAtColumn(6)); view.OpenCurrent(); QCOMPARE(opened.file3_, input.file3_ + "/sub/common.txt"); QVERIFY(opened.base_.isEmpty());
+        const auto only = proxy->mapFromSource(model->ForPath("third-only.txt")); third->setCurrentIndex(only.siblingAtColumn(6)); view.OpenCurrent(); QCOMPARE(opened.file2_, input.file3_ + "/third-only.txt"); QVERIFY(opened.allowMissingInputs_[0]); QVERIFY(!opened.allowMissingInputs_[1]);
+        auto* pair = view.findChild<QComboBox*>("directoryPairSelector"); QVERIFY(pair->isVisible()); pair->setCurrentIndex(2); third->setCurrentIndex(common.siblingAtColumn(6)); auto* copy = view.findChild<QPushButton*>("directoryCopyRight"); QVERIFY(copy->isEnabled()); copy->click();
+        auto* dialog = dynamic_cast<DirectoryMergeDialog*>(view.findChild<QWidget*>("directoryMergeDialog")); QVERIFY(dialog); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000); QVERIFY2(dialog->LastResult().error_.isEmpty(), qPrintable(dialog->LastResult().error_)); QCOMPARE(dialog->LastResult().directoryPlan_["output"].toObject()["path"].toString(), input.file3_); QCOMPARE(dialog->LastResult().directoryPlan_["roots"].toArray()[0].toObject()["path"].toString(), input.file2_); dialog->close();
+        const auto prefix = QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-three-" + QGuiApplication::platformName(); QVERIFY(view.grab().save(prefix + ".png"));
+        view.BeginComparison(input); DirectoryProgress progress; progress.side_ = -2; progress.phase_ = "scan"; DirectoryRow row; row.path_ = "lazy"; row.statuses_[0] = 18; row.sides_[2] = {"lazy", 0, 0, true, true}; progress.rows_.append(row); view.ApplyProgress(progress); const auto lazy = proxy->mapFromSource(model->ForPath("lazy")); QVERIFY(third->model()->hasChildren(lazy)); third->setExpanded(lazy, true); QVERIFY(third->isExpanded(lazy));
+        DirectoryRow link; link.path_ = "junction"; link.statuses_[0] = 18; link.sides_[2] = {"junction", 0, 0, true, true, true, std::make_shared<DirectoryLink>(DirectoryLink{{}, "outside"})}; progress.rows_.clear(); progress.rows_.append(link); view.ApplyProgress(progress); const auto junction = proxy->mapFromSource(model->ForPath("junction")); QVERIFY(!third->model()->hasChildren(junction)); view.EndProgress();
+    }
+    void largeSimultaneousWindowUsesBoundedPages()
+    {
+        QTemporaryDir dir; Request input; input.mode_ = "merge"; input.memoryMiB_ = 256; input.file1_ = dir.filePath("left.cpp"); input.file2_ = dir.filePath("right.cpp"); input.base_ = dir.filePath("base.cpp"); input.output_ = dir.filePath("result.cpp");
+        { QByteArray bytes(17 * 1024 * 1024, 'a'); write(input.file1_, bytes); write(input.base_, bytes); bytes[10] = 'b'; write(input.file2_, bytes); }
+        CompareWindow window(input); window.resize(1700, 850); window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("largeTextView"), 30000); auto* view = dynamic_cast<LargeTextMultiView*>(window.findChild<QWidget*>("largeTextView")); QVERIFY(view); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
+        for (const auto& name : {"largeTextLeft", "largeTextRight", "largeTextInput1", "largeTextInput2"}) { auto* editor = view->findChild<ScintillaEditBase*>(name); QVERIFY(editor); QCOMPARE(contents(editor).size(), qsizetype(largeTextPageMaximum)); }
+        view->findChild<QPushButton*>("largeNextRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000); auto* line = view->findChild<QLabel*>("largeStatus"); QVERIFY2(!line->text().contains("Limit"), qPrintable(line->text()));
+        view->SaveActive(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000); QCOMPARE(QFileInfo(input.output_).size(), qint64(17 * 1024 * 1024)); QCOMPARE(readBytes(input.output_), readBytes(input.file2_)); window.close();
+    }
     void largeSimultaneousMergeAndIndependentViews()
     {
         QTemporaryDir dir; Request request; request.mode_ = "merge"; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.base_ = dir.filePath("base.cpp"); request.output_ = dir.filePath("out.cpp");

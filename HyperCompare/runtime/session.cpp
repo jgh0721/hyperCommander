@@ -188,6 +188,7 @@ namespace hc::compare
             {"largeText", QJsonObject{{"compareTwo", true}, {"compareThree", true}, {"pagedEditAndMergeTwo", true}, {"baseMerge", true}, {"resultOutput", true}, {"maxInputBytes", double(largeTextMaximum)}, {"maxDecodedBytes", double(largeTextMaximum)}, {"maxPageBytes", double(largeTextPageMaximum)}, {"maxCombinedLines", 2000000}, {"undoRevisions", 32}, {"encodings", QJsonArray{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949-explicit"}}}},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryLevels", QJsonArray{"bytes", "text", "metadata"}}, {"directoryTextMaxBytes", 16 * 1024 * 1024}, {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 4}, {"directoryFileCopyOptions", QJsonArray{"metadata", "acl", "streams"}}, {"directoryRename", true}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-7z-rewrite-rar-readonly"},
+            {"directoryIndependentThree", true}, {"directoryPairSelection", QJsonArray{"1:2", "1:3", "2:3"}}, {"directoryLinks", "compare-reparse-object-no-follow; exclude-before-write"}, {"largeTextSimultaneousView", "three-inputs-and-result"},
             {"gitAdapter", QJsonObject{{"schemaVersion", 1}, {"config", "-git-tool config"}, {"diff", "files-and-explicit-dev-null"},
                 {"merge", "regular-same-mode-index-stages-123-or-23"}, {"writesConfig", false}, {"writesIndex", false}}},
             {"requestFiles", true}, {"requestSchema", 1}, {"maxRequestBytes", 1048576}, {"roleEncodings", true},
@@ -512,7 +513,7 @@ namespace hc::compare
         }
         return {{"schemaVersion", 1}, {"requestId", requestId_}, {"engineVersion", extension.isEmpty() ? QString(textEngineVersion) : extension["engine"].toString()}, {"operation", operation_}, {"completion", completion_},
             {"outcome", outcome_}, {"exitCode", exitCode_}, {"commit", commit_}, {"error", error_}, {"textComparison", textComparison_},
-            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && directoryComplete_ && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}}}, {"inputs", inputs},
+            {"coverage", QJsonObject{{"scopeComplete", completion_ == "Complete" && directoryComplete_ && extension_["scopeComplete"].toBool(true)}, {"filtered", directoryFiltered_}, {"comparisonLevel", directoryLevel_}, {"directoryThirdRole", operation_ == "directory-compare3" ? "FILE3" : "BASE"}, {"linkPolicy", "object-no-follow-readonly"}}}, {"inputs", inputs},
             {"changes", changes}, {"conflicts", conflicts}, {"entries", IncludeEntries ? entries_.Json() : QJsonArray{}}, {"comparisons", comparisons_}, {"sourceAnalysis", semantic_}, {"engineProbe", engineProbe_}, {"extension", extension},
             {"directoryPlan", directoryPlan_}, {"planWritten", planWritten_}, {"decisionSource", decisionsSnapshot_ ? decisionsSnapshot_->path_ : QString{}},
             {"resolutions", resolutions}, {"unresolvedCount", unresolved},

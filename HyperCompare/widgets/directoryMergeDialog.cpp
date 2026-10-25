@@ -117,10 +117,12 @@ namespace hc::compare
     DirectoryMergeDialog::DirectoryMergeDialog(Request Input, Result Comparison, QWidget* Parent)
         : QDialog(Parent), input_(std::move(Input)), comparison_(std::move(Comparison))
     {
+        if (!input_.file3_.isEmpty()) { const std::array roots{input_.file1_, input_.file2_, input_.file3_}; for (int i = 0; i < 3; ++i) if (i != input_.directoryPair_[0] && i != input_.directoryPair_[1]) input_.protectedInputs_.append(roots[i]); }
         setObjectName("directoryMergeDialog"); setWindowTitle(tr("디렉터리 병합 계획")); resize(1000, 700);
         auto* box = new QVBoxLayout(this); auto* introduction = new QLabel(tr("출력 디렉터리를 지정하고 계획을 검토하십시오. 입력은 보존하며, ‘계획 실행’에서 출력 파일을 변경합니다."), this);
         introduction->setObjectName("directoryPlanIntroduction"); introduction->setWordWrap(true); box->addWidget(introduction);
-        auto* inputs = new QLabel(tr("LEFT  %1\nRIGHT  %2%3").arg(input_.file1_, input_.file2_, input_.base_.isEmpty() ? QString{} : "\nBASE  " + input_.base_), this);
+        const std::array roots{input_.file1_, input_.file2_, input_.file3_}; const auto selected = input_.file3_.isEmpty() ? std::array{0, 1} : input_.directoryPair_;
+        auto* inputs = new QLabel(tr("LEFT  %1\nRIGHT  %2%3").arg(roots[selected[0]], roots[selected[1]], input_.base_.isEmpty() ? QString{} : "\nBASE  " + input_.base_), this);
         inputs->setTextFormat(Qt::PlainText); inputs->setWordWrap(true); inputs->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); box->addWidget(inputs);
         auto* destination = new QHBoxLayout(); output_ = new QLineEdit(this); output_->setObjectName("directoryOutput"); output_->setPlaceholderText(tr("출력 디렉터리")); output_->setAccessibleName(tr("병합 출력 디렉터리"));
         auto* browse = new QPushButton(tr("찾아보기…"), this); browse->setObjectName("directoryOutputBrowse"); destination->addWidget(output_, 1); destination->addWidget(browse); box->addLayout(destination);
@@ -204,8 +206,9 @@ namespace hc::compare
     void DirectoryMergeDialog::PrepareTransfer(int Source, const QString& Path)
     {
         if (Busy() || Source < 0 || Source > 1) return;
-        transfer_ = true; transferSource_ = Source; transferPath_ = Path; model_->SetPlan({}); output_->setText(Source == 0 ? input_.file2_ : input_.file1_); mirror_->setChecked(false); overwrite_->setChecked(true);
-        findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(Source == 0 ? input_.file1_ : input_.file2_));
+        const std::array roots{input_.file1_, input_.file2_, input_.file3_}; const auto selected = input_.file3_.isEmpty() ? std::array{0, 1} : input_.directoryPair_;
+        transfer_ = true; transferSource_ = Source; transferPath_ = Path; model_->SetPlan({}); output_->setText(roots[selected[1 - Source]]); mirror_->setChecked(false); overwrite_->setChecked(true);
+        findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(roots[selected[Source]]));
         findChild<QPushButton*>("directoryOutputBrowse")->setEnabled(false);
         auto input = input_; input.directoryCopy_ = copyOptions();
         run("prepare", [input, comparison = comparison_, Source, Path, cancel = canceled_] {

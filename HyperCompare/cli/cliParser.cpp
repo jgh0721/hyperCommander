@@ -41,6 +41,7 @@ namespace hc::compare
         value("include", "Directory include globs separated by ';'; filename or root-relative path with '/'.");
         value("exclude", "Directory exclusion globs separated by ';'; matching directories are pruned.");
         value("directory-level", "bytes (default), text (encoding/BOM-independent, up to 16 MiB per file; binary/oversized uses bytes), or metadata.");
+        value("directory-pair", "Independent three-folder operation pair: 1:2 (default), 1:3 or 2:3. Links are compared as objects without traversal; exclude links before merge.");
         flag("copy-metadata", "Directory-merge: preserve copied file modification time and basic attributes.");
         flag("copy-acl", "Directory-merge: copy file DACL using destination inheritance rules; interrupted unrecorded ACL commits require recovery review.");
         flag("copy-streams", "Directory-merge: preserve and verify named file data streams (ADS).");
@@ -92,6 +93,9 @@ namespace hc::compare
         }
         request.file1_ = parser.value("file1"); request.file2_ = parser.value("file2");
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
+        if (parser.isSet("directory-pair")) {
+            const auto pair = parser.value("directory-pair"); if (pair == "1:2") request.directoryPair_ = {0, 1}; else if (pair == "1:3") request.directoryPair_ = {0, 2}; else if (pair == "2:3") request.directoryPair_ = {1, 2}; else return fail("Invalid directory pair.");
+        }
         request.encoding_ = parser.value("encoding"); request.report_ = parser.value("report");
         if (parser.isSet("text-equality")) request.textEquality_ = parser.value("text-equality");
         if (request.textEquality_ != "content" && request.textEquality_ != "bytes") return fail("Invalid text-equality.");
@@ -201,6 +205,7 @@ namespace hc::compare
         if (request.file1_.isEmpty() && request.file2_.isEmpty() && !request.headless_ && Arguments.size() == 1) return result;
         if (request.file1_.isEmpty() || request.file2_.isEmpty()) return fail("Both -file1 and -file2 are required.");
         if (!request.base_.isEmpty() && !request.file3_.isEmpty()) return fail("-base and -file3 are mutually exclusive.");
+        if (parser.isSet("directory-pair") && (request.file3_.isEmpty() || !QStringList{"auto", "directory", "directory-merge"}.contains(request.mode_))) return fail("directory-pair requires three independent folders.");
         if (parser.isSet("encoding3") && request.base_.isEmpty() && request.file3_.isEmpty()) return fail("encoding3 requires -base or -file3.");
         if (request.mode_ == "directory-merge")
         {
@@ -210,7 +215,7 @@ namespace hc::compare
         }
         if (request.mode_ == "directory-merge")
         {
-            if ((request.headless_ && request.planOut_.isEmpty()) || request.output_.isEmpty() || !request.decisions_.isEmpty() || !request.file3_.isEmpty() || request.dryRun_)
+            if ((request.headless_ && request.planOut_.isEmpty()) || request.output_.isEmpty() || !request.decisions_.isEmpty() || request.dryRun_)
                 return fail("directory-merge requires -output and headless requests also require -planout; use -base for three-way.");
             if (!request.takeAll_.isEmpty() && (!request.base_.isEmpty() || (request.takeAll_ != "left" && request.takeAll_ != "right"))) return fail("Invalid directory selection.");
         }

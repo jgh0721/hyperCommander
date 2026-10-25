@@ -6,6 +6,9 @@
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include <QDir>
 #include <thread>
+#include <QScopeGuard>
+#include <winioctl.h>
+#include <cstring>
 
 namespace hc::compare
 {
@@ -30,6 +33,31 @@ namespace hc::compare
         }
         bool recoverable(const Failure& Error)
         { return Error.code_.starts_with("win32:") || Error.code_ == "ChangedDuringRead"; }
+        void readLink(DirectoryEntry& Entry, const QString& Path)
+        {
+            const auto native = QDir::toNativeSeparators(Path);
+            const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(native.utf16()), 0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) throw Failure("win32:" + std::to_string(GetLastError()));
+            const auto close = qScopeGuard([&] { CloseHandle(handle); });
+            QByteArray bytes(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, '\0'); DWORD count = 0;
+            if (!DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0, bytes.data(), DWORD(bytes.size()), &count, nullptr))
+                throw Failure("win32:" + std::to_string(GetLastError()));
+            if (count < 8) throw Failure("InvalidReparseData");
+            DWORD tag = 0; WORD length = 0; std::memcpy(&tag, bytes.constData(), 4); std::memcpy(&length, bytes.constData() + 4, 2);
+            if (DWORD(length) + 8 > count) throw Failure("InvalidReparseData");
+            // Third-party tags may include a GUID header beyond the 8-byte prefix.
+            bytes.resize(count); bytes[6] = bytes[7] = 0; auto link = std::make_shared<DirectoryLink>(); link->data_ = bytes;
+            const int prefix = tag == IO_REPARSE_TAG_SYMLINK ? 20 : tag == IO_REPARSE_TAG_MOUNT_POINT ? 16 : 0;
+            if (prefix) {
+                if (bytes.size() < prefix) throw Failure("InvalidReparseData");
+                WORD offset = 0, size = 0; std::memcpy(&offset, bytes.constData() + 8, 2); std::memcpy(&size, bytes.constData() + 10, 2);
+                if (bytes.size() < prefix || (offset & 1) || (size & 1) || prefix + int(offset) + int(size) > bytes.size()) throw Failure("InvalidReparseData");
+                link->target_ = QString::fromUtf16(reinterpret_cast<const char16_t*>(bytes.constData() + prefix + offset), size / 2);
+            } else link->target_ = QString("tag 0x%1").arg(tag, 8, 16, QChar('0'));
+            Entry.link_ = std::move(link);
+        }
         struct Enumeration
         {
             using Item = std::pair<storage::Locator, QString>;
@@ -65,8 +93,12 @@ namespace hc::compare
             ctx.allowUnavailableChildMetadata_ = true;
             const auto& root = Snapshot.entry_;
             if (!root.directory_) throw Failure("ExpectedDirectory");
-            if (root.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
             Enumeration local(root); auto& pending = Work ? *Work : local;
+            if (root.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) {
+                if (!AllowIncomplete) throw Failure("ReparseDirectoryUnsupported");
+                DirectoryEntry link{".", root.id_.revision_, root.size_, root.createdUtcMs_, root.modifiedUtcMs_, root.attributes_, root.directory_};
+                readLink(link, Snapshot.root_); result.insert(".", link); pending.pending_.clear(); pending.order_.clear(); if (Discovered) Discovered(link); return;
+            }
             while (!pending.pending_.isEmpty())
             {
                 Limits.Check(); auto [at, prefix] = pending.Take(Priority);
@@ -85,15 +117,20 @@ namespace hc::compare
                             if (result.contains(key)) throw Failure("CaseCollision");
                             QString error;
                             if (const auto found = entry.hints_.find("comparisonError"); found != entry.hints_.end()) error = QString::fromStdString(found->second);
-                            if (entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) error = "ReparseDirectoryUnsupported";
+                            const bool link = entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT;
+                            if (link && !AllowIncomplete) error = "ReparseDirectoryUnsupported";
                             if (relative.count('/') > 128) error = "DirectoryDepthLimit";
                             if (!error.isEmpty())
                             {
                                 if (!AllowIncomplete) throw Failure(error.toStdString());
                                 Snapshot.issues_.insert(key, error);
                             }
-                            if (entry.directory_ && error.isEmpty()) pending.Add(entry.locator_, relative + '/');
+                            if (entry.directory_ && !link && error.isEmpty()) pending.Add(entry.locator_, relative + '/');
                             const auto inserted = result.insert(key, {relative, std::move(entry.id_.revision_), entry.size_, entry.createdUtcMs_, entry.modifiedUtcMs_, entry.attributes_, entry.directory_});
+                            if (link && AllowIncomplete && error.isEmpty()) {
+                                try { readLink(*inserted, QDir(Snapshot.root_).filePath(relative)); }
+                                catch (const Failure& failure) { Snapshot.issues_.insert(key, QString::fromStdString(failure.code_)); }
+                            }
                             if (Discovered) Discovered(*inserted);
                         }
                         if (page.end_) break;
@@ -186,7 +223,8 @@ namespace hc::compare
         {
             if (!Entry) return {{"present", false}};
             return {{"present", true}, {"path", relative(Entry)}, {"directory", Entry->directory_},
-                {"size", QString::number(Entry->size_)}, {"modifiedUtcMs", QString::number(Entry->modifiedUtcMs_)}};
+                {"size", QString::number(Entry->size_)}, {"modifiedUtcMs", QString::number(Entry->modifiedUtcMs_)},
+                {"reparse", bool(Entry->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)}, {"linkTarget", Entry->link_ ? Entry->link_->target_ : QString{}}};
         }
         QString relation(const DirectoryEntry* A, const DirectoryEntry* B,
             const DirectorySnapshot& RootA, const DirectorySnapshot& RootB, const Request& Input, int SideA, int SideB, const Budget& Limits)
@@ -196,6 +234,9 @@ namespace hc::compare
             if (!B) return "LeftOnly";
             if (A->directory_ != B->directory_) return "TypeConflict";
             if (relative(A) != relative(B)) return "NameDifferent";
+            const bool linkA = A->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT, linkB = B->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT;
+            if (linkA != linkB) return "TypeConflict";
+            if (linkA) return A->link_ && B->link_ && A->link_->data_ == B->link_->data_ ? "Equal" : "Different";
             if (A->directory_) return "Equal";
             if (Input.directory_.level_ == "metadata")
                 return A->size_ == B->size_ && A->modifiedUtcMs_ == B->modifiedUtcMs_ ? "Equal" : "Different";
@@ -243,6 +284,7 @@ namespace hc::compare
         {
             const auto side = Object[sides[i]].toObject(); auto& target = sides_[i];
             target.present_ = side["present"].toBool(); target.directory_ = side["directory"].toBool();
+            target.reparse_ = side["reparse"].toBool(); if (target.reparse_) target.link_ = std::make_shared<DirectoryLink>(DirectoryLink{{}, side["linkTarget"].toString()});
             const auto path = side["path"].toString(path_); if (path != path_) target.path_ = path;
             target.size_ = side["size"].toString().toULongLong(); target.modified_ = side["modifiedUtcMs"].toString().toLongLong();
         }
@@ -257,6 +299,7 @@ namespace hc::compare
             const auto& side = sides_[i]; QJsonObject value{{"present", side.present_}};
             if (side.present_) { value["path"] = side.path_.isEmpty() ? path_ : side.path_; value["directory"] = side.directory_;
                 value["size"] = QString::number(side.size_); value["modifiedUtcMs"] = QString::number(side.modified_); }
+            if (side.reparse_) { value["reparse"] = true; value["linkTarget"] = side.link_ ? side.link_->target_ : QString{}; }
             result[sides[i]] = value;
         }
         return result;
@@ -297,7 +340,8 @@ namespace hc::compare
     void ValidateDirectory(const DirectorySnapshot& Snapshot, const DirectoryPolicy& Policy, const Budget& Limits)
     {
         if (!Snapshot.issues_.isEmpty()) throw Failure("DirectoryComparisonIncomplete");
-        const auto current = CaptureDirectory(Snapshot.root_, Policy, Limits);
+        const auto current = CaptureDirectory(Snapshot.root_, Policy, Limits, true);
+        if (!current.issues_.isEmpty()) throw Failure("DirectoryChanged");
         if (current.entry_.id_.revision_ != Snapshot.entry_.id_.revision_ || current.entries_.size() != Snapshot.entries_.size())
             throw Failure("DirectoryChanged");
         auto before = Snapshot.entries_.cbegin(), after = current.entries_.cbegin();
@@ -305,12 +349,12 @@ namespace hc::compare
         {
             Limits.Check();
             if (before.key() != after.key() || before->revision_ != after->revision_ ||
-                before->directory_ != after->directory_ || relative(&*before) != relative(&*after)) throw Failure("DirectoryChanged");
+                before->directory_ != after->directory_ || bool(before->link_) != bool(after->link_) || (before->link_ && before->link_->data_ != after->link_->data_) || relative(&*before) != relative(&*after)) throw Failure("DirectoryChanged");
         }
     }
     void CompareDirectory(const Request& Input, Result& Value, const Budget& Limits)
     {
-        if (!Input.file3_.isEmpty()) throw Failure("DirectoryIndependentThreeUnsupported");
+        const bool independent = !Input.file3_.isEmpty();
         auto captured = std::make_shared<std::vector<DirectorySnapshot>>();
         DirectoryProgress progress; progress.phase_ = "scan";
         auto flushed = std::chrono::steady_clock::now();
@@ -322,7 +366,7 @@ namespace hc::compare
             batch.rows_ = std::move(progress.rows_); Input.directoryProgress_->Push(std::move(batch), Limits);
             progress.rows_ = {}; flushed = now;
         };
-        const QStringList roots = Input.base_.isEmpty() ? QStringList{Input.file1_, Input.file2_} : QStringList{Input.file1_, Input.file2_, Input.base_};
+        const QStringList roots = independent ? QStringList{Input.file1_, Input.file2_, Input.file3_} : Input.base_.isEmpty() ? QStringList{Input.file1_, Input.file2_} : QStringList{Input.file1_, Input.file2_, Input.base_};
         captured->reserve(roots.size());
         std::vector<Enumeration> scans;
         for (const auto& root : roots)
@@ -343,7 +387,7 @@ namespace hc::compare
                     ++progress.processed_;
                     if (!Input.directoryProgress_) return;
                     DirectoryRow row; row.path_ = Entry.path_; row.statuses_[0] = 18;
-                    row.sides_[side] = {Entry.path_, Entry.size_, Entry.modifiedUtcMs_, true, Entry.directory_};
+                    row.sides_[side] = {Entry.path_, Entry.size_, Entry.modifiedUtcMs_, true, Entry.directory_, bool(Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT), Entry.link_};
                     progress.rows_.append(row); flush(false);
                 }, &scans[side], Input.directoryProgress_ ? Input.directoryProgress_->Priority() : QString{});
                 flush(rootListing);
@@ -351,7 +395,7 @@ namespace hc::compare
         }
         flush(true);
         const bool three = captured->size() == 3;
-        Value.operation_ = three ? "directory3" : "directory2";
+        Value.operation_ = independent ? "directory-compare3" : three ? "directory3" : "directory2";
         Value.directoryLevel_ = Input.directory_.level_;
         Value.directoryFiltered_ = !Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty();
         QSet<QString> keys;
@@ -414,7 +458,8 @@ namespace hc::compare
             {
                 lb = safeRelation(0, 2);
                 rb = safeRelation(1, 2);
-                if (DirectoryContentEqual(lr)) status = DirectoryContentEqual(lb) ? lr : !entries[0] ? "BothDeleted" : "BothSame";
+                if (independent) status = DirectoryContentEqual(lr) && DirectoryContentEqual(lb) && DirectoryContentEqual(rb) ? ((lr == "Equivalent" || lb == "Equivalent" || rb == "Equivalent") ? "Equivalent" : "Equal") : (lr == "TypeConflict" || lb == "TypeConflict" || rb == "TypeConflict") ? "TypeConflict" : "Different";
+                else if (DirectoryContentEqual(lr)) status = DirectoryContentEqual(lb) ? lr : !entries[0] ? "BothDeleted" : "BothSame";
                 else if (DirectoryContentEqual(lb)) status = !entries[1] ? "RightDeleted" : !entries[2] ? "RightAdded" : "RightChanged";
                 else if (DirectoryContentEqual(rb)) status = !entries[0] ? "LeftDeleted" : !entries[2] ? "LeftAdded" : "LeftChanged";
                 else status = "Conflict";
@@ -435,5 +480,22 @@ namespace hc::compare
         Value.exitCode_ = Value.directoryComplete_ ? (different ? 1 : 0) : 2;
         Value.outcome_ = Value.directoryComplete_ ? (conflict ? "Conflict" : different ? "Different" : "Equal") : "Partial";
         if (!Value.directoryComplete_) Value.error_ = "DirectoryComparisonIncomplete";
+    }
+    void ProjectDirectoryPair(const Request& Input, const Result& Comparison, Request& PairInput, Result& PairComparison, const Budget& Limits)
+    {
+        const auto pair = Input.directoryPair_;
+        if (Input.file3_.isEmpty() || !Comparison.directories_ || Comparison.directories_->size() != 3 || pair[0] < 0 || pair[1] > 2 || pair[0] >= pair[1]) throw Failure("DirectoryPairInvalid");
+        PairInput = Input; PairInput.file3_.clear(); PairInput.base_.clear(); PairInput.directoryProgress_.reset();
+        const std::array roots{Input.file1_, Input.file2_, Input.file3_}; PairInput.file1_ = roots[pair[0]]; PairInput.file2_ = roots[pair[1]];
+        PairInput.inputEncodings_ = {Input.inputEncodings_[pair[0]], Input.inputEncodings_[pair[1]], QString{}};
+        // The unselected third tree remains protected when a pair writes elsewhere.
+        for (int side = 0; side < 3; ++side) if (side != pair[0] && side != pair[1]) PairInput.protectedInputs_.append(roots[side]);
+        PairComparison = Comparison; PairComparison.operation_ = "directory2"; PairComparison.entries_.clear();
+        PairComparison.directories_ = std::make_shared<const std::vector<DirectorySnapshot>>(std::vector<DirectorySnapshot>{(*Comparison.directories_)[pair[0]], (*Comparison.directories_)[pair[1]]});
+        const int statusIndex = pair == std::array{0, 1} ? 1 : pair == std::array{0, 2} ? 2 : 3;
+        for (const auto& row : Comparison.entries_) {
+            Limits.Check(); if (!row.sides_[pair[0]].present_ && !row.sides_[pair[1]].present_) continue;
+            DirectoryRow projected; projected.path_ = row.path_; projected.errors_ = row.errors_; projected.sides_[0] = row.sides_[pair[0]]; projected.sides_[1] = row.sides_[pair[1]]; projected.statuses_[0] = projected.statuses_[1] = row.statuses_[statusIndex]; PairComparison.entries_.append(projected);
+        }
     }
 }
