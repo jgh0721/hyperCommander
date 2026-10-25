@@ -30,7 +30,7 @@ function Test-HyperComparePackage {
         if ((Get-Item -LiteralPath $File).Length -ne $Entry.size -or (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash -ine $Entry.sha256) { throw "Package hash/size mismatch: $Relative" }
         if ($Relative -match '\.(exe|dll)$') { $null = Assert-UpdateSignature $File $Relative }
 }
-foreach ($Required in @('HyperCompare.exe','HyperCompareCli.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Libs/platforms/qwindows.dll','Licenses/Scintilla.txt','Licenses/Lexilla.txt','Licenses/waterColorStyle.txt','Licenses/hc_tree_sitter.txt','Licenses/hc_tree_sitter_c.txt','Licenses/hc_tree_sitter_cpp.txt','Licenses/hc_tree_sitter_python.txt','Licenses/miniz.txt')) {
+foreach ($Required in @('HyperCompare.exe','HyperCompareCli.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Libs/platforms/qwindows.dll','Licenses/Scintilla.txt','Licenses/Lexilla.txt','Licenses/waterColorStyle.txt','Licenses/hc_tree_sitter.txt','Licenses/hc_tree_sitter_c.txt','Licenses/hc_tree_sitter_cpp.txt','Licenses/hc_tree_sitter_python.txt','Licenses/miniz.txt','Licenses/pcre2.txt')) {
     if (-not $Seen.Contains($Required)) { throw "Required package entry missing: $Required" }
 }
 # Keep unlisted DLLs and executables out of the package's loader search path.

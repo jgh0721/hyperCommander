@@ -181,6 +181,8 @@ namespace hc::compare
             {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
+            {"largeTextSearch", QJsonObject{{"literal", true}, {"regex", "PCRE2-10.49"}, {"unicode", true}, {"multiline", true}, {"heapLimitKiB", 16384}, {"maxPatternBytes", 4096}}},
+            {"largeTextSyntax", "disk-backed-prefix-context"}, {"largeTextAutoApply", "idle-navigation-save"},
             {"largeText", QJsonObject{{"compareTwo", true}, {"compareThree", true}, {"pagedEditAndMergeTwo", true}, {"baseMerge", true}, {"resultOutput", true}, {"maxInputBytes", double(largeTextMaximum)}, {"maxDecodedBytes", double(largeTextMaximum)}, {"maxPageBytes", double(largeTextPageMaximum)}, {"maxCombinedLines", 2000000}, {"undoRevisions", 32}, {"encodings", QJsonArray{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949-explicit"}}}},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryLevels", QJsonArray{"bytes", "text", "metadata"}}, {"directoryTextMaxBytes", 16 * 1024 * 1024}, {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 4}, {"directoryFileCopyOptions", QJsonArray{"metadata", "acl", "streams"}}, {"directoryRename", true}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},

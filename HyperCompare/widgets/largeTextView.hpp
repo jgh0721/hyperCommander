@@ -11,9 +11,11 @@ class QPushButton;
 class QComboBox;
 class QLineEdit;
 class QCheckBox;
+class QTimer;
 namespace hc::compare
 {
     class ChunkGutter;
+    class LargeTextSyntax;
     class LargeTextView final : public ExtensionView
     {
     public:
@@ -32,7 +34,7 @@ namespace hc::compare
         void SaveActive();
         void Undo(bool Redo);
         bool CanUndo(bool Redo) const;
-        bool CanExport() const { return !Busy() && !pageDirty_[0] && !pageDirty_[1]; }
+        bool CanExport() const { return !Busy(); }
         bool CanSave() const { return CanExport() && (!merging() || (!LargeTextUnresolved(*value_) && !value_->session_->reviewRequired_)); }
         std::function<void()> stateChanged_;
     protected:
@@ -48,6 +50,8 @@ namespace hc::compare
         struct Response {
             std::shared_ptr<LargeTextComparison> comparison_;
             std::array<QByteArray, 2> text_;
+            std::array<QByteArray, 2> styles_;
+            std::array<std::shared_ptr<LargeTextSyntax>, 2> syntax_;
             std::array<std::uint64_t, 2> begin_{}, end_{};
             QString error_; QJsonArray recovery_;
             std::optional<LargeTextMatch> match_;
@@ -57,6 +61,7 @@ namespace hc::compare
         void load(bool Mutation = false, std::shared_ptr<LargeTextComparison> Value = {});
         void run(std::function<Task(const Budget&)> Work, bool Mutation, int Saved = -1);
         void applyPages();
+        bool deferPages(std::function<void()> Action);
         void merge(int Source);
         void save(int Side, bool ChoosePath = false);
         void undo(bool Redo);
@@ -86,6 +91,14 @@ namespace hc::compare
         QLineEdit* query_ = nullptr;
         QComboBox* searchScope_ = nullptr;
         QCheckBox* searchCase_ = nullptr;
+        QCheckBox* searchRegex_ = nullptr;
+        bool lastRegex_ = false, lastCase_ = false;
+        QTimer* applyTimer_ = nullptr;
+        std::function<void()> pendingAction_;
+        struct EditorPosition { std::intptr_t anchor_ = 0, current_ = 0, first_ = 0; };
+        std::optional<std::array<EditorPosition, 2>> pendingPosition_;
+        std::array<std::shared_ptr<LargeTextSyntax>, 2> syntax_;
+        std::array<int, 2> lexerIds_{};
         QString lastQuery_;
         LargeTextMatch lastMatch_;
         int lastSearchDocument_ = -1;

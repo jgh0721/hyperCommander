@@ -1,6 +1,7 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/textRegex.cmake")
 target_sources(hc_compare_semantic_worker PRIVATE runtime/docxWorker.cpp)
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
@@ -16,6 +17,7 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/largeText.cpp runtime/largeText.hpp
     runtime/largeTextSession.cpp
     runtime/largeTextTools.cpp
+    runtime/largeTextRegex.cpp
     runtime/controllerMemory.cpp runtime/controllerMemory.hpp
     runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/gitTool.cpp runtime/gitTool.hpp
@@ -43,10 +45,12 @@ qt_add_library(hc_compare_runtime STATIC
 target_include_directories(hc_compare_runtime BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
 target_include_directories(hc_compare_runtime PUBLIC "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core Qt6::Network PRIVATE advapi32 shell32 ole32 uuid netapi32 mpr shlwapi)
+target_link_libraries(hc_compare_runtime PRIVATE pcre2-8-static)
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/largeTextView.cpp widgets/largeTextView.hpp
+    widgets/largeTextSyntax.cpp widgets/largeTextSyntax.hpp
     widgets/saveRecoveryDialog.cpp widgets/saveRecoveryDialog.hpp
     widgets/directoryTreeModel.cpp widgets/directoryTreeModel.hpp
     widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp
@@ -83,7 +87,7 @@ if(BUILD_TESTING)
     add_test(NAME hypercompare.core COMMAND hc_compare_tests -o "${CMAKE_CURRENT_BINARY_DIR}/core-results.txt,txt")
     hc_enable_qt_deployment(hc_compare_tests TEST PLUGINS)
     qt_add_executable(hc_compare_ui_tests tests/tstCompareUi.cpp)
-    target_link_libraries(hc_compare_ui_tests PRIVATE hc_compare_widgets hc_scintilla fmstyle Qt6::Test)
+    target_link_libraries(hc_compare_ui_tests PRIVATE hc_compare_widgets hc_scintilla hc_lexilla fmstyle Qt6::Test)
     target_compile_definitions(hc_compare_ui_tests PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(hc_compare_ui_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     add_test(NAME hypercompare.ui COMMAND hc_compare_ui_tests -o "${CMAKE_CURRENT_BINARY_DIR}/ui-results.txt,txt")

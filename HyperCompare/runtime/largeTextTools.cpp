@@ -67,8 +67,9 @@ namespace hc::compare
             const auto number = Value.toDouble(-1); if (number < 0 || number > double(Maximum) || number != std::floor(number)) throw Failure("LargeTextWorkSchema"); return std::uint64_t(number);
         }
     }
-    LargeTextMatch FindLargeText(const LargeTextDocument& Document, const QString& Query, std::uint64_t Start, bool Backwards, Qt::CaseSensitivity Case, const Budget& Limits)
+    LargeTextMatch FindLargeText(const LargeTextDocument& Document, const QString& Query, std::uint64_t Start, bool Backwards, Qt::CaseSensitivity Case, const Budget& Limits, bool Regex)
     {
+        if (Regex) return FindLargeTextRegex(Document, Query, Start, Backwards, Case, Limits);
         if (Query.isEmpty() || Query.toUtf8().size() > 4096 || !Query.isValidUtf16()) throw Failure("LargeTextSearchQueryLimit"); Start = std::min(Start, Document.bytes_);
         const auto admission = Limits.memoryReserve_ ? Limits.memoryReserve_(4 * 1024 * 1024) : std::shared_ptr<void>{};
         const auto overlap = std::uint64_t(Query.toUtf8().size() * 4 + 8);

@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
 #include "widgets/largeTextView.hpp"
+#include "widgets/largeTextSyntax.hpp"
+#include <SciLexer.h>
 #include <QSpinBox>
 #include "widgets/guiRequestServer.hpp"
 #include "runtime/guiIpc.hpp"
@@ -192,7 +194,7 @@ private slots:
         QByteArray text = "int value() { return 1; }\n"; for (int i = 0; i < 2000; ++i) text += "// line " + QByteArray::number(i) + "\n"; text += "// needle한글\n";
         auto rightText = text; rightText.replace("return 1", "return 2"); write(request.file1_, text); write(request.file2_, rightText);
         LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1300, 800); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
-        auto* left = view.findChild<ScintillaEditBase*>("largeTextLeft"); auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); QCOMPARE(left->send(SCI_GETLEXER), sptr_t(3));
+        auto* left = view.findChild<ScintillaEditBase*>("largeTextLeft"); auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); QCOMPARE(left->send(SCI_GETSTYLEAT, 0), sptr_t(SCE_C_WORD));
         QTRY_VERIFY(view.findChild<QToolButton*>("chunk1_action0")); auto* copy = view.findChild<QToolButton*>("chunk1_action0"); QVERIFY(copy->isEnabled());
         const auto at = contents(left).indexOf("1"); left->send(SCI_SETSEL, at, at + 1); QTest::qWait(30); copy->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(left), contents(right)); QCOMPARE(readBytes(request.file2_), rightText);
         right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("// manual\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
@@ -206,6 +208,57 @@ private slots:
         const auto a = left->send(SCI_GETSELECTIONSTART), b = left->send(SCI_GETSELECTIONEND); QCOMPARE(contents(left).mid(a, b - a), QByteArray("needle한글"));
         query->setText("does-not-exist"); view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(left->send(SCI_GETSELECTIONSTART), a); QCOMPARE(left->send(SCI_GETSELECTIONEND), b);
         QCOMPARE(readBytes(request.file1_), text); QCOMPARE(readBytes(request.file2_), rightText);
+    }
+    void largeSyntaxKeepsPageBoundaryContext()
+    {
+        QTemporaryDir dir; const auto path = dir.filePath("syntax.txt");
+        const QList<QPair<QByteArray, QByteArray>> samples{
+            {"cpp", QByteArray(994, ' ') + "return 1;\n/*\n" + QByteArray("comment\n").repeated(900) + "*/\nconst char* s = R\"tag(\n" + QByteArray("raw text\n").repeated(500) + ")tag\";\n"},
+            {"python", QByteArray("s = \"\"\"\n") + QByteArray("string\n").repeated(900) + "\"\"\"\nreturn 1\n"},
+            {"xml", QByteArray("<!--\n") + QByteArray("comment\n").repeated(900) + "-->\n<node><![CDATA[\n" + QByteArray("text\n").repeated(500) + "]]></node>"},
+            {"json", QByteArray("{\"text\":\"") + QByteArray(1100000, 'a') + "\"}"}
+        };
+        for (const auto& sample : samples) {
+            write(path, sample.second); const auto document = IndexLargeText(ReadLargeText(path, {}, {}), {});
+            std::shared_ptr<LargeTextSyntax> whole, paged;
+            QByteArray expected;
+            for (std::uint64_t at = 0; at < document.bytes_; at += largeTextPageMaximum) expected += StyleLargeText(document, sample.first, at, std::min(document.bytes_, at + largeTextPageMaximum), whole, {});
+            QByteArray actual;
+            for (std::uint64_t at = 0; at < document.bytes_; at += 997) actual += StyleLargeText(document, sample.first, at, std::min(document.bytes_, at + 997), paged, {});
+            QCOMPARE(actual, expected);
+            QCOMPARE(StyleLargeText(document, sample.first, 3, 30, paged, {}), expected.mid(3, 27));
+            if (sample.first == "cpp") QCOMPARE(uchar(actual[2000]), uchar(SCE_C_COMMENT));
+            if (sample.first == "python") QCOMPARE(uchar(actual[2000]), uchar(SCE_P_TRIPLEDOUBLE));
+            if (sample.first == "xml") QCOMPARE(uchar(actual[2000]), uchar(SCE_H_COMMENT));
+            std::shared_ptr<LargeTextSyntax> interrupted; Budget limited; int checks = 0;
+            limited.memoryCheck_ = [&] { if (++checks == 5) throw Failure("TestInterruptedSyntax"); };
+            QVERIFY_EXCEPTION_THROWN(StyleLargeText(document, sample.first, 0, std::min(document.bytes_, largeTextPageMaximum), interrupted, limited), Failure);
+            QCOMPARE(StyleLargeText(document, sample.first, 0, 100, interrupted, {}), expected.left(100));
+        }
+    }
+    void largeEditsApplyBeforeNavigationSaveAndRegex()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp");
+        const auto text = QByteArray("/*\n") + QByteArray("comment\n").repeated(900) + "*/\nint value = 42;\n";
+        write(request.file1_, text); write(request.file2_, text);
+        LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1500, 900); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* right = view.findChild<ScintillaEditBase*>("largeTextRight");
+        right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("// new\n"));
+        view.findChild<QPushButton*>("largeNextRight")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!view.Busy() && !contents(right).contains("// new"), 10000);
+        QCOMPARE(right->send(SCI_GETSTYLEAT, 0), sptr_t(SCE_C_COMMENT)); QCOMPARE(readBytes(request.file2_), text);
+        right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("EDIT\n"));
+        view.findChild<QPushButton*>("largeSaveRight")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(readBytes(request.file2_).contains("EDIT\n"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QVERIFY(readBytes(request.file2_).startsWith("// new\n")); QCOMPARE(readBytes(request.file1_), text);
+        view.findChild<QComboBox*>("largeSearchScope")->setCurrentIndex(1);
+        view.findChild<QCheckBox*>("largeSearchRegex")->setChecked(true); view.findChild<QLineEdit*>("largeSearchQuery")->setText("value\\s*=\\s*\\d+");
+        view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        const auto first = right->send(SCI_GETSELECTIONSTART), last = right->send(SCI_GETSELECTIONEND); QCOMPARE(contents(right).mid(first, last - first), QByteArray("value = 42"));
+        right->send(SCI_SETSEL, 0, 0); view.findChild<QLineEdit*>("largeSearchQuery")->setText("(?=value)|\\z");
+        view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).startsWith("value"));
+        view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).isEmpty());
+        view.findChild<QPushButton*>("largeFindPrevious")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).startsWith("value"));
     }
     void directoryPartialResultsAndPlanGuard()
     {

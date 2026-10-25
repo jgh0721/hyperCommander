@@ -112,6 +112,11 @@ namespace hc::compare
     std::shared_ptr<LargeTextComparison> PairLargeTextSession(LargeTextSession Session, std::array<int, 2> Pair, const Budget& Limits)
     {
         if (Pair[0] < 0 || Pair[1] < 0 || Pair[0] == Pair[1] || std::size_t(std::max(Pair[0], Pair[1])) >= Session.documents_.size()) throw Failure("LargeTextPairInvalid");
+        std::size_t total = 0;
+        for (int i = 0; i < int(Session.documents_.size()); ++i) {
+            Session.documents_[i] = IndexLargeText(std::move(Session.documents_[i]), Limits);
+            if (i != Session.result_) { total += Session.documents_[i].index_->lineCount_; if (total > 2'000'000) throw Failure("LineLimit"); }
+        }
         auto value = std::make_shared<LargeTextComparison>(compare(Session, Pair, Limits));
         for (int side = 0; side < 2; ++side) Session.documents_[Pair[side]].contentHash_ = value->documents_[side].contentHash_;
         Session.comparisons_ = {};

@@ -1140,6 +1140,35 @@ private slots:
         std::atomic_bool canceled{true}; Budget limits; limits.canceled_ = &canceled;
         QVERIFY_EXCEPTION_THROWN(PairLargeTextSession(*again->session_, {0, 1}, limits), Failure);
     }
+    void largeTextRegexWholeFileUnicodeAndLimits()
+    {
+        QTemporaryDir dir; const auto path = dir.filePath("regex.txt");
+        const QByteArray prefix(65533, 'x'); const auto text = prefix + QByteArray("\nBEGIN\n") + QByteArray(1100000, 'a') + QByteArray("\nEND\n") + QString::fromUtf8("한글42 😀\n한글43 😀\n").toUtf8(); write(path, text);
+        const auto document = ReadLargeText(path, {}, {});
+        const auto multiline = FindLargeText(document, "(?s)BEGIN.*?END", 0, false, Qt::CaseSensitive, {}, true);
+        QVERIFY(multiline.found_); QCOMPARE(multiline.begin_, std::uint64_t(prefix.size() + 1)); QVERIFY(multiline.end_ - multiline.begin_ > largeTextPageMaximum);
+        const auto first = FindLargeText(document, QString::fromUtf8("(?m)^한글\\d+ (?=😀)"), 0, false, Qt::CaseSensitive, {}, true); QVERIFY(first.found_);
+        QCOMPARE(ReadLargeTextRange(document, first.begin_, first.end_, {}), QString::fromUtf8("한글42 ").toUtf8());
+        const auto last = FindLargeText(document, QString::fromUtf8("한글\\d+"), document.bytes_, true, Qt::CaseSensitive, {}, true); QVERIFY(last.begin_ > first.begin_);
+        const auto previous = FindLargeText(document, QString::fromUtf8("한글\\d+"), last.begin_, true, Qt::CaseSensitive, {}, true); QCOMPARE(previous.begin_, first.begin_);
+        const auto wrapped = FindLargeText(document, "BEGIN", document.bytes_, false, Qt::CaseInsensitive, {}, true); QVERIFY(wrapped.wrapped_); QCOMPARE(wrapped.begin_, multiline.begin_);
+        const auto zero = FindLargeText(document, "(?=BEGIN)", 0, false, Qt::CaseSensitive, {}, true); QVERIFY(zero.found_); QCOMPARE(zero.begin_, zero.end_);
+        QVERIFY_EXCEPTION_THROWN(FindLargeText(document, "[", 0, false, Qt::CaseSensitive, {}, true), Failure);
+        QVERIFY_EXCEPTION_THROWN(FindLargeText(document, "\\C", 0, false, Qt::CaseSensitive, {}, true), Failure);
+        Budget limited; limited.steps_ = 1000; QVERIFY_EXCEPTION_THROWN(FindLargeText(document, "(a+)+z", 0, false, Qt::CaseSensitive, limited, true), Failure);
+        std::atomic_bool canceled{true}; Budget stopped; stopped.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(FindLargeText(document, "BEGIN", 0, false, Qt::CaseSensitive, stopped, true), Failure);
+        write(path, {}); const auto empty = ReadLargeText(path, {}, {}); const auto emptyMatch = FindLargeText(empty, "^$", 0, false, Qt::CaseSensitive, {}, true); QVERIFY(emptyMatch.found_); QCOMPARE(emptyMatch.end_, std::uint64_t(0));
+    }
+    void largeThreeInputLineLimitAfterEditing()
+    {
+        QTemporaryDir dir; Request input; input.file1_ = dir.filePath("a.txt"); input.file2_ = dir.filePath("b.txt"); input.file3_ = dir.filePath("c.txt");
+        write(input.file1_, QByteArray("a\n").repeated(1'000'000)); write(input.file2_, QByteArray("a\n").repeated(999'998)); write(input.file3_, "a\n");
+        const auto initial = OpenLargeTextSession(input, {}); const auto selected = PairLargeTextSession(*initial->session_, {0, 2}, {});
+        auto documents = selected->documents_; documents[1] = EditLargeText(documents[1], documents[1].bytes_, documents[1].bytes_, "b\nc\n", {});
+        QVERIFY_EXCEPTION_THROWN(UpdateLargeTextSession(*selected, std::move(documents), {}), Failure);
+        QCOMPARE(initial->session_->documents_[2].bytes_, std::uint64_t(2));
+    }
     void largeTextEncodingBoundaries()
     {
         try {
