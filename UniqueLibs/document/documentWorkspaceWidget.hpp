@@ -57,6 +57,8 @@ namespace hc::document
         void showPreferences();
         QPointer<DocumentSettingsDialog> preferences_;
         QJsonObject newDocument();
+        void showEpubRecovery();
+        QJsonObject openEpubRecovery(const QString& Path);
         DocumentShortcutRouter* shortcutRouter_ = nullptr;
         QString settingsPath_;
         QJsonObject appliedPreferences_;

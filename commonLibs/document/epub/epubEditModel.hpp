@@ -10,6 +10,9 @@ public:
     QJsonObject Publication()const{return publication_;}
     QString Error()const{return error_;}
     QByteArray Read(const QString& Path)const;
+    QByteArray OriginalBytes()const{return original_;}
+    QMap<QString,QByteArray> Changes()const{return replacements_;}
+    bool IsEditable(const QString& Path)const{return media_.contains(Path);}
     QString Replace(const QString& Path,const QByteArray& Bytes);
     bool CanUndo()const{return position_>0;}
     bool CanRedo()const{return position_<history_.size();}

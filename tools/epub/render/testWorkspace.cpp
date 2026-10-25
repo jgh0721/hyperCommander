@@ -1,6 +1,10 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
+#include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "commonLibs/document/epub/epubDraftStore.hpp"
+#include <QProcess>
+#include <QUuid>
 #include <QFile>
 #include <Windows.h>
 #include <QTemporaryDir>
@@ -55,6 +59,48 @@ QJsonObject document(DocumentWorkspaceWidget& Window, const QString& Id) {
 class EpubWorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
+    void draftStoreIntegrity() {
+        QTemporaryDir Temp;const auto Root=Temp.filePath("drafts");epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=Temp.filePath("input.epub");Snapshot.original_="original ZIP bytes";Snapshot.hasCurrentDraft_=true;Snapshot.currentResource_="OEBPS/chapter.xhtml";Snapshot.currentDraft_="<html>unfinished";Snapshot.changes_["OEBPS/style.css"]="p { color: red; }";Snapshot.changes_["OEBPS/img.png"]=QByteArray::fromHex("89504e4700010200");Snapshot.cursor_=7;Snapshot.locator_="epubcfi(/6/2!/4/2:0)";
+        const auto Session=QUuid::createUuid().toString(QUuid::Id128);const auto Written=epub::DraftStore::Write(Root,Session,Snapshot);QVERIFY2(Written,qPrintable(Written.error_));
+        const auto Read=epub::DraftStore::Read(Root,Written.path_);QVERIFY(Read);QCOMPARE(Read.snapshot_.original_,Snapshot.original_);QCOMPARE(Read.snapshot_.currentDraft_,Snapshot.currentDraft_);QCOMPARE(Read.snapshot_.changes_,Snapshot.changes_);QCOMPARE(Read.snapshot_.cursor_,7);
+        const auto Empty=QUuid::createUuid().toString(QUuid::Id128);Snapshot.currentDraft_.clear();QVERIFY(epub::DraftStore::Write(Root,Empty,Snapshot));QCOMPARE(epub::DraftStore::Read(Root,QDir(Root).filePath(Empty+".hcedraft")).snapshot_.currentDraft_,QByteArray{});
+        QVERIFY(!epub::DraftStore::Write(Root,"../escape",Snapshot));QVERIFY(!QFile::exists(Temp.filePath("escape.hcedraft")));
+        QFile File(Written.path_);QVERIFY(File.open(QIODevice::ReadWrite));const auto Bytes=File.readAll();QVERIFY(File.seek(Bytes.size()-1));File.write(QByteArray(1,char(Bytes.back()^1)));File.close();QVERIFY(!epub::DraftStore::Read(Root,Written.path_));QVERIFY(QFile::exists(Written.path_));
+        const auto Other=QDir(Root).filePath(Empty+".hcedraft");QVERIFY(epub::DraftStore::Remove(Root,Written.path_));QVERIFY(QFile::exists(Other));QCOMPARE(epub::DraftStore::List(Root).size(),1);
+    }
+    void draftRecoveryOverlays() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());QFile File(Corpus);QVERIFY(File.open(QIODevice::ReadOnly));const auto Original=File.readAll();epub::EditModel Model;QVERIFY(Model.Load(Original));
+        epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=QFileInfo(Corpus).absoluteFilePath();Snapshot.original_=Original;QString ImagePath,Css;
+        for(const auto& Value:Model.Publication()["resources"].toArray()){const auto Resource=Value.toObject();if(Resource["mediaType"]=="image/png")ImagePath=Resource["path"].toString();if(Resource["mediaType"]=="text/css")Css=Resource["path"].toString();}
+        QVERIFY(!ImagePath.isEmpty() && !Css.isEmpty());QImage Image(4,4,QImage::Format_RGB32);Image.fill(Qt::magenta);QByteArray Pixels;QBuffer Buffer(&Pixels);QVERIFY(Buffer.open(QIODevice::WriteOnly));QVERIFY(Image.save(&Buffer,"PNG"));Snapshot.changes_[ImagePath]=Pixels;Snapshot.changes_[Css]="p { margin-bottom: 2em; }";
+        const auto Root=EpubSourceEditor::RecoveryDirectory();const auto Backup=epub::DraftStore::Write(Root,QUuid::createUuid().toString(QUuid::Id128),Snapshot);QVERIFY(Backup);
+        EpubSourceEditor Editor(Original,Snapshot.sourcePath_);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);Editor.Execute({{"action","epub.edit.recover"},{"path",Backup.path_}});QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady() && !Editor.Snapshot()["recoveryBusy"].toBool() && Editor.Token()!=QCryptographicHash::hash(Original,QCryptographicHash::Sha256),30000);
+        Editor.Execute({{"action","epub.edit.validate"}});QTRY_VERIFY_WITH_TIMEOUT(Editor.IsValidated(),30000);const auto Output=Editor.Export(Temp.filePath("new.epub"));QVERIFY(Output.HasValue());epub::EditModel Restored;QVERIFY(Restored.Load(Output.Value()));QCOMPARE(Restored.Read(ImagePath),Pixels);QCOMPARE(Restored.Read(Css),Snapshot.changes_[Css]);
+        Editor.SetRecoveryEnabled(false);Editor.Checkpoint();QVERIFY(QFile::exists(Backup.path_));Editor.SetRecoveryEnabled(true);Editor.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Editor.Snapshot()["recoverySaved"].toBool(),10000);
+        EpubSourceEditor Second(Original,Snapshot.sourcePath_);QTRY_VERIFY_WITH_TIMEOUT(Second.IsReady(),30000);auto* Source=Second.findChild<QPlainTextEdit*>("epubEditSource");QVERIFY(Source);Source->setPlainText("");Source->document()->setModified(true);Second.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Second.Snapshot()["recoverySaved"].toBool(),10000);const auto Other=Second.Snapshot()["recoveryPath"].toString();QVERIFY(Other!=Editor.Snapshot()["recoveryPath"].toString());const auto Empty=epub::DraftStore::Read(Root,Other);QVERIFY(Empty);QVERIFY(Empty.snapshot_.hasCurrentDraft_ && Empty.snapshot_.currentDraft_.isEmpty());
+        Editor.DiscardRecovery();QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(Backup.path_),10000);QVERIFY(QFile::exists(Other));Second.DiscardRecovery();
+    }
+    void draftCrashRecovery() {
+        const auto Child=qEnvironmentVariable("HC_EPUB_DRAFT_CHILD");
+        if(!Child.isEmpty()) {
+            qApp->setProperty("documentViewsConfigDir",Child);QFile File(QDir(Child).filePath("input.epub"));QVERIFY(File.open(QIODevice::ReadOnly));EpubSourceEditor Editor(File.readAll(),File.fileName());Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);
+            auto* Text=Editor.findChild<QPlainTextEdit*>("epubEditSource");QVERIFY(Text);Text->setPlainText("<html>unfinished crash draft");Text->document()->setModified(true);Editor.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Editor.Snapshot()["recoverySaved"].toBool(),10000);
+            TerminateProcess(GetCurrentProcess(),37);QFAIL("Termination failed");
+        }
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");QTemporaryDir Temp;const auto Source=Temp.filePath("input.epub");QVERIFY(QFile::copy(Corpus,Source));
+        QProcess Crash;auto Env=QProcessEnvironment::systemEnvironment();Env.insert("HC_EPUB_DRAFT_CHILD",Temp.path());Crash.setProcessEnvironment(Env);Crash.start(QCoreApplication::applicationFilePath(),{"draftCrashRecovery"});QTRY_VERIFY_WITH_TIMEOUT(Crash.state()==QProcess::NotRunning,45000);QCOMPARE(Crash.exitCode(),37);
+        qApp->setProperty("documentViewsConfigDir",Temp.path());const auto Root=EpubSourceEditor::RecoveryDirectory();auto Entries=epub::DraftStore::List(Root);QCOMPARE(Entries.size(),1);const auto Recovery=Entries.first().path_;
+        QFile File(Source);QVERIFY(File.open(QIODevice::ReadOnly));const auto Original=File.readAll();File.close();epub::EditModel Model;QVERIFY(Model.Load(Original));const auto Opf=Model.Publication()["rootfile"].toString();auto Metadata=Model.Read(Opf);Metadata.replace(Model.Publication()["title"].toString().toUtf8(),"Externally changed");QVERIFY(Model.Replace(Opf,Metadata).isEmpty());const auto Revised=Model.Export();QVERIFY(Revised);QVERIFY(File.open(QIODevice::WriteOnly|QIODevice::Truncate));File.write(Revised.bytes_);File.close();
+        EpubSourceEditor Editor(Revised.bytes_,Source);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady() && Editor.Snapshot()["recoveryCandidates"].toInt()>0,30000);QVERIFY(!Editor.Execute({{"action","epub.edit.recover"},{"path",Recovery}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady() && Editor.Snapshot()["recoverySourceChanged"].toBool(),30000);auto* Text=Editor.findChild<QPlainTextEdit*>("epubEditSource");QVERIFY(Text);QCOMPARE(Text->toPlainText(),QString("<html>unfinished crash draft"));Editor.Execute({{"action","epub.edit.validate"}});QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["validating"].toBool(),10000);QVERIFY(!Editor.IsValidated());QVERIFY(File.open(QIODevice::ReadOnly));QCOMPARE(File.readAll(),Revised.bytes_);File.close();
+        Editor.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Editor.Snapshot()["recoverySaved"].toBool(),10000);const auto Own=Editor.Snapshot()["recoveryPath"].toString();QVERIFY(Own!=Recovery);QVERIFY(QFile::exists(Recovery));Editor.DiscardRecovery();QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(Own) && !QFile::exists(Recovery),10000);
+        // A deleted source is restored through a private copy owned by the workspace.
+        epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=Source;Snapshot.original_=Original;Snapshot.currentResource_=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();Snapshot.hasCurrentDraft_=true;Snapshot.currentDraft_="<html>deleted source draft";
+        const auto Saved=epub::DraftStore::Write(Root,QUuid::createUuid().toString(QUuid::Id128),Snapshot);QVERIFY(Saved);QVERIFY(QFile::remove(Source));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.ConfigureEpub(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});Window.show();QVERIFY(!Window.Handle({{"action","epub.recovery.open"},{"path",Saved.path_}}).contains("error"));
+        const auto Restored=[&]{const auto Rows=Window.Snapshot()["documents"].toArray();return Rows.isEmpty()?QJsonObject{}:Rows.first().toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(Restored()["view"].toObject()["epubEditor"].toObject()["recoverySourceChanged"].toBool(),60000);QVERIFY(Restored()["dirty"].toBool());QVERIFY(!QFile::exists(Source));QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void startupAndUnchangedProfile() {
         const auto Book=qEnvironmentVariable("HC_EPUB_BENCH_BOOK",qEnvironmentVariable("HC_EPUB_READER_EPUB"));if(Book.isEmpty())QSKIP("Explicit book required");
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());

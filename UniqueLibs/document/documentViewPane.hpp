@@ -42,6 +42,9 @@ namespace hc::document
         bool IsBusy() const;
         bool IsEditing() const;
         bool IsEpubEditing() const;
+        void DiscardEpubRecovery();
+        void SetEpubRecoveryEnabled(bool Enabled);
+        void CheckpointEpub();
         bool CanUndo() const;
         bool CanRedo() const;
         void Undo();

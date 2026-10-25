@@ -1,4 +1,5 @@
-﻿#include "documentSettingsDialog.hpp"
+﻿#include "stdafx.h"
+#include "documentSettingsDialog.hpp"
 #include "documentShortcutRegistry.hpp"
 #include "tools/epub/render/readingSettings.hpp"
 #include <QDir>
@@ -150,6 +151,10 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     for (const auto& Row : Rows) connect(Row.second->findChild<QKeySequenceEdit*>(), &QKeySequenceEdit::keySequenceChanged, this, Filter);
     auto* Hint = new QLabel(tr("빈 값은 단축키 해제입니다. 최대 두 번의 키 조합을 사용할 수 있습니다. 이동·선택 기본키와 입력기 키는 유지됩니다."), this); Hint->setWordWrap(true); Shortcuts->addRow(Hint);
     auto* EpubForm=Page();
+    auto* EpubRecovery=new QCheckBox(tr("편집 초안 자동 복구 (텍스트 편집기와 공통 설정)"),this);EpubRecovery->setObjectName("epubRecoveryEnabled");EpubForm->addRow(EpubRecovery);
+    auto* TextRecovery=qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
+    connect(TextRecovery,&QCheckBox::toggled,EpubRecovery,&QCheckBox::setChecked);connect(EpubRecovery,&QCheckBox::toggled,TextRecovery,&QCheckBox::setChecked);
+    EpubRecovery->setChecked(TextRecovery->isChecked());
     epubSettings_=new hc::epub::poc::ReadingSettings(QDir(QFileInfo(path_).absolutePath()).filePath("epub-reading.json"),QString(64,'0'),"light",this);
     epubSettings_->setObjectName("epubGlobalSettings");epubSettings_->SetGlobalOnly();EpubForm->addRow(epubSettings_);
     error_ = new QLabel(this); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); Layout->addWidget(error_);

@@ -49,6 +49,8 @@ qt_add_library(hc_epub_package STATIC
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubPackage.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditModel.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditModel.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h"
@@ -82,6 +84,7 @@ qt_add_library(hc_document_widgets STATIC
     ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp
     ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
+    ../UniqueLibs/document/epubSourceRecovery.cpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp

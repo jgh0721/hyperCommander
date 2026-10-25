@@ -1,4 +1,5 @@
-﻿#include "documentWorkspaceWidget.hpp"
+﻿#include "stdafx.h"
+#include "documentWorkspaceWidget.hpp"
 #include "imageAsync.hpp"
 #include "documentFocusRestore.hpp"
 #ifndef NOMINMAX
@@ -17,6 +18,7 @@
 #include "documentSettingsDialog.hpp"
 #include "documentShortcutRouter.hpp"
 #include "epubProcessView.hpp"
+#include "epubSourceEditor.hpp"
 #include <QLineEdit>
 #include "text/ScintillaQtDirectBackend.h"
 #include <Scintilla.h>
@@ -332,6 +334,8 @@ namespace hc::document
             });
         }
         auto* Restore = FileMenu->addAction(tr("복구 목록"));
+        auto* EpubRestore=FileMenu->addAction(tr("EPUB 편집 초안 복구…"));EpubRestore->setObjectName("epubDraftRecovery");EpubRestore->setVisible(!hosted_);
+        connect(EpubRestore,&QAction::triggered,this,&DocumentWorkspaceWidget::showEpubRecovery);
         Restore->setObjectName("documentRecovery"); Protection->setObjectName("documentCaptureProtection");
         connect(Restore, &QAction::triggered, this, [this] {
             auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(this); ++recoveryWorkers_;
@@ -508,12 +512,55 @@ namespace hc::document
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
+        for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true));
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
         for(auto* Epub:findChildren<EpubProcessView*>())Epub->ReaderAction("bindings",Bindings);
         if (!ShortcutError.isEmpty()) ShowShellError(tr("단축키 설정 오류 · 기본값을 사용합니다: %1").arg(ShortcutError));
         else if (const auto Unknown = DocumentShortcutRegistry::Unknown(Bindings); !Unknown.isEmpty())
             ShowShellError(tr("지원하지 않는 단축키 항목을 보존했습니다: %1").arg(Unknown.join(", ")));
+    }
+    void DocumentWorkspaceWidget::showEpubRecovery()
+    {
+        auto* Watcher=new QFutureWatcher<QList<epub::DraftInfo>>(this);++recoveryWorkers_;
+        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher]{
+            const auto Entries=Watcher->result();Watcher->deleteLater();--recoveryWorkers_;
+            if(closingWorkspace_){tryFinishClose();return;}
+            if(Entries.isEmpty()){ShowShellError(tr("복구할 EPUB 편집 초안이 없습니다."));return;}
+            QStringList Labels,Paths;for(const auto& Entry:Entries){Labels.append(QFileInfo(Entry.sourcePath_).fileName()+" · "+QFileInfo(Entry.path_).baseName().left(8)+(Entry.error_.isEmpty()?QString{}:tr(" · 손상 여부 확인 필요")));Paths.append(Entry.path_);}
+            auto* Dialog=new QInputDialog(this);Dialog->setAttribute(Qt::WA_DeleteOnClose);Dialog->setWindowTitle(tr("EPUB 편집 초안 복구"));Dialog->setLabelText(tr("원본이 이동·삭제되어도 보관된 판본으로 복구합니다."));Dialog->setComboBoxItems(Labels);Dialog->setComboBoxEditable(false);
+            connect(Dialog,&QDialog::accepted,this,[this,Dialog,Labels,Paths]{const auto Reply=openEpubRecovery(Paths.value(Labels.indexOf(Dialog->textValue())));if(Reply.contains("error"))ShowShellError(Reply["error"].toString());});Dialog->open();
+        });
+        Watcher->setFuture(QtConcurrent::run([Root=EpubSourceEditor::RecoveryDirectory()]{return epub::DraftStore::List(Root);}));
+    }
+    QJsonObject DocumentWorkspaceWidget::openEpubRecovery(const QString& Path)
+    {
+        if(hosted_ || closingWorkspace_)return Error("epub-draft-editor-required");
+        const auto Root=EpubSourceEditor::RecoveryDirectory(),Folder=QDir(Root).filePath("sources");
+        const auto Copy=QDir(Folder).filePath("restored-"+QUuid::createUuid().toString(QUuid::Id128)+".epub");
+        auto* Watcher=new QFutureWatcher<epub::DraftRead>(this);++recoveryWorkers_;
+        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Path,Copy]{
+            const auto Result=Watcher->result();Watcher->deleteLater();--recoveryWorkers_;
+            if(closingWorkspace_){QFile::remove(Copy);tryFinishClose();return;}
+            if(!Result){ShowShellError(tr("초안을 복원하지 못했습니다: %1 · 초안 파일은 유지됩니다.").arg(Result.error_));return;}
+            const auto Reply=open(Copy,false,{},false,{},tr("복구 초안 · %1").arg(QFileInfo(Result.snapshot_.sourcePath_).fileName()));
+            auto Tab=find(Reply["documentId"].toString());if(!Tab){QFile::remove(Copy);ShowShellError(Reply["error"].toString());return;}
+            Tab->temporarySource_=Copy;Tab->originalAuthority_=false;Tab->originalSave_=false;Tab->recovered_=true;
+            auto* Timer=new QTimer(this);Timer->setInterval(50);auto Elapsed=std::make_shared<QElapsedTimer>();Elapsed->start();
+            connect(Timer,&QTimer::timeout,this,[this,Timer,Elapsed,Id=Tab->id_,Path]{
+                auto Current=find(Id);if(!Current || closingWorkspace_ || Elapsed->elapsed()>60000){Timer->stop();Timer->deleteLater();return;}
+                if(Current->loading_)return;
+                if(!Current->pane_->IsEpub()){Timer->stop();Timer->deleteLater();ShowShellError(tr("보관된 EPUB을 열지 못했습니다. 초안 파일은 유지됩니다."));return;}
+                if(!Current->pane_->CanEditEpub()){Current->pane_->Execute({{"action","epub.edit.begin"}});return;}
+                Current->pane_->Execute({{"action","epub.edit.recover"},{"path",Path}});Timer->stop();Timer->deleteLater();
+            });Timer->start();update();
+        });
+        Watcher->setFuture(QtConcurrent::run([Root,Path,Copy,Folder]{
+            auto Result=epub::DraftStore::Read(Root,Path);if(Result){epub::EditModel Model;if(!Model.Load(Result.snapshot_.original_))Result.error_=Model.Error();
+                else if(QFileInfo(Folder).isSymLink() || !QDir().mkpath(Folder) || !StoreCopy(Copy,Result.snapshot_.original_))Result.error_="epub-draft-copy-write";}
+            return Result;
+        }));
+        return {{"accepted",true}};
     }
     QJsonObject DocumentWorkspaceWidget::newDocument()
     {
@@ -731,6 +778,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::load(const std::shared_ptr<Tab>& Tab, bool Discard, const QString& RecoveryPath)
     {
         if (Tab->choosingSavePath_ || Tab->saving_ || Tab->navigating_ || !Tab->pendingToken_.isEmpty()) return;
+        if(Discard)Tab->pane_->DiscardEpubRecovery();
         if(Tab->pane_->IsProcessDocument()&&!Tab->pane_->RequestClose()) {Tab->reloadAfterClose_=true;return;}
         Tab->reloadAfterClose_=false;
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
@@ -912,7 +960,7 @@ namespace hc::document
         if (pendingHostOpen_.isEmpty() && !appliedPreferences_["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true)) return;
         for (const auto& Tab : documents_) {
             // EPUB source drafts are tokens, not a recovery archive. Never persist them as EPUB bytes.
-            if(Tab->pane_->IsEpub())continue;
+            if(Tab->pane_->IsEpub()){Tab->pane_->CheckpointEpub();continue;}
             if (Tab->loading_ || Tab->navigating_ || Tab->closed_ || Tab->checkpointing_ || !Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) continue;
             const auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content() : QByteArray::fromStdString(Tab->session_->Text());
             if (!hosted_ && Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
@@ -1058,6 +1106,7 @@ namespace hc::document
         if (Action == "escape") { escapeViewer(); return {{"accepted", hosted_ && closeViewerOnEscape_}}; }
         if (Action == "preferences") { findChild<QAction*>("documentPreferences")->trigger(); return {{"accepted", true}}; }
         if (Action == "new") return newDocument();
+        if (Action == "epub.recovery.open") return openEpubRecovery(Request["path"].toString());
         if (Action == "focus") {
             if (hosted_ && !IsWindowVisible(reinterpret_cast<HWND>(winId()))) return {{"accepted", false}};
             // A background/prepared helper must not activate either its Qt
@@ -1265,6 +1314,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery)
     {
+        if(Discard && !PreserveRecovery)Tab->pane_->DiscardEpubRecovery();
         if(!Tab->pane_->RequestClose()){Tab->closeRequested_=true;return;}
         if(editRequest_["documentId"]==Tab->id_)editRequest_={};
         if (!workspace_.Remove(Tab->id_.toStdString(), Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges).HasValue()) return;
