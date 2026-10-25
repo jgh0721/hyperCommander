@@ -54,6 +54,7 @@ namespace hc::document::epub
             QMap<QString, QString> attributes_;
             QList<int> children_;
             int end_ = 0;
+            int parent_ = -1;
             qsizetype textBegin_ = 0, textEnd_ = 0;
             QString Attr(const QString& Name) const { return attributes_.value(Name); }
         };
@@ -86,7 +87,7 @@ namespace hc::document::epub
                         if(nodes_.size() >= 32768 || Stack.size() >= 64 || Reader.attributes().size() > 256) Reject("xml-complexity-limit", Path);
                         const auto Index = static_cast<int>(nodes_.size());
                         Node Item; Item.tag_ = key(Reader.namespaceUri().toString(), Reader.name().toString());
-                        Item.textBegin_ = text_.size();
+                        Item.textBegin_ = text_.size(); Item.parent_ = Stack.isEmpty() ? -1 : Stack.last();
                         for(const auto& Attr : Reader.attributes()) Item.attributes_.insert(key(Attr.namespaceUri().toString(), Attr.name().toString()), Attr.value().toString());
                         if(!Stack.isEmpty()) nodes_[Stack.last()].children_.append(Index);
                         else if(!nodes_.isEmpty()) Reject("invalid-xml", Path);
@@ -273,10 +274,11 @@ namespace hc::document::epub
                 }
                 if(Reader.hasError() || Writer.hasError() || ReaderPackage.size() > 2 * 1024 * 1024) Reject("invalid-reader-package");
             }
-            const auto AddNavigation = [&](const QString& Base, const QString& Href, const QString& Label) {
+            const auto AddNavigation = [&](const QString& Base, const QString& Href, const QString& Label, int Depth) {
                 const auto Target = resolve(Base, Href);
                 if(!Paths.contains(Target)) Reject("missing-navigation-target", Target);
-                Append(Navigation, {{"label", Label}, {"path", Target}});
+                Append(Navigation, {{"label", Label}, {"path", Target},
+                    {"fragment", QUrl(Href).fragment()}, {"depth", Depth}});
             };
             qint64 Total = PackageBytes.size();
             const auto AddResource = [&](const QString& Path, const QString& Media, const QByteArray& Raw) {
@@ -303,8 +305,12 @@ namespace hc::document::epub
                     if(Resource.properties_.contains("nav")) {
                         for(const auto Nav : Document.Descendants(0, Xhtml, "nav"))
                             if(tokens(Document.At(Nav).Attr("{http://www.idpf.org/2007/ops}type")).contains("toc"))
-                                for(const auto Link : Document.Descendants(Nav, Xhtml, "a"))
-                                    AddNavigation(Resource.path_, Document.At(Link).Attr("href"), Document.Text(Link));
+                                for(const auto Link : Document.Descendants(Nav, Xhtml, "a")) {
+                                    int Depth = -1;
+                                    for(int Parent = Document.At(Link).parent_; Parent >= 0 && Parent != Nav; Parent = Document.At(Parent).parent_)
+                                        if(Document.At(Parent).tag_ == key(Xhtml, "li")) ++Depth;
+                                    AddNavigation(Resource.path_, Document.At(Link).Attr("href"), Document.Text(Link), qMax(0, Depth));
+                                }
                     }
                 }
                 AddResource(Resource.path_, Resource.media_, Raw);
@@ -324,7 +330,10 @@ namespace hc::document::epub
                         const auto Text = Document.Children(Labels.first(), Ncx, "text");
                         if(!Text.isEmpty()) Label = Document.Text(Text.first());
                     }
-                    AddNavigation(Resource.path_, Document.At(Content).Attr("src"), Label);
+                    int Depth = 0;
+                    for(int Parent = Document.At(Point).parent_; Parent >= 0; Parent = Document.At(Parent).parent_)
+                        if(Document.At(Parent).tag_ == key(Ncx, "navPoint")) ++Depth;
+                    AddNavigation(Resource.path_, Document.At(Content).Attr("src"), Label, Depth);
                 }
             }
             if(Navigation.isEmpty()) Reject("missing-navigation");

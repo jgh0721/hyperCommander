@@ -245,15 +245,9 @@ namespace
 #ifdef HC_EPUB_PRODUCT_HELPER
             Form->setRowVisible(EngineBox,false); EngineBox->setEnabled(false);
 #endif
-            auto* Chapters = new QComboBox(Panel);
-            Chapters->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Chapters->setMinimumContentsLength(12);
-            for(const auto Value : Publication["navigation"].toArray()) Chapters->addItem(Value.toObject()["label"].toString());
-            // Only linear spine chapter jumps are offered in this P0 tool; nested TOC/fragment navigation is deferred.
-            Chapters->clear();
-            for(const auto Value : Publication["spine"].toArray()) Chapters->addItem(Value.toObject()["path"].toString());
-            Form->addRow(tr("장"), Chapters);
             settings_ = new hc::epub::poc::ReadingSettings(SettingsPath, Publication["sourceSha256"].toString(), Theme, Panel);
             navigation_=new hc::epub::poc::ReadingNavigation(SettingsPath,documentId_,[this](const QJsonObject& Request){command("read",Request);},Panel);
+            navigation_->SetPublication(Publication);
             Form->addRow(navigation_);
             Form->addRow(settings_);
             view_ = new QWebEngineView(Splitter); Splitter->setSizes({400, 880});
@@ -273,7 +267,6 @@ namespace
             connect(&debounce_, &QTimer::timeout, this, [this] { sendProfile(); });
             connect(settings_, &hc::epub::poc::ReadingSettings::ProfileChanged, this, [this] { debounce_.start(); });
             connect(EngineBox, &QComboBox::currentIndexChanged, this, [this](int Index) { command("start", Index ? "readium" : "epubjs"); });
-            connect(Chapters, &QComboBox::currentIndexChanged, this, [this](int Index) { command("chapter", Index); });
             connect(page_, &QWebEnginePage::loadFinished, this, [this, Engine](bool Ok) {
                 if(!Ok) { finish({{"status", "error"}, {"message", "shell load failed"}}); return; }
                 shellReady_=true; sendProfile();
@@ -306,7 +299,7 @@ namespace
                 });
             });
             if(!Evidence.isEmpty()) QTimer::singleShot(60000, this, [this] { if(!finished_) finish({{"status", "timeout"}}); });
-            Chapters->setAccessibleName(tr("읽을 장 선택"));view_->setAccessibleName(tr("EPUB 본문"));
+            view_->setAccessibleName(tr("EPUB 본문"));
             auto* SearchKey=new QShortcut(QKeySequence::Find,this);connect(SearchKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->show();navigation_->Execute("focus-search");}});
             auto* MarkKey=new QShortcut(QKeySequence("Ctrl+D"),this);connect(MarkKey,&QShortcut::activated,this,[this]{if(!composing_)navigation_->Execute("bookmark-add");});
             auto* FocusKey=new QShortcut(QKeySequence(Qt::Key_F6),this);connect(FocusKey,&QShortcut::activated,this,[this]{if(!composing_){if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))navigation_->Execute("focus-search");else view_->setFocus(Qt::ShortcutFocusReason);}});

@@ -8,6 +8,7 @@ import { applyReadingOverrides } from "./readingOverrides.js";
 import { EpubNavigator, EpubPreferences, Injector } from "@readium/navigator";
 import { Manifest, Publication, HttpFetcher, Locator } from "@readium/shared";
 import { typographyProbe } from "./typographyProbe.js";
+import EpubCFI from "epubjs/src/epubcfi.js";
 
 // EPUB.js 0.3.93 advances its work queue through animation frames. A hidden
 // native tab can suspend those frames before an iframe exists. Yield through
@@ -34,7 +35,7 @@ const pane = document.getElementById("reader");
 const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
 let fontCatalog;
-const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument});
+const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate});
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
@@ -163,7 +164,7 @@ window.hcBookFonts = bookFonts;
 
 function currentSnapshot() {
     const docs = documents();
-    return { ...tools.state(), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { ...tools.state(), ...readingLocation(), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
@@ -185,6 +186,32 @@ function currentSnapshot() {
 function getLocator() {
     if (rendition) return rendition.currentLocation()?.start?.cfi || null;
     return navigator?.currentLocator?.serialize() || null;
+}
+
+function readingLocation() {
+    const location=rendition?.currentLocation(), index=location?.start?.index ?? 0;
+    const path=publication?.spine[index]?.path;
+    let tocIndex=-1;
+    const doc=documents()[0], section=book?.spine.get(index), compare=new EpubCFI();
+    for(const [i,item] of (publication?.navigation || []).entries()) {
+        if(item.path!==path)continue;
+        if(!item.fragment) {if(tocIndex<0)tocIndex=i;continue;}
+        const target=doc?.getElementById(item.fragment);
+        if(target && location?.start?.cfi && section) {
+            try {if(compare.compare(section.cfiFromElement(target),location.start.cfi)<=0)tocIndex=i;} catch {}
+        }
+    }
+    return {chapterIndex:index,tocIndex,chapterTitle:publication?.navigation[tocIndex]?.label || path || ""};
+}
+
+async function navigate(action,value) {
+    if(action!=="toc")throw Error("Unsupported reading navigation");
+    const item=publication.navigation[value];if(!Number.isInteger(value) || !item)throw Error("Invalid TOC item");
+    const index=publication.spine.findIndex(section=>section.path===item.path);
+    if(index<0)throw Error("TOC target is outside reading order");
+    if(rendition)await rendition.display(book.spine.get(index).href+(item.fragment?"#"+encodeURIComponent(item.fragment):""));
+    else await goChapter(index);
+    documents().forEach(applyDocument);
 }
 
 async function restoreLocator(locator) {

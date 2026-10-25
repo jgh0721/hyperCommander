@@ -257,7 +257,7 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value}});return true;

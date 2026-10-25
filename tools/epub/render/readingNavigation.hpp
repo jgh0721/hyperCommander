@@ -4,7 +4,7 @@
 #include <QJsonObject>
 #include <QTimer>
 #include <functional>
-class QLineEdit;class QListWidget;class QLabel;
+class QLineEdit;class QListWidget;class QLabel;class QTreeWidget;
 namespace hc::epub::poc {
 class ReadingNavigation final : public QWidget {
 public:
@@ -14,6 +14,7 @@ public:
     bool Execute(const QString& Action,const QJsonValue& Value={});
     void Poll(const QJsonObject& State);
     QJsonObject Snapshot() const;
+    void SetPublication(const QJsonObject& Publication);
 private:
     void save();void refresh();void send(const QString& Action,const QJsonValue& Value);
     QString path_,error_,locator_,saved_,restore_;
@@ -21,5 +22,7 @@ private:
     Dispatch send_;QTimer saveTimer_;
     QLineEdit* query_=nullptr;QListWidget *results_=nullptr,*marks_=nullptr;QLabel* status_=nullptr;
     qint64 serial_=0,seen_=0,restoreSerial_=0;bool started_=false,restoring_=false,readFailed_=false;
+    QTreeWidget* toc_=nullptr;
+    QJsonArray navigation_;
 };
 }

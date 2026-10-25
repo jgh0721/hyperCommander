@@ -16,6 +16,7 @@
 #include <QLockFile>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTreeWidget>
 #include <QtTest>
 
 using hc::epub::poc::ReadingStore;
@@ -29,6 +30,13 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void hierarchicalTocAndCurrentLocation() {
+        QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},book,[&](const QJsonObject& Value){Request=Value;});
+        Navigation.SetPublication({{"navigation",QJsonArray{QJsonObject{{"label","장"},{"path","a.xhtml"},{"depth",0}},QJsonObject{{"label","절"},{"path","a.xhtml"},{"fragment","part"},{"depth",1}}}}});
+        auto* Toc=Navigation.findChild<QTreeWidget*>("epubToc");QVERIFY(Toc);QCOMPARE(Toc->topLevelItemCount(),1);QCOMPARE(Toc->topLevelItem(0)->childCount(),1);
+        QVERIFY(!Navigation.Execute("toc",1));Navigation.Poll({{"status","ready"},{"tocIndex",1}});
+        QCOMPARE(Toc->currentItem()->text(0),QString("절"));QVERIFY(Navigation.Execute("toc",1));QCOMPARE(Request["action"].toString(),QString("toc"));QCOMPARE(Request["value"].toInt(),1);QVERIFY(!Navigation.Execute("toc",9));
+    }
     void imeAndAccessibleControls() {
         QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},QString(64,'a'),[&](const QJsonObject& Value){Request=Value;});Navigation.show();
         Navigation.Poll({{"status","ready"},{"locator","epubcfi(/6/2!/4/2:0)"}});QVERIFY(Navigation.Execute("focus-search"));
