@@ -50,6 +50,8 @@
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QUuid>
 #include <QWebEngineDownloadRequest>
@@ -238,8 +240,8 @@ namespace
                 auto* Notice = new QLabel(tr("읽기 순서에서 찾을 수 없는 항목 %1개를 제외하고, 존재하는 본문 순서로 복구해 표시합니다. 원본 파일은 변경하지 않았습니다.").arg(Missing), Central);
                 Notice->setObjectName("epubRecoveryNotice"); Notice->setTextFormat(Qt::PlainText); Notice->setWordWrap(true); Layout->addWidget(Notice);
             }
-            auto* Splitter = new QSplitter(Central); Layout->addWidget(Splitter, 1);
-            auto* Scroll = new QScrollArea(Splitter); settingsScroll_ = Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(400);
+            auto* Splitter = new QSplitter(Central);splitter_=Splitter; Layout->addWidget(Splitter, 1);
+            auto* Scroll = new QScrollArea(Splitter); navigationScroll_=Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(220);
             auto* Panel = new QWidget; Scroll->setWidget(Panel);
             auto* Form = new QFormLayout(Panel);
             Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
@@ -257,10 +259,23 @@ namespace
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{navigation_->Execute(Name);view_->setFocus(Qt::OtherFocusReason);});
             }
-            location_=new QLabel(ReadingBar);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));ReadingBar->addWidget(location_);
+            location_=new QLabel(this);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));location_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);location_->setMinimumWidth(0);statusBar()->addPermanentWidget(location_,1);
             Form->addRow(navigation_);
-            Form->addRow(settings_);
-            view_ = new QWebEngineView(Splitter); Splitter->setSizes({400, 880});
+            settingsScroll_=new QScrollArea(Splitter);settingsScroll_->setObjectName("epubQuickSettings");settingsScroll_->setWidgetResizable(true);settingsScroll_->setMinimumWidth(320);settingsScroll_->setWidget(settings_);
+            view_ = new QWebEngineView(Splitter); Splitter->setSizes({260,360,880});
+            navigationScroll_->hide();settingsScroll_->hide();
+            for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
+                auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
+                connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{readAction(Name,{});});
+            }
+            layoutChoice_=new QComboBox(ReadingBar);layoutChoice_->setAccessibleName(tr("읽기 방식"));layoutChoice_->addItems({tr("세로 스크롤"),tr("가로 페이지")});ReadingBar->addWidget(layoutChoice_);
+            connect(layoutChoice_,&QComboBox::currentIndexChanged,this,[this](int Index){
+                const bool Dirty=settings_->IsDirty();
+                if(settings_->Execute("preview",{{"layout",Index==1?"paginated":"scroll"}},false)) {
+                    if(!Dirty && settings_->CssValid())settings_->Execute("apply",{},false);else readAction("focus-settings",{});
+                }
+                focusReading();
+            });
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::NoCache);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);
@@ -291,6 +306,7 @@ namespace
                     const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
                     if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
                     navigation_->Poll(Result);
+                    {QSignalBlocker Block(layoutChoice_);layoutChoice_->setCurrentIndex(settings_->Profile()["layout"]=="paginated"?1:0);}
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
@@ -329,7 +345,7 @@ namespace
                 && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus))
                     || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
             shortcuts_->Apply({});
-            auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){settingsScroll_->setVisible(!settingsScroll_->isVisible());view_->setFocus();}});
+            auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){if(navigationScroll_->isVisible()){navigationScroll_->hide();focusReading();}else readAction("focus-toc",{});}});
             qApp->installEventFilter(this);
             view_->setUrl(QUrl("epub://app/app/index.html"));
         }
@@ -384,6 +400,10 @@ namespace
             return QJsonDocument(Reply).toJson(QJsonDocument::Compact);
         }
     protected:
+        void resizeEvent(QResizeEvent* Event) override {
+            QMainWindow::resizeEvent(Event);
+            if(splitter_)splitter_->setOrientation(width()<700?Qt::Vertical:Qt::Horizontal);
+        }
         bool eventFilter(QObject* Object,QEvent* Event) override {
             auto* Widget=qobject_cast<QWidget*>(Object);if(!Widget || (Widget!=this && !isAncestorOf(Widget)))return false;
             if(Event->type()==QEvent::InputMethod)composing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
@@ -405,7 +425,7 @@ namespace
                         if(!Guard || Closed.toBool())return;
                         if(auto* Input=qobject_cast<QLineEdit*>(Receiver.data());Input && !Input->text().isEmpty()){Input->clear();return;}
                         if(Guard->settings_->IsDirty()){Guard->settings_->Execute("cancel",{},false);return;}
-                        if(Guard->settingsScroll_->isVisible()){Guard->settingsScroll_->hide();Guard->focusReading();return;}
+                        if(Guard->settingsScroll_->isVisible() || Guard->navigationScroll_->isVisible()){Guard->settingsScroll_->hide();Guard->navigationScroll_->hide();Guard->focusReading();return;}
                         ++Guard->escapeRequests_;
                     });return true;
                 }
@@ -420,12 +440,12 @@ namespace
         bool readAction(const QString& Action,const QJsonValue& Value) {
             if(Action=="bindings")return Value.isObject() && shortcuts_->Apply(Value.toObject()).isEmpty();
             if(Action=="cycle-focus") {
-                if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget())){settingsScroll_->show();navigation_->Execute("focus-toc");}
-                else if(navigation_->isAncestorOf(QApplication::focusWidget())){settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);}
-                else focusReading();return true;
+                if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-toc",{});
+                if(navigation_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-settings",{});
+                focusReading();return true;
             }
-            if(Action=="focus-settings"){settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);return true;}
-            if(Action=="focus-search" || Action=="focus-toc")settingsScroll_->show();
+            if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);return true;}
+            if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks"){settingsScroll_->hide();navigationScroll_->show();}
             return navigation_->Execute(Action,Value);
         }
         void command(const QString& Name, const QJsonValue& Value)
@@ -516,6 +536,9 @@ namespace
         QLabel* location_=nullptr;
         hc::document::DocumentShortcutRouter* shortcuts_=nullptr;
         QScrollArea* settingsScroll_ = nullptr;
+        QScrollArea* navigationScroll_=nullptr;
+        QSplitter* splitter_=nullptr;
+        QComboBox* layoutChoice_=nullptr;
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;
         Filter* filter_ = nullptr;

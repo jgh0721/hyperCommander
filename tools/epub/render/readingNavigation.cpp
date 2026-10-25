@@ -58,6 +58,7 @@ void ReadingNavigation::send(const QString& Action,const QJsonValue& Value){send
 bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
     if(Action=="focus-search") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(1);query_->setFocus(Qt::ShortcutFocusReason);query_->selectAll();return true;}
     if(Action=="focus-toc") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(0);toc_->setFocus(Qt::ShortcutFocusReason);return true;}
+    if(Action=="focus-bookmarks") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(2);marks_->setFocus(Qt::ShortcutFocusReason);return true;}
     if(!started_ || restoring_)return false;
     if(QStringList{"next","previous","back","next-chapter","previous-chapter"}.contains(Action)){send(Action,Value);return true;}
     if(Action=="toc") {if(!Value.isDouble() || Value.toInt()<0 || Value.toInt()>=navigation_.size())return false;send(Action,Value);return true;}
