@@ -56,6 +56,10 @@ private slots:
         const auto Stored=ReadingStore::Load(Temp.filePath("epub-reading.json"),QString(64,'a'));QVERIFY(Stored.error.isEmpty());QCOMPARE(Stored.global["line"].toDouble(),2.4);QVERIFY(Stored.book.isEmpty());
     }
     void epubShortcutScope() {
+        QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgUp")),QKeySequence("PgUp"));
+        QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgDown")),QKeySequence("PgDown"));
+        QVERIFY(DocumentShortcutRegistry::Validate({{"epub.previous","Num+PgUp"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epub.next","Num+PgUp"}}).isEmpty());
         using hc::document::DocumentShortcutRegistry;
         QVERIFY(DocumentShortcutRegistry::Validate({}).isEmpty());
         QVERIFY(DocumentShortcutRegistry::Validate({{"epub.next","Ctrl+Alt+N"}}).isEmpty());

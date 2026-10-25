@@ -10,6 +10,17 @@ struct DocumentShortcut {
 };
 class DocumentShortcutRegistry {
 public:
+    static QKeySequence NormalizeNavigationKeys(const QKeySequence& Sequence)
+    {
+        QKeyCombination Keys[4]{QKeyCombination::fromCombined(0),QKeyCombination::fromCombined(0),QKeyCombination::fromCombined(0),QKeyCombination::fromCombined(0)};
+        for(int I=0;I<Sequence.count();++I) {
+            auto Key=Sequence[I];
+            if(Key.key()==Qt::Key_PageUp || Key.key()==Qt::Key_PageDown)
+                Key=QKeyCombination(Key.keyboardModifiers() & ~Qt::KeypadModifier,Key.key());
+            Keys[I]=Key;
+        }
+        return QKeySequence(Keys[0],Keys[1],Keys[2],Keys[3]);
+    }
     static QList<DocumentShortcut> Commands()
     {
         return {
@@ -81,7 +92,7 @@ public:
             const auto Value = Effective[Item.id_];
             if (!Value.isString()) return QObject::tr("%1: 단축키는 문자열이어야 합니다.").arg(Item.label_);
             if (Value.toString().isEmpty()) continue;
-            const auto Key = QKeySequence::fromString(Value.toString(), QKeySequence::PortableText);
+            const auto Key = NormalizeNavigationKeys(QKeySequence::fromString(Value.toString(), QKeySequence::PortableText));
             if (Key.isEmpty() || Key.count() > 2) return QObject::tr("%1: 올바른 단축키를 입력하세요.").arg(Item.label_);
             for (int Index = 0; Index < Key.count(); ++Index)
                 if (Key[Index].key() == Qt::Key_unknown) return QObject::tr("%1: 인식할 수 없는 키입니다.").arg(Item.label_);

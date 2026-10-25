@@ -40,12 +40,14 @@ protected:
         auto* Key = static_cast<QKeyEvent*>(Event);
         if (Key->key() == Qt::Key_Control || Key->key() == Qt::Key_Shift || Key->key() == Qt::Key_Alt || Key->key() == Qt::Key_Meta) return false;
         auto Combination = Key->keyCombination();
+        if(Combination.key()==Qt::Key_PageUp || Combination.key()==Qt::Key_PageDown)
+            Combination=QKeyCombination(Combination.keyboardModifiers() & ~Qt::KeypadModifier,Combination.key());
         if (Combination.key() == Qt::Key_Backtab) Combination = QKeyCombination(Combination.keyboardModifiers() | Qt::ShiftModifier, Qt::Key_Tab);
         const auto Sequence = pending_.isEmpty() ? QKeySequence(Combination) : QKeySequence(pending_[0], Combination);
         QAction* Exact = nullptr; bool Partial = false, Owned = false;
         for (const auto& Item : DocumentShortcutRegistry::Commands()) {
             if (eligible_ && !eligible_(Item.id_, Widget)) continue;
-            const auto Binding = QKeySequence::fromString(bindings_[Item.id_].toString(), QKeySequence::PortableText);
+            const auto Binding = DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence::fromString(bindings_[Item.id_].toString(), QKeySequence::PortableText));
             const auto Match = Binding.isEmpty() ? QKeySequence::NoMatch : Sequence.matches(Binding);
             if (Match == QKeySequence::ExactMatch) { Exact = actions_.value(Item.id_); Owned = true; }
             if (Match == QKeySequence::PartialMatch) Partial = true;
