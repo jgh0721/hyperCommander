@@ -84,7 +84,7 @@ namespace hc::epub::poc
         cancel_ = new QPushButton(tr("취소"), this); cancel_->setObjectName("cancel");
         reload_ = new QPushButton(tr("다시 불러오기"), this); reload_->setObjectName("reload");
         Actions->addWidget(apply_); Actions->addWidget(cancel_); Actions->addWidget(reload_); Layout->addLayout(Actions);
-        status_ = new QLabel(this); status_->setObjectName("settingsStatus"); status_->setWordWrap(true); Layout->addWidget(status_);
+        status_ = new QLabel(this); status_->setTextFormat(Qt::PlainText);status_->setObjectName("settingsStatus"); status_->setWordWrap(true); Layout->addWidget(status_);
         auto* StorageNote = new QLabel(path_.isEmpty() ? tr("검증 모드 · 파일 저장 없음")
             : tr("미리보기 후 적용하면 저장됩니다.\n책별 지정 값은 기본값보다 우선합니다.\nEPUB 원본은 변경하지 않습니다."), this);
         StorageNote->setWordWrap(true); Layout->addWidget(StorageNote);

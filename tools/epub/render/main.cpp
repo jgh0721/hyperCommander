@@ -233,8 +233,8 @@ namespace
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
             auto* Layout = new QVBoxLayout(Central);
-            auto* Header = new QLabel(Publication["title"].toString() + tr(" — EPUB 읽기"), Central);
-            Header->setTextFormat(Qt::PlainText); Layout->addWidget(Header);
+            auto* Header = new QLabel(Central);Header->setTextFormat(Qt::PlainText);
+            Header->setText(Publication["title"].toString() + tr(" — EPUB 읽기")); Layout->addWidget(Header);
             const auto Missing = Publication["recovery"].toObject()["missingSpineItems"].toInt();
             if(Missing > 0) {
                 auto* Notice = new QLabel(tr("읽기 순서 %1개 항목을 제외하고 복구했습니다. 원본 유지.").arg(Missing), Central);
@@ -260,7 +260,7 @@ namespace
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{navigation_->Execute(Name);view_->setFocus(Qt::OtherFocusReason);});
             }
-            location_=new QLabel(this);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));location_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);location_->setMinimumWidth(0);statusBar()->addPermanentWidget(location_,1);
+            location_=new QLabel(this);location_->setTextFormat(Qt::PlainText);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));location_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);location_->setMinimumWidth(0);statusBar()->addPermanentWidget(location_,1);
             Form->addRow(navigation_);
             settingsScroll_=new QScrollArea(Splitter);settingsScroll_->setObjectName("epubQuickSettings");settingsScroll_->setWidgetResizable(true);settingsScroll_->setMinimumWidth(320);settingsScroll_->setWidget(settings_);
             view_ = new QWebEngineView(Splitter); Splitter->setSizes({260,360,880});

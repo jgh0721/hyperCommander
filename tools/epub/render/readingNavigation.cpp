@@ -47,7 +47,7 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
     SearchLayout->addWidget(query_);SearchLayout->addWidget(Find);SearchLayout->addWidget(results_);Tabs->addTab(Search,tr("검색"));
     auto* Marks=new QWidget(Tabs);auto* MarkLayout=new QVBoxLayout(Marks);marks_=new QListWidget(Marks);marks_->setObjectName("epubBookmarks");marks_->setAccessibleName(tr("책갈피 목록"));marks_->setMaximumHeight(140);
     auto* Add=new QPushButton(tr("현재 위치 책갈피"),Marks);auto* Remove=new QPushButton(tr("선택 책갈피 삭제"),Marks);MarkLayout->addWidget(marks_);MarkLayout->addWidget(Add);MarkLayout->addWidget(Remove);Tabs->addTab(Marks,tr("책갈피"));
-    status_=new QLabel(this);status_->setWordWrap(true);Layout->addWidget(status_);
+    status_=new QLabel(this);status_->setTextFormat(Qt::PlainText);status_->setWordWrap(true);Layout->addWidget(status_);
     connect(Find,&QPushButton::clicked,this,[this]{Execute("search",query_->text());});connect(query_,&QLineEdit::returnPressed,this,[this]{Execute("search",query_->text());});
     connect(results_,&QListWidget::itemActivated,this,[this](QListWidgetItem* Item){Execute("locate",Item->data(Qt::UserRole).toString());});
     connect(marks_,&QListWidget::itemActivated,this,[this](QListWidgetItem* Item){Execute("locate",Item->data(Qt::UserRole+1).toString());});
@@ -97,7 +97,7 @@ void ReadingNavigation::SetPublication(const QJsonObject& Publication) {
         const auto Entry=navigation_[Index].toObject();const int Depth=qBound(0,Entry["depth"].toInt(),static_cast<int>(Parents.size()));
         while(Parents.size()>Depth)Parents.removeLast();
         auto* Item=new QTreeWidgetItem(QStringList{Entry["label"].toString().isEmpty()?Entry["path"].toString():Entry["label"].toString()});
-        Item->setData(0,Qt::UserRole,Index);Item->setToolTip(0,Item->text(0));
+        Item->setData(0,Qt::UserRole,Index);Item->setToolTip(0,"<qt>"+Item->text(0).toHtmlEscaped()+"</qt>");
         if(Parents.isEmpty())toc_->addTopLevelItem(Item);else Parents.last()->addChild(Item);Parents.append(Item);
     }
     toc_->expandToDepth(0);
