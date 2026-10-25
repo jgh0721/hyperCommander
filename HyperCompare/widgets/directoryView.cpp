@@ -184,6 +184,7 @@ namespace hc::compare
             tree->setUniformRowHeights(true); tree->setItemDelegate(new TreeDelegate(tree));
             tree->setSelectionMode(QAbstractItemView::SingleSelection); tree->setSelectionBehavior(QAbstractItemView::SelectRows);
             tree->setEditTriggers(QAbstractItemView::NoEditTriggers); tree->setAlternatingRowColors(true);
+            tree->setExpandsOnDoubleClick(false);
             tree->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel); tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
             tree->setTreePosition(side * 3); tree->header()->setStretchLastSection(false);
             for (int i = 0; i < 6; ++i) tree->setColumnHidden(i, i / 3 != side);
@@ -191,6 +192,10 @@ namespace hc::compare
             tree->setColumnWidth(side * 3 + 1, 140); tree->setColumnWidth(side * 3 + 2, 100);
             column->addWidget(tree, 1);
             connect(tree, &QTreeView::activated, this, [this] { OpenCurrent(); });
+            connect(tree, &QTreeView::doubleClicked, this, [this, tree](const QModelIndex& Index) {
+                const auto branch = Index.siblingAtColumn(0);
+                if (branch.isValid() && treeFilter_->hasChildren(branch)) tree->setExpanded(branch, !tree->isExpanded(branch));
+            });
         }
         for (int side = 0; side < 2; ++side)
         {

@@ -1318,6 +1318,26 @@ private slots:
         action(window, "Dark")->setChecked(true); QTest::qWait(50);
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-dark.png")); window.close();
     }
+    void directoryRowsDoubleClickToggleBothTrees()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "directory"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        for (const auto& root : {request.file1_, request.file2_}) { QVERIFY(QDir().mkpath(root + "/folder/nested")); write(root + "/folder/file.txt", "content\n"); }
+        const auto comparison = Execute(request, std::make_shared<std::atomic_bool>(false), false);
+        DirectoryView view; view.SetComparison(request, comparison); view.resize(1300, 700); view.show(); int opened = 0; view.open_ = [&](Request) { ++opened; };
+        auto* left = view.findChild<QTreeView*>("directoryLeftTree"); auto* right = view.findChild<QTreeView*>("directoryRightTree"); QVERIFY(left); QVERIFY(right);
+        const auto branch = left->model()->index(0, 0); QCOMPARE(branch.data(DirectoryTreeModel::PathRole).toString(), QString("folder"));
+        left->collapse(branch); QVERIFY(!right->isExpanded(branch));
+        const auto click = [&](QTreeView* Tree, int Column) { const auto item = branch.siblingAtColumn(Column); Tree->scrollTo(item); Tree->setFocus(); QTest::qWait(30); const auto point = Tree->visualRect(item).center(); QTest::mouseClick(Tree->viewport(), Qt::LeftButton, {}, point); QTest::mouseDClick(Tree->viewport(), Qt::LeftButton, {}, point); };
+        click(left, 0); QTRY_VERIFY(left->isExpanded(branch)); QVERIFY(right->isExpanded(branch)); QCOMPARE(opened, 0);
+        click(right, 4); QTRY_VERIFY(!left->isExpanded(branch)); QVERIFY(!right->isExpanded(branch));
+        click(right, 3); QTRY_VERIFY(left->isExpanded(branch)); QVERIFY(right->isExpanded(branch));
+        click(left, 2); QTRY_VERIFY(!left->isExpanded(branch)); QVERIFY(!right->isExpanded(branch));
+        click(right, 5); QTRY_VERIFY(left->isExpanded(branch)); QVERIFY(right->isExpanded(branch));
+        const auto row = left->visualRect(branch); QTest::mouseClick(left->viewport(), Qt::LeftButton, {}, QPoint(row.left() - left->indentation() / 2, row.center().y())); QTRY_VERIFY(!left->isExpanded(branch)); QVERIFY(!right->isExpanded(branch));
+        click(left, 0); QTRY_VERIFY(left->isExpanded(branch));
+        const auto file = left->model()->index(1, 0, branch); QCOMPARE(file.data(DirectoryTreeModel::PathRole).toString(), QString("folder/file.txt"));
+        left->scrollTo(file); const auto point = left->visualRect(file).center(); QTest::mouseClick(left->viewport(), Qt::LeftButton, {}, point); QTest::mouseDClick(left->viewport(), Qt::LeftButton, {}, point); QTRY_COMPARE(opened, 1);
+    }
     void directoryOneSidedFileMergesIntoEmptyDocument()
     {
         for (int missing = 0; missing < 2; ++missing)
