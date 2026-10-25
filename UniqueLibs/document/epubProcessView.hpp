@@ -27,6 +27,7 @@ namespace hc::document
     signals:
         void Loaded();
         void EscapeRequested();
+        void FullscreenRequested();
         void Failed(const QString& Error);
         void Closed();
         void ViewStateChanged();

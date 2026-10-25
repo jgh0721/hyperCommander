@@ -13,6 +13,8 @@
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 #include <new>
+#include <algorithm>
+#include <algorithm>
 
 namespace hc::document::epub
 {
@@ -304,13 +306,18 @@ namespace hc::document::epub
                     }
                     if(Resource.properties_.contains("nav")) {
                         for(const auto Nav : Document.Descendants(0, Xhtml, "nav"))
-                            if(tokens(Document.At(Nav).Attr("{http://www.idpf.org/2007/ops}type")).contains("toc"))
-                                for(const auto Link : Document.Descendants(Nav, Xhtml, "a")) {
+                            if(tokens(Document.At(Nav).Attr("{http://www.idpf.org/2007/ops}type")).contains("toc")) {
+                                auto Links=Document.Descendants(Nav,Xhtml,"a");
+                                for(const auto Span:Document.Descendants(Nav,Xhtml,"span"))if(Document.At(Span).parent_>=0 && Document.At(Document.At(Span).parent_).tag_==key(Xhtml,"li"))Links.append(Span);
+                                std::sort(Links.begin(),Links.end());
+                                for(const auto Link : Links) {
                                     int Depth = -1;
                                     for(int Parent = Document.At(Link).parent_; Parent >= 0 && Parent != Nav; Parent = Document.At(Parent).parent_)
                                         if(Document.At(Parent).tag_ == key(Xhtml, "li")) ++Depth;
-                                    AddNavigation(Resource.path_, Document.At(Link).Attr("href"), Document.Text(Link), qMax(0, Depth));
+                                    if(Document.At(Link).tag_==key(Xhtml,"span"))Append(Navigation,{{"label",Document.Text(Link)},{"path",""},{"depth",qMax(0,Depth)}});
+                                    else AddNavigation(Resource.path_, Document.At(Link).Attr("href"), Document.Text(Link), qMax(0, Depth));
                                 }
+                            }
                     }
                 }
                 AddResource(Resource.path_, Resource.media_, Raw);

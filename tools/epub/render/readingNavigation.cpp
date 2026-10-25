@@ -38,8 +38,9 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
     }
     auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);Layout->addWidget(Tabs);
     toc_=new QTreeWidget(Tabs);toc_->setObjectName("epubToc");toc_->setAccessibleName(tr("목차"));toc_->setHeaderHidden(true);
+    toc_->setStyleSheet("QTreeWidget:focus { border: 2px solid palette(highlight); }");
     toc_->setMinimumHeight(180);Tabs->addTab(toc_,tr("목차"));
-    const auto OpenToc=[this](QTreeWidgetItem* Item){Execute("toc",Item->data(0,Qt::UserRole).toInt());};
+    const auto OpenToc=[this](QTreeWidgetItem* Item){const auto Index=Item->data(0,Qt::UserRole).toInt();if(navigation_[Index].toObject()["path"].toString().isEmpty())Item->setExpanded(!Item->isExpanded());else Execute("toc",Index);};
     connect(toc_,&QTreeWidget::itemClicked,this,OpenToc);connect(toc_,&QTreeWidget::itemActivated,this,OpenToc);
     auto* Search=new QWidget(Tabs);auto* SearchLayout=new QVBoxLayout(Search);query_=new QLineEdit(Search);query_->setMaxLength(128);query_->setPlaceholderText(tr("책 전체에서 검색"));query_->setObjectName("epubSearch");query_->setAccessibleName(tr("책 전체 검색어"));query_->setAccessibleDescription(tr("Ctrl+F로 이동하고 Enter로 검색합니다."));
     auto* Find=new QPushButton(tr("검색"),Search);results_=new QListWidget(Search);results_->setObjectName("epubSearchResults");results_->setAccessibleName(tr("본문 검색 결과"));results_->setMaximumHeight(140);
@@ -61,7 +62,7 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
     if(Action=="focus-bookmarks") {if(auto* Tabs=findChild<QTabWidget*>())Tabs->setCurrentIndex(2);marks_->setFocus(Qt::ShortcutFocusReason);return true;}
     if(!started_ || restoring_)return false;
     if(QStringList{"next","previous","back","next-chapter","previous-chapter"}.contains(Action)){send(Action,Value);return true;}
-    if(Action=="toc") {if(!Value.isDouble() || Value.toInt()<0 || Value.toInt()>=navigation_.size())return false;send(Action,Value);return true;}
+    if(Action=="toc") {if(!Value.isDouble() || Value.toInt()<0 || Value.toInt()>=navigation_.size() || navigation_[Value.toInt()].toObject()["path"].toString().isEmpty())return false;send(Action,Value);return true;}
     if(Action=="search") {if(!Value.isString() || Value.toString().trimmed().isEmpty() || Value.toString().size()>128)return false;results_->clear();status_->setText(tr("책 전체에서 검색 중…"));send(Action,Value);return true;}
     if(Action=="bookmark-add") {
         if(!cfi(locator_) || bookmarks_.size()>=128)return false;
@@ -76,8 +77,9 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
 void ReadingNavigation::Poll(const QJsonObject& State) {
     if(State["status"]!="ready")return;
     const auto Current=State["tocIndex"].toInt(-1);
-    if(Current>=0) {QTreeWidgetItemIterator It(toc_);for(;*It;++It)if((*It)->data(0,Qt::UserRole).toInt()==Current){
-        QSignalBlocker Block(toc_);toc_->setCurrentItem(*It);for(auto* Parent=(*It)->parent();Parent;Parent=Parent->parent())Parent->setExpanded(true);break;}}
+    if(Current>=0 && Current!=currentToc_) {currentToc_=Current;QTreeWidgetItemIterator It(toc_);for(;*It;++It){
+        const bool Active=(*It)->data(0,Qt::UserRole).toInt()==Current;auto Font=(*It)->font(0);Font.setBold(Active);(*It)->setFont(0,Font);
+        if(Active){if(!toc_->hasFocus()){QSignalBlocker Block(toc_);toc_->setCurrentItem(*It);}for(auto* Parent=(*It)->parent();Parent;Parent=Parent->parent())Parent->setExpanded(true);}}}
     if(!started_) {started_=true;if(resume_ && remember_ && !restore_.isEmpty()){send("locate",restore_);restoreSerial_=serial_;restoring_=true;return;}}
     const auto Result=State["readerAction"].toObject();const auto Serial=Result["serial"].toInteger();
     if(restoring_) {if(Serial!=restoreSerial_ || Result["busy"].toBool())return;restoring_=false;if(Result.contains("error"))error_=tr("이전 읽기 위치를 복원하지 못했습니다.");}
@@ -90,7 +92,7 @@ void ReadingNavigation::Poll(const QJsonObject& State) {
     }
 }
 void ReadingNavigation::SetPublication(const QJsonObject& Publication) {
-    navigation_=Publication["navigation"].toArray();toc_->clear();QList<QTreeWidgetItem*> Parents;
+    navigation_=Publication["navigation"].toArray();currentToc_=-1;toc_->clear();QList<QTreeWidgetItem*> Parents;
     for(int Index=0;Index<navigation_.size();++Index) {
         const auto Entry=navigation_[Index].toObject();const int Depth=qBound(0,Entry["depth"].toInt(),static_cast<int>(Parents.size()));
         while(Parents.size()>Depth)Parents.removeLast();

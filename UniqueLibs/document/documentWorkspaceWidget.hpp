@@ -96,6 +96,9 @@ namespace hc::document
         QStackedWidget* singlePane_;
         std::function<int(const QString&)> closePrompt_;
         QString shellError_;
+        void toggleEpubFullscreen();
+        bool epubFullscreen_=false,epubWasMaximized_=false;
+        QRect epubWindowGeometry_;
         bool closingWorkspace_ = false;
         bool pendingActionsScheduled_ = false;
         bool closeViewerOnEscape_ = true, viewerCloseRequested_ = false;

@@ -135,7 +135,7 @@ namespace
             != Entry["sha256"].toString().toLatin1()) throw QString("Bundle hash mismatch");
         Result.insert("/app/reader.js", {Script, "text/javascript"});
         Result.insert("/app/index.html", {QByteArrayLiteral(
-            "<!doctype html><html lang='ko'><head><meta charset='utf-8'><title>EPUB P0</title>"
+            "<!doctype html><html lang='ko'><head><meta charset='utf-8'><title>EPUB 본문</title>"
             "<style>html,body{margin:0;height:100%;overflow:hidden}#viewport{height:100%;margin:auto;max-width:100%}"
             "#reader{position:relative;width:100%;height:100%;margin:auto;max-width:100%}"
             ".readium-navigator-iframe{border:0;inset:0;width:100%;height:100%}</style>"
@@ -224,7 +224,7 @@ namespace
         {
             engine_=Engine;
 #ifdef HC_EPUB_PRODUCT_HELPER
-            setWindowTitle(tr("EPUB 읽기 설정"));
+            setWindowTitle(tr("EPUB 읽기"));
 #else
             setWindowTitle(tr("EPUB · Watercolor 읽기 설정 · P0 엔진 비교"));
 #endif
@@ -237,7 +237,8 @@ namespace
             Header->setTextFormat(Qt::PlainText); Layout->addWidget(Header);
             const auto Missing = Publication["recovery"].toObject()["missingSpineItems"].toInt();
             if(Missing > 0) {
-                auto* Notice = new QLabel(tr("읽기 순서에서 찾을 수 없는 항목 %1개를 제외하고, 존재하는 본문 순서로 복구해 표시합니다. 원본 파일은 변경하지 않았습니다.").arg(Missing), Central);
+                auto* Notice = new QLabel(tr("읽기 순서 %1개 항목을 제외하고 복구했습니다. 원본 유지.").arg(Missing), Central);
+                Notice->setToolTip(tr("파일에서 찾을 수 없는 읽기 순서 항목을 제외하고 존재하는 본문을 표시합니다. 원본 EPUB은 변경하지 않았습니다."));
                 Notice->setObjectName("epubRecoveryNotice"); Notice->setTextFormat(Qt::PlainText); Notice->setWordWrap(true); Layout->addWidget(Notice);
             }
             auto* Splitter = new QSplitter(Central);splitter_=Splitter; Layout->addWidget(Splitter, 1);
@@ -321,7 +322,7 @@ namespace
                     for(const auto& Family : Result["bookFonts"].toArray()) if(Family.isString()) Families.append(Family.toString());
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
-                    statusBar()->showMessage(tr("%1 · 읽기 전용 · 원본 유지").arg(Status));
+                    statusBar()->showMessage(Status=="ready"?tr("원본 유지"):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
                         if(!Families.isEmpty()) {
@@ -364,7 +365,7 @@ namespace
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
-                State["escapeRequests"]=escapeRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
+                State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
             }
@@ -409,16 +410,6 @@ namespace
             if(Event->type()==QEvent::InputMethod)composing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();
             if(Event->type()==QEvent::KeyPress) {
                 auto* Key=static_cast<QKeyEvent*>(Event);
-                const bool Body=Widget==view_ || view_->isAncestorOf(Widget);
-                if(Body && !composing_ && settings_->Profile()["layout"]=="paginated" && Key->modifiers()==Qt::NoModifier
-                    && (Key->key()==Qt::Key_Left || Key->key()==Qt::Key_Right)) {
-                    const bool Forward=(Key->key()==Qt::Key_Right)!=(latest_["readingProgression"]=="rtl");
-                    readAction(Forward?"next":"previous",{});return true;
-                }
-                if(Body && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()
-                    && Key->key()==Qt::Key_Space && (Key->modifiers()==Qt::NoModifier || Key->modifiers()==Qt::ShiftModifier)) {
-                    readAction(Key->modifiers()==Qt::ShiftModifier?"previous":"next",{});return true;
-                }
                 if(Key->key()==Qt::Key_Escape && Key->modifiers()==Qt::NoModifier && !Key->isAutoRepeat() && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
                     const QPointer<Window> Guard(this);const QPointer<QWidget> Receiver(Widget);
                     page_->runJavaScript("!!(window.hcDismissPopup && window.hcDismissPopup())",[Guard,Receiver](const QVariant& Closed){
@@ -438,13 +429,14 @@ namespace
             page_->runJavaScript("window.hcFocusReading && window.hcFocusReading()");
         }
         bool readAction(const QString& Action,const QJsonValue& Value) {
+            if(Action=="fullscreen"){++fullscreenRequests_;return true;}
             if(Action=="bindings")return Value.isObject() && shortcuts_->Apply(Value.toObject()).isEmpty();
             if(Action=="cycle-focus") {
                 if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-toc",{});
                 if(navigation_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-settings",{});
                 focusReading();return true;
             }
-            if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();settings_->findChild<QComboBox*>("scope")->setFocus(Qt::ShortcutFocusReason);return true;}
+            if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();settings_->findChild<QTabWidget*>()->setFocus(Qt::ShortcutFocusReason);return true;}
             if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks"){settingsScroll_->hide();navigationScroll_->show();}
             return navigation_->Execute(Action,Value);
         }
@@ -531,6 +523,7 @@ namespace
         qint64 settingsStamp_=0;
         bool shellReady_=false,started_=false,composing_=false;
         int escapeRequests_=0;
+        int fullscreenRequests_=0;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QLabel* location_=nullptr;

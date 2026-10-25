@@ -50,7 +50,8 @@ public:
             {"epub.focus-settings", QObject::tr("EPUB 읽기 설정"), "Ctrl+Shift+E", "epub"},
             {"epub.focus-search", QObject::tr("EPUB 검색"), "Ctrl+F", "epub"},
             {"epub.bookmark-add", QObject::tr("EPUB 책갈피 추가"), "Ctrl+D", "epub"},
-            {"epub.cycle-focus", QObject::tr("EPUB 영역 포커스 이동"), "F6", "epub"}
+            {"epub.cycle-focus", QObject::tr("EPUB 영역 포커스 이동"), "F6", "epub"},
+            {"epub.fullscreen", QObject::tr("EPUB 전체 화면"), "F11", "epub"}
         };
     }
     static QJsonObject Bindings(const QJsonObject& Stored)

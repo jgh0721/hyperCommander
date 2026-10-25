@@ -233,6 +233,7 @@ bool ReadingSettings::CssValid() const {
 }
 void ReadingSettings::SetCssValidation(const QString& Css,const QString& Error) {
     if(Css!=Profile()["customCss"].toString()) return;
+    if(validatedCss_==Css && cssError_==Error)return;
     validatedCss_=Css; cssError_=Error; refresh();
 }
 void ReadingSettings::addAppearance(QTabWidget* Tabs) {

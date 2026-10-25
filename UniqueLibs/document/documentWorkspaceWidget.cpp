@@ -290,7 +290,7 @@ namespace hc::document
         }
         auto* ViewMenu = menu_->addMenu(tr("보기(&V)"));
         auto* Fullscreen=new ImageFullscreen(this,[this]()->ImageReadingView*{const auto Tab=active();return Tab?Tab->pane_->findChild<ImageReadingView*>():nullptr;},[this](int Direction){if(auto Tab=active())if(auto* Action=Tab->pane_->findChild<QAction*>(Direction>0?"image.next":"image.previous"))Action->trigger();});Fullscreen->setObjectName("imageFullscreen");
-        auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));FullscreenAction->setObjectName("view.fullscreen");connect(FullscreenAction,&QAction::triggered,Fullscreen,&ImageFullscreen::Toggle);
+        auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));FullscreenAction->setObjectName("view.fullscreen");connect(FullscreenAction,&QAction::triggered,this,[this,Fullscreen]{if(auto Tab=active();epubFullscreen_ || Tab && Tab->pane_->IsEpub())toggleEpubFullscreen();else Fullscreen->Toggle();});
         auto* Preferences = ViewMenu->addAction(tr("설정(&P)…"));
         Preferences->setObjectName("documentPreferences"); Preferences->setShortcut(QKeySequence("Ctrl+,")); addAction(Preferences);
         connect(Preferences, &QAction::triggered, this, &DocumentWorkspaceWidget::showPreferences);
@@ -644,7 +644,8 @@ namespace hc::document
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){update();tryFinishClose();}});
-        connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)escapeViewer();});
+        connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
+        connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)toggleEpubFullscreen();});
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;
@@ -1212,6 +1213,7 @@ namespace hc::document
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
         }
         auto Tab = active();
+        if(epubFullscreen_ && (!Tab || !Tab->pane_->IsEpub()))toggleEpubFullscreen();
         if (Tab) {
             workspace_.Activate(Tab->id_.toStdString());if(!findChild<ImageFullscreen*>("imageFullscreen")->Active())chrome_->SetActive(Tab->pane_->Contribution());
             const auto State = Tab->session_->Snapshot();
@@ -1240,12 +1242,13 @@ namespace hc::document
         }
         if(Tab&&Tab->pane_->IsEpub()){
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
-            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("EPUB ? ?? ??"));
+            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("EPUB · 읽기 전용 · 원본 유지"));
         }
         findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
         findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
+            if(Id.startsWith("epub."))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing());
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->editor_->isReadOnly()));
@@ -1370,6 +1373,12 @@ namespace hc::document
                 }
             }
         });
+    }
+    void DocumentWorkspaceWidget::toggleEpubFullscreen() {
+        auto* Root=window();
+        if(epubFullscreen_){epubFullscreen_=false;Root->showNormal();if(epubWasMaximized_)Root->showMaximized();else Root->setGeometry(epubWindowGeometry_);}
+        else {const auto Tab=active();if(!Tab || !Tab->pane_->IsEpub())return;epubWasMaximized_=Root->isMaximized();epubWindowGeometry_=Root->geometry();epubFullscreen_=true;Root->showFullScreen();}
+        if(auto Tab=active())Tab->pane_->Focus();
     }
     void DocumentWorkspaceWidget::escapeViewer()
     {

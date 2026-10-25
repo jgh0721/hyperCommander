@@ -44,6 +44,7 @@ let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "",layout:"scroll",columns:0,backgroundFit:"cover",backgroundOpacity:1 };
 const cssErrors = new WeakMap();
 const profileStyles = new WeakMap();
+const inputDocuments=new WeakSet();let keyboardSerial=0;
 let customRules = [], backgroundImage = { asset: "", data: "" };
 let sequence = Promise.resolve();
 let generation = 0;
@@ -94,6 +95,18 @@ function documents() {
 
 function applyDocument(doc) {
     tools.hook(doc);
+    if(!inputDocuments.has(doc)) {
+        inputDocuments.add(doc);
+        doc.addEventListener("keydown",event=>{
+            if(event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || tools.state().popup
+                || event.target.closest?.("input,textarea,select,[contenteditable=true]"))return;
+            let action;
+            if(event.key===" " && !event.target.closest?.("a,button,img"))action=event.shiftKey?"previous":"next";
+            if(profile.layout==="paginated" && !event.shiftKey && ["ArrowLeft","ArrowRight"].includes(event.key))
+                action=(event.key==="ArrowRight")!==(readingLocation().readingProgression==="rtl" || book?.packaging?.metadata.direction==="rtl")?"next":"previous";
+            if(action){event.preventDefault();window.hcCommand("read",{action,serial:--keyboardSerial});}
+        });
+    }
     if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
     let style = profileStyles.get(doc);
     if (!style) { style = doc.createElement("style"); doc.head.append(style); profileStyles.set(doc,style); }
@@ -112,6 +125,7 @@ function applyDocument(doc) {
         text-indent:${profile.indent}em!important; }
       body img, body svg { max-width:100%!important; height:auto; }
     ` : "";
+    style.textContent+="a:focus-visible, img:focus-visible { outline:2px solid currentColor!important; outline-offset:3px; }";
 }
 
 async function applyProfile(next = {}) {
@@ -224,11 +238,11 @@ function readingLocation() {
 }
 
 async function navigate(action,value) {
-    if(action==="back") {const locator=history.pop();if(locator)await restoreLocator(locator);return;}
+    if(action==="back") {const locator=history.pop();if(locator)await restoreLocator(locator);window.hcFocusReading?.();return;}
     if(action==="next" || action==="previous") {
         if(rendition)await rendition[action==="next"?"next":"prev"]();
         else await new Promise(resolve=>navigator[action==="next"?"goForward":"goBackward"](false,resolve));
-        documents().forEach(applyDocument);return;
+        documents().forEach(applyDocument);window.hcFocusReading?.();return;
     }
     if(action==="next-chapter" || action==="previous-chapter") {
         const index=readingLocation().chapterIndex+(action==="next-chapter"?1:-1);
@@ -242,6 +256,7 @@ async function navigate(action,value) {
     if(rendition)await rendition.display(book.spine.get(index).href+(item.fragment?"#"+encodeURIComponent(item.fragment):""));
     else await goChapter(index);
     documents().forEach(applyDocument);
+    window.hcFocusReading?.();
 }
 
 async function restoreLocator(locator) {
@@ -296,7 +311,7 @@ async function start(name) {
                 presentation: { layout: "reflowable" } },
             links: [{ href: root + "manifest.json", rel: "self", type: "application/webpub+json" }], readingOrder,
             resources: publication.resources.map(item => ({ href: encodePath(item.path), type: item.mediaType })),
-            toc: publication.navigation.map(item => ({ href: encodePath(item.path), title: item.label })) });
+            toc: publication.navigation.filter(item=>item.path).map(item => ({ href: encodePath(item.path)+(item.fragment?"#"+encodeURIComponent(item.fragment):""), title: item.label })) });
         if (!manifest) throw Error("Readium manifest rejected");
         const pub = new Publication({ manifest, fetcher: new HttpFetcher(undefined, root) });
         const positions = readingOrder.map((item, i) => Locator.deserialize({ ...item,

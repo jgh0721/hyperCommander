@@ -228,6 +228,7 @@ namespace hc::document
         const auto State = ViewState();
         if(State == reported_) return;
         const bool Escape=State["escapeRequests"].toInt()>reported_["escapeRequests"].toInt();
+        const bool Fullscreen=State["fullscreenRequests"].toInt()>reported_["fullscreenRequests"].toInt();
         reported_ = State;
         const QPointer<EpubProcessView> Guard(this);
         const bool Retired = State["retired"].toBool();
@@ -248,6 +249,7 @@ namespace hc::document
             if(!Guard) return;
         }
         if(Escape && !Retired) {emit EscapeRequested();if(!Guard)return;}
+        if(Fullscreen && !Retired){emit FullscreenRequested();if(!Guard)return;}
         emit ViewStateChanged();
     }
     bool EpubProcessView::event(QEvent* Event)
@@ -258,7 +260,7 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value}});return true;

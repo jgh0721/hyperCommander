@@ -65,6 +65,7 @@ namespace hc::document
         void EditImageRequested(const QImage& Image);
         void ReadingSelected();
         void EscapeRequested();
+        void FullscreenRequested();
     private:
         void syncText();
         bool editEpub();
