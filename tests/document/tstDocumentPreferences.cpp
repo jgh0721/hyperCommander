@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
+#include "tools/epub/render/readingSettings.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
@@ -46,6 +47,14 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void epubGlobalSettingsApplyAndCancel() {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("HyperEditor.json");
+        using hc::epub::poc::ReadingSettings;using hc::epub::poc::ReadingStore;
+        {DocumentSettingsDialog Dialog(Path,{});auto* Panel=Dialog.findChild<ReadingSettings*>("epubGlobalSettings");QVERIFY(Panel);QTRY_VERIFY(!Panel->IsBusy());
+            QVERIFY(Panel->Execute("preview",{{"line",2.4},{"layout","paginated"}},true));QVERIFY(Dialog.Apply());
+            QVERIFY(Panel->Execute("preview",{{"line",2.8}},true));Dialog.reject();}
+        const auto Stored=ReadingStore::Load(Temp.filePath("epub-reading.json"),QString(64,'a'));QVERIFY(Stored.error.isEmpty());QCOMPARE(Stored.global["line"].toDouble(),2.4);QVERIFY(Stored.book.isEmpty());
+    }
     void epubShortcutScope() {
         using hc::document::DocumentShortcutRegistry;
         QVERIFY(DocumentShortcutRegistry::Validate({}).isEmpty());
@@ -530,7 +539,7 @@ private slots:
         QTRY_VERIFY(Window.IsIdle()); auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
         Window.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "edited\r\ntext\r\n"}});
         const auto Content = Text->Content(); const auto Before = Read(Path);
-        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 3);
+        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 4);
           Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7); Dialog.reject(); }
         QCOMPARE(Read(Path), Before);
         DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>());

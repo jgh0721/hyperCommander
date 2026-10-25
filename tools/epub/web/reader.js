@@ -41,7 +41,7 @@ function remember() {const locator=getLocator();if(locator && history.at(-1)!==l
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
-    backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "",layout:"scroll",columns:0 };
+    backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "",layout:"scroll",columns:0,backgroundFit:"cover",backgroundOpacity:1 };
 const cssErrors = new WeakMap();
 const profileStyles = new WeakMap();
 let customRules = [], backgroundImage = { asset: "", data: "" };
@@ -127,6 +127,7 @@ async function applyProfile(next = {}) {
         || ![candidate.backgroundColor, candidate.textColor].every(v => typeof v === "string" && (!v || /^#[0-9a-f]{6}$/i.test(v)))) throw Error("Invalid background profile");
     customRules = candidate.cssEnabled ? compileCss(candidate.customCss) : [];
     if(!["scroll","paginated"].includes(candidate.layout) || ![0,1,2].includes(candidate.columns))throw Error("Invalid reading layout");
+    if(!["cover","contain","tile"].includes(candidate.backgroundFit) || !Number.isFinite(candidate.backgroundOpacity) || candidate.backgroundOpacity<0 || candidate.backgroundOpacity>1)throw Error("Invalid background placement");
     profile = candidate;
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
@@ -135,7 +136,13 @@ async function applyProfile(next = {}) {
     document.body.style.backgroundImage = profile.background === "paper" ? "radial-gradient(rgba(127,97,48,.10) .6px,transparent .7px)"
         : profile.background === "grid" ? "linear-gradient(rgba(127,127,127,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(127,127,127,.10) 1px,transparent 1px)"
         : profile.background === "image" && backgroundImage.asset === profile.backgroundAsset && backgroundImage.data ? `url("${backgroundImage.data}")` : "none";
-    document.body.style.backgroundSize = profile.background === "paper" ? "5px 5px" : profile.background === "grid" ? "24px 24px" : "cover";
+    if(profile.background==="image" && backgroundImage.data) {
+        const rgb=background.slice(1).match(/../g).map(v=>parseInt(v,16)).join(",");
+        const fade=`rgba(${rgb},${1-profile.backgroundOpacity})`;
+        document.body.style.backgroundImage=`linear-gradient(${fade},${fade}),url("${backgroundImage.data}")`;
+    }
+    document.body.style.backgroundRepeat=profile.backgroundFit==="tile" || ["paper","grid"].includes(profile.background)?"repeat":"no-repeat";
+    document.body.style.backgroundSize = profile.background === "paper" ? "5px 5px" : profile.background === "grid" ? "24px 24px" : profile.backgroundFit==="tile"?"auto":profile.backgroundFit;
     document.body.style.backgroundPosition = "center";
     document.body.style.backgroundAttachment = "fixed";
     viewport.style.width = `min(calc(100% - ${profile.margin * 2}px), ${profile.width*(profile.layout==="paginated" && profile.columns!==1?2:1)}px)`;

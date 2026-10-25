@@ -29,7 +29,10 @@ namespace hc::epub::poc
                 if(Limits.contains(Key))
                     Valid = Value.isDouble() && std::isfinite(Value.toDouble())
                         && Value.toDouble() >= Limits[Key].first && Value.toDouble() <= Limits[Key].second;
-                else if(Key == "override" || Key=="cssEnabled" || Key=="cssForce") Valid = Value.isBool();
+                else if(Key == "override" || Key=="cssEnabled" || Key=="cssForce" || Key=="resume" || Key=="privateReading") Valid = Value.isBool();
+                else if(Key=="historyEpoch")Valid=Value.isDouble() && Value.toDouble()>=0 && Value.toDouble()<=9007199254740991.0 && std::floor(Value.toDouble())==Value.toDouble();
+                else if(Key=="backgroundOpacity")Valid=Value.isDouble() && Value.toDouble()>=0 && Value.toDouble()<=1;
+                else if(Key=="backgroundFit")Valid=Value.isString() && QStringList{"cover","contain","tile"}.contains(Value.toString());
                 else if(Key=="customCss") Valid=Value.isString() && Value.toString().size()<=16384 && Value.toString().toUtf8().size()<=32768;
                 else if(Key=="background") Valid=Value.isString() && QStringList{"theme","color","paper","grid","image"}.contains(Value.toString());
                 else if(Key=="backgroundColor" || Key=="textColor") Valid=Value.isString() && (Value.toString().isEmpty() || QRegularExpression("^#[0-9a-fA-F]{6}$").match(Value.toString()).hasMatch());
@@ -81,6 +84,7 @@ namespace hc::epub::poc
         return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
             {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
             {"background","theme"},{"backgroundColor",""},{"textColor",""},{"backgroundAsset",""},{"customCss",""},{"cssEnabled",false},{"cssForce",true},
+            {"resume",true},{"privateReading",false},{"historyEpoch",0},{"backgroundFit","cover"},{"backgroundOpacity",1},
             {"layout","scroll"},{"columns",0},{"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
     }
     QJsonObject ReadingStore::Resolve(const QJsonObject& Global, const QJsonObject& Book)
@@ -98,6 +102,21 @@ namespace hc::epub::poc
             return snapshot(readRoot(Path), Book);
         }
         catch(const QString& Error) { return {{}, {}, Error}; }
+    }
+    QString ReadingStore::ClearPositions(const QString& Path) {
+        const QDir Directory(QDir(QFileInfo(Path).absolutePath()).filePath("epub-state"));
+        if(QFileInfo(Directory.absolutePath()).isSymLink())return QStringLiteral("기록 폴더의 연결 경로는 변경하지 않습니다.");
+        for(const auto& Name:Directory.entryList({"*.json"},QDir::Files)) {
+            if(!QRegularExpression("^[a-f0-9]{64}\\.json$").match(Name).hasMatch())continue;
+            const auto Target=Directory.filePath(Name);if(QFileInfo(Target).isSymLink())return QStringLiteral("기록 연결 파일은 변경하지 않습니다.");
+            QLockFile Lock(Target+".lock");if(!Lock.tryLock(0))return QStringLiteral("다른 창에서 기록을 저장하고 있습니다.");
+            QFile Input(Target);if(!Input.open(QIODevice::ReadOnly) || Input.size()>256*1024)return QStringLiteral("독서 기록을 읽을 수 없습니다.");
+            QJsonParseError Parse;auto Root=QJsonDocument::fromJson(Input.readAll(),&Parse).object();Input.close();
+            if(Parse.error!=QJsonParseError::NoError || Root["schemaVersion"]!=QJsonValue(1) || !Root["bookmarks"].isArray())return QStringLiteral("손상된 독서 기록은 유지합니다.");
+            Root["locator"]="";QSaveFile Output(Target);Output.setDirectWriteFallback(false);const auto Bytes=QJsonDocument(Root).toJson();
+            if(!Output.open(QIODevice::WriteOnly) || Output.write(Bytes)!=Bytes.size() || !Output.commit())return QStringLiteral("독서 위치를 초기화하지 못했습니다.");
+        }
+        return {};
     }
     ReadingSnapshot ReadingStore::Save(const QString& Path, const QString& Book, bool Global,
         const QJsonObject& Base, const QJsonObject& Draft)

@@ -25,13 +25,14 @@ namespace hc::epub::poc
         QString error;
     };
 
-    // Developer store is intentionally separate from product preferences and EPUB bytes.
+    // Shared reader/global preferences; reading state and original EPUB bytes remain separate.
     class ReadingStore
     {
     public:
         static bool Valid(const QJsonObject& Profile);
         static QJsonObject Defaults();
         static QJsonObject Resolve(const QJsonObject& Global, const QJsonObject& Book);
+        static QString ClearPositions(const QString& Path);
         static ReadingSnapshot Load(const QString& Path, const QString& Book);
         static ReadingSnapshot Save(const QString& Path, const QString& Book, bool Global,
             const QJsonObject& Base, const QJsonObject& Draft);
@@ -50,6 +51,9 @@ namespace hc::epub::poc
         QString CssError() const { return cssError_; }
         bool IsBusy() const { return busy_; }
         bool IsDirty() const { return draft_ != base_; }
+        void SetGlobalOnly();
+        bool CommitGlobal(QString& Error);
+        void ResetDraft();
     signals:
         void ProfileChanged(const QJsonObject& Profile);
     private:
@@ -81,5 +85,7 @@ namespace hc::epub::poc
         QWidget* editors_ = nullptr;
         QFutureWatcher<ReadingSnapshot> worker_;
         bool busy_ = false, updating_ = false, loadFailed_ = false;
+        bool globalOnly_=false;
+        QPushButton* clearPositions_=nullptr;
     };
 }

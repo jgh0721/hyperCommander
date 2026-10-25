@@ -5,6 +5,7 @@
 class QAction;
 class QLabel;
 class QWidget;
+namespace hc::epub::poc {class ReadingSettings;}
 namespace hc::document {
 class DocumentSettingsDialog final : public QDialog {
     Q_OBJECT
@@ -23,5 +24,6 @@ private:
     QMap<QString, QAction*> actions_;
     QLabel* error_;
     bool valid_ = false;
+    hc::epub::poc::ReadingSettings* epubSettings_=nullptr;
 };
 }

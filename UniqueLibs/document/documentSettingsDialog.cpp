@@ -1,5 +1,8 @@
 ﻿#include "documentSettingsDialog.hpp"
 #include "documentShortcutRegistry.hpp"
+#include "tools/epub/render/readingSettings.hpp"
+#include <QDir>
+#include <QFileInfo>
 #include <QLineEdit>
 #include "UniqueLibs/settings/unifiedConfig.hpp"
 #include <QAction>
@@ -31,7 +34,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     const auto Screen = screen()->availableGeometry().size(); resize(qMin(900, Screen.width() - 40), qMin(680, Screen.height() - 60));
     auto* Layout = new QVBoxLayout(this); auto* Body = new QHBoxLayout;
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키")}); List->setMaximumWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB")}); List->setMaximumWidth(180);
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
     connect(List, &QListWidget::currentRowChanged, Pages, &QStackedWidget::setCurrentIndex); List->setCurrentRow(0);
     auto Page = [&] {
@@ -145,6 +148,9 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Search, &QLineEdit::textChanged, this, Filter); connect(Scope, &QComboBox::currentIndexChanged, this, Filter); connect(ChangedOnly, &QCheckBox::toggled, this, Filter);
     for (const auto& Row : Rows) connect(Row.second->findChild<QKeySequenceEdit*>(), &QKeySequenceEdit::keySequenceChanged, this, Filter);
     auto* Hint = new QLabel(tr("빈 값은 단축키 해제입니다. 최대 두 번의 키 조합을 사용할 수 있습니다. 이동·선택 기본키와 입력기 키는 유지됩니다."), this); Hint->setWordWrap(true); Shortcuts->addRow(Hint);
+    auto* EpubForm=Page();
+    epubSettings_=new hc::epub::poc::ReadingSettings(QDir(QFileInfo(path_).absolutePath()).filePath("epub-reading.json"),QString(64,'0'),"light",this);
+    epubSettings_->setObjectName("epubGlobalSettings");epubSettings_->SetGlobalOnly();EpubForm->addRow(epubSettings_);
     error_ = new QLabel(this); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); Layout->addWidget(error_);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Apply | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, this); Buttons->setObjectName("settingsButtons"); Layout->addWidget(Buttons);
     Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인")); Buttons->button(QDialogButtonBox::Apply)->setText(tr("적용"));
@@ -153,6 +159,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
+        if(List->currentRow()==3){epubSettings_->ResetDraft();return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
     });
@@ -218,6 +225,7 @@ void DocumentSettingsDialog::validateShortcuts()
 bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
 {
     if (!valid_) return false;
+    if(epubSettings_->IsBusy() && epubSettings_->IsDirty()){error_->setText(tr("EPUB 설정을 불러오고 있습니다."));return false;}
     auto Next = values();
     const auto Problem = DocumentShortcutRegistry::Validate(settings::UnifiedConfig::Value(Next, {"documentViews", "shortcuts", "bindings"}).toObject());
     if (!Problem.isEmpty()) { error_->setText(Problem); return false; }
@@ -251,6 +259,8 @@ bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
         }
         return false;
     }
-    base_ = Saved; imported_ = {}; loadControls(); initial_ = values(); error_->clear(); emit PreferencesSaved(); return true;
+    base_ = Saved; imported_ = {}; loadControls(); initial_ = values();
+    if(!epubSettings_->CommitGlobal(Error)){error_->setText(tr("일반 설정은 적용되었으나 EPUB 설정을 적용하지 못했습니다. 입력은 유지됩니다.\n%1").arg(Error));emit PreferencesSaved();return false;}
+    error_->clear(); emit PreferencesSaved(); return true;
 }
 }

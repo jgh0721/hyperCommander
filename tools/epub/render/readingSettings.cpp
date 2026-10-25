@@ -16,6 +16,12 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QtConcurrentRun>
+#include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
+#include <QDesktopServices>
+#include <QMessageBox>
+#include <QUrl>
 
 namespace hc::epub::poc
 {
@@ -176,6 +182,8 @@ namespace hc::epub::poc
             It.value()->setToolTip(scope_->currentIndex() == 1 ? tr("내장 기본값으로 복원") : tr("이 책의 지정을 해제하고 기본값 상속"));
         }
         background_->setCurrentIndex(background_->findData(Values["background"].toString()));
+        if(auto* Fit=findChild<QComboBox*>("backgroundFit"))Fit->setCurrentIndex(Fit->findData(Values["backgroundFit"]));
+        for(const auto& Key:{QString("resume"),QString("privateReading")})if(auto* Box=findChild<QCheckBox*>(Key))Box->setChecked(Values[Key].toBool());
         backgroundColor_->setText(Values["backgroundColor"].toString().isEmpty()?tr("색상 선택…"):Values["backgroundColor"].toString());
         textColor_->setText(Values["textColor"].toString().isEmpty()?tr("테마 글자색"):Values["textColor"].toString());
         cssEnabled_->setChecked(Values["cssEnabled"].toBool()); cssForce_->setChecked(Values["cssForce"].toBool());
@@ -190,6 +198,7 @@ namespace hc::epub::poc
             : scope_->currentIndex() == 1 ? tr("기본값 미리보기 · 책별 지정 제외") : tr("적용된 설정"));
         if(!CssValid()) status_->setText(tr("CSS 검사: %1").arg(cssError_.isEmpty()?tr("검사 중…"):cssError_));
         updating_ = false;
+        if(clearPositions_)clearPositions_->setEnabled(!busy_ && !Dirty && !loadFailed_);
     }
     void ReadingSettings::acceptSnapshot(const ReadingSnapshot& Snapshot)
     {
@@ -220,7 +229,7 @@ namespace hc::epub::poc
 namespace hc::epub::poc {
 bool ReadingSettings::CssValid() const {
     const auto Value=Profile(); const auto Css=Value["customCss"].toString();
-    return !Value["cssEnabled"].toBool() || Css.isEmpty() || (validatedCss_==Css && cssError_.isEmpty());
+    return globalOnly_ || !Value["cssEnabled"].toBool() || Css.isEmpty() || (validatedCss_==Css && cssError_.isEmpty());
 }
 void ReadingSettings::SetCssValidation(const QString& Css,const QString& Error) {
     if(Css!=Profile()["customCss"].toString()) return;
@@ -237,6 +246,10 @@ void ReadingSettings::addAppearance(QTabWidget* Tabs) {
     backgroundColor_=new QPushButton(Panel); addField(Form,"backgroundColor",tr("배경색"),backgroundColor_);
     textColor_=new QPushButton(Panel); addField(Form,"textColor",tr("글자색"),textColor_);
     backgroundImport_=new QPushButton(tr("이미지 선택…"),Panel); addField(Form,"backgroundAsset",tr("배경 이미지"),backgroundImport_);
+    auto* Fit=new QComboBox(Panel);Fit->addItem(tr("채우기"),"cover");Fit->addItem(tr("맞추기"),"contain");Fit->addItem(tr("반복"),"tile");
+    addField(Form,"backgroundFit",tr("이미지 배치"),Fit);connect(Fit,&QComboBox::currentIndexChanged,this,[this,Fit](int I){if(I>=0)edit("backgroundFit",Fit->itemData(I).toString());});
+    addNumber(Form,"backgroundOpacity",tr("이미지 불투명도"),0,1,0.05);
+    Panel=new QWidget(Tabs);Form=new QFormLayout(Panel);Form->setRowWrapPolicy(QFormLayout::WrapLongRows);Tabs->setTabText(2,tr("배경·색상"));Tabs->addTab(Panel,tr("서식·CSS"));
     cssEnabled_=new QCheckBox(tr("사용자 CSS 사용"),Panel); addField(Form,"cssEnabled",tr("CSS 재정의"),cssEnabled_);
     cssForce_=new QCheckBox(tr("선택한 CSS를 우선 적용"),Panel); addField(Form,"cssForce",tr("적용 우선순위"),cssForce_);
     css_=new QPlainTextEdit(Panel); css_->setMinimumHeight(150); css_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)); css_->setPlaceholderText("p { margin-block-end: 1em; text-align: justify; }"); addField(Form,"customCss",tr("사용자 CSS"),css_);
@@ -262,6 +275,38 @@ void ReadingSettings::importBackground() {
 }
 
 namespace hc::epub::poc {
+void ReadingSettings::SetGlobalOnly() {
+    globalOnly_=true;scope_->setCurrentIndex(1);scope_->hide();
+    if(auto* ScopeForm=qobject_cast<QFormLayout*>(layout()->itemAt(0)->layout()))if(auto* Label=ScopeForm->labelForField(scope_))Label->hide();
+    apply_->hide();cancel_->hide();reload_->hide();
+    auto* Tabs=findChild<QTabWidget*>();auto* History=new QWidget(Tabs);auto* Form=new QFormLayout(History);Tabs->addTab(History,tr("독서 기록"));
+    for(const auto& Entry:QList<QPair<QString,QString>>{{"resume",tr("다시 열 때 읽던 위치 복원")},{"privateReading",tr("읽던 위치를 저장하지 않음")}}) {
+        auto* Box=new QCheckBox(Entry.second,History);addField(Form,Entry.first,Entry.second,Box);Box->setChecked(Profile()[Entry.first].toBool());
+        connect(Box,&QCheckBox::toggled,this,[this,Key=Entry.first](bool Value){edit(Key,Value);});
+    }
+    clearPositions_=new QPushButton(tr("모든 책의 읽던 위치 초기화…"),History);Form->addRow(clearPositions_);
+    connect(clearPositions_,&QPushButton::clicked,this,[this]{
+        if(IsDirty() || busy_)return;
+        if(QMessageBox::question(this,tr("읽던 위치 초기화"),tr("저장된 읽던 위치를 지금 초기화합니다. 책갈피와 책별 서식은 유지됩니다. 설정 취소로 되돌릴 수 없습니다."))!=QMessageBox::Yes)return;
+        busy_=true;refresh();worker_.setFuture(QtConcurrent::run([Path=path_,Book=book_,Base=base_]{
+            const auto Error=ReadingStore::ClearPositions(Path);if(!Error.isEmpty())return ReadingSnapshot{{},{},Error};
+            auto Draft=Base;Draft["historyEpoch"]=QDateTime::currentMSecsSinceEpoch();return ReadingStore::Save(Path,Book,true,Base,Draft);
+        }));
+    });
+    auto* Location=new QPushButton(tr("독서 기록 폴더 열기"),History);Form->addRow(Location);connect(Location,&QPushButton::clicked,this,[this]{const auto Folder=QDir(QFileInfo(path_).absolutePath()).filePath("epub-state");QDir().mkpath(Folder);QDesktopServices::openUrl(QUrl::fromLocalFile(Folder));});
+    auto* Note=new QLabel(tr("책갈피는 직접 추가한 경우에 저장합니다. 본문 디스크 캐시는 사용하지 않습니다. 배경 이미지와 책별 설정은 기록 초기화에 포함되지 않습니다."),History);Note->setWordWrap(true);Form->addRow(Note);
+    auto* Editing=new QWidget(Tabs);auto* EditingLayout=new QVBoxLayout(Editing);Tabs->addTab(Editing,tr("편집·저장"));
+    auto* EditingNote=new QLabel(tr("HyperEditor에서 DRM 없는 EPUB의 XHTML·CSS·OPF 원본과 이미지를 편집합니다.\n구조 검증을 통과한 파일만 다른 이름으로 저장합니다. 원본 덮어쓰기는 허용하지 않습니다.\n편집 초안은 문서 복구 목록에서 명시적으로 확인·복원합니다."),Editing);EditingNote->setWordWrap(true);EditingLayout->addWidget(EditingNote);EditingLayout->addStretch();
+    auto* CssNote=new QLabel(tr("전역 CSS는 책을 열 때 검사합니다. 구문 또는 허용 범위를 벗어난 CSS는 적용하지 않으며 읽기 설정에 오류를 표시합니다."),this);CssNote->setWordWrap(true);qobject_cast<QVBoxLayout*>(layout())->addWidget(CssNote);
+    refresh();
+}
+bool ReadingSettings::CommitGlobal(QString& Error) {
+    if(!IsDirty())return true;
+    if(!globalOnly_ || busy_ || loadFailed_){Error=tr("EPUB 설정을 읽는 중이거나 읽기에 실패했습니다.");return false;}
+    const auto Result=ReadingStore::Save(path_,book_,true,base_,draft_);if(!Result.error.isEmpty()){Error=Result.error;return false;}
+    acceptSnapshot(Result);return true;
+}
+void ReadingSettings::ResetDraft(){draft_={};refresh();emit ProfileChanged(Profile());}
 bool ReadingSettings::Execute(const QString& Action,const QJsonObject& Patch,bool Global) {
     if(busy_ || loadFailed_)return false;
     if(Action=="preview") {

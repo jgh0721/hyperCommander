@@ -13,6 +13,7 @@
 #include <QPlainTextEdit>
 #include <QShortcut>
 #include <QFileInfo>
+#include <QDateTime>
 #include <memory>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
@@ -287,6 +288,8 @@ namespace
                     pending_ = false; if(finished_) return;
                     const auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
                     latest_ = Result;
+                    const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
+                    if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
                     navigation_->Poll(Result);
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
@@ -435,6 +438,7 @@ namespace
         {
             if(!shellReady_) return;
             const auto Values=settings_->Profile(); const auto Css=Values["customCss"].toString();
+            navigation_->ConfigureProfile(Values);
             const auto Serial=++profileSerial_; const QPointer<Window> Guard(this);
             const auto Apply=[Guard,Values,Serial](const QString& CssError) {
                 if(!Guard || Guard->profileSerial_!=Serial)return;
@@ -504,6 +508,7 @@ namespace
         hc::epub::poc::ReadingNavigation* navigation_=nullptr;
         QString settingsPath_,engine_,backgroundAsset_,astError_;
         quint64 profileSerial_=0;
+        qint64 settingsStamp_=0;
         bool shellReady_=false,started_=false,composing_=false;
         int escapeRequests_=0;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;

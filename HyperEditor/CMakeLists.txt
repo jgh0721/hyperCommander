@@ -79,6 +79,8 @@ target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVA
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 qt_add_library(hc_document_widgets STATIC
+    ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp
+    ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp

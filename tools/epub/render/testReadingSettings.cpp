@@ -30,6 +30,15 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void privacyAndHistoryResetPreserveBookmarks() {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("epub-reading.json");
+        {hc::epub::poc::ReadingNavigation Reader(Path,book,[](const QJsonObject&){});Reader.ConfigureProfile({{"privateReading",true}});
+            Reader.Poll({{"status","ready"},{"locator","epubcfi(/6/2!/4/2:0)"}});QVERIFY(Reader.Execute("bookmark-add","keep"));}
+        const auto StatePath=Temp.filePath("epub-state/"+book+".json");auto Root=QJsonDocument::fromJson(bytes(StatePath)).object();QCOMPARE(Root["bookmarks"].toArray().size(),1);QCOMPARE(Root["locator"].toString(),QString{});
+        {hc::epub::poc::ReadingNavigation Reader(Path,book,[](const QJsonObject&){});Reader.Poll({{"status","ready"},{"locator","epubcfi(/6/2!/4/4:0)"}});}
+        Root=QJsonDocument::fromJson(bytes(StatePath)).object();QVERIFY(!Root["locator"].toString().isEmpty());
+        QVERIFY(ReadingStore::ClearPositions(Path).isEmpty());Root=QJsonDocument::fromJson(bytes(StatePath)).object();QCOMPARE(Root["bookmarks"].toArray().size(),1);QVERIFY(Root["locator"].toString().isEmpty());
+    }
     void readingLayoutPersistence() {
         QTemporaryDir Temp;const auto Path=Temp.filePath("reading.json");
         QVERIFY(ReadingStore::Save(Path,book,true,{},{{"layout","paginated"},{"columns",2}}).error.isEmpty());
