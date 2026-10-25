@@ -152,12 +152,11 @@ namespace hc::compare
         const auto* engine = FindComparisonEngine(format); QString reason;
         if (inputs.size() < 2) throw Failure("BothInputsRequired");
         if (!compatible || !engine) { compatible = false; reason = "InputCapabilityMismatch"; }
-        else if (large && inputs.size() != 2) { compatible = false; reason = "LargeTextRequiresTwoWayCompare"; }
         else if (inputs.size() == 3 && !engine->compareThree_) { compatible = false; reason = "ThreeUnsupported"; }
         else if (inputs.size() == 3 && Input.base_.isEmpty() && !engine->independentThree_) { compatible = false; reason = "IndependentThreeUnsupported"; }
         return {{"schemaVersion", 1}, {"available", compatible}, {"reason", reason}, {"inputs", inputs},
             {"engine", engine ? engine->Json() : QJsonObject{}},
-            {"compareAvailable", compatible}, {"pagedEditAndMergeTwo", compatible && large}, {"mergeTwoAvailable", compatible && !large && inputs.size() == 2 && engine && engine->mergeTwo_},
+            {"compareAvailable", compatible}, {"pagedEditAndMergeTwo", compatible && large}, {"mergeTwoAvailable", compatible && inputs.size() == 2 && engine && engine->mergeTwo_},
             {"mergeBaseAvailable", compatible && !Input.base_.isEmpty() && engine && engine->mergeBase_},
             {"outputValidated", false}, {"warning", "Probe is read-only. Input revisions and output policy are revalidated when executing."}};
     }

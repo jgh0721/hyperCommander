@@ -7,6 +7,7 @@ class ScintillaEditBase;
 class QLabel;
 class QSpinBox;
 class QPushButton;
+class QComboBox;
 namespace hc::compare
 {
     class LargeTextView final : public ExtensionView
@@ -16,7 +17,7 @@ namespace hc::compare
         ~LargeTextView() override;
         bool Busy() const { return busy_; }
         bool Dirty() const;
-        int ExitCode() const { return input_.textEquality_ == "bytes" ? (Dirty() || saved_[0].rawHash_ != saved_[1].rawHash_ ? 1 : 0) : value_->changes_.empty() ? 0 : 1; }
+        int ExitCode() const;
         void Cancel() { if (canceled_) canceled_->store(true); }
         void SetTextFont(const QFont& Font) override;
         void SetDark(bool Dark) { dark_ = Dark; }
@@ -35,15 +36,24 @@ namespace hc::compare
         void save(int Side);
         void undo(bool Redo);
         void controls();
+        void switchPair(int Index);
+        void resolve(Resolution Choice);
+        void completeReview();
+        bool merging() const { return value_->session_ && value_->session_->result_ >= 0; }
         Request input_;
         std::shared_ptr<LargeTextComparison> value_;
         std::array<LargeTextDocument, 2> saved_;
+        std::vector<LargeTextDocument> savedAll_;
+        bool resultNeverSaved_ = false;
         std::vector<std::shared_ptr<LargeTextComparison>> undo_, redo_;
         QFutureWatcher<Response> watcher_;
         std::shared_ptr<std::atomic_bool> canceled_;
         ScintillaEditBase* editors_[2]{};
         QSpinBox* lines_[2]{};
         QSpinBox* change_ = nullptr;
+        QSpinBox* conflict_ = nullptr;
+        QComboBox* pairs_ = nullptr;
+        QLabel* titles_[2]{};
         QLabel* status_ = nullptr;
         std::array<std::uint64_t, 2> begin_{}, end_{};
         std::array<std::optional<std::uint64_t>, 2> pageStart_;

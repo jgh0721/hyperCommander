@@ -181,7 +181,7 @@ namespace hc::compare
             {"textDecisionPlans", true}, {"decisionPlanSchema", 1}, {"maxDecisionPlanBytes", double(decisionPlanBytes)},
             {"maxDecisionBlocks", double(decisionBlockLimit)}, {"maxManualReplacementBytes", 1048576},
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
-            {"largeText", QJsonObject{{"compareTwo", true}, {"pagedEditAndMergeTwo", true}, {"baseMerge", false}, {"maxInputBytes", double(largeTextMaximum)}, {"maxDecodedBytes", double(largeTextMaximum)}, {"maxPageBytes", double(largeTextPageMaximum)}, {"maxCombinedLines", 2000000}, {"undoRevisions", 32}, {"encodings", QJsonArray{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949-explicit"}}}},
+            {"largeText", QJsonObject{{"compareTwo", true}, {"compareThree", true}, {"pagedEditAndMergeTwo", true}, {"baseMerge", true}, {"resultOutput", true}, {"maxInputBytes", double(largeTextMaximum)}, {"maxDecodedBytes", double(largeTextMaximum)}, {"maxPageBytes", double(largeTextPageMaximum)}, {"maxCombinedLines", 2000000}, {"undoRevisions", 32}, {"encodings", QJsonArray{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949-explicit"}}}},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
             {"directoryLevels", QJsonArray{"bytes", "text", "metadata"}}, {"directoryTextMaxBytes", 16 * 1024 * 1024}, {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 4}, {"directoryFileCopyOptions", QJsonArray{"metadata", "acl", "streams"}}, {"directoryRename", true}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},
             {"gitAdapter", QJsonObject{{"schemaVersion", 1}, {"config", "-git-tool config"}, {"diff", "files-and-explicit-dev-null"},
@@ -238,16 +238,30 @@ namespace hc::compare
             {
                 if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
                 if (!allowMissing && TryExtensionComparison(Input, result, limits)) { result.completion_ = "Complete"; return result; }
-                if ((first && first->size_ > std::uint64_t(textLimit)) || (second && second->size_ > std::uint64_t(textLimit)))
+                const auto extraPath = Input.base_.isEmpty() ? Input.file3_ : Input.base_;
+                const auto extra = extraPath.isEmpty() ? std::optional<storage::EntrySnapshot>{} : resolveInput(extraPath, false, limits);
+                if ((first && first->size_ > std::uint64_t(textLimit)) || (second && second->size_ > std::uint64_t(textLimit)) || (extra && extra->size_ > std::uint64_t(textLimit)))
                 {
-                    if (!Input.file3_.isEmpty() || !Input.base_.isEmpty() || Input.mode_ == "merge") throw Failure("LargeTextRequiresTwoWayCompare");
-                    auto documents = std::array{ReadLargeText(Input.file1_, InputEncoding(Input, 0), limits, Input.allowMissingInputs_[0]), ReadLargeText(Input.file2_, InputEncoding(Input, 1), limits, Input.allowMissingInputs_[1])};
-                    result.largeText_ = std::make_shared<LargeTextComparison>(CompareLargeText(std::move(documents), limits));
-                    result.operation_ = "large-text-compare2"; result.completion_ = "Complete";
-                    const bool contentEqual = result.largeText_->changes_.empty(), rawEqual = result.largeText_->documents_[0].rawHash_ == result.largeText_->documents_[1].rawHash_;
+                    if (result.decisionsSnapshot_ || !Input.planOut_.isEmpty()) throw Failure("LargeTextUseWorkCheckpoint");
+                    result.largeText_ = OpenLargeTextSession(Input, limits); const auto& session = *result.largeText_->session_;
+                    const bool merging = session.result_ >= 0;
+                    result.operation_ = merging ? (Input.base_.isEmpty() ? "large-text-merge2" : "large-text-merge3") : session.documents_.size() == 3 ? "large-text-compare3" : "large-text-compare2"; result.completion_ = "Complete";
+                    bool contentEqual = true, rawEqual = true;
+                    for (const auto& pair : session.comparisons_) contentEqual &= pair.toObject()["changeCount"].toDouble() == 0;
+                    for (std::size_t i = 1; i < session.documents_.size() && int(i) != session.result_; ++i) rawEqual &= session.documents_[i].rawHash_ == session.documents_[0].rawHash_;
                     result.exitCode_ = (Input.textEquality_ == "bytes" ? rawEqual : contentEqual) ? 0 : 1; result.outcome_ = result.exitCode_ ? "Different" : rawEqual ? "Equal" : "Equivalent";
                     result.textComparison_ = {{"policy", Input.textEquality_}, {"contentEqual", contentEqual}, {"rawEqual", rawEqual}, {"encodingOnly", contentEqual && !rawEqual}, {"storage", "disk-backed-pieces"}, {"changeCount", double(result.largeText_->changes_.size())}};
                     result.warnings_.append("LargeTextPagedEditing");
+                    result.comparisons_ = session.comparisons_; result.textComparison_["session"] = LargeTextSessionJson(*result.largeText_);
+                    if (merging) {
+                        result.exitCode_ = LargeTextUnresolved(*result.largeText_) ? 1 : 0; result.outcome_ = result.exitCode_ ? "Conflicted" : "Planned";
+                        if (result.exitCode_ == 0 && Save && !Input.dryRun_) {
+                            if (session.documents_[session.result_].original_.path_.isEmpty()) throw Failure("LargeTextOutputRequired");
+                            ValidateLargeTextInputs(session, limits); auto protectedInput = Input;
+                            for (int i = 0; i < session.result_; ++i) protectedInput.protectedInputs_.append(session.documents_[i].original_.path_);
+                            const auto saved = SaveLargeText(protectedInput, session.documents_[session.result_], limits); result.warnings_ += saved.warnings_; result.recovery_ += saved.recovery_; result.commit_ = "Committed"; result.outcome_ = "Saved";
+                        }
+                    }
                     if (Input.includeContent_) result.warnings_.append("LargeTextReportContentOmitted");
                     return result;
                 }
@@ -456,8 +470,11 @@ namespace hc::compare
     {
         QJsonArray changes, conflicts, inputs, resolutions; qsizetype unresolved = 0;
         if (largeText_) {
-            for (const auto& document : largeText_->documents_) inputs.append(QJsonObject{{"path", document.original_.path_}, {"encoding", document.original_.encoding_}, {"bom", document.original_.bom_}, {"sha256", QString::fromLatin1(document.rawHash_.toHex())}});
+            const auto appendInput = [&](const LargeTextDocument& Document) { inputs.append(QJsonObject{{"path", Document.original_.path_}, {"encoding", Document.original_.encoding_}, {"bom", Document.original_.bom_}, {"sha256", QString::fromLatin1(Document.rawHash_.toHex())}}); };
+            if (largeText_->session_) { for (std::size_t i = 0; i < largeText_->session_->documents_.size(); ++i) if (int(i) != largeText_->session_->result_) appendInput(largeText_->session_->documents_[i]); }
+            else for (const auto& document : largeText_->documents_) appendInput(document);
             for (const auto& edit : largeText_->changes_) changes.append(QJsonObject{{"begin", double(edit.begin_)}, {"end", double(edit.end_)}, {"otherBegin", double(edit.otherBegin_)}, {"otherEnd", double(edit.otherEnd_)}});
+            unresolved = LargeTextUnresolved(*largeText_);
         }
         for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"exists", input.exists_}, {"encoding", input.encoding_}, {"bom", input.bom_},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(input.raw_, QCryptographicHash::Sha256).toHex())}});

@@ -98,9 +98,11 @@ namespace hc::compare
         {
             std::shared_ptr<LargeTextBacking> backing_;
             uchar* data_ = nullptr;
+            QByteArray hash_;
             explicit Mapping(const LargeTextDocument& Document, const Budget& Limits) : backing_(backing())
             {
-                visit(Document, 0, Document.bytes_, Limits, [&](const QByteArray& Bytes) { append(backing_->file_, Bytes); });
+                QCryptographicHash hash(QCryptographicHash::Sha256);
+                visit(Document, 0, Document.bytes_, Limits, [&](const QByteArray& Bytes) { append(backing_->file_, Bytes); hash.addData(Bytes); }); hash_ = hash.result();
                 if (!backing_->file_.flush()) throw Failure("LargeTextTemporaryWriteFailed");
                 if (Document.bytes_) { data_ = backing_->file_.map(0, qint64(Document.bytes_)); if (!data_) throw Failure("LargeTextMapFailed"); }
             }
@@ -153,7 +155,7 @@ namespace hc::compare
     {
         Limits.Check(); Mapping left(Documents[0], Limits), right(Documents[1], Limits); auto ranges = Limits; ranges.rangesOnly_ = true;
         const auto leftLines = CountLines(left.View(), Limits); CountLines(right.View(), Limits, 2'000'000 - leftLines);
-        LargeTextComparison result; result.documents_ = std::move(Documents); result.changes_ = Diff(left.View(), right.View(), ranges);
+        LargeTextComparison result; result.documents_ = std::move(Documents); result.documents_[0].contentHash_ = left.hash_; result.documents_[1].contentHash_ = right.hash_; result.changes_ = Diff(left.View(), right.View(), ranges);
         for (int side = 0; side < 2; ++side) {
             const auto view = side ? right.View() : left.View(); const auto count = CountLines(view, Limits);
             const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_((count + 1) * sizeof(std::uint64_t)) : std::shared_ptr<void>{};
@@ -172,6 +174,8 @@ namespace hc::compare
         if (End < Begin || End - Begin > largeTextPageMaximum) throw Failure("LargeTextPageLimit");
         QByteArray result; result.reserve(qsizetype(End - Begin)); visit(Document, Begin, End, Limits, [&](const QByteArray& Bytes) { result += Bytes; }); return result;
     }
+    void StreamLargeText(const LargeTextDocument& Document, const Budget& Limits, const std::function<void(QByteArrayView)>& Output)
+    { visit(Document, 0, Document.bytes_, Limits, [&](const QByteArray& Bytes) { Output(Bytes); }); }
     LargeTextDocument ReplaceLargeText(const LargeTextDocument& Target, std::uint64_t Begin, std::uint64_t End,
         const LargeTextDocument& Source, std::uint64_t SourceBegin, std::uint64_t SourceEnd, const Budget& Limits)
     {

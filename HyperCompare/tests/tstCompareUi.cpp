@@ -156,6 +156,34 @@ private slots:
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-text-dark.png"));
         window.close();
     }
+    void largeMergeResultConflictReviewAndSave()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "merge"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); request.base_ = dir.filePath("base"); request.output_ = dir.filePath("out");
+        write(request.file1_, "keep\nLEFT\nend\n"); write(request.file2_, "keep\nRIGHT\nend\n"); write(request.base_, "keep\nBASE\nend\n");
+        LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1200, 700); view.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); auto* source = view.findChild<ScintillaEditBase*>("largeTextLeft"); auto* result = view.findChild<ScintillaEditBase*>("largeTextRight");
+        QVERIFY(source->send(SCI_GETREADONLY)); QVERIFY(!result->send(SCI_GETREADONLY)); QVERIFY(view.Dirty());
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QVERIFY(!QFileInfo::exists(request.output_));
+        view.findChild<QPushButton*>("largeResolveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(result), QByteArray("keep\nRIGHT\nend\n"));
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.output_), contents(result)); QVERIFY(!view.Dirty());
+        result->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("manual\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QCOMPARE(readBytes(request.output_), QByteArray("keep\nRIGHT\nend\n"));
+        view.findChild<QPushButton*>("largeCompleteReview")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.output_), QByteArray("manual\nkeep\nRIGHT\nend\n"));
+        QCOMPARE(readBytes(request.file1_), QByteArray("keep\nLEFT\nend\n")); QCOMPARE(readBytes(request.file2_), QByteArray("keep\nRIGHT\nend\n"));
+        view.findChild<QPushButton*>("largeUndo")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(view.Dirty());
+    }
+    void largeThreeFilePairSwitchKeepsEdits()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("a"); request.file2_ = dir.filePath("b"); request.file3_ = dir.filePath("c");
+        write(request.file1_, "first\n"); write(request.file2_, "second\n"); write(request.file3_, "third\n");
+        LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* pairs = view.findChild<QComboBox*>("largePairSelector"); QVERIFY(pairs); QCOMPARE(pairs->count(), 3); pairs->setCurrentIndex(2); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); QCOMPARE(contents(right), QByteArray("third\n"));
+        right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("EDIT\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        pairs->setCurrentIndex(1); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(right), QByteArray("EDIT\nthird\n")); QVERIFY(view.Dirty());
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.file3_), QByteArray("EDIT\nthird\n")); QVERIFY(!view.Dirty());
+    }
     void directoryPartialResultsAndPlanGuard()
     {
         Request request; request.file1_ = "D:/left"; request.file2_ = "D:/right"; Result value; value.directoryComplete_ = false;

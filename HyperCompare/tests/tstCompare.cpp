@@ -1168,6 +1168,45 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(MergeLargeTextChange(comparison, 0, 0, (std::pair<std::uint64_t, std::uint64_t>{0, 1}), {}), Failure);
         QCOMPARE(read(left), QByteArray("keep\n가나다XYZ\nend\n")); QCOMPARE(read(right), QByteArray("keep\nabcXYZ\nend\n"));
     }
+    void largeThreeWayMergeMatchesCoreAndResolves()
+    {
+        try {
+            QTemporaryDir dir; Request input; input.mode_ = "merge"; input.file1_ = dir.filePath("left"); input.file2_ = dir.filePath("right"); input.base_ = dir.filePath("base"); input.output_ = dir.filePath("out");
+            const auto run = [&](const QByteArray& Base, const QByteArray& Left, const QByteArray& Right) {
+                write(input.base_, Base); write(input.file1_, Left); write(input.file2_, Right);
+                const auto actual = OpenLargeTextSession(input, {}); const auto expected = Merge(Base.toStdString(), Left.toStdString(), Right.toStdString());
+                const auto& output = actual->session_->documents_[actual->session_->result_];
+                QCOMPARE(ReadLargeTextRange(output, 0, output.bytes_, {}), QByteArray::fromStdString(expected.text_));
+                QCOMPARE(LargeTextUnresolved(*actual), expected.conflicts_.size());
+            };
+            run("a\nb\nc\n", "LEFT\nb\nc\n", "a\nb\nRIGHT\n");
+            run("a\nb\nc\n", "a\nLEFT\nc\n", "a\nRIGHT\nc\n");
+            run("a\nb\n", "X\na\nb\n", "Y\na\nb\n");
+            run("a\nb\n", "a\n", "a\nCHANGED\n");
+            std::mt19937 rng(712); for (int trial = 0; trial < 60; ++trial) {
+                QByteArray base, left, right; for (int i = 0; i < 20; ++i) { const auto line = QByteArray::number(i) + "\n"; base += line; left += rng() % 5 ? line : QByteArray("LEFT\n"); right += rng() % 5 ? line : QByteArray("RIGHT\n"); } run(base, left, right);
+            }
+            write(input.base_, "a\nb\nc\nd\n"); write(input.file1_, "a\nLEFT\nc\nONE\n"); write(input.file2_, "a\nRIGHT\nc\nTWO\n");
+            auto value = OpenLargeTextSession(input, {}); QCOMPARE(LargeTextUnresolved(*value), std::size_t(2));
+            value = ResolveLargeTextConflict(*value, 0, Resolution::LeftThenRight, {}); value = ResolveLargeTextConflict(*value, 1, Resolution::Right, {});
+            const auto& result = value->session_->documents_[3]; QCOMPARE(ReadLargeTextRange(result, 0, result.bytes_, {}), QByteArray("a\nLEFT\nRIGHT\nc\nTWO\n")); QCOMPARE(LargeTextUnresolved(*value), std::size_t(0));
+            QVERIFY(!QFileInfo::exists(input.output_)); ValidateLargeTextInputs(*value->session_, {}); SaveLargeText(input, result, {}); QCOMPARE(read(input.output_), QByteArray("a\nLEFT\nRIGHT\nc\nTWO\n"));
+            write(input.file1_, "external"); QVERIFY_EXCEPTION_THROWN(ValidateLargeTextInputs(*value->session_, {}), Failure);
+            QVERIFY_EXCEPTION_THROWN(BindLargeTextOutput(*value, input.file2_, true, input, {}), Failure);
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
+    void largeIndependentThreePairEditing()
+    {
+        try {
+            QTemporaryDir dir; Request input; input.file1_ = dir.filePath("a"); input.file2_ = dir.filePath("b"); input.file3_ = dir.filePath("c");
+            write(input.file1_, "one\n"); write(input.file2_, "two\n"); write(input.file3_, "three\n");
+            auto value = OpenLargeTextSession(input, {}); QCOMPARE(value->session_->comparisons_.size(), 3);
+            value = PairLargeTextSession(*value->session_, {1, 2}, {});
+            auto documents = value->documents_; documents[1] = EditLargeText(documents[1], 0, documents[1].bytes_, "EDIT\n", {});
+            value = UpdateLargeTextSession(*value, std::move(documents), {}); value = PairLargeTextSession(*value->session_, {0, 2}, {});
+            QCOMPARE(ReadLargeTextRange(value->documents_[1], 0, value->documents_[1].bytes_, {}), QByteArray("EDIT\n")); QCOMPARE(read(input.file3_), QByteArray("three\n"));
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
     void functionRenameSmallTokenEdits()
     {
         const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
