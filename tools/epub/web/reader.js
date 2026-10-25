@@ -81,6 +81,7 @@ const appliedProfiles = new WeakMap();
 let readerBindings = { "epub.next": "PgDown", "epub.previous": "PgUp" };
 let pendingCommands = 0, pendingPageMoves = 0;
 let activeCommand = "", reflowStage = "";
+let profileStamp="",profileApplications=0,profileSkips=0,backgroundRevision=0;
 const inputDocuments=new WeakSet();let keyboardSerial=0;
 let customRules = [], backgroundImage = { asset: "", data: "" };
 let sequence = Promise.resolve();
@@ -203,6 +204,9 @@ async function applyProfile(next = {}) {
     customRules = candidate.cssEnabled ? compileCss(candidate.customCss) : [];
     if(!["scroll","paginated"].includes(candidate.layout) || ![0,1,2].includes(candidate.columns))throw Error("Invalid reading layout");
     if(!["cover","contain","tile"].includes(candidate.backgroundFit) || !Number.isFinite(candidate.backgroundOpacity) || candidate.backgroundOpacity<0 || candidate.backgroundOpacity>1)throw Error("Invalid background placement");
+    const stamp=JSON.stringify([candidate,colors[candidate.theme],backgroundRevision]);
+    if(stamp===profileStamp){++profileSkips;reflowStage="";return false;}
+    profileStamp=stamp;++profileApplications;
     profile = candidate;
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
@@ -242,8 +246,8 @@ async function applyProfile(next = {}) {
         reflowStage="restore";if(locator)await rendition.display(locator);
     }
     if (!rendition && !navigator){reflowStage="";return;}
-    await sleep(150);
     documents().forEach(applyDocument);
+    await settleFrame();
     reflowStage="";
 }
 
@@ -389,6 +393,7 @@ async function start(name) {
         await rendition.display();
         measured("firstDisplayMs");
     } else if (name === "readium") {
+        profileStamp="";
         const readingOrder = publication.spine.map(item => ({ href: encodePath(item.path), type: "application/xhtml+xml" }));
         const manifest = Manifest.deserialize({ "@context": "https://readium.org/webpub-manifest/context.jsonld",
             metadata: { title: publication.title, language: publication.languages || [],
@@ -519,17 +524,20 @@ window.hcCommand = (command, value) => {
     if(pageMove)++pendingPageMoves;
     ++pendingCommands;
     sequence = sequence.then(async () => {
-        activeCommand=command;
+        activeCommand=command;let needsFrame=command!=="bindings";
         const manager=rendition?.manager;manager?.beginTransition?.();
         try {
         if (command === "start") await start(value);
-        else if (command === "profile") await applyProfile(value);
+        else if (command === "profile") {await applyProfile(value);needsFrame=false;}
         else if (command === "palette") {
             if (!/^#[0-9a-f]{6}$/i.test(value?.background) || !/^#[0-9a-f]{6}$/i.test(value?.foreground)) throw Error("Invalid host palette");
+            const changed=colors.system[0]!==value.background || colors.system[1]!==value.foreground;
             colors.system = [value.background, value.foreground];
-            if (profile.theme === "system") await applyProfile(profile);
+            if (changed && profile.theme === "system") await applyProfile(profile);
+            needsFrame=false;
         }
         else if (command === "background") {
+            if(backgroundImage.asset!==value.asset || backgroundImage.data!==value.data)++backgroundRevision;
             if (!value.asset && !value.data) backgroundImage = { asset: "", data: "" };
             else {
                 if (!/^[0-9a-f]{64}$/.test(value.asset) || typeof value.data !== "string" || value.data.length > 12*1024*1024
@@ -542,7 +550,7 @@ window.hcCommand = (command, value) => {
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
         else throw Error("Unknown command");
-        if(command!=="bindings")await settleFrame();
+        if(needsFrame)await settleFrame();
         if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot() };
         } finally {manager?.endTransition?.();}
     }).catch(fail).finally(()=>{activeCommand="";--pendingCommands;if(pageMove)--pendingPageMoves;});
@@ -553,6 +561,7 @@ window.addEventListener("unhandledrejection", event => fail(event.reason));
 // Trusted-shell diagnostics only: no book script or mutable document authority.
 window.hcStartupDiagnostics = () => ({
     activeCommand, reflowStage, pendingCommands, pendingPageMoves,
+    profileApplications,profileSkips,
     jsHeapBytes:performance.memory?.usedJSHeapSize || 0,
     managedViews:rendition?.manager?.views?.length || 0,
     retiredViews:rendition?.manager?.retired?.length || 0,

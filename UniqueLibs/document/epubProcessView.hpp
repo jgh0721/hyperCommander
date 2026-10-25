@@ -20,6 +20,7 @@ namespace hc::document
         bool ChangeReadingSettings(const QString& Action, const QJsonObject& Profile = {}, bool Global = false);
         bool ReaderAction(const QString& Action,const QJsonValue& Value={});
         QJsonObject ViewState() const;
+        bool IsLoaded() const { return loaded_; }
         static void InitializeLifecycle();
         static void RequestShutdown();
         static bool IsDrained();

@@ -398,7 +398,7 @@ namespace hc::document
         if(epub_){
             const auto Epub=epub_->ViewState();State["epub"]=Epub;State["readOnly"]=!CanEditEpub();State["epubEditor"]=epubEditor_?epubEditor_->Snapshot():QJsonObject{};
             State["closed"]=Epub["retired"].toBool();
-            State["ready"]=CanEditEpub() || (Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool());
+            State["ready"]=CanEditEpub() || (epub_->IsLoaded()&&Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool());
             State["error"]=!CanEditEpub() && Epub["status"]=="error"?Epub["message"].toString():QString();
         }
         if(hwp_){

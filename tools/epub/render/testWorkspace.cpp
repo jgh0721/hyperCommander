@@ -55,6 +55,21 @@ QJsonObject document(DocumentWorkspaceWidget& Window, const QString& Id) {
 class EpubWorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
+    void startupAndUnchangedProfile() {
+        const auto Book=qEnvironmentVariable("HC_EPUB_BENCH_BOOK",qEnvironmentVariable("HC_EPUB_READER_EPUB"));if(Book.isEmpty())QSKIP("Explicit book required");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        for(int Round=0;Round<2;++Round) {
+            DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();QElapsedTimer Elapsed;Elapsed.start();
+            const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+            QTRY_VERIFY2_WITH_TIMEOUT(State()["status"]=="ready" && State()["readingStateLoaded"].toBool() && !State()["readerBusy"].toBool() && !State()["locator"].toString().isEmpty(),qPrintable(QString::fromUtf8(QJsonDocument(State()).toJson(QJsonDocument::Compact))),60000);
+            qInfo().noquote()<<"EPUB stable startup"<<QJsonDocument(QJsonObject{{"round",Round},{"elapsedMs",Elapsed.elapsed()},{"metrics",State()["metrics"]},{"startup",State()["startup"]}}).toJson(QJsonDocument::Compact);
+            const auto Frame=State()["frameId"].toString(),Locator=State()["locator"].toString();const auto Skips=State()["startup"].toObject()["profileSkips"].toInt(-1),Applications=State()["startup"].toObject()["profileApplications"].toInt();
+            QVERIFY(!Window.Handle({{"action","epub.settings.preview"},{"documentId",Id},{"profile",State()["profile"]}}).contains("error"));
+            if(Skips>=0)QTRY_VERIFY_WITH_TIMEOUT(State()["startup"].toObject()["profileSkips"].toInt()>Skips && !State()["readerBusy"].toBool(),10000);else QTest::qWait(700);
+            QCOMPARE(State()["frameId"].toString(),Frame);QCOMPARE(State()["locator"].toString(),Locator);if(Skips>=0)QCOMPARE(State()["startup"].toObject()["profileApplications"].toInt(),Applications);
+            QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+        }
+    }
     void readerFrameTransitions() {
         const auto Output=qEnvironmentVariable("HC_EPUB_FRAME_OUTPUT"),Book=qEnvironmentVariable("HC_EPUB_STRESS_BOOK");if(Output.isEmpty() || Book.isEmpty())QSKIP("Explicit frame evidence directory and book required");
         QVERIFY(QDir().mkpath(Output));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
