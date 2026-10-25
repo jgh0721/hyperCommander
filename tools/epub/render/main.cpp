@@ -331,8 +331,12 @@ namespace
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
                             .arg(Result["chapterPage"].toInt(1)).arg(Result["chapterPages"].toInt(1)).arg(qRound(Result["progress"].toDouble()*100)));
                         findChild<QAction*>("epub.back")->setEnabled(Result["canBack"].toBool());
-                        findChild<QAction*>("epub.previous")->setEnabled(!Result["atStart"].toBool() && !Result["readerBusy"].toBool());
-                        findChild<QAction*>("epub.next")->setEnabled(!Result["atEnd"].toBool() && !Result["readerBusy"].toBool());
+                        // Busy navigation is already bounded by the reader queue.
+                        // Keep toolbar contrast stable between interior pages.
+                        for(const auto& Entry:QList<QPair<QString,bool>>{{"previous",!Result["atStart"].toBool()},{"next",!Result["atEnd"].toBool()}}) {
+                            auto* Action=findChild<QAction*>("epub."+Entry.first);
+                            if(Action->isEnabled()!=Entry.second){++toolbarAvailabilityChanges_;Action->setEnabled(Entry.second);}
+                        }
                     }
                     if(Result["profile"].toObject()["customCss"]==settings_->Profile()["customCss"])
                         settings_->SetCssValidation(settings_->Profile()["customCss"].toString(),astError_.isEmpty()?Result["cssError"].toString():astError_);
@@ -386,7 +390,7 @@ namespace
             if(Kind == "snapshot") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
                 State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
-                State["openPanel"]=openPanel();
+                State["openPanel"]=openPanel();State["toolbarPreviousEnabled"]=findChild<QAction*>("epub.previous")->isEnabled();State["toolbarNextEnabled"]=findChild<QAction*>("epub.next")->isEnabled();State["toolbarAvailabilityChanges"]=toolbarAvailabilityChanges_;
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
@@ -571,6 +575,7 @@ namespace
         quint64 profileSerial_=0;
         qint64 settingsStamp_=0;
         bool shellReady_=false,started_=false,composing_=false;
+        int toolbarAvailabilityChanges_=0;
         int escapeRequests_=0;
         int fullscreenRequests_=0;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;

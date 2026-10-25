@@ -175,6 +175,10 @@ private slots:
             const auto Target=Info.hwndFocus?Info.hwndFocus:Reader;const LPARAM Bits=1|(Scan<<16)|(Extended?(1<<24):0);
             return PostMessageW(Target,WM_KEYDOWN,Virtual,Bits) && PostMessageW(Target,WM_KEYUP,Virtual,Bits|(1LL<<30)|(1LL<<31));
         };
+        const int InitialPage=State()["chapterPage"].toInt();QVERIFY(!Do("next").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(State()["chapterPage"].toInt()==InitialPage+1 && !State()["readerBusy"].toBool(),10000);
+        QTRY_VERIFY_WITH_TIMEOUT(State()["toolbarPreviousEnabled"].toBool() && State()["toolbarNextEnabled"].toBool(),10000);
+        const auto StableToolbar=State()["toolbarAvailabilityChanges"].toInt();bool ToolbarStable=true;QTimer ToolbarPoll;ToolbarPoll.setInterval(10);
+        connect(&ToolbarPoll,&QTimer::timeout,&Window,[&]{const auto S=State();ToolbarStable&=S["toolbarPreviousEnabled"].toBool() && S["toolbarNextEnabled"].toBool();});ToolbarPoll.start();
         for(bool Extended:{true,false}) {
             const int Page=State()["chapterPage"].toInt();QElapsedTimer Elapsed;Elapsed.start();
             QVERIFY(Key(VK_NEXT,0x51,Extended));QTRY_COMPARE_WITH_TIMEOUT(State()["chapterPage"].toInt(),Page+1,10000);
@@ -190,6 +194,7 @@ private slots:
             QVERIFY(Key(VK_NUMPAD9,0x49,false));QTRY_COMPARE_WITH_TIMEOUT(State()["chapterPage"].toInt(),Page,10000);
             QTRY_VERIFY_WITH_TIMEOUT(!State()["readerBusy"].toBool(),10000);
         }
+        ToolbarPoll.stop();QVERIFY2(ToolbarStable,"Previous/next toolbar buttons flashed disabled during page navigation");QCOMPARE(State()["toolbarAvailabilityChanges"].toInt(),StableToolbar);
         for(int Columns:{2,1}) {
             QVERIFY(!Window.Handle({{"action","epub.settings.preview"},{"documentId",Id},{"profile",QJsonObject{{"columns",Columns}}}}).contains("error"));
             QTRY_VERIFY_WITH_TIMEOUT(State()["toolbarColumns"].toInt()==Columns && State()["columnCount"].toInt()==Columns && !State()["readerBusy"].toBool(),20000);
