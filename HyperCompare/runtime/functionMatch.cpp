@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QMap>
 #include <algorithm>
+#include <array>
 
 namespace hc::compare
 {
@@ -144,7 +145,29 @@ namespace hc::compare
                     while (prefix < x.size() && prefix < y.size()) { step(); if (x[prefix] != y[prefix]) break; ++prefix; }
                     while (suffix < x.size() - prefix && suffix < y.size() - prefix) { step(); if (x[x.size() - suffix - 1] != y[y.size() - suffix - 1]) break; ++suffix; }
                     const auto common = prefix + suffix;
-                    const int score = x.size() - common <= 3 && y.size() - common <= 3 ? int(2000 * common / (x.size() + y.size())) : 0;
+                    qsizetype matched = common;
+                    if ((x.size() - common > 3 || y.size() - common > 3) && std::abs(x.size() - y.size()) <= 3)
+                    {
+                        // A band of three is sufficient when each side may have
+                        // at most three unmatched tokens. Rolling rows bound memory;
+                        // every visited cell shares the session's work budget.
+                        std::array<int, 257> previous{}, current{};
+                        previous.fill(-1000);
+                        for (int j = 0; j <= std::min<qsizetype>(3, y.size()); ++j) previous[j] = 0;
+                        for (int i = 1; i <= x.size(); ++i)
+                        {
+                            current.fill(-1000); if (i <= 3) current[0] = 0;
+                            for (int j = std::max(1, i - 3); j <= std::min<int>(int(y.size()), i + 3); ++j)
+                            {
+                                step();
+                                current[j] = std::max(previous[j], current[j - 1]);
+                                if (x[i - 1] == y[j - 1]) current[j] = std::max(current[j], previous[j - 1] + 1);
+                            }
+                            previous.swap(current);
+                        }
+                        matched = std::max<qsizetype>(common, previous[y.size()]);
+                    }
+                    const int score = x.size() - matched <= 3 && y.size() - matched <= 3 ? int(2000 * matched / (x.size() + y.size())) : 0;
                     best(score, b, bestA[a], secondA[a], choiceA[a]); best(score, a, bestB[b], secondB[b], choiceB[b]);
                 }
                 for (int a = 0; a < n; ++a)
@@ -194,7 +217,7 @@ namespace hc::compare
             ambiguousCount += ambiguousRight[i];
         }
         return {{"status", complete && !ambiguousCount && !similarityLimited ? "Complete" : "Partial"}, {"relations", relations}, {"moved", moveCount}, {"modified", modifiedCount},
-            {"renamed", renamedCount}, {"ambiguous", ambiguousCount}, {"bodySimilarityLimited", similarityLimited}, {"method", "qualified-name-signature/unique-body-literal-or-token-edit/scope-order-lis-4"}};
+            {"renamed", renamedCount}, {"ambiguous", ambiguousCount}, {"bodySimilarityLimited", similarityLimited}, {"method", "qualified-name-signature/unique-body-literal-or-token-edit/scope-order-lis-5"}};
     }
     void AnalyzeSourceRelations(const Request& Input, Result& Value, const Budget& Limits)
     {

@@ -1053,6 +1053,35 @@ private slots:
         const auto cancel = std::make_shared<std::atomic_bool>(false); const auto annotated = Execute(r, cancel, false); r.semantic_ = "off"; const auto plain = Execute(r, cancel, false);
         QCOMPARE(annotated.semantic_["status"].toString(), "Complete"); QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_);
     }
+    void functionRenameSeparatedTokenEdits()
+    {
+        for (const auto& extension : {"c", "cpp", "py"})
+        {
+            const bool python = QByteArray(extension) == "py";
+            const QByteArray body = python ? QByteArray("(x):\n    y = x * 2\n    y += x\n    y -= x\n    y *= x\n    y /= x\n    y += y\n    if y < x:\n        y += x\n    return y + x\n") :
+                QByteArray("(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }");
+            const QByteArray declaration = python ? "def " : "int ";
+            const auto path = QString("input.") + extension;
+            const auto left = AnalyzeFunctions(path, declaration + "before" + body);
+            auto changed = body; changed.replace("* 2", "/ 2"); changed.replace("return y + x", "return x + x");
+            const auto right = AnalyzeFunctions(path, declaration + "after" + changed);
+            const auto result = MatchFunctions(left, right);
+            QCOMPARE(result["renamed"].toInt(), 1); QCOMPARE(result["modified"].toInt(), 1);
+            QCOMPARE(result["relations"].toArray()[0].toObject()["match"].toString(), "UniqueTokenEdit");
+            QCOMPARE(MatchFunctions(right, left)["renamed"].toInt(), 1);
+            const auto clones = AnalyzeFunctions(path, declaration + "before" + body + declaration + "stable" + body);
+            const auto cloneRight = AnalyzeFunctions(path, declaration + "after" + changed + declaration + "stable" + body);
+            QCOMPARE(MatchFunctions(clones, cloneRight)["renamed"].toInt(), 0);
+            auto excessive = changed; excessive.replace("y += x", "y *= x"); excessive.replace("y -= x", "y /= x");
+            QCOMPARE(MatchFunctions(left, AnalyzeFunctions(path, declaration + "after" + excessive))["renamed"].toInt(), 0);
+            Budget low; low.steps_ = 1; QVERIFY_EXCEPTION_THROWN(MatchFunctions(left, right, low), Failure);
+            QTemporaryDir dir; Request request; request.file1_ = dir.filePath("l." + QString(extension)); request.file2_ = dir.filePath("r." + QString(extension));
+            write(request.file1_, declaration + "before" + body); write(request.file2_, declaration + "after" + changed);
+            const auto cancel = std::make_shared<std::atomic_bool>(false);
+            const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
+            QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_);
+        }
+    }
     void functionRenameSmallTokenEdits()
     {
         const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";
@@ -1079,7 +1108,7 @@ private slots:
         const auto clones = MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body + " int stable" + body),
             AnalyzeFunctions("r.cpp", "int newName" + changed + " int stable" + changed)); QCOMPARE(clones["renamed"].toInt(), 0);
         auto distantBody = changed; distantBody.replace("return y + x", "return x - y");
-        QCOMPARE(MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body), AnalyzeFunctions("r.cpp", "int newName" + distantBody))["renamed"].toInt(), 0);
+        QCOMPARE(MatchFunctions(AnalyzeFunctions("l.cpp", "int oldName" + body), AnalyzeFunctions("r.cpp", "int newName" + distantBody))["renamed"].toInt(), 1);
         QByteArray a, b;
         for (int i = 0; i < 33; ++i) { a += "int old" + QByteArray::number(i) + body; b += "int new" + QByteArray::number(i) + changed; }
         const auto crowded = MatchFunctions(AnalyzeFunctions("l.cpp", a), AnalyzeFunctions("r.cpp", b));
