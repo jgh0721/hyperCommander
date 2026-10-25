@@ -2618,6 +2618,34 @@ private slots:
         QCOMPARE(read(r.file1_ + "/한글.txt"), QByteArray("changed after comparison"));
         QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(r, comparison, 1, "한글.txt", "missing", {}), Failure);
     }
+    void directoryRenamePreservesMetadataAclAndStreams()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        QVERIFY(QDir().mkpath(request.file1_)); QVERIFY(QDir().mkpath(request.file2_));
+        const auto source = request.file1_ + "/source.txt";
+        write(source, "original content"); write(source + ":info", "stream content"); write(request.file1_ + "/occupied.txt", "preserve target");
+        { QFile file(source); QVERIFY(file.open(QIODevice::ReadWrite)); QVERIFY(file.setFileTime(QDateTime::fromMSecsSinceEpoch(1700000000000LL), QFileDevice::FileModificationTime)); }
+        QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(source.utf16()), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
+        PSECURITY_DESCRIPTOR descriptor = nullptr; QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
+        const auto release = qScopeGuard([&] { LocalFree(descriptor); });
+        QVERIFY(SetFileSecurityW(reinterpret_cast<LPCWSTR>(source.utf16()), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor));
+        const hc::storage::CopyOptions options{true, true, true, true};
+        const auto initial = CaptureDirectory(request.file1_, {}, {});
+        const auto evidence = DirectoryCopyEvidence(initial.Expand(initial.entries_["source.txt"]), {}, options);
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto comparison = Execute(request, cancel, false);
+        QCOMPARE(RenameDirectoryEntry(request, comparison, 0, "source.txt", "한글.txt", {}).commit_, QString("Committed"));
+        QVERIFY(!QFileInfo::exists(source)); QCOMPARE(read(request.file1_ + "/한글.txt"), QByteArray("original content"));
+        QCOMPARE(read(request.file1_ + "/한글.txt:info"), QByteArray("stream content"));
+        const auto renamed = CaptureDirectory(request.file1_, {}, {});
+        QCOMPARE(DirectoryCopyEvidence(renamed.Expand(renamed.entries_[QString::fromUtf8("한글.txt")]), {}, options), evidence);
+        comparison = Execute(request, cancel, false);
+        QVERIFY_EXCEPTION_THROWN(RenameDirectoryEntry(request, comparison, 0, "한글.txt", "occupied.txt", {}), Failure);
+        QCOMPARE(read(request.file1_ + "/occupied.txt"), QByteArray("preserve target"));
+        const auto rejected = CaptureDirectory(request.file1_, {}, {});
+        QCOMPARE(DirectoryCopyEvidence(rejected.Expand(rejected.entries_[QString::fromUtf8("한글.txt")]), {}, options), evidence);
+        QCOMPARE(read(request.file1_ + "/한글.txt:info"), QByteArray("stream content"));
+    }
     void directoryTransferSelectionAndResume()
     {
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
