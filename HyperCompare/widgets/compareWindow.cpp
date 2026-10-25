@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "largeTextView.hpp"
 #include "boundedEditor.hpp"
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
@@ -431,6 +432,10 @@ namespace hc::compare
     void CompareWindow::start(bool Preserve, bool Reintegrate)
     {
         if (busy() || request_.file1_.isEmpty()) return;
+        if (Preserve) if (auto* large = dynamic_cast<LargeTextView*>(extensionView_); large && large->Dirty()) {
+            state_->setText(tr("대용량 편집 내용을 보존했습니다. 양쪽 파일을 저장한 뒤 다시 비교하십시오.")); return;
+        }
+        if (extensionView_) extensionView_->setEnabled(false);
         if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
         sourceEditing_ = false; bufferTimer_.stop(); ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         canceled_ = std::make_shared<std::atomic_bool>(false);
@@ -570,6 +575,12 @@ namespace hc::compare
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
         if (result_.completion_ != "Complete") { directory_->EndProgress(); updateMerge(); state_->setText(result_.error_); return; }
+        if (result_.largeText_) {
+            auto* view = new LargeTextView(request_, result_.largeText_, centralWidget()); extensionView_ = view;
+            qobject_cast<QSplitter*>(centralWidget())->addWidget(view); sources_->hide(); details_->hide(); directory_->hide(); view->show();
+            view->stateChanged_ = [this, view] { dirty_ = view->Dirty(); exitCode_ = view->ExitCode(); updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
+            state_->setText(tr("대용량 텍스트 — 부분 로딩 편집·병합")); applyAppearance(); updateMerge(); return;
+        }
         if (!result_.extension_.isEmpty())
         {
             try
@@ -809,7 +820,7 @@ namespace hc::compare
     void CompareWindow::updateMerge()
     {
         recoveryAction_->setEnabled(!busy());
-        exportReport_->setEnabled(!busy() && result_.completion_ == "Complete" && (!sourceEditing_ || (!sourcePending_ && sourceValid_)));
+        exportReport_->setEnabled(!busy() && !result_.largeText_ && result_.completion_ == "Complete" && (!sourceEditing_ || (!sourcePending_ && sourceValid_)));
         for (auto* action : encodingActions_)
         {
             const int role = action->data().toInt();
@@ -1021,7 +1032,7 @@ namespace hc::compare
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
         qApp->setFont(uiFont_); changes_->setFont(listFont_); find_->SetListFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
-        if (extensionView_) { extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
+        if (extensionView_) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->SetDark(dark_); extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)
@@ -1060,8 +1071,8 @@ namespace hc::compare
         completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
         setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
     }
-    bool CompareWindow::busy() const { return (directory_ && directory_->Busy()) || watcher_.isRunning() || workWatcher_.isRunning() || reportWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
-    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (directory_) directory_->Cancel(); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
+    bool CompareWindow::busy() const { return (dynamic_cast<LargeTextView*>(extensionView_) && static_cast<LargeTextView*>(extensionView_)->Busy()) || (directory_ && directory_->Busy()) || watcher_.isRunning() || workWatcher_.isRunning() || reportWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
+    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->Cancel(); if (directory_) directory_->Cancel(); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
         if (busy()) { CancelRemoteRequest(); closing_ = true; Event->ignore(); return; }

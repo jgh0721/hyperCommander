@@ -27,7 +27,7 @@ namespace hc::compare
             if (edits.empty() || edits.back().end_ != r.a_ || edits.back().otherEnd_ != r.b_)
                 edits.push_back({r.a_, r.a_, r.b_, r.b_, {}});
             auto& edit = edits.back(); edit.end_ = r.endA_; edit.otherEnd_ = r.endB_;
-            for (auto i = r.b_; i < r.endB_; ++i) { step(); edit.replacement_.append(Right[i]); }
+            if (!Limits.rangesOnly_) for (auto i = r.b_; i < r.endB_; ++i) { step(); edit.replacement_.append(Right[i]); }
         };
         // One pair of vectors is reused after each partition; no recursion retains it.
         // Myers 1986, section 4b: forward/reverse furthest paths overlap on delta-k.
@@ -149,7 +149,7 @@ namespace hc::compare
         const auto emit = [&](std::size_t EndA, std::size_t EndB) {
             if (a == EndA && b == EndB) return;
             Edit edit{Prefix + a, Prefix + EndA, Prefix + b, Prefix + EndB, {}};
-            for (auto i = b; i < EndB; ++i) { step(); edit.replacement_.append(Right[Prefix + i]); }
+            if (!Limits.rangesOnly_) for (auto i = b; i < EndB; ++i) { step(); edit.replacement_.append(Right[Prefix + i]); }
             edits.push_back(std::move(edit));
         };
         for (const auto& anchor : anchors) { step(); emit(anchor.first, anchor.second); a = anchor.first + 1; b = anchor.second + 1; }

@@ -27,6 +27,8 @@ namespace hc::compare
         std::function<void()> memoryCheck_;
         // A lease gates new allocations; input snapshots already in private commit are not charged again.
         std::function<std::shared_ptr<void>(std::uint64_t)> memoryReserve_;
+        // Disk-backed callers consume line ranges without copying replacement text.
+        bool rangesOnly_ = false;
         void Check() const;
     };
     // Lines retain their terminators: EOF and CRLF/LF differences remain edits.

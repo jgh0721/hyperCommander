@@ -13,6 +13,7 @@ target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/largeText.cpp runtime/largeText.hpp
     runtime/controllerMemory.cpp runtime/controllerMemory.hpp
     runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/gitTool.cpp runtime/gitTool.hpp
@@ -43,6 +44,7 @@ target_link_libraries(hc_compare_runtime PUBLIC hc_compare_core Qt6::Core Qt6::N
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
+    widgets/largeTextView.cpp widgets/largeTextView.hpp
     widgets/saveRecoveryDialog.cpp widgets/saveRecoveryDialog.hpp
     widgets/directoryTreeModel.cpp widgets/directoryTreeModel.hpp
     widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp

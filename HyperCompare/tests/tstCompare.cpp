@@ -3,6 +3,8 @@
 #include "core/linearDiff.hpp"
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
+#include "runtime/largeText.hpp"
+#include "UniqueLibs/document/documentTextCodec.hpp"
 #include "runtime/inputEditing.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -837,7 +839,10 @@ private slots:
         write(request.file1_, QByteArray::fromHex("6100")); write(request.file2_, QByteArray::fromHex("6200")); request.encoding_ = "UTF-16LE";
         result = Execute(request, cancel, false); QCOMPARE(result.exitCode_, 0);
         request.encoding_.clear(); write(request.file2_, QByteArray(16 * 1024 * 1024 + 1, 'a')); result = Execute(request, cancel, false);
-        QCOMPARE(result.engineProbe_["inputs"].toArray()[1].toObject()["reason"].toString(), "InputSizeLimit");
+        QVERIFY(result.engineProbe_["inputs"].toArray()[1].toObject()["pagedText"].toBool());
+        QVERIFY(!result.engineProbe_["pagedEditAndMergeTwo"].toBool()); // Left still contains binary NUL.
+        write(request.file1_, "text\n"); result = Execute(request, cancel, false);
+        QVERIFY(result.engineProbe_["pagedEditAndMergeTwo"].toBool());
     }
     void engineProbeDirectoryModesAndConsole()
     {
@@ -1081,6 +1086,87 @@ private slots:
             const auto annotated = Execute(request, cancel, false); request.semantic_ = "off"; const auto plain = Execute(request, cancel, false);
             QCOMPARE(annotated.edits_, plain.edits_); QCOMPARE(annotated.output_, plain.output_);
         }
+    }
+    void largeTextPagedEditMergeSave()
+    {
+        try {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        const QByteArray line = QByteArray(1020, 'a') + "\r\n"; QByteArray left;
+        for (int i = 0; i < 17000; ++i) left += line;
+        auto right = left; right.replace(9000 * line.size(), 1, "b"); write(request.file1_, left); write(request.file2_, right);
+        const auto cancel = std::make_shared<std::atomic_bool>(false); auto result = Execute(request, cancel, false);
+        QVERIFY2(result.largeText_, qPrintable(result.error_)); QCOMPARE(result.completion_, "Complete"); QCOMPARE(result.exitCode_, 1);
+        const auto& comparison = *result.largeText_; QCOMPARE(comparison.changes_.size(), std::size_t(1));
+        const auto edit = comparison.changes_[0]; QCOMPARE(edit.begin_, std::size_t(9000)); QVERIFY(edit.replacement_.empty());
+        auto merged = ReplaceLargeText(comparison.documents_[1], comparison.lines_[1][edit.otherBegin_], comparison.lines_[1][edit.otherEnd_], comparison.documents_[0], comparison.lines_[0][edit.begin_], comparison.lines_[0][edit.end_], {});
+        QCOMPARE(read(request.file2_), right); // Only explicit Save touches the destination.
+        auto edited = EditLargeText(merged, 0, line.size(), QByteArray("한글\r\n"), {});
+        QCOMPARE(ReadLargeTextRange(edited, 0, 8, {}), QByteArray("한글\r\n"));
+        QCOMPARE(ReadLargeTextRange(merged, 0, line.size(), {}), line); // Undo revision shares immutable pieces.
+        const auto saved = SaveLargeText(request, edited, {}); QVERIFY(saved.recovery_.isEmpty());
+        QCOMPARE(saved.rawHash_, QCryptographicHash::hash(QByteArray("한글\r\n") + left.mid(line.size()), QCryptographicHash::Sha256));
+        QCOMPARE(read(request.file2_), QByteArray("한글\r\n") + left.mid(line.size()));
+        QCOMPARE(read(request.file1_), left);
+        QVERIFY_EXCEPTION_THROWN(SaveLargeText(request, edited, {}), Failure); // Original revision is now stale.
+        QVERIFY_EXCEPTION_THROWN(EditLargeText(edited, 1, 2, "x", {}), Failure);
+        std::atomic_bool stopped{true}; Budget canceled; canceled.canceled_ = &stopped;
+        QVERIFY_EXCEPTION_THROWN(CompareLargeText(comparison.documents_, canceled), Failure);
+        auto oneSided = request; oneSided.mode_ = "compare"; oneSided.file2_ = dir.filePath("new/sub/right.txt"); oneSided.allowMissingInputs_[1] = true;
+        const auto missing = Execute(oneSided, cancel, false); QVERIFY2(missing.largeText_, qPrintable(missing.error_));
+        const auto target = ReplaceLargeText(missing.largeText_->documents_[1], 0, 0, missing.largeText_->documents_[0], 0, missing.largeText_->documents_[0].bytes_, {});
+        QVERIFY(!QFileInfo::exists(oneSided.file2_)); SaveLargeText(oneSided, target, {}); QCOMPARE(read(oneSided.file2_), left);
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
+    void largeTextEncodingBoundaries()
+    {
+        try {
+        QTemporaryDir dir;
+        for (const auto& encoding : {QString("UTF-8"), QString("UTF-16LE"), QString("UTF-16BE"), QString("CP949")}) {
+            QString text(65535, QChar('a')); text += QString::fromUtf8("한글\r\n"); text += QString(65535, QChar('b'));
+            if (encoding != "CP949") text += QString::fromUtf8("😀");
+            const bool bom = encoding != "CP949";
+            const auto encoded = hc::document::EncodeDocumentText(text, encoding, bom); QVERIFY(encoded.HasValue());
+            const auto path = dir.filePath(encoding + ".txt"); write(path, encoded.Value());
+            const auto original = ReadLargeText(path, encoding, {}); QCOMPARE(ReadLargeTextRange(original, 0, original.bytes_, {}), text.toUtf8());
+            const auto edited = EditLargeText(original, 0, 1, "Z", {}); SaveLargeText({}, edited, {});
+            const auto expected = hc::document::EncodeDocumentText(QString("Z") + text.mid(1), encoding, bom); QVERIFY(expected.HasValue()); QCOMPARE(read(path), expected.Value());
+            const auto refreshed = ReadLargeText(path, encoding, {}); const auto empty = EditLargeText(refreshed, 0, refreshed.bytes_, {}, {}); SaveLargeText({}, empty, {});
+            QCOMPARE(read(path), !bom ? QByteArray{} : encoding == "UTF-8" ? QByteArray::fromHex("efbbbf") : encoding == "UTF-16LE" ? QByteArray::fromHex("fffe") : QByteArray::fromHex("feff"));
+        }
+        write(dir.filePath("bad"), QByteArray::fromHex("6161f09f")); QVERIFY_EXCEPTION_THROWN(ReadLargeText(dir.filePath("bad"), "UTF-8", {}), Failure);
+        write(dir.filePath("bad16"), QByteArray::fromHex("fffe610000d8")); QVERIFY_EXCEPTION_THROWN(ReadLargeText(dir.filePath("bad16"), "UTF-16LE", {}), Failure);
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
+    void rangeOnlyDiffMatchesPayloadDiff()
+    {
+        Budget rangesOnly; rangesOnly.rangesOnly_ = true; QVERIFY_EXCEPTION_THROWN(Merge("a", "b", "c", rangesOnly), Failure);
+        std::mt19937 rng(812);
+        for (int trial = 0; trial < 100; ++trial) {
+            std::string a, b;
+            for (int i = 0; i < 45; ++i) { a += std::to_string(rng() % 13) + "\n"; b += std::to_string(rng() % 13) + "\n"; }
+            const auto expected = Diff(a, b); Budget ranges; ranges.rangesOnly_ = true; ranges.traceBytes_ = trial % 2 ? 64 * 1024 * 1024 : LinearDiffWorkspaceBytes(90);
+            const auto actual = Diff(a, b, ranges);
+            auto rebuilt = actual; const auto lines = SplitLines(b);
+            for (auto& edit : rebuilt) { QVERIFY(edit.replacement_.empty()); for (auto i = edit.otherBegin_; i < edit.otherEnd_; ++i) edit.replacement_ += lines[i]; }
+            QCOMPARE(Apply(a, rebuilt), b);
+            std::size_t actualCost = 0, expectedCost = 0;
+            for (const auto& edit : actual) actualCost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+            for (const auto& edit : expected) expectedCost += edit.end_ - edit.begin_ + edit.otherEnd_ - edit.otherBegin_;
+            QCOMPARE(actualCost, expectedCost);
+        }
+    }
+    void largeTextSelectionProjectsUnicodePositions()
+    {
+        QTemporaryDir dir; const auto left = dir.filePath("left"), right = dir.filePath("right");
+        write(left, "keep\n가나다XYZ\nend\n"); write(right, "keep\nabcXYZ\nend\n");
+        const auto comparison = CompareLargeText({ReadLargeText(left, {}, {}), ReadLargeText(right, {}, {})}, {});
+        QCOMPARE(comparison.changes_.size(), std::size_t(1));
+        const auto selected = MergeLargeTextChange(comparison, 0, 0, std::pair<std::uint64_t, std::uint64_t>{8, 11}, {});
+        QCOMPARE(ReadLargeTextRange(selected, 0, selected.bytes_, {}), QByteArray("keep\na나cXYZ\nend\n"));
+        const auto reverse = MergeLargeTextChange(comparison, 1, 0, std::pair<std::uint64_t, std::uint64_t>{6, 7}, {});
+        QCOMPARE(ReadLargeTextRange(reverse, 0, reverse.bytes_, {}), QByteArray("keep\n가b다XYZ\nend\n"));
+        QVERIFY_EXCEPTION_THROWN(MergeLargeTextChange(comparison, 0, 0, (std::pair<std::uint64_t, std::uint64_t>{0, 1}), {}), Failure);
+        QCOMPARE(read(left), QByteArray("keep\n가나다XYZ\nend\n")); QCOMPARE(read(right), QByteArray("keep\nabcXYZ\nend\n"));
     }
     void functionRenameSmallTokenEdits()
     {

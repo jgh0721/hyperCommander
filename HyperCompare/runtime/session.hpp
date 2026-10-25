@@ -14,6 +14,7 @@
 
 namespace hc::compare
 {
+    struct LargeTextComparison;
     struct Request
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
@@ -65,6 +66,7 @@ namespace hc::compare
     };
     struct Result
     {
+        std::shared_ptr<LargeTextComparison> largeText_;
         int exitCode_ = 2;
         QString operation_, error_, outcome_ = "Unknown", completion_ = "Failed";
         QString requestId_;

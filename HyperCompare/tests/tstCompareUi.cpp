@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include "widgets/largeTextView.hpp"
+#include <QSpinBox>
 #include "widgets/guiRequestServer.hpp"
 #include "runtime/guiIpc.hpp"
 #include "runtime/controllerMemory.hpp"
@@ -113,6 +115,47 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void largeTextPagesEditMergeUndoAndSave()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        const auto original = lines(0, 2500); auto changed = original; changed.replace("common200\t", "CHANGED200\t");
+        write(request.file1_, original); write(request.file2_, changed);
+        auto comparison = std::make_shared<LargeTextComparison>(CompareLargeText({ReadLargeText(request.file1_, {}, {}), ReadLargeText(request.file2_, {}, {})}, {}));
+        LargeTextView view(request, comparison, nullptr); view.resize(1200, 700); view.show();
+        auto* left = view.findChild<ScintillaEditBase*>("largeTextLeft"); auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); QVERIFY(left); QVERIFY(right);
+        QTRY_VERIFY_WITH_TIMEOUT(!view.Busy() && !contents(left).isEmpty(), 10000); QCOMPARE(contents(left), lines(0, 400));
+        view.findChild<QPushButton*>("largeMergeRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QVERIFY2(contents(right) == contents(left), qPrintable(view.findChild<QLabel*>("largeStatus")->text())); QCOMPARE(readBytes(request.file2_), changed); QVERIFY(view.Dirty());
+        view.findChild<QPushButton*>("largeUndo")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right) != contents(left));
+        view.findChild<QPushButton*>("largeRedo")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(right), contents(left));
+        const QByteArray prefix("header\r\n"); left->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>(prefix.constData()));
+        view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(left).startsWith(prefix));
+        view.findChild<QPushButton*>("largeSaveLeft")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.file1_), prefix + original);
+        view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.file2_), original); QVERIFY(!view.Dirty());
+        // An external writer after the last save must never be overwritten.
+        write(request.file2_, "external"); view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.file2_), QByteArray("external"));
+    }
+    void largeWindowAndLongLinePaging()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        const QByteArray text(17 * 1024 * 1024, 'a'); write(request.file1_, text); write(request.file2_, text);
+        CompareWindow window(request); window.resize(1200, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("largeTextView"), 30000);
+        auto* view = dynamic_cast<LargeTextView*>(window.findChild<QWidget*>("largeTextView")); QVERIFY(view);
+        auto* left = view->findChild<ScintillaEditBase*>("largeTextLeft"); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy() && !contents(left).isEmpty(), 10000);
+        QCOMPARE(contents(left).size(), qsizetype(largeTextPageMaximum));
+        view->findChild<QPushButton*>("largeNextLeft")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 10000);
+        left->send(SCI_SETTARGETSTART, 0); left->send(SCI_SETTARGETEND, 1); left->send(SCI_REPLACETARGET, 1, reinterpret_cast<sptr_t>("Z"));
+        view->findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
+        QVERIFY(contents(left).startsWith("Z"));
+        view->findChild<QPushButton*>("largeSaveLeft")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
+        auto expected = text; expected[qsizetype(largeTextPageMaximum)] = 'Z'; QCOMPARE(readBytes(request.file1_), expected); QCOMPARE(readBytes(request.file2_), text);
+        action(window, "Dark")->setChecked(false); QTest::qWait(50);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-text-light.png"));
+        action(window, "Dark")->setChecked(true); QTest::qWait(50);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-text-dark.png"));
+        window.close();
+    }
     void directoryPartialResultsAndPlanGuard()
     {
         Request request; request.file1_ = "D:/left"; request.file2_ = "D:/right"; Result value; value.directoryComplete_ = false;

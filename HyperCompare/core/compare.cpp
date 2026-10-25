@@ -96,13 +96,13 @@ namespace hc::compare
         // Reserve only the changed span so a small edit in a large file remains affordable.
         const auto changed = std::uint64_t(n + m);
         std::uint64_t replacementBytes = 0;
-        for (auto i = prefix; i < right.size() - suffix; ++i) { step(); replacementBytes += right[i].size(); }
+        if (!Limits.rangesOnly_) for (auto i = prefix; i < right.size() - suffix; ++i) { step(); replacementBytes += right[i].size(); }
         const auto history = n && m ? std::min(Limits.traceBytes_, (changed + 1) * (changed + 2) / 2 * sizeof(std::int64_t)) : 0;
         const auto estimate = changed * (2 * sizeof(Edit) + 64) + replacementBytes * 2 + history;
         const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(estimate) : std::shared_ptr<void>{};
         const auto replace = [&] {
             Edit edit{prefix, left.size() - suffix, prefix, right.size() - suffix, {}};
-            for (auto i = prefix; i < right.size() - suffix; ++i) { step(); edit.replacement_.append(right[i]); }
+            if (!Limits.rangesOnly_) for (auto i = prefix; i < right.size() - suffix; ++i) { step(); edit.replacement_.append(right[i]); }
             Limits.Check(); return std::vector<Edit>{std::move(edit)};
         };
         if (!n || !m) return replace();
@@ -185,7 +185,7 @@ namespace hc::compare
             if (!open) { edits.push_back({a, a, b, b, {}}); open = true; }
             auto& edit = edits.back();
             if (op == '-') edit.end_ = ++a;
-            else { edit.replacement_.append(right[b++]); edit.otherEnd_ = b; }
+            else { if (!Limits.rangesOnly_) edit.replacement_.append(right[b]); edit.otherEnd_ = ++b; }
         }
         Limits.Check(); return edits;
     }
@@ -201,6 +201,7 @@ namespace hc::compare
     }
     MergeResult Merge(std::string_view Base, std::string_view Left, std::string_view Right, const Budget& Limits)
     {
+        if (Limits.rangesOnly_) throw Failure("RangesOnlyRequiresDiff");
         const auto l = Diff(Base, Left, Limits), r = Diff(Base, Right, Limits);
         const auto lines = CountLines(Base, Limits);
         const auto estimate = std::uint64_t(lines) * sizeof(std::string_view)

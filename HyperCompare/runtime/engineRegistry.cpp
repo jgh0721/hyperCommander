@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "engineRegistry.hpp"
 #include "session.hpp"
+#include "largeText.hpp"
 #include "extensionEngine.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QDir>
@@ -92,6 +93,12 @@ namespace hc::compare
             {
                 try
                 {
+                    if (entry.size_ > 16 * 1024 * 1024) {
+                        const auto text = ReadLargeText(path, Encoding, Limits);
+                        if (entry.id_.revision_ != text.original_.entry_.id_.revision_) throw Failure("ChangedDuringRead");
+                        result["encoding"] = text.original_.encoding_; result["decodedBytes"] = double(text.bytes_); result["validation"] = "full-streamed-text-decode";
+                        result["materialization"] = "temporary-utf8-disk-snapshot"; result["pagedText"] = true; result["engine"] = engine->id_; result["available"] = true; return result;
+                    }
                     const auto text = ReadTextSnapshot(path, Encoding, Limits);
                     if (entry.id_.revision_ != text.entry_.id_.revision_) throw Failure("ChangedDuringRead");
                     result["encoding"] = text.encoding_; result["decodedBytes"] = double(text.utf8_.size()); result["validation"] = "full-text-decode";
@@ -134,21 +141,23 @@ namespace hc::compare
     }
     QJsonObject ProbeComparison(const Request& Input, const Budget& Limits)
     {
-        QJsonArray inputs; QString format; bool compatible = true; int index = 0;
+        QJsonArray inputs; QString format; bool compatible = true, large = false; int index = 0;
         for (const auto& path : {Input.file1_, Input.file2_, Input.base_.isEmpty() ? Input.file3_ : Input.base_})
         {
             if (path.isEmpty()) continue; auto probe = probeOne(path, InputEncoding(Input, index++), Limits);
             if (format.isEmpty()) format = probe["format"].toString();
             compatible &= probe["format"] == format && probe["available"].toBool(); inputs.append(probe);
+            large |= probe["pagedText"].toBool();
         }
         const auto* engine = FindComparisonEngine(format); QString reason;
         if (inputs.size() < 2) throw Failure("BothInputsRequired");
         if (!compatible || !engine) { compatible = false; reason = "InputCapabilityMismatch"; }
+        else if (large && inputs.size() != 2) { compatible = false; reason = "LargeTextRequiresTwoWayCompare"; }
         else if (inputs.size() == 3 && !engine->compareThree_) { compatible = false; reason = "ThreeUnsupported"; }
         else if (inputs.size() == 3 && Input.base_.isEmpty() && !engine->independentThree_) { compatible = false; reason = "IndependentThreeUnsupported"; }
         return {{"schemaVersion", 1}, {"available", compatible}, {"reason", reason}, {"inputs", inputs},
             {"engine", engine ? engine->Json() : QJsonObject{}},
-            {"compareAvailable", compatible}, {"mergeTwoAvailable", compatible && inputs.size() == 2 && engine && engine->mergeTwo_},
+            {"compareAvailable", compatible}, {"pagedEditAndMergeTwo", compatible && large}, {"mergeTwoAvailable", compatible && !large && inputs.size() == 2 && engine && engine->mergeTwo_},
             {"mergeBaseAvailable", compatible && !Input.base_.isEmpty() && engine && engine->mergeBase_},
             {"outputValidated", false}, {"warning", "Probe is read-only. Input revisions and output policy are revalidated when executing."}};
     }
