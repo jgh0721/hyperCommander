@@ -818,7 +818,7 @@ namespace hc::document
                 Tab->loading_=true;
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
-                if(epubRuntime_)Tab->pane_->ConfigureEpub(*epubRuntime_,!hosted_);
+                Tab->pane_->ConfigureEpub(epubRuntime_.value_or(MakeProductEpubRuntime(QCoreApplication::applicationDirPath())),!hosted_);
                 const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty());
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}

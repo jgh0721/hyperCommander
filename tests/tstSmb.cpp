@@ -7012,6 +7012,31 @@ private slots:
             };
             QTRY_VERIFY_WITH_TIMEOUT(Find(),10000);
             Visibility.stop();QVERIFY(!Disappeared);
+            if(Book=="epub3-images.epub") {
+                const auto Id=Document["documentId"].toString();
+                const auto Send=[&](QJsonObject Request){Request["documentId"]=Id;const auto Sent=Surface->SendDocument(Request);if(!Sent.HasValue())return false;QElapsedTimer Wait;Wait.start();while(Surface->Details().commandSequence_<Sent.Value()){if(Wait.elapsed()>15000)return false;QTest::qWait(20);}return !Surface->Details().commandError_;};
+                const auto ViewerState=[&]{return Surface->Details().documentState_["documents"].toArray().first().toObject()["view"].toObject();};
+                QVERIFY(Send({{"action","epub.reader.chapter"},{"value",1}}));
+                QTRY_VERIFY_WITH_TIMEOUT(ViewerState()["epub"].toObject()["chapterIndex"].toInt()==1 && !ViewerState()["epub"].toObject()["readerBusy"].toBool(),15000);
+                QVERIFY(Send({{"action","editEpub"}}));
+                struct EditorSearch {QString title_,program_;HWND window_=nullptr;DWORD pid_=0;HANDLE process_=nullptr;} EditState{
+                    Name+QStringLiteral(" — EPUB 편집 — HyperEditor"),QDir::cleanPath(QCoreApplication::applicationDirPath()+"/HyperEditor.exe")};
+                const auto FindEditor=[&]{
+                    if(EditState.window_ && IsWindow(EditState.window_)){wchar_t Title[1024]{};GetWindowTextW(EditState.window_,Title,1024);return QString::fromWCharArray(Title)==EditState.title_;}
+                    EnumWindows([](HWND Window,LPARAM Value)->BOOL{
+                        auto& Target=*reinterpret_cast<EditorSearch*>(Value);if(!IsWindowVisible(Window))return TRUE;
+                        wchar_t Title[1024]{};GetWindowTextW(Window,Title,1024);if(!QString::fromWCharArray(Title).startsWith(Target.title_.section(QStringLiteral(" — "),0,0)+QStringLiteral(" — ")))return TRUE;
+                        DWORD Pid=0;GetWindowThreadProcessId(Window,&Pid);const auto Process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,Pid);if(!Process)return TRUE;
+                        wchar_t Program[32768]{};DWORD Length=32768;
+                        if(!QueryFullProcessImageNameW(Process,0,Program,&Length) || QDir::cleanPath(QDir::fromNativeSeparators(QString::fromWCharArray(Program,int(Length)))).compare(Target.program_,Qt::CaseInsensitive)!=0){CloseHandle(Process);return TRUE;}
+                        Target.window_=Window;Target.pid_=Pid;Target.process_=Process;return FALSE;
+                    },reinterpret_cast<LPARAM>(&EditState));if(!EditState.window_)return false;wchar_t Title[1024]{};GetWindowTextW(EditState.window_,Title,1024);return QString::fromWCharArray(Title)==EditState.title_;
+                };
+                const auto CloseEditor=qScopeGuard([&]{if(EditState.window_ && IsWindow(EditState.window_)){DWORD Pid=0;GetWindowThreadProcessId(EditState.window_,&Pid);if(Pid==EditState.pid_)PostMessageW(EditState.window_,WM_CLOSE,0,0);}if(EditState.process_)CloseHandle(EditState.process_);});
+                QTRY_VERIFY_WITH_TIMEOUT(FindEditor(),30000);QVERIFY(EditState.pid_!=State.pid);
+                QVERIFY(ViewerState()["readOnly"].toBool());QCOMPARE(ViewerState()["epubMode"].toString(),QString("reader"));QVERIFY(ViewerState()["epubEditor"].toObject().isEmpty());
+                PostMessageW(EditState.window_,WM_CLOSE,0,0);QTRY_VERIFY_WITH_TIMEOUT(WaitForSingleObject(EditState.process_,0)==WAIT_OBJECT_0,30000);EditState.window_=nullptr;
+            }
             PostMessageW(State.window,WM_CLOSE,0,0);
             QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || (!Window->isVisible() && Window->objectName()=="hc.document.prepared"),20000);
             QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Surface->Details().host_.activeProcesses_<=1u,15000);
