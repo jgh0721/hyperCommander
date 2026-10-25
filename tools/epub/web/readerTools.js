@@ -22,7 +22,7 @@ export function findText(section, query, limit = 200) {
     return { hits, characters: text.length };
 }
 export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && value.startsWith("epubcfi(") && value.endsWith(")") && [...value].every(c=>c.charCodeAt(0)>=32 && c.charCodeAt(0)<=126); }
-export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate }) {
+export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{} }) {
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
     const hooked = new WeakSet();
     const close = () => { dialog?.remove(); dialog=null; popup=null; focus?.focus(); };
@@ -63,6 +63,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         if(hooked.has(doc))return;hooked.add(doc);
         doc.addEventListener("click",e=>{
             const anchor=e.target.closest?.("a"), image=e.target.closest?.("img");
+            if(anchor)remember();
             if(anchor && ((anchor.getAttribute("epub:type")||"").split(/\s+/).includes("noteref") || anchor.getAttribute("role")==="doc-noteref")) {
                 e.preventDefault();e.stopImmediatePropagation();footnote(anchor.getAttribute("href"),doc).catch(error=>{result={...result,error:String(error)};});
             } else if(image) {e.preventDefault();e.stopImmediatePropagation();resource(image.getAttribute("src"),doc).then(({url,item})=>{
@@ -84,8 +85,8 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
                     await new Promise(resolve=>setTimeout(resolve,0));
                 }
                 result={serial,hits,limited:limited||hits.length>=200};
-            } else if(action==="toc") {await navigate(action,value);result={serial,located:true};}
-            else if(action==="locate") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");await restore(value);documents().forEach(apply);result={serial,located:true};}
+            } else if(["toc","next","previous","back","next-chapter","previous-chapter"].includes(action)) {await navigate(action,value);result={serial,located:true};}
+            else if(action==="locate") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
             else if(action==="close-popup") {close();result={serial};}

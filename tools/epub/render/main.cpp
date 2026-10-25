@@ -46,6 +46,7 @@
 #include <QStatusBar>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QToolBar>
 #include <QTimer>
 #include <QUuid>
 #include <QWebEngineDownloadRequest>
@@ -248,6 +249,12 @@ namespace
             settings_ = new hc::epub::poc::ReadingSettings(SettingsPath, Publication["sourceSha256"].toString(), Theme, Panel);
             navigation_=new hc::epub::poc::ReadingNavigation(SettingsPath,documentId_,[this](const QJsonObject& Request){command("read",Request);},Panel);
             navigation_->SetPublication(Publication);
+            auto* ReadingBar=addToolBar(tr("독서"));ReadingBar->setObjectName("epubReadingToolbar");ReadingBar->setMovable(false);
+            for(const auto& Entry:QList<QPair<QString,QString>>{{"back",tr("이전 위치")},{"previous",tr("이전")},{"next",tr("다음")}}) {
+                auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
+                connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{navigation_->Execute(Name);view_->setFocus(Qt::OtherFocusReason);});
+            }
+            location_=new QLabel(ReadingBar);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));ReadingBar->addWidget(location_);
             Form->addRow(navigation_);
             Form->addRow(settings_);
             view_ = new QWebEngineView(Splitter); Splitter->setSizes({400, 880});
@@ -279,6 +286,14 @@ namespace
                     const auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
                     latest_ = Result;
                     navigation_->Poll(Result);
+                    if(Result["status"]=="ready") {
+                        location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
+                            .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
+                            .arg(Result["chapterPage"].toInt(1)).arg(Result["chapterPages"].toInt(1)).arg(qRound(Result["progress"].toDouble()*100)));
+                        findChild<QAction*>("epub.back")->setEnabled(Result["canBack"].toBool());
+                        findChild<QAction*>("epub.previous")->setEnabled(!Result["atStart"].toBool());
+                        findChild<QAction*>("epub.next")->setEnabled(!Result["atEnd"].toBool());
+                    }
                     if(Result["profile"].toObject()["customCss"]==settings_->Profile()["customCss"])
                         settings_->SetCssValidation(settings_->Profile()["customCss"].toString(),astError_.isEmpty()?Result["cssError"].toString():astError_);
                     QStringList Families;
@@ -455,6 +470,7 @@ namespace
         int escapeRequests_=0;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
+        QLabel* location_=nullptr;
         QScrollArea* settingsScroll_ = nullptr;
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;

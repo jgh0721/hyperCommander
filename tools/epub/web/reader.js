@@ -35,7 +35,9 @@ const pane = document.getElementById("reader");
 const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
 let fontCatalog;
-const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate});
+const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember});
+const history=[];
+function remember() {const locator=getLocator();if(locator && history.at(-1)!==locator){history.push(locator);if(history.length>64)history.shift();}}
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
@@ -201,14 +203,29 @@ function readingLocation() {
             try {if(compare.compare(section.cfiFromElement(target),location.start.cfi)<=0)tocIndex=i;} catch {}
         }
     }
-    return {chapterIndex:index,tocIndex,chapterTitle:publication?.navigation[tocIndex]?.label || path || ""};
+    const page=location?.start?.displayed?.page || 1, pages=location?.start?.displayed?.total || 1;
+    const count=publication?.spine.length || 1;
+    return {chapterIndex:index,tocIndex,chapterTitle:publication?.navigation[tocIndex]?.label || path || "",
+        chapterCount:count,chapterPage:page,chapterPages:pages,progress:Math.min(1,(index+(page-1)/pages)/count),
+        atStart:!!location?.atStart,atEnd:!!location?.atEnd,canBack:history.length>0};
 }
 
 async function navigate(action,value) {
+    if(action==="back") {const locator=history.pop();if(locator)await restoreLocator(locator);return;}
+    if(action==="next" || action==="previous") {
+        if(rendition)await rendition[action==="next"?"next":"prev"]();
+        else await new Promise(resolve=>navigator[action==="next"?"goForward":"goBackward"](false,resolve));
+        documents().forEach(applyDocument);return;
+    }
+    if(action==="next-chapter" || action==="previous-chapter") {
+        const index=readingLocation().chapterIndex+(action==="next-chapter"?1:-1);
+        if(index>=0 && index<publication.spine.length){remember();await goChapter(index);}return;
+    }
     if(action!=="toc")throw Error("Unsupported reading navigation");
     const item=publication.navigation[value];if(!Number.isInteger(value) || !item)throw Error("Invalid TOC item");
     const index=publication.spine.findIndex(section=>section.path===item.path);
     if(index<0)throw Error("TOC target is outside reading order");
+    remember();
     if(rendition)await rendition.display(book.spine.get(index).href+(item.fragment?"#"+encodeURIComponent(item.fragment):""));
     else await goChapter(index);
     documents().forEach(applyDocument);
@@ -330,6 +347,13 @@ async function selfTest() {
         checks.locatorRestored = currentSnapshot().text === second.text;
     }
     const doc = documents()[0];
+    await navigate("toc",0);
+    checks.tocNavigation=readingLocation().chapterIndex===publication.spine.findIndex(item=>item.path===publication.navigation[0].path);
+    const beforeJump=readingLocation().chapterIndex;
+    if(beforeJump+1<publication.spine.length) {
+        await navigate("next-chapter");checks.nextChapter=readingLocation().chapterIndex===beforeJump+1;
+        await navigate("back");checks.backNavigation=readingLocation().chapterIndex===beforeJump;
+    }
     const script = doc.createElement("script"); script.textContent = "window.hcUntrustedExecuted=1";
     doc.body.append(script);
     const button = doc.createElement("button"); button.setAttribute("onclick", "window.hcUntrustedExecuted=2");
