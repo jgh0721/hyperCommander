@@ -19,6 +19,11 @@
           "type": "separator"
         },
         {
+          "id": "compare",
+          "command": "hc.file.compare",
+          "label": "파일·폴더 비교"
+        },
+        {
           "id": "copy",
           "command": "hc.file.copy",
           "label": "복사"

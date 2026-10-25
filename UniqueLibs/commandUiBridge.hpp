@@ -3,6 +3,7 @@
 #include <QPointer>
 #include <QModelIndex>
 #include <QVariantMap>
+#include <QStringList>
 #include <QHash>
 #include "commonLibs/commands/commandBus.hpp"
 #include "commonLibs/commands/automation.hpp"
@@ -33,6 +34,7 @@ public:
     void PromptFileTools(bool Rename, const QModelIndex& Index = {});
     void PromptFileAttributes(const QModelIndex& Index = {});
     void PromptArchive(bool Extract, const QModelIndex& Index = {});
+    hc::storage::Result<QStringList> CompareArguments(const QModelIndex& Index = {});
     bool ExecuteCommand(const QString& Id, const QModelIndex& Index = {});
     void ShowShellMenu(const QModelIndex& Index = {});
     QAction* Action(const QString& Id) const;
@@ -44,6 +46,7 @@ public:
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
 private:
+    hc::storage::Result<QStringList> compareArguments(const hc::storage::CommandContext& Context, CFSModel* Model);
     void bindModels();
     void createActions();
     void createCommandUi();
