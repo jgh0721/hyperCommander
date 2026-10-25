@@ -41,6 +41,7 @@ namespace hc::document
         QString ViewId() const { return viewId_; }
         bool IsBusy() const;
         bool IsEditing() const;
+        bool IsEpubEditing() const;
         bool CanUndo() const;
         bool CanRedo() const;
         void Undo();

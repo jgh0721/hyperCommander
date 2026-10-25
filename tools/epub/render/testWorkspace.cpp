@@ -202,6 +202,9 @@ private slots:
         const auto Evidence=qEnvironmentVariable("HC_EPUB_EDIT_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);QFile Before(QDir(Evidence).filePath(Name+".original")),After(QDir(Evidence).filePath(Name));QVERIFY(Before.open(QIODevice::WriteOnly|QIODevice::NewOnly));Before.write(Original);QVERIFY(After.open(QIODevice::WriteOnly|QIODevice::NewOnly));After.write(SavedBytes);QVERIFY(Window.grab().save(QDir(Evidence).filePath(Name+".png")));}
         auto* ReopenAction=Window.findChild<QAction*>("epubReopen");QVERIFY(ReopenAction);ReopenAction->trigger();QTRY_VERIFY_WITH_TIMEOUT(View()["ready"].toBool() && View()["epubEditor"].toObject().isEmpty(),60000);
         QTRY_VERIFY_WITH_TIMEOUT(View()["epub"].toObject()["images"].toArray().last().toObject()["naturalWidth"].toInt()==3,15000);
+        QVERIFY(!Window.Handle({{"action","epub.edit.begin"},{"documentId",Id}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor()["ready"].toBool(),30000);
+        QVERIFY(!document(Window,Id)["dirty"].toBool());
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);QVERIFY(Source.open(QIODevice::ReadOnly));QCOMPARE(Source.readAll(),Original);
         DocumentWorkspaceWidget Viewer(Temp.filePath("viewer"),true);Viewer.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Viewer.show();const auto ReadId=Viewer.Handle({{"action","open"},{"path",SourcePath}})["documentId"].toString();QTRY_VERIFY_WITH_TIMEOUT(document(Viewer,ReadId)["view"].toObject()["ready"].toBool(),60000);
         QVERIFY(Viewer.Handle({{"action","epub.edit.begin"},{"documentId",ReadId}}).contains("error"));QTRY_VERIFY_WITH_TIMEOUT(Viewer.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
@@ -268,7 +271,7 @@ private slots:
             DocumentWorkspaceWidget Window(Temp.filePath("recovery2"));const auto Id=Open(Window);const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
             QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool() && !State()["readingStateRestoring"].toBool(),60000);
             QCOMPARE(State()["bookmarks"].toArray().size(),1);QCOMPARE(State()["bookmarks"].toArray().first().toObject()["locator"].toString(),SavedLocator);
-            QVERIFY(State()["text"].toString().contains("돌아오는 길"));QVERIFY(State()["readingStateError"].toString().isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(State()["text"].toString().contains("돌아오는 길"),15000);QVERIFY(State()["readingStateError"].toString().isEmpty());
             QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
         }
     }

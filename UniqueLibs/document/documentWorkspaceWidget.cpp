@@ -373,7 +373,7 @@ namespace hc::document
         for(const auto& Command:DocumentShortcutRegistry::Commands())if(Command.scope_=="epub") {
             auto* Action=EpubMenu->addAction(Command.label_);Action->setObjectName(Command.id_);addAction(Action);
             Action->setProperty("documentIconName",Command.id_.endsWith("next")?"chevron-right":Command.id_.endsWith("previous")?"chevron-left":"toc-toggle");
-            connect(Action,&QAction::triggered,this,[this,Id=Command.id_]{if(auto Tab=active();Tab && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing())Tab->pane_->Execute({{"action","epub.reader."+Id.mid(5)}});});
+            connect(Action,&QAction::triggered,this,[this,Id=Command.id_]{if(auto Tab=active();Tab && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing())Tab->pane_->Execute({{"action","epub.reader."+Id.mid(5)}});});
         }
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
             if (!Command.id_.startsWith("text.") && !QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Command.id_)) continue;
@@ -415,7 +415,7 @@ namespace hc::document
         }
         shortcutRouter_->SetEligibility([this](const QString& Id, QWidget* Focus) {
             auto Tab = active();
-            if(Id.startsWith("epub."))return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
+            if(Id.startsWith("epub."))return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
             if (Id.startsWith("text.")) return Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text";
             if (Id.startsWith("edit.")) {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
@@ -1249,7 +1249,7 @@ namespace hc::document
         findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
-            if(Id.startsWith("epub."))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEditing());
+            if(Id.startsWith("epub."))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->editor_->isReadOnly()));

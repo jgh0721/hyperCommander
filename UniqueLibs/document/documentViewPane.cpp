@@ -334,7 +334,8 @@ namespace hc::document
         return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());
     }
     bool DocumentViewPane::RequestClose(){if(epub_){epubClosing_=true;epub_->RequestClose();return epub_->ViewState()["retired"].toBool();}if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
-    bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing() || epubEditor_&&epubEditor_->isVisible();}
+    bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing();}
+    bool DocumentViewPane::IsEpubEditing() const {return epubEditor_&&epubEditor_->isVisible();}
     bool DocumentViewPane::CanUndo() const {if(epubEditor_)return epubEditor_->CanUndo();return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
     bool DocumentViewPane::CanRedo() const {if(epubEditor_)return epubEditor_->CanRedo();return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANREDO):image_&&image_->CanRedo();}
     void DocumentViewPane::Undo(){if(epubEditor_)epubEditor_->Undo();else if(text_)static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);else if(image_)image_->undoEdit();}
