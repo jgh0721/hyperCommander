@@ -22,6 +22,9 @@
 #include <QtnGridViewGraphics.h>
 #include <QtnGridEditors.h>
 #include <QScopeGuard>
+#include <QDrag>
+#include <QMimeData>
+#include <QUrl>
 #include <limits>
 #include <fmfilelist/ListPresentation.h>
 #include <fmfilelist/ThumbnailView.h>
@@ -258,7 +261,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     BaseOpts.setScrollRowStyle( Qtitan::ScrollByPixel );
     BaseOpts.setGridLines( Qtitan::LinesNone );
     BaseOpts.setModelDecoration( true );
-    BaseOpts.setModelItemsDragEnabled( true );
+    BaseOpts.setModelItemsDragEnabled( false );
     BaseOpts.setRowStyle( Qtitan::GridViewOptions::RowStyleNormal );
     BaseOpts.setSelectedDecorationOpacity( 0.2 );
     BaseOpts.setSelectionPolicy( Qtitan::GridViewOptions::IgnoreSelection );
@@ -281,7 +284,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     view_->setFileManagerMode(true);
     BaseOpts.setRowFocusColor( QColor( 51, 79, 102 ) );
     
-    BaseOpts.setDragEnabled( true );
+    BaseOpts.setDragEnabled( false );
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setGroupsHeaderTextColor( "white" );
@@ -328,6 +331,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
     thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
     thumbnails_->listView()->installEventFilter(this);
+    thumbnails_->listView()->viewport()->installEventFilter(this);
     presentationStack_->addWidget(grid_); presentationStack_->addWidget(thumbnails_);
     vbox_->addWidget(QueryWidget); vbox_->addWidget(presentationStack_, 1);
     connect(thumbnails_, &fm::filelist::ThumbnailView::paneActivated, this, &CViewT::sig_NotifyViewActivated);
@@ -1510,6 +1514,17 @@ void CGridView::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
     ShowShellMenu(SrcIndex);
 }
 
+QStringList CGridView::DragPaths(const QModelIndex& Index) const
+{
+    auto Source = Index;
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (!model_ || !Source.isValid() || Source.model() != model_) return {};
+    const auto Item = model_->GetFileInfo(Source);
+    // Shell menus may fall back to the current directory; drags must never do so.
+    if (!Item || Item->Name_ == "..") return {};
+    return ShellMenuPaths(Source, IsSourceSelected(Source));
+}
+
 QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelection) const
 {
     const auto* Native = qobject_cast<CFSModel*>(model_);
@@ -1759,6 +1774,49 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    const bool GridViewport = Watched == grid_->viewport();
+    const bool TileViewport = thumbnails_ && Watched == thumbnails_->listView()->viewport();
+    if (GridViewport || TileViewport) {
+        if (Event->type() == QEvent::MouseButtonPress) {
+            dragPaths_.clear();
+            const auto* Mouse = static_cast<QMouseEvent*>(Event);
+            if (Mouse->button() == Qt::LeftButton && !IsEditing()) {
+                dragPressPosition_ = Mouse->position().toPoint();
+                QModelIndex Index;
+                if (TileViewport) {
+                    const auto Tile = thumbnails_->listView()->indexAt(dragPressPosition_);
+                    if (Tile.isValid()) Index = thumbnailModel_->SourceIndex(Tile.row());
+                } else {
+                    const auto Hit = grid_->hitInfo(dragPressPosition_);
+                    if (Hit.info() == Qtitan::GridHitInfo::Cell) Index = Hit.modelIndex();
+                }
+                dragPaths_ = DragPaths(Index);
+            }
+        } else if (Event->type() == QEvent::MouseButtonRelease || Event->type() == QEvent::MouseButtonDblClick) {
+            dragPaths_.clear();
+        } else if (Event->type() == QEvent::MouseMove && !dragPaths_.isEmpty()) {
+            const auto* Mouse = static_cast<QMouseEvent*>(Event);
+            if (!Mouse->buttons().testFlag(Qt::LeftButton)) dragPaths_.clear();
+            else if ((Mouse->position().toPoint() - dragPressPosition_).manhattanLength() >= QApplication::startDragDistance()) {
+                const auto Paths = std::exchange(dragPaths_, {});
+                plainLeftClick_ = false; resetRenameClicks();
+                // End the view's pressed state before entering the native OLE drag loop.
+                QMouseEvent Release(QEvent::MouseButtonRelease, Mouse->position(), Mouse->globalPosition(),
+                    Qt::LeftButton, Qt::NoButton, Mouse->modifiers());
+                QCoreApplication::sendEvent(Watched, &Release);
+                resetRenameClicks();
+                auto* Mime = new QMimeData;
+                QList<QUrl> Urls;
+                for (const auto& Path : Paths) Urls.append(QUrl::fromLocalFile(Path));
+                Mime->setUrls(Urls); // Qt's Windows platform exports these as CF_HDROP.
+                auto* Drag = new QDrag(this); Drag->setMimeData(Mime);
+                Drag->exec(Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, Qt::CopyAction);
+                Drag->deleteLater();
+                // The shell target performs a move; never remove source files here.
+                return true;
+            }
+        }
+    }
     if (Event->type() == QEvent::ShortcutOverride && !IsEditing()
         && (Watched == grid_ || Watched == grid_->viewport())) {
         const auto* Key = static_cast<QKeyEvent*>(Event);

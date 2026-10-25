@@ -3,6 +3,8 @@
 #include "memoryStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/mappedDriveRecovery.hpp"
+#include "UniqueLibs/shellDriveSort.hpp"
+#include <algorithm>
 #include <QtTest>
 #include <Windows.h>
 #include <AclAPI.h>
@@ -14,6 +16,30 @@ class StorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void driveLetterSortKeys()
+    {
+        using namespace hc::ui;
+        QVERIFY(IsDriveList({LocatorKind::Shell, "::{20d04fe0-3aea-1069-a2d8-08002b30309d}"}));
+        QVERIFY(!IsDriveList({LocatorKind::Local, "C:\\"}));
+        QVERIFY(!IsDriveList({LocatorKind::Shell, "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"}));
+        const auto Entry = [](std::string Name, std::string Path) {
+            EntrySnapshot Value; Value.name_ = std::move(Name);
+            Value.locator_ = {LocatorKind::Shell, "virtual"}; Value.hints_["filesystemPath"] = std::move(Path); return Value;
+        };
+        auto Z = Entry("AAA mapped drive (Z:)", "Z:\\");
+        auto C = Entry("ZZZ local disk (C:)", "c:/");
+        auto D = Entry("Local disk (D:)", "\\\\?\\D:\\");
+        auto Virtual = Entry("A virtual item (A:)", "\\\\server\\share");
+        std::vector<EntrySnapshot> Entries{Virtual, Z, D, C};
+        std::stable_sort(Entries.begin(), Entries.end(), [](const auto& A, const auto& B) { return DriveLetterSortKey(A) < DriveLetterSortKey(B); });
+        QCOMPARE(Entries[0].name_, C.name_); QCOMPARE(Entries[1].name_, D.name_);
+        QCOMPARE(Entries[2].name_, Z.name_); QCOMPARE(Entries[3].name_, Virtual.name_);
+        QCOMPARE(DriveLetterSortKey(Entry("folder", "C:\\folder")), 26);
+        QCOMPARE(DriveLetterSortKey(Entry("invalid", "1:\\")), 26);
+        EntrySnapshot Parsing; Parsing.locator_ = {LocatorKind::Shell, "X:\\"};
+        QCOMPARE(DriveLetterSortKey(Parsing), 23);
+    }
+
     void mappedDriveListing()
     {
         const auto Path = qEnvironmentVariable("HC_TEST_MAPPED_DRIVE");

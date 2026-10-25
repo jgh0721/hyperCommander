@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "shellDriveSort.hpp"
 #include "fileIconService.hpp"
 #include "quickFindSettings.hpp"
 #include "everythingSearchSession.hpp"
@@ -1501,7 +1502,18 @@ void CFSModel::refreshNameSortRanks(int First)
     if (Merge) for (int Row = 0; Row < First; ++Row) Order[nameSortRanks_[Row]] = Row;
     else First = 0;
     std::iota(Order.begin() + First, Order.end(), First);
+    const bool DriveList = hc::ui::IsDriveList(WorkspaceLocation());
     const auto Less = [&](int Left, int Right) {
+        if (DriveList) {
+            const bool LeftParent = vecNode_[Left]->Name_ == "..", RightParent = vecNode_[Right]->Name_ == "..";
+            if (LeftParent != RightParent) return LeftParent;
+            const auto DriveKey = [&](int Row) {
+                const auto& Entry = vecNode_[Row]->storageEntry_;
+                return Entry ? hc::ui::DriveLetterSortKey(*Entry) : 26;
+            };
+            const int LeftKey = DriveKey(Left), RightKey = DriveKey(Right);
+            if (LeftKey != RightKey) return LeftKey < RightKey;
+        }
         const auto Group = [&](int Row) { return vecNode_[Row]->Name_ == ".." ? 0 : (vecNode_[Row]->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2; };
         if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
         const auto Name = [&](int Row) { const auto& Item = vecNode_[Row];
@@ -2219,6 +2231,14 @@ void CFSModel::refreshColumnSortRanks(int First)
 {
     using namespace hc::columns;
     if (loading_) return;
+    if (hc::ui::IsDriveList(WorkspaceLocation())) {
+        // Drive letters stay A-Z even when a saved column sort is descending.
+        // GridSortRole compensates for the grid's direction using these ranks.
+        columnQueries_->EndSnapshot(); refreshNameSortRanks();
+        columnSortRanks_ = nameSortRanks_; completedSorts_ = columnSorts_;
+        if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
+        return;
+    }
     if ((UsesIndexedOrder() || appendOrder_) && !grouping_.enabled_) {
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
         return;

@@ -39,6 +39,9 @@
 #include <fmwidgets/DialogWidgets.h>
 #include <fmwidgets/Button.h>
 #include "stdafx.h"
+#include <QDrag>
+#include "UniqueLibs/shellDriveSort.hpp"
+#include <QMimeData>
 #include <QtTest>
 #include <mutex>
 #include <set>
@@ -141,6 +144,34 @@ private:
     UINT_PTR timer_ = 0;
     HHOOK hook_ = nullptr;
     HMENU menu_ = nullptr;
+};
+
+// OLE does not continuously pump Qt timers while the physical mouse is idle.
+class NativeDragProbe final
+{
+public:
+    explicit NativeDragProbe(QObject* Owner) : owner_(Owner)
+    { active_ = this; timer_ = SetTimer(nullptr, 0, 20, tick); }
+    ~NativeDragProbe() { KillTimer(nullptr, timer_); active_ = nullptr; }
+    bool seen_ = false;
+    QStringList paths_;
+private:
+    static void CALLBACK tick(HWND, UINT, UINT_PTR, DWORD)
+    {
+        if (!active_) return;
+        if (const auto* Drag = active_->owner_->findChild<QDrag*>()) {
+            if (!active_->seen_) {
+                active_->seen_ = true;
+                for (const auto& Url : Drag->mimeData()->urls()) active_->paths_.append(Url.toLocalFile());
+            }
+            QDrag::cancel();
+            if (const auto Capture = GetCapture()) PostMessageW(Capture, WM_MOUSEMOVE, 0, 0);
+            PostThreadMessageW(GetCurrentThreadId(), WM_MOUSEMOVE, 0, 0);
+        }
+    }
+    inline static thread_local NativeDragProbe* active_ = nullptr;
+    QObject* owner_;
+    UINT_PTR timer_ = 0;
 };
 
 class GatedProvider : public hc::storage::IStorageProvider
@@ -252,6 +283,8 @@ private slots:
             const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
@@ -3940,6 +3973,91 @@ private slots:
                 && QDir::fromNativeSeparators(Panel->CurrentPath()) == Root, 10000);
             QCOMPARE(Other->CurrentPath(), OtherPath);
         }
+    }
+
+    void driveListOrderUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        hc::workspace::TabState Tab; Tab.id_ = "drive-list-order";
+        Tab.location_ = {hc::storage::LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
+        auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() > 0, 10000);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile()));
+        const auto Ordered = [&] {
+            int Previous = -1, Drives = 0;
+            for (int Row = 0; Row < View->BaseView()->getRowCount(); ++Row) {
+                auto Index = View->BaseView()->getRow(Row).modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                const auto Item = Model->GetFileInfo(Index);
+                if (!Item || Item->Name_ == "..") continue;
+                const int Key = Item->storageEntry_ ? hc::ui::DriveLetterSortKey(*Item->storageEntry_) : 26;
+                if (Key < Previous) return false;
+                Previous = Key; if (Key < 26) ++Drives;
+            }
+            return Drives > 0;
+        };
+        QTRY_VERIFY(Ordered());
+        auto* Name = static_cast<Qtitan::GridTableColumn*>(View->BaseView()->getColumnByModelColumn(0));
+        Name->setSortOrder(Qtitan::SortDescending); QTest::qWait(160); QTRY_VERIFY(Ordered());
+        Name->setSortOrder(Qtitan::SortAscending); QTest::qWait(160); QTRY_VERIFY(Ordered());
+        QVERIFY(main_->grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("drive-list-order.png")));
+    }
+
+    void externalFileDragUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"first.txt", "한글 이름.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("drag fixture");
+        }
+        hc::workspace::TabState Tab; Tab.id_ = "external-drag";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
+        auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 3, 10000);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        const auto IndexFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto KeyFor = [&](const QString& Name) { return hc::workspace::SelectionKey(*Model->GetFileInfo(IndexFor(Name))->storageEntry_); };
+        View->RestoreSelection({}, KeyFor("first.txt"));
+        QCOMPARE(View->DragPaths(IndexFor("한글 이름.txt")), QStringList{Directory.filePath("한글 이름.txt")});
+        QVERIFY(View->DragPaths({}).isEmpty());
+        QVERIFY(View->DragPaths(IndexFor("..")).isEmpty());
+        View->RestoreSelection({KeyFor("first.txt"), KeyFor("한글 이름.txt")}, KeyFor("first.txt"));
+        auto Expected = QStringList{Directory.filePath("first.txt"), Directory.filePath("한글 이름.txt")}; Expected.sort();
+        auto Paths = View->DragPaths(IndexFor("first.txt")); Paths.sort(); QCOMPARE(Paths, Expected);
+        QVERIFY(View->DragPaths(IndexFor("..")).isEmpty());
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
+        QPoint Press(-1, -1);
+        for (const auto& Hit : Grid->hitInfoAll()) {
+            if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.modelIndex().data().toString() == "first.txt") {
+                Press = Hit.rect().center(); break;
+            }
+        }
+        QVERIFY(Press.x() >= 0);
+        QTest::mousePress(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Press);
+        NativeDragProbe Probe(View);
+        const QPoint Moved = Press + QPoint(QApplication::startDragDistance() + 5, 0);
+        QMouseEvent Move(QEvent::MouseMove, Moved, Grid->viewport()->mapToGlobal(Moved), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(Grid->viewport(), &Move);
+        // A synthetic press can make OLE cancel immediately on a headless desktop.
+        // The drag object still records the exact native payload until deleteLater.
+        if (!Probe.seen_) {
+            if (const auto* Drag = View->findChild<QDrag*>()) {
+                Probe.seen_ = true;
+                for (const auto& Url : Drag->mimeData()->urls()) Probe.paths_.append(Url.toLocalFile());
+            }
+        }
+        QVERIFY(Probe.seen_); Probe.paths_.sort(); QCOMPARE(Probe.paths_, Expected);
+        QVERIFY(QFile::exists(Expected.front())); QVERIFY(QFile::exists(Expected.back()));
+        QVERIFY(!View->IsEditing());
     }
 
     void shellMenuUi()
