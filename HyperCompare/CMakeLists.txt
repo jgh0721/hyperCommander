@@ -53,6 +53,7 @@ target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/largeTextView.cpp widgets/largeTextView.hpp
+    widgets/largeTextMultiView.cpp widgets/largeTextMultiView.hpp
     widgets/largeTextSyntax.cpp widgets/largeTextSyntax.hpp
     widgets/saveRecoveryDialog.cpp widgets/saveRecoveryDialog.hpp
     widgets/directoryTreeModel.cpp widgets/directoryTreeModel.hpp

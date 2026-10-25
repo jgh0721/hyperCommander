@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
 #include "widgets/largeTextView.hpp"
+#include "widgets/largeTextMultiView.hpp"
 #include "widgets/largeTextSyntax.hpp"
 #include <SciLexer.h>
 #include <QSpinBox>
@@ -118,6 +119,25 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void largeSimultaneousMergeAndIndependentViews()
+    {
+        QTemporaryDir dir; Request request; request.mode_ = "merge"; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp"); request.base_ = dir.filePath("base.cpp"); request.output_ = dir.filePath("out.cpp");
+        write(request.file1_, "int a = 1;\nint b = 0;\n"); write(request.file2_, "int a = 2;\nint b = 0;\n"); write(request.base_, "int a = 0;\nint b = 0;\n");
+        LargeTextMultiView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1700, 850); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* right = view.findChild<ScintillaEditBase*>("largeTextInput1"); auto* base = view.findChild<ScintillaEditBase*>("largeTextInput2"); auto* result = view.findChild<ScintillaEditBase*>("largeTextRight");
+        QVERIFY(right); QVERIFY(base); QVERIFY(right->isVisible()); QCOMPARE(contents(right), readBytes(request.file2_)); QCOMPARE(contents(base), readBytes(request.base_)); QVERIFY(right->send(SCI_GETREADONLY)); QVERIFY(!result->send(SCI_GETREADONLY));
+        view.findChild<QPushButton*>("largeResolveLeft")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(result), readBytes(request.file1_));
+        const auto at = contents(right).indexOf('2'); right->send(SCI_SETSEL, at, at + 1); view.findChild<QToolButton*>("largeInput1ToResult")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(result), readBytes(request.file2_));
+        QVERIFY(!QFileInfo::exists(request.output_)); view.Undo(false); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(result), readBytes(request.file1_)); view.Undo(true); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(result), readBytes(request.file2_));
+        result->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("// manual\n"));
+        view.findChild<QLineEdit*>("largeSearchQuery")->setText("int b"); view.findChild<QComboBox*>("largeSearchScope")->setCurrentIndex(1); view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(result).startsWith("// manual\n"));
+        view.findChild<QPushButton*>("largeCompleteReview")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); view.SaveActive(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.output_), contents(result)); QCOMPARE(readBytes(request.file2_), QByteArray("int a = 2;\nint b = 0;\n"));
+        const auto prefix = QCoreApplication::applicationDirPath() + "/../HyperCompare/large-multi-" + QGuiApplication::platformName();
+        QVERIFY(view.grab().save(prefix + "-light.png")); view.SetDark(true); view.SetTextFont(QFont("Consolas", 10)); QVERIFY(view.grab().save(prefix + "-dark.png"));
+        request.mode_ = "compare"; request.file3_ = request.base_; request.base_.clear(); request.output_.clear(); LargeTextMultiView independent(request, OpenLargeTextSession(request, {}), nullptr); independent.show(); QTRY_VERIFY_WITH_TIMEOUT(!independent.Busy(), 10000);
+        auto* third = independent.findChild<ScintillaEditBase*>("largeTextInput2"); QCOMPARE(contents(third), readBytes(request.file3_)); QVERIFY(!independent.CanSave()); auto* mode = independent.findChild<QComboBox*>("largeLayoutMode"); mode->setCurrentIndex(0); QTRY_VERIFY_WITH_TIMEOUT(!independent.Busy(), 10000);
+        auto* pairs = independent.findChild<QComboBox*>("largePairSelector"); pairs->setCurrentIndex(1); QTRY_VERIFY_WITH_TIMEOUT(!independent.Busy(), 10000); auto* edited = independent.findChild<ScintillaEditBase*>("largeTextRight"); edited->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("edit\n")); mode->setCurrentIndex(1); QTRY_VERIFY_WITH_TIMEOUT(!independent.Busy(), 10000); QCOMPARE(mode->currentIndex(), 1); QVERIFY(contents(third).startsWith("edit\n")); QVERIFY(!independent.CanSave()); QCOMPARE(readBytes(request.file3_), QByteArray("int a = 0;\nint b = 0;\n"));
+    }
     void largeTextPagesEditMergeUndoAndSave()
     {
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");

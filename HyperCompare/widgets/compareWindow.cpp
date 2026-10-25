@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
 #include "largeTextView.hpp"
+#include "largeTextMultiView.hpp"
 #include "boundedEditor.hpp"
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
@@ -594,9 +595,11 @@ namespace hc::compare
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
         if (result_.completion_ != "Complete") { directory_->EndProgress(); updateMerge(); state_->setText(result_.error_); return; }
         if (result_.largeText_) {
-            auto* view = new LargeTextView(request_, result_.largeText_, centralWidget()); extensionView_ = view;
+            LargeTextView* view = result_.largeText_->session_->documents_.size() >= 3
+                ? new LargeTextMultiView(request_, result_.largeText_, centralWidget())
+                : new LargeTextView(request_, result_.largeText_, centralWidget()); extensionView_ = view;
             qobject_cast<QSplitter*>(centralWidget())->addWidget(view); sources_->hide(); details_->hide(); directory_->hide(); view->show();
-            view->stateChanged_ = [this, view] { dirty_ = view->Dirty(); exitCode_ = view->ExitCode(); updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
+            view->stateChanged_ = [this, view, internal = view->stateChanged_] { if (internal) internal(); dirty_ = view->Dirty(); exitCode_ = view->ExitCode(); updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
             state_->setText(tr("대용량 텍스트 — 부분 로딩 편집·병합")); applyAppearance(); updateMerge(); return;
         }
         if (!result_.extension_.isEmpty())

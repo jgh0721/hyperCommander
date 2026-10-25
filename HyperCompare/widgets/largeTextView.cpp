@@ -48,6 +48,7 @@ namespace hc::compare
             if (ext == "json") return "json"; if (ext == "xml" || ext == "html") return "xml"; return "null";
         }
     }
+    const char* LargeTextLexer(const QString& Path) { return lexer(Path); }
     LargeTextView::LargeTextView(Request Input, std::shared_ptr<LargeTextComparison> Value, QWidget* Parent)
         : ExtensionView(Parent), input_(std::move(Input)), value_(std::move(Value)), saved_(value_->documents_)
     {
@@ -62,7 +63,7 @@ namespace hc::compare
         button(tr("왼쪽 ← 오른쪽"), "largeMergeLeft", [this] { merge(1); });
         button(tr("실행 취소"), "largeUndo", [this] { Undo(false); }); button(tr("다시 실행"), "largeRedo", [this] { Undo(true); });
         button(tr("왼쪽 저장"), "largeSaveLeft", [this] { save(0); }); button(tr("오른쪽 저장"), "largeSaveRight", [this] { save(1); });
-        auto* cancel = new QPushButton(tr("취소"), this); actions->addWidget(cancel); connect(cancel, &QPushButton::clicked, this, [this] { if (canceled_) canceled_->store(true); });
+        auto* cancel = new QPushButton(tr("취소"), this); actions->addWidget(cancel); connect(cancel, &QPushButton::clicked, this, [this] { Cancel(); });
         auto* navigation = new QHBoxLayout(); box->addLayout(navigation); navigation->addWidget(new QLabel(tr("차이 번호"), this));
         if (value_->session_) {
             savedAll_ = value_->session_->documents_; resultNeverSaved_ = merging();
@@ -98,10 +99,10 @@ namespace hc::compare
         auto* findKey = new QShortcut(QKeySequence::Find, this); connect(findKey, &QShortcut::activated, this, [this] { query_->setFocus(); query_->selectAll(); });
         auto* nextKey = new QShortcut(QKeySequence::FindNext, this); connect(nextKey, &QShortcut::activated, this, [this] { find(false); });
         auto* previousKey = new QShortcut(QKeySequence::FindPrevious, this); connect(previousKey, &QShortcut::activated, this, [this] { find(true); });
-        auto* panes = new QHBoxLayout(); box->addLayout(panes, 1);
+        auto* panes = new QHBoxLayout(); panes_ = panes; box->addLayout(panes, 1);
         for (int side = 0; side < 2; ++side) {
-            auto* pane = new QVBoxLayout(); panes->addLayout(pane, 1);
-            auto* label = new QLabel(value_->documents_[side].original_.path_, this); titles_[side] = label; label->setTextFormat(Qt::PlainText); pane->addWidget(label);
+            auto* paneWidget = new QWidget(this); paneWidgets_[side] = paneWidget; auto* pane = new QVBoxLayout(paneWidget); pane->setContentsMargins(0, 0, 0, 0); panes->addWidget(paneWidget, 1);
+            auto* label = new QLabel(value_->documents_[side].original_.path_, this); titles_[side] = label; label->setTextFormat(Qt::PlainText); label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); pane->addWidget(label);
             auto* row = new QHBoxLayout(); pane->addLayout(row); row->addWidget(new QLabel(tr("시작 줄"), this));
             lines_[side] = new QSpinBox(this); lines_[side]->setObjectName(side ? "largeLineRight" : "largeLineLeft"); row->addWidget(lines_[side]);
             auto* previous = new QPushButton(tr("이전"), this); auto* next = new QPushButton(tr("다음"), this); auto* go = new QPushButton(tr("이동"), this);
@@ -156,20 +157,18 @@ namespace hc::compare
         if (value_->session_) { for (const auto& pair : value_->session_->comparisons_) if (pair.toObject()["changeCount"].toDouble()) return 1; return 0; }
         return value_->changes_.empty() ? 0 : 1;
     }
-    void LargeTextView::SetTextFont(const QFont& Font)
+    void ApplyLargeTextEditorAppearance(ScintillaEditBase* Editor, const QFont& Font, bool Dark, int LexerId)
     {
-        textFont_ = Font;
         const auto color = [](QColor Value) { return Value.red() | (Value.green() << 8) | (Value.blue() << 16); };
-        for (int side = 0; side < 2; ++side) { auto* editor = editors_[side];
-            const auto name = Font.family().toUtf8(); editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(name.constData()));
-            editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, std::max(1, Font.pointSize())); editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, color(dark_ ? QColor("#e5e5e5") : QColor("#142236")));
-            editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, color(dark_ ? QColor("#202020") : QColor("#fafbfc"))); editor->send(SCI_STYLECLEARALL);
-            editor->send(SCI_SETCARETFORE, color(dark_ ? QColor("#ffffff") : QColor("#142236")));
-            editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_RTEXT); editor->send(SCI_SETMARGINWIDTHN, 0, 60); editor->send(SCI_SETMARGINWIDTHN, 1, 0);
-            editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(dark_ ? QColor("#282828") : QColor("#f0f0f0")));
-            editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
-            const auto paint = [&](std::initializer_list<int> Styles, const QColor& Light, const QColor& Dark) { for (const auto style : Styles) editor->send(SCI_STYLESETFORE, style, color(dark_ ? Dark : Light)); };
-            switch (lexerIds_[side]) {
+            const auto name = Font.family().toUtf8(); Editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(name.constData()));
+            Editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, std::max(1, Font.pointSize())); Editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, color(Dark ? QColor("#e5e5e5") : QColor("#142236")));
+            Editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, color(Dark ? QColor("#202020") : QColor("#fafbfc"))); Editor->send(SCI_STYLECLEARALL);
+            Editor->send(SCI_SETCARETFORE, color(Dark ? QColor("#ffffff") : QColor("#142236")));
+            Editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_RTEXT); Editor->send(SCI_SETMARGINWIDTHN, 0, 60); Editor->send(SCI_SETMARGINWIDTHN, 1, 0);
+            Editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(Dark ? QColor("#282828") : QColor("#f0f0f0")));
+            Editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); Editor->send(SCI_MARKERSETBACK, 8, color(Dark ? QColor("#4d4635") : QColor("#fff0bb")));
+            const auto paint = [&](std::initializer_list<int> Styles, const QColor& LightColor, const QColor& DarkColor) { for (const auto style : Styles) Editor->send(SCI_STYLESETFORE, style, color(Dark ? DarkColor : LightColor)); };
+            switch (LexerId) {
             case SCLEX_CPP:
                 paint({SCE_C_COMMENT, SCE_C_COMMENTLINE, SCE_C_COMMENTDOC, SCE_C_COMMENTLINEDOC}, QColor("#51774c"), QColor("#90b58b"));
                 paint({SCE_C_WORD, SCE_C_WORD2}, QColor("#803da1"), QColor("#cb9fda")); paint({SCE_C_STRING, SCE_C_CHARACTER, SCE_C_VERBATIM, SCE_C_STRINGRAW}, QColor("#9b5f28"), QColor("#d7b080"));
@@ -184,17 +183,20 @@ namespace hc::compare
                 paint({SCE_H_TAG, SCE_H_TAGEND}, QColor("#3769a0"), QColor("#92bfdd")); paint({SCE_H_COMMENT}, QColor("#51774c"), QColor("#90b58b"));
                 paint({SCE_H_DOUBLESTRING, SCE_H_SINGLESTRING, SCE_H_CDATA}, QColor("#9b5f28"), QColor("#d7b080")); break;
             }
-        }
+    }
+    void LargeTextView::SetTextFont(const QFont& Font)
+    {
+        textFont_ = Font; for (int side = 0; side < 2; ++side) ApplyLargeTextEditorAppearance(editors_[side], Font, dark_, lexerIds_[side]);
     }
     void LargeTextView::controls()
     {
         for (auto* b : buttons_) b->setEnabled(!Busy());
         for (int side = 0; side < 2; ++side) {
             const bool source = merging() && value_->session_->pair_[side] != value_->session_->result_;
-            lines_[side]->setRange(1, std::max(1, int(value_->lines_[side].size()))); lines_[side]->setEnabled(!Busy()); editors_[side]->send(SCI_SETREADONLY, Busy() || source);
+            lines_[side]->setRange(1, std::max(1, int(value_->lines_[side].size()))); lines_[side]->setEnabled(!Busy()); editors_[side]->send(SCI_SETREADONLY, Busy() || source || displayReadOnly_);
             titles_[side]->setText((value_->session_ ? value_->session_->titles_[value_->session_->pair_[side]] + " — " : QString{}) + value_->documents_[side].original_.path_ + "\n" + value_->documents_[side].original_.encoding_ + (value_->documents_[side].original_.bom_ ? tr(" · BOM 있음") : tr(" · BOM 없음")));
-            findChild<QPushButton*>(side ? "largeSaveRight" : "largeSaveLeft")->setEnabled(!Busy() && !source);
-            findChild<QPushButton*>(side ? "largeMergeRight" : "largeMergeLeft")->setEnabled(!Busy() && !source);
+            findChild<QPushButton*>(side ? "largeSaveRight" : "largeSaveLeft")->setEnabled(!Busy() && !source && !displayReadOnly_);
+            findChild<QPushButton*>(side ? "largeMergeRight" : "largeMergeLeft")->setEnabled(!Busy() && !source && !displayReadOnly_);
         }
         if (pairs_) pairs_->setEnabled(!Busy());
         if (pairs_ && value_->session_) { const QSignalBlocker blocker(pairs_); for (int i = 0; i < pairs_->count(); ++i) { const auto data = pairs_->itemData(i).toList(); if (value_->session_->pair_ == std::array{data[0].toInt(), data[1].toInt()}) pairs_->setCurrentIndex(i); } }
@@ -264,8 +266,9 @@ namespace hc::compare
                 if (response.match_->found_ && response.match_->end_ > end_[response.matchSide_]) status_->setText(status_->text() + tr(" · 일치 범위가 페이지를 넘어 현재 표시 부분만 선택했습니다."));
             }
             if (!response.note_.isEmpty()) status_->setText(response.note_ + " · " + status_->text()); updateGutter();
+            deferredContinuation_ = bool(pending);
             if (stateChanged_) stateChanged_();
-            if (pending) QTimer::singleShot(0, this, std::move(pending));
+            if (pending) QTimer::singleShot(0, this, [this, pending = std::move(pending)] { deferredContinuation_ = false; pending(); });
         });
         watcher_.setFuture(QtConcurrent::run([work = std::move(Work), starts, pageStart = pageStart_, syntax = syntax_, canceled = canceled_, memory = input_.memoryMiB_] {
             Response result; Budget limits; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::time_point::max();

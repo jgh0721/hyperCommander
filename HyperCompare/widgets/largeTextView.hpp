@@ -12,21 +12,24 @@ class QComboBox;
 class QLineEdit;
 class QCheckBox;
 class QTimer;
+class QHBoxLayout;
 namespace hc::compare
 {
+    const char* LargeTextLexer(const QString& Path);
+    void ApplyLargeTextEditorAppearance(ScintillaEditBase* Editor, const QFont& Font, bool Dark, int LexerId);
     class ChunkGutter;
     class LargeTextSyntax;
-    class LargeTextView final : public ExtensionView
+    class LargeTextView : public ExtensionView
     {
     public:
         LargeTextView(Request Input, std::shared_ptr<LargeTextComparison> Value, QWidget* Parent);
         ~LargeTextView() override;
         bool Busy() const { return busy_; }
         bool Dirty() const;
-        int ExitCode() const;
+        virtual int ExitCode() const;
         void Cancel() { if (canceled_) canceled_->store(true); }
         void SetTextFont(const QFont& Font) override;
-        void SetDark(bool Dark) { dark_ = Dark; }
+        virtual void SetDark(bool Dark) { dark_ = Dark; }
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
         void RecoverWork(const QString& Path);
@@ -39,7 +42,7 @@ namespace hc::compare
         std::function<void()> stateChanged_;
     protected:
         bool eventFilter(QObject* Object, QEvent* Event) override;
-    private:
+    protected:
         struct Task {
             std::shared_ptr<LargeTextComparison> comparison_;
             std::optional<LargeTextMatch> match_;
@@ -69,7 +72,7 @@ namespace hc::compare
         void switchPair(int Index);
         void resolve(Resolution Choice);
         void completeReview();
-        void find(bool Backwards);
+        virtual void find(bool Backwards);
         void updateGutter();
         void chooseChunk(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         bool merging() const { return value_->session_ && value_->session_->result_ >= 0; }
@@ -82,6 +85,10 @@ namespace hc::compare
         QFutureWatcher<Response> watcher_;
         std::shared_ptr<std::atomic_bool> canceled_;
         ScintillaEditBase* editors_[2]{};
+        QHBoxLayout* panes_ = nullptr;
+        QWidget* paneWidgets_[2]{};
+        bool displayReadOnly_ = false;
+        bool deferredContinuation_ = false;
         QSpinBox* lines_[2]{};
         QSpinBox* change_ = nullptr;
         QSpinBox* conflict_ = nullptr;
