@@ -148,8 +148,10 @@ private slots:
         left->send(SCI_SETTARGETSTART, 0); left->send(SCI_SETTARGETEND, 1); left->send(SCI_REPLACETARGET, 1, reinterpret_cast<sptr_t>("Z"));
         view->findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
         QVERIFY(contents(left).startsWith("Z"));
-        view->findChild<QPushButton*>("largeSaveLeft")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
+        left->setFocus(); QTest::keyClick(left, Qt::Key_S, Qt::ControlModifier); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000);
         auto expected = text; expected[qsizetype(largeTextPageMaximum)] = 'Z'; QCOMPARE(readBytes(request.file1_), expected); QCOMPARE(readBytes(request.file2_), text);
+        QVERIFY(action(window, QString::fromUtf8("작업 저장..."))->isEnabled()); const auto work = dir.filePath("large.hclarge"); window.SaveWork(work); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 30000); QVERIFY(QFileInfo::exists(work));
+        const auto report = dir.filePath("large-report.json"); window.ExportReport(report); QTRY_VERIFY_WITH_TIMEOUT(!view->Busy(), 10000); QCOMPARE(QJsonDocument::fromJson(readBytes(report)).object()["kind"].toString(), QString("HyperCompareLargeReport"));
         action(window, "Dark")->setChecked(false); QTest::qWait(50);
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/large-text-light.png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(50);
@@ -183,6 +185,27 @@ private slots:
         right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("EDIT\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
         pairs->setCurrentIndex(1); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(right), QByteArray("EDIT\nthird\n")); QVERIFY(view.Dirty());
         view.findChild<QPushButton*>("largeSaveRight")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(readBytes(request.file3_), QByteArray("EDIT\nthird\n")); QVERIFY(!view.Dirty());
+    }
+    void largeSearchWorkReportAndChunkControls()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.cpp"); request.file2_ = dir.filePath("right.cpp");
+        QByteArray text = "int value() { return 1; }\n"; for (int i = 0; i < 2000; ++i) text += "// line " + QByteArray::number(i) + "\n"; text += "// needle한글\n";
+        auto rightText = text; rightText.replace("return 1", "return 2"); write(request.file1_, text); write(request.file2_, rightText);
+        LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1300, 800); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* left = view.findChild<ScintillaEditBase*>("largeTextLeft"); auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); QCOMPARE(left->send(SCI_GETLEXER), sptr_t(3));
+        QTRY_VERIFY(view.findChild<QToolButton*>("chunk1_action0")); auto* copy = view.findChild<QToolButton*>("chunk1_action0"); QVERIFY(copy->isEnabled());
+        const auto at = contents(left).indexOf("1"); left->send(SCI_SETSEL, at, at + 1); QTest::qWait(30); copy->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(left), contents(right)); QCOMPARE(readBytes(request.file2_), rightText);
+        right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("// manual\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        const auto work = dir.filePath("session.hclarge"); view.SaveWork(work); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(QFileInfo::exists(work));
+        right->send(SCI_INSERTTEXT, 0, reinterpret_cast<sptr_t>("// NEXT\n")); view.findChild<QPushButton*>("largeApplyPages")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        view.LoadWork(work); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).startsWith("// manual\n")); QVERIFY(!contents(right).contains("NEXT"));
+        view.findChild<QPushButton*>("largeUndo")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).startsWith("// NEXT\n"));
+        view.findChild<QPushButton*>("largeRedo")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        const auto report = dir.filePath("report.json"); view.ExportReport(report); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(QJsonDocument::fromJson(readBytes(report)).object()["kind"].toString(), QString("HyperCompareLargeReport"));
+        auto* query = view.findChild<QLineEdit*>("largeSearchQuery"); query->setText(QString::fromUtf8("needle한글")); view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        const auto a = left->send(SCI_GETSELECTIONSTART), b = left->send(SCI_GETSELECTIONEND); QCOMPARE(contents(left).mid(a, b - a), QByteArray("needle한글"));
+        query->setText("does-not-exist"); view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(left->send(SCI_GETSELECTIONSTART), a); QCOMPARE(left->send(SCI_GETSELECTIONEND), b);
+        QCOMPARE(readBytes(request.file1_), text); QCOMPARE(readBytes(request.file2_), rightText);
     }
     void directoryPartialResultsAndPlanGuard()
     {

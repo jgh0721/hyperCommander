@@ -248,6 +248,7 @@ namespace hc::compare
                     result.operation_ = merging ? (Input.base_.isEmpty() ? "large-text-merge2" : "large-text-merge3") : session.documents_.size() == 3 ? "large-text-compare3" : "large-text-compare2"; result.completion_ = "Complete";
                     bool contentEqual = true, rawEqual = true;
                     for (const auto& pair : session.comparisons_) contentEqual &= pair.toObject()["changeCount"].toDouble() == 0;
+                    if (merging) for (int i = 1; i < session.result_; ++i) contentEqual &= !session.documents_[i].contentHash_.isEmpty() && session.documents_[i].contentHash_ == session.documents_[0].contentHash_;
                     for (std::size_t i = 1; i < session.documents_.size() && int(i) != session.result_; ++i) rawEqual &= session.documents_[i].rawHash_ == session.documents_[0].rawHash_;
                     result.exitCode_ = (Input.textEquality_ == "bytes" ? rawEqual : contentEqual) ? 0 : 1; result.outcome_ = result.exitCode_ ? "Different" : rawEqual ? "Equal" : "Equivalent";
                     result.textComparison_ = {{"policy", Input.textEquality_}, {"contentEqual", contentEqual}, {"rawEqual", rawEqual}, {"encodingOnly", contentEqual && !rawEqual}, {"storage", "disk-backed-pieces"}, {"changeCount", double(result.largeText_->changes_.size())}};
@@ -355,6 +356,8 @@ namespace hc::compare
             AnalyzeSourceRelations(Input, result, limits);
             result.completion_ = "Complete";
         }
+        catch (const SaveRecoveryFailure& error)
+        { result.error_ = QString::fromStdString(error.code_); result.recovery_ += error.recovery_; result.exitCode_ = 2; result.completion_ = "Failed"; if (error.code_.starts_with("LargeTextCommitted")) { result.commit_ = "Committed"; result.outcome_ = "VerificationFailed"; } }
         catch (const Failure& error)
         { result.error_ = QString::fromStdString(error.code_); result.exitCode_ = error.code_ == "Canceled" ? 3 : 2; result.completion_ = result.exitCode_ == 3 ? "Canceled" : "Failed"; }
         catch (const std::exception& error)

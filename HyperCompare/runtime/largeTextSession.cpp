@@ -67,6 +67,7 @@ namespace hc::compare
         {
             const auto& base = Session.documents_[2]; const auto& left = Session.documents_[0]; const auto& right = Session.documents_[1];
             const auto a = CompareLargeText({base, left}, Limits), b = CompareLargeText({base, right}, Limits);
+            Session.documents_[2].contentHash_ = a.documents_[0].contentHash_; Session.documents_[0].contentHash_ = a.documents_[1].contentHash_; Session.documents_[1].contentHash_ = b.documents_[1].contentHash_;
             struct Tagged { const Edit* edit_; bool left_; }; std::vector<Tagged> all;
             const auto admission = Limits.memoryReserve_ ? Limits.memoryReserve_((a.changes_.size() + b.changes_.size()) * 4096) : std::shared_ptr<void>{};
             for (const auto& edit : a.changes_) all.push_back({&edit, true}); for (const auto& edit : b.changes_) all.push_back({&edit, false});
@@ -124,6 +125,7 @@ namespace hc::compare
             if (!Input.base_.isEmpty()) merge(session, Limits);
             else {
                 const auto comparison = CompareLargeText({session.documents_[0], session.documents_[1]}, Limits);
+                session.documents_[0].contentHash_ = comparison.documents_[0].contentHash_; session.documents_[1].contentHash_ = comparison.documents_[1].contentHash_;
                 auto output = session.documents_[Input.takeAll_ == "right" ? 1 : 0];
                 if (Input.takeAll_.isEmpty()) for (const auto& edit : comparison.changes_) {
                     LargeTextConflict conflict; conflict.base_ = range(session.documents_[0], comparison.lines_[0][edit.begin_], comparison.lines_[0][edit.end_], Limits);
@@ -196,7 +198,7 @@ namespace hc::compare
     {
         QJsonArray documents, conflicts;
         if (Value.session_) {
-            for (std::size_t i = 0; i < Value.session_->documents_.size(); ++i) { const auto& doc = Value.session_->documents_[i]; documents.append(QJsonObject{{"role", Value.session_->titles_[int(i)]}, {"path", doc.original_.path_}, {"encoding", doc.original_.encoding_}, {"bom", doc.original_.bom_}, {"decodedBytes", double(doc.bytes_)}}); }
+            for (std::size_t i = 0; i < Value.session_->documents_.size(); ++i) { const auto& doc = Value.session_->documents_[i]; documents.append(QJsonObject{{"role", Value.session_->titles_[int(i)]}, {"path", doc.original_.path_}, {"encoding", doc.original_.encoding_}, {"bom", doc.original_.bom_}, {"decodedBytes", double(doc.bytes_)}, {"utf8Sha256", QString::fromLatin1(doc.contentHash_.toHex())}}); }
             for (const auto& conflict : Value.session_->conflicts_) conflicts.append(QJsonObject{{"begin", double(conflict.begin_)}, {"end", double(conflict.end_)}, {"choice", int(conflict.choice_)}});
         }
         return {{"documents", documents}, {"conflicts", conflicts}, {"unresolved", double(LargeTextUnresolved(Value))}, {"reviewRequired", Value.session_ && Value.session_->reviewRequired_}};

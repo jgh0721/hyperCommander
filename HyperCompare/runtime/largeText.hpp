@@ -65,6 +65,12 @@ namespace hc::compare
     std::size_t LargeTextUnresolved(const LargeTextComparison& Value);
     void ValidateLargeTextInputs(const LargeTextSession& Session, const Budget& Limits);
     QJsonObject LargeTextSessionJson(const LargeTextComparison& Value);
+    struct LargeTextMatch { bool found_ = false, wrapped_ = false; std::uint64_t begin_ = 0, end_ = 0; };
+    LargeTextMatch FindLargeText(const LargeTextDocument& Document, const QString& Query, std::uint64_t Start,
+        bool Backwards, Qt::CaseSensitivity Case, const Budget& Limits);
+    ReportFile SaveLargeTextWork(const QString& Path, const Request& Input, const LargeTextComparison& Value, bool ReplaceExisting, const Budget& Limits);
+    std::shared_ptr<LargeTextComparison> LoadLargeTextWork(const QString& Path, const Request& Input, const LargeTextComparison& Current, const Budget& Limits, bool RecoverResult = false);
+    ReportFile SaveLargeTextReport(const QString& Path, const Request& Input, const LargeTextComparison& Value, bool ReplaceExisting, const Budget& Limits);
     struct LargeTextSave { Snapshot snapshot_; QByteArray rawHash_; QJsonArray warnings_, recovery_; };
     LargeTextSave SaveLargeText(const Request& Input, const LargeTextDocument& Document, const Budget& Limits);
 }

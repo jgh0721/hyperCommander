@@ -191,19 +191,19 @@ namespace hc::compare
         });
         gitSetup->setObjectName("openGitSetup");
         saveWork_ = fileMenu->addAction(tr("작업 저장..."), this, [this] {
-            if (!merge_ || busy()) return;
-            QFileDialog dialog(this, tr("병합 작업 저장"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
-            dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix("hcmerge");
+            if ((!merge_ && !result_.largeText_) || busy()) return;
+            QFileDialog dialog(this, tr("병합 작업 저장"), workPath_, tr("HyperCompare 작업 (*.hcmerge *.hclarge)"));
+            dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix(result_.largeText_ ? "hclarge" : "hcmerge");
             if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()) SaveWork(dialog.selectedFiles().front(), true);
         });
         loadWork_ = fileMenu->addAction(tr("작업 불러오기..."), this, [this] {
-            if (!merge_ || busy()) return;
-            const auto path = QFileDialog::getOpenFileName(this, tr("병합 작업 불러오기"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
+            if ((!merge_ && !result_.largeText_) || busy()) return;
+            const auto path = QFileDialog::getOpenFileName(this, tr("병합 작업 불러오기"), workPath_, tr("HyperCompare 작업 (*.hcmerge *.hclarge)"));
             if (!path.isEmpty()) LoadWork(path);
         });
         recoverWork_ = fileMenu->addAction(tr("작업 결과 텍스트 복구…"), this, [this] {
             if (!recoverWork_->isEnabled()) return;
-            const auto path = QFileDialog::getOpenFileName(this, tr("변경된 입력의 작업 결과 복구"), workPath_, tr("HyperCompare 작업 (*.hcmerge)"));
+            const auto path = QFileDialog::getOpenFileName(this, tr("변경된 입력의 작업 결과 복구"), workPath_, tr("HyperCompare 작업 (*.hcmerge *.hclarge)"));
             if (!path.isEmpty()) RecoverWork(path);
         });
         recoverWork_->setObjectName("recoverMergeWork"); recoverWork_->setEnabled(false);
@@ -845,6 +845,13 @@ namespace hc::compare
         overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
+        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) {
+            exportReport_->setEnabled(large->CanExport()); saveWork_->setEnabled(large->CanExport()); loadWork_->setEnabled(large->CanExport());
+            recoverWork_->setEnabled(request_.mode_ == "merge" && large->CanExport()); reintegrate_->setEnabled(false); importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false);
+            save_->setVisible(true); save_->setText(request_.mode_ == "merge" ? tr("RESULT 저장") : tr("활성 문서 저장")); save_->setEnabled(large->CanSave());
+            undo_->setEnabled(large->CanUndo(false)); redo_->setEnabled(large->CanUndo(true));
+            for (auto* action : blockActions_) action->setEnabled(false); for (auto* action : wholeActions_) action->setEnabled(false); return;
+        }
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready); reintegrate_->setEnabled(ready);
         importDecisions_->setEnabled(ready && request_.takeAll_.isEmpty()); exportDecisions_->setEnabled(ready && request_.takeAll_.isEmpty());
@@ -923,6 +930,7 @@ namespace hc::compare
     }
     void CompareWindow::save()
     {
+        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SaveActive(); return; }
         if (sourceEditing_) { saveInput(activeInput_); return; }
         if (!output_ || busy()) return;
         if (unresolved_) { QMessageBox::information(this, tr("충돌 해결"), tr("충돌을 검토하고 ‘수동 해결 완료’를 선택하십시오.")); return; }
@@ -935,9 +943,9 @@ namespace hc::compare
         }));
         updateMerge();
     }
-    void CompareWindow::SaveWork(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting); }
-    void CompareWindow::LoadWork(const QString& Path) { transferWork(Path, true, false); }
-    void CompareWindow::RecoverWork(const QString& Path) { transferWork(Path, true, false, false, true); }
+    void CompareWindow::SaveWork(const QString& Path, bool ReplaceExisting) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SaveWork(Path, ReplaceExisting); return; } transferWork(Path, false, ReplaceExisting); }
+    void CompareWindow::LoadWork(const QString& Path) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->LoadWork(Path); return; } transferWork(Path, true, false); }
+    void CompareWindow::RecoverWork(const QString& Path) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->RecoverWork(Path); return; } transferWork(Path, true, false, false, true); }
     void CompareWindow::ImportDecisions(const QString& Path) { transferWork(Path, true, false, true); }
     void CompareWindow::ExportDecisions(const QString& Path, bool ReplaceExisting) { transferWork(Path, false, ReplaceExisting, true); }
     void CompareWindow::transferWork(const QString& Path, bool Loading, bool ReplaceExisting, bool Decisions, bool RecoverText)
@@ -965,6 +973,7 @@ namespace hc::compare
     }
     void CompareWindow::ExportReport(const QString& Path, bool ReplaceExisting)
     {
+        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->ExportReport(Path, ReplaceExisting); return; }
         if (Path.isEmpty() || !exportReport_->isEnabled() || busy() || (sourceEditing_ && (sourcePending_ || !sourceValid_))) return;
         auto session = result_; QJsonArray workingInputs;
         for (int i = 0; i < session.inputs_.size(); ++i)

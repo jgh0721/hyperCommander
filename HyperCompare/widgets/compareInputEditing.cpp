@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "largeTextView.hpp"
 #include "boundedEditor.hpp"
 #include "chunkGutter.hpp"
 #include "mergeController.hpp"
@@ -307,6 +308,7 @@ namespace hc::compare
     void CompareWindow::inputUndo(bool Redo)
     {
         if (busy()) return;
+        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->Undo(Redo); return; }
         auto* editor = sourceEditing_ && !editors_.isEmpty() ? editors_[activeInput_] : output_;
         if (editor) editor->send(Redo ? SCI_REDO : SCI_UNDO);
     }

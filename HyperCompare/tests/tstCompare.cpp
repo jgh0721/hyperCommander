@@ -1207,6 +1207,56 @@ private slots:
             QCOMPARE(ReadLargeTextRange(value->documents_[1], 0, value->documents_[1].bytes_, {}), QByteArray("EDIT\n")); QCOMPARE(read(input.file3_), QByteArray("three\n"));
         } catch (const std::exception& error) { QFAIL(error.what()); }
     }
+    void largeSearchCrossesChunksAndWraps()
+    {
+        try {
+            QTemporaryDir dir; const auto path = dir.filePath("text"); const QByteArray needle("한글Needle😀"); QByteArray text(65533, 'x'); text += needle; text += QByteArray(150000, 'y'); text += needle.toLower(); text += "end"; write(path, text);
+            const auto document = ReadLargeText(path, {}, {});
+            auto match = FindLargeText(document, QString::fromUtf8(needle), 0, false, Qt::CaseSensitive, {}); QVERIFY(match.found_); QCOMPARE(match.begin_, std::uint64_t(65533));
+            const auto second = FindLargeText(document, QString::fromUtf8(needle), match.end_, false, Qt::CaseInsensitive, {}); QVERIFY2(second.found_, qPrintable(QString("start=%1 size=%2 tail=%3 wholeIndex=%4").arg(match.end_).arg(text.size()).arg(QString::fromUtf8(text.right(30))).arg(QString::fromUtf8(text).indexOf(QString::fromUtf8(needle), int(QString::fromUtf8(text.left(qsizetype(match.end_))).size()), Qt::CaseInsensitive)))); QVERIFY(second.begin_ > 200000); QVERIFY(!second.wrapped_);
+            const auto wrapped = FindLargeText(document, QString::fromUtf8(needle), second.end_, false, Qt::CaseInsensitive, {}); QVERIFY(wrapped.wrapped_); QCOMPARE(wrapped.begin_, match.begin_);
+            const auto previous = FindLargeText(document, QString::fromUtf8(needle), second.begin_, true, Qt::CaseInsensitive, {}); QCOMPARE(previous.begin_, match.begin_);
+            const auto crossingCursor = FindLargeText(document, QString::fromUtf8(needle), match.begin_ + 3, false, Qt::CaseSensitive, {}); QVERIFY(crossingCursor.found_); QVERIFY(crossingCursor.wrapped_); QCOMPARE(crossingCursor.begin_, match.begin_);
+            QVERIFY(!FindLargeText(document, "absent", 0, false, Qt::CaseInsensitive, {}).found_);
+            std::atomic_bool canceled{true}; Budget limits; limits.canceled_ = &canceled; QVERIFY_EXCEPTION_THROWN(FindLargeText(document, "Needle", 0, false, Qt::CaseSensitive, limits), Failure);
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
+    void largeWorkRoundTripCorruptionAndReport()
+    {
+        try {
+            QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); request.file3_ = dir.filePath("third");
+            write(request.file1_, "a\n"); write(request.file2_, "b\n"); write(request.file3_, "c\n");
+            const auto original = OpenLargeTextSession(request, {}); auto documents = original->documents_; documents[1] = EditLargeText(documents[1], 0, documents[1].bytes_, "한글😀\n", {});
+            const auto working = UpdateLargeTextSession(*original, std::move(documents), {}); const auto path = dir.filePath("work.hclarge");
+            SaveLargeTextWork(path, request, *working, false, {}); const auto stored = read(path);
+            const auto restored = LoadLargeTextWork(path, request, *original, {}); QCOMPARE(ReadLargeTextRange(restored->documents_[1], 0, restored->documents_[1].bytes_, {}), QByteArray("한글😀\n")); QCOMPARE(read(request.file2_), QByteArray("b\n"));
+            QVERIFY_EXCEPTION_THROWN(SaveLargeTextWork(request.file1_, request, *working, true, {}), Failure); QCOMPARE(read(request.file1_), QByteArray("a\n"));
+            QVERIFY_EXCEPTION_THROWN(SaveLargeTextWork(path, request, *working, false, {}), Failure);
+            auto corrupt = stored; corrupt[corrupt.size() - 1] ^= 1; write(path, corrupt); QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, request, *original, {}), Failure);
+            write(path, stored.left(stored.size() - 1)); QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, request, *original, {}), Failure);
+            write(path, stored + "extra"); QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, request, *original, {}), Failure); write(path, stored);
+            Budget denied; denied.memoryReserve_ = [](std::uint64_t) -> std::shared_ptr<void> { throw Failure("MemoryLimit"); }; QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, request, *original, denied), Failure);
+            const auto report = dir.filePath("report.json"); SaveLargeTextReport(report, request, *working, false, {}); const auto json = QJsonDocument::fromJson(read(report)).object(); QCOMPARE(json["kind"].toString(), "HyperCompareLargeReport"); QVERIFY(json["workingCopy"].toBool()); QCOMPARE(json["documents"].toArray().size(), 3);
+            QVERIFY_EXCEPTION_THROWN(SaveLargeTextReport(request.file2_, request, *working, true, {}), Failure);
+            write(request.file1_, "external"); QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, request, *original, {}), Failure); QCOMPARE(read(request.file1_), QByteArray("external"));
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
+    void largeMergeWorkKeepsConflictChoices()
+    {
+        try {
+            QTemporaryDir dir; Request input; input.mode_ = "merge"; input.file1_ = dir.filePath("left"); input.file2_ = dir.filePath("right"); input.base_ = dir.filePath("base"); input.output_ = dir.filePath("out");
+            write(input.base_, "a\nb\nc\n"); write(input.file1_, "LEFT\nb\nONE\n"); write(input.file2_, "RIGHT\nb\nTWO\n");
+            const auto original = OpenLargeTextSession(input, {}); const auto chosen = ResolveLargeTextConflict(*original, 0, Resolution::Left, {}); const auto path = dir.filePath("work.hclarge"); SaveLargeTextWork(path, input, *chosen, false, {});
+            auto restored = LoadLargeTextWork(path, input, *original, {}); QCOMPARE(LargeTextUnresolved(*restored), std::size_t(1)); QCOMPARE(restored->session_->conflicts_[0].choice_, Resolution::Left);
+            restored = ResolveLargeTextConflict(*restored, 1, Resolution::Right, {}); const auto& result = restored->session_->documents_[3]; QCOMPARE(ReadLargeTextRange(result, 0, result.bytes_, {}), QByteArray("LEFT\nb\nTWO\n"));
+            auto docs = restored->documents_; docs[1] = EditLargeText(docs[1], 0, 0, "manual\n", {}); restored = UpdateLargeTextSession(*restored, std::move(docs), {}); QVERIFY(restored->session_->reviewRequired_);
+            SaveLargeTextWork(path, input, *restored, true, {}); const auto reviewed = LoadLargeTextWork(path, input, *original, {}); QVERIFY(reviewed->session_->reviewRequired_); QVERIFY_EXCEPTION_THROWN(ResolveLargeTextConflict(*reviewed, 0, Resolution::Right, {}), Failure);
+            write(input.file1_, "LATEST\nb\nONE\n"); const auto fresh = OpenLargeTextSession(input, {}); QVERIFY_EXCEPTION_THROWN(LoadLargeTextWork(path, input, *fresh, {}), Failure);
+            const auto recovered = LoadLargeTextWork(path, input, *fresh, {}, true); QVERIFY(recovered->session_->reviewRequired_); QVERIFY(recovered->session_->conflicts_.empty());
+            QCOMPARE(ReadLargeTextRange(recovered->session_->documents_[0], 0, recovered->session_->documents_[0].bytes_, {}), QByteArray("LATEST\nb\nONE\n"));
+            QVERIFY(ReadLargeTextRange(recovered->session_->documents_[3], 0, recovered->session_->documents_[3].bytes_, {}).startsWith("manual\n")); QCOMPARE(read(input.file1_), QByteArray("LATEST\nb\nONE\n"));
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
     void functionRenameSmallTokenEdits()
     {
         const QByteArray body = "(int x){ int y = x * 2; y += x; y -= x; if (y < x) { y += x; } return y + x; }";

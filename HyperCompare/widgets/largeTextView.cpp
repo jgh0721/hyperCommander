@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "largeTextView.hpp"
 #include "boundedEditor.hpp"
+#include "chunkGutter.hpp"
 #include "runtime/controllerMemory.hpp"
 #include "runtime/saveRecovery.hpp"
 #include <QtConcurrent/QtConcurrentRun>
@@ -13,6 +14,14 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QShortcut>
+#include <QFileInfo>
+#include <ILexer.h>
+#include <SciLexer.h>
+#include <Lexilla.h>
+#include <set>
 
 namespace hc::compare
 {
@@ -30,6 +39,12 @@ namespace hc::compare
             const auto size = Editor->send(SCI_GETLENGTH); QByteArray result(size + 1, '\0');
             Editor->send(SCI_GETTEXT, result.size(), reinterpret_cast<sptr_t>(result.data())); result.resize(size); return result;
         }
+        const char* lexer(const QString& Path) {
+            const auto ext = QFileInfo(Path).suffix().toLower();
+            if (QStringList{"c", "cpp", "cc", "cxx", "h", "hpp", "cs", "java", "js", "ts"}.contains(ext)) return "cpp";
+            if (QStringList{"py", "pyw", "pyi"}.contains(ext)) return "python";
+            if (ext == "json") return "json"; if (ext == "xml" || ext == "html") return "xml"; return "null";
+        }
     }
     LargeTextView::LargeTextView(Request Input, std::shared_ptr<LargeTextComparison> Value, QWidget* Parent)
         : ExtensionView(Parent), input_(std::move(Input)), value_(std::move(Value)), saved_(value_->documents_)
@@ -41,7 +56,7 @@ namespace hc::compare
         button(tr("페이지 편집 적용"), "largeApplyPages", [this] { applyPages(); });
         button(tr("왼쪽 → 오른쪽"), "largeMergeRight", [this] { merge(0); });
         button(tr("왼쪽 ← 오른쪽"), "largeMergeLeft", [this] { merge(1); });
-        button(tr("실행 취소"), "largeUndo", [this] { undo(false); }); button(tr("다시 실행"), "largeRedo", [this] { undo(true); });
+        button(tr("실행 취소"), "largeUndo", [this] { Undo(false); }); button(tr("다시 실행"), "largeRedo", [this] { Undo(true); });
         button(tr("왼쪽 저장"), "largeSaveLeft", [this] { save(0); }); button(tr("오른쪽 저장"), "largeSaveRight", [this] { save(1); });
         auto* cancel = new QPushButton(tr("취소"), this); actions->addWidget(cancel); connect(cancel, &QPushButton::clicked, this, [this] { if (canceled_) canceled_->store(true); });
         auto* navigation = new QHBoxLayout(); box->addLayout(navigation); navigation->addWidget(new QLabel(tr("차이 번호"), this));
@@ -63,6 +78,21 @@ namespace hc::compare
             const auto& edit = value_->changes_[std::size_t(change_->value() - 1)];
             pageStart_ = {}; lines_[0]->setValue(int(edit.begin_) + 1); lines_[1]->setValue(int(edit.otherBegin_) + 1); load();
         });
+        auto* tools = new QHBoxLayout(); box->addLayout(tools);
+        const auto tool = [&](const QString& Text, const QString& Name, auto Callback) { auto* b = new QPushButton(Text, this); b->setObjectName(Name); tools->addWidget(b); buttons_.append(b); connect(b, &QPushButton::clicked, this, Callback); };
+        tool(tr("작업 저장…"), "largeSaveWork", [this] { const auto path = QFileDialog::getSaveFileName(this, tr("대용량 작업 저장"), {}, "HyperCompare Large Work (*.hclarge)"); if (!path.isEmpty()) SaveWork(path, true); });
+        tool(tr("작업 복구…"), "largeLoadWork", [this] { const auto path = QFileDialog::getOpenFileName(this, tr("대용량 작업 복구"), {}, "HyperCompare Large Work (*.hclarge)"); if (!path.isEmpty()) LoadWork(path); });
+        if (merging()) tool(tr("이전 RESULT 복구…"), "largeRecoverResult", [this] { const auto path = QFileDialog::getOpenFileName(this, tr("변경된 원본의 RESULT 복구"), {}, "HyperCompare Large Work (*.hclarge)"); if (!path.isEmpty()) RecoverWork(path); });
+        if (merging()) tool(tr("RESULT 다른 이름으로…"), "largeSaveResultAs", [this] { save(1, true); });
+        tool(tr("보고서…"), "largeExportReport", [this] { const auto path = QFileDialog::getSaveFileName(this, tr("비교 보고서"), {}, "JSON (*.json)"); if (!path.isEmpty()) ExportReport(path, true); });
+        searchScope_ = new QComboBox(this); searchScope_->setObjectName("largeSearchScope"); searchScope_->addItems({tr("왼쪽 전체 파일"), tr("오른쪽 전체 파일")}); tools->addWidget(searchScope_);
+        query_ = new QLineEdit(this); query_->setObjectName("largeSearchQuery"); query_->setPlaceholderText(tr("전체 파일에서 텍스트 검색")); query_->setMaxLength(4096); tools->addWidget(query_, 1);
+        searchCase_ = new QCheckBox(tr("대소문자"), this); searchCase_->setObjectName("largeSearchCase"); tools->addWidget(searchCase_);
+        tool(tr("이전 찾기"), "largeFindPrevious", [this] { find(true); }); tool(tr("다음 찾기"), "largeFindNext", [this] { find(false); });
+        connect(query_, &QLineEdit::returnPressed, this, [this] { find(false); });
+        auto* findKey = new QShortcut(QKeySequence::Find, this); connect(findKey, &QShortcut::activated, this, [this] { query_->setFocus(); query_->selectAll(); });
+        auto* nextKey = new QShortcut(QKeySequence::FindNext, this); connect(nextKey, &QShortcut::activated, this, [this] { find(false); });
+        auto* previousKey = new QShortcut(QKeySequence::FindPrevious, this); connect(previousKey, &QShortcut::activated, this, [this] { find(true); });
         auto* panes = new QHBoxLayout(); box->addLayout(panes, 1);
         for (int side = 0; side < 2; ++side) {
             auto* pane = new QVBoxLayout(); panes->addLayout(pane, 1);
@@ -81,12 +111,15 @@ namespace hc::compare
             connect(next, &QPushButton::clicked, this, [this, side] { if (pageDirty_[0] || pageDirty_[1]) return; pageStart_[side] = end_[side]; load(); });
             connect(go, &QPushButton::clicked, this, [this] { if (!pageDirty_[0] && !pageDirty_[1]) { pageStart_ = {}; load(); } });
             auto* editor = new BoundedEditor(this, input_.memoryMiB_, largeTextPageMaximum); editors_[side] = editor;
+            editor->installEventFilter(this);
             editor->setObjectName(side ? "largeTextRight" : "largeTextLeft"); pane->addWidget(editor, 1); editor->send(SCI_SETCODEPAGE, SC_CP_UTF8); editor->EnableProtection(8 * 1024 * 1024);
             editor->blocked_ = [this](const QString& Reason) { status_->setText(Reason); };
             connect(editor, &ScintillaEditBase::modified, this, [this, side](Scintilla::ModificationFlags Flags) {
                 if (!loading_ && (int(Flags) & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) { pageDirty_[side] = true; controls(); if (stateChanged_) stateChanged_(); }
             });
         }
+        gutter_ = new ChunkGutter(editors_[0], editors_[1], merging() ? 0 : -1, this); gutter_->setObjectName("largeChunkGutter"); panes->insertWidget(1, gutter_);
+        gutter_->choose_ = [this](std::uint64_t Id, std::uint64_t Revision, Resolution Choice) { chooseChunk(Id, Revision, Choice); };
         if (merging()) {
             auto* row = new QHBoxLayout(); box->addLayout(row); row->addWidget(new QLabel(tr("충돌"), this)); conflict_ = new QSpinBox(this); conflict_->setObjectName("largeConflict"); row->addWidget(conflict_);
             const auto resolveButton = [&](const QString& Text, const QString& Name, Resolution Choice) { auto* b = new QPushButton(Text, this); b->setObjectName(Name); row->addWidget(b); buttons_.append(b); connect(b, &QPushButton::clicked, this, [this, Choice] { resolve(Choice); }); };
@@ -98,6 +131,13 @@ namespace hc::compare
         status_ = new QLabel(this); status_->setObjectName("largeStatus"); status_->setTextFormat(Qt::PlainText); status_->setWordWrap(true); box->addWidget(status_); controls(); load();
     }
     LargeTextView::~LargeTextView() { if (canceled_) canceled_->store(true); watcher_.waitForFinished(); }
+    bool LargeTextView::eventFilter(QObject* Object, QEvent* Event)
+    { if (Event->type() == QEvent::FocusIn) for (int side = 0; side < 2; ++side) if (Object == editors_[side]) activeSide_ = side; return ExtensionView::eventFilter(Object, Event); }
+    void LargeTextView::SaveActive() { save(merging() ? 1 : activeSide_); }
+    bool LargeTextView::CanUndo(bool Redo) const
+    { if (Busy()) return false; return pageDirty_[0] || pageDirty_[1] ? editors_[activeSide_]->send(Redo ? SCI_CANREDO : SCI_CANUNDO) : !(Redo ? redo_ : undo_).empty(); }
+    void LargeTextView::Undo(bool Redo)
+    { if (Busy()) return; if (pageDirty_[0] || pageDirty_[1]) editors_[activeSide_]->send(Redo ? SCI_REDO : SCI_UNDO); else undo(Redo); }
     bool LargeTextView::Dirty() const {
         if (pageDirty_[0] || pageDirty_[1] || resultNeverSaved_) return true;
         if (merging()) return value_->session_->reviewRequired_ || LargeTextUnresolved(*value_) || !same(value_->session_->documents_[value_->session_->result_], savedAll_[value_->session_->result_]);
@@ -112,6 +152,7 @@ namespace hc::compare
     }
     void LargeTextView::SetTextFont(const QFont& Font)
     {
+        textFont_ = Font;
         const auto color = [](QColor Value) { return Value.red() | (Value.green() << 8) | (Value.blue() << 16); };
         for (auto* editor : editors_) {
             const auto name = Font.family().toUtf8(); editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(name.constData()));
@@ -121,6 +162,23 @@ namespace hc::compare
             editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_RTEXT); editor->send(SCI_SETMARGINWIDTHN, 0, 60); editor->send(SCI_SETMARGINWIDTHN, 1, 0);
             editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(dark_ ? QColor("#282828") : QColor("#f0f0f0")));
             editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
+            const auto paint = [&](std::initializer_list<int> Styles, const QColor& Light, const QColor& Dark) { for (const auto style : Styles) editor->send(SCI_STYLESETFORE, style, color(dark_ ? Dark : Light)); };
+            switch (editor->send(SCI_GETLEXER)) {
+            case SCLEX_CPP:
+                paint({SCE_C_COMMENT, SCE_C_COMMENTLINE, SCE_C_COMMENTDOC, SCE_C_COMMENTLINEDOC}, QColor("#51774c"), QColor("#90b58b"));
+                paint({SCE_C_WORD, SCE_C_WORD2}, QColor("#803da1"), QColor("#cb9fda")); paint({SCE_C_STRING, SCE_C_CHARACTER, SCE_C_VERBATIM}, QColor("#9b5f28"), QColor("#d7b080"));
+                paint({SCE_C_NUMBER}, QColor("#3769a0"), QColor("#92bfdd")); break;
+            case SCLEX_PYTHON:
+                paint({SCE_P_COMMENTLINE, SCE_P_COMMENTBLOCK}, QColor("#51774c"), QColor("#90b58b")); paint({SCE_P_WORD, SCE_P_WORD2}, QColor("#803da1"), QColor("#cb9fda"));
+                paint({SCE_P_STRING, SCE_P_CHARACTER, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE}, QColor("#9b5f28"), QColor("#d7b080")); paint({SCE_P_DEFNAME, SCE_P_CLASSNAME}, QColor("#3769a0"), QColor("#92bfdd")); break;
+            case SCLEX_JSON:
+                paint({SCE_JSON_STRING}, QColor("#9b5f28"), QColor("#d7b080")); paint({SCE_JSON_PROPERTYNAME}, QColor("#3769a0"), QColor("#92bfdd"));
+                paint({SCE_JSON_KEYWORD}, QColor("#803da1"), QColor("#cb9fda")); paint({SCE_JSON_LINECOMMENT, SCE_JSON_BLOCKCOMMENT}, QColor("#51774c"), QColor("#90b58b")); break;
+            case SCLEX_XML:
+                paint({SCE_H_TAG, SCE_H_TAGEND}, QColor("#3769a0"), QColor("#92bfdd")); paint({SCE_H_COMMENT}, QColor("#51774c"), QColor("#90b58b"));
+                paint({SCE_H_DOUBLESTRING, SCE_H_SINGLESTRING}, QColor("#9b5f28"), QColor("#d7b080")); break;
+            }
+            editor->send(SCI_COLOURISE, 0, -1);
         }
     }
     void LargeTextView::controls()
@@ -129,7 +187,7 @@ namespace hc::compare
         for (int side = 0; side < 2; ++side) {
             const bool source = merging() && value_->session_->pair_[side] != value_->session_->result_;
             lines_[side]->setRange(1, std::max(1, int(value_->lines_[side].size()))); lines_[side]->setEnabled(!Busy()); editors_[side]->send(SCI_SETREADONLY, Busy() || source);
-            titles_[side]->setText((value_->session_ ? value_->session_->titles_[value_->session_->pair_[side]] + " — " : QString{}) + value_->documents_[side].original_.path_);
+            titles_[side]->setText((value_->session_ ? value_->session_->titles_[value_->session_->pair_[side]] + " — " : QString{}) + value_->documents_[side].original_.path_ + "\n" + value_->documents_[side].original_.encoding_ + (value_->documents_[side].original_.bom_ ? tr(" · BOM 있음") : tr(" · BOM 없음")));
             findChild<QPushButton*>(side ? "largeSaveRight" : "largeSaveLeft")->setEnabled(!Busy() && !source);
             findChild<QPushButton*>(side ? "largeMergeRight" : "largeMergeLeft")->setEnabled(!Busy() && !source);
         }
@@ -138,8 +196,10 @@ namespace hc::compare
         if (conflict_) { conflict_->setRange(1, std::max(1, int(value_->session_->conflicts_.size()))); conflict_->setEnabled(!Busy()); }
         change_->setRange(1, std::max(1, int(value_->changes_.size()))); change_->setEnabled(!Busy());
         if (pageDirty_[0] || pageDirty_[1]) status_->setText(tr("페이지 수정 중 — ‘페이지 편집 적용’ 후 탐색·병합·저장할 수 있습니다."));
+        if (gutter_) { gutter_->setEnabled(!Busy() && !pageDirty_[0] && !pageDirty_[1]); if (pageDirty_[0] || pageDirty_[1]) gutter_->SetChunks({}, ++generation_); }
+        if (query_) { query_->setEnabled(!Busy()); searchScope_->setEnabled(!Busy()); searchCase_->setEnabled(!Busy()); }
     }
-    void LargeTextView::run(std::function<std::shared_ptr<LargeTextComparison>(const Budget&)> Work, bool Mutation, int Saved)
+    void LargeTextView::run(std::function<Task(const Budget&)> Work, bool Mutation, int Saved)
     {
         if (Busy()) return; busy_ = true; canceled_ = std::make_shared<std::atomic_bool>(false);
         const auto starts = std::array{lines_[0]->value() - 1, lines_[1]->value() - 1};
@@ -150,12 +210,14 @@ namespace hc::compare
             // editor admission failure. Keep its new expected revision.
             if (Saved >= 0 && response.comparison_) { value_ = response.comparison_; saved_[Saved] = value_->documents_[Saved]; if (value_->session_) { const auto index = value_->session_->pair_[Saved]; savedAll_[index] = value_->documents_[Saved]; if (index == value_->session_->result_) resultNeverSaved_ = false; } }
             if (!response.error_.isEmpty()) { controls(); status_->setText(response.error_ + (response.recovery_.isEmpty() ? QString{} : tr(" · 복구 기록: ") + response.recovery_.first().toString())); if (stateChanged_) stateChanged_(); return; }
+            if (response.match_ && !response.match_->found_) { lastMatch_ = {}; controls(); status_->setText(tr("전체 파일에서 일치하는 텍스트가 없습니다.")); if (stateChanged_) stateChanged_(); return; }
             std::vector<std::shared_ptr<void>> admissions;
             // Page replacement discards native page history; document Undo lives
             // in immutable disk revisions. Reserve storage without growing Undo.
             try { for (int side = 0; side < 2; ++side) admissions.push_back(static_cast<BoundedEditor*>(editors_[side])->BeginEdit(response.text_[side].size(), editors_[side]->send(SCI_GETLENGTH), true, false, true)); }
             catch (const std::exception& error) { controls(); status_->setText(QString::fromUtf8(error.what())); if (stateChanged_) stateChanged_(); return; }
             if (Mutation) { undo_.push_back(value_); if (undo_.size() > 32) undo_.erase(undo_.begin()); redo_.clear(); }
+            if (Mutation || Saved == -2 || Saved == -3) { lastQuery_.clear(); lastMatch_ = {}; }
             if (Saved == -2) { undo_.pop_back(); redo_.push_back(value_); }
             if (Saved == -3) { redo_.pop_back(); undo_.push_back(value_); }
             value_ = response.comparison_; if (Saved >= 0) saved_[Saved] = value_->documents_[Saved];
@@ -163,6 +225,10 @@ namespace hc::compare
             for (int side = 0; side < 2; ++side) {
                 auto* editor = editors_[side]; editor->send(SCI_SETREADONLY, 0); editor->send(SCI_CLEARALL);
                 editor->send(SCI_ADDTEXT, response.text_[side].size(), reinterpret_cast<sptr_t>(response.text_[side].constData())); editor->send(SCI_EMPTYUNDOBUFFER);
+                auto path = value_->documents_[side].original_.path_; if (merging() && value_->session_->pair_[side] == value_->session_->result_) path = value_->session_->documents_[0].original_.path_;
+                editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(CreateLexer(lexer(path))));
+                static constexpr char keywords[] = "auto bool break case catch class const constexpr continue def default delete do else enum explicit extern false float for from if import in int lambda namespace new noexcept nullptr private protected public raise return static struct switch template this throw true try typedef typename using virtual void while with yield";
+                editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(keywords)); editor->send(SCI_COLOURISE, 0, -1);
                 const auto& offsets = value_->lines_[side]; const auto first = std::size_t(std::upper_bound(offsets.begin(), offsets.end(), begin_[side]) - offsets.begin() - 1);
                 const auto last = std::size_t(std::lower_bound(offsets.begin(), offsets.end(), end_[side]) - offsets.begin());
                 editor->send(SCI_MARGINTEXTCLEARALL);
@@ -180,19 +246,24 @@ namespace hc::compare
                 pageStart_[side] = begin_[side]; lines_[side]->setRange(1, std::max(1, int(offsets.size()))); lines_[side]->setValue(int(first) + 1);
                 pageDirty_[side] = false;
             }
-            loading_ = false; controls(); status_->setText(tr("전체 파일 비교: %1개 차이 · 화면은 최대 400줄/1 MiB · 편집·병합은 명시적 저장 전까지 디스크 원본에 반영되지 않습니다.").arg(value_->changes_.size()));
+            loading_ = false; SetTextFont(textFont_); controls(); status_->setText(tr("전체 파일 비교: %1개 차이 · 최대 400줄/1 MiB씩 표시 · 구문 강조는 현재 페이지 기준 · 저장 전 원본 보존").arg(value_->changes_.size()));
             if (merging()) status_->setText(tr("미해결 충돌: %1 · %2 · ").arg(LargeTextUnresolved(*value_)).arg(value_->session_->reviewRequired_ ? tr("RESULT 전체 수동 검토 필요") : tr("충돌 선택 가능")) + status_->text());
             if (!value_->saveWarnings_.isEmpty() || !value_->saveRecovery_.isEmpty()) status_->setText(status_->text() + tr(" · 저장 확인: ") + QString::fromUtf8(QJsonDocument(QJsonObject{{"warnings", value_->saveWarnings_}, {"recovery", value_->saveRecovery_}}).toJson(QJsonDocument::Compact)));
+            if (response.match_) {
+                if (response.match_->found_) { lastMatch_ = *response.match_; const auto side = response.matchSide_; editors_[side]->send(SCI_SETSEL, response.match_->begin_ - begin_[side], std::min(response.match_->end_, end_[side]) - begin_[side]); editors_[side]->send(SCI_SCROLLCARET); status_->setText(response.match_->wrapped_ ? tr("문서 끝에서 처음으로 돌아가 찾았습니다.") : tr("전체 파일에서 찾았습니다.")); }
+                else { lastMatch_ = {}; status_->setText(tr("전체 파일에서 일치하는 텍스트가 없습니다.")); }
+            }
+            if (!response.note_.isEmpty()) status_->setText(response.note_ + " · " + status_->text()); updateGutter();
             if (stateChanged_) stateChanged_();
         });
         watcher_.setFuture(QtConcurrent::run([work = std::move(Work), starts, pageStart = pageStart_, canceled = canceled_, memory = input_.memoryMiB_] {
             Response result; Budget limits; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::time_point::max();
             try {
                 ConfigureMemoryBudget(limits, memory);
-                result.comparison_ = work(limits);
+                const auto task = work(limits); result.comparison_ = task.comparison_; result.match_ = task.match_; result.matchSide_ = task.side_; result.note_ = task.note_;
                 for (int side = 0; side < 2; ++side) {
                     const auto& document = result.comparison_->documents_[side]; const auto& lines = result.comparison_->lines_[side];
-                    auto begin = pageStart[side] ? std::min(*pageStart[side], document.bytes_) : lines[std::min<std::size_t>(starts[side], lines.size() - 1)];
+                    auto begin = task.match_ && task.match_->found_ && task.side_ == side ? task.match_->begin_ : pageStart[side] ? std::min(*pageStart[side], document.bytes_) : lines[std::min<std::size_t>(starts[side], lines.size() - 1)];
                     const auto continuation = [&](std::uint64_t At) { return At < document.bytes_ && (uchar(ReadLargeTextRange(document, At, At + 1, limits)[0]) & 0xc0) == 0x80; };
                     while (begin && continuation(begin)) --begin;
                     const auto start = std::size_t(std::upper_bound(lines.begin(), lines.end(), begin) - lines.begin() - 1);
@@ -235,14 +306,14 @@ namespace hc::compare
             return UpdateLargeTextSession(*value, std::move(documents), Limits);
         }, true);
     }
-    void LargeTextView::save(int Side)
+    void LargeTextView::save(int Side, bool ChoosePath)
     {
         if (Busy() || pageDirty_[0] || pageDirty_[1]) return;
         if (merging() && (LargeTextUnresolved(*value_) || value_->session_->reviewRequired_)) { status_->setText(tr("미해결 충돌을 선택하거나 RESULT 전체를 검토 완료한 뒤 저장하십시오.")); return; }
         const auto original = value_->session_ ? (merging() && resultNeverSaved_ ? value_->documents_[Side].original_ : savedAll_[value_->session_->pair_[Side]].original_) : saved_[Side].original_;
         QString output;
         if (merging() && value_->session_->pair_[Side] != value_->session_->result_) return;
-        if (merging() && (original.path_.isEmpty() || (resultNeverSaved_ && original.exists_ && !input_.overwrite_))) {
+        if (merging() && (ChoosePath || original.path_.isEmpty() || (resultNeverSaved_ && original.exists_ && !input_.overwrite_))) {
             output = QFileDialog::getSaveFileName(this, tr("대용량 RESULT 저장"), original.path_); if (output.isEmpty()) return;
         }
         run([value = value_, input = input_, Side, original, output](const Budget& Limits) {
@@ -269,7 +340,7 @@ namespace hc::compare
     {
         if (Busy() || pageDirty_[0] || pageDirty_[1] || !value_->session_) return;
         const auto pair = pairs_->itemData(Index).toList(); if (pair.size() != 2) return; const std::array selected{pair[0].toInt(), pair[1].toInt()};
-        pageStart_ = {}; lines_[0]->setValue(1); lines_[1]->setValue(1);
+        pageStart_ = {}; lastQuery_.clear(); lastMatch_ = {}; lines_[0]->setValue(1); lines_[1]->setValue(1);
         run([session = *value_->session_, selected](const Budget& Limits) { return PairLargeTextSession(session, selected, Limits); }, false);
     }
     void LargeTextView::resolve(Resolution Choice)
@@ -282,5 +353,63 @@ namespace hc::compare
     {
         if (Busy() || pageDirty_[0] || pageDirty_[1] || !merging()) return;
         run([value = value_](const Budget& Limits) { auto session = *value->session_; if (session.reviewRequired_) session.conflicts_.clear(); session.reviewRequired_ = false; for (auto& conflict : session.conflicts_) conflict.choice_ = Resolution::Manual; return PairLargeTextSession(std::move(session), value->session_->pair_, Limits); }, true);
+    }
+    void LargeTextView::find(bool Backwards)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1]) return; const auto query = query_->text(); if (query.isEmpty()) { query_->setFocus(); return; }
+        const auto side = searchScope_->currentIndex(), document = value_->session_ ? value_->session_->pair_[side] : side;
+        const bool repeat = lastMatch_.found_ && query == lastQuery_ && document == lastSearchDocument_;
+        const auto start = repeat ? (Backwards ? lastMatch_.begin_ : lastMatch_.end_) : begin_[side] + editors_[side]->send(Backwards ? SCI_GETSELECTIONSTART : SCI_GETSELECTIONEND);
+        lastQuery_ = query; lastSearchDocument_ = document; const auto sensitivity = searchCase_->isChecked() ? Qt::CaseSensitive : Qt::CaseInsensitive;
+        run([value = value_, side, query, start, Backwards, sensitivity](const Budget& Limits) { Task task(value); task.side_ = side; task.match_ = FindLargeText(value->documents_[side], query, start, Backwards, sensitivity, Limits); return task; }, false);
+    }
+    void LargeTextView::SaveWork(const QString& Path, bool ReplaceExisting)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1]) return;
+        run([value = value_, input = input_, Path, ReplaceExisting](const Budget& Limits) { const auto saved = SaveLargeTextWork(Path, input, *value, ReplaceExisting, Limits); auto next = std::make_shared<LargeTextComparison>(*value); next->saveWarnings_ = saved.warnings_; next->saveRecovery_ = saved.recovery_; Task task(next); task.note_ = tr("작업을 저장했습니다. 원본 파일은 별도 저장 전까지 보존됩니다."); return task; }, false);
+    }
+    void LargeTextView::LoadWork(const QString& Path)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1]) return;
+        run([value = value_, input = input_, Path](const Budget& Limits) { Task task(LoadLargeTextWork(Path, input, *value, Limits)); task.note_ = tr("작업을 복구했습니다. 실행 취소로 이전 작업에 돌아갈 수 있습니다."); return task; }, true);
+    }
+    void LargeTextView::RecoverWork(const QString& Path)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1] || !merging()) return;
+        run([input = input_, Path](const Budget& Limits) { const auto fresh = OpenLargeTextSession(input, Limits); Task task(LoadLargeTextWork(Path, input, *fresh, Limits, true)); task.note_ = tr("최신 원본에 이전 RESULT를 복구했습니다. 전체 수동 검토 후 저장하십시오."); return task; }, true);
+    }
+    void LargeTextView::ExportReport(const QString& Path, bool ReplaceExisting)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1]) return;
+        run([value = value_, input = input_, Path, ReplaceExisting](const Budget& Limits) { const auto saved = SaveLargeTextReport(Path, input, *value, ReplaceExisting, Limits); auto next = std::make_shared<LargeTextComparison>(*value); next->saveWarnings_ = saved.warnings_; next->saveRecovery_ = saved.recovery_; Task task(next); task.note_ = tr("현재 작업 상태의 비교 보고서를 저장했습니다."); return task; }, false);
+    }
+    void LargeTextView::updateGutter()
+    {
+        if (!gutter_ || Busy() || pageDirty_[0] || pageDirty_[1]) return; std::set<std::size_t> indexes;
+        for (int side = 0; side < 2; ++side) {
+            auto at = std::lower_bound(value_->changes_.begin(), value_->changes_.end(), begin_[side], [&](const Edit& Edit, std::uint64_t Begin) { return value_->lines_[side][side ? Edit.otherEnd_ : Edit.end_] < Begin; });
+            for (; at != value_->changes_.end() && indexes.size() < 256; ++at) { if (value_->lines_[side][side ? at->otherBegin_ : at->begin_] > end_[side]) break; indexes.insert(std::size_t(at - value_->changes_.begin())); }
+        }
+        std::vector<GutterChunk> chunks;
+        for (const auto index : indexes) { const auto& edit = value_->changes_[index]; GutterChunk chunk; chunk.id_ = index + 1; chunk.enabled_ = true;
+            for (int side = 0; side < 2; ++side) { const auto a = value_->lines_[side][side ? edit.otherBegin_ : edit.begin_], b = value_->lines_[side][side ? edit.otherEnd_ : edit.end_]; chunk.begin_[side] = std::clamp(a, begin_[side], end_[side]) - begin_[side]; chunk.end_[side] = std::clamp(b, begin_[side], end_[side]) - begin_[side]; } chunks.push_back(chunk);
+        }
+        gutter_->SetChunks(std::move(chunks), ++generation_);
+    }
+    void LargeTextView::chooseChunk(std::uint64_t Id, std::uint64_t Revision, Resolution Choice)
+    {
+        if (Busy() || pageDirty_[0] || pageDirty_[1] || Revision != generation_ || !Id || Id > value_->changes_.size()) return;
+        change_->setValue(int(Id)); if (Choice == Resolution::Left) { merge(0); return; } if (Choice == Resolution::Right) { merge(1); return; }
+        if (!merging()) return;
+        run([value = value_, index = std::size_t(Id - 1), Choice](const Budget& Limits) { const auto& edit = value->changes_[index]; auto documents = value->documents_; const auto a = value->lines_[1][edit.otherBegin_], b = value->lines_[1][edit.otherEnd_];
+            if (Choice == Resolution::Omit) documents[1] = EditLargeText(documents[1], a, b, {}, Limits);
+            else if (Choice == Resolution::LeftThenRight || Choice == Resolution::RightThenLeft) {
+                auto replacement = ReplaceLargeText({}, 0, 0, documents[0], value->lines_[0][edit.begin_], value->lines_[0][edit.end_], Limits);
+                if (Choice == Resolution::LeftThenRight) replacement = ReplaceLargeText(replacement, replacement.bytes_, replacement.bytes_, documents[1], a, b, Limits);
+                else replacement = ReplaceLargeText(replacement, 0, 0, documents[1], a, b, Limits);
+                documents[1] = ReplaceLargeText(documents[1], a, b, replacement, 0, replacement.bytes_, Limits);
+            }
+            return UpdateLargeTextSession(*value, std::move(documents), Limits);
+        }, true);
     }
 }
