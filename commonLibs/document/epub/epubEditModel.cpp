@@ -31,40 +31,47 @@ QString cssProblem(const QByteArray& Bytes,int& Line,int& Column,const Cancellat
     if(!Stack.isEmpty()){Line=Stack.last().line_;Column=Stack.last().column_;return "CSS delimiter is not closed";}return {};
 }
 bool imageValid(const QByteArray& Bytes,const QString& Media) {
-    if(!QStringList{"image/png","image/jpeg","image/gif"}.contains(Media))return true;
+    if(!QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Media))return true;
     QBuffer Buffer;Buffer.setData(Bytes);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);const auto Size=Reader.size();
-    const auto Expected=Media=="image/png"?QByteArray("png"):Media=="image/jpeg"?QByteArray("jpeg"):QByteArray("gif");
+    const auto Expected=Media=="image/png"?QByteArray("png"):Media=="image/jpeg"?QByteArray("jpeg"):Media=="image/webp"?QByteArray("webp"):QByteArray("gif");
     return Reader.format()==Expected && Size.isValid() && Size.width()<=4096 && Size.height()<=4096 && qint64(Size.width())*Size.height()<=4194304 && !Reader.read().isNull();
 }
 }
 
 bool EditModel::Load(QByteArray Bytes,const Cancellation& Cancel) {
     const auto Prepared=Prepare(Bytes,Cancel);if(!Prepared){error_=Prepared.error_+": "+Prepared.location_;return false;}
-    original_=std::move(Bytes);publication_=Prepared.publication_;error_.clear();media_.clear();replacements_.clear();history_.clear();position_=0;
+    original_=Bytes;edition_=std::move(Bytes);originalHash_=Prepared.publication_["sourceSha256"].toString();publication_=Prepared.publication_;error_.clear();media_.clear();replacements_.clear();history_.clear();position_=0;
     QJsonArray Metadata;for(const auto& Value:publication_["resources"].toArray()){auto Item=Value.toObject();Item.remove("base64");Metadata.append(Item);}publication_["resources"]=Metadata;
-    for(const auto& V:publication_["resources"].toArray()){const auto R=V.toObject();const auto M=R["mediaType"].toString();if(QStringList{"application/xhtml+xml","application/oebps-package+xml","text/css","image/svg+xml","image/png","image/jpeg","image/gif"}.contains(M))media_[R["path"].toString()]=M;}
+    for(const auto& V:publication_["resources"].toArray()){const auto R=V.toObject();const auto M=R["mediaType"].toString();if(QStringList{"application/xhtml+xml","application/oebps-package+xml","application/x-dtbncx+xml","text/css","image/svg+xml","image/png","image/jpeg","image/gif","image/webp"}.contains(M))media_[R["path"].toString()]=M;}
     return true;
 }
 QByteArray EditModel::Read(const QString& Path)const {
     if(!media_.contains(Path))return {};if(replacements_.contains(Path))return replacements_[Path];
-    try {const Cancellation Cancel;return detail::Archive(original_,Cancel).Read(Path);}catch(const detail::Rejected&){return {};}
+    try {const Cancellation Cancel;return detail::Archive(edition_,Cancel).Read(Path);}catch(const detail::Rejected&){return {};}
 }
 void EditModel::assign(const QString& Path,const QByteArray& Bytes) {
-    const Cancellation Cancel;const detail::Archive Archive(original_,Cancel);if(Archive.Read(Path)==Bytes)replacements_.remove(Path);else replacements_[Path]=Bytes;
+    const Cancellation Cancel;const detail::Archive Archive(edition_,Cancel);if(Archive.Read(Path)==Bytes)replacements_.remove(Path);else replacements_[Path]=Bytes;
 }
 QString EditModel::Replace(const QString& Path,const QByteArray& Bytes) {
     if(!media_.contains(Path) || Bytes.isEmpty() || Bytes.size()>(media_[Path].startsWith("image/")?8*1024*1024:2*1024*1024))return "epub-edit-resource-budget";
     if(!imageValid(Bytes,media_[Path]))return "epub-edit-image-invalid-or-over-budget";
     qint64 Total=Bytes.size();for(auto I=replacements_.begin();I!=replacements_.end();++I)if(I.key()!=Path)Total+=I.value().size();if(Total>32*1024*1024)return "epub-edit-overlay-budget";
-    const auto Before=Read(Path);if(Before==Bytes)return {};
-    while(history_.size()>position_)history_.removeLast();
-    history_.append({Path,Before,Bytes});++position_;assign(Path,Bytes);
-    qint64 Memory=0;for(const auto& C:history_)Memory+=C.before_.size()+C.after_.size();
-    while(history_.size()>1 && (history_.size()>32 || Memory>64*1024*1024)){Memory-=history_.first().before_.size()+history_.first().after_.size();history_.removeFirst();--position_;}
-    return {};
+    if(Read(Path)==Bytes)return {};auto Before=state();assign(Path,Bytes);record(std::move(Before));return {};
 }
-void EditModel::Undo(){if(CanUndo()){const auto& C=history_[--position_];assign(C.path_,C.before_);}}
-void EditModel::Redo(){if(CanRedo()){const auto& C=history_[position_++];assign(C.path_,C.after_);}}
+EditModel::State EditModel::state()const{return {edition_,publication_,media_,replacements_};}
+void EditModel::restore(const State& Value){edition_=Value.edition_;publication_=Value.publication_;media_=Value.media_;replacements_=Value.changes_;}
+void EditModel::record(State Before) {
+    while(history_.size()>position_)history_.removeLast();history_.append({std::move(Before),state()});++position_;
+    const auto Memory=[this](const State& Value){qint64 Size=Value.publication_["sourceSha256"].toString()==originalHash_?0:Value.edition_.size();for(const auto& Bytes:Value.changes_)Size+=Bytes.size();return Size;};
+    qint64 Total=0;for(const auto& Change:history_)Total+=Memory(Change.before_)+Memory(Change.after_);
+    while(history_.size()>1 && (history_.size()>32 || Total>128LL*1024*1024)){Total-=Memory(history_.first().before_)+Memory(history_.first().after_);history_.removeFirst();--position_;}
+}
+void EditModel::Undo(){if(CanUndo())restore(history_[--position_].before_);}
+void EditModel::Redo(){if(CanRedo())restore(history_[position_++].after_);}
+QString EditModel::RestoreStructuralBytes(const QByteArray& Bytes) {
+    if(Bytes.isEmpty())return {};EditModel Candidate;if(!Candidate.Load(Bytes))return Candidate.Error();
+    edition_=Bytes;publication_=Candidate.publication_;media_=Candidate.media_;replacements_.clear();return {};
+}
 QByteArray EditModel::Fingerprint(const QMap<QString,QByteArray>& Draft)const {
     auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I)Changes[I.key()]=I.value();
     if(Changes.isEmpty())return QByteArray::fromHex(publication_["sourceSha256"].toString().toLatin1());
@@ -74,10 +81,10 @@ QByteArray EditModel::Fingerprint(const QMap<QString,QByteArray>& Draft)const {
 EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancellation& Cancel)const {
     auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I){if(!media_.contains(I.key()) || I.value().isEmpty() || I.value().size()>(media_[I.key()].startsWith("image/")?8*1024*1024:2*1024*1024))return {{},"epub-edit-resource-budget",I.key()};Changes[I.key()]=I.value();}
     try {
-        const detail::Archive Source(original_,Cancel);
+        const detail::Archive Source(edition_,Cancel);
         for(auto I=media_.begin();I!=media_.end();++I) {
             if(Cancel && Cancel())return {{},"cancelled",I.key()};
-            const bool XmlMedia=QStringList{"application/xhtml+xml","application/oebps-package+xml","image/svg+xml"}.contains(I.value());
+            const bool XmlMedia=QStringList{"application/xhtml+xml","application/oebps-package+xml","application/x-dtbncx+xml","image/svg+xml"}.contains(I.value());
             if(!XmlMedia && I.value()!="text/css")continue;
             const auto Raw=Changes.contains(I.key())?Changes[I.key()]:Source.Read(I.key());
             if(I.value()=="text/css") {int Line=1,Column=1;const auto Problem=cssProblem(Raw,Line,Column,Cancel);if(!Problem.isEmpty())return {{},Problem,QString("%1:%2:%3").arg(I.key()).arg(Line).arg(Column)};continue;}
@@ -86,7 +93,7 @@ EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancell
         }
         if(Changes.isEmpty()) {
             if(publication_["recovery"].toObject()["missingSpineItems"].toInt()>0)return {{},"epub-edit-spine-repair-required",publication_["rootfile"].toString()};
-            return {original_,{},{}};
+            return {edition_,{},{}};
         }
         for(auto I=Changes.begin();I!=Changes.end();++I)if(!imageValid(I.value(),media_[I.key()]))return {{},"epub-edit-image-invalid-or-over-budget",I.key()};
         const auto Bytes=Source.Rewrite(Changes);const auto Checked=Prepare(Bytes,Cancel);if(!Checked)return {{},Checked.error_,Checked.location_};

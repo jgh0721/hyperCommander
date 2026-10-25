@@ -49,6 +49,7 @@ qt_add_library(hc_epub_package STATIC
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubPackage.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditModel.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditModel.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditStructure.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.hpp"
@@ -57,7 +58,7 @@ qt_add_library(hc_epub_package STATIC
 )
 target_precompile_headers(hc_epub_package PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h")
 target_include_directories(hc_epub_package PUBLIC "${PROJECT_SOURCE_DIR}")
-target_link_libraries(hc_epub_package PUBLIC Qt6::Core PRIVATE Qt6::Gui Qt6::ZlibPrivate)
+target_link_libraries(hc_epub_package PUBLIC Qt6::Core PRIVATE Qt6::Gui Qt6::Xml Qt6::ZlibPrivate)
 target_compile_options(hc_epub_package PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 qt_add_library(hc_epub_host STATIC
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubResourceLease.cpp"
@@ -87,6 +88,8 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/epubSourceRecovery.cpp
     ../UniqueLibs/document/epubSourcePreview.cpp
     ../UniqueLibs/document/epubSourceValidation.cpp
+    ../UniqueLibs/document/epubSourceStructure.cpp
+    ../UniqueLibs/document/epubSourceNavigation.cpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp

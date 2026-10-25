@@ -3,6 +3,7 @@
 
 /// Framework headers
 #include <QMap>
+#include <QSet>
 #include <QXmlStreamReader>
 
 namespace hc::document::epub::detail
@@ -39,7 +40,7 @@ namespace hc::document::epub::detail
         QByteArray Read(const QString& Path) const;
         bool Contains(const QString& Path) const { return entries_.contains(Path); }
         void VerifyAll() const;
-        QByteArray Rewrite(const QMap<QString,QByteArray>& Replacements) const;
+        QByteArray Rewrite(const QMap<QString,QByteArray>& Replacements,const QMap<QString,QByteArray>& Additions={},const QSet<QString>& Removals={}) const;
     private:
         const QByteArray& bytes_;
         const Cancellation& cancel_;

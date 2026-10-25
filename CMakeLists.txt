@@ -41,6 +41,7 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS
     GuiPrivate
     Sql
     Svg
+    Xml
     Network
     UiTools
     PrintSupport

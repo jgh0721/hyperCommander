@@ -17,8 +17,8 @@
 #include <utility>
 namespace hc::document::epub {
 namespace {
-constexpr qint64 OriginalLimit=64LL*1024*1024,OverlayLimit=32LL*1024*1024,FileLimit=100LL*1024*1024;
-const QByteArray Magic("HCEDRF01",8);
+constexpr qint64 OriginalLimit=64LL*1024*1024,OverlayLimit=32LL*1024*1024,FileLimit=164LL*1024*1024;
+const QByteArray Magic("HCEDRF01",8),StructuralMagic("HCEDRF02",8);
 bool text(const QString& Value,int Limit=32768){return Value.size()<=Limit && !Value.contains(QChar::Null) && QString::fromUtf8(Value.toUtf8())==Value;}
 bool path(const QString& Root,const QString& Path) {
     const QFileInfo Dir(Root),File(Path);
@@ -32,18 +32,22 @@ qint64 size(const QJsonValue& Value,qint64 Limit) {
 }
 QJsonObject header(QFile& File,QByteArray& Prefix,QString& Error) {
     Prefix=File.read(12);
-    if(File.size()>FileLimit || Prefix.size()!=12 || Prefix.first(8)!=Magic){Error="epub-draft-header";return {};}
+    if(File.size()>FileLimit || Prefix.size()!=12 || (Prefix.first(8)!=Magic && Prefix.first(8)!=StructuralMagic)){Error="epub-draft-header";return {};}
+    const bool Structural=Prefix.first(8)==StructuralMagic;
+    if(!Structural && File.size()>100LL*1024*1024){Error="epub-draft-header";return {};}
     const auto Length=qFromBigEndian<quint32>(Prefix.constData()+8);
     if(!Length || Length>64*1024){Error="epub-draft-header-budget";return {};}
     const auto Json=File.read(Length);Prefix+=Json;QJsonParseError Parse;
     const auto Document=QJsonDocument::fromJson(Json,&Parse);const auto Object=Document.object();
-    if(Json.size()!=Length || Parse.error!=QJsonParseError::NoError || !Document.isObject() || Object["schemaVersion"]!=QJsonValue(1)
+    if(Json.size()!=Length || Parse.error!=QJsonParseError::NoError || !Document.isObject() || Object["schemaVersion"]!=QJsonValue(Structural?2:1)
+        || Structural && (size(Object["editionBytes"],OriginalLimit)<=0 || !QRegularExpression("^[a-f0-9]{64}$").match(Object["editionSha256"].toString()).hasMatch())
         || !Object["sourcePath"].isString() || !text(Object["sourcePath"].toString()) || !QFileInfo(Object["sourcePath"].toString()).isAbsolute()
         || QFileInfo(Object["sourcePath"].toString()).suffix().compare("epub",Qt::CaseInsensitive)!=0
         || !QRegularExpression("^[a-f0-9]{64}$").match(Object["sourceSha256"].toString()).hasMatch()
         || size(Object["originalBytes"],OriginalLimit)<=0 || !Object["entries"].isArray() || Object["entries"].toArray().size()>1024
         || !Object["hasCurrentDraft"].isBool() || !Object["currentResource"].isString() || !text(Object["currentResource"].toString(),2048)
         || size(Object["currentBytes"],2*1024*1024)<0 || (!Object["hasCurrentDraft"].toBool() && Object["currentBytes"].toInteger()!=0)
+        || Object.contains("readingChapter") && (!Object["readingChapter"].isDouble() || Object["readingChapter"].toInteger(-2)<-1 || Object["readingChapter"].toInteger(-2)>=4096 || Object["readingChapter"].toDouble()!=double(Object["readingChapter"].toInteger(-2)))
         || !Object["locator"].isString() || !text(Object["locator"].toString(),8192)
         || size(Object["cursor"],2*1024*1024)<0 || size(Object["scroll"],INT_MAX)<0 || Object["utcMs"].toInteger()<=0) {
         Error="epub-draft-metadata";return {};
@@ -53,26 +57,29 @@ QJsonObject header(QFile& File,QByteArray& Prefix,QString& Error) {
 }
 DraftWrite DraftStore::Write(const QString& Root,const QString& Session,const DraftSnapshot& Snapshot,const std::function<bool()>& Cancelled) {
     const auto Target=QDir(Root).filePath(Session+".hcedraft");
-    if(!QDir().mkpath(Root) || !path(Root,Target) || Snapshot.original_.isEmpty() || Snapshot.original_.size()>OriginalLimit
+    if(!QDir().mkpath(Root) || !path(Root,Target) || Snapshot.original_.isEmpty() || Snapshot.original_.size()>OriginalLimit || Snapshot.structuralBytes_.size()>OriginalLimit
         || Snapshot.changes_.size()>1024 || !text(Snapshot.sourcePath_) || !QFileInfo(Snapshot.sourcePath_).isAbsolute()
         || QFileInfo(Snapshot.sourcePath_).suffix().compare("epub",Qt::CaseInsensitive)!=0 || !text(Snapshot.currentResource_,2048)
-        || !text(Snapshot.locator_,8192) || Snapshot.currentDraft_.size()>2*1024*1024 || (!Snapshot.hasCurrentDraft_ && !Snapshot.currentDraft_.isEmpty()) || Snapshot.cursor_<0 || Snapshot.cursor_>2*1024*1024 || Snapshot.scroll_<0)
+        || !text(Snapshot.locator_,8192) || Snapshot.currentDraft_.size()>2*1024*1024 || (!Snapshot.hasCurrentDraft_ && !Snapshot.currentDraft_.isEmpty()) || Snapshot.cursor_<0 || Snapshot.cursor_>2*1024*1024 || Snapshot.scroll_<0 || Snapshot.readingChapter_<-1 || Snapshot.readingChapter_>=4096)
         return {{},"epub-draft-admission"};
     QJsonArray Entries;qint64 Overlay=0;
     for(auto I=Snapshot.changes_.begin();I!=Snapshot.changes_.end();++I) {
         if(!text(I.key(),2048) || I.key().isEmpty() || I.value().size()>8*1024*1024 || (Overlay+=I.value().size())>OverlayLimit)return {{},"epub-draft-overlay-budget"};
         Entries.append(QJsonObject{{"path",I.key()},{"bytes",I.value().size()}});
     }
-    const auto Json=QJsonDocument(QJsonObject{{"schemaVersion",1},{"sourcePath",Snapshot.sourcePath_},{"sourceSha256",QString::fromLatin1(QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256).toHex())},
+    const bool Structural=!Snapshot.structuralBytes_.isEmpty();
+    auto Metadata=QJsonObject{{"schemaVersion",Structural?2:1},{"sourcePath",Snapshot.sourcePath_},{"sourceSha256",QString::fromLatin1(QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256).toHex())},
         {"originalBytes",Snapshot.original_.size()},{"entries",Entries},{"currentResource",Snapshot.currentResource_},{"hasCurrentDraft",Snapshot.hasCurrentDraft_},{"currentBytes",Snapshot.currentDraft_.size()},
-        {"cursor",Snapshot.cursor_},{"scroll",Snapshot.scroll_},{"locator",Snapshot.locator_},{"utcMs",QDateTime::currentMSecsSinceEpoch()}}).toJson(QJsonDocument::Compact);
+        {"cursor",Snapshot.cursor_},{"scroll",Snapshot.scroll_},{"readingChapter",Snapshot.readingChapter_},{"locator",Snapshot.locator_},{"utcMs",QDateTime::currentMSecsSinceEpoch()}};
+    if(Structural){Metadata["editionBytes"]=Snapshot.structuralBytes_.size();Metadata["editionSha256"]=QString::fromLatin1(QCryptographicHash::hash(Snapshot.structuralBytes_,QCryptographicHash::Sha256).toHex());}
+    const auto Json=QJsonDocument(Metadata).toJson(QJsonDocument::Compact);
     if(Json.size()>64*1024)return {{},"epub-draft-header-budget"};
     QLockFile Lock(Target+".lock");if(!Lock.tryLock(0))return {{},"epub-draft-locked"};
     QSaveFile File(Target);File.setDirectWriteFallback(false);if(!File.open(QIODevice::WriteOnly))return {{},"epub-draft-write"};
     QCryptographicHash Hash(QCryptographicHash::Sha256);
     const auto Write=[&](const QByteArray& Bytes){if(Cancelled && Cancelled())return false;Hash.addData(Bytes);return File.write(Bytes)==Bytes.size();};
-    QByteArray Prefix=Magic;const auto Length=qToBigEndian(quint32(Json.size()));Prefix.append(reinterpret_cast<const char*>(&Length),4);
-    bool Ok=Write(Prefix) && Write(Json) && Write(Snapshot.original_);
+    QByteArray Prefix=Structural?StructuralMagic:Magic;const auto Length=qToBigEndian(quint32(Json.size()));Prefix.append(reinterpret_cast<const char*>(&Length),4);
+    bool Ok=Write(Prefix) && Write(Json) && Write(Snapshot.original_) && (!Structural || Write(Snapshot.structuralBytes_));
     for(auto I=Snapshot.changes_.begin();Ok && I!=Snapshot.changes_.end();++I)Ok=Write(I.value());
     Ok=Ok && Write(Snapshot.currentDraft_);
     if(!Ok || (Cancelled && Cancelled())){File.cancelWriting();return {{},Cancelled && Cancelled()?"epub-draft-cancelled":"epub-draft-write"};}
@@ -87,6 +94,8 @@ DraftRead DraftStore::Read(const QString& Root,const QString& Path) {
     const auto Read=[&](qint64 Length){const auto Bytes=File.read(Length);Hash.addData(Bytes);return Bytes;};
     const auto OriginalBytes=size(Header["originalBytes"],OriginalLimit);Snapshot.original_=Read(OriginalBytes);
     if(Snapshot.original_.size()!=OriginalBytes || QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256).toHex()!=Header["sourceSha256"].toString().toLatin1())return {{},"epub-draft-original-hash"};
+    if(Header["schemaVersion"]==QJsonValue(2)) {const auto Length=size(Header["editionBytes"],OriginalLimit);Snapshot.structuralBytes_=Read(Length);
+        if(Snapshot.structuralBytes_.size()!=Length || QCryptographicHash::hash(Snapshot.structuralBytes_,QCryptographicHash::Sha256).toHex()!=Header["editionSha256"].toString().toLatin1())return {{},"epub-draft-edition-hash"};}
     qint64 Total=0;
     for(const auto& Value:Header["entries"].toArray()) {
         const auto Entry=Value.toObject();const auto Name=Entry["path"].toString();const auto Bytes=size(Entry["bytes"],8*1024*1024);
@@ -97,7 +106,7 @@ DraftRead DraftStore::Read(const QString& Root,const QString& Path) {
     if(Snapshot.currentDraft_.size()!=CurrentBytes)return {{},"epub-draft-truncated"};
     const auto Digest=Hash.result();if(File.read(32)!=Digest || !File.atEnd())return {{},"epub-draft-checksum"};
     Snapshot.sourcePath_=Header["sourcePath"].toString();Snapshot.currentResource_=Header["currentResource"].toString();Snapshot.locator_=Header["locator"].toString();
-    Snapshot.hasCurrentDraft_=Header["hasCurrentDraft"].toBool();Snapshot.cursor_=Header["cursor"].toInt();Snapshot.scroll_=Header["scroll"].toInt();
+    Snapshot.hasCurrentDraft_=Header["hasCurrentDraft"].toBool();Snapshot.cursor_=Header["cursor"].toInt();Snapshot.scroll_=Header["scroll"].toInt();Snapshot.readingChapter_=Header["readingChapter"].toInt(-1);
     if(Snapshot.hasCurrentDraft_ && Snapshot.currentResource_.isEmpty())return {{},"epub-draft-selection"};
     return {std::move(Snapshot),{}};
 }

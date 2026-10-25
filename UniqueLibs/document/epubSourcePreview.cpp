@@ -128,8 +128,9 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     const auto State=Candidate->ViewState();if(State["status"]!="ready" || State["readerBusy"].toBool() || State["settingsBusy"].toBool() || !State["readingStateLoaded"].toBool() || !State["readingProfile"].toObject()["privateReading"].toBool())return;
     if(previewCandidateSerial_==-2) {
         const int OldChapter=!previewRecoveryPosition_ && previewView_?previewView_->ViewState()["chapterIndex"].toInt(-1):previewRestoreChapter_;const auto Locator=!previewRecoveryPosition_ && previewView_?previewView_->ViewState()["locator"].toString():recoveryLocator_;
-        int Target=-1;const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Target=I;
-        const bool Located=Target>=0 && Target!=OldChapter?Candidate->ReaderAction("chapter",Target):!Locator.isEmpty()?Candidate->ReaderAction("preview-location",Locator):false;
+        int Target=-1;const auto Spine=model_.Publication()["spine"].toArray();if(previewSynchronize_->isChecked())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Target=I;
+        if(Target<0 && previewRecoveryPosition_)Target=previewRestoreChapter_;
+        const bool Located=Target>=0 && (Target!=OldChapter || Locator.isEmpty() && Target!=State["chapterIndex"].toInt(-1))?Candidate->ReaderAction("chapter",Target):!Locator.isEmpty()?Candidate->ReaderAction("preview-location",Locator):false;
         previewCandidateSerial_=Located?State["readerAction"].toObject()["serial"].toInteger()+1:-1;if(Located)return;
     }
     if(previewCandidateSerial_>=0 && State["readerAction"].toObject()["serial"].toInteger()<previewCandidateSerial_)return;

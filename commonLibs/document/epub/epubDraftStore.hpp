@@ -7,9 +7,9 @@
 namespace hc::document::epub {
 struct DraftSnapshot {
     QString sourcePath_, currentResource_, locator_;
-    QByteArray original_, currentDraft_;
+    QByteArray original_, currentDraft_,structuralBytes_;
     QMap<QString,QByteArray> changes_;
-    int cursor_=0,scroll_=0;
+    int cursor_=0,scroll_=0,readingChapter_=-1;
     bool hasCurrentDraft_=false;
 };
 struct DraftInfo {

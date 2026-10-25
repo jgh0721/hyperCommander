@@ -166,13 +166,27 @@ namespace hc::document::epub::detail
         if(Read("mimetype") != "application/epub+zip") Reject("invalid-mimetype-value");
     }
 
-    QByteArray Archive::Rewrite(const QMap<QString,QByteArray>& Replacements) const {
-        for(auto I=Replacements.begin();I!=Replacements.end();++I)if(!entries_.contains(I.key()) || entries_[I.key()].directory_ || I.key()=="mimetype" || I.value().size()>16*1024*1024)Reject("edit-resource-denied",I.key());
+    QByteArray Archive::Rewrite(const QMap<QString,QByteArray>& Replacements,const QMap<QString,QByteArray>& Additions,const QSet<QString>& Removals) const {
+        QSet<QString> Names;
+        for(const auto& Item:entries_)if(!Removals.contains(Item.path_))Names.insert(Item.path_.toCaseFolded());
+        for(const auto& Path:Removals)if(!entries_.contains(Path) || entries_[Path].directory_ || Path=="mimetype")Reject("edit-remove-denied",Path);
+        for(auto I=Replacements.begin();I!=Replacements.end();++I)if(!entries_.contains(I.key()) || entries_[I.key()].directory_ || I.key()=="mimetype" || Removals.contains(I.key()) || I.value().size()>16*1024*1024)Reject("edit-resource-denied",I.key());
+        for(auto I=Additions.begin();I!=Additions.end();++I){if(Canonical(I.key())!=I.key() || I.key().endsWith('/') || I.key()=="mimetype" || Names.contains(I.key().toCaseFolded()) || I.value().size()>16*1024*1024)Reject("edit-add-denied",I.key());Names.insert(I.key().toCaseFolded());}
+        if(entries_.size()+Additions.size()-Removals.size()>4096)Reject("edit-entry-limit");
         auto Ordered=entries_.values();std::sort(Ordered.begin(),Ordered.end(),[](const Entry& A,const Entry& B){return A.offset_<B.offset_;});
-        QByteArray Output,Central;
+        QByteArray Output,Central;int Count=0;
         const auto Put16=[](QByteArray& B,qsizetype At,quint16 V){qToLittleEndian(V,B.data()+At);};
         const auto Put32=[](QByteArray& B,qsizetype At,quint32 V){qToLittleEndian(V,B.data()+At);};
+        const auto Budget=[&]{if(Output.size()+Central.size()+22+comment_.size()>InputLimit)Reject("edit-output-limit");};
+        const auto NewEntry=[&](const QString& Path,const QByteArray& Data){
+            Check(cancel_);const auto Name=Path.toUtf8();if(Name.size()>65535)Reject("edit-name-limit",Path);const auto Offset=quint32(Output.size());const auto Crc=quint32(crc32(0,reinterpret_cast<const Bytef*>(Data.constData()),uInt(Data.size())));
+            QByteArray Header(30,0);Put32(Header,0,0x04034b50);Put16(Header,4,20);Put16(Header,6,0x800);Put16(Header,12,0x21);Put32(Header,14,Crc);Put32(Header,18,quint32(Data.size()));Put32(Header,22,quint32(Data.size()));Put16(Header,26,quint16(Name.size()));Output+=Header;Output+=Name;Output+=Data;
+            QByteArray Record(46,0);Put32(Record,0,0x02014b50);Put16(Record,4,20);Put16(Record,6,20);Put16(Record,8,0x800);Put16(Record,14,0x21);Put32(Record,16,Crc);Put32(Record,20,quint32(Data.size()));Put32(Record,24,quint32(Data.size()));Put16(Record,28,quint16(Name.size()));Put32(Record,38,0x20);Put32(Record,42,Offset);Central+=Record;Central+=Name;++Count;Budget();
+        };
+        // Every rewritten edition uses EPUB's required first, stored mimetype entry.
+        NewEntry("mimetype",QByteArray("application/epub+zip"));
         for(const auto& Item:Ordered) {
+            if(Item.path_=="mimetype" || Removals.contains(Item.path_))continue;
             Check(cancel_);auto Record=Item.central_;Put32(Record,42,quint32(Output.size()));
             if(!Replacements.contains(Item.path_))Output+=bytes_.mid(Item.offset_,Item.end_-Item.offset_);
             else {
@@ -181,9 +195,10 @@ namespace hc::document::epub::detail
                 Put16(Header,6,Flags);Put16(Header,8,0);Put32(Header,14,Crc);Put32(Header,18,quint32(Data.size()));Put32(Header,22,quint32(Data.size()));
                 Put16(Record,8,Flags);Put16(Record,10,0);Put32(Record,16,Crc);Put32(Record,20,quint32(Data.size()));Put32(Record,24,quint32(Data.size()));Output+=Header;Output+=Data;
             }
-            Central+=Record;if(Output.size()+Central.size()+22+comment_.size()>InputLimit)Reject("edit-output-limit");
+            Central+=Record;++Count;Budget();
         }
-        const auto Offset=Output.size();Output+=Central;QByteArray End(22,0);Put32(End,0,0x06054b50);Put16(End,8,quint16(Ordered.size()));Put16(End,10,quint16(Ordered.size()));Put32(End,12,quint32(Central.size()));Put32(End,16,quint32(Offset));Put16(End,20,quint16(comment_.size()));Output+=End;Output+=comment_;return Output;
+        for(auto I=Additions.begin();I!=Additions.end();++I)NewEntry(I.key(),I.value());
+        const auto Offset=Output.size();Output+=Central;QByteArray End(22,0);Put32(End,0,0x06054b50);Put16(End,8,quint16(Count));Put16(End,10,quint16(Count));Put32(End,12,quint32(Central.size()));Put32(End,16,quint32(Offset));Put16(End,20,quint16(comment_.size()));Output+=End;Output+=comment_;return Output;
     }
 
     QByteArray Archive::Read(const QString& Path) const

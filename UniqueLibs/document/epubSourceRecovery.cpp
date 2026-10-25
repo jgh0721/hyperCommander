@@ -74,11 +74,12 @@ void EpubSourceEditor::setupRecovery(QVBoxLayout* Layout) {
 }
 void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     const bool Restoring=pendingRecovery_.has_value();QString Error=Model.Error();
+    if(Restoring && Error.isEmpty())Error=Model.RestoreStructuralBytes(pendingRecovery_->structuralBytes_);
     if(Restoring && Error.isEmpty())for(auto I=pendingRecovery_->changes_.begin();I!=pendingRecovery_->changes_.end();++I){Error=Model.Replace(I.key(),I.value());if(!Error.isEmpty())break;}
     if(Restoring && Error.isEmpty() && pendingRecovery_->hasCurrentDraft_) {
         const auto& Current=pendingRecovery_->currentResource_;QString Media;
         for(const auto& Value:Model.Publication()["resources"].toArray())if(Value.toObject()["path"]==Current)Media=Value.toObject()["mediaType"].toString();
-        if(!Model.IsEditable(Current) || QStringList{"image/png","image/jpeg","image/gif"}.contains(Media) || QString::fromUtf8(pendingRecovery_->currentDraft_).toUtf8()!=pendingRecovery_->currentDraft_)Error="epub-draft-selected-resource";
+        if(!Model.IsEditable(Current) || QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Media) || QString::fromUtf8(pendingRecovery_->currentDraft_).toUtf8()!=pendingRecovery_->currentDraft_)Error="epub-draft-selected-resource";
     }
     if(Restoring && !Error.isEmpty()) {
         pendingRecovery_.reset();ready_=!model_.Publication().isEmpty();setEnabled(true);text_->setReadOnly(false);recoveryError_=Error;recoveryStatus_->setText(tr("복구 내용 검사 실패: %1 · 현재 편집과 초안 파일을 유지합니다.").arg(Error));emit StateChanged();return;
@@ -88,8 +89,9 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     if(checkerCancel_)checkerCancel_->setEnabled(checkerState_=="running");
     status_->setText(ready_?tr("변경 내용은 사본으로 저장합니다. EPUBCheck 검사는 설정의 Java/JAR를 사용합니다."):error_);
     if(ready_) {
-        reference_=Restoring?QByteArray::fromHex(model_.Publication()["sourceSha256"].toString().toLatin1()):model_.Fingerprint();updating_=true;resources_->clear();
+        reference_=Restoring?QCryptographicHash::hash(pendingRecovery_->original_,QCryptographicHash::Sha256):model_.Fingerprint();updating_=true;resources_->clear();
         for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Resource=Value.toObject();if(model_.IsEditable(Resource["path"].toString()))resources_->addItem(Resource["path"].toString(),Resource["mediaType"].toString());}
+        QStringList SpinePaths;for(const auto& Value:model_.Publication()["spine"].toArray())SpinePaths.append(Value.toObject()["path"].toString());resources_->setProperty("epubEditionHash",model_.Publication()["sourceSha256"].toString());resources_->setProperty("epubSpinePaths",SpinePaths);
         updating_=false;current_.clear();select();
         if(Restoring) {
             const auto Snapshot=std::exchange(pendingRecovery_,std::nullopt).value();baseToken_=QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256);
@@ -99,9 +101,9 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
                 else {updating_=true;text_->setPlainText(QString::fromUtf8(Snapshot.currentDraft_));text_->document()->setModified(true);auto Cursor=text_->textCursor();Cursor.setPosition(qBound(0,Snapshot.cursor_,text_->document()->characterCount()-1));text_->setTextCursor(Cursor);text_->verticalScrollBar()->setValue(Snapshot.scroll_);updating_=false;}
             }
             recoveryLocator_=Snapshot.locator_;recoverySourceChanged_=recoveryReadingSourceChanged_;recoveredFrom_=readingRecoveryPath_;
-            previewPreferredChapter_=-1;previewRestoreChapter_=-1;previewRecoveryPosition_=true;
+            previewPreferredChapter_=-1;previewRestoreChapter_=Snapshot.readingChapter_;previewRecoveryPosition_=true;
             const auto Spine=model_.Publication()["spine"].toArray();
-            if(!recoveryLocator_.isEmpty())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)previewRestoreChapter_=I;
+            if(previewRestoreChapter_<0 && !recoveryLocator_.isEmpty())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)previewRestoreChapter_=I;
             protectSourcePath(Snapshot.sourcePath_);sourcePath_=Snapshot.sourcePath_;
             resetRecoverySession();text_->setReadOnly(false);
             recoveryStatus_->setText(recoverySourceChanged_?tr("원본의 변경 또는 삭제를 감지했습니다. 보관된 판본의 초안을 복원했습니다. 다른 이름으로 저장하여 비교하세요."):tr("보관된 편집 초안을 복원했습니다. 원본 EPUB은 변경하지 않았습니다."));
@@ -118,7 +120,7 @@ void EpubSourceEditor::Checkpoint() {
     draftTimer_.stop();if(!ready_ || !recoveryEnabled_ || discardedRecovery_ || draftWriter_.isRunning() || pendingRecovery_ || draftReader_.isRunning())return;
     if(Token()==baseToken_) {if(!recoveryPath_.isEmpty()){DiscardRecovery();resetRecoverySession();}return;}
     if(draftWrittenToken_==Token())return;
-    epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;
+    epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.structuralBytes_=model_.StructuralBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;Snapshot.readingChapter_=previewRecoveryPosition_?previewRestoreChapter_:previewSnapshot()["state"].toObject()["chapterIndex"].toInt(previewRestoreChapter_);
     const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.cursor_=text_->textCursor().position();Snapshot.scroll_=text_->verticalScrollBar()->value();
     draftWritingToken_=Token();recoveryStatus_->setText(tr("편집 초안을 자동 복구용으로 보관하고 있습니다…"));
     draftWriter_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Session=recoverySession_,Snapshot=std::move(Snapshot),State=draftSession_]{
@@ -140,6 +142,7 @@ void EpubSourceEditor::SetRecoveryEnabled(bool Enabled) {
     emit StateChanged();
 }
 void EpubSourceEditor::restoreRecovery(const QString& Path) {
+    if(structuring_){status_->setText(tr("구조 작업이 끝난 뒤 초안을 복원해 주세요."));return;}
     if(Path.isEmpty() || pendingRecovery_ || draftReader_.isRunning() || worker_.isRunning() || validation_.isRunning())return;
     if(ready_ && Token()!=baseToken_ && draftWrittenToken_!=Token()) {
         if(!recoveryEnabled_){recoveryStatus_->setText(tr("현재 편집 내용이 있습니다. 사본을 저장하거나 자동 복구를 켠 뒤 복원하세요."));return;}

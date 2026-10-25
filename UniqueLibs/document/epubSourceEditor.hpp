@@ -12,7 +12,7 @@
 #include <atomic>
 #include <optional>
 #include <utility>
-class QProcess;class QTreeWidget;
+class QToolButton;class QProcess;class QTreeWidget;
 class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;class QSplitter;class QStackedLayout;class QCheckBox;class QTemporaryDir;class QResizeEvent;
 namespace hc::document {
 class EpubProcessView;
@@ -28,7 +28,7 @@ public:
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
     bool IsModified()const{return ready_ && Token()!=baseToken_;}
-    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !validation_.isRunning() && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
+    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
     void RequestSave(){validate(true);}
@@ -48,6 +48,12 @@ protected:void resizeEvent(QResizeEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
     QMap<QString,QByteArray> draft()const;
+    struct StructureOutput {epub::EditModel model_;QString error_,selected_;};
+    QFutureWatcher<StructureOutput> structureWorker_;std::shared_ptr<std::atomic_bool> structureCancel_;
+    QToolButton* structureActions_=nullptr;QPushButton* tocEdit_=nullptr;QString structureError_;bool structuring_=false;
+    QJsonArray tocDraft_;QByteArray tocDraftToken_;
+    void setupStructure(QVBoxLayout* Layout);bool structure(QJsonObject Request);void refreshResources(const QString& Preferred);
+    void addImageResource();void convertImageResource();void addChapterResource();void editNavigation();
     void setupValidation(QVBoxLayout* Layout);void nativeDiagnostic(const epub::EditOutput& Result);
     void setDiagnostics(QJsonArray Rows);bool selectDiagnostic(int Index);
     bool standardValidationRequired()const;bool standardValidationAccepted()const;
@@ -73,7 +79,7 @@ private:
     void syncPreviewSource(bool Force=false);
     QJsonObject previewSnapshot()const;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
-    QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false;
+    QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,nativeValidating_=false;
     std::shared_ptr<std::atomic_bool> cancel_;
     QComboBox* resources_=nullptr;QPlainTextEdit* text_=nullptr;QLabel *image_=nullptr,*status_=nullptr;
     QString current_,error_;QStringList protectedPaths_;QList<QByteArray> identities_;QByteArray baseToken_,reference_;
