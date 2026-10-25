@@ -52,6 +52,24 @@ namespace hc::compare
             if (B.begin_ == B.end_) return A.begin_ < B.begin_ && B.begin_ < A.end_;
             return std::max(A.begin_, B.begin_) < std::min(A.end_, B.end_);
         }
+        LargeTextComparison compare(LargeTextSession& Session, std::array<int, 2> Pair, const Budget& Limits)
+        {
+            Limits.Check();
+            for (const auto& cached : Session.pairCache_) if (cached->pair_ == Pair &&
+                cached->indexes_[0] == Session.documents_[Pair[0]].index_ && cached->indexes_[1] == Session.documents_[Pair[1]].index_) {
+                const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(cached->changes_.size() * sizeof(Edit) +
+                    (cached->indexes_[0]->lines_.size() + cached->indexes_[1]->lines_.size()) * sizeof(std::uint64_t)) : std::shared_ptr<void>{};
+                LargeTextComparison value; value.changes_ = cached->changes_;
+                for (int side = 0; side < 2; ++side) { value.documents_[side] = Session.documents_[Pair[side]]; value.lines_[side] = cached->indexes_[side]->lines_; }
+                return value;
+            }
+            auto value = CompareLargeText({Session.documents_[Pair[0]], Session.documents_[Pair[1]]}, Limits);
+            auto cached = std::make_shared<LargeTextPairCache>(); cached->pair_ = Pair;
+            for (int side = 0; side < 2; ++side) { Session.documents_[Pair[side]] = value.documents_[side]; cached->indexes_[side] = value.documents_[side].index_; }
+            std::erase_if(Session.pairCache_, [&](const auto& Item) { return Item->indexes_[0] != Session.documents_[Item->pair_[0]].index_ || Item->indexes_[1] != Session.documents_[Item->pair_[1]].index_; });
+            const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(value.changes_.size() * sizeof(Edit)) : std::shared_ptr<void>{};
+            cached->changes_ = value.changes_; Session.pairCache_.push_back(std::move(cached)); return value;
+        }
         LargeTextDocument variant(const LargeTextDocument& Base, const LargeTextDocument& Side,
             const std::vector<std::uint64_t>& BaseLines, const std::vector<std::uint64_t>& SideLines,
             std::size_t Begin, std::size_t End, const std::vector<const Edit*>& Changes, const Budget& Limits)
@@ -66,7 +84,7 @@ namespace hc::compare
         void merge(LargeTextSession& Session, const Budget& Limits)
         {
             const auto& base = Session.documents_[2]; const auto& left = Session.documents_[0]; const auto& right = Session.documents_[1];
-            const auto a = CompareLargeText({base, left}, Limits), b = CompareLargeText({base, right}, Limits);
+            const auto a = compare(Session, {2, 0}, Limits), b = compare(Session, {2, 1}, Limits);
             Session.documents_[2].contentHash_ = a.documents_[0].contentHash_; Session.documents_[0].contentHash_ = a.documents_[1].contentHash_; Session.documents_[1].contentHash_ = b.documents_[1].contentHash_;
             struct Tagged { const Edit* edit_; bool left_; }; std::vector<Tagged> all;
             const auto admission = Limits.memoryReserve_ ? Limits.memoryReserve_((a.changes_.size() + b.changes_.size()) * 4096) : std::shared_ptr<void>{};
@@ -94,12 +112,12 @@ namespace hc::compare
     std::shared_ptr<LargeTextComparison> PairLargeTextSession(LargeTextSession Session, std::array<int, 2> Pair, const Budget& Limits)
     {
         if (Pair[0] < 0 || Pair[1] < 0 || Pair[0] == Pair[1] || std::size_t(std::max(Pair[0], Pair[1])) >= Session.documents_.size()) throw Failure("LargeTextPairInvalid");
-        auto value = std::make_shared<LargeTextComparison>(CompareLargeText({Session.documents_[Pair[0]], Session.documents_[Pair[1]]}, Limits));
+        auto value = std::make_shared<LargeTextComparison>(compare(Session, Pair, Limits));
         for (int side = 0; side < 2; ++side) Session.documents_[Pair[side]].contentHash_ = value->documents_[side].contentHash_;
         Session.comparisons_ = {};
         if (Session.result_ < 0) for (int a = 0; a < int(Session.documents_.size()); ++a) for (int b = a + 1; b < int(Session.documents_.size()); ++b) {
             auto count = value->changes_.size();
-            if (Pair != std::array{a, b} && Pair != std::array{b, a}) { const auto comparison = CompareLargeText({Session.documents_[a], Session.documents_[b]}, Limits); count = comparison.changes_.size(); Session.documents_[a].contentHash_ = comparison.documents_[0].contentHash_; Session.documents_[b].contentHash_ = comparison.documents_[1].contentHash_; }
+            if (Pair != std::array{a, b} && Pair != std::array{b, a}) { const auto comparison = compare(Session, {a, b}, Limits); count = comparison.changes_.size(); }
             Session.comparisons_.append(QJsonObject{{"fromFile", a + 1}, {"toFile", b + 1}, {"changeCount", double(count)}});
         }
         Session.pair_ = Pair; value->session_ = std::make_shared<LargeTextSession>(std::move(Session)); return value;
@@ -112,19 +130,14 @@ namespace hc::compare
             session.documents_.push_back(ReadLargeText(Input.base_.isEmpty() ? Input.file3_ : Input.base_, InputEncoding(Input, 2), Limits)); session.titles_ << (Input.base_.isEmpty() ? "FILE 3" : "BASE");
         }
         std::size_t total = 0;
-        for (const auto& document : session.documents_) {
-            bool previousCr = false, tail = false;
-            StreamLargeText(document, Limits, [&](QByteArrayView Bytes) { for (const auto byte : Bytes) {
-                if (byte == '\r') { ++total; previousCr = true; tail = false; }
-                else if (byte == '\n') { if (!previousCr) ++total; previousCr = false; tail = false; }
-                else { previousCr = false; tail = true; }
-            } if (total > 2'000'000) throw Failure("LineLimit"); });
-            if (tail && ++total > 2'000'000) throw Failure("LineLimit");
+        for (auto& document : session.documents_) {
+            document = IndexLargeText(std::move(document), Limits); total += document.index_->lineCount_;
+            if (total > 2'000'000) throw Failure("LineLimit");
         }
         if (Input.mode_ == "merge") {
             if (!Input.base_.isEmpty()) merge(session, Limits);
             else {
-                const auto comparison = CompareLargeText({session.documents_[0], session.documents_[1]}, Limits);
+                const auto comparison = compare(session, {0, 1}, Limits);
                 session.documents_[0].contentHash_ = comparison.documents_[0].contentHash_; session.documents_[1].contentHash_ = comparison.documents_[1].contentHash_;
                 auto output = session.documents_[Input.takeAll_ == "right" ? 1 : 0];
                 if (Input.takeAll_.isEmpty()) for (const auto& edit : comparison.changes_) {

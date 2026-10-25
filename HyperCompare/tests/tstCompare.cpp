@@ -1117,6 +1117,29 @@ private slots:
         QVERIFY(!QFileInfo::exists(oneSided.file2_)); SaveLargeText(oneSided, target, {}); QCOMPARE(read(oneSided.file2_), left);
         } catch (const std::exception& error) { QFAIL(error.what()); }
     }
+    void largeTextImmutableIndexesAndPairReuse()
+    {
+        QTemporaryDir dir; Request input; input.file1_ = dir.filePath("a.txt"); input.file2_ = dir.filePath("b.txt"); input.file3_ = dir.filePath("c.txt");
+        write(input.file1_, "same\na\n"); write(input.file2_, "same\nb\n"); write(input.file3_, "same\nc\n");
+        auto first = OpenLargeTextSession(input, {}); QCOMPARE(first->session_->pairCache_.size(), std::size_t(3));
+        for (const auto& document : first->session_->documents_) {
+            QVERIFY(document.index_); QCOMPARE(document.index_->contiguous_.backing_, document.pieces_[0].backing_);
+        }
+        auto second = PairLargeTextSession(*first->session_, {1, 2}, {});
+        QCOMPARE(second->session_->pairCache_, first->session_->pairCache_);
+        QCOMPARE(second->documents_[0].index_, first->session_->documents_[1].index_);
+        auto documents = second->documents_; documents[1] = EditLargeText(documents[1], 5, 6, "b", {});
+        QVERIFY(!documents[1].index_);
+        auto edited = UpdateLargeTextSession(*second, documents, {});
+        QVERIFY(edited->changes_.empty()); QCOMPARE(edited->documents_[0].index_, second->documents_[0].index_);
+        QVERIFY(edited->documents_[1].index_ != second->documents_[1].index_);
+        QCOMPARE(edited->session_->pairCache_[0], first->session_->pairCache_[0]);
+        QCOMPARE(ReadLargeTextRange(second->documents_[1], 0, 7, {}), QByteArray("same\nc\n"));
+        QCOMPARE(ReadLargeTextRange(edited->documents_[1], 0, 7, {}), QByteArray("same\nb\n"));
+        auto again = PairLargeTextSession(*edited->session_, {0, 1}, {}); QCOMPARE(again->session_->pairCache_, edited->session_->pairCache_);
+        std::atomic_bool canceled{true}; Budget limits; limits.canceled_ = &canceled;
+        QVERIFY_EXCEPTION_THROWN(PairLargeTextSession(*again->session_, {0, 1}, limits), Failure);
+    }
     void largeTextEncodingBoundaries()
     {
         try {

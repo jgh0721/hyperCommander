@@ -11,12 +11,26 @@ namespace hc::compare
         std::shared_ptr<LargeTextBacking> backing_;
         std::uint64_t begin_ = 0, bytes_ = 0;
     };
+    struct LargeTextIndex
+    {
+        LargeTextPiece contiguous_;
+        QByteArray hash_;
+        std::vector<std::uint64_t> lines_;
+        std::size_t lineCount_ = 0;
+    };
     struct LargeTextDocument
     {
         Snapshot original_; // Identity/encoding only; raw_/utf8_ remain empty.
         QByteArray rawHash_, contentHash_;
         std::vector<LargeTextPiece> pieces_;
         std::uint64_t bytes_ = 0;
+        std::shared_ptr<const LargeTextIndex> index_;
+    };
+    struct LargeTextPairCache
+    {
+        std::array<int, 2> pair_;
+        std::array<std::shared_ptr<const LargeTextIndex>, 2> indexes_;
+        std::vector<Edit> changes_;
     };
     struct LargeTextConflict
     {
@@ -33,6 +47,7 @@ namespace hc::compare
         std::vector<LargeTextConflict> conflicts_;
         std::array<int, 2> pair_{0, 1};
         QJsonArray comparisons_;
+        std::vector<std::shared_ptr<const LargeTextPairCache>> pairCache_;
     };
     struct LargeTextComparison
     {
@@ -46,6 +61,7 @@ namespace hc::compare
     constexpr std::uint64_t largeTextPageMaximum = 1024 * 1024;
     LargeTextDocument ReadLargeText(const QString& Path, const QString& Encoding, const Budget& Limits, bool AllowMissing = false);
     LargeTextComparison CompareLargeText(std::array<LargeTextDocument, 2> Documents, const Budget& Limits);
+    LargeTextDocument IndexLargeText(LargeTextDocument Document, const Budget& Limits);
     QByteArray ReadLargeTextRange(const LargeTextDocument& Document, std::uint64_t Begin, std::uint64_t End, const Budget& Limits);
     void StreamLargeText(const LargeTextDocument& Document, const Budget& Limits, const std::function<void(QByteArrayView)>& Output);
     LargeTextDocument ReplaceLargeText(const LargeTextDocument& Target, std::uint64_t Begin, std::uint64_t End,

@@ -96,18 +96,18 @@ namespace hc::compare
         }
         struct Mapping
         {
-            std::shared_ptr<LargeTextBacking> backing_;
+            QFile file_;
             uchar* data_ = nullptr;
-            QByteArray hash_;
-            explicit Mapping(const LargeTextDocument& Document, const Budget& Limits) : backing_(backing())
+            std::uint64_t bytes_ = 0;
+            explicit Mapping(const LargeTextPiece& Piece) : bytes_(Piece.bytes_)
             {
-                QCryptographicHash hash(QCryptographicHash::Sha256);
-                visit(Document, 0, Document.bytes_, Limits, [&](const QByteArray& Bytes) { append(backing_->file_, Bytes); hash.addData(Bytes); }); hash_ = hash.result();
-                if (!backing_->file_.flush()) throw Failure("LargeTextTemporaryWriteFailed");
-                if (Document.bytes_) { data_ = backing_->file_.map(0, qint64(Document.bytes_)); if (!data_) throw Failure("LargeTextMapFailed"); }
+                if (!bytes_) return;
+                file_.setFileName(Piece.backing_->file_.fileName());
+                if (!file_.open(QIODevice::ReadOnly)) throw Failure("LargeTextTemporaryReadFailed");
+                data_ = file_.map(qint64(Piece.begin_), qint64(bytes_)); if (!data_) throw Failure("LargeTextMapFailed");
             }
-            ~Mapping() { if (data_) backing_->file_.unmap(data_); }
-            std::string_view View() const { return {data_ ? reinterpret_cast<const char*>(data_) : "", std::size_t(backing_->file_.size())}; }
+            ~Mapping() { if (data_) file_.unmap(data_); }
+            std::string_view View() const { return {data_ ? reinterpret_cast<const char*>(data_) : "", std::size_t(bytes_)}; }
         };
     }
     LargeTextDocument ReadLargeText(const QString& Path, const QString& Encoding, const Budget& Limits, bool AllowMissing)
@@ -151,21 +151,41 @@ namespace hc::compare
         result.rawHash_ = rawHash.result();
         return result;
     }
+    LargeTextDocument IndexLargeText(LargeTextDocument Document, const Budget& Limits)
+    {
+        Limits.Check(); if (Document.index_) return Document;
+        auto index = std::make_shared<LargeTextIndex>();
+        if (Document.pieces_.size() == 1) index->contiguous_ = Document.pieces_.front();
+        else if (Document.bytes_) {
+            auto store = backing(); visit(Document, 0, Document.bytes_, Limits, [&](const QByteArray& Bytes) { append(store->file_, Bytes); });
+            if (!store->file_.flush()) throw Failure("LargeTextTemporaryWriteFailed");
+            index->contiguous_ = {std::move(store), 0, Document.bytes_};
+        }
+        Mapping mapping(index->contiguous_); const auto view = mapping.View();
+        index->lineCount_ = CountLines(view, Limits);
+        const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_((index->lineCount_ + 1) * sizeof(std::uint64_t)) : std::shared_ptr<void>{};
+        auto& lines = index->lines_; lines.reserve(index->lineCount_ + 1); lines.push_back(0);
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        for (std::size_t offset = 0; offset < view.size(); offset += 64 * 1024) {
+            Limits.Check(); hash.addData(QByteArrayView(view.data() + offset, qsizetype(std::min<std::size_t>(64 * 1024, view.size() - offset))));
+        }
+        for (std::size_t i = 0; i < view.size(); ++i) {
+            if (!(i & 4095)) Limits.Check();
+            if (view[i] == '\r') { if (i + 1 < view.size() && view[i + 1] == '\n') ++i; lines.push_back(i + 1); }
+            else if (view[i] == '\n') lines.push_back(i + 1);
+        }
+        if (lines.back() != view.size()) lines.push_back(view.size());
+        index->hash_ = hash.result(); Document.contentHash_ = index->hash_; Document.index_ = std::move(index); return Document;
+    }
     LargeTextComparison CompareLargeText(std::array<LargeTextDocument, 2> Documents, const Budget& Limits)
     {
-        Limits.Check(); Mapping left(Documents[0], Limits), right(Documents[1], Limits); auto ranges = Limits; ranges.rangesOnly_ = true;
-        const auto leftLines = CountLines(left.View(), Limits); CountLines(right.View(), Limits, 2'000'000 - leftLines);
-        LargeTextComparison result; result.documents_ = std::move(Documents); result.documents_[0].contentHash_ = left.hash_; result.documents_[1].contentHash_ = right.hash_; result.changes_ = Diff(left.View(), right.View(), ranges);
+        Limits.Check(); for (auto& document : Documents) document = IndexLargeText(std::move(document), Limits);
+        if (Documents[0].index_->lineCount_ + Documents[1].index_->lineCount_ > 2'000'000) throw Failure("LineLimit");
+        Mapping left(Documents[0].index_->contiguous_), right(Documents[1].index_->contiguous_); auto ranges = Limits; ranges.rangesOnly_ = true;
+        LargeTextComparison result; result.documents_ = std::move(Documents); result.changes_ = Diff(left.View(), right.View(), ranges);
         for (int side = 0; side < 2; ++side) {
-            const auto view = side ? right.View() : left.View(); const auto count = CountLines(view, Limits);
-            const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_((count + 1) * sizeof(std::uint64_t)) : std::shared_ptr<void>{};
-            auto& lines = result.lines_[side]; lines.reserve(count + 1); lines.push_back(0);
-            for (std::size_t i = 0; i < view.size(); ++i) {
-                if (!(i & 4095)) Limits.Check();
-                if (view[i] == '\r') { if (i + 1 < view.size() && view[i + 1] == '\n') ++i; lines.push_back(i + 1); }
-                else if (view[i] == '\n') lines.push_back(i + 1);
-            }
-            if (lines.back() != view.size()) lines.push_back(view.size());
+            const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_(result.documents_[side].index_->lines_.size() * sizeof(std::uint64_t)) : std::shared_ptr<void>{};
+            result.lines_[side] = result.documents_[side].index_->lines_;
         }
         return result;
     }
