@@ -46,7 +46,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     });
     connect(&validation_,&QFutureWatcher<epub::EditOutput>::finished,this,[this]{
         const auto Result=validation_.result();if(validationToken_!=Token()){status_->setText(tr("검사 중 소스가 변경되었습니다. 다시 검사해 주세요."));emit StateChanged();return;}
-        if(!Result){error_=Result.error_+": "+Result.location_;status_->setText(tr("소스 검사를 통과하지 못했습니다.\n%1").arg(error_));validatedBytes_.clear();}
+        if(!Result){error_=Result.error_+": "+Result.location_;status_->setText(Result.error_=="epub-edit-spine-repair-required"?tr("읽기 순서에 누락된 참조가 있어 저장할 수 없습니다. OPF에서 해당 참조를 수정한 후 다시 검사해 주세요. 원본은 변경하지 않았습니다."):tr("소스 검사를 통과하지 못했습니다.\n%1").arg(error_));validatedBytes_.clear();}
         else {error_.clear();validatedToken_=validationToken_;validatedBytes_=Result.bytes_;status_->setText(tr("기본 구조 검사 통과 · 다른 이름 저장 가능 · 출판용 EPUB 표준 검증은 별도입니다."));}
         emit StateChanged();if(Result && saveAfter_)emit SaveRequested();
     });load(std::move(Bytes));

@@ -11,6 +11,7 @@
 #include <QSet>
 #include <QUrl>
 #include <QXmlStreamReader>
+#include <QXmlStreamWriter>
 #include <new>
 
 namespace hc::document::epub
@@ -124,7 +125,10 @@ namespace hc::document::epub
                     "base", "foreignobject", "animate", "animatetransform", "animatemotion", "set"};
                 for(const auto& Item : nodes_) {
                     const auto Local = Item.tag_.section('}', -1).toLower();
-                    if(Forbidden.contains(Local) || (Local == "meta" && Item.attributes_.contains("http-equiv"))) Reject("renderer-active-markup", Path);
+                    static const QRegularExpression Utf8ContentType(QStringLiteral(R"(^\s*(?:text/html|application/xhtml\+xml)\s*;\s*charset\s*=\s*utf-?8\s*$)"), QRegularExpression::CaseInsensitiveOption);
+                    const bool EncodingMeta = Local == "meta" && Item.Attr("http-equiv").trimmed().compare("content-type", Qt::CaseInsensitive) == 0
+                        && Utf8ContentType.match(Item.Attr("content")).hasMatch();
+                    if(Forbidden.contains(Local) || (Local == "meta" && Item.attributes_.contains("http-equiv") && !EncodingMeta)) Reject("renderer-active-markup", Path);
                     for(auto It = Item.attributes_.cbegin(); It != Item.attributes_.cend(); ++It) {
                         const auto Name = It.key().section('}', -1).toLower(), Value = It.value().trimmed().toLower();
                         if(Name.startsWith("on") || It.key() == "{http://www.w3.org/XML/1998/namespace}base") Reject("renderer-active-attribute", Path);
@@ -168,7 +172,12 @@ namespace hc::document::epub
             }
             for(const auto Index : Package.Children(Metadata, Opf, "meta"))
                 if(Package.At(Index).Attr("property") == "rendition:layout" && Package.Text(Index).trimmed() == "pre-paginated") Reject("fixed-layout", Rootfile);
-            static const QSet<QString> Allowed{"application/xhtml+xml", "text/css", "image/svg+xml", "image/png", "image/jpeg", "image/gif",
+            const auto SpineIndex = Package.One(0, Opf, "spine", "missing-spine");
+            const auto NcxId = Package.At(SpineIndex).Attr("toc");
+            QSet<QString> SpineIds;
+            for(const auto Index : Package.Children(SpineIndex, Opf, "itemref")) SpineIds.insert(Package.At(Index).Attr("idref"));
+            QMap<QString, QString> NormalizedMedia;
+            static const QSet<QString> Allowed{"application/xhtml+xml", "text/css", "image/svg+xml", "image/png", "image/jpeg", "image/gif", "image/webp",
                 "font/woff", "font/woff2", "font/ttf", "font/otf", "application/x-dtbncx+xml"};
             QList<Resource> Resources;
             QMap<QString, int> Ids;
@@ -178,15 +187,26 @@ namespace hc::document::epub
                 Check(Cancel);
                 const auto& Item = Package.At(Index);
                 Resource Resource{Item.Attr("id"), resolve(Rootfile, Item.Attr("href")), Item.Attr("media-type"), tokens(Item.Attr("properties"))};
+                if(Resource.media_ == "application/x-font-ttf") Resource.media_ = "font/ttf";
+                if(Resource.media_ == "application/xhtml+xml" && Resource.path_.endsWith(".css", Qt::CaseInsensitive)
+                    && !SpineIds.contains(Resource.id_) && !Resource.properties_.contains("nav")) Resource.media_ = "text/css";
+                // A few EPUB2 converters label the designated NCX as XHTML.
+                // Normalize only the spine's explicit TOC role and a verified
+                // NCX namespace/root; never reinterpret arbitrary resources.
+                if(Version == "2.0" && Resource.id_ == NcxId && Resource.media_ == "application/xhtml+xml") {
+                    const Xml Toc(Book.Read(Resource.path_), Resource.path_, Cancel);
+                    if(Toc.At(0).tag_ != key(Ncx, "ncx")) Reject("invalid-ncx-root", Resource.path_);
+                    Resource.media_ = "application/x-dtbncx+xml";
+                }
                 if(Resource.id_.isEmpty() || Ids.contains(Resource.id_)) Reject("duplicate-or-empty-manifest-id", Resource.id_);
                 if(Paths.contains(Resource.path_) || Resource.path_ == Rootfile) Reject("duplicate-manifest-path", Resource.path_);
                 if(!Allowed.contains(Resource.media_)) Reject("renderer-media-unsupported", Resource.path_);
                 if(Resource.properties_.contains("scripted")) Reject("scripted-content", Resource.path_);
                 if(Resource.properties_.contains("rendition:layout-pre-paginated")) Reject("fixed-layout", Resource.path_);
+                if(Resource.media_ != Item.Attr("media-type")) NormalizedMedia.insert(Resource.id_, Resource.media_);
                 Ids.insert(Resource.id_, static_cast<int>(Resources.size())); Paths.insert(Resource.path_); Resources.append(Resource);
             }
             if(Resources.isEmpty() || Resources.size() >= 4096) Reject("manifest-count-limit");
-            const auto SpineIndex = Package.One(0, Opf, "spine", "missing-spine");
             auto Progression = Package.At(SpineIndex).Attr("page-progression-direction");
             if(Progression.isEmpty()) Progression = "default";
             if(Progression != "default" && Progression != "ltr" && Progression != "rtl") Reject("invalid-reading-progression");
@@ -204,17 +224,55 @@ namespace hc::document::epub
                 if(Array.size() >= 4096) Reject("snapshot-record-limit");
                 Account(Record); Array.append(Record);
             };
-            for(const auto Index : Package.Children(SpineIndex, Opf, "itemref")) {
+            const auto SpineItems = Package.Children(SpineIndex, Opf, "itemref");
+            int MissingSpineItems = 0;
+            for(const auto Index : SpineItems) if(!Ids.contains(Package.At(Index).Attr("idref"))) ++MissingSpineItems;
+            if(MissingSpineItems > 4096) Reject("snapshot-record-limit");
+            for(const auto Index : SpineItems) {
                 const auto& Item = Package.At(Index); const auto Id = Item.Attr("idref");
-                if(!Ids.contains(Id)) Reject("missing-spine-resource", Id);
+                if(!Ids.contains(Id)) continue;
                 const auto& Resource = Resources[Ids[Id]];
                 if(Resource.media_ != "application/xhtml+xml") Reject("spine-media-unsupported", Resource.path_);
                 if(tokens(Item.Attr("properties")).contains("rendition:layout-pre-paginated")) Reject("fixed-layout-spine", Resource.path_);
                 auto Linear = Item.Attr("linear"); if(Linear.isEmpty()) Linear = "yes";
                 if(Linear != "yes" && Linear != "no") Reject("invalid-spine-linear", Resource.path_);
-                Append(Spine, {{"id", Id}, {"path", Resource.path_}, {"linear", Linear}});
+                // Recovery retains available source order and makes all of it
+                // reachable. The reader must explicitly show the missing count.
+                Append(Spine, {{"id", Id}, {"path", Resource.path_}, {"linear", MissingSpineItems ? "yes" : Linear}});
             }
-            if(Spine.isEmpty()) Reject("missing-spine");
+            if(Spine.isEmpty()) Reject(MissingSpineItems ? "missing-spine-resource" : "missing-spine");
+            QByteArray ReaderPackage = PackageBytes;
+            if(MissingSpineItems || !NormalizedMedia.isEmpty()) {
+                // Repair only the immutable rendering snapshot. The archive and
+                // editor's OPF source remain untouched, with all original bytes.
+                ReaderPackage.clear(); QXmlStreamReader Reader(PackageBytes); QXmlStreamWriter Writer(&ReaderPackage);
+                int Depth = 0, SpineDepth = -1, ManifestDepth = -1;
+                while(!Reader.atEnd()) {
+                    Check(Cancel); const auto Token = Reader.readNext();
+                    if(Token == QXmlStreamReader::StartElement) {
+                        ++Depth;
+                        if(Depth == 2 && Reader.namespaceUri() == Opf && Reader.name() == "spine") SpineDepth = Depth;
+                        if(Depth == 2 && Reader.namespaceUri() == Opf && Reader.name() == "manifest") ManifestDepth = Depth;
+                        if(ManifestDepth > 0 && Depth == ManifestDepth + 1 && Reader.namespaceUri() == Opf && Reader.name() == "item"
+                            && NormalizedMedia.contains(Reader.attributes().value("id").toString())) {
+                            Writer.writeStartElement(Reader.namespaceUri().toString(), Reader.name().toString());
+                            for(const auto& Namespace : Reader.namespaceDeclarations()) Writer.writeNamespace(Namespace.namespaceUri().toString(), Namespace.prefix().toString());
+                            for(const auto& Attribute : Reader.attributes()) if(Attribute.name() != "media-type") Writer.writeAttribute(Attribute);
+                            Writer.writeAttribute("media-type", NormalizedMedia[Reader.attributes().value("id").toString()]); continue;
+                        }
+                        if(MissingSpineItems && SpineDepth > 0 && Depth == SpineDepth + 1 && Reader.namespaceUri() == Opf && Reader.name() == "itemref") {
+                            if(!Ids.contains(Reader.attributes().value("idref").toString())) { Reader.skipCurrentElement(); --Depth; continue; }
+                            Writer.writeStartElement(Reader.namespaceUri().toString(), Reader.name().toString());
+                            for(const auto& Namespace : Reader.namespaceDeclarations()) Writer.writeNamespace(Namespace.namespaceUri().toString(), Namespace.prefix().toString());
+                            for(const auto& Attribute : Reader.attributes()) if(Attribute.name() != "linear") Writer.writeAttribute(Attribute);
+                            Writer.writeAttribute("linear", "yes"); continue;
+                        }
+                    }
+                    Writer.writeCurrentToken(Reader);
+                    if(Token == QXmlStreamReader::EndElement) { if(Depth == SpineDepth) SpineDepth = -1; if(Depth == ManifestDepth) ManifestDepth = -1; --Depth; }
+                }
+                if(Reader.hasError() || Writer.hasError() || ReaderPackage.size() > 2 * 1024 * 1024) Reject("invalid-reader-package");
+            }
             const auto AddNavigation = [&](const QString& Base, const QString& Href, const QString& Label) {
                 const auto Target = resolve(Base, Href);
                 if(!Paths.contains(Target)) Reject("missing-navigation-target", Target);
@@ -270,10 +328,11 @@ namespace hc::document::epub
                 }
             }
             if(Navigation.isEmpty()) Reject("missing-navigation");
-            AddResource(Rootfile, "application/oebps-package+xml", PackageBytes);
+            AddResource(Rootfile, "application/oebps-package+xml", ReaderPackage);
             Check(Cancel);
             return {{"schemaVersion", 1}, {"phase", "P0-B"}, {"policy", "passive-reflowable-v1"}, {"sourceSha256", digest(Bytes)},
                 {"title", Title}, {"languages", Languages}, {"readingProgression", Progression},
+                {"recovery", QJsonObject{{"missingSpineItems", MissingSpineItems}, {"normalizedMedia", NormalizedMedia.size()}, {"sourceUnchanged", true}}},
                 {"packageVersion", Version}, {"rootfile", Rootfile}, {"spine", Spine}, {"navigation", Navigation}, {"images", Images}, {"resources", Entries},
                 {"limitations", QJsonArray{"UTF-8 XML and ZIP names only", "ZIP64, fixed layout, encrypted, signed and active publications rejected",
                     "CSS URLs, SVG references and srcset not structurally validated; renderer allowlist remains required", "immutable reader preparation; authoring requires separate Save As validation; not EPUBCheck"}}};

@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from make_corpus import archive, generate, publication
+from make_corpus import archive, generate, publication, webp
 from prepare_render import prepare
 
 EXECUTABLE = Path(sys.argv.pop(1)).resolve()
@@ -78,6 +78,11 @@ class NativePackageTests(unittest.TestCase):
                 error = codes.get(case["id"], case["expectedCode"])
                 # The Python research inspector keeps strict EPUB conformance;
                 # the native reader also admits safe legacy ZIP layouts.
+                if case["id"] == "invalid-spine":
+                    native = self.run_bytes(path.read_bytes())
+                    self.assertEqual(native["recovery"]["missingSpineItems"], 1)
+                    self.assertEqual(len(native["spine"]), 1)
+                    continue
                 if case["id"] == "compressed-mimetype":
                     native = self.run_bytes(path.read_bytes())
                     self.assertEqual(len(native["spine"]), 2)
@@ -120,6 +125,59 @@ class NativePackageTests(unittest.TestCase):
         central = broken.index(b'PK\x01\x02')
         broken[central + 16] ^= 1
         self.run_bytes(bytes(broken), "zip-descriptor")
+
+    def test_single_nul_terminator(self):
+        data = archive(publication())
+        self.run_bytes(data + b'\x00')
+        for suffix in (b'\x00' * 2, b'\x00' * 16, b'x\x00'):
+            self.run_bytes(data + suffix, "zip-end-missing")
+        self.run_bytes(data[:-2] + b'\x00', "zip-end-missing")
+
+    def test_legacy_manifest_roles_and_utf8_meta(self):
+        entries = publication("2.0")
+        opf = entries["EPUB/content.opf"].replace(b'application/x-dtbncx+xml', b'application/xhtml+xml').replace(b'media-type="text/css"', b'media-type="application/xhtml+xml"')
+        opf = opf.replace(b'</manifest>', b'<item id="font" href="Fonts/test.ttf" media-type="application/x-font-ttf"/></manifest>')
+        entries["EPUB/content.opf"] = opf
+        entries["EPUB/Fonts/test.ttf"] = b'font parser fixture'
+        chapter = "EPUB/Text/second.xhtml"
+        entries[chapter] = entries[chapter].replace(b'<head>', b'<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>')
+        result = self.run_bytes(archive(entries))
+        self.assertEqual(result["recovery"]["normalizedMedia"], 3)
+        resources = {r["path"]:r for r in result["resources"]}
+        self.assertEqual(resources["EPUB/toc.ncx"]["mediaType"], "application/x-dtbncx+xml")
+        self.assertEqual(resources["EPUB/Styles/book.css"]["mediaType"], "text/css")
+        self.assertEqual(resources["EPUB/Fonts/test.ttf"]["mediaType"], "font/ttf")
+        import base64, xml.etree.ElementTree as ET
+        normalized = ET.fromstring(base64.b64decode(resources["EPUB/content.opf"]["base64"]))
+        media = {r.get("id"):r.get("media-type") for r in normalized.findall("{*}manifest/{*}item")}
+        self.assertEqual(media["ncx"], "application/x-dtbncx+xml")
+        entries["EPUB/toc.ncx"] = entries[chapter]
+        self.run_bytes(archive(entries), "invalid-ncx-root")
+        for equiv, content in [(b'refresh', b'0;url=https://invalid.example/'), (b'content-type', b'text/html;charset=windows-1252')]:
+            bad = publication()
+            bad[chapter] = bad[chapter].replace(b'<head>', b'<head><meta http-equiv="'+equiv+b'" content="'+content+b'"/>')
+            self.run_bytes(archive(bad), "renderer-active-markup")
+
+    def test_webp_and_missing_spine_recovery(self):
+        entries = publication()
+        entries["EPUB/Images/alpha.webp"] = webp()
+        del entries["EPUB/Images/alpha.png"]
+        for name in list(entries):
+            if name.endswith(('.xhtml', '.opf')):
+                entries[name] = entries[name].replace(b'alpha.png', b'alpha.webp').replace(b'image/png', b'image/webp')
+        result = self.run_bytes(archive(entries))
+        self.assertTrue(any(r["mediaType"]=="image/webp" for r in result["resources"]))
+        opf = entries["EPUB/content.opf"]
+        entries["EPUB/content.opf"] = opf.replace(b'<itemref idref="c2"/>', b'<itemref idref="absent"/><itemref idref="c2" linear="no"/>')
+        result = self.run_bytes(archive(entries))
+        self.assertEqual(result["recovery"]["missingSpineItems"], 1)
+        self.assertTrue(all(i["linear"]=="yes" for i in result["spine"]))
+        import base64, xml.etree.ElementTree as ET
+        raw = next(r for r in result["resources"] if r["path"]=="EPUB/content.opf")
+        reader = ET.fromstring(base64.b64decode(raw["base64"]))
+        self.assertEqual([i.get("idref") for i in reader.findall("{*}spine/{*}itemref")], ["c1","c2"])
+        entries["EPUB/content.opf"] = opf.replace(b'idref="c1"', b'idref="absent1"').replace(b'idref="c2"', b'idref="absent2"')
+        self.run_bytes(archive(entries), "missing-spine-resource")
 
     def test_passive_epub2_ncx_doctype(self):
         entries = publication("2.0")

@@ -94,7 +94,7 @@ namespace
         Assets Result;
         qint64 Total = 0;
         const QSet<QString> Types{"application/xhtml+xml", "application/oebps-package+xml", "application/x-dtbncx+xml",
-            "text/css", "image/svg+xml", "image/png", "image/jpeg", "image/gif", "font/ttf", "font/otf", "font/woff", "font/woff2"};
+            "text/css", "image/svg+xml", "image/png", "image/jpeg", "image/gif", "image/webp", "font/ttf", "font/otf", "font/woff", "font/woff2"};
         QJsonArray Metadata;
         const auto Resources = Publication["resources"].toArray();
         if(Resources.size() > 4096) throw QString("Too many resources");
@@ -229,6 +229,11 @@ namespace
             auto* Layout = new QVBoxLayout(Central);
             auto* Header = new QLabel(Publication["title"].toString() + tr(" — EPUB 읽기"), Central);
             Header->setTextFormat(Qt::PlainText); Layout->addWidget(Header);
+            const auto Missing = Publication["recovery"].toObject()["missingSpineItems"].toInt();
+            if(Missing > 0) {
+                auto* Notice = new QLabel(tr("읽기 순서에서 찾을 수 없는 항목 %1개를 제외하고, 존재하는 본문 순서로 복구해 표시합니다. 원본 파일은 변경하지 않았습니다.").arg(Missing), Central);
+                Notice->setObjectName("epubRecoveryNotice"); Notice->setTextFormat(Qt::PlainText); Notice->setWordWrap(true); Layout->addWidget(Notice);
+            }
             auto* Splitter = new QSplitter(Central); Layout->addWidget(Splitter, 1);
             auto* Scroll = new QScrollArea(Splitter); settingsScroll_ = Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(400);
             auto* Panel = new QWidget; Scroll->setWidget(Panel);

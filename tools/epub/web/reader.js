@@ -163,7 +163,7 @@ window.hcBookFonts = bookFonts;
 
 function currentSnapshot() {
     const docs = documents();
-    return { ...tools.state(), engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { ...tools.state(), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {

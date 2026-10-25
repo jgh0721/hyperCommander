@@ -54,10 +54,14 @@ EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancell
     for(auto I=Changes.begin();I!=Changes.end();++I)if(QStringList{"application/xhtml+xml","application/oebps-package+xml","image/svg+xml"}.contains(media_[I.key()])) {
         QXmlStreamReader Xml(I.value());detail::XhtmlEntities Entities;Xml.setEntityResolver(&Entities);while(!Xml.atEnd()){if(Cancel && Cancel())return {{},"cancelled",I.key()};const auto Token=Xml.readNext();if(Token==QXmlStreamReader::DTD){if(!detail::PassiveDoctype(Xml))return {{},"xml-dtd-or-entity",I.key()};Entities.enabled_=Xml.dtdName()=="html";}else if(Token==QXmlStreamReader::EntityReference)return {{},"xml-dtd-or-entity",I.key()};}if(Xml.hasError())return {{},"XML syntax: "+Xml.errorString(),QString("%1:%2:%3").arg(I.key()).arg(Xml.lineNumber()).arg(Xml.columnNumber())};
     }
-    if(Changes.isEmpty())return {original_,{},{}};
+    if(Changes.isEmpty()) {
+        if(publication_["recovery"].toObject()["missingSpineItems"].toInt()>0)return {{},"epub-edit-spine-repair-required",publication_["rootfile"].toString()};
+        return {original_,{},{}};
+    }
     for(auto I=Changes.begin();I!=Changes.end();++I)if(!imageValid(I.value(),media_[I.key()]))return {{},"epub-edit-image-invalid-or-over-budget",I.key()};
     try {
         const auto Bytes=detail::Archive(original_,Cancel).Rewrite(Changes);const auto Checked=Prepare(Bytes,Cancel);if(!Checked)return {{},Checked.error_,Checked.location_};
+        if(Checked.publication_["recovery"].toObject()["missingSpineItems"].toInt()>0)return {{},"epub-edit-spine-repair-required",Checked.publication_["rootfile"].toString()};
         for(const auto& Value:Checked.publication_["resources"].toArray()) {const auto Item=Value.toObject();const auto Path=Item["path"].toString(),Media=Item["mediaType"].toString();
             if(Changes.contains(Path) || media_.value(Path)!=Media) {const auto Raw=QByteArray::fromBase64(Item["base64"].toString().toLatin1());if(!imageValid(Raw,Media))return {{},"epub-edit-image-media-mismatch",Path};}}
         return {Bytes,{},{}};

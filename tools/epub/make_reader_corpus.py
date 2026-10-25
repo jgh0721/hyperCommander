@@ -1,7 +1,7 @@
 """Reader-control fixtures built from the original CC0 package corpus."""
 import argparse
 from pathlib import Path
-from make_corpus import publication, archive
+from make_corpus import publication, archive, webp
 p=argparse.ArgumentParser();p.add_argument("output",type=Path);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 for version,name in [("3.0","epub3-images.epub"),("2.0","epub2-ncx.epub")]:
     entries=publication(version)
@@ -29,3 +29,21 @@ entries=publication()
 cover="EPUB/Text/첫 장.xhtml"
 entries[cover]=b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Percentage cover</title><style>html,body{height:100%;margin:0;padding:0}.cover{height:100%;display:-webkit-box;-webkit-box-align:center;-webkit-box-pack:center}img{width:100%;height:auto}</style></head><body><div class="cover"><img src="../Images/alpha.png" alt="cover"/></div></body></html>'
 (a.output/"epub3-percentage-cover.epub").write_bytes(archive(entries))
+
+# Safe legacy declarations, WebP images and explicit read-only spine recovery.
+entries=publication("2.0")
+entries["EPUB/content.opf"]=entries["EPUB/content.opf"].replace(b'application/x-dtbncx+xml',b'application/xhtml+xml').replace(b'media-type="text/css"',b'media-type="application/xhtml+xml"')
+for name in list(entries):
+    if name.endswith('.xhtml'):entries[name]=entries[name].replace(b'<head>',b'<head><meta http-equiv="Content-Type" content="text/html;charset=utf-8"/>')
+(a.output/"epub2-legacy-mime.epub").write_bytes(archive(entries)+b'\x00')
+entries=publication()
+entries["EPUB/content.opf"]=entries["EPUB/content.opf"].replace(b'</manifest>',b'<item id="font" href="Fonts/test.ttf" media-type="application/x-font-ttf"/></manifest>')
+entries["EPUB/Fonts/test.ttf"]=b'Unreferenced font declaration fixture'
+(a.output/"epub3-legacy-font.epub").write_bytes(archive(entries))
+entries=publication()
+entries["EPUB/Images/alpha.webp"]=webp();del entries["EPUB/Images/alpha.png"]
+for name in list(entries):
+    if name.endswith(('.opf','.xhtml')):entries[name]=entries[name].replace(b'alpha.png',b'alpha.webp').replace(b'image/png',b'image/webp')
+(a.output/"epub3-webp.epub").write_bytes(archive(entries))
+entries["EPUB/content.opf"]=entries["EPUB/content.opf"].replace(b'<itemref idref="c2"/>',b'<itemref idref="absent"/><itemref idref="c2" linear="no"/>')
+(a.output/"epub3-recovered-spine.epub").write_bytes(archive(entries))

@@ -6588,7 +6588,9 @@ private slots:
             const auto Document=Surface->Details().documentState_["documents"].toArray().first().toObject();
             QCOMPARE(Document["view"].toObject()["viewId"].toString(),QString("epub"));
             QVERIFY(Document["view"].toObject()["readOnly"].toBool()); QVERIFY(!Document["canSave"].toBool());
-            QVERIFY(!Document["view"].toObject()["epub"].toObject()["images"].toArray().isEmpty());
+            const auto Reader = Document["view"].toObject()["epub"].toObject();
+            QVERIFY(!Reader["text"].toString().trimmed().isEmpty() || !Reader["images"].toArray().isEmpty());
+            for(const auto& Value : Reader["images"].toArray()) { const auto Image = Value.toObject(); QVERIFY(Image["complete"].toBool()); QVERIFY(Image["naturalWidth"].toInt() > 0); }
             struct Search { DWORD pid; HWND window=nullptr; } State{DWORD(Surface->Details().host_.processId_)};
             const auto Find=[&] {
                 EnumWindows([](HWND Candidate,LPARAM Value)->BOOL {

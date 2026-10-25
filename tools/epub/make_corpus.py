@@ -1,6 +1,7 @@
 """Generate original deterministic P0 EPUB fixtures in a new directory."""
 from __future__ import annotations
 import argparse
+import base64
 import copy
 import hashlib
 import io
@@ -12,6 +13,11 @@ import zlib
 from pathlib import Path
 
 LICENSE = "CC0-1.0"
+
+
+def webp():
+    # Original 8x8 solid-color image, encoded losslessly with libwebp.
+    return base64.b64decode("UklGRh4AAABXRUJQVlA4TBEAAAAvB8ABAAdQt8oUtP+BiOh/AAA=")
 
 
 def png():

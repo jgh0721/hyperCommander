@@ -85,6 +85,12 @@ namespace hc::document::epub::detail
                 End = FindEnd(ArchiveEnd);
             }
         }
+        // A single C-string terminator is also left by some legacy writers.
+        // Do not accept general zero padding or any arbitrary trailing bytes.
+        if(End < 0 && Bytes.endsWith(char(0))) {
+            const auto TerminatedEnd = FindEnd(Bytes.size() - 1);
+            if(TerminatedEnd >= 0) { End = TerminatedEnd; ArchiveEnd = Bytes.size() - 1; }
+        }
         if(End < 0) Reject("zip-end-missing");
         comment_=Bytes.mid(End+22, ArchiveEnd-End-22);
         const auto Count = u16(Bytes, End + 10);

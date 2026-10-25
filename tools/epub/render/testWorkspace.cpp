@@ -39,6 +39,49 @@ private slots:
         const auto Result=ReadDocumentFile(File.fileName(),{},true);
         QVERIFY(!Result.HasValue());QCOMPARE(QString::fromStdString(Result.Failure().code_),QString("epub-input-budget"));
     }
+    void compatibilityBooks_data() {
+        QTest::addColumn<QString>("Path");QTest::addColumn<int>("Missing");QTest::addColumn<bool>("Webp");
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");
+        if(Corpus.isEmpty() && qEnvironmentVariableIsEmpty("HC_EPUB_COMPAT_INPUTS"))QSKIP("Explicit compatibility corpus not configured");
+        if(!Corpus.isEmpty()) {
+            const auto Dir=QFileInfo(Corpus).dir();
+            QTest::newRow("legacy-mime")<<Dir.filePath("epub2-legacy-mime.epub")<<0<<false;
+            QTest::newRow("legacy-font")<<Dir.filePath("epub3-legacy-font.epub")<<0<<false;
+            QTest::newRow("webp")<<Dir.filePath("epub3-webp.epub")<<0<<true;
+            QTest::newRow("recovered-spine")<<Dir.filePath("epub3-recovered-spine.epub")<<1<<true;
+        }
+        QFile Inputs(qEnvironmentVariable("HC_EPUB_COMPAT_INPUTS"));
+        if(Inputs.open(QIODevice::ReadOnly)) {const auto Rows=QJsonDocument::fromJson(Inputs.readAll()).array();for(int I=0;I<Rows.size();++I)QTest::newRow(qPrintable(QString("real-%1").arg(I+1)))<<Rows[I].toObject()["path"].toString()<<Rows[I].toObject()["expectedMissingSpineItems"].toInt()<<Rows[I].toObject()["expectWebp"].toBool();}
+    }
+    void compatibilityBooks() {
+        QFETCH(QString,Path);QFETCH(int,Missing);QFETCH(bool,Webp);
+        QFile Source(Path);QVERIFY(Source.open(QIODevice::ReadOnly));const auto Original=Source.readAll();Source.close();
+        epub::EditModel Model;QVERIFY2(Model.Load(Original),qPrintable(Model.Error()));
+        QCOMPARE(Model.Publication()["recovery"].toObject()["missingSpineItems"].toInt(),Missing);
+        if(Missing) {
+            QCOMPARE(Model.Export().error_,QString("epub-edit-spine-repair-required"));
+            if(Missing==1) {
+                const auto Root=Model.Publication()["rootfile"].toString();auto Opf=Model.Read(Root);QVERIFY(Opf.contains("<itemref idref=\"absent\"/>"));Opf.replace("<itemref idref=\"absent\"/>","");
+                QVERIFY(Model.Replace(Root,Opf).isEmpty());const auto Export=Model.Export();QVERIFY2(Export,qPrintable(Export.error_));epub::EditModel Reopened;QVERIFY(Reopened.Load(Export.bytes_));QCOMPARE(Reopened.Publication()["recovery"].toObject()["missingSpineItems"].toInt(),0);
+            }
+        } else QCOMPARE(Model.Export().bytes_,Original);
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());
+        const auto View=[&]{return document(Window,Id)["view"].toObject();};const auto State=[&]{return View()["epub"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(View()["ready"].toBool() || State()["status"]=="error",60000);
+        QVERIFY2(View()["ready"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(View()).toJson())));
+        QTRY_VERIFY_WITH_TIMEOUT(!State()["frameBounds"].toArray().isEmpty() && State()["frameBounds"].toArray().first().toObject()["height"].toInt()>0,15000);
+        QCOMPARE(State()["recovery"].toObject()["missingSpineItems"].toInt(),Missing);
+        QVERIFY(!State()["text"].toString().trimmed().isEmpty() || !State()["images"].toArray().isEmpty());
+        const auto Do=[&](const QString& Action,QJsonValue Value=QJsonValue{}){return Window.Handle({{"action","epub.reader."+Action},{"documentId",Id},{"value",Value}});};
+        if(Missing) {QVERIFY(!Do("locate","epubcfi(/6/4!/4/2/1:0)").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(State()["readerAction"].toObject()["located"].toBool(),30000);QVERIFY(!State()["text"].toString().trimmed().isEmpty());}
+        if(Webp) {
+            const auto Find=[&]{const auto Images=State()["images"].toArray();for(int I=0;I<Images.size();++I){const auto Image=Images[I].toObject();if(Image["src"].toString().endsWith(".webp") && Image["complete"].toBool() && Image["naturalWidth"].toInt()>0)return I;}return -1;};
+            QTRY_VERIFY_WITH_TIMEOUT(Find()>=0,30000);QVERIFY(!Do("image",Find()).contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["popup"].toObject()["kind"].toString(),QString("image"),15000);QVERIFY(!Do("close-popup").contains("error"));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+        QVERIFY(Source.open(QIODevice::ReadOnly));QCOMPARE(Source.readAll(),Original);
+    }
     void percentageCover() {
         const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus not configured");
         const auto Path=QFileInfo(Corpus).dir().filePath("epub3-percentage-cover.epub");QVERIFY(QFile::exists(Path));
