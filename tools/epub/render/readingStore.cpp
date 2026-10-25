@@ -36,6 +36,8 @@ namespace hc::epub::poc
                 else if(Key=="backgroundAsset") Valid=Value.isString() && (Value.toString().isEmpty() || QRegularExpression("^[0-9a-f]{64}$").match(Value.toString()).hasMatch());
                 else if(Key == "theme") Valid = Value.isString() && QStringList{"system", "light", "dark", "sepia", "green"}.contains(Value.toString());
                 else if(Key == "align") Valid = Value.isString() && QStringList{"left", "center", "right", "justify"}.contains(Value.toString());
+                else if(Key == "layout") Valid=Value.isString() && QStringList{"scroll","paginated"}.contains(Value.toString());
+                else if(Key == "columns") Valid=Value.isDouble() && (Value==QJsonValue(0) || Value==QJsonValue(1) || Value==QJsonValue(2));
                 else if(Key == "font")
                 {
                     Valid = Value.isString() && !Value.toString().trimmed().isEmpty() && Value.toString().size() <= 128;
@@ -79,7 +81,7 @@ namespace hc::epub::poc
         return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
             {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
             {"background","theme"},{"backgroundColor",""},{"textColor",""},{"backgroundAsset",""},{"customCss",""},{"cssEnabled",false},{"cssForce",true},
-            {"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
+            {"layout","scroll"},{"columns",0},{"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
     }
     QJsonObject ReadingStore::Resolve(const QJsonObject& Global, const QJsonObject& Book)
     {

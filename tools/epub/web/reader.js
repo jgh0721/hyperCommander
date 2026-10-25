@@ -41,7 +41,7 @@ function remember() {const locator=getLocator();if(locator && history.at(-1)!==l
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     letter: 0, word: 0, line: 1.8, before: 0, after: 0.8, indent: 0,
     align: "left", margin: 28, width: 760, override: true, background: "theme", backgroundColor: "", textColor: "",
-    backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "" };
+    backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "",layout:"scroll",columns:0 };
 const cssErrors = new WeakMap();
 const profileStyles = new WeakMap();
 let customRules = [], backgroundImage = { asset: "", data: "" };
@@ -115,6 +115,7 @@ function applyDocument(doc) {
 }
 
 async function applyProfile(next = {}) {
+    const locator=getLocator(), oldLayout=profile.layout,oldColumns=profile.columns;
     const candidate = { ...profile, ...next };
     if (!colors[candidate.theme] || typeof candidate.font !== "string" || !candidate.font || candidate.font.length > 128
         || !["left", "center", "right", "justify"].includes(candidate.align)) throw Error("Invalid profile enum");
@@ -125,6 +126,7 @@ async function applyProfile(next = {}) {
     if (!["theme", "color", "paper", "grid", "image"].includes(candidate.background)
         || ![candidate.backgroundColor, candidate.textColor].every(v => typeof v === "string" && (!v || /^#[0-9a-f]{6}$/i.test(v)))) throw Error("Invalid background profile");
     customRules = candidate.cssEnabled ? compileCss(candidate.customCss) : [];
+    if(!["scroll","paginated"].includes(candidate.layout) || ![0,1,2].includes(candidate.columns))throw Error("Invalid reading layout");
     profile = candidate;
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
@@ -136,9 +138,9 @@ async function applyProfile(next = {}) {
     document.body.style.backgroundSize = profile.background === "paper" ? "5px 5px" : profile.background === "grid" ? "24px 24px" : "cover";
     document.body.style.backgroundPosition = "center";
     document.body.style.backgroundAttachment = "fixed";
-    viewport.style.width = `min(calc(100% - ${profile.margin * 2}px), ${profile.width}px)`;
+    viewport.style.width = `min(calc(100% - ${profile.margin * 2}px), ${profile.width*(profile.layout==="paginated" && profile.columns!==1?2:1)}px)`;
     if (navigator) await navigator.submitPreferences(new EpubPreferences({
-        scroll: true, columnCount: 1, backgroundColor: profile.override ? background : null,
+        scroll: profile.layout==="scroll", columnCount: profile.columns || "auto", backgroundColor: profile.override ? background : null,
         textColor: profile.override ? foreground : null,
         fontFamily: profile.override ? profile.font : null,
         // Readium scales the root with fontSize. Keep it neutral: the common adapter owns pixel size,
@@ -148,7 +150,11 @@ async function applyProfile(next = {}) {
         // Separate paragraph-before/after and letter/word spacing are the common adapter's CSS contract.
     }));
     documents().forEach(applyDocument);
-    if (rendition) await resizeRendition();
+    if(rendition) {
+        if(oldLayout!==profile.layout)rendition.flow(profile.layout==="paginated"?"paginated":"scrolled-doc");
+        if(oldLayout!==profile.layout || oldColumns!==profile.columns)rendition.spread(profile.columns===1 || profile.layout==="scroll"?"none":"auto",profile.columns===2?600:900);
+        await resizeRendition();if(locator)await rendition.display(locator);
+    }
     await sleep(150);
     documents().forEach(applyDocument);
 }
@@ -267,8 +273,9 @@ async function start(name) {
         window.hcEvidence.stage = "book-ready";
         await book.ready;
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
-        rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: "scrolled-doc",
-            view: ReaderIframeView, spread: "none", overflow: "scroll", allowScriptedContent: false, allowPopups: false });
+        rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: profile.layout==="paginated"?"paginated":"scrolled-doc",
+            view: ReaderIframeView, spread: profile.layout==="scroll" || profile.columns===1?"none":"auto", minSpreadWidth:profile.columns===2?600:900,
+            allowScriptedContent: false, allowPopups: false });
         rendition.on("displayerror", error => { if (mine === generation) fail(error); });
         rendition.hooks.content.register(content => applyDocument(content.document));
         window.hcEvidence.stage = "first-display";
@@ -317,6 +324,11 @@ async function selfTest() {
         viewportFilled: initial.frameBounds.length > 0 && initial.frameBounds.every(f => f.width >= initial.paneWidth * 0.9 && f.height >= initial.paneHeight * 0.9),
         readingWidthApplied: initial.viewportWidth <= profile.width + 1,
         noDoubleFontScaling: initial.rootZoom.every(zoom => Math.abs(parseFloat(zoom || "1") - 1) < 0.01) };
+    const initialChapter=readingLocation().chapterIndex;
+    await applyProfile({layout:"paginated",columns:2});
+    checks.paginatedLayout=rendition ? rendition.manager.isPaginated && readingLocation().chapterIndex===initialChapter : true;
+    await applyProfile({layout:"scroll",columns:0});
+    checks.scrollLayout=rendition ? !rendition.manager.isPaginated && readingLocation().chapterIndex===initialChapter : true;
     await applyProfile({ theme: "dark", size: 24, line: 2.1, before: 0.4, after: 1.3,
         letter: 0.08, word: 0.25, indent: 1.5, align: "justify", font: "Batang", weight: 700 });
     const typography = currentSnapshot();

@@ -387,6 +387,11 @@ namespace
             if(Event->type()==QEvent::KeyPress) {
                 auto* Key=static_cast<QKeyEvent*>(Event);
                 const bool Body=Widget==view_ || view_->isAncestorOf(Widget);
+                if(Body && !composing_ && settings_->Profile()["layout"]=="paginated" && Key->modifiers()==Qt::NoModifier
+                    && (Key->key()==Qt::Key_Left || Key->key()==Qt::Key_Right)) {
+                    const bool Forward=(Key->key()==Qt::Key_Right)!=(latest_["readingProgression"]=="rtl");
+                    readAction(Forward?"next":"previous",{});return true;
+                }
                 if(Body && !composing_ && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()
                     && Key->key()==Qt::Key_Space && (Key->modifiers()==Qt::NoModifier || Key->modifiers()==Qt::ShiftModifier)) {
                     readAction(Key->modifiers()==Qt::ShiftModifier?"previous":"next",{});return true;

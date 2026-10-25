@@ -30,6 +30,14 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void readingLayoutPersistence() {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("reading.json");
+        QVERIFY(ReadingStore::Save(Path,book,true,{},{{"layout","paginated"},{"columns",2}}).error.isEmpty());
+        const auto Saved=ReadingStore::Load(Path,book);QCOMPARE(ReadingStore::Resolve(Saved.global,{})["columns"].toInt(),2);
+        QVERIFY(ReadingStore::Save(Path,book,false,{},{{"layout","scroll"}}).error.isEmpty());
+        QCOMPARE(ReadingStore::Resolve(Saved.global,ReadingStore::Load(Path,book).book)["layout"].toString(),QString("scroll"));
+        QVERIFY(!ReadingStore::Valid({{"columns",1.5}}));QVERIFY(!ReadingStore::Valid({{"layout","free"}}));
+    }
     void hierarchicalTocAndCurrentLocation() {
         QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},book,[&](const QJsonObject& Value){Request=Value;});
         Navigation.SetPublication({{"navigation",QJsonArray{QJsonObject{{"label","장"},{"path","a.xhtml"},{"depth",0}},QJsonObject{{"label","절"},{"path","a.xhtml"},{"fragment","part"},{"depth",1}}}}});

@@ -75,6 +75,7 @@ namespace hc::epub::poc
         QHash<QString, QDoubleSpinBox*> numbers_;
         QHash<QString, QPushButton*> resets_;
         QComboBox *scope_ = nullptr, *mode_ = nullptr, *theme_ = nullptr, *font_ = nullptr, *alignment_ = nullptr;
+        QComboBox *layout_=nullptr,*columns_=nullptr;
         QPushButton *apply_ = nullptr, *cancel_ = nullptr, *clear_ = nullptr, *reload_ = nullptr;
         QLabel* status_ = nullptr;
         QWidget* editors_ = nullptr;

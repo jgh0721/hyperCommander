@@ -35,6 +35,10 @@ namespace hc::epub::poc
         { Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); }
         mode_ = new QComboBox; mode_->addItems({tr("사용자 설정"), tr("출판사 서식")}); addField(QuickForm, "override", tr("본문 서식"), mode_);
         theme_ = new QComboBox; theme_->addItems({tr("라이트"), tr("다크"), tr("세피아"), tr("연녹색"), tr("앱 테마 따름")}); addField(QuickForm, "theme", tr("배경"), theme_);
+        layout_=new QComboBox;layout_->addItems({tr("세로 스크롤"),tr("가로 페이지 넘김")});addField(QuickForm,"layout",tr("읽기 방식"),layout_);
+        columns_=new QComboBox;columns_->addItems({tr("자동"),tr("1단"),tr("2단")});addField(QuickForm,"columns",tr("페이지 단 수"),columns_);
+        connect(layout_,&QComboBox::currentIndexChanged,this,[this](int I){if(I>=0)edit("layout",I==1?"paginated":"scroll");});
+        connect(columns_,&QComboBox::currentIndexChanged,this,[this](int I){if(I>=0)edit("columns",I);});
         font_ = new QComboBox;
         systemFonts_ = QFontDatabase::families();
         rebuildFonts();
@@ -158,6 +162,7 @@ namespace hc::epub::poc
         updating_ = true;
         const auto Values = Profile();
         mode_->setCurrentIndex(Values["override"].toBool() ? 0 : 1);
+        layout_->setCurrentIndex(Values["layout"]=="paginated"?1:0);columns_->setCurrentIndex(Values["columns"].toInt());columns_->setEnabled(Values["layout"]=="paginated");
         theme_->setCurrentIndex(QStringList{"light", "dark", "sepia", "green", "system"}.indexOf(Values["theme"].toString()));
         const auto Family = Values["font"].toString();
         auto FontIndex = font_->findData(Family);
