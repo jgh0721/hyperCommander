@@ -1,26 +1,58 @@
 import EpubIframeView from "epubjs/src/managers/views/iframe.js";
+import EpubRendition from "epubjs/src/rendition.js";
+import { EVENTS } from "epubjs/src/utils/constants.js";
 import EpubQueue from "epubjs/src/utils/queue.js";
 import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
 import { compileCss } from "./customCss.js";
-import { buildBookFontCatalog, applyBookFont, activeBookFonts } from "./bookFontCatalog.js";
-import { applyReadingOverrides } from "./readingOverrides.js";
+import { buildBookFontCatalog, applyBookFont, activeBookFonts, releaseBookFonts } from "./bookFontCatalog.js";
+import { applyReadingOverrides, releaseReadingOverrides } from "./readingOverrides.js";
 import { EpubNavigator, EpubPreferences, Injector } from "@readium/navigator";
 import { Manifest, Publication, HttpFetcher, Locator } from "@readium/shared";
 import { typographyProbe } from "./typographyProbe.js";
 import EpubCFI from "epubjs/src/epubcfi.js";
+import { pageKeyAction } from "./readerKeys.js";
+import { ReaderViewManager } from "./readerViewManager.js";
 
 // EPUB.js 0.3.93 advances its work queue through animation frames. A hidden
 // native tab can suspend those frames before an iframe exists. Yield through
 // timers while keeping every queued operation serialized; painting stays on RAF.
 const runEpubQueue=EpubQueue.prototype.run;
 EpubQueue.prototype.run=function(){this.tick=callback=>setTimeout(callback,0);return runEpubQueue.call(this);};
+// Finish location mapping in the engine queue. Its default unawaited RAF can
+// publish a new page with the previous CFI, especially in a background tab.
+EpubRendition.prototype.reportLocation=function() {
+    return this.q.enqueue(async()=>{
+        const raw=await this.manager.currentLocation();if(!raw)return;
+        const located=this.located(raw);if(!located?.start || !located?.end)return;
+        this.location=located;
+        this.emit(EVENTS.RENDITION.LOCATION_CHANGED,{index:located.start.index,href:located.start.href,start:located.start.cfi,end:located.end.cfi,percentage:located.start.percentage});
+        this.emit(EVENTS.RENDITION.RELOCATED,located);
+    });
+};
 
 // Percentage-height covers depend on the iframe viewport. EPUB.js measures
 // them while the iframe is still zero pixels tall in scrolled-doc mode, then
 // feeds that zero back into the iframe. Keep a viewport-sized minimum on the
 // engine-owned frame; leave publisher XHTML and its inline styles intact.
 class ReaderIframeView extends EpubIframeView {
+    destroy() {
+        const frame=this.iframe,doc=this.document;
+        if(doc){releaseReadingOverrides(doc);releaseBookFonts(doc);profileStyles.delete(doc);appliedProfiles.delete(doc);cssErrors.delete(doc);inputDocuments.delete(doc);}
+        super.destroy();
+        // EPUB.js leaves its document and resolved render promise attached to
+        // retired views. Navigate detached frames away from image-heavy pages
+        // so their resources are released even before Chromium's next GC pass.
+        this.document=undefined;this.window=undefined;this.sectionRender=undefined;
+        if(doc){doc.fonts?.clear();doc.body?.replaceChildren();doc.head?.replaceChildren();}
+        if(frame){frame.onload=null;frame.remove();frame.removeAttribute("srcdoc");frame.src="about:blank";}
+    }
+    setLayout(layout) {
+        const key=JSON.stringify([layout.props,this.settings.axis,layout.settings.direction]);
+        if(this.contents && this.appliedLayout===key){this.layout=layout;return;}
+        super.setLayout(layout);
+        if(this.contents)this.appliedLayout=key;
+    }
     expand(force) {
         if (this.iframe && this.settings.axis === "vertical" && this.layout?.name === "reflowable")
             this.iframe.style.minHeight = `${Math.max(1, this.layout.height || pane.clientHeight)}px`;
@@ -45,6 +77,10 @@ let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
     backgroundAsset: "", cssEnabled: false, cssForce: true, customCss: "",layout:"scroll",columns:0,backgroundFit:"cover",backgroundOpacity:1 };
 const cssErrors = new WeakMap();
 const profileStyles = new WeakMap();
+const appliedProfiles = new WeakMap();
+let readerBindings = { "epub.next": "PgDown", "epub.previous": "PgUp" };
+let pendingCommands = 0, pendingPageMoves = 0;
+let activeCommand = "", reflowStage = "";
 const inputDocuments=new WeakSet();let keyboardSerial=0;
 let customRules = [], backgroundImage = { asset: "", data: "" };
 let sequence = Promise.resolve();
@@ -60,18 +96,33 @@ async function resizeRendition() {
     if (!width || !height || (renditionSize?.width === width && renditionSize?.height === height)) return;
     const locator = getLocator();
     renditionSize = { width, height };
+    await rendition.q.enqueue(() => {});
     rendition.resize(width, height, locator || undefined);
-    // resize may enqueue its own redisplay. Await the following display as a
-    // barrier, so the next resize cannot remove a still-loading iframe.
-    await rendition.display(locator || 0);
+    // resize already enqueues its display through onResized. Wait for that
+    // display before another operation can clear its still-loading iframe.
+    await rendition.q.enqueue(() => {});
+}
+async function settleFrame() {
+    if(!rendition)return;
+    await rendition.q.enqueue(() => {});
+    await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
+    await Promise.all(documents().map(doc => doc.fonts.ready));
+    await new Promise(resolve => {
+        const timer=setTimeout(resolve,80);
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve();}));
+    });
 }
 new ResizeObserver(() => {
     if (!rendition || engine !== "epubjs" || resizeQueued) return;
     const mine = generation;
     resizeQueued = true;
     sequence = sequence.then(async () => {
-        resizeQueued = false;
-        if (mine === generation) await resizeRendition();
+        const manager=rendition?.manager;manager?.beginTransition?.();
+        try {
+            if (mine === generation)do {await resizeRendition();await settleFrame();}
+            while(mine===generation && (renditionSize?.width!==pane.clientWidth || renditionSize?.height!==pane.clientHeight));
+        }
+        finally {manager?.endTransition?.();resizeQueued = false;}
     }).catch(fail);
 }).observe(pane);
 // P0 adapter for pinned Navigator 2.13.2. The public injector lacks a core-script nonce option.
@@ -91,7 +142,7 @@ const colors = { system: ["#ffffff", "#303840"], light: ["#fffdf7", "#303840"], 
 
 function documents() {
     return [...pane.querySelectorAll("iframe")].filter(frame =>
-        getComputedStyle(frame).visibility !== "hidden" && getComputedStyle(frame).display !== "none"
+        !frame.closest("[data-hc-retired]") && getComputedStyle(frame).visibility !== "hidden" && getComputedStyle(frame).display !== "none"
     ).map(frame => frame.contentDocument).filter(doc => doc?.body);
 }
 
@@ -100,6 +151,10 @@ function applyDocument(doc) {
     if(!inputDocuments.has(doc)) {
         inputDocuments.add(doc);
         doc.addEventListener("keydown",event=>{
+            if(!tools.state().popup) {
+                const pageAction=pageKeyAction(event,readerBindings);
+                if(pageAction){event.preventDefault();if(!event.repeat || !pendingPageMoves)window.hcCommand("read",{action:pageAction,serial:--keyboardSerial});return;}
+            }
             if(event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || tools.state().popup
                 || event.target.closest?.("input,textarea,select,[contenteditable=true]"))return;
             let action;
@@ -110,9 +165,11 @@ function applyDocument(doc) {
         });
     }
     if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
+    const [themeBackground, themeForeground] = colors[profile.theme];
+    const profileKey = JSON.stringify([profile, themeBackground, themeForeground]);
+    if (appliedProfiles.get(doc) === profileKey) return;
     let style = profileStyles.get(doc);
     if (!style) { style = doc.createElement("style"); doc.head.append(style); profileStyles.set(doc,style); }
-    const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
     cssErrors.set(doc, applyReadingOverrides(doc, profile, foreground, background, customRules));
     style.textContent = profile.override ? `
@@ -128,9 +185,11 @@ function applyDocument(doc) {
       body img, body svg { max-width:100%!important; height:auto; }
     ` : "";
     style.textContent+="a:focus-visible, img:focus-visible { outline:2px solid currentColor!important; outline-offset:3px; }";
+    appliedProfiles.set(doc,profileKey);
 }
 
 async function applyProfile(next = {}) {
+    reflowStage="profile";
     const locator=getLocator(), oldLayout=profile.layout,oldColumns=profile.columns;
     const candidate = { ...profile, ...next };
     if (!colors[candidate.theme] || typeof candidate.font !== "string" || !candidate.font || candidate.font.length > 128
@@ -174,13 +233,18 @@ async function applyProfile(next = {}) {
     }));
     documents().forEach(applyDocument);
     if(rendition) {
-        if(oldLayout!==profile.layout)rendition.flow(profile.layout==="paginated"?"paginated":"scrolled-doc");
+        reflowStage="before-layout";
+        await rendition.q.enqueue(() => {});
+        reflowStage="flow";
+        if(oldLayout!==profile.layout){rendition.flow(profile.layout==="paginated"?"paginated":"scrolled-doc");await rendition.q.enqueue(() => {});}
         if(oldLayout!==profile.layout || oldColumns!==profile.columns)rendition.spread(profile.columns===1 || profile.layout==="scroll"?"none":"auto",profile.columns===2?600:900);
-        await resizeRendition();if(locator)await rendition.display(locator);
+        reflowStage="resize";await resizeRendition();
+        reflowStage="restore";if(locator)await rendition.display(locator);
     }
-    if (!rendition && !navigator) return;
+    if (!rendition && !navigator){reflowStage="";return;}
     await sleep(150);
     documents().forEach(applyDocument);
+    reflowStage="";
 }
 
 async function waitFor(predicate, timeout = 12000) {
@@ -208,11 +272,13 @@ function currentSnapshot() {
             complete: img.complete, naturalWidth: img.naturalWidth, width: img.getBoundingClientRect().width,
             alt: img.getAttribute("alt"), filter: doc.defaultView.getComputedStyle(img).filter }))),
         viewportWidth: viewport.clientWidth, paneWidth: pane.clientWidth, paneHeight: pane.clientHeight,
-        frameBounds: [...pane.querySelectorAll("iframe")].filter(f => getComputedStyle(f).visibility !== "hidden")
+        frameBounds: [...pane.querySelectorAll("iframe")].filter(f => !f.closest("[data-hc-retired]") && getComputedStyle(f).visibility !== "hidden")
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
-        readerFocused:docs.some(doc=>doc.hasFocus()), locator: getLocator(), frameCount: docs.length };
+        columnCount:rendition?._layout?.divisor || 1,
+        frameId:docs[0]?.defaultView.frameElement?.id || "",
+        readerBusy:pendingCommands>0 || resizeQueued, readerFocused:docs.some(doc=>doc.hasFocus()), locator: getLocator(), frameCount: docs.length };
 }
 
 function getLocator() {
@@ -314,6 +380,7 @@ async function start(name) {
         measured("bookReadyMs");
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: profile.layout==="paginated"?"paginated":"scrolled-doc",
+            manager: ReaderViewManager,
             view: ReaderIframeView, spread: profile.layout==="scroll" || profile.columns===1?"none":"auto", minSpreadWidth:profile.columns===2?600:900,
             allowScriptedContent: false, allowPopups: false });
         rendition.on("displayerror", error => { if (mine === generation) fail(error); });
@@ -356,6 +423,7 @@ async function start(name) {
         await applyProfile();
         await goChapter(0);
     }
+    await settleFrame();
     measured("firstChapterMs");
     startupTimings.totalMs = Math.round(performance.now() - startedAt);
     if (mine === generation) window.hcEvidence = { status: "ready", phase: "P0-B", ...currentSnapshot() };
@@ -446,7 +514,14 @@ window.hcValidateCss = source => {
     catch (error) { return { ready: true, ok: false, error: error.message, line: error.line || 1, column: error.column || 1 }; }
 };
 window.hcCommand = (command, value) => {
+    const pageMove=command==="read" && ["next","previous"].includes(value?.action);
+    if(pageMove && pendingPageMoves>=2)return;
+    if(pageMove)++pendingPageMoves;
+    ++pendingCommands;
     sequence = sequence.then(async () => {
+        activeCommand=command;
+        const manager=rendition?.manager;manager?.beginTransition?.();
+        try {
         if (command === "start") await start(value);
         else if (command === "profile") await applyProfile(value);
         else if (command === "palette") {
@@ -462,18 +537,25 @@ window.hcCommand = (command, value) => {
                 const image = new Image(); image.src = value.data; await image.decode(); backgroundImage = value;
             }
         }
+        else if (command === "bindings") readerBindings=value;
         else if (command === "read") await tools.action(value);
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
         else throw Error("Unknown command");
+        if(command!=="bindings")await settleFrame();
         if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot() };
-    }).catch(fail);
+        } finally {manager?.endTransition?.();}
+    }).catch(fail).finally(()=>{activeCommand="";--pendingCommands;if(pageMove)--pendingPageMoves;});
 };
 window.addEventListener("error", event => fail(event.error || event.message));
 window.addEventListener("unhandledrejection", event => fail(event.reason));
 
 // Trusted-shell diagnostics only: no book script or mutable document authority.
 window.hcStartupDiagnostics = () => ({
+    activeCommand, reflowStage, pendingCommands, pendingPageMoves,
+    jsHeapBytes:performance.memory?.usedJSHeapSize || 0,
+    managedViews:rendition?.manager?.views?.length || 0,
+    retiredViews:rendition?.manager?.retired?.length || 0,
     timings: startupTimings,
     visibility: document.visibilityState,
     paneWidth: pane.clientWidth, paneHeight: pane.clientHeight,
@@ -488,6 +570,6 @@ window.hcSnapshot = () => window.hcEvidence.status === "ready" ? {...window.hcEv
 window.hcFocusReading=()=>{
     if(tools.state().popup)return false;
     const doc=documents()[0];if(!doc)return false;
-    const frame=doc.defaultView.frameElement;frame.tabIndex=0;frame.focus();
+    const frame=doc.defaultView.frameElement;frame.tabIndex=0;frame.focus({preventScroll:true});
     doc.body.tabIndex=-1;doc.body.focus({preventScroll:true});return doc.hasFocus();
 };

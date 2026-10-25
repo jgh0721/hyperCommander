@@ -110,6 +110,10 @@ void ReadingNavigation::ConfigureProfile(const QJsonObject& Profile) {
 }
 QJsonObject ReadingNavigation::Snapshot()const {return {{"bookmarks",bookmarks_},{"readingStateError",error_},{"readingStateRestoring",restoring_},{"readingStateLoaded",started_}};}
 void ReadingNavigation::refresh(){marks_->clear();for(const auto& Value:bookmarks_){const auto M=Value.toObject();auto* Item=new QListWidgetItem(M["label"].toString(),marks_);Item->setData(Qt::UserRole,M["id"]);Item->setData(Qt::UserRole+1,M["locator"]);}if(!error_.isEmpty())status_->setText(error_);}
+bool ReadingNavigation::Flush() {
+    saveTimer_.stop();if(path_.isEmpty())return true;save();
+    return !readFailed_ && additions_.isEmpty() && removals_.isEmpty() && (!remember_ || restoring_ || locator_==saved_);
+}
 void ReadingNavigation::save() {
     if(path_.isEmpty() || readFailed_ || restoring_ || ((!remember_ || locator_==saved_) && additions_.isEmpty() && removals_.isEmpty()))return;
     QLockFile Lock(path_+".lock");if(!Lock.tryLock(0)){saveTimer_.start(1200);return;}

@@ -23,6 +23,7 @@
 #include <QTimer>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <system_error>
@@ -41,6 +42,7 @@ namespace hc::document
         std::atomic<bool> cancel_ = false, done_ = false, ready_ = false, attached_ = false;
         std::atomic<bool> focusRequested_ = false;
         mutable std::mutex mutex_;
+        std::condition_variable wake_;
         QJsonObject state_{{"status", "opening"}};
         QJsonObject metrics_;
         QJsonObject appearance_;
@@ -102,6 +104,7 @@ namespace hc::document
         {
             if(!Entry || !Entry->valid_) return;
             Entry->valid_ = false; ++Entry->token_.generation_; Entry->work_->cancel_.store(true);
+            Entry->work_->wake_.notify_all();
             // This never changes the helper's immediate parent HWND. If external
             // destruction has already removed the proxy, do not touch its reuse.
             if(owns(*Entry)) { ShowWindow(Entry->proxy_, SW_HIDE); SetParent(Entry->proxy_, parking_); }
@@ -193,7 +196,7 @@ namespace hc::document
         : QWidget(Parent), runtime_(std::move(Runtime)), limits_(Limits), timer_(new QTimer(this))
     {
         const auto Changed = [this] {
-            if(work_) { const auto Value = epubui::Appearance(); std::lock_guard Lock(work_->mutex_); work_->appearance_ = Value; }
+            if(work_) { const auto Value = epubui::Appearance(); std::lock_guard Lock(work_->mutex_); work_->appearance_ = Value;work_->wake_.notify_one(); }
         };
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, Changed);
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::fontsChanged, this, Changed);
@@ -207,7 +210,7 @@ namespace hc::document
     void EpubProcessView::ReleaseLifecycle() { Registry::ReleaseLifecycle(); }
     void EpubProcessView::RequestClose()
     {
-        if(work_) work_->cancel_.store(true);
+        if(work_){work_->cancel_.store(true);work_->wake_.notify_all();}
         if(native_ && !native_->retired_) Registry::Instance().Invalidate(native_);
     }
     bool EpubProcessView::ChangeReadingSettings(const QString& Action,const QJsonObject& Profile,bool Global) {
@@ -215,12 +218,13 @@ namespace hc::document
             || !QStringList{"preview","apply","cancel","reload"}.contains(Action)
             || QJsonDocument(Profile).toJson(QJsonDocument::Compact).size()>65536)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
-        work_->settingsRequests_.push_back({{"kind","reading-settings"},{"action",Action},{"profile",Profile},{"global",Global}});return true;
+        work_->settingsRequests_.push_back({{"kind","reading-settings"},{"action",Action},{"profile",Profile},{"global",Global}});work_->wake_.notify_one();return true;
     }
     bool EpubProcessView::FocusInput()
     {
         if(!work_ || !isVisible() || work_->cancel_.load() || work_->done_.load()) return false;
         work_->focusRequested_.store(true);
+        work_->wake_.notify_one();
         return true;
     }
     void EpubProcessView::collect()
@@ -233,7 +237,7 @@ namespace hc::document
         const QPointer<EpubProcessView> Guard(this);
         const bool Retired = State["retired"].toBool();
         if(Retired) timer_->stop();
-        if(!loaded_ && !work_->cancel_.load() && State["attached"].toBool() && State["status"] == "ready") {
+        if(!loaded_ && !work_->cancel_.load() && State["attached"].toBool() && State["status"] == "ready" && !State["readerBusy"].toBool() && !State["locator"].toString().isEmpty()) {
             loaded_ = true;
             emit Loaded();
             if(!Guard) return;
@@ -260,10 +264,10 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","next-chapter","previous-chapter","toc","focus-toc","search","locate","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
-        work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value}});return true;
+        work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
     }
     QJsonObject EpubProcessView::ViewState() const
     {
@@ -315,6 +319,7 @@ namespace hc::document
         WebProcessError Error;
         QString Failure;
         QJsonObject LastReaderState;
+        QString Id;
         QByteArray Payload; // Retain input until proven retirement.
         QElapsedTimer Elapsed; Elapsed.start();
         QJsonObject Metrics{{"processLimit", int(Limits.processes_)}, {"jobMemoryLimit", qint64(Limits.memoryBytes_)}};
@@ -333,7 +338,7 @@ namespace hc::document
                 Metrics["prepareMs"] = Elapsed.elapsed();
                 if(!Package) { Failure = Package.error_; return; }
                 if(Cancelled()) return;
-                const auto Id = Package.publication_["sourceSha256"].toString();
+                Id = Package.publication_["sourceSha256"].toString();
                 Payload = QJsonDocument(Package.publication_).toJson(QJsonDocument::Compact);
                 Owner = DocumentWebProcess::Start(Runtime, Limits, State->parent_, Error, &Pending, Cancelled);
                 if(!Owner) { Failure = Error.code_; return; }
@@ -351,11 +356,13 @@ namespace hc::document
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
                     || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()) { Failure = "epub-configuration-rejected"; return; }
+                const auto TransferAt=Elapsed.elapsed();
                 auto Sent = epub::SendInput(Payload, Id, State->generation_, "epubjs",
                     [&](const QByteArray& Request, QByteArray& Reply, int Timeout) {
                         return Owner->Exchange(Request, Reply, Timeout, Error);
                     }, Cancelled);
                 if(!Sent.accepted_) { Failure = Sent.error_; return; }
+                Metrics["transferMs"]=Elapsed.elapsed()-TransferAt;
                 const auto Request = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
                     {"generation", State->generation_}, {"kind", "snapshot"}}).toJson(QJsonDocument::Compact);
                 bool DocumentReady = false;
@@ -399,8 +406,9 @@ namespace hc::document
                     LastReaderState = View;
                     const auto Status = View["status"].toString();
                     if(Status == "error" || Status == "cancelled") { Failure = View["message"].toString("epub-renderer-failed"); return; }
-                    if(!DocumentReady && Status == "ready") Metrics["readyMs"] = Elapsed.elapsed();
-                    DocumentReady = DocumentReady || Status == "ready";
+                    const bool Stable=Status=="ready" && !View["readerBusy"].toBool() && !View["locator"].toString().isEmpty();
+                    if(!DocumentReady && Stable) Metrics["readyMs"] = Elapsed.elapsed();
+                    DocumentReady = DocumentReady || Stable;
                     const auto Usage = Owner->Snapshot();
                     PeakBytes = qMax(PeakBytes, Usage.peakJobBytes_);
                     PeakProcesses = qMax(PeakProcesses, Usage.activeProcesses_);
@@ -427,11 +435,22 @@ namespace hc::document
                     View["processId"] = int(State->snapshot_.processId_);
                     State->Update(std::move(View));
                     if(!DocumentReady && Deadline.hasExpired()) { Failure = "epub-view-load-timeout"; return; }
-                    for(int I = 0; I < 10 && !Cancelled(); ++I) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    std::unique_lock Lock(State->mutex_);
+                    State->wake_.wait_for(Lock,std::chrono::milliseconds(DocumentReady?100:20),[&]{
+                        return Cancelled() || State->appearance_!=Applied || (DocumentReady && (!State->settingsRequests_.empty()
+                            || (State->focusRequested_.load() && IsWindowVisible(reinterpret_cast<HWND>(State->parent_)))));
+                    });
                 }
             };
             Process();
         } catch(...) { Failure = "epub-view-worker-exception"; }
+        // The process job is terminated after retirement. Flush durable reading
+        // state first; a quick close must not race the navigation save debounce.
+        if(Owner && Failure.isEmpty() && LastReaderState["status"]=="ready") {
+            QByteArray Reply;WebProcessError FlushError;
+            const auto Request=QJsonDocument(QJsonObject{{"protocolVersion",1},{"documentId",Id},{"generation",State->generation_},{"kind","flush-reading"}}).toJson(QJsonDocument::Compact);
+            Metrics["readingFlushSaved"]=Owner->Exchange(Request,Reply,1000,FlushError) && QJsonDocument::fromJson(Reply).object()["accepted"].toBool();
+        }
         const auto ClosingAt = Elapsed.elapsed();
         State->Update({{"status", "closing"}});
         while((Owner && !Owner->Close(100)) || (Pending && !Pending->Close(100)))

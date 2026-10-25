@@ -14,6 +14,7 @@ public:
     bool Execute(const QString& Action,const QJsonValue& Value={});
     void Poll(const QJsonObject& State);
     QJsonObject Snapshot() const;
+    bool Flush();
     void SetPublication(const QJsonObject& Publication);
     void ConfigureProfile(const QJsonObject& Profile);
 private:

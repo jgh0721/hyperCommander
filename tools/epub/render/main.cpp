@@ -20,6 +20,7 @@
 #include "UniqueLibs/document/documentWebPeer.hpp"
 #include "UniqueLibs/document/documentShortcutRouter.hpp"
 #include <QAbstractSpinBox>
+#include <QAbstractItemView>
 
 /// Product integration
 #include "UniqueLibs/document/documentThemeAdapter.hpp"
@@ -160,7 +161,7 @@ namespace
             Job->setAdditionalResponseHeaders({{"Content-Security-Policy",
                 "default-src 'none'; script-src " + ScriptPolicy + "; style-src 'unsafe-inline' epub: blob:; img-src epub: data: blob:; "
                 "font-src epub: data:; connect-src epub://app/; frame-src blob: epub:; base-uri epub:; object-src 'none'; form-action 'none'"},
-                {"X-Content-Type-Options", "nosniff"}, {"Cache-Control", "no-store"}});
+                {"X-Content-Type-Options", "nosniff"}, {"Cache-Control", "private, max-age=3600, immutable"}});
             auto* Buffer = new QBuffer(Job);
             Buffer->setData(Item.data);
             Buffer->open(QIODevice::ReadOnly);
@@ -258,6 +259,8 @@ namespace
             auto* ReadingBar=addToolBar(tr("독서"));ReadingBar->setObjectName("epubReadingToolbar");ReadingBar->setMovable(false);
             for(const auto& Entry:QList<QPair<QString,QString>>{{"back",tr("이전 위치")},{"previous",tr("이전")},{"next",tr("다음")}}) {
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
+                if(Entry.first=="previous")Action->setToolTip(tr("이전 화면 · PgUp / 숫자 키패드 PgUp"));
+                if(Entry.first=="next")Action->setToolTip(tr("다음 화면 · PgDown / 숫자 키패드 PgDown"));
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{navigation_->Execute(Name);view_->setFocus(Qt::OtherFocusReason);});
             }
             location_=new QLabel(this);location_->setTextFormat(Qt::PlainText);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));location_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);location_->setMinimumWidth(0);statusBar()->addPermanentWidget(location_,1);
@@ -267,7 +270,8 @@ namespace
             navigationScroll_->hide();settingsScroll_->hide();
             for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
-                connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{readAction(Name,{});});
+                Action->setCheckable(true);
+                connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{readAction("toggle-"+Name.mid(6),{});});
             }
             layoutChoice_=new QComboBox(ReadingBar);layoutChoice_->setAccessibleName(tr("읽기 방식"));layoutChoice_->addItems({tr("세로 스크롤"),tr("가로 페이지")});ReadingBar->addWidget(layoutChoice_);
             connect(layoutChoice_,&QComboBox::currentIndexChanged,this,[this](int Index){
@@ -277,7 +281,17 @@ namespace
                 }
                 focusReading();
             });
-            profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::NoCache);
+            columnsChoice_=new QComboBox(ReadingBar);columnsChoice_->setObjectName("epubColumns");columnsChoice_->setAccessibleName(tr("페이지 단 수"));
+            columnsChoice_->addItems({tr("자동 단 수"),tr("1단"),tr("2단")});ReadingBar->addWidget(columnsChoice_);
+            columnsChoice_->setToolTip(tr("가로 페이지에서 단 수를 선택합니다. 화면이 좁으면 1단으로 표시합니다."));
+            connect(columnsChoice_,&QComboBox::currentIndexChanged,this,[this](int Index){
+                const bool Dirty=settings_->IsDirty();
+                if(settings_->Execute("preview",{{"columns",Index}},false)) {
+                    if(!Dirty && settings_->CssValid())settings_->Execute("apply",{},false);else readAction("focus-settings",{});
+                }
+                focusReading();
+            });
+            profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);profile_->setHttpCacheMaximumSize(32*1024*1024);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);
             profile_->installUrlSchemeHandler("epub", new Handler(Items, profile_));
@@ -306,15 +320,19 @@ namespace
                     latest_ = Result;
                     const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
                     if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
-                    navigation_->Poll(Result);
+                    if(!Result["readerBusy"].toBool()) {
+                        navigation_->Poll(Result);
+                        while(!pendingBookmarks_.isEmpty())navigation_->Execute("bookmark-add",pendingBookmarks_.takeAt(0));
+                    }
                     {QSignalBlocker Block(layoutChoice_);layoutChoice_->setCurrentIndex(settings_->Profile()["layout"]=="paginated"?1:0);}
+                    {QSignalBlocker Block(columnsChoice_);columnsChoice_->setCurrentIndex(settings_->Profile()["columns"].toInt());columnsChoice_->setEnabled(settings_->Profile()["layout"]=="paginated");}
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
                             .arg(Result["chapterPage"].toInt(1)).arg(Result["chapterPages"].toInt(1)).arg(qRound(Result["progress"].toDouble()*100)));
                         findChild<QAction*>("epub.back")->setEnabled(Result["canBack"].toBool());
-                        findChild<QAction*>("epub.previous")->setEnabled(!Result["atStart"].toBool());
-                        findChild<QAction*>("epub.next")->setEnabled(!Result["atEnd"].toBool());
+                        findChild<QAction*>("epub.previous")->setEnabled(!Result["atStart"].toBool() && !Result["readerBusy"].toBool());
+                        findChild<QAction*>("epub.next")->setEnabled(!Result["atEnd"].toBool() && !Result["readerBusy"].toBool());
                     }
                     if(Result["profile"].toObject()["customCss"]==settings_->Profile()["customCss"])
                         settings_->SetCssValidation(settings_->Profile()["customCss"].toString(),astError_.isEmpty()?Result["cssError"].toString():astError_);
@@ -322,7 +340,8 @@ namespace
                     for(const auto& Family : Result["bookFonts"].toArray()) if(Family.isString()) Families.append(Family.toString());
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
-                    statusBar()->showMessage(Status=="ready"?tr("원본 유지"):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
+                    poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool()?250:33);
+                    statusBar()->showMessage(Status=="ready"?(settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
                         if(!Families.isEmpty()) {
@@ -344,7 +363,7 @@ namespace
             }
             shortcuts_->SetEligibility([this](const QString& Id,QWidget* Focus){return Id.startsWith("epub.") && !composing_
                 && (latest_["popup"].isNull() || latest_["popup"].isUndefined() || Id=="epub.fullscreen")
-                && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus))
+                && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && !qobject_cast<QAbstractItemView*>(Focus))
                     || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
             shortcuts_->Apply({});
             auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){if(navigationScroll_->isVisible()){navigationScroll_->hide();focusReading();}else readAction("focus-toc",{});}});
@@ -367,8 +386,13 @@ namespace
             if(Kind == "snapshot") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
                 State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();
+                State["openPanel"]=openPanel();
+                State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
+            }
+            else if(Kind=="flush-reading") {
+                if(Request.size()!=4 || !navigation_->Flush())return Fail("epub-reading-save");
             }
             else if(Kind == "reading-settings") {
                 if(Request.size()!=7 || !Request["profile"].isObject() || !Request["global"].isBool()
@@ -417,7 +441,7 @@ namespace
                         if(!Guard || Closed.toBool())return;
                         if(auto* Input=qobject_cast<QLineEdit*>(Receiver.data());Input && !Input->text().isEmpty()){Input->clear();return;}
                         if(Guard->settings_->IsDirty()){Guard->settings_->Execute("cancel",{},false);return;}
-                        if(Guard->settingsScroll_->isVisible() || Guard->navigationScroll_->isVisible()){Guard->settingsScroll_->hide();Guard->navigationScroll_->hide();Guard->focusReading();return;}
+                        if(Guard->settingsScroll_->isVisible() || Guard->navigationScroll_->isVisible()){Guard->settingsScroll_->hide();Guard->navigationScroll_->hide();Guard->updatePanelActions();Guard->focusReading();return;}
                         ++Guard->escapeRequests_;
                     });return true;
                 }
@@ -425,27 +449,51 @@ namespace
             return QMainWindow::eventFilter(Object,Event);
         }
     private:
+        QString openPanel() const {
+            if(settingsScroll_->isVisible())return "settings";
+            if(!navigationScroll_->isVisible())return {};
+            const auto Index=navigation_->findChild<QTabWidget*>()->currentIndex();
+            return Index==1?"search":Index==2?"bookmarks":"toc";
+        }
+        void updatePanelActions() {
+            const auto Panel=openPanel();
+            for(const auto& Name:QStringList{"toc","search","bookmarks","settings"})
+                if(auto* Action=findChild<QAction*>("epub.focus-"+Name)){QSignalBlocker Block(Action);Action->setChecked(Panel==Name);}
+        }
         void focusReading() {
             activateWindow();view_->setFocus(Qt::OtherFocusReason);
             page_->runJavaScript("window.hcFocusReading && window.hcFocusReading()");
         }
         bool readAction(const QString& Action,const QJsonValue& Value) {
             if(Action=="fullscreen"){++fullscreenRequests_;return true;}
-            if(Action=="bindings")return Value.isObject() && shortcuts_->Apply(Value.toObject()).isEmpty();
+            if(Action=="bindings") {
+                if(!Value.isObject() || !shortcuts_->Apply(Value.toObject()).isEmpty())return false;
+                command("bindings",hc::document::DocumentShortcutRegistry::Bindings(Value.toObject()));return true;
+            }
+            if(Action.startsWith("toggle-") && QStringList{"toc","search","bookmarks","settings"}.contains(Action.mid(7))) {
+                if(openPanel()==Action.mid(7)){settingsScroll_->hide();navigationScroll_->hide();updatePanelActions();focusReading();return true;}
+                return readAction("focus-"+Action.mid(7),Value);
+            }
             if(Action=="cycle-focus") {
                 if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-toc",{});
                 if(navigation_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-settings",{});
                 focusReading();return true;
             }
-            if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();settings_->findChild<QTabWidget*>()->setFocus(Qt::ShortcutFocusReason);return true;}
+            if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();updatePanelActions();settings_->findChild<QTabWidget*>()->setFocus(Qt::ShortcutFocusReason);return true;}
             if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks"){settingsScroll_->hide();navigationScroll_->show();}
-            return navigation_->Execute(Action,Value);
+            if(Action=="bookmark-add" && latest_["readerBusy"].toBool()) {
+                if(pendingBookmarks_.size()>=16)return false;
+                pendingBookmarks_.append(Value);return true;
+            }
+            const auto Result=navigation_->Execute(Action,Value);updatePanelActions();return Result;
         }
         void command(const QString& Name, const QJsonValue& Value)
         {
+            if(finished_)return;
             auto Args = QJsonDocument(QJsonArray{Name, Value}).toJson(QJsonDocument::Compact);
             Args = Args.mid(1, Args.size() - 2);
             page_->runJavaScript("window.hcCommand && window.hcCommand(" + QString::fromUtf8(Args) + ")");
+            if(started_ && (Name=="read" || Name=="profile" || Name=="chapter"))poll_.start(16);
         }
         void sendProfile()
         {
@@ -470,7 +518,7 @@ namespace
                     if(!Error.isEmpty()) Self->statusBar()->showMessage(Error);
                 }
                 Self->command("profile",Rendered);
-                if(!Self->started_) {Self->started_=true;Self->command("start",Self->engine_);Self->poll_.start(250);}
+                if(!Self->started_) {Self->started_=true;Self->command("start",Self->engine_);Self->poll_.start(33);}
             };
             if(Css.size()>16384 || Css.toUtf8().size()>32768) {Apply(tr("CSS 크기 한도를 초과했습니다."));return;}
             const auto Encoded=QJsonDocument(QJsonArray{Css}).toJson(QJsonDocument::Compact);
@@ -486,7 +534,7 @@ namespace
         void finish(QJsonObject Result)
         {
             if(finished_) return;
-            if(evidence_.isEmpty()) { statusBar()->showMessage(Result["status"].toString() + ": " + Result["message"].toString()); return; }
+            if(evidence_.isEmpty()) {latest_=Result;if(Result["status"]=="error"){finished_=true;poll_.stop();}statusBar()->showMessage(Result["status"].toString() + ": " + Result["message"].toString()); return; }
             finished_ = true; poll_.stop();
             if(!expectedBookFont_.isEmpty()) {
                 const auto Final = Result["final"].toObject();
@@ -533,9 +581,11 @@ namespace
         QScrollArea* navigationScroll_=nullptr;
         QSplitter* splitter_=nullptr;
         QComboBox* layoutChoice_=nullptr;
+        QComboBox* columnsChoice_=nullptr;
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;
         Filter* filter_ = nullptr;
+        QJsonArray pendingBookmarks_;
         QTimer debounce_, poll_;
         bool pending_ = false, testing_ = false, finished_ = false;
     };
@@ -644,6 +694,8 @@ int main(int Argc, char** Argv)
 {
     hc::epub::poc::OwnerMode Owner;
     try {
+        if(!qEnvironmentVariableIsEmpty("QTWEBENGINE_DISABLE_SANDBOX")
+            || qEnvironmentVariable("QTWEBENGINE_CHROMIUM_FLAGS").contains("--no-sandbox")) throw QString("Sandbox bypass is not allowed");
         Owner = hc::epub::poc::ParseOwnerMode();
 #ifdef HC_EPUB_PRODUCT_HELPER
         // The product executable has no standalone file or comparison-engine entry.
@@ -655,6 +707,9 @@ int main(int Argc, char** Argv)
     Scheme.setSyntax(QWebEngineUrlScheme::Syntax::Host);
     Scheme.setFlags(QWebEngineUrlScheme::SecureScheme | QWebEngineUrlScheme::CorsEnabled | QWebEngineUrlScheme::FetchApiAllowed);
     QWebEngineUrlScheme::registerScheme(Scheme);
+    // Match V8 collection pressure to this helper's bounded job instead of a
+    // multi-gigabyte desktop-browser heap. Publisher scripts remain disabled.
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--js-flags=--max-old-space-size=64");
     QApplication App(Argc, Argv);
     hc::document::DocumentThemeAdapter::Install(App);
     QCommandLineParser Parser; Parser.addHelpOption();
@@ -668,8 +723,6 @@ int main(int Argc, char** Argv)
     Parser.process(App);
     try
     {
-        if(!qEnvironmentVariableIsEmpty("QTWEBENGINE_DISABLE_SANDBOX")
-            || qEnvironmentVariable("QTWEBENGINE_CHROMIUM_FLAGS").contains("--no-sandbox")) throw QString("Sandbox bypass is not allowed");
         if(Parser.value("engine") != "epubjs" && Parser.value("engine") != "readium") throw QString("Invalid engine");
         hc::document::DocumentWebPeer Peer;
         if(Owner.enabled && !Peer.Connect(Owner.pipe, Owner.connection, Owner.processId, Owner.parentWindow)) throw QString("Owner authentication failed");

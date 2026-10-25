@@ -2,6 +2,9 @@
 import { applyCustomCss } from "./customCss.js";
 const states = new WeakMap();
 const textSelector = "p, li, blockquote, td, dd";
+export function releaseReadingOverrides(doc) {
+    states.get(doc)?.clear();states.delete(doc);
+}
 export function applyReadingOverrides(doc, profile, foreground, background, custom = []) {
     let state = states.get(doc);
     if (!state) { state = new Map(); states.set(doc, state); }

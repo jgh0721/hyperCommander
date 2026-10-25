@@ -73,6 +73,13 @@ export function activeBookFonts(catalog, view) {
     return [...new Set(catalog.records.filter(record => active(record, view)).map(record => record.family))].sort();
 }
 
+export function releaseBookFonts(doc) {
+    const state=installed.get(doc);if(!state)return;
+    for(const {query,listener} of state.queries)query.removeEventListener("change",listener);
+    for(const face of state.faces)doc.fonts.delete(face);
+    state.queries=[];state.faces=[];installed.delete(doc);
+}
+
 export function applyBookFont(doc, catalog, profile) {
     let state = installed.get(doc);
     if (!state) {
@@ -82,8 +89,9 @@ export function applyBookFont(doc, catalog, profile) {
             .filter(condition => condition.type === "media").map(condition => condition.text));
         for (const text of media) {
             const query = doc.defaultView.matchMedia(text);
-            query.addEventListener("change", () => applyBookFont(doc, catalog, state.profile));
-            state.queries.push(query);
+            const listener=()=>applyBookFont(doc,catalog,state.profile);
+            query.addEventListener("change",listener);
+            state.queries.push({query,listener});
         }
     }
     state.profile = profile;
