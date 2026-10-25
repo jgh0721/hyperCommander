@@ -86,6 +86,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
     ../UniqueLibs/document/epubSourceRecovery.cpp
     ../UniqueLibs/document/epubSourcePreview.cpp
+    ../UniqueLibs/document/epubSourceValidation.cpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp

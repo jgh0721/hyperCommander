@@ -7,9 +7,12 @@
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QPointer>
+#include <QElapsedTimer>
+#include <QJsonArray>
 #include <atomic>
 #include <optional>
 #include <utility>
+class QProcess;class QTreeWidget;
 class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;class QSplitter;class QStackedLayout;class QCheckBox;class QTemporaryDir;class QResizeEvent;
 namespace hc::document {
 class EpubProcessView;
@@ -25,10 +28,11 @@ public:
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
     bool IsModified()const{return ready_ && Token()!=baseToken_;}
-    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !validation_.isRunning() && validatedToken_==Token() && !validatedBytes_.isEmpty();}
+    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !validation_.isRunning() && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
     void RequestSave(){validate(true);}
+    void ReloadValidationSettings();
     void Checkpoint();
     void DiscardRecovery();
     void SetRecoveryEnabled(bool Enabled);
@@ -42,8 +46,17 @@ public:
 signals:void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
 protected:void resizeEvent(QResizeEvent* Event)override;
 private:
-    void load(QByteArray Bytes);void validate(bool SaveAfter);void select();bool flush();void importImage();
+    void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
     QMap<QString,QByteArray> draft()const;
+    void setupValidation(QVBoxLayout* Layout);void nativeDiagnostic(const epub::EditOutput& Result);
+    void setDiagnostics(QJsonArray Rows);bool selectDiagnostic(int Index);
+    bool standardValidationRequired()const;bool standardValidationAccepted()const;
+    void startEpubCheck();void cancelEpubCheck(const QString& Reason);void finishEpubCheck(int Code,bool Normal);void stopEpubCheck();
+    QJsonObject validationSnapshot()const;
+    QProcess* checkerProcess_=nullptr;QTreeWidget* diagnostics_=nullptr;QPushButton* checkerCancel_=nullptr;
+    QTimer checkerTimer_;QElapsedTimer checkerElapsed_;std::unique_ptr<QTemporaryDir> checkerDirectory_;
+    QJsonObject checkerSettings_;QJsonArray diagnosticRows_;QByteArray checkerWorkToken_,checkerVerifiedToken_,checkerLog_;
+    QString checkerState_="idle",checkerReason_,checkerVersion_;bool checkerRequested_=false;
     void setupRecovery(QVBoxLayout* Layout);
     void modelLoaded(epub::EditModel Model);
     void refreshRecovery();

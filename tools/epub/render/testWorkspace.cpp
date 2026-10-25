@@ -19,6 +19,10 @@
 #include <QBuffer>
 #include <QImage>
 #include <QPlainTextEdit>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QListWidget>
+#include "UniqueLibs/document/documentThemeAdapter.hpp"
 #include <QPushButton>
 #include <QScreen>
 #include <QAction>
@@ -77,6 +81,47 @@ QJsonObject document(DocumentWorkspaceWidget& Window, const QString& Id) {
 class EpubWorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
+    void epubValidationSettings() {
+        const auto Java=qEnvironmentVariable("HC_EPUBCHECK_JAVA"),Jar=qEnvironmentVariable("HC_EPUBCHECK_JAR");if(Java.isEmpty() || Jar.isEmpty())QSKIP("Official EPUBCheck paths required");
+        QTemporaryDir Temp;DocumentThemeAdapter::Install(*qApp);const auto Path=Temp.filePath("HyperEditor.json");
+        DocumentSettingsDialog Dialog(Path,{});Dialog.show();
+        auto* JavaField=Dialog.findChild<QLineEdit*>("documentViews/epubEditor/javaPath");auto* JarField=Dialog.findChild<QLineEdit*>("documentViews/epubEditor/epubcheckJar");auto* Required=Dialog.findChild<QCheckBox*>("documentViews/epubEditor/requireEpubCheck");QVERIFY(JavaField && JarField && Required);QVERIFY(!Required->isChecked());
+        Required->setChecked(true);QVERIFY(!Dialog.Apply());QVERIFY(!QFileInfo::exists(Path));JavaField->setText(Java);JarField->setText(Jar);QVERIFY(Dialog.Apply());
+        QFile Saved(Path);QVERIFY(Saved.open(QIODevice::ReadOnly));const auto Config=QJsonDocument::fromJson(Saved.readAll()).object()["documentViews"].toObject()["epubEditor"].toObject();QCOMPARE(Config["javaPath"].toString(),Java);QCOMPARE(Config["epubcheckJar"].toString(),Jar);QVERIFY(Config["requireEpubCheck"].toBool());
+        Dialog.findChild<QListWidget*>("settingsCategories")->setCurrentRow(3);const auto Evidence=qEnvironmentVariable("HC_EPUB_VALIDATION_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);for(const auto& Mode:QStringList{"light","dark"}){QVERIFY(DocumentThemeAdapter::SetMode(Mode));QTest::qWait(100);QVERIFY(Dialog.grab().save(QDir(Evidence).filePath("validation-settings-"+Mode+".png")));}}Dialog.reject();QVERIFY(DocumentThemeAdapter::SetMode("system"));
+        DocumentSettingsDialog Reload(Path,{});QCOMPARE(Reload.findChild<QLineEdit*>(JavaField->objectName())->text(),Java);QVERIFY(Reload.findChild<QCheckBox*>(Required->objectName())->isChecked());
+    }
+    void cssSaveValidation() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");QFile Input(Corpus);QVERIFY(Input.open(QIODevice::ReadOnly));epub::EditModel Model;QVERIFY(Model.Load(Input.readAll()));QString Css;
+        for(const auto& Item:Model.Publication()["resources"].toArray())if(Item.toObject()["mediaType"]=="text/css")Css=Item.toObject()["path"].toString();QVERIFY(!Css.isEmpty());
+        for(const auto& Good:QList<QByteArray>{"p {filter:url(#filter{);}","p {filter:URL(#filter[);}","p::before {content:\"}\";/* {[ */color:red;--x:calc(1px + 2px);}","@media print {p[data-x=\"(\"] {color:blue;}}","p {content:'\\\'';}","p {content:'hello\\\nworld';}"}){QVERIFY(Model.Replace(Css,Good).isEmpty());const auto Output=Model.Export();QVERIFY2(Output,qPrintable(Output.error_+Output.location_));}
+        for(const auto& Bad:QList<QByteArray>{"p {color:red;","p{color:rgb(1,2,3];}","/* unterminated","p{content:'line\nbreak';}","p{content:'open"}){QVERIFY(Model.Replace(Css,Bad).isEmpty());const auto Output=Model.Export();QVERIFY(!Output);QVERIFY(Output.error_.startsWith("CSS"));QVERIFY(Output.location_.startsWith(Css+":"));}
+    }
+    void epubCheckValidation() {
+        const auto Java=qEnvironmentVariable("HC_EPUBCHECK_JAVA"),Jar=qEnvironmentVariable("HC_EPUBCHECK_JAR"),Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");
+        if(Java.isEmpty() || Jar.isEmpty() || Corpus.isEmpty())QSKIP("Explicit official EPUBCheck Java/JAR and corpus required");
+        QTemporaryDir Temp;const auto Previous=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());const auto Restore=qScopeGuard([Previous]{qApp->setProperty("documentViewsConfigDir",Previous);});
+        const auto Settings=[&](bool Required,const QString& Program){QFile File(Temp.filePath("HyperEditor.json"));if(!File.open(QIODevice::WriteOnly))return false;return File.write(QJsonDocument(QJsonObject{{"schemaVersion",2},{"documentViews",QJsonObject{{"epubEditor",QJsonObject{{"javaPath",Program},{"epubcheckJar",Jar},{"requireEpubCheck",Required}}}}}}).toJson())>0;};
+        QVERIFY(Settings(true,Java));const auto Path=Temp.filePath("input.epub");QVERIFY(QFile::copy(Corpus,Path));QFile Original(Path);QVERIFY(Original.open(QIODevice::ReadOnly));const auto Bytes=Original.readAll();Original.close();epub::EditModel Model;QVERIFY(Model.Load(Bytes));QString Css;
+        for(const auto& Item:Model.Publication()["resources"].toArray())if(Item.toObject()["mediaType"]=="text/css")Css=Item.toObject()["path"].toString();QVERIFY(!Css.isEmpty());
+        EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);
+        const auto Standard=[&]{return Editor.Snapshot()["standardValidation"].toObject();};
+        const auto Validate=[&]{return Editor.Execute({{"action","epub.edit.validate"}});};
+        const auto Replace=[&](const QString& Text){return Editor.Execute({{"action","epub.edit.replace"},{"resource",Css},{"text",Text}});};
+        QVERIFY(!Validate().contains("error"));QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["validating"].toBool(),30000);QVERIFY2(Editor.IsValidated(),qPrintable(QJsonDocument(Standard()).toJson()));QCOMPARE(Standard()["state"].toString(),QString("passed"));QVERIFY(Standard()["version"].toString().startsWith("5.4"));
+        QVERIFY(!Replace("body { color red; }").contains("error"));QVERIFY(!Editor.IsValidated());Validate();QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["validating"].toBool(),30000);QCOMPARE(Standard()["state"].toString(),QString("failed"));QVERIFY(!Editor.IsValidated());
+        const auto Diagnostics=Standard()["diagnostics"].toArray();int Found=-1;for(int I=0;I<Diagnostics.size();++I)if(Diagnostics[I].toObject()["resource"]==Css && Diagnostics[I].toObject()["severity"]=="ERROR")Found=I;QVERIFY2(Found>=0,qPrintable(QJsonDocument(Standard()).toJson()));
+        QVERIFY(Editor.Execute({{"action","epub.edit.diagnostic"},{"index",Found}})["accepted"].toBool());QCOMPARE(Editor.Snapshot()["current"].toString(),Css);QVERIFY(!Editor.Export(Temp.filePath("bad.epub")).HasValue());
+        QVERIFY(!Replace("body {color:red;}").contains("error"));Validate();QTRY_COMPARE_WITH_TIMEOUT(Standard()["state"].toString(),QString("running"),10000);Editor.Execute({{"action","epub.edit.validation-cancel"}});QTRY_COMPARE_WITH_TIMEOUT(Standard()["state"].toString(),QString("cancelled"),10000);QVERIFY(!Editor.IsValidated());
+        Validate();QTRY_COMPARE_WITH_TIMEOUT(Standard()["state"].toString(),QString("running"),10000);QVERIFY(!Replace("body {color:blue;}").contains("error"));QTRY_COMPARE_WITH_TIMEOUT(Standard()["state"].toString(),QString("stale"),10000);QVERIFY(!Editor.IsValidated());
+        Validate();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsValidated(),30000);const auto Output=Editor.Export(Temp.filePath("valid.epub"));QVERIFY(Output.HasValue());
+        QVERIFY(Settings(true,Temp.filePath("missing-java.exe")));Editor.ReloadValidationSettings();QVERIFY(!Editor.IsValidated());Validate();QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["validating"].toBool(),10000);QCOMPARE(Standard()["state"].toString(),QString("error"));QVERIFY(!Editor.IsValidated());
+        QVERIFY(Settings(false,Java));Editor.ReloadValidationSettings();Validate();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsValidated(),10000);
+        QVERIFY(Settings(true,Java));QFile Legacy(QDir(QFileInfo(Corpus).absolutePath()).filePath("epub2-ncx.epub"));QVERIFY(Legacy.open(QIODevice::ReadOnly));EpubSourceEditor LegacyEditor(Legacy.readAll(),Temp.filePath("legacy.epub"));LegacyEditor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(LegacyEditor.IsReady(),10000);LegacyEditor.Execute({{"action","epub.edit.validate"}});QTRY_VERIFY_WITH_TIMEOUT(!LegacyEditor.Snapshot()["validating"].toBool(),30000);const auto LegacyState=LegacyEditor.Snapshot()["standardValidation"].toObject();QCOMPARE(LegacyState["state"].toString(),QString("failed"));
+        const auto LegacyRows=LegacyState["diagnostics"].toArray();int Unicode=-1;for(int I=0;I<LegacyRows.size();++I)if(LegacyRows[I].toObject()["resource"].toString().contains(QStringLiteral("첫 장.xhtml")))Unicode=I;QVERIFY(Unicode>=0);QVERIFY(LegacyEditor.Execute({{"action","epub.edit.diagnostic"},{"index",Unicode}})["accepted"].toBool());QVERIFY(LegacyEditor.Snapshot()["current"].toString().contains(QStringLiteral("첫 장.xhtml")));
+        const auto Evidence=qEnvironmentVariable("HC_EPUB_VALIDATION_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);DocumentThemeAdapter::Install(*qApp);LegacyEditor.resize(1100,720);LegacyEditor.show();QTest::qWait(100);QVERIFY(LegacyEditor.grab().save(QDir(Evidence).filePath("standard-diagnostics.png")));}
+        QVERIFY(Original.open(QIODevice::ReadOnly));QCOMPARE(Original.readAll(),Bytes);qInfo()<<"Official EPUBCheck validation, CSS diagnostic navigation, cancellation, stale results and strict Save As verified";
+    }
     void livePreviewEditing() {
         const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());const auto Source=Temp.filePath("input.epub");QVERIFY(QFile::copy(Corpus,Source));QFile Input(Source);QVERIFY(Input.open(QIODevice::ReadOnly));const auto Original=Input.readAll();Input.close();epub::EditModel Model;QVERIFY(Model.Load(Original));const auto Spine=Model.Publication()["spine"].toArray();QVERIFY(Spine.size()>1);const auto First=Spine.first().toObject()["path"].toString();QString Css,Png;
         for(const auto& V:Model.Publication()["resources"].toArray()){const auto R=V.toObject();if(R["mediaType"]=="text/css")Css=R["path"].toString();if(R["mediaType"]=="image/png")Png=R["path"].toString();}QVERIFY(!Css.isEmpty() && !Png.isEmpty());

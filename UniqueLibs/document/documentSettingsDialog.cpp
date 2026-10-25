@@ -155,6 +155,18 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* TextRecovery=qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
     connect(TextRecovery,&QCheckBox::toggled,EpubRecovery,&QCheckBox::setChecked);connect(EpubRecovery,&QCheckBox::toggled,TextRecovery,&QCheckBox::setChecked);
     EpubRecovery->setChecked(TextRecovery->isChecked());
+    auto EpubTool=[&](const QString& Key,const QString& Label,const QString& Filter){
+        auto* Row=new QWidget(this);auto* Fields=new QHBoxLayout(Row);Fields->setContentsMargins(0,0,0,0);
+        auto* Field=new QLineEdit(Row);Field->setMaxLength(4096);Field->setObjectName("documentViews/epubEditor/"+Key);Field->setAccessibleName(Label);controls_[Field->objectName()]=Field;
+        if(Key=="javaPath")Field->setPlaceholderText(tr("java.exe 경로 · 빈 값은 PATH에서 찾기"));
+        auto* Browse=new QPushButton(tr("찾기…"),Row);Fields->addWidget(Field,1);Fields->addWidget(Browse);EpubForm->addRow(Label,Row);
+        connect(Browse,&QPushButton::clicked,this,[this,Field,Label,Filter]{const auto File=QFileDialog::getOpenFileName(this,Label,Field->text(),Filter);if(!File.isEmpty())Field->setText(File);});
+    };
+    EpubTool("javaPath",tr("EPUBCheck Java 실행 파일"),tr("Java 실행 파일 (java.exe);;모든 파일 (*)"));
+    EpubTool("epubcheckJar",tr("EPUBCheck JAR"),tr("EPUBCheck (epubcheck.jar);;JAR 파일 (*.jar)"));
+    Check(EpubForm,"documentViews/epubEditor/requireEpubCheck",tr("EPUB 다른 이름 저장 전에 EPUBCheck 오류 없음 필수"),false);
+    auto* ValidationHint=new QLabel(tr("기본 검사는 패키지·XML·CSS 괄호·참조·이미지를 확인합니다. EPUBCheck는 선택한 외부 Java/JAR로 사본을 검사합니다. 경고는 저장을 허용하며, 필수 검사를 켜면 검사 실패·취소·오류가 있을 때 저장을 중단합니다."),this);ValidationHint->setWordWrap(true);EpubForm->addRow(ValidationHint);
+    auto* EpubCheckHelp=new QLabel(tr("<a href=\"https://www.w3.org/publishing/epubcheck/docs/installation/\">EPUBCheck 공식 설치 안내</a>"),this);EpubCheckHelp->setOpenExternalLinks(true);EpubForm->addRow(EpubCheckHelp);
     epubSettings_=new hc::epub::poc::ReadingSettings(QDir(QFileInfo(path_).absolutePath()).filePath("epub-reading.json"),QString(64,'0'),"light",this);
     epubSettings_->setObjectName("epubGlobalSettings");epubSettings_->SetGlobalOnly();EpubForm->addRow(epubSettings_);
     error_ = new QLabel(this); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); Layout->addWidget(error_);
@@ -165,7 +177,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
-        if(List->currentRow()==3){epubSettings_->ResetDraft();return;}
+        if(List->currentRow()==3){epubSettings_->ResetDraft();for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/epubEditor/")){if(auto* Field=qobject_cast<QLineEdit*>(I.value()))Field->clear();else if(auto* Check=qobject_cast<QCheckBox*>(I.value()))Check->setChecked(false);}return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
     });
@@ -201,6 +213,7 @@ void DocumentSettingsDialog::loadControls()
         } else if (auto* Field = qobject_cast<QSpinBox*>(It.value())) Field->setValue(Value.toInt());
         else if (auto* Field = qobject_cast<QDoubleSpinBox*>(It.value())) Field->setValue(Value.toDouble());
         else if (auto* Field = qobject_cast<QCheckBox*>(It.value())) Field->setChecked(Value.toBool());
+        else if (auto* Field = qobject_cast<QLineEdit*>(It.value())) Field->setText(Value.toString());
         else if (auto* Field = qobject_cast<QKeySequenceEdit*>(It.value())) Field->setKeySequence(QKeySequence::fromString(Value.toString(), QKeySequence::PortableText));
     }
 }
@@ -214,6 +227,7 @@ QJsonObject DocumentSettingsDialog::values() const
         else if (auto* Field = qobject_cast<QSpinBox*>(It.value())) Value = Field->value();
         else if (auto* Field = qobject_cast<QDoubleSpinBox*>(It.value())) Value = Field->value();
         else if (auto* Field = qobject_cast<QCheckBox*>(It.value())) Value = Field->isChecked();
+        else if (auto* Field = qobject_cast<QLineEdit*>(It.value())) Value = Field->text().trimmed();
         else if (auto* Field = qobject_cast<QKeySequenceEdit*>(It.value())) Value = Field->keySequence().toString(QKeySequence::PortableText);
         settings::UnifiedConfig::Set(Result, It.key().split('/'), settings::UnifiedConfig::Encode(Value));
     }
@@ -233,6 +247,11 @@ bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
     if (!valid_) return false;
     if(epubSettings_->IsBusy() && epubSettings_->IsDirty()){error_->setText(tr("EPUB 설정을 불러오고 있습니다."));return false;}
     auto Next = values();
+    const auto EpubEditor=Next["documentViews"].toObject()["epubEditor"].toObject();
+    if(EpubEditor["requireEpubCheck"].toBool()) {
+        auto Java=EpubEditor["javaPath"].toString();if(Java.isEmpty())Java=QStandardPaths::findExecutable("java");const auto Jar=EpubEditor["epubcheckJar"].toString();
+        if(!QFileInfo(Java).isAbsolute() || !QFileInfo(Java).isFile() || !QFileInfo(Jar).isAbsolute() || !QFileInfo(Jar).isFile() || QFileInfo(Jar).suffix().compare("jar",Qt::CaseInsensitive)!=0){error_->setText(tr("EPUBCheck 필수 검사에는 사용할 수 있는 Java 실행 파일과 EPUBCheck JAR 경로가 필요합니다."));return false;}
+    }
     const auto Problem = DocumentShortcutRegistry::Validate(settings::UnifiedConfig::Value(Next, {"documentViews", "shortcuts", "bindings"}).toObject());
     if (!Problem.isEmpty()) { error_->setText(Problem); return false; }
     QJsonObject Saved; QString Error;

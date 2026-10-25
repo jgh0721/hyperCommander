@@ -45,16 +45,18 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     connect(Apply,&QPushButton::clicked,this,[this]{flush();});connect(Replace,&QPushButton::clicked,this,&EpubSourceEditor::importImage);connect(Save,&QPushButton::clicked,this,[this]{validate(true);});
     connect(resources_,&QComboBox::currentIndexChanged,this,[this]{if(!updating_){if(!flush()){const QSignalBlocker Block(resources_);resources_->setCurrentIndex(resources_->findText(current_));return;}select();}});
     connect(text_,&QPlainTextEdit::textChanged,this,[this]{if(updating_)return;if(text_->document()->toRawText().replace(QChar(0x2029),QChar('\n')).toUtf8().size()>2*1024*1024){const QSignalBlocker Block(text_);text_->undo();status_->setText(tr("소스 편집은 리소스당 2 MiB까지 지원합니다."));}emit Changed();});
-    setupRecovery(Layout);
+    setupRecovery(Layout);setupValidation(Layout);
     connect(&worker_,&QFutureWatcher<epub::EditModel>::finished,this,[this]{modelLoaded(worker_.result());});
     connect(&validation_,&QFutureWatcher<epub::EditOutput>::finished,this,[this]{
         const auto Result=validation_.result();if(validationToken_!=Token()){status_->setText(tr("검사 중 소스가 변경되었습니다. 다시 검사해 주세요."));emit StateChanged();return;}
+        nativeDiagnostic(Result);
         if(!Result){error_=Result.error_+": "+Result.location_;status_->setText(Result.error_=="epub-edit-spine-repair-required"?tr("읽기 순서에 누락된 참조가 있어 저장할 수 없습니다. OPF에서 해당 참조를 수정한 후 다시 검사해 주세요. 원본은 변경하지 않았습니다."):tr("소스 검사를 통과하지 못했습니다.\n%1").arg(error_));validatedBytes_.clear();}
-        else {error_.clear();validatedToken_=validationToken_;validatedBytes_=Result.bytes_;status_->setText(tr("기본 구조 검사 통과 · 다른 이름 저장 가능 · 출판용 EPUB 표준 검증은 별도입니다."));}
-        emit StateChanged();if(Result && saveAfter_)emit SaveRequested();
+        else {error_.clear();validatedToken_=validationToken_;validatedBytes_=Result.bytes_;status_->setText(tr("기본 구조·XML·CSS 괄호 검사 통과 · EPUBCheck 검사로 표준 오류를 확인할 수 있습니다."));}
+        if(Result && checkerRequested_){startEpubCheck();return;}
+        emit StateChanged();if(Result && IsValidated() && saveAfter_)emit SaveRequested();saveAfter_=false;
     });load(std::move(Bytes));
 }
-EpubSourceEditor::~EpubSourceEditor(){RequestPreviewClose();if(ready_ && !discardedRecovery_ && recoveryEnabled_)Checkpoint();if(cancel_)cancel_->store(true);}
+EpubSourceEditor::~EpubSourceEditor(){stopEpubCheck();RequestPreviewClose();if(ready_ && !discardedRecovery_ && recoveryEnabled_)Checkpoint();if(cancel_)cancel_->store(true);}
 void EpubSourceEditor::load(QByteArray Bytes) {
     ready_=false;setEnabled(false);status_->setText(tr("EPUB 편집 구조를 검사하고 있습니다…"));cancel_=std::make_shared<std::atomic_bool>(false);auto Cancel=cancel_;
     worker_.setFuture(QtConcurrent::run([Bytes=std::move(Bytes),Cancel]{epub::EditModel Model;Model.Load(Bytes,[Cancel]{return Cancel->load();});return Model;}));
@@ -77,7 +79,7 @@ bool EpubSourceEditor::CanUndo()const{return ready_ && ((!text_->isHidden() && t
 bool EpubSourceEditor::CanRedo()const{return ready_ && ((!text_->isHidden() && text_->document()->isRedoAvailable()) || model_.CanRedo());}
 void EpubSourceEditor::Undo(){if(!ready_)return;if(!text_->isHidden() && text_->document()->isUndoAvailable())text_->undo();else{model_.Undo();select();emit Changed();}}
 void EpubSourceEditor::Redo(){if(!ready_)return;if(!text_->isHidden() && text_->document()->isRedoAvailable())text_->redo();else{model_.Redo();select();emit Changed();}}
-QJsonObject EpubSourceEditor::Snapshot()const {QJsonArray Rows;for(int I=0;I<resources_->count();++I)Rows.append(QJsonObject{{"path",resources_->itemText(I)},{"mediaType",resources_->itemData(I).toString()}});return {{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"validating",validation_.isRunning()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveries_?recoveries_->count():0},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};}
+QJsonObject EpubSourceEditor::Snapshot()const {QJsonArray Rows;for(int I=0;I<resources_->count();++I)Rows.append(QJsonObject{{"path",resources_->itemText(I)},{"mediaType",resources_->itemData(I).toString()}});return {{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"validating",validation_.isRunning() || checkerState_=="running"},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveries_?recoveries_->count():0},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};}
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();
     if(Action=="epub.edit.preview"){requestPreview(true);return {{"accepted",previewRuntime_.has_value()}};}
@@ -86,7 +88,9 @@ QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     if(!ready_)return {{"error","epub-edit-not-ready"}};
     if(Action=="epub.edit.checkpoint"){Checkpoint();return {{"accepted",true}};}
     if(Action=="epub.edit.recovery-list"){QJsonArray Entries;for(int I=0;I<recoveries_->count();++I)Entries.append(QJsonObject{{"path",recoveries_->itemData(I).toString()},{"label",recoveries_->itemText(I)}});return {{"entries",Entries}};}
-    if(Action=="epub.edit.validate"){validate(false);return {{"accepted",true}};}
+    if(Action=="epub.edit.validate"){validate(false,Request["standard"].toBool());return {{"accepted",true}};}
+    if(Action=="epub.edit.validation-cancel"){cancelEpubCheck("cancelled");return {{"accepted",true}};}
+    if(Action=="epub.edit.diagnostic")return {{"accepted",selectDiagnostic(Request["index"].toInt(-1))}};
     if(Action=="epub.edit.replace") {
         if(!flush())return {{"error","epub-edit-draft-invalid"}};const auto Path=Request["resource"].toString();const auto Index=resources_->findText(Path);if(Index<0)return {{"error","epub-edit-resource"}};
         const bool Raster=QStringList{"image/png","image/jpeg","image/gif"}.contains(resources_->itemData(Index).toString());
@@ -101,8 +105,9 @@ storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination)
     if(protectedPaths_.contains(QFileInfo(Destination).absoluteFilePath().toCaseFolded()) || (!identity(Destination).isEmpty() && identities_.contains(identity(Destination))))return storage::Error{storage::ErrorCategory::AccessDenied,"epub-edit-source-overwrite-denied"};
     if(!IsValidated())return storage::Error{storage::ErrorCategory::InvalidRequest,"epub-edit-validation-required"};return validatedBytes_;
 }
-void EpubSourceEditor::validate(bool SaveAfter) {
-    if(!ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || validation_.isRunning())return;validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;status_->setText(tr("패키지·XML·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();auto Cancel=cancel_;
+void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
+    ReloadValidationSettings();
+    if(!ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || validation_.isRunning() || checkerState_=="running")return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;status_->setText(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();auto Cancel=cancel_;
     validation_.setFuture(QtConcurrent::run([Model=std::move(Model),Draft,Cancel]{return Model.Export(Draft,[Cancel]{return Cancel->load();});}));emit StateChanged();
 }
 void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){DiscardRecovery();resetRecoverySession();sourcePath_=Path;sourceHashAtOpen_=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256);baseToken_=Token();protectSourcePath(Path);load(Bytes);}

@@ -85,7 +85,8 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     }
     model_=std::move(Model);ready_=!model_.Publication().isEmpty();error_=model_.Error();setEnabled(true);resources_->setEnabled(ready_);text_->setEnabled(ready_);image_->setEnabled(ready_);
     for(auto* Button:findChildren<QPushButton*>())if(!recoveryPanel_->isAncestorOf(Button))Button->setEnabled(ready_);
-    status_->setText(ready_?tr("변경 내용은 원본을 유지하고 사본으로 저장합니다. 출판용 EPUB 표준 검증은 별도입니다."):error_);
+    if(checkerCancel_)checkerCancel_->setEnabled(checkerState_=="running");
+    status_->setText(ready_?tr("변경 내용은 사본으로 저장합니다. EPUBCheck 검사는 설정의 Java/JAR를 사용합니다."):error_);
     if(ready_) {
         reference_=Restoring?QByteArray::fromHex(model_.Publication()["sourceSha256"].toString().toLatin1()):model_.Fingerprint();updating_=true;resources_->clear();
         for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Resource=Value.toObject();if(model_.IsEditable(Resource["path"].toString()))resources_->addItem(Resource["path"].toString(),Resource["mediaType"].toString());}
