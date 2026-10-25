@@ -49,6 +49,12 @@ def compressed(entries, descriptor=False, legacy=False):
 
 
 class NativePackageTests(unittest.TestCase):
+    def test_hierarchical_navigation_fragments(self):
+        entries=publication()
+        entries["EPUB/nav.xhtml"]='<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>TOC</title></head><body><nav epub:type="toc"><ol><li><span>Part</span><ol><li><a href="Text/second.xhtml#%EC%84%B8%EB%B6%80%EC%A0%88">Section</a></li></ol></li></ol></nav></body></html>'.encode()
+        native=self.run_bytes(archive(entries))["navigation"]
+        self.assertEqual(native[0],dict(label="Part",path="",depth=0))
+        self.assertEqual(native[1],dict(label="Section",path="EPUB/Text/second.xhtml",fragment="세부절",depth=1))
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hc-epub-native-")
         self.addCleanup(self.temp.cleanup)

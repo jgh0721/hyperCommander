@@ -256,8 +256,13 @@ void ReadingSettings::addAppearance(QTabWidget* Tabs) {
     css_=new QPlainTextEdit(Panel); css_->setMinimumHeight(150); css_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)); css_->setPlaceholderText("p { margin-block-end: 1em; text-align: justify; }"); addField(Form,"customCss",tr("사용자 CSS"),css_);
     auto* Hint=new QLabel(tr("문자·문단·이미지 폭·테두리의 CSS를 미리보기합니다. 외부 리소스와 동적 선택자는 지원하지 않습니다. 출판사 서식에서는 재정의를 적용하지 않습니다."),Panel); Hint->setWordWrap(true);Form->addRow(Hint);
     connect(background_,&QComboBox::currentIndexChanged,this,[this](int I){if(I>=0)edit("background",background_->itemData(I).toString());});
-    connect(backgroundColor_,&QPushButton::clicked,this,[this]{const auto Color=QColorDialog::getColor(QColor(Profile()["backgroundColor"].toString()),this,tr("읽기 배경색"));if(Color.isValid())edit("backgroundColor",Color.name());});
-    connect(textColor_,&QPushButton::clicked,this,[this]{const auto Color=QColorDialog::getColor(QColor(Profile()["textColor"].toString()),this,tr("읽기 글자색"));if(Color.isValid())edit("textColor",Color.name());});
+    for(const auto& Entry:QList<QPair<QPushButton*,QString>>{{backgroundColor_,"backgroundColor"},{textColor_,"textColor"}})
+        connect(Entry.first,&QPushButton::clicked,this,[this,Key=Entry.second]{
+            auto* Dialog=new QColorDialog(QColor(Profile()[Key].toString()),this);Dialog->setAttribute(Qt::WA_DeleteOnClose);
+            Dialog->setWindowTitle(Key=="backgroundColor"?tr("읽기 배경색"):tr("읽기 글자색"));
+            connect(Dialog,&QColorDialog::colorSelected,this,[this,Key](const QColor& Color){if(Color.isValid())edit(Key,Color.name());});
+            Dialog->open();
+        });
     connect(backgroundImport_,&QPushButton::clicked,this,&ReadingSettings::importBackground);
     connect(cssEnabled_,&QCheckBox::toggled,this,[this](bool Value){edit("cssEnabled",Value);});
     connect(cssForce_,&QCheckBox::toggled,this,[this](bool Value){edit("cssForce",Value);});
@@ -270,8 +275,15 @@ void ReadingSettings::addAppearance(QTabWidget* Tabs) {
 }
 void ReadingSettings::importBackground() {
     if(busy_ || path_.isEmpty())return;
-    const auto Input=QFileDialog::getOpenFileName(this,tr("읽기 배경 이미지"),{},tr("이미지 (*.png *.jpg *.jpeg *.bmp)"));if(Input.isEmpty())return;
-    busy_=true;refresh();assetWorker_.setFuture(QtConcurrent::run([Input,Path=path_]{return ReadingAssets::Import(Input,Path);}));
+    // A native modal exec can suspend the helper's authenticated control pipe.
+    // Return to its event loop while the user chooses an image or cancels.
+    auto* Dialog=new QFileDialog(this,tr("읽기 배경 이미지"));Dialog->setAttribute(Qt::WA_DeleteOnClose);
+    Dialog->setFileMode(QFileDialog::ExistingFile);Dialog->setNameFilter(tr("이미지 (*.png *.jpg *.jpeg *.bmp)"));
+    connect(Dialog,&QFileDialog::fileSelected,this,[this](const QString& Input){
+        if(Input.isEmpty() || busy_)return;
+        busy_=true;refresh();assetWorker_.setFuture(QtConcurrent::run([Input,Path=path_]{return ReadingAssets::Import(Input,Path);}));
+    });
+    Dialog->open();
 }
 }
 

@@ -66,6 +66,7 @@ namespace hc::document
         void ReadingSelected();
         void EscapeRequested();
         void FullscreenRequested();
+        void RetryRequested();
     private:
         void syncText();
         bool editEpub();
@@ -82,6 +83,7 @@ namespace hc::document
         bool hwpFocusPending_ = false;
         WebProcessRuntime hwpRuntime_, epubRuntime_;
         EpubProcessView* epub_ = nullptr;
+        QWidget* epubFailure_=nullptr;
         bool epubClosing_ = false,epubEditingAllowed_=false;
         EpubSourceEditor* epubEditor_=nullptr;QByteArray epubBytes_;QString epubPath_;
         QByteArray epubSourceHash_;

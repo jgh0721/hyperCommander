@@ -446,6 +446,7 @@ namespace hc::document
         State->Metrics(Metrics);
         State->Update({{"status", Failure.isEmpty() || Cancelled() ? "closed" : "error"},
             {"message", Failure}, {"activeProcessesAfterClose", 0},
+            {"nativeError",qint64(Error.native_)},{"childExitCode",Error.childExitCode_?QJsonValue(qint64(*Error.childExitCode_)):QJsonValue(QJsonValue::Null)},
             {"lastReaderState", Failure.isEmpty() ? QJsonObject{} : LastReaderState}});
         State->done_.store(true, std::memory_order_release);
     }

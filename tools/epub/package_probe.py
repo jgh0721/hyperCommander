@@ -218,17 +218,30 @@ def inspect(path: Path, *, snapshot: bytes | None = None):
                     for nav in document.findall(".//x:nav", NS):
                         if "toc" not in nav.get("{http://www.idpf.org/2007/ops}type", "").split():
                             continue
-                        for link in nav.findall(".//x:a", NS):
+                        parents = {child: parent for parent in nav.iter() for child in parent}
+                        for link in nav.iter():
+                            if link.tag not in (f'{{{NS["x"]}}}a', f'{{{NS["x"]}}}span'):
+                                continue
+                            if link.tag.endswith('}span') and parents.get(link).tag != f'{{{NS["x"]}}}li':
+                                continue
+                            parent, depth = parents.get(link), -1
+                            while parent is not None:
+                                depth += parent.tag == f'{{{NS["x"]}}}li'
+                                parent = parents.get(parent)
+                            if link.tag.endswith('}span'):
+                                report["navigation"].append(dict(label="".join(link.itertext()), path="", depth=max(0, depth)))
+                                continue
                             target = resolve(resource["path"], link.get("href", ""))
                             if target not in paths:
                                 raise Rejected("missing-navigation-target", target)
-                            report["navigation"].append(dict(label="".join(link.itertext()), path=target))
+                            report["navigation"].append(dict(label="".join(link.itertext()), path=target, fragment=urllib.parse.unquote(urllib.parse.urlsplit(link.get("href", "")).fragment), depth=max(0, depth)))
             if version == "2.0":
                 nav_id = spine.get("toc", "")
                 if nav_id not in manifest:
                     raise Rejected("missing-ncx", nav_id)
                 ncx_path = manifest[nav_id]["path"]
                 ncx = xml(read(ncx_path), ncx_path)
+                parents = {child: parent for parent in ncx.iter() for child in parent}
                 for point in ncx.findall(".//ncx:navPoint", NS):
                     content = point.find("ncx:content", NS)
                     if content is None:
@@ -236,7 +249,11 @@ def inspect(path: Path, *, snapshot: bytes | None = None):
                     target = resolve(ncx_path, content.get("src", ""))
                     if target not in paths:
                         raise Rejected("missing-navigation-target", target)
-                    report["navigation"].append(dict(label=point.findtext("ncx:navLabel/ncx:text", "", NS), path=target))
+                    parent, depth = parents.get(point), 0
+                    while parent is not None:
+                        depth += parent.tag == f'{{{NS["ncx"]}}}navPoint'
+                        parent = parents.get(parent)
+                    report["navigation"].append(dict(label=point.findtext("ncx:navLabel/ncx:text", "", NS), path=target, fragment=urllib.parse.unquote(urllib.parse.urlsplit(content.get("src", "")).fragment), depth=depth))
             if not report["navigation"]:
                 raise Rejected("missing-navigation")
             report["status"] = "restricted" if report["issues"] else "structure-checked"

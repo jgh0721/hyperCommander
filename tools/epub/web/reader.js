@@ -34,6 +34,7 @@ const root = "epub://app/book/";
 const pane = document.getElementById("reader");
 const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
+let selectedToc=-1;
 let fontCatalog;
 const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember});
 const history=[];
@@ -222,18 +223,24 @@ function readingLocation() {
     const path=publication?.spine[index]?.path;
     let tocIndex=-1;
     const doc=documents()[0], section=book?.spine.get(index), compare=new EpubCFI();
+    let selectedAnchor=null;
     for(const [i,item] of (publication?.navigation || []).entries()) {
         if(item.path!==path)continue;
         if(!item.fragment) {if(tocIndex<0)tocIndex=i;continue;}
         const target=doc?.getElementById(item.fragment);
         if(target && location?.start?.cfi && section) {
-            try {if(compare.compare(section.cfiFromElement(target),location.start.cfi)<=0)tocIndex=i;} catch {}
+            try {const anchor=section.cfiFromElement(target);if(i===selectedToc)selectedAnchor=anchor;if(compare.compare(anchor,location.start.cfi)<=0)tocIndex=i;} catch {}
         }
     }
+    // A chapter's final heading cannot always reach the viewport's top edge.
+    // Retain an explicit TOC target while that heading is visible, then resume
+    // location-based selection when the reader moves away.
+    if(selectedAnchor && location?.end?.cfi && compare.compare(selectedAnchor,location.start.cfi)>=0 && compare.compare(selectedAnchor,location.end.cfi)<=0)tocIndex=selectedToc;
+    else if(tocIndex!==selectedToc)selectedToc=-1;
     const page=location?.start?.displayed?.page || 1, pages=location?.start?.displayed?.total || 1;
     const count=publication?.spine.length || 1;
     return {chapterIndex:index,tocIndex,chapterTitle:publication?.navigation[tocIndex]?.label || path || "",
-        chapterCount:count,chapterPage:page,chapterPages:pages,progress:Math.min(1,(index+(page-1)/pages)/count),
+        chapterCount:count,chapterPage:page,chapterPages:pages,progress:location?.atEnd?1:Math.min(1,(index+(page-1)/pages)/count),
         atStart:!!location?.atStart,atEnd:!!location?.atEnd,canBack:history.length>0};
 }
 
@@ -246,15 +253,16 @@ async function navigate(action,value) {
     }
     if(action==="next-chapter" || action==="previous-chapter") {
         const index=readingLocation().chapterIndex+(action==="next-chapter"?1:-1);
-        if(index>=0 && index<publication.spine.length){remember();await goChapter(index);}return;
+        if(index>=0 && index<publication.spine.length){remember();await goChapter(index);window.hcFocusReading?.();}return;
     }
     if(action!=="toc")throw Error("Unsupported reading navigation");
     const item=publication.navigation[value];if(!Number.isInteger(value) || !item)throw Error("Invalid TOC item");
     const index=publication.spine.findIndex(section=>section.path===item.path);
     if(index<0)throw Error("TOC target is outside reading order");
     remember();
-    if(rendition)await rendition.display(book.spine.get(index).href+(item.fragment?"#"+encodeURIComponent(item.fragment):""));
+    if(rendition)await rendition.display(book.spine.get(index).href+(item.fragment?"#"+item.fragment:""));
     else await goChapter(index);
+    selectedToc=value;
     documents().forEach(applyDocument);
     window.hcFocusReading?.();
 }
@@ -279,6 +287,7 @@ async function goChapter(index) {
 
 async function start(name) {
     const mine = ++generation;
+    selectedToc=-1;
     window.hcEvidence = { status: "loading", phase: "P0-B", engine: name, checks: {} };
     if (navigator) { await navigator.destroy(); navigator = null; }
     if (book) { book.destroy(); book = rendition = null; }
@@ -455,6 +464,7 @@ window.hcStartupDiagnostics = () => ({
 
 window.hcSnapshot = () => window.hcEvidence.status === "ready" ? {...window.hcEvidence,...currentSnapshot()} : window.hcEvidence;
 window.hcFocusReading=()=>{
+    if(tools.state().popup)return false;
     const doc=documents()[0];if(!doc)return false;
     const frame=doc.defaultView.frameElement;frame.tabIndex=0;frame.focus();
     doc.body.tabIndex=-1;doc.body.focus({preventScroll:true});return doc.hasFocus();

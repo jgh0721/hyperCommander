@@ -343,6 +343,7 @@ namespace
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.id_.mid(5)]{readAction(Name,{});});
             }
             shortcuts_->SetEligibility([this](const QString& Id,QWidget* Focus){return Id.startsWith("epub.") && !composing_
+                && (latest_["popup"].isNull() || latest_["popup"].isUndefined() || Id=="epub.fullscreen")
                 && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus))
                     || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
             shortcuts_->Apply({});

@@ -15,7 +15,14 @@ for version,name in [("3.0","epub3-images.epub"),("2.0","epub2-ncx.epub")]:
 
 # Exercise compressed local records and ZIP metadata preservation as well.
 import io,zipfile
+import urllib.parse
 source=a.output/"epub3-images.epub"
+entries=publication()
+first=next(path for path in entries if path.startswith("EPUB/Text/") and not path.endswith("second.xhtml"))
+href=urllib.parse.quote(first.removeprefix("EPUB/"))
+entries[first]=('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Navigation</title></head><body><h1 id="start">Start</h1>'+('<p>Reading navigation paragraph with enough text for several screens.</p>'*180)+'<h2 id="세부절">Unicode section</h2><p>End of section.</p></body></html>').encode()
+entries["EPUB/nav.xhtml"]=(f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>TOC</title></head><body><nav epub:type="toc"><ol><li><span>Part</span><ol><li><a href="{href}#start">Start</a></li><li><a href="{href}#%EC%84%B8%EB%B6%80%EC%A0%88">Section</a></li></ol></li></ol></nav></body></html>').encode()
+(a.output/"epub3-toc-fragments.epub").write_bytes(archive(entries))
 with zipfile.ZipFile(source) as before,zipfile.ZipFile(a.output/"epub3-compressed.epub","w") as after:
     after.comment=b"Original CC0 ZIP metadata preservation fixture"
     for old in before.infolist():

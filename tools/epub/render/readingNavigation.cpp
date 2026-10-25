@@ -18,7 +18,7 @@
 #include <QVBoxLayout>
 namespace hc::epub::poc {
 namespace {
-bool cfi(const QString& Value) {return Value.size()<=8192 && QRegularExpression("^epubcfi\\([ -~]+\\)$").match(Value).hasMatch();}
+bool cfi(const QString& Value) {return Value.size()<=8192 && QRegularExpression("^epubcfi\\([^\\x{0}-\\x{1f}\\x{7f}-\\x{9f}\\x{2028}\\x{2029}]+\\)$").match(Value).hasMatch();}
 QJsonObject read(const QString& Path) {
     if(!QFileInfo::exists(Path))return {{"schemaVersion",1},{"locator",""},{"bookmarks",QJsonArray{}}};
     QFile File(Path);if(QFileInfo(Path).isSymLink() || !File.open(QIODevice::ReadOnly) || File.size()>256*1024)throw QString("읽기 기록을 읽을 수 없습니다.");

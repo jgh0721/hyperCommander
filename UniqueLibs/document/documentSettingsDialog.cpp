@@ -120,12 +120,12 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Shortcuts = Page();
     auto* Diagnostics = new QLabel(this); Diagnostics->setObjectName("shortcutDiagnostics"); Diagnostics->setWordWrap(true); Shortcuts->addRow(Diagnostics);
     auto* Search = new QLineEdit(this); Search->setObjectName("shortcutSearch"); Search->setPlaceholderText(tr("명령 또는 단축키 검색…")); Shortcuts->addRow(Search);
-    auto* Scope = new QComboBox(this); Scope->addItem(tr("전체"), ""); Scope->addItem(tr("공통"), "common"); Scope->addItem(tr("텍스트·편집"), "text"); Shortcuts->addRow(tr("분류"), Scope);
+    auto* Scope = new QComboBox(this); Scope->addItem(tr("전체"), ""); Scope->addItem(tr("공통"), "common"); Scope->addItem(tr("텍스트·편집"), "text"); Scope->addItem(tr("EPUB"),"epub");Shortcuts->addRow(tr("분류"), Scope);
     auto* ChangedOnly = new QCheckBox(tr("변경한 항목만"), this); Shortcuts->addRow(ChangedOnly);
     QList<QPair<DocumentShortcut, QWidget*>> Rows;
     for (const auto& Command : DocumentShortcutRegistry::Commands()) {
         auto* Row = new QWidget(this); auto* RowLayout = new QVBoxLayout(Row); RowLayout->setContentsMargins(0, 0, 0, 4);
-        auto* Caption = new QLabel(tr("%1 · %2 · 기본값 %3").arg(Command.label_, Command.scope_ == "common" ? tr("공통") : tr("텍스트·편집"), Command.key_.isEmpty() ? tr("없음") : Command.key_), Row); Caption->setWordWrap(true); RowLayout->addWidget(Caption);
+        auto* Caption = new QLabel(tr("%1 · %2 · 기본값 %3").arg(Command.label_, Command.scope_ == "common" ? tr("공통") : Command.scope_=="epub"?tr("EPUB"):tr("텍스트·편집"), Command.key_.isEmpty() ? tr("없음") : Command.key_), Row); Caption->setWordWrap(true); RowLayout->addWidget(Caption);
         auto* Input = new QHBoxLayout; auto* Field = new QKeySequenceEdit(Row); Field->setClearButtonEnabled(true); Field->setMaximumSequenceLength(2);
         const auto Key = "documentViews/shortcuts/bindings/" + Command.id_;
         Field->setObjectName(Key); Field->setProperty("defaultValue", Command.key_); Field->setAccessibleName(Command.label_);
@@ -141,7 +141,8 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             auto* Field = Row.second->findChild<QKeySequenceEdit*>();
             const auto Current = Field->keySequence().toString(QKeySequence::NativeText);
             const bool Match = (Row.first.label_ + " " + Row.first.id_ + " " + Current + " " + Row.first.key_).contains(Search->text(), Qt::CaseInsensitive);
-            const bool Category = Scope->currentData().toString().isEmpty() || (Scope->currentData() == "common" ? Row.first.scope_ == "common" : Row.first.scope_ != "common");
+            const auto ScopeId=Scope->currentData().toString();
+            const bool Category = ScopeId.isEmpty() || (ScopeId=="text"?(Row.first.scope_=="text" || Row.first.scope_=="edit"):Row.first.scope_==ScopeId);
             Shortcuts->setRowVisible(Row.second, Match && Category && (!ChangedOnly->isChecked() || Field->keySequence() != QKeySequence(Row.first.key_)));
         }
     };

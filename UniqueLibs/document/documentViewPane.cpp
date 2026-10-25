@@ -20,6 +20,11 @@
 #include "core/WatermarkDialog.h"
 #include <fmstyle/ThemeManager.h>
 #include <QApplication>
+#include <QPushButton>
+#include <QLabel>
+#include <QClipboard>
+#include <QJsonDocument>
+#include <memory>
 #include <QPlainTextEdit>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -77,6 +82,11 @@ namespace hc::document
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
+        QString RetryLocator;
+        if(epub_ && epubSourceHash_==Input.hash_) {
+            const auto Last=epub_->ViewState()["lastReaderState"].toObject();
+            if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(true))RetryLocator=Last["locator"].toString();
+        }
         const QSignalBlocker Block(this),EditorBlock(editor_);
         viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
@@ -91,6 +101,7 @@ namespace hc::document
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
         if(epub_){delete epub_;epub_=nullptr;}
+        if(epubFailure_){delete epubFailure_;epubFailure_=nullptr;}
         epubClosing_=false;
         if(IsEpub()) {
             epubSourceHash_=Input.hash_;epubBytes_=Input.bytes_;epubPath_=Input.path_;
@@ -102,6 +113,29 @@ namespace hc::document
             }
             epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
             layout()->addWidget(epub_);epub_->show();
+            epubFailure_=new QWidget(this);epubFailure_->setObjectName("epubFailure");epubFailure_->setAccessibleName(tr("EPUB 읽기 오류"));
+            auto* FailureLayout=new QVBoxLayout(epubFailure_);auto* FailureText=new QLabel(epubFailure_);FailureText->setTextFormat(Qt::PlainText);FailureText->setWordWrap(true);FailureLayout->addWidget(FailureText);
+            auto* Retry=new QPushButton(tr("다시 열기"),epubFailure_);Retry->setObjectName("epubRetry");FailureLayout->addWidget(Retry);
+            auto* Details=new QPlainTextEdit(epubFailure_);Details->setObjectName("epubFailureDetails");Details->setAccessibleName(tr("EPUB 오류 진단 정보"));Details->setReadOnly(true);FailureLayout->addWidget(Details);
+            auto* Copy=new QPushButton(tr("진단 정보 복사"),epubFailure_);FailureLayout->addWidget(Copy);
+            connect(Copy,&QPushButton::clicked,this,[Details]{QApplication::clipboard()->setText(Details->toPlainText());});
+            connect(Retry,&QPushButton::clicked,this,&DocumentViewPane::RetryRequested);
+            layout()->addWidget(epubFailure_);epubFailure_->hide();
+            connect(epub_,&EpubProcessView::Failed,this,[this,FailureText,Details,Retry](const QString& Error){
+                if(epubEditor_ && epubEditor_->isVisible())return;
+                const auto State=epub_->ViewState(),Last=State["lastReaderState"].toObject();
+                const QJsonObject Diagnostics{{"code",Error},{"nativeError",State["nativeError"]},{"childExitCode",State["childExitCode"]},{"metrics",State["metrics"]},{"stage",Last["stage"]},{"frameCount",Last["frameCount"]}};
+                FailureText->setText(tr("EPUB 본문을 표시하지 못했습니다.\n오류: %1\n다시 열면 저장된 읽기 위치를 복원합니다. 원본 파일은 변경되지 않았습니다.").arg(Error.left(1024)));
+                Details->setPlainText(QString::fromUtf8(QJsonDocument(Diagnostics).toJson()));epub_->hide();epubFailure_->show();Retry->setFocus(Qt::OtherFocusReason);emit ViewStateChanged();
+            });
+            if(!RetryLocator.isEmpty()) {
+                auto* Restore=new QTimer(epub_);Restore->setInterval(150);auto Attempts=std::make_shared<int>(0);
+                connect(Restore,&QTimer::timeout,epub_,[this,Restore,Attempts,RetryLocator]{
+                    const auto State=epub_->ViewState();if(++*Attempts>400 || State["status"]=="error"){Restore->deleteLater();return;}
+                    if(State["readingProfile"].toObject()["privateReading"].toBool() || !State["readingProfile"].toObject()["resume"].toBool(true)){Restore->deleteLater();return;}
+                    if(State["status"]=="ready" && State["readingStateLoaded"].toBool() && !State["readingStateRestoring"].toBool() && epub_->ReaderAction("locate",RetryLocator))Restore->deleteLater();
+                });Restore->start();
+            }
             contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB");
             contribution_.mainToolbarRecommended_=false;
             connect(epub_,&EpubProcessView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);

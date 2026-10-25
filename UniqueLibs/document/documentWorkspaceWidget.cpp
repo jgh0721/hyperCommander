@@ -198,7 +198,7 @@ namespace hc::document
         toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
-        status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setObjectName("documentStatus");status_->setContentsMargins(8, 4, 8, 4);
+        status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setObjectName("documentStatus");status_->setTextFormat(Qt::PlainText);status_->setContentsMargins(8, 4, 8, 4);
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(status_);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
@@ -646,6 +646,7 @@ namespace hc::document
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){update();tryFinishClose();}});
         connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
         connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)toggleEpubFullscreen();});
+        connect(Pane,&DocumentViewPane::RetryRequested,this,[this,Tab]{if(!Tab->closed_){activate(Tab);findChild<QAction*>("reloadDocument")->trigger();}});
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;
@@ -1219,7 +1220,7 @@ namespace hc::document
             const auto State = Tab->session_->Snapshot();
             const auto ViewError=Tab->pane_->ViewState()["error"].toString();
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : !ViewError.isEmpty()?ViewError:State.error_ ? QString::fromStdString(State.error_->code_) : QString{};
-            status_->setToolTip(Code); status_->setText(!Code.isEmpty() ? Message(Code) : Tab->loading_ || Tab->navigating_ ? tr("여는 중…") : Tab->saving_ || !Tab->pendingToken_.isEmpty() ? tr("저장 중…") :
+            status_->setToolTip(Code); status_->setText(!Code.isEmpty() ? Tab->pane_->IsEpub()?tr("EPUB 읽기 실패 · %1 · 다시 열기 또는 진단 정보를 확인하십시오.").arg(Code.section('\n',0,0).left(120)):Message(Code) : Tab->loading_ || Tab->navigating_ ? tr("여는 중…") : Tab->saving_ || !Tab->pendingToken_.isEmpty() ? tr("저장 중…") :
                 Tab->pane_->IsBusy()?tr("표시 또는 편집 작업 처리 중…") : Tab->pane_->ViewId().toUpper()+(Tab->broker_?tr(" · 원본 공급자에 저장"):Tab->originalSave_?tr(" · 로컬 파일"):tr(" · 사본 · 다른 이름 저장")));
             const auto Reading=Tab->pane_->ViewState()["reading"].toObject();if(Reading["pageCount"].toInt()>0)status_->setText(QString("%1 · %2 / %3 · %4").arg(Reading["book"].toString()).arg(Reading["page"].toInt()+1).arg(Reading["pageCount"].toInt()).arg(Reading["error"].toString().isEmpty()?Reading["pageName"].toString():Reading["error"].toString()));
         }

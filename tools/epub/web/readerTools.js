@@ -21,11 +21,11 @@ export function findText(section, query, limit = 200) {
     }
     return { hits, characters: text.length };
 }
-export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && value.startsWith("epubcfi(") && value.endsWith(")") && [...value].every(c=>c.charCodeAt(0)>=32 && c.charCodeAt(0)<=126); }
+export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && /^epubcfi\([^\u0000-\u001f\u007f-\u009f\u2028\u2029]+\)$/u.test(value); }
 export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{} }) {
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
     const hooked = new WeakSet();
-    const close = () => { dialog?.remove(); dialog=null; popup=null; focus?.focus(); };
+    const close = () => { dialog?.remove(); dialog=null; popup=null; if(focus?.isConnected)focus.focus();else window.hcFocusReading?.(); };
     function show(kind, value) {
         close(); focus=document.activeElement; dialog=document.createElement("dialog");
         dialog.style.cssText="max-width:90vw;max-height:85vh;padding:16px;color:inherit;background:inherit;border:1px solid currentColor;overflow:auto";
@@ -87,7 +87,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
                     await new Promise(resolve=>setTimeout(resolve,0));
                 }
                 result={serial,hits,limited:limited||hits.length>=200};
-            } else if(["toc","next","previous","back","next-chapter","previous-chapter"].includes(action)) {await navigate(action,value);result={serial,located:true};}
+            } else if(["toc","next","previous","back","next-chapter","previous-chapter"].includes(action)) {if(popup)close();await navigate(action,value);result={serial,located:true};}
             else if(action==="locate") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);window.hcFocusReading?.();result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}

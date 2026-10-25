@@ -11,3 +11,5 @@ assert.equal(findText(section(["나무 골목"]),"골목").hits[0].cfi,'[[0,3],[
 assert.throws(()=>findText(section(["text"]),""));
 assert.ok(validCfi("epubcfi(/6/2!/4/2:0)"));assert.ok(!validCfi("https://example.invalid"));
 console.log("Cross-node, literal, Unicode, hit-limit and locator checks passed");
+assert.ok(validCfi("epubcfi(/6/2!/4/2[세부절]/1:0)"));
+assert.ok(!validCfi("epubcfi(/6/2!\n/4/2:0)"));

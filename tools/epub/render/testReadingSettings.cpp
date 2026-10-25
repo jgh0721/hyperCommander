@@ -16,6 +16,7 @@
 #include <QLockFile>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QFileDialog>
 #include <QTreeWidget>
 #include <QtTest>
 
@@ -30,6 +31,19 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void backgroundDialogKeepsEventLoopRunning() {
+        QTemporaryDir Temp;ReadingSettings Panel(Temp.filePath("reading.json"),book,"light");QTRY_VERIFY(!Panel.IsBusy());Panel.show();
+        Panel.findChild<QPushButton*>("backgroundAsset")->click();
+        auto* Dialog=Panel.findChild<QFileDialog*>();QVERIFY(Dialog);QVERIFY(Dialog->isVisible());
+        bool Alive=false;QTimer::singleShot(10,&Panel,[&]{Alive=true;});QTRY_VERIFY(Alive);Dialog->reject();
+        QVERIFY(!Panel.IsDirty());
+    }
+    void unicodeReadingLocator() {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("epub-reading.json"),Locator=QString("epubcfi(/6/2!/4/2[세부절]/1:0)");
+        {hc::epub::poc::ReadingNavigation Reader(Path,book,[](const QJsonObject&){});Reader.Poll({{"status","ready"},{"locator",Locator}});QVERIFY(Reader.Execute("bookmark-add","한글 절"));}
+        QJsonObject Request;hc::epub::poc::ReadingNavigation Reopened(Path,book,[&](const QJsonObject& Value){Request=Value;});Reopened.Poll({{"status","ready"}});
+        QCOMPARE(Request["value"].toString(),Locator);QCOMPARE(Reopened.Snapshot()["bookmarks"].toArray().size(),1);
+    }
     void privacyAndHistoryResetPreserveBookmarks() {
         QTemporaryDir Temp;const auto Path=Temp.filePath("epub-reading.json");
         {hc::epub::poc::ReadingNavigation Reader(Path,book,[](const QJsonObject&){});Reader.ConfigureProfile({{"privateReading",true}});

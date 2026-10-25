@@ -13,6 +13,9 @@
 #include <QBuffer>
 #include <QImage>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QAction>
+#include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "commonLibs/document/epub/epubEditModel.hpp"
@@ -28,6 +31,53 @@ QJsonObject document(DocumentWorkspaceWidget& Window, const QString& Id) {
 class EpubWorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
+    void unicodeTocFragments() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus not configured");
+        const auto Book=QFileInfo(Corpus).dir().filePath("epub3-toc-fragments.epub");QVERIFY(QFile::exists(Book));
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);
+        Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool(),60000);
+        QVERIFY(!Window.Handle({{"action","epub.reader.toc"},{"documentId",Id},{"value",2}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(State()["chapterPage"].toInt()>1,15000);QTRY_COMPARE_WITH_TIMEOUT(State()["tocIndex"].toInt(),2,15000);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    void readerUxFlow() {
+        const auto Book=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Book.isEmpty())QSKIP("Reader corpus not configured");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();QVERIFY(!Id.isEmpty());
+        const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool() && !State()["readingStateRestoring"].toBool(),60000);
+        const auto Do=[&](const QString& Action,QJsonValue Value=QJsonValue{}){return Window.Handle({{"action","epub.reader."+Action},{"documentId",Id},{"value",Value}});};
+        QVERIFY(!Do("next-chapter").contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["chapterIndex"].toInt(),1,15000);
+        QVERIFY(!Do("back").contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["chapterIndex"].toInt(),0,15000);
+        QVERIFY(!Do("toc",1).contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["tocIndex"].toInt(),1,15000);
+        QVERIFY(!Window.Handle({{"action","epub.settings.preview"},{"documentId",Id},{"profile",QJsonObject{{"layout","paginated"},{"columns",2}}}}).contains("error"));
+        QTRY_COMPARE_WITH_TIMEOUT(State()["profile"].toObject()["layout"].toString(),QString("paginated"),15000);QTRY_VERIFY_WITH_TIMEOUT(!State()["frameBounds"].toArray().isEmpty(),15000);
+        QVERIFY(!Window.Handle({{"action","epub.settings.cancel"},{"documentId",Id}}).contains("error"));QTRY_COMPARE_WITH_TIMEOUT(State()["profile"].toObject()["layout"].toString(),QString("scroll"),15000);
+        QVERIFY(!Window.Handle({{"action","preferences"}}).contains("error"));
+        QPointer<DocumentSettingsDialog> Settings;for(auto* Widget:QApplication::topLevelWidgets())if(auto* Dialog=qobject_cast<DocumentSettingsDialog*>(Widget))Settings=Dialog;
+        QVERIFY(Settings);QVERIFY(Settings->isVisible());QTest::qWait(1000);QVERIFY2(State()["status"]=="ready",qPrintable(QString::fromUtf8(QJsonDocument(State()).toJson())));Settings->reject();
+        QVERIFY(!Do("fullscreen").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(Window.isFullScreen(),10000);
+        QVERIFY(!Do("fullscreen").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(!Window.isFullScreen(),10000);
+        QTRY_COMPARE_WITH_TIMEOUT(State()["status"].toString(),QString("ready"),10000);
+        QVERIFY(!Do("next").contains("error"));QTRY_VERIFY_WITH_TIMEOUT(!State()["readerAction"].toObject()["busy"].toBool(),10000);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    void readerFailureAndRetry() {
+        const auto Book=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Book.isEmpty())QSKIP("Reader corpus not configured");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);auto Runtime=MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION"));
+        auto Denied=Runtime;Denied.approvedInventorySha256_=QByteArray(64,'0');Window.ConfigureEpub(Denied);Window.resize(1280,900);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",Book}})["documentId"].toString();QVERIFY(!Id.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<QWidget*>("epubFailure") && Window.findChild<QWidget*>("epubFailure")->isVisible(),60000);
+        auto* Retry=Window.findChild<QPushButton*>("epubRetry");QVERIFY(Retry);QVERIFY(!Window.findChild<QPlainTextEdit*>("epubFailureDetails")->toPlainText().isEmpty());
+        Window.ConfigureEpub(Runtime);Retry->click();
+        QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
+        QVERIFY(Window.findChild<QWidget*>("epubFailure")->isHidden());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void cleanup() {
         EpubProcessView::RequestShutdown();
         QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
@@ -184,7 +234,7 @@ private slots:
         DocumentWorkspaceWidget Window(Temp.filePath("recovery"),true);Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.resize(1280,900);Window.show();
         const auto Id=Window.Handle({{"action","open"},{"path",qEnvironmentVariable("HC_EPUB_POC_EPUB")}})["documentId"].toString();
         QTRY_VERIFY_WITH_TIMEOUT(document(Window,Id)["view"].toObject()["ready"].toBool(),60000);
-        HWND Reader=nullptr;EnumChildWindows(reinterpret_cast<HWND>(Window.winId()),[](HWND Child,LPARAM Data)->BOOL {wchar_t Title[128]{};GetWindowTextW(Child,Title,128);if(QString::fromWCharArray(Title)==QString("EPUB 읽기 설정"))*reinterpret_cast<HWND*>(Data)=Child;return TRUE;},reinterpret_cast<LPARAM>(&Reader));
+        HWND Reader=nullptr;EnumChildWindows(reinterpret_cast<HWND>(Window.winId()),[](HWND Child,LPARAM Data)->BOOL {wchar_t Title[128]{};GetWindowTextW(Child,Title,128);if(QString::fromWCharArray(Title)==QString("EPUB 읽기"))*reinterpret_cast<HWND*>(Data)=Child;return TRUE;},reinterpret_cast<LPARAM>(&Reader));
         QVERIFY(Reader);DWORD Pid=0;const auto Thread=GetWindowThreadProcessId(Reader,&Pid);QVERIFY(Pid!=GetCurrentProcessId());
         GUITHREADINFO Info{sizeof(Info)};QVERIFY(GetGUIThreadInfo(Thread,&Info));const auto Target=Info.hwndFocus?Info.hwndFocus:Reader;
         QVERIFY(PostMessageW(Target,WM_KEYDOWN,VK_ESCAPE,1));QVERIFY(PostMessageW(Target,WM_KEYUP,VK_ESCAPE,1));
