@@ -3,6 +3,24 @@ import DefaultViewManager from "epubjs/src/managers/default/index.js";
 // Keep retired pages in the same DOM parent until their replacement is painted.
 // Moving an iframe between parents would reload its browsing context.
 export class ReaderViewManager extends DefaultViewManager {
+    // Select per-spine layout only after the old view has been retired. Keep
+    // the same Layout object so Rendition's location mapping remains coherent.
+    createView(section, forceRight) {
+        this.selectSection(section);
+        return super.createView(section, forceRight);
+    }
+    selectSection(section) {
+        const policy=this.settings.sectionPolicy?.(section);
+        if(!policy || !this.layout)return;
+        const {layout,flow,spread,minSpreadWidth}=policy;
+        const key=JSON.stringify(policy);
+        if(this.sectionPolicyKey===key)return;
+        this.sectionPolicyKey=key;
+        this.layout.name=layout;this.layout.settings.layout=layout;
+        this.layout.update({name:layout});this.layout.flow(flow);
+        this.layout.settings.spread=spread;this.layout.spread(spread,minSpreadWidth);
+        this.updateFlow(flow);
+    }
     beginTransition() { this.transitionDepth = (this.transitionDepth || 0) + 1; }
     clear() {
         if (!this.transitionDepth || !this.views?.length) return super.clear();
@@ -24,7 +42,9 @@ export class ReaderViewManager extends DefaultViewManager {
         this.scrollTo(0, 0, true);
     }
     paginatedLocation() {
-        const locations=super.paginatedLocation(),bounds=this.container.getBoundingClientRect();
+        const locations=super.paginatedLocation();
+        if(this.layout.name==="pre-paginated" || this.settings.axis!=="horizontal")return locations;
+        const bounds=this.container.getBoundingClientRect();
         let used=0;
         for(const view of this.visible()) {
             const rect=view.position(),width=this.layout.width;

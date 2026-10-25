@@ -40,11 +40,13 @@ namespace hc::document::epub::detail
         QByteArray Read(const QString& Path) const;
         bool Contains(const QString& Path) const { return entries_.contains(Path); }
         void VerifyAll() const;
+        QStringList CompatibilityWarnings() const { return warnings_; }
         QByteArray Rewrite(const QMap<QString,QByteArray>& Replacements,const QMap<QString,QByteArray>& Additions={},const QSet<QString>& Removals={}) const;
     private:
         const QByteArray& bytes_;
         const Cancellation& cancel_;
         QMap<QString, Entry> entries_;
         QByteArray comment_;
+        QStringList warnings_;
     };
 }

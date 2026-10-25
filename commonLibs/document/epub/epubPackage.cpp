@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubPackage.hpp"
 #include "epubArchive.hpp"
+#include <QSize>
 
 /// Framework headers
 #include <QCryptographicHash>
@@ -173,8 +174,13 @@ namespace hc::document::epub
                 if(Language.size() > 128 || Languages.size() >= 32) Reject("language-metadata-limit");
                 if(!Language.isEmpty() && !Languages.contains(Language)) Languages.append(Language);
             }
-            for(const auto Index : Package.Children(Metadata, Opf, "meta"))
-                if(Package.At(Index).Attr("property") == "rendition:layout" && Package.Text(Index).trimmed() == "pre-paginated") Reject("fixed-layout", Rootfile);
+            QString GlobalLayout="reflowable";bool HasLayout=false;
+            for(const auto Index : Package.Children(Metadata, Opf, "meta")) {
+                const auto& Meta=Package.At(Index);if(Meta.Attr("property")!="rendition:layout")continue;
+                const auto Value=Package.Text(Index).trimmed();
+                if(HasLayout || !Meta.Attr("refines").isEmpty() || (Value!="reflowable" && Value!="pre-paginated"))Reject("invalid-rendition-layout",Rootfile);
+                GlobalLayout=Value;HasLayout=true;
+            }
             const auto SpineIndex = Package.One(0, Opf, "spine", "missing-spine");
             const auto NcxId = Package.At(SpineIndex).Attr("toc");
             QSet<QString> SpineIds;
@@ -205,7 +211,7 @@ namespace hc::document::epub
                 if(Paths.contains(Resource.path_) || Resource.path_ == Rootfile) Reject("duplicate-manifest-path", Resource.path_);
                 if(!Allowed.contains(Resource.media_)) Reject("renderer-media-unsupported", Resource.path_);
                 if(Resource.properties_.contains("scripted")) Reject("scripted-content", Resource.path_);
-                if(Resource.properties_.contains("rendition:layout-pre-paginated")) Reject("fixed-layout", Resource.path_);
+
                 if(Resource.media_ != Item.Attr("media-type")) NormalizedMedia.insert(Resource.id_, Resource.media_);
                 Ids.insert(Resource.id_, static_cast<int>(Resources.size())); Paths.insert(Resource.path_); Resources.append(Resource);
             }
@@ -228,7 +234,7 @@ namespace hc::document::epub
                 Account(Record); Array.append(Record);
             };
             const auto SpineItems = Package.Children(SpineIndex, Opf, "itemref");
-            int MissingSpineItems = 0;
+            int MissingSpineItems = 0, FixedSpineItems = 0;QMap<QString,QSize> FixedViewports;
             for(const auto Index : SpineItems) if(!Ids.contains(Package.At(Index).Attr("idref"))) ++MissingSpineItems;
             if(MissingSpineItems > 4096) Reject("snapshot-record-limit");
             for(const auto Index : SpineItems) {
@@ -236,12 +242,29 @@ namespace hc::document::epub
                 if(!Ids.contains(Id)) continue;
                 const auto& Resource = Resources[Ids[Id]];
                 if(Resource.media_ != "application/xhtml+xml") Reject("spine-media-unsupported", Resource.path_);
-                if(tokens(Item.Attr("properties")).contains("rendition:layout-pre-paginated")) Reject("fixed-layout-spine", Resource.path_);
+                const auto Properties=tokens(Item.Attr("properties"));
+                const bool Fixed=Properties.contains("rendition:layout-pre-paginated"),Reflow=Properties.contains("rendition:layout-reflowable");
+                if(Fixed && Reflow)Reject("conflicting-rendition-layout",Resource.path_);
+                const auto Layout=Fixed?QString("pre-paginated"):Reflow?QString("reflowable"):GlobalLayout;
+                if(Layout=="pre-paginated") {
+                    const Xml Document(Book.Read(Resource.path_),Resource.path_,Cancel);int Width=0,Height=0,Count=0;
+                    for(const auto Meta:Document.Descendants(0,Xhtml,"meta"))if(Document.At(Meta).Attr("name").compare("viewport",Qt::CaseInsensitive)==0) {
+                        ++Count;const auto Viewport=Document.At(Meta).Attr("content");
+                        const auto W=QRegularExpression("(?:^|[,;\\s])width\\s*=\\s*([0-9]+)(?=$|[,;\\s])",QRegularExpression::CaseInsensitiveOption).match(Viewport);
+                        const auto H=QRegularExpression("(?:^|[,;\\s])height\\s*=\\s*([0-9]+)(?=$|[,;\\s])",QRegularExpression::CaseInsensitiveOption).match(Viewport);
+                        Width=W.captured(1).toInt();Height=H.captured(1).toInt();
+                        if(Viewport.count(QRegularExpression("(?:^|[,;\\s])width\\s*=",QRegularExpression::CaseInsensitiveOption))!=1 || Viewport.count(QRegularExpression("(?:^|[,;\\s])height\\s*=",QRegularExpression::CaseInsensitiveOption))!=1)Reject("fixed-layout-viewport",Resource.path_);
+                    }
+                    if(Count!=1 || Width<1 || Height<1 || Width>16384 || Height>16384 || qint64(Width)*Height>64*1024*1024)Reject("fixed-layout-viewport",Resource.path_);
+                    ++FixedSpineItems;FixedViewports.insert(Resource.path_,QSize(Width,Height));
+                }
                 auto Linear = Item.Attr("linear"); if(Linear.isEmpty()) Linear = "yes";
                 if(Linear != "yes" && Linear != "no") Reject("invalid-spine-linear", Resource.path_);
                 // Recovery retains available source order and makes all of it
                 // reachable. The reader must explicitly show the missing count.
-                Append(Spine, {{"id", Id}, {"path", Resource.path_}, {"linear", MissingSpineItems ? "yes" : Linear}});
+                QJsonObject Section{{"id",Id},{"path",Resource.path_},{"linear",MissingSpineItems?"yes":Linear},{"layout",Layout}};
+                if(Layout=="pre-paginated"){const auto Size=FixedViewports[Resource.path_];Section["viewport"]=QJsonObject{{"width",Size.width()},{"height",Size.height()}};}
+                Append(Spine,Section);
             }
             if(Spine.isEmpty()) Reject(MissingSpineItems ? "missing-spine-resource" : "missing-spine");
             QByteArray ReaderPackage = PackageBytes;
@@ -348,9 +371,10 @@ namespace hc::document::epub
             Check(Cancel);
             return {{"schemaVersion", 1}, {"phase", "P0-B"}, {"policy", "passive-reflowable-v1"}, {"sourceSha256", digest(Bytes)},
                 {"title", Title}, {"languages", Languages}, {"readingProgression", Progression},
-                {"recovery", QJsonObject{{"missingSpineItems", MissingSpineItems}, {"normalizedMedia", NormalizedMedia.size()}, {"sourceUnchanged", true}}},
+                {"renditionLayout",GlobalLayout},{"hasFixedLayout",FixedSpineItems>0},{"mixedLayout",FixedSpineItems>0 && FixedSpineItems<Spine.size()},
+                {"recovery", QJsonObject{{"missingSpineItems", MissingSpineItems}, {"normalizedMedia", NormalizedMedia.size()}, {"sourceUnchanged", true},{"legacyZip",QJsonArray::fromStringList(Book.CompatibilityWarnings())}}},
                 {"packageVersion", Version}, {"rootfile", Rootfile}, {"spine", Spine}, {"navigation", Navigation}, {"images", Images}, {"resources", Entries},
-                {"limitations", QJsonArray{"UTF-8 XML and ZIP names only", "ZIP64, fixed layout, encrypted, signed and active publications rejected",
+                {"limitations", QJsonArray{"UTF-8 XML and ZIP names only", "ZIP64, encrypted, signed and active publications rejected; fixed layout requires XHTML with numeric viewport dimensions",
                     "CSS URLs, SVG references and srcset not structurally validated; renderer allowlist remains required", "immutable reader preparation; authoring requires separate Save As validation; not EPUBCheck"}}};
         }
     }

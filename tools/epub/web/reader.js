@@ -53,6 +53,13 @@ class ReaderIframeView extends EpubIframeView {
         super.setLayout(layout);
         if(this.contents)this.appliedLayout=key;
     }
+    create() {
+        const result=super.create();this.element.dataset.hcSectionIndex=String(this.section.index);
+        // A transparent fixed-page canvas uses paper white independently of
+        // shell theme. Publisher backgrounds and foregrounds remain untouched.
+        this.iframe.style.backgroundColor=publication?.spine[this.section.index]?.layout==="pre-paginated"?"#ffffff":"";
+        return result;
+    }
     expand(force) {
         if (this.iframe && this.settings.axis === "vertical" && this.layout?.name === "reflowable")
             this.iframe.style.minHeight = `${Math.max(1, this.layout.height || pane.clientHeight)}px`;
@@ -147,6 +154,19 @@ function documents() {
     ).map(frame => frame.contentDocument).filter(doc => doc?.body);
 }
 
+function fixedDocument(doc) {
+    const frame=doc.defaultView?.frameElement;
+    const section=rendition?.manager?.views?.all().find(view=>view.iframe===frame)?.section;
+    // Content hooks can run before a new view enters the manager list.
+    const raw=frame?.parentElement?.dataset.hcSectionIndex;
+    const index=section?.index ?? (raw===undefined?-1:Number(raw));
+    return publication?.spine[index]?.layout==="pre-paginated";
+}
+function sectionPolicy(section) {
+    const fixed=publication?.spine[section.index]?.layout==="pre-paginated";
+    return {layout:fixed?"pre-paginated":"reflowable",flow:fixed || profile.layout==="paginated"?"paginated":"scrolled",
+        spread:fixed || profile.layout==="scroll" || profile.columns===1?"none":"auto",minSpreadWidth:profile.columns===2?600:900};
+}
 function applyDocument(doc) {
     tools.hook(doc);
     if(!inputDocuments.has(doc)) {
@@ -165,15 +185,18 @@ function applyDocument(doc) {
             if(action){event.preventDefault();window.hcCommand("read",{action,serial:--keyboardSerial});}
         });
     }
-    if (fontCatalog) applyBookFont(doc, fontCatalog, profile);
+    // Fixed pages retain the publisher's geometry, fonts and colors. Reading
+    // preferences remain stored for reflowable chapters in mixed publications.
+    const effective=fixedDocument(doc)?{...profile,override:false,cssEnabled:false}:profile;
+    if (fontCatalog) applyBookFont(doc, fontCatalog, effective);
     const [themeBackground, themeForeground] = colors[profile.theme];
     const profileKey = JSON.stringify([profile, themeBackground, themeForeground]);
     if (appliedProfiles.get(doc) === profileKey) return;
     let style = profileStyles.get(doc);
     if (!style) { style = doc.createElement("style"); doc.head.append(style); profileStyles.set(doc,style); }
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
-    cssErrors.set(doc, applyReadingOverrides(doc, profile, foreground, background, customRules));
-    style.textContent = profile.override ? `
+    cssErrors.set(doc, applyReadingOverrides(doc, effective, foreground, background, effective.cssEnabled?customRules:[]));
+    style.textContent = effective.override ? `
       html, body { background-color:${profile.background === "theme" ? background : "transparent"}!important; color:${foreground}!important; }
       body, body p, body li, body blockquote, body td, body dd {
         font-family:${CSS.escape(profile.font)}!important; font-size:${profile.size}px!important;
@@ -240,10 +263,17 @@ async function applyProfile(next = {}) {
         reflowStage="before-layout";
         await rendition.q.enqueue(() => {});
         reflowStage="flow";
-        if(oldLayout!==profile.layout){rendition.flow(profile.layout==="paginated"?"paginated":"scrolled-doc");await rendition.q.enqueue(() => {});}
-        if(oldLayout!==profile.layout || oldColumns!==profile.columns)rendition.spread(profile.columns===1 || profile.layout==="scroll"?"none":"auto",profile.columns===2?600:900);
+        const current=book.spine.get(readingLocation().chapterIndex);
+        if(oldLayout!==profile.layout || oldColumns!==profile.columns) {
+            const policy=sectionPolicy(current);
+            if(policy.layout!=="pre-paginated") {
+                rendition.flow(policy.flow);await rendition.q.enqueue(()=>{});
+                rendition.spread(policy.spread,policy.minSpreadWidth);rendition.manager.sectionPolicyKey="";
+            }
+            rendition.manager.selectSection(current);
+        }
         reflowStage="resize";await resizeRendition();
-        reflowStage="restore";if(locator)await rendition.display(locator);
+        reflowStage="restore";if(locator && rendition._layout.name!=="pre-paginated")await rendition.display(locator);
     }
     if (!rendition && !navigator){reflowStage="";return;}
     documents().forEach(applyDocument);
@@ -264,7 +294,7 @@ window.hcBookFonts = bookFonts;
 
 function currentSnapshot() {
     const docs = documents();
-    return { ...tools.state(), ...readingLocation(), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { ...tools.state(), ...readingLocation(), contentLayout:rendition?._layout?.name || "reflowable", mixedLayout:!!publication?.mixedLayout, writingModes:docs.map(doc=>getComputedStyle(doc.documentElement).writingMode), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
@@ -278,6 +308,8 @@ function currentSnapshot() {
         viewportWidth: viewport.clientWidth, paneWidth: pane.clientWidth, paneHeight: pane.clientHeight,
         frameBounds: [...pane.querySelectorAll("iframe")].filter(f => !f.closest("[data-hc-retired]") && getComputedStyle(f).visibility !== "hidden")
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
+        ruby:docs.flatMap(doc=>[...doc.querySelectorAll("ruby")].slice(0,4).map(node=>({display:getComputedStyle(node).display,size:getComputedStyle(node).fontSize,annotations:[...node.querySelectorAll("rt")].map(rt=>({display:getComputedStyle(rt).display,size:getComputedStyle(rt).fontSize,text:rt.textContent}))}))),
+        pageCanvasColors:docs.map(doc=>getComputedStyle(doc.defaultView.frameElement).backgroundColor),
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
         columnCount:rendition?._layout?.divisor || 1,
@@ -385,7 +417,7 @@ async function start(name) {
         measured("bookReadyMs");
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: profile.layout==="paginated"?"paginated":"scrolled-doc",
-            manager: ReaderViewManager,
+            manager: ReaderViewManager, sectionPolicy,
             view: ReaderIframeView, spread: profile.layout==="scroll" || profile.columns===1?"none":"auto", minSpreadWidth:profile.columns===2?600:900,
             allowScriptedContent: false, allowPopups: false });
         rendition.on("displayerror", error => { if (mine === generation) fail(error); });
@@ -394,6 +426,7 @@ async function start(name) {
         await rendition.display();
         measured("firstDisplayMs");
     } else if (name === "readium") {
+        if(publication.hasFixedLayout)throw Error("Fixed-layout publications require the EPUB.js product renderer");
         profileStamp="";
         const readingOrder = publication.spine.map(item => ({ href: encodePath(item.path), type: "application/xhtml+xml" }));
         const manifest = Manifest.deserialize({ "@context": "https://readium.org/webpub-manifest/context.jsonld",

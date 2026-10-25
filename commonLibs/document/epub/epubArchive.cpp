@@ -111,9 +111,13 @@ namespace hc::document::epub::detail
             const qsizetype Next = At + 46 + NameSize + ExtraSize + CommentSize;
             if(Next > End) Reject("zip-central-range");
             if(Flags & 1) Reject("encrypted-zip-entry");
-            if(Flags & ~quint16(0x080e)) Reject("zip-flags-unsupported");
-            if(Method == 0 && (Flags & 6)) Reject("zip-flags-unsupported");
+            // Some legacy converters set the reserved method-8 enhancement hint
+            // on both stored and deflated entries. Read() still requires exact
+            // input/output sizes and CRC; unused compression hints cannot change
+            // the declared method or admit encryption, patching or alternate codecs.
+            if(Flags & ~quint16(0x081e)) Reject("zip-flags-unsupported");
             if(Method != 0 && Method != 8) Reject("unsupported-zip-method");
+            if((Flags & 0x10 || (Method==0 && (Flags & 6))) && !warnings_.contains("legacy-compression-hints"))warnings_.append("legacy-compression-hints");
             if(u16(Bytes, At + 34)) Reject("zip-multidisk-unsupported");
             const auto NameBytes = Bytes.mid(At + 46, NameSize);
             if(!(Flags & 0x0800) && std::any_of(NameBytes.cbegin(), NameBytes.cend(), [](char C) { return static_cast<unsigned char>(C) >= 128; }))
@@ -156,7 +160,9 @@ namespace hc::document::epub::detail
                 Reject("zip-local-size", Path);
             // Compatibility: compressed/descriptor-backed mimetype is safe
             // after the same size, descriptor and CRC checks as every entry.
-            if(Path == "mimetype" && (Local || LocalExtra)) Reject("invalid-mimetype-layout");
+            // Reading tolerates legacy placement/extra fields after all entry
+            // range and CRC checks. Rewrite() emits canonical stored mimetype first.
+            if(Path=="mimetype" && (Local || LocalExtra))warnings_.append("legacy-mimetype-layout");
             Ranges.append({Local, Item.end_}); entries_.insert(Path, Item); At = Next;
         }
         if(At != End) Reject("zip-central-count");

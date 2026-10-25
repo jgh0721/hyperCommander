@@ -78,6 +78,7 @@ namespace hc::epub::poc
         QuickForm->addRow(tr("간격 프리셋"), Presets);
         auto* Note = new QLabel(tr("줄 사이 간격은 행간, 문단 사이 간격은 문단 앞·뒤에서 조절합니다.\nem은 현재 글자 크기 기준입니다."), this);
         Note->setWordWrap(true); Layout->addWidget(Note);
+        fixedNote_=new QLabel(tr("고정 레이아웃 페이지는 출판사의 글꼴·색상·배치를 유지하고 한 장씩 화면에 맞춥니다. 혼합 책의 일반 본문으로 이동하면 본문 설정을 다시 사용할 수 있습니다."),this);fixedNote_->setWordWrap(true);fixedNote_->hide();Layout->addWidget(fixedNote_);
         clear_ = new QPushButton(this); clear_->setObjectName("clear"); Layout->addWidget(clear_);
         auto* Actions = new QHBoxLayout;
         apply_ = new QPushButton(tr("적용"), this); apply_->setObjectName("apply");
@@ -197,9 +198,17 @@ namespace hc::epub::poc
         status_->setText(busy_ ? tr("설정을 처리하고 있습니다…") : Dirty ? tr("미리보기 · 아직 적용하지 않음")
             : scope_->currentIndex() == 1 ? tr("기본값 미리보기 · 책별 지정 제외") : tr("적용된 설정"));
         if(!CssValid()) status_->setText(tr("CSS 검사: %1").arg(cssError_.isEmpty()?tr("검사 중…"):cssError_));
+        const bool Editable=!fixedLayout_;
+        for(auto* Editor:QList<QWidget*>{mode_,font_,alignment_,layout_,css_,cssEnabled_,cssForce_,textColor_})Editor->setEnabled(Editable);
+        columns_->setEnabled(Editable && Values["layout"]=="paginated");
+        for(auto I=numbers_.begin();I!=numbers_.end();++I)I.value()->setEnabled(Editable || I.key()=="margin" || I.key()=="width");
+        for(const auto& Key:QStringList{"override","font","align","layout","columns","size","weight","line","letter","word","before","after","indent","customCss","cssEnabled","cssForce","textColor"})if(resets_.contains(Key))resets_[Key]->setEnabled(Editable && draft_.contains(Key));
+        for(int I=0;I<3;++I)if(auto* Button=findChild<QPushButton*>("preset"+QString::number(I)))Button->setEnabled(Editable);
+        fixedNote_->setVisible(fixedLayout_);
         updating_ = false;
         if(clearPositions_)clearPositions_->setEnabled(!busy_ && !Dirty && !loadFailed_);
     }
+    void ReadingSettings::SetFixedLayout(bool Fixed) {if(fixedLayout_==Fixed)return;fixedLayout_=Fixed;refresh();}
     void ReadingSettings::acceptSnapshot(const ReadingSnapshot& Snapshot)
     {
         snapshot_ = Snapshot; base_ = scope_->currentIndex() == 1 ? Snapshot.global : Snapshot.book; draft_ = base_;

@@ -77,7 +77,7 @@ class NativePackageTests(unittest.TestCase):
 
     def test_corpus_and_python_snapshot_parity(self):
         manifest = generate(self.root / "corpus")
-        codes = {"scripted": "renderer-active-markup", "crc-error": "zip-crc"}
+        codes = {"scripted": "renderer-active-markup", "crc-error": "zip-crc", "fixed-layout":"fixed-layout-viewport"}
         for case in manifest["cases"]:
             with self.subTest(case=case["id"]):
                 path = self.root / "corpus" / case["file"]
@@ -96,6 +96,9 @@ class NativePackageTests(unittest.TestCase):
                 native = self.run_bytes(path.read_bytes(), error)
                 if not error:
                     oracle = prepare(path)
+                    # Layout metadata extends the native product snapshot; the
+                    # Python P0 inspector remains a reflowable-only oracle.
+                    for item in native["spine"]:self.assertEqual(item.pop("layout"),"reflowable")
                     for field in ("schemaVersion", "phase", "policy", "sourceSha256", "title", "languages", "readingProgression", "packageVersion", "rootfile", "spine", "navigation", "images", "resources"):
                         self.assertEqual(native[field], oracle[field], field)
 

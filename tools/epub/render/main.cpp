@@ -242,6 +242,9 @@ namespace
                 Notice->setToolTip(tr("파일에서 찾을 수 없는 읽기 순서 항목을 제외하고 존재하는 본문을 표시합니다. 원본 EPUB은 변경하지 않았습니다."));
                 Notice->setObjectName("epubRecoveryNotice"); Notice->setTextFormat(Qt::PlainText); Notice->setWordWrap(true); Layout->addWidget(Notice);
             }
+            if(!Publication["recovery"].toObject()["legacyZip"].toArray().isEmpty()) {
+                auto* Notice=new QLabel(tr("비표준 ZIP 구성을 크기·CRC 검사 후 읽었습니다. 원본 유지 · 편집 사본은 표준 ZIP 순서로 저장합니다."),Central);Notice->setObjectName("epubLegacyZipNotice");Notice->setTextFormat(Qt::PlainText);Notice->setWordWrap(true);Layout->addWidget(Notice);
+            }
             auto* Splitter = new QSplitter(Central);splitter_=Splitter; Layout->addWidget(Splitter, 1);
             auto* Scroll = new QScrollArea(Splitter); navigationScroll_=Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(220);
             auto* Panel = new QWidget; Scroll->setWidget(Panel);
@@ -324,8 +327,9 @@ namespace
                         navigation_->Poll(Result);
                         while(!pendingBookmarks_.isEmpty())navigation_->Execute("bookmark-add",pendingBookmarks_.takeAt(0));
                     }
-                    {QSignalBlocker Block(layoutChoice_);layoutChoice_->setCurrentIndex(settings_->Profile()["layout"]=="paginated"?1:0);}
-                    {QSignalBlocker Block(columnsChoice_);columnsChoice_->setCurrentIndex(settings_->Profile()["columns"].toInt());columnsChoice_->setEnabled(settings_->Profile()["layout"]=="paginated");}
+                    const bool Fixed=Result["contentLayout"]=="pre-paginated";settings_->SetFixedLayout(Fixed);
+                    {QSignalBlocker Block(layoutChoice_);layoutChoice_->setCurrentIndex(Fixed || settings_->Profile()["layout"]=="paginated"?1:0);layoutChoice_->setEnabled(!Fixed);}
+                    {QSignalBlocker Block(columnsChoice_);columnsChoice_->setCurrentIndex(Fixed?1:settings_->Profile()["columns"].toInt());columnsChoice_->setEnabled(!Fixed && settings_->Profile()["layout"]=="paginated");}
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
@@ -345,7 +349,7 @@ namespace
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
                     poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool()?250:33);
-                    statusBar()->showMessage(Status=="ready"?(settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
+                    statusBar()->showMessage(Status=="ready"?(Fixed?tr("원본 유지 · 고정 레이아웃 · 한 장씩 화면에 맞춤"):settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
                         if(!Families.isEmpty()) {

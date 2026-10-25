@@ -52,6 +52,7 @@ namespace hc::epub::poc
         bool IsBusy() const { return busy_; }
         bool IsDirty() const { return draft_ != base_; }
         void SetGlobalOnly();
+        void SetFixedLayout(bool Fixed);
         bool CommitGlobal(QString& Error);
         void ResetDraft();
     signals:
@@ -85,7 +86,8 @@ namespace hc::epub::poc
         QWidget* editors_ = nullptr;
         QFutureWatcher<ReadingSnapshot> worker_;
         bool busy_ = false, updating_ = false, loadFailed_ = false;
-        bool globalOnly_=false;
+        bool globalOnly_=false,fixedLayout_=false;
+        QLabel* fixedNote_=nullptr;
         QPushButton* clearPositions_=nullptr;
     };
 }
