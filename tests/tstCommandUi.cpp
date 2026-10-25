@@ -137,6 +137,25 @@ private slots:
         QVERIFY(Missing.summary_.contains(QStringLiteral("원격 데스크톱")));
         QVERIFY(!Missing.recovery_.contains("rdp-drives-unavailable"));
     }
+    void fileClipboardCommandsAndShortcuts()
+    {
+        const auto Descriptors = hc::defaults::BusCommands();
+        for (const auto& Preset : {"legacy", "prototype"}) {
+            const QJsonObject General{{"shortcutPreset", Preset}};
+            for (const auto& Item : QList<QPair<QString, Qt::Key>>{{"hc.clipboard.cut", Qt::Key_X},
+                {"hc.clipboard.copy", Qt::Key_C}, {"hc.clipboard.paste", Qt::Key_V}}) {
+                const QKeyCombination Key(Qt::ControlModifier | Qt::AltModifier, Item.second);
+                QCOMPARE(CommandId(EffectiveShortcuts(General, {}).value(Key)), Item.first);
+                QCOMPARE(QString(FindCommand(Item.first).Name), Item.first);
+                QCOMPARE(std::count_if(Descriptors.begin(), Descriptors.end(), [&](const auto& Descriptor) {
+                    return Descriptor.id_ == Item.first.toStdString() && Descriptor.parameters_.empty();
+                }), 1);
+                const auto Text = QKeySequence(Key).toString(QKeySequence::PortableText);
+                QVERIFY(!EffectiveShortcuts(General, {{Text, QJsonValue::Null}}).contains(Key));
+                QCOMPARE(CommandId(EffectiveShortcuts(General, {{Text, "hc.jobs.show"}}).value(Key)), "hc.jobs.show");
+            }
+        }
+    }
     void driveRootCommandsAndShortcuts()
     {
         const auto Descriptors = hc::defaults::BusCommands();

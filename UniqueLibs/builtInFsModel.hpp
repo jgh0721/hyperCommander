@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "columnPreview.hpp"
 #include <functional>
+#include <QSet>
 
 #include "columnMgr.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
@@ -57,6 +58,9 @@ public:
     int IconPixels() const { return iconPixels_; }
     void SetIconViewport(const QModelIndexList& Entries, bool Enabled);
     void ForceRefresh();
+    void SetClipboardCut(const QSet<QString>& Keys, const QString& Root);
+    static constexpr int ClipboardCutRole = Qt::UserRole + 73;
+    static constexpr int FileEffectsRole = Qt::UserRole + 74;
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void SetGrouping(const hc::columns::GroupingState& State);
@@ -235,6 +239,8 @@ private:
     QVector<int>                    iconVisibleRows_;
     QTimer                          iconApplyTimer_;
     bool                            iconViewportBound_ = false, iconViewportEnabled_ = true;
+    QSet<QString> clipboardCutKeys_;
+    QString clipboardCutRoot_;
     bool                            forceIconRefresh_ = false;
     QString                         forceIconLocation_;
     std::stop_source                directorySizeStop_;

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/fileColorRules.hpp"
+#include "UniqueLibs/fileRulePaint.hpp"
 #include "HyperCommander/UIs/fileColorConditionRow.hpp"
 #include "UniqueLibs/itemSelection.hpp"
 #include <QtTest>
@@ -11,6 +12,56 @@ class FileColorRuleTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void dimAndRowBorders()
+    {
+        auto Doc = document({{"type", "pattern"}, {"syntax", "literal"}, {"op", "contains"}, {"value", "sample"}});
+        auto Groups = Doc["groups"].toArray(); auto Group = Groups[0].toObject();
+        Group["font"] = QJsonObject{{"dim", true}, {"border", "dot"}}; Groups[0] = Group; Doc["groups"] = Groups;
+        FileColorRules Rules; QVERIFY(Rules.Load(Doc).isEmpty()); FileColorRules::EvaluationContext Context;
+        const auto Style = Rules.Evaluate(FileRuleInput{"sample.txt"}, &Context);
+        QCOMPARE(Style.font_["dim"], QJsonValue(true)); QCOMPARE(Style.font_["border"].toString(), QString("dot"));
+        auto Higher = Group; Higher["id"] = "higher"; Higher["name"] = "override";
+        Higher["font"] = QJsonObject{{"dim", false}, {"border", "none"}};
+        Doc["mode"] = "merge"; Doc["groups"] = QJsonArray{Higher, Group}; QVERIFY(Rules.Load(Doc).isEmpty());
+        const auto Merged = Rules.Evaluate(FileRuleInput{"sample.txt"}, &Context);
+        QCOMPARE(Merged.font_["dim"], QJsonValue(false)); QCOMPARE(Merged.font_["border"].toString(), QString("none"));
+        Higher["font"] = QJsonObject{{"dim", "yes"}}; Doc["groups"] = QJsonArray{Higher}; QVERIFY(!FileColorRules::Validate(Doc).isEmpty());
+        Higher["font"] = QJsonObject{{"border", "unknown"}}; Doc["groups"] = QJsonArray{Higher}; QVERIFY(!FileColorRules::Validate(Doc).isEmpty());
+        const auto FramePixels = [](const QString& Border) {
+            QImage Image(160, 36, QImage::Format_ARGB32_Premultiplied); Image.fill(Qt::white);
+            { QPainter Painter(&Image); hc::ui::PaintFileRuleBorder(&Painter, Image.rect(), Qt::red, {{"border", Border}}); }
+            int Count = 0; for (int Y = 0; Y < Image.height(); ++Y) for (int X = 0; X < Image.width(); ++X)
+                if (Image.pixelColor(X, Y) == QColor(Qt::red)) ++Count;
+            return Count;
+        };
+        const auto Solid = FramePixels("solid"), Dotted = FramePixels("dot");
+        QVERIFY(Solid > 300); QVERIFY(Dotted > 0 && Dotted < Solid); QCOMPARE(FramePixels("none"), 0);
+        for (const auto& Key : {"dash", "dashDot", "dashDotDot"}) QVERIFY(FramePixels(Key) > 0);
+    }
+    void rtlNamesAndOperators()
+    {
+        const QStringList Rtl{QStringLiteral("left-\u05d0.txt"), QStringLiteral("left-\u0627.txt"),
+            QStringLiteral("safe-\u202etxt.exe"), QStringLiteral("\u200fmark.txt"), QStringLiteral("\u061cmark.txt"),
+            QStringLiteral("\u202bembed.txt"), QStringLiteral("\u2067isolate.txt"), QString::fromUcs4(U"\U0001e900.txt")};
+        const QStringList Plain{QStringLiteral("ASCII.txt"), QStringLiteral("한글.txt"), QStringLiteral("\u202dltr.txt"),
+            QStringLiteral("\u202altr.txt"), QStringLiteral("\u202cend.txt"), QStringLiteral("\U0001f600.txt")};
+        for (const auto& Op : {"contains", "notContains"}) {
+            const auto Doc = document({{"type", "rtl"}, {"op", Op}});
+            QVERIFY(FileColorRules::Validate(Doc).isEmpty());
+            FileColorRules Rules; QVERIFY(Rules.Load(Doc).isEmpty()); FileColorRules::EvaluationContext Context;
+            for (const auto& Name : Rtl) { QVERIFY(FileColorRules::HasRtlName(Name)); QCOMPARE(Rules.Matches(FileRuleInput{Name}, &Context).matched_, QByteArray(Op) == "contains"); }
+            for (const auto& Name : Plain) { QVERIFY(!FileColorRules::HasRtlName(Name)); QCOMPARE(Rules.Matches(FileRuleInput{Name}, &Context).matched_, QByteArray(Op) == "notContains"); }
+            QCOMPARE(Rules.Matches(FileRuleInput{Rtl.front(), 0x10}, &Context).matched_, QByteArray(Op) == "contains");
+        }
+        QVERIFY(!FileColorRules::Validate(document({{"type", "rtl"}, {"op", "is"}})).isEmpty());
+        QTableWidget Table(0, 4); hc::ui::FileColorConditionRow Row(&Table, {{"type", "rtl"}, {"op", "contains"}}, 2);
+        auto* Field = qobject_cast<QComboBox*>(Table.cellWidget(0, 0)); QCOMPARE(Field->currentText(), QString("RTL 문자"));
+        auto* Operator = qobject_cast<QComboBox*>(Table.cellWidget(0, 1)); QCOMPARE(Operator->count(), 2);
+        QCOMPARE(Operator->itemText(0), QString("포함")); QCOMPARE(Operator->itemText(1), QString("비포함"));
+        QVERIFY(!Table.cellWidget(0, 2)->findChild<QLineEdit*>());
+        Operator->setCurrentIndex(1); QCOMPARE(Row.Record()["op"].toString(), QString("notContains"));
+        QCOMPARE(Row.Record()["type"].toString(), QString("rtl")); QVERIFY(!Row.Record().contains("value"));
+    }
     void conditionEditor()
     {
         QTableWidget Table(0, 4);

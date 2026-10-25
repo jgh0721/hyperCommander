@@ -37,6 +37,13 @@ DECLARE_CMD( BuiltInCMD_Tab_Close,                QObject::tr( "탭" ),     "hc.
 DECLARE_CMD( BuiltInCMD_Src_QuickView,            QObject::tr( "원본" ),    "hc.viewer.quick",
              Qt::ControlModifier | Qt::Key_Q,                           QObject::tr( "빠른 보기 창" ) );
 
+DECLARE_CMD( BuiltInCMD_Clipboard_Cut, QObject::tr("클립보드"), "hc.clipboard.cut",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_X, QObject::tr("잘라내기") );
+DECLARE_CMD( BuiltInCMD_Clipboard_Copy, QObject::tr("클립보드"), "hc.clipboard.copy",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_C, QObject::tr("복사") );
+DECLARE_CMD( BuiltInCMD_Clipboard_Paste, QObject::tr("클립보드"), "hc.clipboard.paste",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_V, QObject::tr("붙여넣기") );
+
 DECLARE_CMD( BuiltInCMD_OPs_FileCopy,             QObject::tr( "동작" ),    "hc.file.copy",
              Qt::ControlModifier | Qt::Key_C,                           QObject::tr( "다른 패널로 복사" ) );
 DECLARE_CMD( BuiltInCMD_OPs_RenameSingleFile,     QObject::tr( "동작" ),    "hc.file.rename",
@@ -248,6 +255,9 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
 
     BuiltInCMD_Src_QuickView,
 
+    BuiltInCMD_Clipboard_Cut,
+    BuiltInCMD_Clipboard_Copy,
+    BuiltInCMD_Clipboard_Paste,
     BuiltInCMD_OPs_FileCopy,
     BuiltInCMD_OPs_RenameSingleFile,
     BuiltInCMD_OPs_Lister,
@@ -448,6 +458,9 @@ namespace hc::defaults
                  { "hc.viewer.open",          1, { { "requestToken", { ParameterType::String, false } } } },
                  { "hc.file.edit",            1, { { "requestToken", { ParameterType::String, false } } } },
                  { "hc.file.compare" },
+                 { "hc.clipboard.cut" },
+                 { "hc.clipboard.copy" },
+                 { "hc.clipboard.paste", 1, {}, "file-write" },
                  { "hc.viewer.quick" },
                  { "hc.viewer.preview" },
                  { "hc.viewer.close" },

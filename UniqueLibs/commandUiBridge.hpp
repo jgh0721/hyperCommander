@@ -5,6 +5,8 @@
 #include <QVariantMap>
 #include <QStringList>
 #include <QHash>
+#include <QSet>
+#include "commonLibs/operations/fileOperation.hpp"
 #include "commonLibs/commands/commandBus.hpp"
 #include "commonLibs/commands/automation.hpp"
 #include "commonLibs/scripting/scriptApi.hpp"
@@ -25,6 +27,7 @@ class CommandUiBridge : public QObject
 {
 public:
     explicit CommandUiBridge(QWidget* Main);
+    ~CommandUiBridge() override;
     hc::storage::Task<hc::commands::CommandOutcome> Dispatch(const QString& Id, const QVariantMap& Parameters,
         const QString& Source, const QModelIndex& Index = {});
     hc::storage::Task<hc::commands::CommandOutcome> DispatchInvocation(hc::commands::CommandInvocation Invocation);
@@ -41,11 +44,26 @@ public:
     void RefreshShortcutLabels();
     bool ReloadMenu();
     void RefreshFunctionBar();
+    bool CancelClipboard();
+    bool HasFileClipboard() const { return clipboard_.has_value() || clipboardImporting_; }
     FileJobUi* FileJobs() const { return fileJobs_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
 private:
+    hc::storage::Result<hc::commands::CommandOutcome> executeClipboard(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
+    void refreshClipboardVisuals();
+    bool ownsFileClipboard() const;
+    void updateClipboard();
+    bool clipboardExternal_ = false, clipboardImporting_ = false;
+    quint64 clipboardGeneration_ = 0;
+    std::stop_source clipboardImportStop_;
+    std::optional<hc::operations::FileOperationRequest> clipboard_;
+    QByteArray clipboardToken_;
+    QSet<QString> cutKeys_;
+    QString cutRoot_;
+    std::vector<hc::storage::Locator> clipboardLocations_;
+    std::map<std::string, QByteArray> clipboardMoves_;
     hc::storage::Result<QStringList> compareArguments(const hc::storage::CommandContext& Context, CFSModel* Model);
     void bindModels();
     void createActions();

@@ -220,6 +220,13 @@ void CFSModel::SetColumnLayoutMode(hc::columns::LayoutMode Mode)
         emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
 }
 
+void CFSModel::SetClipboardCut(const QSet<QString>& Keys, const QString& Root)
+{
+    if (clipboardCutKeys_ == Keys && clipboardCutRoot_ == Root) return;
+    clipboardCutKeys_ = Keys; clipboardCutRoot_ = Root;
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {ClipboardCutRole});
+}
+
 void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
 {
     if( index.isValid() == false )
@@ -251,7 +258,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
     // Sorting, measuring columns and reading names must never evaluate colors.
     const bool NeedsStyle = std::any_of(roleDataSpan.begin(), roleDataSpan.end(), [](const auto& Role) {
         return Role.role() == Qt::ForegroundRole || Role.role() == Qt::BackgroundRole
-            || Role.role() == Qt::FontRole || Role.role() == FileColorOverrideRole;
+            || Role.role() == Qt::FontRole || Role.role() == FileColorOverrideRole || Role.role() == FileEffectsRole;
     });
     const auto RuleStyle = NeedsStyle ? fileRuleStyle(Row) : hc::settings::FileRuleResult{};
     for( QModelRoleData& RoleWith : roleDataSpan )
@@ -307,6 +314,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 else RoleWith.clearData();
             } break;
 
+            case FileEffectsRole: { RoleWith.setData(RuleStyle.font_); } break;
             case FileColorOverrideRole: {
                 RoleWith.setData(RuleStyle.matched_ ||
                     (vecRowColors_[Row].first.isValid() && vecRowColors_[Row].first != colorScheme_.FileList_FGColor) ||
@@ -376,6 +384,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                     RoleWith.setData( 0.5f );
                 else
                     RoleWith.setData( 1.0f );
+            } break;
+            case ClipboardCutRole: {
+                RoleWith.setData(Item->Name_ != ".." && Item->storageEntry_
+                    && ((!clipboardCutKeys_.isEmpty() && clipboardCutKeys_.contains(hc::workspace::SelectionKey(*Item->storageEntry_)))
+                        || (!clipboardCutRoot_.isEmpty() && clipboardCutRoot_ == hc::workspace::LocationKey(WorkspaceLocation()))));
             } break;
         }
     }
@@ -1765,7 +1778,7 @@ void CFSModel::pumpFileRules()
                 const int First = Rows[At]; int Last = First; ++At;
                 while (At < Rows.size() && Rows[At] <= Last + 1) Last = std::max(Last, Rows[At++]);
                 if (First >= 0 && Last < rowCount() && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1),
-                    {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole});
+                    {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole, FileEffectsRole});
             }
         }
         while (!fileRuleDeferredRows_.isEmpty() && fileRulePending_.size() < 256) {
@@ -1800,7 +1813,7 @@ void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
         vecRowColors_.push_back(Color);
     }
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
-        {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
+        {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileEffectsRole});
 }
 
 QString CFSModel::retrieveRootWithPath() const

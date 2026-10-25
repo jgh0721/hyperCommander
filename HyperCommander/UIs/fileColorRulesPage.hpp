@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "UniqueLibs/settings/fileColorRules.hpp"
+#include "UniqueLibs/fileRulePaint.hpp"
 #include <QtWidgets>
 #include <QCryptographicHash>
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -23,19 +24,41 @@ class FileRulePreviewDelegate final : public QStyledItemDelegate
 {
 public:
     using Resolver = std::function<QPair<QColor, QColor>(int, bool, bool)>;
-    FileRulePreviewDelegate(Resolver Resolve, QObject* Parent) : QStyledItemDelegate(Parent), resolve_(std::move(Resolve)) {}
+    using Effects = std::function<QJsonObject(int)>;
+    FileRulePreviewDelegate(Resolver Resolve, Effects Effect, QTableWidget* Parent)
+        : QStyledItemDelegate(Parent), resolve_(std::move(Resolve)), effects_(std::move(Effect)), table_(Parent) {}
     void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
         auto Styled = Option; initStyleOption(&Styled, Index); const bool Selected = Option.state & QStyle::State_Selected;
         const auto Colors = resolve_(Index.row(), Selected, Index.column() == 0);
         Painter->save(); Painter->fillRect(Option.rect, Colors.second); Painter->setPen(Colors.first);
         if (Selected && fm::style::ThemeManager::instance().design() == fm::style::Design::Standard && Index.column() == 0) Styled.font.setBold(true);
+        const auto Effects = effects_(Index.row());
         Painter->setFont(Styled.font); const auto Rect = Option.rect.adjusted(6, 0, -6, 0);
+        if (Effects["dim"].toBool()) Painter->setOpacity(Painter->opacity() * 0.55);
         Painter->drawText(Rect, Qt::AlignVCenter | (Index.column() == 1 ? Qt::AlignRight : Qt::AlignLeft), QFontMetrics(Styled.font).elidedText(Styled.text, Qt::ElideRight, Rect.width()));
         if (Option.state & QStyle::State_HasFocus) { QStyleOptionFocusRect Focus; Focus.rect = Option.rect.adjusted(1, 1, -1, -1); Focus.state = Option.state; Focus.backgroundColor = Colors.second; QApplication::style()->drawPrimitive(QStyle::PE_FrameFocusRect, &Focus, Painter); }
+        const auto RowRect = table_->visualRect(Index.siblingAtColumn(0)).united(table_->visualRect(Index.siblingAtColumn(table_->columnCount() - 1)));
+        Painter->setClipRect(Option.rect, Qt::IntersectClip);
+        PaintFileRuleBorder(Painter, RowRect, resolve_(Index.row(), Option.state.testFlag(QStyle::State_Selected), true).first, Effects);
         Painter->restore();
     }
 private:
     Resolver resolve_;
+    Effects effects_;
+    QTableWidget* table_;
+};
+class FileRulePreviewLabel final : public QLabel
+{
+public:
+    using QLabel::QLabel;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter Painter(this); Painter.setFont(font()); Painter.setPen(palette().color(QPalette::WindowText));
+        const auto Effects = property("hc.fileEffects").toJsonObject();
+        if (Effects["dim"].toBool()) Painter.setOpacity(0.55);
+        Painter.drawText(contentsRect().adjusted(4, 0, -4, 0), alignment(), text());
+        PaintFileRuleBorder(&Painter, contentsRect(), palette().color(QPalette::WindowText), Effects);
+    }
 };
 class FileFontEffectButton final : public QPushButton
 {
@@ -45,7 +68,7 @@ public:
     void SetState(int State) {
         state_ = State; const auto Value = State == 1 ? tr("켬") : State == 2 ? tr("끔") : tr("기본");
         setText(label_ + " · " + Value); setAccessibleName(text()); setChecked(State == 1);
-        setToolTip(tr("%1: 기본 → 켬 → 끔 순서로 전환합니다. 기본은 아래 그룹 또는 목록 글꼴을 따릅니다.").arg(label_));
+        setToolTip(tr("%1: 기본 → 켬 → 끔 순서로 전환합니다. 기본은 아래 그룹 또는 목록 기본값을 따릅니다.").arg(label_));
     }
 private:
     QString label_;
@@ -156,18 +179,26 @@ public:
         connect(autoDark_, &QCheckBox::toggled, this, [this] { if (loading_) return; ensureVersion2(); storeForm(); refreshColors(); });
         for (int I = 0; I < 2; ++I) { contrast_[I] = new QLabel(editor_); contrast_[I]->setObjectName("hc.rules.contrast." + QString::number(I)); contrast_[I]->setWordWrap(true); Appearance->addWidget(contrast_[I]); }
         auto* FontRow = new QGridLayout; Appearance->addLayout(FontRow);
-        const QStringList FontNames{tr("굵게"), tr("기울임"), tr("밑줄"), tr("취소선")};
-        for (int I = 0; I < 4; ++I) {
-            fonts_[I] = new FileFontEffectButton(FontNames[I], editor_); fonts_[I]->setObjectName("hc.rules.font." + fontKeys_[I]); FontRow->addWidget(fonts_[I], 0, I);
+        const QStringList FontNames{tr("굵게"), tr("기울임"), tr("밑줄"), tr("취소선"), tr("흐려짐")};
+        for (int I = 0; I < fontKeys_.size(); ++I) {
+            fonts_[I] = new FileFontEffectButton(FontNames[I], editor_); fonts_[I]->setObjectName("hc.rules.font." + fontKeys_[I]); FontRow->addWidget(fonts_[I], I / 4, I % 4);
             connect(fonts_[I], &QPushButton::clicked, this, [this, I] { fonts_[I]->SetState((fonts_[I]->State() + 1) % 3); storeForm(); });
         }
+        FontRow->addWidget(new QLabel(tr("행 테두리"), editor_), 1, 1);
+        border_ = new QComboBox(editor_); border_->setObjectName("hc.rules.border"); border_->setAccessibleName(tr("파일 행 전체 테두리"));
+        const QStringList BorderNames{tr("기본값"), tr("없음"), tr("실선"), tr("파선"), tr("점선"), tr("일점쇄선"), tr("이점쇄선")};
+        const QStringList BorderKeys{"", "none", "solid", "dash", "dot", "dashDot", "dashDotDot"};
+        for (int I = 0; I < BorderNames.size(); ++I) border_->addItem(BorderNames[I], BorderKeys[I]);
+        border_->setToolTip(tr("파일 행 전체에 테두리를 표시합니다. 색상은 파일의 글자색을 따릅니다. 기본값은 아래 그룹을 따르고 없음은 테두리를 해제합니다."));
+        FontRow->addWidget(border_, 1, 2, 1, 2); connect(border_, &QComboBox::currentIndexChanged, this, [this] { storeForm(); });
         auto* PreviewCard = Card(tr("미리보기"), "hc.rules.previewCard");
         previewTable_ = new QTableWidget(6, 3, editor_); previewTable_->setObjectName("hc.rules.previewTable"); previewTable_->setAccessibleName(tr("예제 파일과 적용 그룹"));
         previewTable_->setHorizontalHeaderLabels({tr("이름"), tr("크기"), tr("적용된 그룹")}); previewTable_->verticalHeader()->hide(); previewTable_->setShowGrid(false);
         previewTable_->setEditTriggers(QAbstractItemView::NoEditTriggers); previewTable_->setSelectionBehavior(QAbstractItemView::SelectRows); previewTable_->setSelectionMode(QAbstractItemView::SingleSelection);
         previewTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); previewTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed); previewTable_->setColumnWidth(1, 78);
         previewTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive); previewTable_->setColumnWidth(2, 170);
-        previewTable_->setItemDelegate(new FileRulePreviewDelegate([this](int Row, bool Selected, bool Name) { return recordPair(previewDark_->isChecked(), previewStyles_.value(Row), Selected, Name); }, previewTable_));
+        previewTable_->setItemDelegate(new FileRulePreviewDelegate([this](int Row, bool Selected, bool Name) { return recordPair(previewDark_->isChecked(), previewStyles_.value(Row), Selected, Name); },
+            [this](int Row) { return previewStyles_.value(Row).font_; }, previewTable_));
         PreviewCard->addWidget(previewTable_);
         auto* PreviewControls = new QHBoxLayout; PreviewCard->addLayout(PreviewControls);
         previewDark_ = new QCheckBox(tr("다크"), editor_); previewDark_->setObjectName("hc.rules.previewDark"); previewDark_->setChecked(fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant())); PreviewControls->addWidget(previewDark_);
@@ -191,7 +222,7 @@ public:
         connect(previewModifiedKnown_, &QCheckBox::toggled, this, [this](bool Known) { previewModified_->setEnabled(Known); updatePreview(); });
         connect(previewModified_, &QDateTimeEdit::dateTimeChanged, this, [this] { updatePreview(); });
         connect(previewLink_, &QComboBox::currentIndexChanged, this, [this] { updatePreview(); });
-        preview_ = new QLabel(editor_); preview_->setTextFormat(Qt::PlainText); preview_->setAutoFillBackground(true); preview_->setMinimumHeight(40); CustomLayout->addWidget(preview_);
+        preview_ = new FileRulePreviewLabel(editor_); preview_->setTextFormat(Qt::PlainText); preview_->setAutoFillBackground(true); preview_->setMinimumHeight(40); CustomLayout->addWidget(preview_);
         owners_ = new QLabel(editor_); owners_->setTextFormat(Qt::PlainText); owners_->setWordWrap(true); CustomLayout->addWidget(owners_); Right->addStretch();
         error_ = new QLabel(this); error_->setTextFormat(Qt::PlainText); error_->setWordWrap(true); Layout->addWidget(error_);
         Button(tr("기존 규칙 가져오기"), Files, [this] { ImportLegacy(); });
@@ -283,13 +314,14 @@ private:
     }
     void updateGroupItems() {
         const auto Groups = document_["groups"].toArray();
-        const QStringList Types{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크"), tr("파일명 정규화")};
+        const QStringList Types{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크"), tr("파일명 정규화"), tr("RTL 문자")};
         const bool Dark = fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant());
         for (int Row = 0; Row < list_->count(); ++Row) {
             const auto G = Groups[Row].toObject(); QStringList Conditions;
             for (const auto Value : G["conditions"].toArray()) {
                 const auto C = settings::FileColorRules::NormalizeCondition(Value.toObject(), document_["version"].toInt()); QString Text = C["value"].toString();
                 if (C["type"] == "normalization") Text = C["value"] == "decomposed" ? tr("자소 분리 있음 (NFD·혼합)") : tr("분리 없음 (NFC)");
+                if (C["type"] == "rtl") Text = C["op"] == "notContains" ? tr("비포함") : tr("포함");
                 if (C["value"].isArray()) { QStringList Parts; for (const auto P : C["value"].toArray()) Parts.append(P.toString()); Text = Parts.join("; "); }
                 const QMap<QString, QString> Comparisons{{"gt", ">"}, {"ge", "≥"}, {"lt", "<"}, {"le", "≤"}, {"eq", "="}, {"ne", "≠"}, {"any", tr("하나라도")}, {"all", tr("모두")}, {"within", tr("최근")}, {"before", tr("이전")}, {"after", tr("이후")}, {"notMatches", tr("불일치")}, {"notIn", tr("제외")}};
                 QString Label = Types.value(typeKeys_.indexOf(C["type"].toString()));
@@ -313,7 +345,10 @@ private:
             const auto Pair = recordPair(Dark, Style, false); Swatch.fill(Pair.second);
             QPainter Painter(&Swatch); Painter.setPen(Pair.first);
             const auto Font = Style.Font(font());
-            Painter.setFont(Font); Painter.drawText(QRect(0, 0, 40, 32), Qt::AlignCenter, "Aa"); Painter.end(); Item->setIcon(Swatch);
+            Painter.setFont(Font); if (Style.font_["dim"].toBool()) Painter.setOpacity(0.55);
+            Painter.drawText(QRect(0, 0, 40, 32), Qt::AlignCenter, "Aa");
+            PaintFileRuleBorder(&Painter, QRect(0, 0, 40, 32), Style.foreground_.isValid() ? Style.foreground_ : palette().color(QPalette::Text), Style.font_);
+            Painter.end(); Item->setIcon(Swatch);
         }
         list_->setIconSize(QSize(40, 32));
     }
@@ -328,7 +363,8 @@ private:
         const auto G = Valid ? Groups[Row].toObject() : QJsonObject{}; name_->setText(G["name"].toString()); join_->button(G["join"] == "all" ? 1 : 0)->setChecked(true);
         qDeleteAll(conditionRows_); conditionRows_.clear(); conditions_->setRowCount(0); for (const auto C : G["conditions"].toArray()) appendCondition(C.toObject());
         autoDark_->setChecked(G["autoDark"].toBool()); refreshColors();
-        for (int I = 0; I < 4; ++I) fonts_[I]->SetState(G["font"].toObject().contains(fontKeys_[I]) ? G["font"].toObject()[fontKeys_[I]].toBool() ? 1 : 2 : 0);
+        for (int I = 0; I < fontKeys_.size(); ++I) fonts_[I]->SetState(G["font"].toObject().contains(fontKeys_[I]) ? G["font"].toObject()[fontKeys_[I]].toBool() ? 1 : 2 : 0);
+        border_->setCurrentIndex(qMax(0, border_->findData(G["font"].toObject()["border"].toString())));
         updateConditionHeight();
         loading_ = false; updatePreview();
     }
@@ -345,7 +381,8 @@ private:
             if (!Color) Target.remove(Key);
             else if (QColor(Target[Key].toString()) != *Color) Target[Key] = Color->name(Color->alpha() == 255 ? QColor::HexRgb : QColor::HexArgb);
         }
-        for (int I = 0; I < 4; ++I) { if (fonts_[I]->State()) Font[fontKeys_[I]] = fonts_[I]->State() == 1; else Font.remove(fontKeys_[I]); }
+        for (int I = 0; I < fontKeys_.size(); ++I) { if (fonts_[I]->State()) Font[fontKeys_[I]] = fonts_[I]->State() == 1; else Font.remove(fontKeys_[I]); }
+        if (border_->currentData().toString().isEmpty()) Font.remove("border"); else Font["border"] = border_->currentData().toString();
         if (autoDark_->isChecked() || G.contains("autoDark")) G["autoDark"] = autoDark_->isChecked();
         G["light"] = Light; G["dark"] = Dark; G["font"] = Font; Groups[list_->currentRow()] = G; document_["groups"] = Groups; refreshColors();
         loading_ = true; updateGroupItems(); loading_ = false;
@@ -393,8 +430,14 @@ private:
         for (int I = 0; I < 2; ++I) {
             const auto Colors = settings::FileColorRules::Colors(G, I); settings::FileRuleResult Style;
             Style.foreground_ = QColor(Colors["foreground"].toString()); Style.background_ = QColor(Colors["background"].toString());
+            Style.font_ = G["font"].toObject();
             const auto Normal = recordPair(I, Style, false), Selected = recordPair(I, Style, true);
-            const auto Ratio = [](const QPair<QColor, QColor>& Pair) { const double Value = fm::style::contrastRatio(Pair.first, Pair.second); return QString::number(Value, 'f', 1) + ":1 " + (Value >= 4.5 ? tr("충족") : tr("낮음")); };
+            const auto Ratio = [&](const QPair<QColor, QColor>& Pair) {
+                const double Alpha = Pair.first.alphaF() * (Style.font_["dim"].toBool() ? 0.55 : 1.0);
+                const auto Shown = QColor::fromRgbF(Pair.first.redF() * Alpha + Pair.second.redF() * (1 - Alpha),
+                    Pair.first.greenF() * Alpha + Pair.second.greenF() * (1 - Alpha), Pair.first.blueF() * Alpha + Pair.second.blueF() * (1 - Alpha));
+                const double Value = fm::style::contrastRatio(Shown, Pair.second); return QString::number(Value, 'f', 1) + ":1 " + (Value >= 4.5 ? tr("충족") : tr("낮음"));
+            };
             contrast_[I]->setText(tr("%1 · 일반 %2 · 선택 %3").arg(I ? tr("다크") : tr("라이트"), Ratio(Normal), Ratio(Selected)));
             contrast_[I]->setToolTip(tr("현재 그룹과 목록 기본색을 기준으로 계산합니다. 4.5:1 이상을 충족으로 표시합니다. 선택 상태는 목록의 선택색을 우선합니다. 수동 색은 자동 보정하지 않습니다."));
         }
@@ -455,7 +498,9 @@ private:
         const auto& Result = Output.custom_;
         const auto Pair = recordPair(Work.input_.dark_, Result, previewSelected_->isChecked()); auto Palette = palette(); Palette.setColor(QPalette::WindowText, Pair.first); Palette.setColor(QPalette::Window, Pair.second);
         preview_->setPalette(Palette); preview_->setFont(Result.Font(recordScheme(Work.input_.dark_).FileList_Font)); preview_->setText(previewName_->text());
-        QStringList Owners; for (auto It = Result.owners_.begin(); It != Result.owners_.end(); ++It) Owners.append(It.key() + ": " + It.value());
+        preview_->setProperty("hc.fileEffects", QVariant::fromValue(Result.font_)); preview_->update();
+        const QMap<QString, QString> EffectNames{{"dim", tr("흐려짐")}, {"border", tr("행 테두리")}};
+        QStringList Owners; for (auto It = Result.owners_.begin(); It != Result.owners_.end(); ++It) Owners.append(EffectNames.value(It.key(), It.key()) + ": " + It.value());
         owners_->setText(tr("일치 그룹: %1\n%2\n크기·속성은 위 미리보기 입력을 사용합니다.").arg(Result.groups_.join(", "), Owners.join(" · ")));
     }
 
@@ -473,7 +518,7 @@ private:
     void updateSampleTable() {
         const auto Samples = settings::FileColorExamples::Samples();
         const auto BaseFont = recordScheme(previewDark_->isChecked()).FileList_Font;
-        const QMap<QString, QString> Labels{{"foreground", tr("글자색")}, {"background", tr("배경색")}, {"bold", tr("굵게")}, {"italic", tr("기울임")}, {"underline", tr("밑줄")}, {"strike", tr("취소선")}};
+        const QMap<QString, QString> Labels{{"foreground", tr("글자색")}, {"background", tr("배경색")}, {"bold", tr("굵게")}, {"italic", tr("기울임")}, {"underline", tr("밑줄")}, {"strike", tr("취소선")}, {"dim", tr("흐려짐")}, {"border", tr("행 테두리")}};
         int Height = previewTable_->horizontalHeader()->height() + 2 * previewTable_->frameWidth(); int SizeWidth = previewTable_->fontMetrics().horizontalAdvance(tr("크기")) + 20;
         for (int Row = 0; Row < Samples.size(); ++Row) { auto Input = Samples[Row]; Input.dark_ = previewDark_->isChecked(); const auto Style = previewStyles_.value(Row);
             QStringList Owners; for (auto It = Style.owners_.begin(); It != Style.owners_.end(); ++It) Owners.append(Labels.value(It.key(), It.key()) + ": " + It.value());
@@ -501,7 +546,8 @@ private:
     fm::ui::ReorderListWidget* list_ = nullptr;
     QLineEdit *name_ = nullptr, *previewName_ = nullptr, *previewSize_ = nullptr, *previewAttributes_ = nullptr;
     fm::ui::ColorPickButton* colors_[4]{};
-    FileFontEffectButton* fonts_[4]{};
+    FileFontEffectButton* fonts_[5]{};
+    QComboBox* border_ = nullptr;
     QComboBox* previewLink_ = nullptr;
     QCheckBox* autoDark_ = nullptr;
     QLabel* contrast_[2]{};
@@ -515,7 +561,7 @@ private:
     QCheckBox* previewModifiedKnown_ = nullptr;
     QCheckBox *previewFolder_ = nullptr, *previewDark_ = nullptr, *previewSelected_ = nullptr;
     QLabel *preview_ = nullptr, *owners_ = nullptr, *error_ = nullptr;
-    const QStringList typeKeys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization"};
-    const QStringList fontKeys_{"bold", "italic", "underline", "strike"};
+    const QStringList typeKeys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization", "rtl"};
+    const QStringList fontKeys_{"bold", "italic", "underline", "strike", "dim"};
 };
 } // namespace hc::ui

@@ -99,7 +99,9 @@ QVariant ThumbnailModel::data(const QModelIndex& Index, int Role) const
     case IsDirRole: return Directory;
     case KindRole: return int(Tile.up_ ? Kind::Up : Directory ? Kind::Folder : kindForExtension(Extension));
     case ExtRole: case BadgeRole: return Extension.toUpper();
-    case HiddenRole: return Tile.index_.data(CFsModelT::USR_ROLE_HIDDENOPACITY).isValid() && Tile.index_.data(CFsModelT::USR_ROLE_HIDDENOPACITY).toDouble() < 1.0;
+    case HiddenRole: return Tile.index_.data(CFSModel::ClipboardCutRole).toBool()
+        || Tile.index_.data(CFSModel::FileEffectsRole).toJsonObject()["dim"].toBool()
+        || (Tile.index_.data(CFsModelT::USR_ROLE_HIDDENOPACITY).isValid() && Tile.index_.data(CFsModelT::USR_ROLE_HIDDENOPACITY).toDouble() < 1.0);
     case MarkedRole: {
         const auto Row = owner_->BaseView()->getRow(Tile.index_);
         return Row.isValid() && owner_->BaseView()->modelController()->isRowSelected(Row);
@@ -108,12 +110,18 @@ QVariant ThumbnailModel::data(const QModelIndex& Index, int Role) const
         const auto Icon = Tile.index_.data(Qt::DecorationRole);
         return Icon.metaType() == QMetaType::fromType<QPixmap>() ? QVariant::fromValue(QIcon(Icon.value<QPixmap>())) : Icon;
     }
-    case Qt::ForegroundRole: case Qt::BackgroundRole: case Qt::FontRole: return Tile.index_.data(Role);
+    case CFSModel::FileEffectsRole: return Tile.index_.data(Role);
+    case Qt::ForegroundRole: {
+        auto Color = Tile.index_.data(Role).value<QColor>();
+        if (Color.isValid() && Tile.index_.data(CFSModel::FileEffectsRole).toJsonObject()["dim"].toBool()) Color.setAlphaF(Color.alphaF() * 0.55);
+        return Color;
+    }
+    case Qt::BackgroundRole: case Qt::FontRole: return Tile.index_.data(Role);
     case GroupStyleRole: {
         ResolvedGroupStyle Style;
         if (Tile.index_.data(CFSModel::FileColorOverrideRole).toBool()) {
             Style.groups.append("product");
-            Style.textLight = Style.textDark = Tile.index_.data(Qt::ForegroundRole).value<QColor>();
+            Style.textLight = Style.textDark = data(Index, Qt::ForegroundRole).value<QColor>();
             Style.backLight = Style.backDark = Tile.index_.data(Qt::BackgroundRole).value<QColor>();
             const auto Font = Tile.index_.data(Qt::FontRole).value<QFont>();
             Style.bold = Font.bold(); Style.italic = Font.italic(); Style.underline = Font.underline(); Style.strike = Font.strikeOut();

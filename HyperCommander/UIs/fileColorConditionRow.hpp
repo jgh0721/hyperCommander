@@ -13,7 +13,7 @@ public:
         const int Row = Table->rowCount(); Table->insertRow(Row);
         auto* Anchor = new QTableWidgetItem; Anchor->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable); Table->setItem(Row, 0, Anchor);
         field_ = new QComboBox(Table); field_->setObjectName("hc.condition.field"); field_->setAccessibleName(tr("조건 항목"));
-        const QStringList Names{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크"), tr("파일명 정규화")};
+        const QStringList Names{tr("확장자"), tr("파일명"), tr("파일/폴더"), tr("속성"), tr("크기"), tr("수정 날짜"), tr("링크"), tr("파일명 정규화"), tr("RTL 문자")};
         for (int I = 0; I < keys_.size(); ++I) field_->addItem(Names[I], keys_[I]);
         field_->setCurrentIndex(field_->findData(draft_["type"].toString())); Table->setCellWidget(Row, 0, field_);
         op_ = new QComboBox(Table); op_->setObjectName("hc.condition.operator"); op_->setAccessibleName(tr("조건 비교 방법")); Table->setCellWidget(Row, 1, op_);
@@ -30,6 +30,7 @@ public:
             else if (Type == "size") { draft_["op"] = "ge"; draft_["value"] = "1"; draft_["unit"] = "MiB"; }
             else if (Type == "modified") { draft_["op"] = "within"; draft_["value"] = "24"; draft_["unit"] = "hours"; }
             else if (Type == "normalization") { draft_["op"] = "is"; draft_["value"] = "decomposed"; }
+            else if (Type == "rtl") { draft_["op"] = "contains"; draft_.remove("value"); }
             else { draft_["op"] = "is"; draft_["value"] = "any"; }
             rebuildOperators(); rebuildValue(); edited();
         });
@@ -66,6 +67,7 @@ private:
         else if (Type == "attributes") { Add(tr("하나라도"), "any"); Add(tr("모두"), "all"); }
         else if (Type == "size") { Add(tr("이상 (≥)"), "ge"); Add(tr("초과 (>)"), "gt"); Add(tr("이하 (≤)"), "le"); Add(tr("미만 (<)"), "lt"); Add(tr("같음 (=)"), "eq"); Add(tr("다름 (≠)"), "ne"); }
         else if (Type == "modified") { Add(tr("최근 기간"), "within"); Add(tr("이전 (<)"), "before"); Add(tr("이후 (>)"), "after"); }
+        else if (Type == "rtl") { Add(tr("포함"), "contains"); Add(tr("비포함"), "notContains"); }
         else Add(tr("같음"), "is");
         auto Key = draft_["op"].toString();
         const auto Mode = settings::FileColorRules::Syntax(draft_);
@@ -95,7 +97,10 @@ private:
         const auto Type = draft_["type"].toString();
         const auto Mode = settings::FileColorRules::Syntax(draft_);
         const bool List = (Type == "extension" || Type == "pattern") && Mode == "wildcard";
-        if (Type == "folder" || Type == "link" || Type == "normalization") {
+        if (Type == "rtl") {
+            auto* Label = new QLabel(tr("파일명 전체"), Panel); Label->setObjectName("hc.condition.value"); Fields->addWidget(Label);
+            Label->setToolTip(tr("아랍어·히브리어 등 오른쪽에서 왼쪽으로 쓰는 문자와 RLM·RLE·RLO·RLI 등의 방향 제어 문자를 검사합니다."));
+        } else if (Type == "folder" || Type == "link" || Type == "normalization") {
             auto* Choice = new QComboBox(Panel); Choice->setObjectName("hc.condition.value"); Choice->setAccessibleName(tr("조건 값")); Choice->setMinimumContentsLength(1); Choice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Fields->addWidget(Choice);
             if (Type == "folder") { Choice->addItem(tr("폴더"), "true"); Choice->addItem(tr("파일"), "false"); }
             else if (Type == "normalization") {
@@ -149,6 +154,6 @@ private:
     QMap<QString, QJsonValue> modeValues_;
     int version_;
     bool loading_ = false, edited_ = false;
-    const QStringList keys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization"};
+    const QStringList keys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization", "rtl"};
 };
 }

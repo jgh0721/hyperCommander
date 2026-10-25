@@ -43,6 +43,7 @@
 #include <QDrag>
 #include "UniqueLibs/shellDriveSort.hpp"
 #include <QMimeData>
+#include <QClipboard>
 #include <QtTest>
 #include <mutex>
 #include <set>
@@ -290,6 +291,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileColorRtlUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbNavigationUi"
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
@@ -8916,6 +8919,70 @@ private slots:
         QVERIFY(QFileInfo(Directory.filePath(Folder)).isDir()); Dialog.reject();
     }
 
+    void fileColorRtlUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const QStringList Rtl{QStringLiteral("left-\u05d0.txt"), QStringLiteral("left-\u0627.txt"), QStringLiteral("safe-\u202etxt.exe")};
+        const QStringList Plain{QStringLiteral("ASCII.txt"), QStringLiteral("한글.txt")};
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : Rtl + Plain) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("rtl fixture"); }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 6);
+        const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row)
+            if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50);
+        auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
+        auto Doc = FileColorRules::Empty();
+        Doc["groups"] = QJsonArray{QJsonObject{{"id", "rtl-test"}, {"name", "RTL 문자"}, {"enabled", true}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
+            {"light", QJsonObject{{"foreground", "#c82277"}}}, {"dark", QJsonObject{{"foreground", "#c82277"}}}}};
+        Page->Load(Doc); auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table);
+        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); QVERIFY(Field->findData("rtl") >= 0);
+        Field->setCurrentIndex(Field->findData("rtl"));
+        auto* Operator = qobject_cast<QComboBox*>(Table->cellWidget(0, 1)); QCOMPARE(Operator->count(), 2);
+        QCOMPARE(Operator->currentText(), QString("포함")); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
+        for (const auto& Name : Rtl + Plain) QTRY_COMPARE(IndexFor(Name).data(Qt::ForegroundRole).value<QColor>() == QColor("#c82277"), Rtl.contains(Name));
+        auto* Dim = Page->findChild<QPushButton*>("hc.rules.font.dim"); QVERIFY(Dim); Dim->click();
+        auto* Border = Page->findChild<QComboBox*>("hc.rules.border"); QVERIFY(Border);
+        for (const auto* Style : {"solid", "dash", "dot", "dashDot", "dashDotDot", "none"}) {
+            Border->setCurrentIndex(Border->findData(Style)); QVERIFY(Dialog.SaveSettings());
+            QTRY_COMPARE(IndexFor(Rtl.front()).data(CFSModel::FileEffectsRole).toJsonObject()["border"].toString(), QString(Style));
+            QVERIFY(IndexFor(Rtl.front()).data(CFSModel::FileEffectsRole).toJsonObject()["dim"].toBool());
+            QVERIFY(IndexFor(Plain.front()).data(CFSModel::FileEffectsRole).toJsonObject().isEmpty());
+        }
+        Border->setCurrentIndex(Border->findData("dot")); QVERIFY(Dialog.SaveSettings());
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Artifacts.isEmpty()) {
+            QDir().mkpath(Artifacts);
+            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+            for (int I = 0; Categories && I < Categories->count(); ++I) if (Categories->item(I)->text() == "파일 그룹 · 색상") Categories->setCurrentRow(I);
+            for (auto* Parent = Dim->parentWidget(); Parent; Parent = Parent->parentWidget())
+                if (auto* Scroll = qobject_cast<QScrollArea*>(Parent)) { Scroll->ensureWidgetVisible(Dim); break; }
+            QTest::qWait(100);
+            QVERIFY(SaveR9Dialog(Dialog, "rtl-row-effects-settings")); Dialog.hide();
+            auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            for (const auto* Mode : {"one-line", "two-line", "thumbnails"}) {
+                QVERIFY(View->SetListMode(Mode)); QTest::qWait(100);
+                QVERIFY(main_->grab().save(QDir(Artifacts).filePath(QString("rtl-row-effects-%1.png").arg(Mode))));
+            }
+        }
+        Operator->setCurrentIndex(Operator->findData("notContains")); QCOMPARE(Operator->currentText(), QString("비포함"));
+        QVERIFY(Dialog.SaveSettings());
+        for (const auto& Name : Rtl + Plain) QTRY_COMPARE(IndexFor(Name).data(Qt::ForegroundRole).value<QColor>() == QColor("#c82277"), Plain.contains(Name));
+        const auto Saved = Page->Document(); Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
+        QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
+        Page->Load(Saved); Operator = qobject_cast<QComboBox*>(Table->cellWidget(0, 1));
+        QCOMPARE(Operator->currentData().toString(), QString("notContains"));
+        QCOMPARE(Page->findChild<QComboBox*>("hc.rules.border")->currentData().toString(), QString("dot"));
+        QVERIFY(Page->findChild<QPushButton*>("hc.rules.font.dim")->isChecked());
+        for (const auto& Name : Rtl + Plain) QVERIFY(QFile::exists(Directory.filePath(Name)));
+        Dialog.reject();
+    }
+
     void fileColorPatternModesUi()
     {
         using namespace hc::settings;
@@ -9525,6 +9592,140 @@ private slots:
         { FileOperationDialog Limited(Request, main_); Limited.show(); QTest::qWait(80); QVERIFY(!Limited.findChild<QCheckBox*>("hc.operation.verify")->isEnabled()); QVERIFY(!Limited.findChild<QLineEdit*>("hc.operation.filter")->isEnabled()); QCOMPARE(Limited.SpeedLimit(), quint64(0)); QVERIFY(!Limited.CopyAcl()); Save(&Limited, "r8-provider-limits"); }
         QCOMPARE(Settings.Object(), Saved);
     }
+    void fileClipboardUi()
+    {
+        using namespace hc::operations; using namespace hc::storage;
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto SavedClipboard = std::make_unique<QMimeData>();
+        if (const auto* Mime = QApplication::clipboard()->mimeData())
+            for (const auto& Format : Mime->formats()) SavedClipboard->setData(Format, Mime->data(Format));
+        const auto Restore = qScopeGuard([&] {
+            Bridge->CancelClipboard(); QApplication::clipboard()->setMimeData(SavedClipboard.release());
+            if (auto* Progress = main_->findChild<QDialog*>("hc.fileJobs")) Progress->hide();
+            main_->RestoreWorkspace(Workspace);
+        });
+        Bridge->CancelClipboard();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Path : {"source", "source/bundle", "target", "again", "moved"}) QVERIFY(QDir().mkpath(Directory.filePath(Path)));
+        for (const auto* Path : {"source/a.txt", "source/b.txt", "source/c.txt", "source/bundle/child.txt"}) {
+            QFile File(Directory.filePath(Path)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Path);
+        }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Grid = View->BaseView();
+        Model->SetProviderEnabled(true); Panel->SetSearch({});
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("source")), {});
+        QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 5);
+        const auto IndexFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto RowFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->getRowCount(); ++Row) {
+                auto Index = Grid->getRow(Row).modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.isValid() && Model->GetName(Index) == Name) return Row;
+            }
+            return -1;
+        };
+        const auto Focus = [&](const QString& Name) {
+            Grid->deselectAll(); Grid->setFocusedRowIndex(RowFor(Name));
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        };
+        const auto Run = [&](const QString& Id, const QModelIndex& Index = QModelIndex{}) {
+            auto Future = Bridge->Dispatch(Id, {}, "clipboard-test", Index);
+            QElapsedTimer Timer; Timer.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready && Timer.elapsed() < 5000) QTest::qWait(10);
+            return Future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready ? Future.get()
+                : Result<hc::commands::CommandOutcome>(Error{ErrorCategory::Unavailable, "test-command-timeout"});
+        };
+        QTRY_VERIFY(RowFor("c.txt") >= 0);
+        Focus("c.txt");
+        for (const auto* Name : {"a.txt", "b.txt"}) Grid->selectRow(RowFor(Name), Qtitan::Select);
+        QTRY_VERIFY(Bridge->Action("hc.clipboard.cut")->isEnabled());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_X, Qt::ControlModifier | Qt::AltModifier);
+        QTRY_VERIFY(IndexFor("a.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QVERIFY(Bridge->HasFileClipboard());
+        QVERIFY(IndexFor("b.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QVERIFY(!IndexFor("c.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QVERIFY(!IndexFor("..").data(CFSModel::ClipboardCutRole).toBool());
+        QCOMPARE(QApplication::clipboard()->mimeData()->urls().size(), 2);
+        QCOMPARE(QApplication::clipboard()->mimeData()->data("application/x-qt-windows-mime;value=\"Preferred DropEffect\"").at(0), char(2));
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        for (const auto* Mode : {"one-line", "two-line"}) {
+            QVERIFY(View->SetListMode(Mode)); QTest::qWait(100);
+            if (!Artifacts.isEmpty()) QVERIFY(main_->grab().save(QDir(Artifacts).filePath(QString("clipboard-cut-%1.png").arg(Mode))));
+        }
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
+        QTRY_VERIFY(!Bridge->HasFileClipboard()); QVERIFY(!IndexFor("a.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QVERIFY(QFile::exists(Directory.filePath("source/a.txt")));
+        Focus("a.txt");
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_C, Qt::ControlModifier | Qt::AltModifier);
+        QTRY_VERIFY(Bridge->HasFileClipboard()); QVERIFY(!IndexFor("a.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape); QTRY_VERIFY(!Bridge->HasFileClipboard());
+        Focus("a.txt"); Grid->selectRow(RowFor("a.txt"), Qtitan::Select);
+        Grid->selectRow(RowFor("bundle"), Qtitan::Select);
+        QVERIFY(Run("hc.clipboard.copy").HasValue());
+        for (const auto* Target : {"target", "again"}) {
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath(Target)), {}); QTRY_VERIFY(!Model->IsLoading());
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+            const auto Submitted = Run("hc.clipboard.paste");
+            QVERIFY2(Submitted.HasValue(), Submitted.HasValue() ? "" : Submitted.Failure().code_.c_str());
+            auto& Scheduler = Bridge->FileJobs()->Scheduler();
+            QTRY_COMPARE_WITH_TIMEOUT(Scheduler.Snapshot(Submitted.Value().jobId_).Value().state_, JobState::Completed, 15000);
+            QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Submitted.Value().jobId_)); QTRY_VERIFY(!Model->IsLoading());
+            QVERIFY(QFile::exists(Directory.filePath(QString(Target) + "/a.txt")));
+            QVERIFY(QFile::exists(Directory.filePath(QString(Target) + "/bundle/child.txt")));
+            QVERIFY(QFile::exists(Directory.filePath("source/a.txt"))); QVERIFY(Bridge->HasFileClipboard());
+        }
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("source")), {}); QTRY_VERIFY(!Model->IsLoading());
+        Focus("a.txt"); QVERIFY(Run("hc.clipboard.cut").HasValue());
+        QVERIFY(IndexFor("a.txt").data(CFSModel::ClipboardCutRole).toBool());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("moved")), {}); QTRY_VERIFY(!Model->IsLoading());
+        Focus("..");
+        QTRY_VERIFY(Bridge->Action("hc.clipboard.paste")->isEnabled());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_V, Qt::ControlModifier | Qt::AltModifier);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Directory.filePath("moved/a.txt")), 15000);
+        QTRY_VERIFY(!QFile::exists(Directory.filePath("source/a.txt"))); QTRY_VERIFY(!Bridge->HasFileClipboard());
+        QTRY_VERIFY(!Model->IsLoading());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("source")), {}); QTRY_VERIFY(!Model->IsLoading());
+        Focus("b.txt"); QVERIFY(Run("hc.clipboard.cut").HasValue());
+        QApplication::clipboard()->setText("replacement clipboard");
+        QTRY_VERIFY(!Bridge->HasFileClipboard()); QVERIFY(!IndexFor("b.txt").data(CFSModel::ClipboardCutRole).toBool());
+        QVERIFY(!Bridge->CancelClipboard()); QCOMPARE(QApplication::clipboard()->text(), QString("replacement clipboard"));
+        const auto NativeFiles = [&](const QString& Name, bool Cut) {
+            auto* Mime = new QMimeData; Mime->setUrls({QUrl::fromLocalFile(Directory.filePath("source/" + Name))});
+            QByteArray Effect(4, '\0'); Effect[0] = Cut ? 2 : 1;
+            Mime->setData("application/x-qt-windows-mime;value=\"Preferred DropEffect\"", Effect);
+            QApplication::clipboard()->setMimeData(Mime);
+        };
+        NativeFiles("c.txt", false);
+        QTRY_VERIFY(Bridge->Action("hc.clipboard.paste")->isEnabled());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("target")), {}); QTRY_VERIFY(!Model->IsLoading());
+        const auto NativeCopy = Run("hc.clipboard.paste");
+        QVERIFY2(NativeCopy.HasValue(), NativeCopy.HasValue() ? "" : NativeCopy.Failure().code_.c_str());
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        QTRY_COMPARE(Scheduler.Snapshot(NativeCopy.Value().jobId_).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(NativeCopy.Value().jobId_)); QTRY_VERIFY(!Model->IsLoading());
+        QVERIFY(QFile::exists(Directory.filePath("target/c.txt"))); QVERIFY(QFile::exists(Directory.filePath("source/c.txt")));
+        NativeFiles("b.txt", true);
+        QTRY_VERIFY(Bridge->Action("hc.clipboard.paste")->isEnabled());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("source")), {}); QTRY_VERIFY(!Model->IsLoading());
+        QTRY_VERIFY(IndexFor("b.txt").data(CFSModel::ClipboardCutRole).toBool());
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("moved")), {}); QTRY_VERIFY(!Model->IsLoading());
+        const auto NativeMove = Run("hc.clipboard.paste");
+        QVERIFY2(NativeMove.HasValue(), NativeMove.HasValue() ? "" : NativeMove.Failure().code_.c_str());
+        QTRY_COMPARE(Scheduler.Snapshot(NativeMove.Value().jobId_).Value().state_, JobState::Completed);
+        QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(NativeMove.Value().jobId_)); QTRY_VERIFY(!Model->IsLoading());
+        QVERIFY(QFile::exists(Directory.filePath("moved/b.txt"))); QVERIFY(!QFile::exists(Directory.filePath("source/b.txt")));
+        QTRY_VERIFY(!Bridge->HasFileClipboard());
+        NativeFiles("c.txt", false); QApplication::clipboard()->setText("new clipboard during import");
+        QTest::qWait(100); QVERIFY(!Bridge->HasFileClipboard());
+        QCOMPARE(QApplication::clipboard()->text(), QString("new clipboard during import"));
+        Focus(".."); QVERIFY(!Run("hc.clipboard.cut").HasValue()); QVERIFY(!Bridge->HasFileClipboard());
+    }
+
     void r8CopyCommandsUi()
     {
         using namespace hc::operations; using namespace hc::storage;

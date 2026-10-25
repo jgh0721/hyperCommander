@@ -64,6 +64,18 @@ public:
     static bool HasDecomposedName(const QString& Name) {
         return Name != Name.normalized(QString::NormalizationForm_C);
     }
+    static bool HasRtlName(const QString& Name) {
+        for (qsizetype I = 0; I < Name.size(); ++I) {
+            char32_t Code = Name[I].unicode();
+            if (Name[I].isHighSurrogate() && I + 1 < Name.size() && Name[I + 1].isLowSurrogate()) {
+                Code = QChar::surrogateToUcs4(Name[I], Name[I + 1]); ++I;
+            }
+            const auto Direction = QChar::direction(Code);
+            if (Direction == QChar::DirR || Direction == QChar::DirAL || Direction == QChar::DirRLE
+                || Direction == QChar::DirRLO || Direction == QChar::DirRLI) return true;
+        }
+        return false;
+    }
     static QStringList Extensions(const QString& Input) {
         QStringList Result;
         for (auto Part : Input.toLower().split(QRegularExpression("[,;|\\s]+"), Qt::SkipEmptyParts)) {
@@ -143,7 +155,9 @@ public:
             if (Group.contains("autoDark") && !Group["autoDark"].isBool()) return QObject::tr("다크 자동 색상은 true 또는 false입니다.");
             if (Group.contains("font") && !Group["font"].isObject()) return QObject::tr("글꼴 규칙 형식이 올바르지 않습니다.");
             const auto Font = Group["font"].toObject();
-            for (const auto& Key : {"bold", "italic", "underline", "strike"}) if (Font.contains(Key) && !Font[Key].isBool()) return QObject::tr("글꼴 효과는 true 또는 false입니다.");
+            for (const auto& Key : {"bold", "italic", "underline", "strike", "dim"}) if (Font.contains(Key) && !Font[Key].isBool()) return QObject::tr("글꼴 효과는 true 또는 false입니다.");
+            if (Font.contains("border") && (!Font["border"].isString() || !QStringList{"none", "solid", "dash", "dot", "dashDot", "dashDotDot"}.contains(Font["border"].toString())))
+                return QObject::tr("테두리 스타일을 확인하세요.");
             if (Group["join"] != "any" && Group["join"] != "all") return QObject::tr("조건 결합 방식이 올바르지 않습니다.");
             const auto Conditions = Group["conditions"].toArray();
             if (Conditions.isEmpty() || Conditions.size() > 32) return QObject::tr("그룹마다 조건을 1~32개 입력하세요.");
@@ -176,6 +190,10 @@ public:
                         hc::text::FileNameGlob Glob; const auto Error = Glob.Compile(P.toString());
                         if (!Error.isEmpty()) return QObject::tr("%1 · 조건 %2: %3").arg(Name).arg(ConditionIndex).arg(Error);
                     }
+                    continue;
+                }
+                if (Type == "rtl") {
+                    if (Op != "contains" && Op != "notContains") return QObject::tr("RTL 문자 조건은 포함 또는 비포함입니다.");
                     continue;
                 }
                 if (!Condition["value"].isString() || Text.size() > 512 || (Type == "pattern" ? Text.isEmpty() : Text.trimmed().isEmpty())) return QObject::tr("조건은 1~512자로 입력하세요.");
@@ -289,7 +307,7 @@ public:
     FileRuleResult Matches(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, false, false); }
     FileRuleResult Evaluate(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, true, true); }
 private:
-    enum Field { Extension, Pattern, Folder, Normalization, Attributes, Size, Modified, Link };
+    enum Field { Extension, Pattern, Folder, Normalization, Attributes, Size, Modified, Link, Rtl };
     enum Operator { In, NotIn, MatchesOp, NotMatches, Contains, NotContains, Is, Any, All, Gt, Ge, Lt, Le, Eq, Ne, Before, After, Within };
     enum SyntaxKind { LiteralSyntax, GlobSyntax, RegexSyntax };
     struct Condition {
@@ -303,7 +321,7 @@ private:
         QColor foreground_[2], background_[2]; QJsonObject font_;
     };
     static const QStringList& typeNames() {
-        static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link"}; return Names;
+        static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link", "rtl"}; return Names;
     }
     static const QStringList& opNames() {
         static const QStringList Names{"in", "notIn", "matches", "notMatches", "contains", "notContains", "is", "any", "all", "gt", "ge", "lt", "le", "eq", "ne", "before", "after", "within"}; return Names;
@@ -319,7 +337,7 @@ private:
         } else Hit = Text.contains(C.value_, Qt::CaseInsensitive);
         return Hit != C.negate_;
     }
-    static qint8 conditionHit(const Condition& C, const FileRuleInput& Input, const QString& Ext, bool IsFolder, std::optional<bool>& Decomposed) {
+    static qint8 conditionHit(const Condition& C, const FileRuleInput& Input, const QString& Ext, bool IsFolder, std::optional<bool>& Decomposed, std::optional<bool>& RtlName) {
         switch (C.type_) {
         case Extension:
             if (IsFolder) return 0;
@@ -327,6 +345,9 @@ private:
             return textHit(C, Ext);
         case Pattern: return textHit(C, Input.name_);
         case Folder: return IsFolder == (C.value_ == "true");
+        case Rtl:
+            if (!RtlName) RtlName = HasRtlName(Input.name_);
+            return *RtlName != C.negate_;
         case Normalization:
             if (!Decomposed) Decomposed = HasDecomposedName(Input.name_);
             return *Decomposed == (C.value_ == "decomposed");
@@ -360,7 +381,7 @@ private:
         if (Input.name_ == ".." || groups_.isEmpty()) return Result;
         const bool IsFolder = (Input.attributes_ & 0x10) != 0;
         const auto Ext = needsExtension_ ? QFileInfo(Input.name_).suffix() : QString{};
-        std::optional<bool> Decomposed;
+        std::optional<bool> Decomposed, RtlName;
         // Deadlines are independent of Boolean short circuiting. An earlier
         // currently false group may acquire precedence when its date changes.
         if (relativeDates_ && Input.modifiedUtcMs_) for (const auto& G : groups_) for (const auto& C : G.conditions_) {
@@ -393,7 +414,7 @@ private:
                 for (const auto& C : G.conditions_) {
                     qint8 Value = Cached && C.cacheIndex_ >= 0 ? Cached->conditions_[C.cacheIndex_] : -1;
                     if (Value < 0) {
-                        Value = conditionHit(C, Input, Ext, IsFolder, Decomposed);
+                        Value = conditionHit(C, Input, Ext, IsFolder, Decomposed, RtlName);
                         if (Cached && C.cacheIndex_ >= 0) Cached->conditions_[C.cacheIndex_] = Value;
                     }
                     if (Value == 2) { Failed = true; continue; }
@@ -417,7 +438,7 @@ private:
                 Result.background_ = G.background_[Input.dark_]; if (Diagnostics) Result.owners_["background"] = G.label_;
             }
             quint8 Bit = 1;
-            for (const auto* Key : {"bold", "italic", "underline", "strike"}) {
+            for (const auto* Key : {"bold", "italic", "underline", "strike", "dim", "border"}) {
                 if (!(FontOwners & Bit) && G.font_.contains(Key)) {
                     FontOwners |= Bit; Result.font_[Key] = G.font_[Key]; if (Diagnostics) Result.owners_[Key] = G.label_;
                 }

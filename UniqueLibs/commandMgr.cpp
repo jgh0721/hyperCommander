@@ -84,6 +84,9 @@ void CCommandMgr::SetMainUI( QWidget* MainUI )
 
 bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& CursorIndex )
 {
+    if (bridge_ && KeyEvent->key() == Qt::Key_Escape && KeyEvent->modifiers() == Qt::NoModifier && bridge_->CancelClipboard()) {
+        KeyEvent->accept(); return true;
+    }
     const bool Executed = hc::ui::InvokeShortcut(*KeyEvent, *retrieve(), [this, &CursorIndex](const QString& Id) {
         if (bridge_ && bridge_->ExecuteCommand(Id, CursorIndex)) return true;
         return InvokeCommand( Id, CursorIndex );

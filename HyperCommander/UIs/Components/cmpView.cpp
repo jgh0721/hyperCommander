@@ -9,6 +9,7 @@
 #include "UniqueLibs/renameSelection.hpp"
 #include "UniqueLibs/quickFindHighlight.hpp"
 #include "UniqueLibs/commandUiConfig.hpp"
+#include "UniqueLibs/fileRulePaint.hpp"
 
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
@@ -83,17 +84,22 @@ public:
     void paintOverlay(QPainter& Painter, const Record& Value, QWidget*) override
     {
         const auto State = ProductRecordState(owner_, Value.rowIndex);
+        const auto Effects = Value.index.data(CFSModel::FileEffectsRole).toJsonObject();
         if (owner_->IsTwoLine()) {
             // The icon spans both lines: centered on the record block and aligned with the cell padding.
             const auto Icon = Value.index.data(Qt::DecorationRole);
             const auto& Geometry = owner_->RecordGeometry();
             const int Size = owner_->ListIconSize();
             const auto Block = Geometry.block(Value.rect);
-            Painter.save(); Painter.setOpacity(State.hidden ? 0.6 : 1.0);
+            Painter.save(); Painter.setOpacity(std::min({Value.index.data(CFSModel::ClipboardCutRole).toBool() ? 0.5 : 1.0,
+                State.hidden ? 0.6 : 1.0, Effects["dim"].toBool() ? 0.55 : 1.0}));
             PaintListIcon(&Painter, Icon, QRect(Value.rect.left() + Geometry.sideMargin + 8, qRound(Block.center().y() - Size / 2.0), Size, Size));
             Painter.restore();
         }
         paintRecordCursor(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(), State, owner_->RecordColors());
+        Painter.save(); if (Effects["dim"].toBool()) Painter.setOpacity(Painter.opacity() * 0.55);
+        hc::ui::PaintFileRuleBorder(&Painter, Value.rect, Value.index.data(Qt::ForegroundRole).value<QColor>(), Effects);
+        Painter.restore();
     }
 private:
     CGridView* owner_;
@@ -134,6 +140,7 @@ public:
             Foreground = Cell.data(Qt::ForegroundRole).value<QColor>();
         auto Rect = Option.rect.adjusted(8 + Geometry.sideMargin, 0, -8 - Geometry.sideMargin, 0);
         Painter->save(); Painter->setFont(Font); Painter->setPen(Foreground);
+        const auto Effects = Cell.data(CFSModel::FileEffectsRole).toJsonObject();
         const QFontMetrics Metrics(Font);
         if (Name) {
             const auto Icon = Cell.data(Qt::DecorationRole);
@@ -141,7 +148,8 @@ public:
             if (!Geometry.twoLine && HasIcon) {
                 const int Size = owner_->ListIconSize();
                 const auto Block = Geometry.block(Option.rect);
-                Painter->setOpacity(State.hidden ? 0.6 : 1.0);
+                Painter->setOpacity(std::min({Cell.data(CFSModel::ClipboardCutRole).toBool() ? 0.5 : 1.0,
+                    State.hidden ? 0.6 : 1.0, Effects["dim"].toBool() ? 0.55 : 1.0}));
                 PaintListIcon(Painter, Icon, QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
                 Painter->setOpacity(1.0);
             }
@@ -153,12 +161,14 @@ public:
                 Rect.setLeft(Rect.left() + Metrics.horizontalAdvance(Prefix));
             }
             const auto Shown = ElideFileName(Cell.data().toString(), Metrics, Rect.width(), Appearance.nameElide, Directory);
+            if (Effects["dim"].toBool()) Painter->setOpacity(0.55);
             const auto Query = owner_->property("hc.quickFind.text").toString();
             if (owner_->property("hc.quickFind.highlight").toBool() && !Query.isEmpty() &&
                 hc::quickfind::Matches(Cell.data(Qt::EditRole).toString(), Query, owner_->property("hc.quickFind.match").toString()))
                 hc::quickfind::PaintHighlightedText(Painter, Rect, Shown, Query);
             else Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Shown);
         } else {
+            if (Effects["dim"].toBool()) Painter->setOpacity(0.55);
             const auto* Column = owner_->BaseView()->getColumnByModelColumn(Cell.column());
             const auto Alignment = static_cast<const Qtitan::GridTableColumn*>(Column)->textAlignment();
             if (Geometry.twoLine && Column->visualIndex() == 1) Rect.setLeft(Rect.left() + owner_->TwoLineTextIndent());
@@ -169,6 +179,20 @@ public:
     }
 private:
     CGridView* owner_;
+};
+class ProductThumbnailDelegate final : public QStyledItemDelegate {
+public:
+    ProductThumbnailDelegate(QAbstractItemDelegate* Base, QObject* Parent) : QStyledItemDelegate(Parent), base_(Base) {}
+    QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override { return base_->sizeHint(Option, Index); }
+    void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
+        base_->paint(Painter, Option, Index);
+        hc::ui::PaintFileRuleBorder(Painter, Option.rect, Index.data(Qt::ForegroundRole).value<QColor>(), Index.data(CFSModel::FileEffectsRole).toJsonObject());
+    }
+    bool editorEvent(QEvent* Event, QAbstractItemModel* Model, const QStyleOptionViewItem& Option, const QModelIndex& Index) override {
+        return base_->editorEvent(Event, Model, Option, Index);
+    }
+private:
+    QPointer<QAbstractItemDelegate> base_;
 };
 }
 
@@ -330,6 +354,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
     thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
     thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
+    auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), Tiles));
     thumbnails_->listView()->installEventFilter(this);
     thumbnails_->listView()->viewport()->installEventFilter(this);
     presentationStack_->addWidget(grid_); presentationStack_->addWidget(thumbnails_);
@@ -1820,7 +1845,10 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     if (Event->type() == QEvent::ShortcutOverride && !IsEditing()
         && (Watched == grid_ || Watched == grid_->viewport())) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
-        if (hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve()) == "hc.navigate.enterFile") {
+        const auto Id = hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve());
+        const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        if (Id == "hc.navigate.enterFile" || Id.startsWith("hc.clipboard.")
+            || (Key->key() == Qt::Key_Escape && Key->modifiers() == Qt::NoModifier && Bridge && Bridge->HasFileClipboard())) {
             Event->accept(); return true;
         }
     }

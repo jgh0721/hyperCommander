@@ -21,6 +21,10 @@
 #include "commandUiWidgets.hpp"
 #include <fmwidgets/FunctionKeyBar.h>
 #include <QDesktopServices>
+#include <QClipboard>
+#include <QMimeData>
+#include <QFutureWatcher>
+#include <QCryptographicHash>
 #include <QStatusBar>
 #include <QHBoxLayout>
 #include <QMenuBar>
@@ -68,6 +72,18 @@ using namespace hc::storage;
 
 namespace
 {
+    QByteArray NativeClipboardToken(const QMimeData* Mime)
+    {
+        if (!Mime || !Mime->hasUrls()) return {};
+        QJsonArray Urls;
+        for (const auto& Url : Mime->urls()) {
+            if (!Url.isLocalFile() || Url.toLocalFile().contains(QChar::Null)) return {};
+            Urls.append(Url.toString(QUrl::FullyEncoded));
+        }
+        if (Urls.isEmpty()) return {};
+        return QCryptographicHash::hash(QJsonDocument(QJsonObject{{"urls", Urls},
+            {"effect", QString::fromLatin1(Mime->data("application/x-qt-windows-mime;value=\"Preferred DropEffect\"").toBase64())}}).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256);
+    }
     template<class T> std::shared_ptr<T> WorkerOwned(std::shared_ptr<T> Value)
     {
         auto* Pointer = Value.get();
@@ -206,6 +222,12 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
         if (!Guard || !Guard->main_) return;
+        if (auto Move = Guard->clipboardMoves_.find(Result.snapshot_.id_); Move != Guard->clipboardMoves_.end()) {
+            const auto Token = Move->second; Guard->clipboardMoves_.erase(Move);
+            if (Token == Guard->clipboardToken_ && Result.snapshot_.state_ == hc::operations::JobState::Completed
+                && Result.snapshot_.completedItems_ > 0 && !Result.snapshot_.skippedItems_ && !Result.snapshot_.failedItems_)
+                Guard->CancelClipboard();
+        }
         if (Result.snapshot_.error_) hc::plugins::OfferPluginReview(Guard->main_, QString::fromStdString(Result.snapshot_.error_->code_), {}, Guard->viewers_->reviewPlugin_);
         else for (const auto& Item : Result.items_) if (Item.error_ && hc::plugins::OfferPluginReview(Guard->main_, QString::fromStdString(Item.error_->code_), {}, Guard->viewers_->reviewPlugin_)) break;
         if (auto It = Guard->inlineRenameCompletions_.find(Result.snapshot_.correlationId_); It != Guard->inlineRenameCompletions_.end()) {
@@ -271,13 +293,18 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     };
     bindModels();
     createActions();
+    connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &CommandUiBridge::updateClipboard);
+    updateClipboard();
 }
+
+CommandUiBridge::~CommandUiBridge() { clipboardImportStop_.request_stop(); }
 
 void CommandUiBridge::bindModels()
 {
     if (!main_) return;
     for (auto* Model : main_->findChildren<CFSModel*>())
     {
+        Model->SetClipboardCut(cutKeys_, cutRoot_);
         if (Model->property("hc.tabId").isNull()) Model->setProperty("hc.tabId", QUuid::createUuid().toString(QUuid::Id128));
         if (Model->property("hc.commandSignals").toBool()) continue;
         Model->setProperty("hc.commandSignals", true);
@@ -334,10 +361,11 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
 {
     CommandInvocation Invocation;
     Invocation.id_ = Id.toStdString();
-    Invocation.context_ = Id.startsWith("hc.viewer.") ? captureFiles(Index, Id != "hc.viewer.open")
+    Invocation.context_ = Id.startsWith("hc.clipboard.") && Id != "hc.clipboard.paste" ? captureFiles(Index, false)
+        : Id.startsWith("hc.viewer.") ? captureFiles(Index, Id != "hc.viewer.open")
         : Id.startsWith("hc.file.") ? captureFiles(Index, Id == "hc.file.rename") : Capture(Index);
     Invocation.permissions_.insert("navigation");
-    if (Id.startsWith("hc.file.")) Invocation.permissions_.insert("file-write");
+    if (Id.startsWith("hc.file.") || Id == "hc.clipboard.paste") Invocation.permissions_.insert("file-write");
     Invocation.source_ = Source.toStdString();
     Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
     for (auto It = Parameters.begin(); It != Parameters.end(); ++It)
@@ -567,6 +595,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     auto* Panel = PanelOf(Model);
     if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
     const auto& Id = Invocation.id_;
+    if (Id.starts_with("hc.clipboard.")) return executeClipboard(Invocation, Model);
     const bool DriveRoot = Id.starts_with("hc.navigate.gotoDrive");
     const bool NavigateToPath = Id == "hc.navigate.path" || DriveRoot;
     QString Path;
@@ -902,6 +931,16 @@ void CommandUiBridge::refreshActionState()
     for (const auto* Id : {"hc.file.normalize"}) if (auto* Command = Action(Id)) Command->setEnabled(false);
     for (const auto* Id : {"hc.file.new", "hc.file.mkdir"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && !Model->IsSearchResults());
+    const bool ClipboardSource = Ready && Model->ProviderEnabled() && Model->SnapshotProvider();
+    if (auto* Command = Action("hc.clipboard.copy")) Command->setEnabled(ClipboardSource);
+    if (auto* Command = Action("hc.clipboard.cut")) Command->setEnabled(ClipboardSource
+        && (Model->IsSearchResults() || Model->WorkspaceLocation().kind_ == LocatorKind::Local
+            || Model->WorkspaceLocation().kind_ == LocatorKind::Smb
+            || (Model->WorkspaceLocation().kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider())));
+    if (auto* Command = Action("hc.clipboard.paste")) Command->setEnabled(ClipboardSource && clipboard_
+        && !Model->IsSearchResults() && (Model->WorkspaceLocation().kind_ == LocatorKind::Local
+            || Model->WorkspaceLocation().kind_ == LocatorKind::Smb
+            || (Model->WorkspaceLocation().kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider())));
     if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
     if (auto* Command = Action("hc.file.attributes")) {
         const bool Native = Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
@@ -954,6 +993,7 @@ void CommandUiBridge::createCommandUi()
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
+            if (Id.startsWith("hc.clipboard.")) { Dispatch(Id, {}, "ui", commandIndex()); return; }
             if (Id.startsWith("hc.selection.") && Id != "hc.selection.invert") {
                 auto* Panel = activePanel_.data();
                 auto* View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
@@ -1816,6 +1856,187 @@ void CommandUiBridge::submitInlineRename(const QModelIndex& Index, const QString
         }
     });
     Poll->start();
+}
+
+bool CommandUiBridge::ownsFileClipboard() const
+{
+    const auto* Mime = QApplication::clipboard()->mimeData();
+    return !clipboardToken_.isEmpty() && Mime && (clipboardExternal_ ? NativeClipboardToken(Mime) == clipboardToken_
+        : Mime->data("application/x-hypercommander-files") == clipboardToken_);
+}
+
+void CommandUiBridge::updateClipboard()
+{
+    if (HasFileClipboard() && ownsFileClipboard()) { refreshActionState(); return; }
+    clipboardImportStop_.request_stop(); clipboardImportStop_ = std::stop_source{};
+    const auto Generation = ++clipboardGeneration_;
+    clipboard_.reset(); clipboardToken_.clear(); clipboardLocations_.clear(); cutKeys_.clear(); cutRoot_.clear();
+    clipboardExternal_ = false; clipboardImporting_ = false;
+    refreshClipboardVisuals(); refreshActionState();
+    const auto* Mime = QApplication::clipboard()->mimeData();
+    const auto Token = NativeClipboardToken(Mime);
+    if (Token.isEmpty()) return;
+    const auto Urls = Mime->urls();
+    const auto Effect = Mime->data("application/x-qt-windows-mime;value=\"Preferred DropEffect\"");
+    const bool Cut = Effect == QByteArray("\x02\0\0\0", 4);
+    clipboardToken_ = Token; clipboardExternal_ = true; clipboardImporting_ = true;
+    OperationContext Context; Context.stopToken_ = clipboardImportStop_.get_token();
+    using ClipboardResult = Result<hc::operations::FileOperationRequest>;
+    auto* Watcher = new QFutureWatcher<ClipboardResult>(this);
+    connect(Watcher, &QFutureWatcher<ClipboardResult>::finished, this, [this, Watcher, Generation, Cut] {
+        auto Loaded = Watcher->result(); Watcher->deleteLater();
+        if (Generation != clipboardGeneration_ || !clipboardImporting_ || !ownsFileClipboard()) return;
+        clipboardImporting_ = false;
+        if (!Loaded.HasValue()) {
+            clipboardToken_.clear(); clipboardExternal_ = false;
+            if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
+                Window->statusBar()->showMessage(tr("클립보드 파일을 확인할 수 없습니다: %1").arg(QString::fromStdString(Loaded.Failure().code_)), 6000);
+            refreshActionState(); return;
+        }
+        clipboard_ = std::move(Loaded.Value());
+        for (const auto& Source : clipboard_->sources_) {
+            if (Cut) cutKeys_.insert(hc::workspace::SelectionKey(Source.entry_));
+            auto Parent = Source.entry_.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString();
+            clipboardLocations_.push_back(std::move(Parent));
+        }
+        refreshClipboardVisuals(); refreshActionState();
+    });
+    // Resolve the native clipboard's immutable URL list away from the GUI thread.
+    // A generation and stop token prevent a replaced/cancelled import from returning.
+    Watcher->setFuture(QtConcurrent::run([Urls, Cut, Context]() -> ClipboardResult {
+        hc::operations::FileOperationRequest Request;
+        Request.operation_ = Cut ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
+        std::set<std::string> Seen;
+        std::map<LocatorKind, std::shared_ptr<IStorageProvider>> Readers;
+        for (const auto& Url : Urls) {
+            if (Context.stopToken_.stop_requested()) return Error{ErrorCategory::Cancelled, "clipboard-import-cancelled"};
+            const auto Path = QDir::toNativeSeparators(QDir::cleanPath(Url.toLocalFile()));
+            if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-source-required"};
+            Locator Location{Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+            if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Location.kind_ = LocatorKind::Smb;
+            if (!Seen.insert(Path.toCaseFolded().toStdString()).second) continue;
+            auto& Reader = Readers[Location.kind_];
+            if (!Reader) Reader = MakeNativeReadProvider(Location.kind_);
+            auto Entry = Reader->Resolve(Location, Context).get();
+            if (!Entry.HasValue()) return Entry.Failure();
+            Request.sources_.push_back({std::move(Entry.Value()), Reader, MakeNativeWritableStorage(Location.kind_, Reader)});
+        }
+        return Request;
+    }));
+}
+
+void CommandUiBridge::refreshClipboardVisuals()
+{
+    if (main_) for (auto* Model : main_->findChildren<CFSModel*>()) Model->SetClipboardCut(cutKeys_, cutRoot_);
+}
+
+bool CommandUiBridge::CancelClipboard()
+{
+    if (!HasFileClipboard()) return false;
+    const bool Owned = ownsFileClipboard();
+    clipboardImportStop_.request_stop(); ++clipboardGeneration_; clipboardImporting_ = false; clipboardExternal_ = false;
+    clipboard_.reset(); clipboardToken_.clear(); cutKeys_.clear(); cutRoot_.clear(); clipboardLocations_.clear();
+    if (Owned) QApplication::clipboard()->clear();
+    refreshClipboardVisuals(); refreshActionState();
+    return true;
+}
+
+Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation& Invocation, CFSModel* Model)
+{
+    using namespace hc::operations;
+    if (Model->IsLoading() || !Model->ProviderEnabled() || !Model->SnapshotProvider())
+        return Error{ErrorCategory::Unavailable, "clipboard-provider-not-ready"};
+    if (Invocation.context_.location_ != Model->WorkspaceLocation())
+        return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+    const auto Kind = Invocation.context_.location_.kind_;
+    if (Invocation.id_ == "hc.clipboard.paste") {
+        if (!clipboard_ || !ownsFileClipboard()) return Error{ErrorCategory::Unavailable, "file-clipboard-empty"};
+        if (Model->IsSearchResults()) return Error{ErrorCategory::InvalidRequest, "search-results-have-no-destination"};
+        if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Plugin)
+            return Error{ErrorCategory::Unsupported, "clipboard-destination-not-writable"};
+        if (std::any_of(clipboardMoves_.begin(), clipboardMoves_.end(), [this](const auto& Move) { return Move.second == clipboardToken_; }))
+            return Error{ErrorCategory::Unavailable, "clipboard-move-in-progress"};
+        auto Request = *clipboard_;
+        Request.destination_ = Invocation.context_.location_;
+        Request.destinationWriter_ = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
+            : MakeNativeWritableStorage(Kind, MakeNativeReadProvider(Kind));
+        if (!Request.destinationWriter_) return Error{ErrorCategory::Unsupported, "clipboard-destination-not-writable"};
+        Request.correlationId_ = Invocation.correlationId_;
+        const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
+        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(true);
+        Request.copyOptions_.verify_ = Options["copyVerify"].toBool(false);
+        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(false);
+        Request.copyOptions_.streams_ = Options["copyStreams"].toBool(false);
+        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(0), 1048576)) * 1024 * 1024;
+        auto Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
+        if (!Started.HasValue()) return Started.Failure();
+        auto Affected = clipboardLocations_; Affected.push_back(Invocation.context_.location_);
+        affectedLocations_[Started.Value().id_] = std::move(Affected);
+        if (clipboard_->operation_ == hc::operations::FileOperation::Move) clipboardMoves_[Started.Value().id_] = clipboardToken_;
+        return CommandOutcome{CommandOutcome::Status::Accepted, Started.Value().id_};
+    }
+    const bool Cut = Invocation.id_ == "hc.clipboard.cut";
+    if (!Cut && Invocation.id_ != "hc.clipboard.copy") return Error{ErrorCategory::Unsupported, "clipboard-command-unknown"};
+    if (Cut && Kind == LocatorKind::Archive) return Error{ErrorCategory::Unsupported, "clipboard-archive-cut-unavailable"};
+    FileOperationRequest Request; Request.operation_ = Cut ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
+    const auto Reader = Model->SnapshotProvider();
+    const auto Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
+        : Kind == LocatorKind::Local || Kind == LocatorKind::Smb ? MakeNativeWritableStorage(Kind, Reader) : nullptr;
+    QSet<QString> Keys;
+    QList<QUrl> Urls;
+    std::vector<Locator> Locations;
+    if (!Model->IsSearchResults()) Locations.push_back(Invocation.context_.location_);
+    if (Invocation.context_.selectionManifest_) {
+        Request.selection_ = Invocation.context_.selectionManifest_;
+        if (Request.selection_->Provider() != Reader) return Error{ErrorCategory::StaleRevision, "selection-provider-changed"};
+        Request.selectionRoot_ = Invocation.context_.location_; Request.selectionWriter_ = Writer;
+        if (!Request.selection_->Count()) return Error{ErrorCategory::InvalidRequest, "clipboard-selection-empty"};
+        if (Cut && !Writer) return Error{ErrorCategory::Unsupported, "clipboard-source-not-writable"};
+    } else {
+        // Match all IDs in one pass; retaining snapshots keeps the clipboard valid
+        // when the source tab changes folder or closes before paste.
+        std::set<std::string> Selected;
+        for (const auto& Id : Invocation.context_.selection_) Selected.insert(Serialize(Id));
+        if (Selected.empty()) return Error{ErrorCategory::InvalidRequest, "clipboard-selection-empty"};
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            if (!Item || Item->Name_ == ".." || !Item->storageEntry_ || !Selected.contains(Serialize(Item->storageEntry_->id_))) continue;
+            const auto& Entry = *Item->storageEntry_;
+            auto SourceReader = Model->ProviderFor(Entry);
+            auto SourceWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry.locator_.kind_, SourceReader) : Writer;
+            if (!SourceReader || (Cut && !SourceWriter)) return Error{ErrorCategory::Unsupported, "clipboard-source-not-writable"};
+            Request.sources_.push_back({Entry, SourceReader, SourceWriter});
+            Keys.insert(hc::workspace::SelectionKey(Entry));
+            if (Entry.locator_.kind_ == LocatorKind::Local || Entry.locator_.kind_ == LocatorKind::Smb) {
+                Urls.append(QUrl::fromLocalFile(QString::fromStdString(Entry.locator_.root_)));
+                if (Model->IsSearchResults()) {
+                    auto Parent = Entry.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString();
+                    Locations.push_back(std::move(Parent));
+                }
+            }
+        }
+        if (Request.sources_.empty()) return Error{ErrorCategory::InvalidRequest, "clipboard-selection-empty"};
+        if (Request.sources_.size() != Selected.size()) return Error{ErrorCategory::StaleRevision, "selection-changed"};
+    }
+    auto* Mime = new QMimeData;
+    const auto Token = QUuid::createUuid().toByteArray();
+    Mime->setData("application/x-hypercommander-files", Token);
+    if (!Urls.isEmpty() && Urls.size() == Request.sources_.size()) {
+        Mime->setUrls(Urls);
+        // Qt's native MIME bridge publishes Explorer's preferred copy/move effect.
+        QByteArray Effect(4, '\0'); Effect[0] = Cut ? 2 : 1;
+        Mime->setData("application/x-qt-windows-mime;value=\"Preferred DropEffect\"", Effect);
+    }
+    clipboardImportStop_.request_stop(); ++clipboardGeneration_; clipboardImporting_ = false; clipboardExternal_ = false;
+    clipboard_ = std::move(Request); clipboardToken_ = Token; clipboardLocations_ = std::move(Locations);
+    cutKeys_ = Cut ? std::move(Keys) : QSet<QString>{};
+    cutRoot_ = Cut && clipboard_->selection_ ? hc::workspace::LocationKey(Invocation.context_.location_) : QString{};
+    QApplication::clipboard()->setMimeData(Mime);
+    if (!ownsFileClipboard()) {
+        CancelClipboard(); return Error{ErrorCategory::Unavailable, "clipboard-write-failed"};
+    }
+    refreshClipboardVisuals(); refreshActionState();
+    return CommandOutcome{};
 }
 
 Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Invocation, CFSModel* Model)
