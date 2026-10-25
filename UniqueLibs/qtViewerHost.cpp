@@ -16,6 +16,7 @@
 #include "pluginHost/manifestFile.hpp"
 #include <QPushButton>
 #include <QApplication>
+#include <algorithm>
 #include <QKeyEvent>
 #include <qt_windows.h>
 #include "qtPluginReview.hpp"
@@ -206,6 +207,9 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     if (!pluginViewer_ || Inputs.empty()) return nullptr;
     const bool Recyclable = matchesPrepared(Options);
     const bool Standalone = Options.approval_.reviewed_.compatibility_ == "hyperviewer-v1";
+    const bool EpubStandalone = Standalone && Completion && std::any_of(Inputs.begin(), Inputs.end(), [](const auto& Input) {
+        return Input.source_ && QFileInfo(QString::fromStdString(Input.source_->Describe().name_)).suffix().compare("epub", Qt::CaseInsensitive) == 0;
+    });
     const auto Warm = Recyclable && preparedWindow_ && preparedSurface_ ? preparedSurface_->Snapshot().status_ : hc::viewer::ViewerStatus::Closed;
     const bool Prepared = Warm == hc::viewer::ViewerStatus::Ready && preparedSurface_->IsReady();
     // A warm viewer that is still starting is ready sooner than a cold start:
@@ -233,16 +237,18 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     connect(Surface, &QtPluginViewerSurface::CloseRequested, Phase, [this, Window, Surface, Recyclable] {
         Window->Dismiss(); retirePlugin(Window, Surface, Recyclable);
     });
-    connect(Surface, &QtPluginViewerSurface::Failed, Phase, [this, Window, Completion, Binary = Options.binaryPath_](const QString& Code) {
+    connect(Surface, &QtPluginViewerSurface::Failed, Phase, [this, Window, Completion, EpubStandalone, Binary = Options.binaryPath_](const QString& Code) {
         Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Code)); if (Completion) Completion(false, Code);
+        if (EpubStandalone) Window->show();
         if (reviewPlugin_) hc::plugins::OfferPluginReview(Window, Code, Binary, [Window, Review = reviewPlugin_](const QString& Path) { Window->close(); Review(Path); });
     });
-    connect(Surface, &QtPluginViewerSurface::Ready, Phase, [Surface, Window, Phase, Expected, Completion, Standalone, Waiting = Pending,
+    connect(Surface, &QtPluginViewerSurface::Ready, Phase, [Surface, Window, Phase, Expected, Completion, Standalone, EpubStandalone, Waiting = Pending,
         PreparedInputs, Inputs = std::move(Inputs)](const QString&) mutable {
         if (std::exchange(Waiting, false)) {
             // The adopted warm viewer finished starting on its placeholder.
             if (Surface->OpenPrepared(std::exchange(PreparedInputs, {}))) return;
             Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg("document-channel-not-ready"));
+            if (EpubStandalone) Window->show();
             if (Completion) Completion(false, "document-channel-not-ready");
             return;
         }
@@ -250,7 +256,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         if (!Completion) return;
         if (!Surface->Details().documentChannel_) { Completion(true, {}); return; }
         auto* Timer = new QTimer(Phase); auto Elapsed = std::make_shared<QElapsedTimer>(); Elapsed->start();
-        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Phase, Expected, Completion, Standalone, EpubPresented=false]() mutable {
+        connect(Timer, &QTimer::timeout, Phase, [Timer, Elapsed, Surface, Window, Phase, Expected, Completion, Standalone, EpubStandalone, EpubPresented=false]() mutable {
             const auto Details = Surface->Details(); const auto Documents = Details.documentState_["documents"].toArray();
             QString Error; bool Loading = Documents.size() != Expected;
             if (Details.commandError_) Error = QString::fromStdString(Details.commandError_->code_);
@@ -325,7 +331,10 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
                     PresentTimer->start(25); return;
                 }
             }
-            if (!Error.isEmpty()) Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Error));
+            if (!Error.isEmpty()) {
+                Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Error));
+                if (EpubStandalone && !EpubPresented) Window->show();
+            }
             Completion(Error.isEmpty(), Error);
         }); Timer->start(50);
     });
@@ -334,7 +343,11 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     } else if (!Pending) Surface->Open(std::move(Options), std::move(First));
     if (preparedOptions_ && !preparedWindow_) QTimer::singleShot(500, this, [this] { if (preparedOptions_ && !closing_) PreparePlugin(*preparedOptions_); });
     Window->RememberPreviousWindow();
-    Window->show(); Surface->setFocus(); return Window;
+    // EPUB presents its own top-level window as soon as the source is bound.
+    // Keep the transport dialog hidden so opening one book does not replace a
+    // visible loading window with another window midway through startup.
+    if (!EpubStandalone) { Window->show(); Surface->setFocus(); }
+    return Window;
 }
 void QtViewerHost::CloseAll()
 {

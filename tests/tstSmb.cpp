@@ -249,7 +249,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
@@ -6648,6 +6648,8 @@ private slots:
         QTest::addColumn<bool>("Editor"); QTest::addColumn<QString>("Book");
         for(bool Editor : {false, true}) for(const auto* Book : {"epub2-ncx.epub", "epub3-images.epub"})
             QTest::newRow(qPrintable(QString(Editor ? "F4-" : "F3-") + Book)) << Editor << QString(Book);
+        const auto StartupBook=qEnvironmentVariable("HC_EPUB_STARTUP_BOOK");
+        if(!StartupBook.isEmpty())QTest::newRow("F3-startup-book")<<false<<StartupBook;
     }
     void epubProductKeys() {
         QFETCH(bool, Editor); QFETCH(QString, Book);
@@ -6655,7 +6657,8 @@ private slots:
         auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto Restore = qScopeGuard([&] { Settings.Replace(Saved); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace); });
         QVERIFY(Settings.Put(hc::settings::Section::Editors, QJsonArray{})); QVERIFY(Settings.SetPlugins("wlx", {})); QVERIFY(Settings.SetPlugins("dopusViewer", {}));
-        QTemporaryDir Directory; const auto Path = Directory.filePath(Book); QVERIFY(QFile::copy(QDir(Corpus).filePath(Book), Path));
+        const auto Name=QFileInfo(Book).fileName();
+        QTemporaryDir Directory; const auto Path = Directory.filePath(Name); QVERIFY(QFile::copy(QFileInfo(Book).isAbsolute()?Book:QDir(Corpus).filePath(Book), Path));
         QFile Original(Path); QVERIFY(Original.open(QIODevice::ReadOnly)); const auto Bytes = Original.readAll(); Original.close();
         auto* Source = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Source)); Model->SetProviderEnabled(true);
         Source->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
@@ -6664,18 +6667,40 @@ private slots:
         for(int Row=0; Row<Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
             Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
             while(const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
-            if(Model->GetName(Index)==Book) { Selected=true; break; }
+            if(Model->GetName(Index)==Name) { Selected=true; break; }
         }
         QVERIFY(Selected); main_->activateWindow(); QApplication::setActiveWindow(main_); Grid->EnsureKeyboardFocusOnView(); QVERIFY(QApplication::focusWidget());
+        struct LoadingWindowProbe final : QObject {
+            bool shown=false;
+            bool eventFilter(QObject* Object,QEvent* Event) override {
+                if(Event->type()==QEvent::Show && Object->objectName()=="hc.document.workspace")shown=true;
+                return false;
+            }
+        } LoadingProbe;
+        qApp->installEventFilter(&LoadingProbe);
         qInfo("EPUB product key dispatch");
+        QElapsedTimer Startup;Startup.start();
         QTest::keyClick(QApplication::focusWidget(), Editor ? Qt::Key_F4 : Qt::Key_F3);
         qInfo("EPUB product key dispatched");
         auto* Controller = main_->findChild<QObject*>("hc.document.openController"); QVERIFY(Controller);
         if(!Editor) {
             QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"),15000);
             QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace");
+            const bool LoadingWindowShown=Window->isVisible();
             auto Cleanup=qScopeGuard([&] { if(Window && Window->objectName()=="hc.document.workspace") Window->close(); });
             auto* Surface=Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+            HWND PresentedWindow=nullptr;bool Disappeared=false;qint64 PresentedMs=-1;
+            QTimer Visibility;Visibility.setInterval(5);
+            connect(&Visibility,&QTimer::timeout,&Visibility,[&]{
+                if(PresentedWindow){Disappeared|=!IsWindowVisible(PresentedWindow);return;}
+                struct Search {DWORD pid;HWND window=nullptr;} Candidate{DWORD(Surface->Details().host_.processId_)};
+                if(!Candidate.pid)return;
+                EnumWindows([](HWND Window,LPARAM Value)->BOOL {
+                    auto& State=*reinterpret_cast<Search*>(Value);DWORD Pid=0;GetWindowThreadProcessId(Window,&Pid);
+                    if(Pid==State.pid && IsWindowVisible(Window) && GetWindowTextLengthW(Window)>0){State.window=Window;return FALSE;}return TRUE;
+                },reinterpret_cast<LPARAM>(&Candidate));
+                if(Candidate.window){PresentedWindow=Candidate.window;PresentedMs=Startup.elapsed();}
+            });Visibility.start();
             QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().status_ == hc::viewer::ViewerStatus::Failed,60000);
             QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer not ready");
             QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().documentState_["documents"].toArray().first().toObject()["view"].toObject()["ready"].toBool()
@@ -6685,6 +6710,8 @@ private slots:
             QCOMPARE(Document["view"].toObject()["viewId"].toString(),QString("epub"));
             QVERIFY(Document["view"].toObject()["readOnly"].toBool()); QVERIFY(!Document["canSave"].toBool());
             const auto Reader = Document["view"].toObject()["epub"].toObject();
+            qInfo().noquote()<<"EPUB startup"<<QJsonDocument(QJsonObject{{"elapsedMs",Startup.elapsed()},{"firstWindowMs",PresentedMs},{"loadingWindowShown",LoadingWindowShown||LoadingProbe.shown},{"nativeWindowDisappeared",Disappeared},{"metrics",Reader["metrics"]},{"startup",Reader["startup"]}}).toJson(QJsonDocument::Compact);
+            QVERIFY(!LoadingWindowShown);QVERIFY(!LoadingProbe.shown);QVERIFY(!Disappeared);
             QVERIFY(!Reader["text"].toString().trimmed().isEmpty() || !Reader["images"].toArray().isEmpty());
             for(const auto& Value : Reader["images"].toArray()) { const auto Image = Value.toObject(); QVERIFY(Image["complete"].toBool()); QVERIFY(Image["naturalWidth"].toInt() > 0); }
             struct Search { DWORD pid; HWND window=nullptr; } State{DWORD(Surface->Details().host_.processId_)};
@@ -6695,6 +6722,7 @@ private slots:
                 },reinterpret_cast<LPARAM>(&State)); return State.window!=nullptr;
             };
             QTRY_VERIFY_WITH_TIMEOUT(Find(),10000);
+            Visibility.stop();QVERIFY(!Disappeared);
             PostMessageW(State.window,WM_CLOSE,0,0);
             QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || (!Window->isVisible() && Window->objectName()=="hc.document.prepared"),20000);
             QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Surface->Details().host_.activeProcesses_<=1u,15000);
@@ -6718,6 +6746,22 @@ private slots:
             PostMessageW(State.window,WM_CLOSE,0,0); QTRY_VERIFY_WITH_TIMEOUT(Process.isNull(),20000);
         }
         QVERIFY(Original.open(QIODevice::ReadOnly)); QCOMPARE(Original.readAll(),Bytes);
+    }
+    void epubStartupFailureUi() {
+        const auto Catalog=hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(),QCoreApplication::applicationDirPath());
+        const auto Found=Catalog.targets_.find("builtin.hyperviewer");QVERIFY(Found!=Catalog.targets_.end());QVERIFY(Found->second.descriptor_.available_);
+        QTemporaryDir Directory;QFile File(Directory.filePath("invalid.epub"));QVERIFY(File.open(QIODevice::WriteOnly));File.write("invalid epub");File.close();
+        auto Provider=hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+        const auto Entry=Provider->Resolve({hc::storage::LocatorKind::Local,File.fileName().toStdString()},{}).get();QVERIFY(Entry.HasValue());
+        auto Source=std::make_shared<hc::storage::ProviderContentSource>(Provider,Entry.Value());
+        QtViewerHost Host(main_,[]{return hc::storage::MakeNativeMaterializer(QDir::tempPath().toStdString());});
+        auto Drain=qScopeGuard([&]{Host.CloseAll();while(!Host.IsIdle())QTest::qWait(10);});
+        bool Completed=false,Ready=true;QString Error;
+        QPointer<QDialog> Window=Host.OpenPlugin(Found->second.plugin_,{{Source,{}}},"EPUB failure fixture",[&](bool Ok,const QString& Code){Completed=true;Ready=Ok;Error=Code;});
+        QVERIFY(Window);QVERIFY(!Window->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(Completed,30000);QVERIFY(!Ready);QVERIFY(!Error.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(Window && Window->isVisible(),10000);QVERIFY(Window->windowTitle().contains(Error));
+        Window->close();QTRY_VERIFY_WITH_TIMEOUT(Window.isNull(),15000);
     }
     void documentCommandsUi() {
         auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
