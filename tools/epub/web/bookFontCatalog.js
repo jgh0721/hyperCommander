@@ -7,6 +7,8 @@ const installed = new WeakMap();
 export async function buildBookFontCatalog(publication, root) {
     const allowed = new Set(publication.resources.filter(r => fontTypes.has(r.mediaType))
         .map(r => new URL(encodePath(r.path), root).href));
+    // Without manifest-backed font URLs, scanning chapters cannot add a font.
+    if (!allowed.size) return { records: [], families: [], warnings: [] };
     const records = [], warnings = [];
     const warn = reason => { if (!warnings.includes(reason)) warnings.push(reason); };
     let bytes = 0, count = 0, rules = 0;

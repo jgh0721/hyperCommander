@@ -51,6 +51,7 @@ let sequence = Promise.resolve();
 let generation = 0;
 let renditionSize = null;
 let resizeQueued = false;
+let startupTimings = {};
 // EPUB.js clears in-flight iframe views on automatic window resize. Fixed pixel
 // dimensions disable that path; all reflow is serialized with display/navigation.
 async function resizeRendition() {
@@ -177,6 +178,7 @@ async function applyProfile(next = {}) {
         if(oldLayout!==profile.layout || oldColumns!==profile.columns)rendition.spread(profile.columns===1 || profile.layout==="scroll"?"none":"auto",profile.columns===2?600:900);
         await resizeRendition();if(locator)await rendition.display(locator);
     }
+    if (!rendition && !navigator) return;
     await sleep(150);
     documents().forEach(applyDocument);
 }
@@ -286,6 +288,10 @@ async function goChapter(index) {
 }
 
 async function start(name) {
+    const startedAt = performance.now();
+    startupTimings = {};
+    let stageAt = startedAt;
+    const measured = name => { const now = performance.now(); startupTimings[name] = Math.round(now - stageAt); stageAt = now; };
     const mine = ++generation;
     selectedToc=-1;
     window.hcEvidence = { status: "loading", phase: "P0-B", engine: name, checks: {} };
@@ -296,13 +302,16 @@ async function start(name) {
     engine = name;
     window.hcEvidence.stage = "publication";
     publication ||= await fetch("epub://app/app/publication.json").then(r => r.json());
+    measured("publicationMs");
     window.hcEvidence.stage = "font-catalog";
     fontCatalog ||= await buildBookFontCatalog(publication, root);
+    measured("fontCatalogMs");
     if (name === "epubjs") {
         book = ePub(root + encodePath(publication.rootfile), { openAs: "opf" });
         book.on("openFailed", error => { if (mine === generation) fail(error); });
         window.hcEvidence.stage = "book-ready";
         await book.ready;
+        measured("bookReadyMs");
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: profile.layout==="paginated"?"paginated":"scrolled-doc",
             view: ReaderIframeView, spread: profile.layout==="scroll" || profile.columns===1?"none":"auto", minSpreadWidth:profile.columns===2?600:900,
@@ -311,6 +320,7 @@ async function start(name) {
         rendition.hooks.content.register(content => applyDocument(content.document));
         window.hcEvidence.stage = "first-display";
         await rendition.display();
+        measured("firstDisplayMs");
     } else if (name === "readium") {
         const readingOrder = publication.spine.map(item => ({ href: encodePath(item.path), type: "application/xhtml+xml" }));
         const manifest = Manifest.deserialize({ "@context": "https://readium.org/webpub-manifest/context.jsonld",
@@ -333,10 +343,21 @@ async function start(name) {
             { preferences: { scroll: true, columnCount: 1 }, defaults: {}, upgradeInsecureRequests: "never" });
         await navigator.load();
     } else throw Error("Unknown engine");
-    window.hcEvidence.stage = "profile";
-    await applyProfile();
     window.hcEvidence.stage = "first-chapter";
-    await goChapter(0);
+    if (rendition) {
+        // The host submits the profile before start and the content hook applies
+        // it before display. Keep that first frame instead of displaying it twice
+        // again merely to apply the same profile and navigate back to chapter 0.
+        await resizeRendition();
+        documents().forEach(applyDocument);
+        await Promise.all(documents().map(doc => doc.fonts.ready));
+        await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
+    } else {
+        await applyProfile();
+        await goChapter(0);
+    }
+    measured("firstChapterMs");
+    startupTimings.totalMs = Math.round(performance.now() - startedAt);
     if (mine === generation) window.hcEvidence = { status: "ready", phase: "P0-B", ...currentSnapshot() };
 }
 
@@ -453,6 +474,7 @@ window.addEventListener("unhandledrejection", event => fail(event.reason));
 
 // Trusted-shell diagnostics only: no book script or mutable document authority.
 window.hcStartupDiagnostics = () => ({
+    timings: startupTimings,
     visibility: document.visibilityState,
     paneWidth: pane.clientWidth, paneHeight: pane.clientHeight,
     renditionQueue: rendition ? { running: !!rendition.q?.running, pending: rendition.q?._q?.length } : null,
