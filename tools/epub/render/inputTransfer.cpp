@@ -31,6 +31,7 @@ namespace hc::epub::poc
         const char* Names[]{"idle", "receiving", "verified", "consumed", "cancelled", "failed"};
         QJsonObject Reply{{"protocolVersion", 1}, {"documentId", input_.documentId}, {"generation", input_.generation},
             {"status", Names[int(state_)]}, {"received", received_}};
+        Reply["chunkBytes"]=ChunkBytes;
         if(!failure_.isEmpty()) Reply["error"] = failure_;
         return Reply;
     }
@@ -50,6 +51,7 @@ namespace hc::epub::poc
                 || timeoutMs_ < 1 || timeoutMs_ > 120000) return reject("epub-input-admission");
             input_.documentId = Request["documentId"].toString(); input_.generation = qint64(Generation); input_.engine = Engine;
             sha256_ = Request["sha256"].toString().toLatin1(); length_ = qsizetype(Size);
+            input_.bytes.reserve(length_);
             deadline_ = QDeadlineTimer(timeoutMs_, Qt::PreciseTimer); state_ = State::Receiving;
         } else {
             if(!Matches(Request)) return reject("epub-input-stale");
@@ -61,10 +63,10 @@ namespace hc::epub::poc
                 if(Request.size() != 6 || !Request["offset"].isDouble() || Request["offset"].toDouble(-1) != received_
                     || !Request["data"].isString()) return fail("epub-input-order");
                 const auto Text = Request["data"].toString();
-                if(Text.isEmpty() || Text.size() > ChunkBytes * 4 / 3) return fail("epub-input-chunk-budget");
+                if(Text.isEmpty() || Text.size() > ((ChunkBytes+2)/3)*4) return fail("epub-input-chunk-budget");
                 const auto Encoded = Text.toLatin1();
                 const auto Data = QByteArray::fromBase64(Encoded, QByteArray::AbortOnBase64DecodingErrors);
-                if(Data.isEmpty() || Data.size() > length_ - received_ || Data.toBase64() != Encoded || QString::fromLatin1(Encoded) != Text)
+                if(Data.isEmpty() || Data.size()>ChunkBytes || Data.size() > length_ - received_ || Data.toBase64() != Encoded || QString::fromLatin1(Encoded) != Text)
                     return fail("epub-input-chunk");
                 input_.bytes.append(Data); hash_.addData(Data); received_ += Data.size();
             } else if(Kind == "input-commit" && Request.size() == 4) {

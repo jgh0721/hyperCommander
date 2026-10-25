@@ -13,7 +13,8 @@ namespace hc::document::epub
     InputSendResult SendInput(const QByteArray& Publication, const QString& DocumentId, qint64 Generation,
         const QString& Engine, const InputExchange& Exchange, const std::function<bool()>& Cancelled, int TimeoutMs)
     {
-        constexpr qsizetype ChunkBytes = 192 * 1024, MaxBytes = 48 * 1024 * 1024;
+        constexpr qsizetype MaxChunkBytes = 512 * 1024, MaxBytes = 48 * 1024 * 1024;
+        qsizetype ChunkBytes = 192 * 1024; // Older helpers retain the original transfer size.
         const auto Id = DocumentId.toLatin1();
         if(!Exchange || Publication.isEmpty() || Publication.size() > MaxBytes || DocumentId.size() != 64
             || QString::fromLatin1(Id) != DocumentId || QByteArray::fromHex(Id).toHex() != Id
@@ -50,6 +51,12 @@ namespace hc::document::epub
                 || (Request["kind"] == "input-commit" && Value["status"] == "preparing");
             if(Value.contains("error") || Value["accepted"] != QJsonValue(true)
                 || !ExpectedStatus || Value["received"] != QJsonValue(Received)) return "epub-send-reply-state";
+            if(Request["kind"]=="input-begin" && Value.contains("chunkBytes")) {
+                const auto Limit=Value["chunkBytes"].toInteger(-1);
+                if(!Value["chunkBytes"].isDouble() || Value["chunkBytes"].toDouble()!=double(Limit) || Limit<192*1024 || Limit>MaxChunkBytes)
+                    return "epub-send-chunk-budget";
+                ChunkBytes=qsizetype(Limit);
+            }
             return {};
         };
         if(const auto Error = Stop(); !Error.isEmpty()) return Fail(Error);

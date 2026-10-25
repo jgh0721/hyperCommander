@@ -18,7 +18,7 @@ namespace hc::epub::poc
     {
     public:
         static constexpr qsizetype MaxBytes = 48 * 1024 * 1024;
-        static constexpr qsizetype ChunkBytes = 192 * 1024;
+        static constexpr qsizetype ChunkBytes = 512 * 1024;
         explicit InputTransfer(int TimeoutMs = 30000);
         QJsonObject Handle(const QJsonObject& Request);
         QJsonObject Status();

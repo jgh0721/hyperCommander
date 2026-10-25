@@ -23,6 +23,22 @@ class InputTransferTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void senderNegotiatesChunkBudget_data() {
+        QTest::addColumn<int>("Limit");QTest::addColumn<bool>("Accepted");
+        QTest::newRow("legacy")<<0<<true;QTest::newRow("bounded")<<512*1024<<true;
+        QTest::newRow("too-large")<<512*1024+1<<false;QTest::newRow("too-small")<<1024<<false;
+    }
+    void senderNegotiatesChunkBudget() {
+        QFETCH(int,Limit);QFETCH(bool,Accepted);InputTransfer Transfer;int Chunks=0;bool Bounded=true;
+        const QByteArray Data(1024*1024+17,'a');
+        const auto Result=hc::document::epub::SendInput(Data,QString(64,'a'),7,"epubjs",[&](const QByteArray& Bytes,QByteArray& Reply,int){
+            const auto Request=QJsonDocument::fromJson(Bytes).object();if(Request["kind"]=="input-chunk"){++Chunks;Bounded&=Bytes.size()<768*1024;}
+            auto Response=Transfer.Handle(Request);if(Request["kind"]=="input-begin"){if(Limit)Response["chunkBytes"]=Limit;else Response.remove("chunkBytes");}
+            Reply=QJsonDocument(Response).toJson(QJsonDocument::Compact);return true;
+        });
+        QCOMPARE(Result.accepted_,Accepted);QVERIFY(Bounded);if(Accepted){QCOMPARE(Chunks,Limit?3:6);const auto Input=Transfer.Take();QVERIFY(Input);QCOMPARE(Input->bytes,Data);}
+        else {QCOMPARE(Chunks,0);QCOMPARE(Result.error_,QString("epub-send-chunk-budget"));}
+    }
     void senderLostCommitAcknowledgement()
     {
         InputTransfer Transfer;

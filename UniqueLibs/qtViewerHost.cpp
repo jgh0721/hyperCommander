@@ -210,6 +210,15 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     const bool EpubStandalone = Standalone && Completion && std::any_of(Inputs.begin(), Inputs.end(), [](const auto& Input) {
         return Input.source_ && QFileInfo(QString::fromStdString(Input.source_->Describe().name_)).suffix().compare("epub", Qt::CaseInsensitive) == 0;
     });
+    if(EpubStandalone) {
+        const auto Complete=std::move(Completion);
+        const QPointer<QtViewerHost> Guard(this);
+        Completion=[Guard,Complete](bool Ready,const QString& Error){
+            Complete(Ready,Error);
+            if(Guard && Ready && Guard->preparedOptions_ && !Guard->preparedWindow_ && !Guard->closing_)
+                QTimer::singleShot(500,Guard,[Guard]{if(Guard && Guard->preparedOptions_ && !Guard->preparedWindow_ && !Guard->closing_)Guard->PreparePlugin(*Guard->preparedOptions_);});
+        };
+    }
     const auto Warm = Recyclable && preparedWindow_ && preparedSurface_ ? preparedSurface_->Snapshot().status_ : hc::viewer::ViewerStatus::Closed;
     const bool Prepared = Warm == hc::viewer::ViewerStatus::Ready && preparedSurface_->IsReady();
     // A warm viewer that is still starting is ready sooner than a cold start:
@@ -341,7 +350,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     if (Prepared) {
         if (!Surface->OpenPrepared(std::move(PreparedInputs))) { Window->deleteLater(); return nullptr; }
     } else if (!Pending) Surface->Open(std::move(Options), std::move(First));
-    if (preparedOptions_ && !preparedWindow_) QTimer::singleShot(500, this, [this] { if (preparedOptions_ && !closing_) PreparePlugin(*preparedOptions_); });
+    if (!EpubStandalone && preparedOptions_ && !preparedWindow_) QTimer::singleShot(500, this, [this] { if (preparedOptions_ && !closing_) PreparePlugin(*preparedOptions_); });
     Window->RememberPreviousWindow();
     // EPUB presents its own top-level window as soon as the source is bound.
     // Keep the transport dialog hidden so opening one book does not replace a
