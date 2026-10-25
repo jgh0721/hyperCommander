@@ -1169,6 +1169,18 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(UpdateLargeTextSession(*selected, std::move(documents), {}), Failure);
         QCOMPARE(initial->session_->documents_[2].bytes_, std::uint64_t(2));
     }
+    void largeSaveInterruptedPreservesDestination()
+    {
+        QTemporaryDir dir; Request input; const auto path = dir.filePath("source.txt");
+        const QByteArray original(4 * 1024 * 1024, 'a'); write(path, original);
+        const auto document = ReadLargeText(path, {}, {}); const auto edited = EditLargeText(document, 0, 1, "b", {});
+        for (const auto& code : {"Canceled", "Timeout", "SimulatedTransportFailure"}) {
+            Budget limits; int checkpoints = 0; limits.memoryCheck_ = [&] { if (++checkpoints == 20) throw Failure(code); };
+            bool failed = false; try { SaveLargeText(input, edited, limits); } catch (const Failure& failure) { failed = true; QVERIFY2(failure.code_.find(code) != std::string::npos, failure.what()); }
+            QVERIFY(failed); QCOMPARE(read(path), original);
+        }
+        const auto saved = SaveLargeText(input, edited, {}); QCOMPARE(saved.rawHash_, QCryptographicHash::hash(QByteArray("b") + original.mid(1), QCryptographicHash::Sha256));
+    }
     void largeTextEncodingBoundaries()
     {
         try {

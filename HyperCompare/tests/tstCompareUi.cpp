@@ -260,6 +260,25 @@ private slots:
         view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).isEmpty());
         view.findChild<QPushButton*>("largeFindPrevious")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QVERIFY(contents(right).startsWith("value"));
     }
+    void largeRepeatedEditsStayWithinBudget()
+    {
+        QTemporaryDir dir; Request input; input.file1_ = dir.filePath("left.txt"); input.file2_ = dir.filePath("right.txt"); input.memoryMiB_ = 256;
+        const QByteArray block(64 * 1024, 'a');
+        for (const auto& path : {input.file1_, input.file2_}) { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); for (int i = 0; i < 1024; ++i) QCOMPARE(file.write(block), qint64(block.size())); }
+        LargeTextView view(input, OpenLargeTextSession(input, {}), nullptr); view.resize(1300, 800); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* right = view.findChild<ScintillaEditBase*>("largeTextRight"); auto* apply = view.findChild<QPushButton*>("largeApplyPages");
+        std::uint64_t peakPrivate = 0; int ticks = 0; QTimer sampler;
+        connect(&sampler, &QTimer::timeout, this, [&] { ++ticks; PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb = sizeof(memory); if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory))) peakPrivate = std::max<std::uint64_t>(peakPrivate, memory.PrivateUsage); }); sampler.start(20);
+        QElapsedTimer elapsed; elapsed.start();
+        for (int i = 0; i < 40; ++i) {
+            const char replacement[2]{char('b' + i % 20), 0}; right->send(SCI_SETTARGETSTART, 0); right->send(SCI_SETTARGETEND, 1); right->send(SCI_REPLACETARGET, 1, reinterpret_cast<sptr_t>(replacement)); apply->click();
+            QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(contents(right)[0], replacement[0]);
+        }
+        int undos = 0; while (view.CanUndo(false)) { view.Undo(false); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); ++undos; QVERIFY(undos <= 32); }
+        QCOMPARE(undos, 32); QVERIFY(ticks > 40); QVERIFY(peakPrivate < 256ull * 1024 * 1024);
+        QFile original(input.file2_); QVERIFY(original.open(QIODevice::ReadOnly)); QCOMPARE(original.read(1), QByteArray("a"));
+        qInfo("64 MiB edit/Undo acceptance: 40 edits, 32 Undo, %lld ms, %d UI ticks, sampled peak private %llu bytes", elapsed.elapsed(), ticks, peakPrivate);
+    }
     void directoryPartialResultsAndPlanGuard()
     {
         Request request; request.file1_ = "D:/left"; request.file2_ = "D:/right"; Result value; value.directoryComplete_ = false;
