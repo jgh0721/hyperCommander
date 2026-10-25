@@ -47,6 +47,16 @@
       "cacheVariables": {
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
+    },
+    {
+      "name": "vc2026-hypercompare",
+      "displayName": "HyperCompare standalone",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/hypercompare",
+      "cacheVariables": {
+        "HC_BUILD_HYPERCOMPARE_ONLY": "ON",
+        "BUILD_TESTING": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -84,6 +94,11 @@
     {
       "name": "vc2026-release",
       "configurePreset": "vc2026-qt612",
+      "configuration": "Release"
+    },
+    {
+      "name": "vc2026-hypercompare-release",
+      "configurePreset": "vc2026-hypercompare",
       "configuration": "Release"
     }
   ]

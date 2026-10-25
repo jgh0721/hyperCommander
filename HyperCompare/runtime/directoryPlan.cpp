@@ -1,0 +1,319 @@
+﻿#include "stdafx.h"
+#include "directoryPlan.hpp"
+#include "saveRecovery.hpp"
+#include "requestFile.hpp"
+#include "directoryText.hpp"
+#include "session.hpp"
+#include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeWritableStorage.hpp"
+#include "commonLibs/document/documentSaveCoordinator.hpp"
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
+#include <QScopeGuard>
+#include <Aclapi.h>
+
+namespace hc::compare
+{
+    namespace
+    {
+        storage::Locator locator(const QString& Path)
+        { return {Path.startsWith("//") ? storage::LocatorKind::Smb : storage::LocatorKind::Local, Path.toUtf8().toStdString()}; }
+        template<class T> T require(storage::Result<T> Value)
+        { if (!Value.HasValue()) throw Failure(Value.Failure().code_); return std::move(Value.Value()); }
+        storage::OperationContext context(const Budget& Limits)
+        { storage::OperationContext ctx; ctx.deadline_ = Limits.deadline_; ctx.workerRead_ = true; ctx.denyConcurrentMutation_ = true; return ctx; }
+        QString revision(const storage::EntrySnapshot& Entry)
+        { if (!Entry.id_.revision_) throw Failure("DirectoryRevisionUnavailable"); return QString::fromStdString(Entry.id_.revision_->token_); }
+        QString pathRoot(const QString& Path)
+        {
+            if (!Path.startsWith("//"))
+            {
+                if (Path.size() < 3 || !Path[0].isLetter() || Path[1] != ':' || Path[2] != '/') throw Failure("InvalidDirectoryPath");
+                return Path.left(3);
+            }
+            const auto parts = Path.split('/');
+            if (parts.size() < 4 || parts[2].isEmpty() || parts[3].isEmpty()) throw Failure("InvalidDirectoryPath");
+            return "//" + parts[2] + '/' + parts[3];
+        }
+        bool textualOverlap(const QString& A, const QString& B)
+        { return A == B || A.startsWith(B.endsWith('/') ? B : B + '/') || B.startsWith(A.endsWith('/') ? A : A + '/'); }
+        QHash<QString, QString> ancestorIdentities(const QString& Path)
+        {
+            QHash<QString, QString> result; auto at = Path; QString suffix; const auto root = pathRoot(Path);
+            for (;;)
+            {
+                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(at).utf16()),
+                    FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (handle != INVALID_HANDLE_VALUE)
+                {
+                    BY_HANDLE_FILE_INFORMATION info{}; const auto ok = GetFileInformationByHandle(handle, &info); CloseHandle(handle);
+                    if (!ok) throw Failure("DirectoryIdentityUnavailable");
+                    if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) throw Failure("ReparseDirectoryUnsupported");
+                    if (!info.nFileIndexHigh && !info.nFileIndexLow) throw Failure("DirectoryIdentityUnavailable");
+                    const auto key = QString::number(info.dwVolumeSerialNumber) + ':' + QString::number(info.nFileIndexHigh) + ':' + QString::number(info.nFileIndexLow);
+                    result.insert(key, suffix.toCaseFolded());
+                }
+                else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) throw Failure("DirectoryPathUnavailable");
+                if (at.compare(root, Qt::CaseInsensitive) == 0) break;
+                suffix = QFileInfo(at).fileName() + (suffix.isEmpty() ? QString{} : '/' + suffix);
+                const auto parent = QFileInfo(at).absolutePath();
+                if (parent == at || parent.size() >= at.size()) throw Failure("InvalidDirectoryPath");
+                at = parent;
+            }
+            return result;
+        }
+        QJsonObject inventory(const DirectorySnapshot& Snapshot, const Budget& Limits, storage::CopyOptions Copy)
+        {
+            QJsonArray entries;
+            for (const auto& item : Snapshot.entries_)
+            {
+                Limits.Check(); auto evidence = DirectoryEntryEvidence(Snapshot.Expand(item), Limits, Copy);
+                evidence["path"] = item.path_; entries.append(evidence);
+            }
+            return {{"path", CheckedDirectoryPath(Snapshot.root_)}, {"exists", true}, {"revision", revision(Snapshot.entry_)}, {"entries", entries}};
+        }
+    }
+    QString CheckedDirectoryPath(const QString& Path)
+    {
+        if (Path.isEmpty() || Path.contains(QChar(0))) throw Failure("InvalidDirectoryPath");
+        auto native = Path; native.replace('\\', '/');
+        if (!QDir::isAbsolutePath(native) || native.startsWith("//?/") || native.startsWith("//./")) throw Failure("InvalidDirectoryPath");
+        const auto root = pathRoot(native);
+        const auto parts = native.split('/');
+        for (qsizetype i = native.startsWith("//") ? 2 : 1; i < parts.size(); ++i)
+        {
+            const auto& part = parts[i]; if (part.isEmpty() && i == parts.size() - 1) continue;
+            if (part.isEmpty() || part == "." || part == ".." || part.endsWith('.') || part.endsWith(' ') || part.contains(':') ||
+                part.contains('*') || part.contains('?')) throw Failure("InvalidDirectoryPath");
+            const auto stem = part.section('.', 0, 0).toUpper();
+            if (QStringList{"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}.contains(stem) ||
+                ((stem.startsWith("COM") || stem.startsWith("LPT")) && stem.size() == 4 && stem[3] >= '1' && stem[3] <= '9'))
+                throw Failure("InvalidDirectoryPath");
+        }
+        auto checked = QDir::cleanPath(native); auto at = checked;
+        for (;;)
+        {
+            const auto attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(at).utf16()));
+            if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("ReparseDirectoryUnsupported");
+            if (attributes == INVALID_FILE_ATTRIBUTES && GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
+                throw Failure("DirectoryPathUnavailable");
+            // A UNC server is not a filesystem directory. Stop at its share root.
+            if (at.compare(root, Qt::CaseInsensitive) == 0) break;
+            const auto parent = QFileInfo(at).absolutePath(); if (parent == at || parent.size() >= at.size()) break; at = parent;
+        }
+        // Canonicalize the nearest existing ancestor, including short-name aliases.
+        QStringList missing; at = checked;
+        while (!QFileInfo::exists(at)) { missing.prepend(QFileInfo(at).fileName()); const auto parent = QFileInfo(at).absolutePath(); if (parent == at) throw Failure("DirectoryParentMissing"); at = parent; }
+        auto canonical = QFileInfo(at).canonicalFilePath(); if (canonical.isEmpty()) throw Failure("DirectoryPathUnavailable");
+        for (const auto& name : missing) canonical = QDir(canonical).filePath(name);
+        return QDir::cleanPath(canonical);
+    }
+    bool DirectoryPathsOverlap(const QString& A, const QString& B)
+    {
+        const auto a = QDir::cleanPath(QDir::fromNativeSeparators(A)).toCaseFolded(), b = QDir::cleanPath(QDir::fromNativeSeparators(B)).toCaseFolded();
+        if (textualOverlap(a, b)) return true;
+        if (pathRoot(a) == pathRoot(b)) return false;
+        // Drive letters, UNC host aliases and overlapping shares can address the
+        // same tree. Compare existing ancestors plus the not-yet-created suffix.
+        const auto aa = ancestorIdentities(a), bb = ancestorIdentities(b);
+        for (auto it = aa.cbegin(); it != aa.cend(); ++it)
+            if (const auto other = bb.constFind(it.key()); other != bb.cend() &&
+                (it.value().isEmpty() || other.value().isEmpty() || textualOverlap(it.value(), other.value()))) return true;
+        return false;
+    }
+    QByteArray DirectoryFileDigest(const storage::EntrySnapshot& Entry, const Budget& Limits)
+    {
+        Limits.Check(); if (Entry.directory_) throw Failure("ExpectedFile");
+        const auto provider = storage::MakeNativeReadProvider(Entry.locator_.kind_); const auto ctx = context(Limits);
+        const auto bound = require(provider->Resolve(Entry.locator_, ctx).get());
+        if (bound.id_.revision_ != Entry.id_.revision_) throw Failure("DirectoryChanged");
+        const auto stream = require(provider->OpenRead(bound.id_, ctx).get()); QCryptographicHash hash(QCryptographicHash::Sha256);
+        std::uint64_t size = 0;
+        for (;;)
+        {
+            Limits.Check(); const auto chunk = require(stream->Read(1024 * 1024, ctx).get());
+            size += chunk.bytes_.size(); hash.addData(QByteArrayView(reinterpret_cast<const char*>(chunk.bytes_.data()), qsizetype(chunk.bytes_.size())));
+            if (chunk.eof_) break; if (chunk.bytes_.empty()) throw Failure("ReadMadeNoProgress");
+        }
+        if (size != Entry.size_ || require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != Entry.id_.revision_) throw Failure("DirectoryChanged");
+        return hash.result().toHex();
+    }
+    QJsonObject DirectoryCopyEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy)
+    {
+        if (Entry.directory_ || !DirectoryCopyExtras(Copy)) return {};
+        Limits.Check(); const auto ctx = context(Limits); const auto provider = storage::MakeNativeReadProvider(Entry.locator_.kind_);
+        const auto bound = require(provider->Resolve(Entry.locator_, ctx).get());
+        if (bound.id_.revision_ != Entry.id_.revision_) throw Failure("DirectorySourceChanged");
+        const auto pin = require(provider->OpenRead(bound.id_, ctx).get());
+        const auto path = QDir::toNativeSeparators(QString::fromStdString(Entry.locator_.root_));
+        QJsonObject result;
+        if (Copy.metadata_) { result["modified"] = QString::number(bound.modifiedUtcMs_); result["attributes"] = QString::number(bound.attributes_ & 0x27u); }
+        if (Copy.acl_)
+        {
+            const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(path.utf16()), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) throw Failure("DirectoryAclReadFailed"); const auto close = qScopeGuard([&] { CloseHandle(handle); });
+            PACL dacl = nullptr; PSECURITY_DESCRIPTOR descriptor = nullptr;
+            if (GetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS) throw Failure("DirectoryAclReadFailed");
+            const auto release = qScopeGuard([&] { LocalFree(descriptor); }); SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+            if (!GetSecurityDescriptorControl(descriptor, &control, &revision)) throw Failure("DirectoryAclReadFailed");
+            result["dacl"] = dacl ? QString::fromLatin1(QCryptographicHash::hash(QByteArrayView(reinterpret_cast<const char*>(dacl), dacl->AclSize), QCryptographicHash::Sha256).toHex()) : "null";
+            result["protected"] = bool(control & SE_DACL_PROTECTED);
+        }
+        if (Copy.streams_)
+        {
+            QStringList names; WIN32_FIND_STREAM_DATA data{};
+            const auto search = FindFirstStreamW(reinterpret_cast<const wchar_t*>(path.utf16()), FindStreamInfoStandard, &data, 0);
+            if (search == INVALID_HANDLE_VALUE && GetLastError() != ERROR_HANDLE_EOF) throw Failure("DirectoryStreamsReadFailed");
+            const auto closeSearch = qScopeGuard([&] { if (search != INVALID_HANDLE_VALUE) FindClose(search); });
+            if (search != INVALID_HANDLE_VALUE) for (;;)
+            {
+                Limits.Check(); const auto name = QString::fromWCharArray(data.cStreamName);
+                if (name != "::$DATA") { if (names.size() >= 65536 || !name.startsWith(':') || !name.endsWith(":$DATA") || name.contains('/') || name.contains('\\')) throw Failure("DirectoryStreamNameInvalid"); names.append(name); }
+                if (!FindNextStreamW(search, &data)) { if (GetLastError() != ERROR_HANDLE_EOF) throw Failure("DirectoryStreamsReadFailed"); break; }
+            }
+            names.sort(); QJsonArray streams; QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+            for (const auto& name : names)
+            {
+                Limits.Check(); const auto streamPath = path + name;
+                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(streamPath.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+                if (handle == INVALID_HANDLE_VALUE) throw Failure("DirectoryStreamsReadFailed"); const auto close = qScopeGuard([&] { CloseHandle(handle); });
+                QCryptographicHash hash(QCryptographicHash::Sha256); quint64 size = 0;
+                for (;;)
+                {
+                    Limits.Check(); DWORD read = 0; if (!ReadFile(handle, buffer.data(), DWORD(buffer.size()), &read, nullptr)) throw Failure("DirectoryStreamsReadFailed");
+                    if (!read) break; hash.addData(QByteArrayView(buffer.constData(), read)); size += read;
+                }
+                streams.append(QJsonObject{{"name", name}, {"size", QString::number(size)}, {"sha256", QString::fromLatin1(hash.result().toHex())}});
+            }
+            result["streams"] = streams;
+        }
+        if (require(provider->Stat(bound.id_, ctx).get()).id_.revision_ != Entry.id_.revision_) throw Failure("DirectorySourceChanged");
+        return result;
+    }
+    QJsonObject DirectoryEntryEvidence(const storage::EntrySnapshot& Entry, const Budget& Limits, storage::CopyOptions Copy)
+    {
+        QJsonObject result{{"directory", Entry.directory_}, {"size", QString::number(Entry.size_)}, {"revision", revision(Entry)},
+            {"sha256", Entry.directory_ ? QString{} : QString::fromLatin1(DirectoryFileDigest(Entry, Limits))}};
+        if (!Entry.directory_ && DirectoryCopyExtras(Copy)) result["copy"] = DirectoryCopyEvidence(Entry, Limits, Copy);
+        return result;
+    }
+    QJsonObject MakeDirectoryPlan(const Request& Input, const Result& Comparison, const Budget& Limits)
+    {
+        CheckProtectedInputs(Input, {Input.output_}, Limits);
+        if (!Comparison.directoryComplete_ || !Comparison.directories_ || Comparison.completion_ != "Complete" || (Input.directory_.level_ != "bytes" && Input.directory_.level_ != "text")) throw Failure("DirectoryPlanRequiresContentComparison");
+        if (!Input.takeAll_.isEmpty() && (Comparison.directories_->size() == 3 || (Input.takeAll_ != "left" && Input.takeAll_ != "right"))) throw Failure("InvalidDirectorySelection");
+        const auto output = CheckedDirectoryPath(Input.output_); QJsonArray roots;
+        if (QDir(output).isRoot()) throw Failure("DirectoryOutputRootUnsupported");
+        for (const auto& snapshot : *Comparison.directories_)
+        {
+            if (DirectoryPathsOverlap(output, CheckedDirectoryPath(snapshot.root_))) throw Failure("DirectoryOutputOverlapsInput");
+            roots.append(inventory(snapshot, Limits, Input.directoryCopy_));
+        }
+        QJsonObject destination{{"path", output}, {"exists", false}, {"revision", ""}, {"entries", QJsonArray{}}};
+        std::optional<DirectorySnapshot> capturedOutput;
+        if (QFileInfo::exists(output))
+        { capturedOutput = CaptureDirectory(output, {}, Limits); destination = inventory(*capturedOutput, Limits, Input.directoryCopy_); }
+        else if (!QFileInfo(QFileInfo(output).absolutePath()).isDir()) throw Failure("DirectoryParentMissing");
+        QJsonArray actions; QSet<QString> selected;
+        for (const auto& row : Comparison.entries_)
+        {
+            Limits.Check(); const auto entry = row.toObject(); const auto path = entry["path"].toString(), status = entry["status"].toString();
+            QString choice = "unresolved";
+            if (!Input.takeAll_.isEmpty()) choice = Input.takeAll_;
+            else if (DirectoryContentEqual(status) || status == "BothSame" || status == "LeftChanged" || status == "LeftAdded") choice = "left";
+            else if (status == "RightChanged" || status == "RightAdded") choice = "right";
+            else if (status == "LeftDeleted" || status == "RightDeleted" || status == "BothDeleted") choice = "omit";
+            if (choice == "unresolved" && Comparison.directories_->size() == 3 && status == "Conflict")
+            {
+                std::array<storage::EntrySnapshot, 3> inputs; bool eligible = true;
+                for (std::size_t side = 0; side < 3; ++side)
+                {
+                    const auto& tree = (*Comparison.directories_)[side].entries_; const auto at = tree.constFind(path.toCaseFolded());
+                    if (at == tree.cend() || at->directory_ || at->path_ != path) { eligible = false; break; }
+                    inputs[side] = (*Comparison.directories_)[side].Expand(*at);
+                }
+                if (eligible && !DirectoryCopyExtras(Input.directoryCopy_) && InputEncoding(Input, 0) == InputEncoding(Input, 1) && InputEncoding(Input, 0) == InputEncoding(Input, 2) && MergeDirectoryText(inputs, InputEncoding(Input, 0), Limits)) choice = "merge";
+            }
+            if ((choice == "left" || choice == "right") && !entry[choice].toObject()["present"].toBool()) choice = "omit";
+            actions.append(QJsonObject{{"path", path}, {"choice", choice}, {"reason", status}}); selected.insert(path.toCaseFolded());
+        }
+        if (Input.mirror_ && capturedOutput)
+            for (auto it = capturedOutput->entries_.cbegin(); it != capturedOutput->entries_.cend(); ++it)
+                if (!selected.contains(it.key())) actions.append(QJsonObject{{"path", it->path_}, {"choice", "omit"}, {"reason", "MirrorExtra"}});
+        for (const auto& snapshot : *Comparison.directories_) ValidateDirectory(snapshot, Input.directory_, Limits);
+        if (capturedOutput) ValidateDirectory(*capturedOutput, {}, Limits);
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 2}, {"textMerge", QJsonObject{{"engine", textEngineVersion}, {"encoding", InputEncoding(Input, 0)}}}, {"roots", roots}, {"output", destination},
+            {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
+            {"overwrite", Input.overwrite_}, {"mirror", Input.mirror_}, {"actions", actions}};
+        if (DirectoryCopyExtras(Input.directoryCopy_))
+        { result["schemaVersion"] = 4; result["copyPolicy"] = QJsonObject{{"metadata", Input.directoryCopy_.metadata_}, {"acl", Input.directoryCopy_.acl_}, {"streams", Input.directoryCopy_.streams_}}; }
+        if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
+        return result;
+    }
+    QJsonObject MakeDirectoryTransferPlan(const Request& Input, const Result& Comparison, int Source, const QString& Path, const Budget& Limits)
+    {
+        if (Source < 0 || Source > 1 || !Comparison.directoryComplete_ || Comparison.completion_ != "Complete" || !Comparison.directories_ || Comparison.directories_->size() != 2)
+            throw Failure("DirectoryTransferRequiresCompleteComparison");
+        const auto& source = (*Comparison.directories_)[Source]; const auto& target = (*Comparison.directories_)[1 - Source];
+        const auto key = Path.toCaseFolded(); if (key.isEmpty() || !source.entries_.contains(key)) throw Failure("DirectoryTransferSelectionMissing");
+        const auto output = CheckedDirectoryPath(target.root_);
+        CheckProtectedInputs(Input, {output}, Limits);
+        if (DirectoryPathsOverlap(source.root_, output)) throw Failure("DirectoryOutputOverlapsInput");
+        ValidateDirectory(source, Input.directory_, Limits); ValidateDirectory(target, Input.directory_, Limits);
+        const auto destinationSnapshot = CaptureDirectory(output, {}, Limits);
+        const auto sourceInventory = inventory(source, Limits, Input.directoryCopy_), destination = inventory(destinationSnapshot, Limits, Input.directoryCopy_);
+        QMap<QString, QString> paths;
+        for (auto it = source.entries_.cbegin(); it != source.entries_.cend(); ++it) paths.insert(it.key(), it->path_);
+        for (auto it = destinationSnapshot.entries_.cbegin(); it != destinationSnapshot.entries_.cend(); ++it) if (!paths.contains(it.key())) paths.insert(it.key(), it->path_);
+        QJsonArray actions;
+        for (auto it = paths.cbegin(); it != paths.cend(); ++it)
+        {
+            Limits.Check(); const bool selected = source.entries_.contains(it.key()) &&
+                (it.key() == key || it.key().startsWith(key + '/') || key.startsWith(it.key() + '/'));
+            actions.append(QJsonObject{{"path", it.value()}, {"choice", selected ? "left" : "keep"}, {"reason", selected ? "Transfer" : "Preserve"}});
+        }
+        ValidateDirectory(source, Input.directory_, Limits); ValidateDirectory(destinationSnapshot, {}, Limits);
+        QJsonObject result{{"kind", "HyperCompareDirectoryPlan"}, {"schemaVersion", 3}, {"transfer", true}, {"roots", QJsonArray{sourceInventory}}, {"output", destination},
+            {"include", QJsonArray::fromStringList(Input.directory_.include_)}, {"exclude", QJsonArray::fromStringList(Input.directory_.exclude_)},
+            {"overwrite", true}, {"mirror", false}, {"actions", actions}};
+        if (DirectoryCopyExtras(Input.directoryCopy_))
+        { result["schemaVersion"] = 4; result["copyPolicy"] = QJsonObject{{"metadata", Input.directoryCopy_.metadata_}, {"acl", Input.directoryCopy_.acl_}, {"streams", Input.directoryCopy_.streams_}}; }
+        if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
+        return result;
+    }
+    void SaveDirectoryPlan(const QJsonObject& Plan, const QString& Path, Result& Value, const Budget& Limits)
+    {
+        const auto destination = CheckedDirectoryPath(Path);
+        if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Plan["output"].toObject()["path"].toString()))) throw Failure("DirectoryArtifactOverlapsRoot");
+        for (const auto& snapshot : Plan["roots"].toArray())
+            if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(snapshot.toObject()["path"].toString()))) throw Failure("DirectoryArtifactOverlapsRoot");
+        auto data = QJsonDocument(Plan).toJson(); data.replace("\n", "\r\n");
+        if (data.size() > directoryPlanLimit) throw Failure("DirectoryPlanSizeLimit");
+        const auto at = locator(destination); const auto provider = storage::MakeNativeReadProvider(at.kind_);
+        const auto writer = storage::MakeNativeWritableStorage(at.kind_, provider);
+        if (require(writer->Inspect(at, context(Limits)))) throw Failure("PlanAlreadyExists");
+        SaveRecoveryJournal journal; auto ctx = context(Limits); ctx.writeCheckpoint_ = journal.Checkpoint();
+        const auto saved = document::SaveDocumentBytes(*writer, at, {},
+            {reinterpret_cast<const std::byte*>(data.constData()), std::size_t(data.size())}, ctx);
+        journal.Track(Value.recovery_); const auto receipt = require(saved);
+        if (!receipt.destinationCommitted_) throw Failure("PlanNotCommitted");
+        journal.Complete(receipt, Value.warnings_, Value.recovery_);
+        Value.planWritten_ = destination;
+    }
+    void ExportDirectoryPlan(const Request& Input, Result& Value, const Budget& Limits)
+    {
+        CheckProtectedInputs(Input, {Input.planOut_, Input.output_}, Limits);
+        const auto destination = CheckedDirectoryPath(Input.planOut_);
+        if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(Input.output_))) throw Failure("DirectoryArtifactOverlapsRoot");
+        for (const auto& snapshot : *Value.directories_)
+            if (DirectoryPathsOverlap(destination, CheckedDirectoryPath(snapshot.root_))) throw Failure("DirectoryArtifactOverlapsRoot");
+        Value.directoryPlan_ = MakeDirectoryPlan(Input, Value, Limits);
+        SaveDirectoryPlan(Value.directoryPlan_, destination, Value, Limits);
+        Value.planWritten_ = destination; Value.outcome_ = "Planned";
+        qsizetype unresolved = 0;
+        for (const auto& action : Value.directoryPlan_["actions"].toArray()) unresolved += action.toObject()["choice"] == "unresolved";
+        Value.exitCode_ = unresolved ? 1 : 0;
+    }
+}
