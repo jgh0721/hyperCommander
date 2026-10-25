@@ -46,6 +46,11 @@ namespace hc::compare
         flag("copy-streams", "Directory-merge: preserve and verify named file data streams (ADS).");
         value("theme", "GUI theme: light or dark.");
         value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
+        value("archive-password1-file", "UTF-8 password file for LEFT; a JSON string array supplies separate nested passwords. Passwords are never command-line values.");
+        value("archive-engine", "native (default, ZIP/7z/RAR and rewrite), or zip (legacy strict read-only ZIP decoder).");
+        value("archive-password2-file", "UTF-8 password file for RIGHT.");
+        value("archive-members1", "Nested LEFT archive ordinal chain as a JSON array, maximum depth 4.");
+        value("archive-members2", "Nested RIGHT archive ordinal chain as a JSON array, maximum depth 4.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("reuse", "Send this GUI request to the current session's HyperCompare host.");
         value("wait-timeout-ms", "GUI request wait deadline (100..3600000); default unlimited. Timeout keeps the window and unsaved edits.");
@@ -66,6 +71,13 @@ namespace hc::compare
         { if (seen.contains(name)) return fail("Duplicate option: " + name); seen.insert(name); }
         request.help_ = parser.isSet("help"); request.version_ = parser.isSet("version");
         if (request.help_ || request.version_) return result;
+        if (parser.isSet("archive-engine")) { request.archiveEngine_ = parser.value("archive-engine"); if (!QStringList{"native", "zip"}.contains(request.archiveEngine_)) return fail("Unsupported archive engine."); }
+        for (int side = 0; side < 2; ++side) {
+            request.archivePasswordFiles_[side] = parser.value(side ? "archive-password2-file" : "archive-password1-file");
+            if (!request.archivePasswordFiles_[side].isEmpty()) request.protectedInputs_.append(request.archivePasswordFiles_[side]);
+            const auto name = side ? "archive-members2" : "archive-members1";
+            if (parser.isSet(name)) { const auto document = QJsonDocument::fromJson(parser.value(name).toUtf8()); if (!document.isArray() || document.array().size() > 4) return fail("Invalid archive ordinal chain."); request.archiveMembers_[side] = document.array(); for (const auto& value : request.archiveMembers_[side]) if (!value.isDouble() || value.toInt(-1) < 0 || value.toDouble() != value.toInt()) return fail("Invalid archive ordinal."); }
+        }
         if (parser.isSet("request"))
         {
             if (parser.value("request").isEmpty()) return fail("Empty request path.");

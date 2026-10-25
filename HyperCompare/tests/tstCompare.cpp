@@ -4,6 +4,7 @@
 #include "core/overviewMap.hpp"
 #include "runtime/session.hpp"
 #include "runtime/largeText.hpp"
+#include "runtime/nativeArchive.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "runtime/inputEditing.hpp"
 #include "runtime/saveRecovery.hpp"
@@ -512,9 +513,30 @@ private slots:
         const auto dtd = test::StoredZip({{"_rels/.rels", "<!DOCTYPE Relationships [<!ENTITY x 'x'>]><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'/>"}, {"[Content_Types].xml", ""}});
         reject(dtd, "DocxDtdUnsupported");
     }
+    void nativeArchiveWorkingCopyNestedRewriteAndRevision()
+    {
+        try {
+        QTemporaryDir dir; Request input; input.file1_ = dir.filePath("left.zip"); input.file2_ = dir.filePath("right.zip");
+        const auto innerLeft = test::StoredZip({{"a.txt", "LEFT"}}), innerRight = test::StoredZip({{"a.txt", "RIGHT"}});
+        const auto left = test::StoredZip({{"plain.txt", "same"}, {"inner.zip", innerLeft}}), right = test::StoredZip({{"plain.txt", "keep"}, {"inner.zip", innerRight}});
+        write(input.file1_, left); write(input.file2_, right); input.archiveMembers_ = {QJsonArray{1}, QJsonArray{1}};
+        const auto initial = Execute(input, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(initial.archive_, qPrintable(initial.error_)); QCOMPARE(initial.extension_["entries"].toArray().size(), 1);
+        auto session = *initial.archive_;
+        const auto rewrite = ArchiveOperation(input, session, {{"operation", "rewrite"}, {"target", 1}, {"changes", QJsonArray{QJsonObject{{"side", 0}, {"ordinal", 0}}}}}, {});
+        session.working_[1] = QByteArray::fromBase64(rewrite["bytes"].toString().toLatin1()); session.members_[1] = rewrite["members"].toArray();
+        const auto nested = ArchiveOperation(input, session, {}, {}); QVERIFY(nested["contentsEqual"].toBool()); QCOMPARE(read(input.file2_), right);
+        session.members_ = {}; const auto outer = ArchiveOperation(input, session, {}, {}); const auto rows = outer["entries"].toArray(); QCOMPARE(rows.size(), 2);
+        for (const auto& value : rows) { const auto row = value.toObject(); if (row["path"] == "plain.txt") { QCOMPARE(row["state"].toString(), QString("Changed")); const auto content = ArchiveOperation(input, session, {{"operation", "read"}, {"side", 1}, {"ordinal", row["right"].toObject()["ordinal"]}}, {}); QCOMPARE(QByteArray::fromBase64(content["bytes"].toString().toLatin1()), QByteArray("keep")); } }
+        SaveArchiveSnapshot(input, session.originals_[1], session.working_[1], {}); QCOMPARE(read(input.file2_), session.working_[1]); QCOMPARE(read(input.file1_), left);
+        QVERIFY_EXCEPTION_THROWN(SaveArchiveSnapshot(input, session.originals_[1], right, {}), Failure);
+        write(input.file2_, test::StoredZip({{"same.txt", "a"}, {"same.txt", "b"}})); input.archiveMembers_ = {};
+        const auto duplicate = Execute(input, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(duplicate.archive_, qPrintable(duplicate.error_)); auto state = *duplicate.archive_;
+        QVERIFY_EXCEPTION_THROWN(ArchiveOperation(input, state, {{"operation", "rewrite"}, {"target", 1}, {"changes", QJsonArray{QJsonObject{{"side", 0}, {"ordinal", 0}}}}}, {}), Failure);
+        } catch (const std::exception& error) { QFAIL(error.what()); }
+    }
     void zipEntriesContentsAndNestedLocations()
     {
-        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true; request.archiveEngine_ = "zip";
         write(request.file1_, test::StoredZip({{"same", "same"}, {"changed.txt", "left"}, {"left-only", ""}, {"folder/", ""}, {QString::fromUtf8("한글.txt").toUtf8(), "unicode"}}));
         write(request.file2_, test::StoredZip({{"same", "same"}, {"changed.txt", "right"}, {"right-only", "new"}, {"folder", "file"}, {QString::fromUtf8("한글.txt").toUtf8(), "unicode"}}));
         auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
@@ -531,9 +553,23 @@ private slots:
         result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QCOMPARE(result.exitCode_, 0); QVERIFY(!result.engineProbe_["mergeTwoAvailable"].toBool());
         QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "all-zip-entries-verified");
     }
+    void nativeArchiveReviewedCliMerge()
+    {
+        QTemporaryDir dir; Request input; input.headless_ = true; input.mode_ = "merge"; input.file1_ = dir.filePath("left.zip"); input.file2_ = dir.filePath("right.zip"); input.output_ = dir.filePath("output.zip"); input.decisions_ = dir.filePath("choices.json");
+        const auto left = test::StoredZip({{"a", "LEFT"}, {"added", "new"}}), right = test::StoredZip({{"a", "RIGHT"}, {"keep", "keep"}, {"remove", "gone"}}); write(input.file1_, left); write(input.file2_, right);
+        QJsonObject plan{{"kind", "HyperCompareArchiveMerge"}, {"schemaVersion", 1}, {"target", 1}};
+        plan["inputSha256"] = QJsonArray{QString::fromLatin1(QCryptographicHash::hash(left, QCryptographicHash::Sha256).toHex()), QString::fromLatin1(QCryptographicHash::hash(right, QCryptographicHash::Sha256).toHex())};
+        plan["changes"] = QJsonArray{QJsonObject{{"side", 0}, {"ordinal", 0}}, QJsonObject{{"side", 0}, {"ordinal", 1}}, QJsonObject{{"remove", true}, {"ordinal", 2}}};
+        write(input.decisions_, QJsonDocument(plan).toJson()); auto canceled = std::make_shared<std::atomic_bool>(false);
+        const auto preview = Execute(input, canceled, false); QCOMPARE(preview.completion_, QString("Complete")); QCOMPARE(preview.commit_, QString("NotRequested")); QVERIFY(!QFileInfo::exists(input.output_));
+        const auto saved = Execute(input, canceled, true); QVERIFY2(saved.error_.isEmpty(), qPrintable(saved.error_)); QCOMPARE(saved.commit_, QString("Committed")); QVERIFY(QFileInfo::exists(input.output_)); QCOMPARE(read(input.file1_), left); QCOMPARE(read(input.file2_), right);
+        auto comparisonInput = input; comparisonInput.mode_ = "compare"; comparisonInput.file1_ = input.output_; comparisonInput.file2_ = input.output_; comparisonInput.output_.clear(); comparisonInput.decisions_.clear();
+        const auto verified = Execute(comparisonInput, canceled, false); QVERIFY2(verified.archive_, qPrintable(verified.error_)); QSet<QString> names; for (const auto& value : verified.extension_["entries"].toArray()) names.insert(value.toObject()["path"].toString()); QCOMPARE(names, QSet<QString>({"a", "added", "keep"}));
+        plan["inputSha256"] = QJsonArray{"changed", "changed"}; write(input.decisions_, QJsonDocument(plan).toJson()); input.output_ = dir.filePath("rejected.zip"); QCOMPARE(Execute(input, canceled, true).error_, QString("ArchiveMergePlanInputChanged")); QVERIFY(!QFileInfo::exists(input.output_));
+    }
     void zipRejectionsAndContentIntegrity()
     {
-        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true; request.archiveEngine_ = "zip";
         const auto good = test::StoredZip({{"a", "hello"}}); write(request.file1_, good); auto cancel = std::make_shared<std::atomic_bool>(false);
         const auto rejected = [&](const QByteArray& Bytes) { write(request.file2_, Bytes); return Execute(request, cancel, true).error_; };
         QCOMPARE(rejected(test::StoredZip({{"../escape.txt", "x"}})), "ZipUnsafePath");
@@ -551,7 +587,7 @@ private slots:
     }
     void zipPackagingDifferencesAndConsole()
     {
-        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true;
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.zip"); request.file2_ = dir.filePath("right.zip"); request.headless_ = true; request.archiveEngine_ = "zip";
         write(request.file1_, test::StoredZip({{"a", "a"}, {"B", "b"}})); write(request.file2_, test::StoredZip({{"B", "b"}, {"a", "a"}}, "comment"));
         const auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));
         QVERIFY(result.extension_["contentsEqual"].toBool()); QVERIFY(!result.extension_["rawEqual"].toBool()); QCOMPARE(result.exitCode_, 1);
@@ -561,7 +597,7 @@ private slots:
     }
     void zipDeflateAndEntryBudget()
     {
-        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("compressed.zip"); request.file2_ = dir.filePath("stored.zip"); request.headless_ = true;
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("compressed.zip"); request.file2_ = dir.filePath("stored.zip"); request.headless_ = true; request.archiveEngine_ = "zip";
         const auto compressed = QByteArray::fromBase64("UEsDBBQAAAAIAENuV11aGkI8IAAAAEAGAAAOAAAAY29tcHJlc3NlZC50eHRLzs8tKEotLk5N0U1JLEnkSh7lj/JH+aP8Uf4onwg+AFBLAQIUABQAAAAIAENuV11aGkI8IAAAAEAGAAAOAAAAAAAAAAAAAACAAQAAAABjb21wcmVzc2VkLnR4dFBLBQYAAAAAAQABADwAAABMAAAAAAA=");
         write(request.file1_, compressed); write(request.file2_, test::StoredZip({{"compressed.txt", QByteArray("compressed-data\n").repeated(100)}}));
         auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.error_.isEmpty(), qPrintable(result.error_));

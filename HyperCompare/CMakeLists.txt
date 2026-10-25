@@ -2,7 +2,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/textRegex.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveNative.cmake")
 target_sources(hc_compare_semantic_worker PRIVATE runtime/docxWorker.cpp)
+target_sources(hc_compare_semantic_worker PRIVATE runtime/nativeArchive.cpp runtime/nativeArchive.hpp)
 
 qt_add_library(hc_compare_core STATIC core/compare.cpp core/compare.hpp core/mergeModel.cpp core/mergeModel.hpp
     core/linearDiff.cpp core/linearDiff.hpp
@@ -18,6 +20,7 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/largeTextSession.cpp
     runtime/largeTextTools.cpp
     runtime/largeTextRegex.cpp
+    runtime/archiveSession.cpp
     runtime/controllerMemory.cpp runtime/controllerMemory.hpp
     runtime/guiIpc.cpp runtime/guiIpc.hpp
     runtime/gitTool.cpp runtime/gitTool.hpp

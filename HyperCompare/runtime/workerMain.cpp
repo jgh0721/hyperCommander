@@ -3,6 +3,7 @@
 #include "semantic.hpp"
 #include "extensionEngine.hpp"
 #include "zipArchive.hpp"
+#include "nativeArchive.hpp"
 #include <QCryptographicHash>
 #include <QFile>
 #include <QJsonDocument>
@@ -69,6 +70,7 @@ namespace hc::compare
             else if (engine == "source.tree-sitter") result = SemanticWorkerRequest(payload);
             else if (engine == "image.png") result = PngWorkerRequest(payload);
             else if (engine == "container.zip") result = ArchiveWorkerRequest(payload);
+            else if (engine == "container.7zip") result = NativeArchiveWorkerRequest(payload);
             else if (engine == "office.docx") result = DocxWorkerRequest(payload);
             else throw Failure("WorkerEngineUnsupported");
         }

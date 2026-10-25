@@ -7,7 +7,7 @@ function Assert-HyperCompareManifest($Manifest) {
     if ($Manifest.schemaVersion -ne 1 -or $Manifest.product -ne 'HyperCompare' -or $Manifest.configuration -ne 'Release' -or @($Manifest.files).Count -lt 8 -or @($Manifest.files).Count -gt 100) { throw 'Invalid HyperCompare inventory.' }
     $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($Entry in $Manifest.files) {
-        if ($Entry.path -isnot [string] -or $Entry.path -cnotmatch '^(HyperCompare(?:Cli)?\.exe|Qt6(?:Core|Gui|Widgets|Network|Svg)\.dll|Libs/platforms/qwindows\.dll|Libs/iconengines/qsvgicon\.dll|Libs/imageformats/qsvg\.dll|Licenses/[A-Za-z0-9_.-]+\.txt)$' -or -not $Seen.Add($Entry.path) -or $Entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid HyperCompare inventory entry.' }
+        if ($Entry.path -isnot [string] -or $Entry.path -cnotmatch '^(HyperCompare(?:Cli)?\.exe|Qt6(?:Core|Gui|Widgets|Network|Svg)\.dll|Libs/platforms/qwindows\.dll|Libs/iconengines/qsvgicon\.dll|Libs/imageformats/qsvg\.dll|Licenses/[A-Za-z0-9_.-]+\.txt|Third-Party/SevenZip/(?:7z\.dll|sevenzip\.json|source-lock\.json)|Licenses/SevenZip/(?:License\.txt|copying\.txt|unRarLicense\.txt|7z2603-src\.tar\.xz))$' -or -not $Seen.Add($Entry.path) -or $Entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid HyperCompare inventory entry.' }
     }
 }
 
@@ -24,13 +24,13 @@ function Test-HyperComparePackage {
     $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($Entry in $Manifest.files) {
         $Relative = [string]$Entry.path
-        if ($Relative -cnotmatch '^(HyperCompare(?:Cli)?\.exe|Qt6(?:Core|Gui|Widgets|Network|Svg)\.dll|Libs/platforms/qwindows\.dll|Libs/iconengines/qsvgicon\.dll|Libs/imageformats/qsvg\.dll|Licenses/[A-Za-z0-9_.-]+\.txt)$' -or
+        if ($Relative -cnotmatch '^(HyperCompare(?:Cli)?\.exe|Qt6(?:Core|Gui|Widgets|Network|Svg)\.dll|Libs/platforms/qwindows\.dll|Libs/iconengines/qsvgicon\.dll|Libs/imageformats/qsvg\.dll|Licenses/[A-Za-z0-9_.-]+\.txt|Third-Party/SevenZip/(?:7z\.dll|sevenzip\.json|source-lock\.json)|Licenses/SevenZip/(?:License\.txt|copying\.txt|unRarLicense\.txt|7z2603-src\.tar\.xz))$' -or
             -not $Seen.Add($Relative) -or $Entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw "Invalid package entry: $Relative" }
         $File = Join-Path $Root $Relative; Assert-UpdatePlainPath $File
         if ((Get-Item -LiteralPath $File).Length -ne $Entry.size -or (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash -ine $Entry.sha256) { throw "Package hash/size mismatch: $Relative" }
         if ($Relative -match '\.(exe|dll)$') { $null = Assert-UpdateSignature $File $Relative }
 }
-foreach ($Required in @('HyperCompare.exe','HyperCompareCli.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Libs/platforms/qwindows.dll','Licenses/Scintilla.txt','Licenses/Lexilla.txt','Licenses/waterColorStyle.txt','Licenses/hc_tree_sitter.txt','Licenses/hc_tree_sitter_c.txt','Licenses/hc_tree_sitter_cpp.txt','Licenses/hc_tree_sitter_python.txt','Licenses/miniz.txt','Licenses/pcre2.txt')) {
+foreach ($Required in @('HyperCompare.exe','HyperCompareCli.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Libs/platforms/qwindows.dll','Licenses/Scintilla.txt','Licenses/Lexilla.txt','Licenses/waterColorStyle.txt','Licenses/hc_tree_sitter.txt','Licenses/hc_tree_sitter_c.txt','Licenses/hc_tree_sitter_cpp.txt','Licenses/hc_tree_sitter_python.txt','Licenses/miniz.txt','Licenses/pcre2.txt','Third-Party/SevenZip/7z.dll','Third-Party/SevenZip/sevenzip.json','Third-Party/SevenZip/source-lock.json','Licenses/SevenZip/License.txt','Licenses/SevenZip/copying.txt','Licenses/SevenZip/unRarLicense.txt','Licenses/SevenZip/7z2603-src.tar.xz')) {
     if (-not $Seen.Contains($Required)) { throw "Required package entry missing: $Required" }
 }
 # Keep unlisted DLLs and executables out of the package's loader search path.

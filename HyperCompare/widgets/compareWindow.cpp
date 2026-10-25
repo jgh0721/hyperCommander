@@ -32,6 +32,11 @@
 #include <QCryptographicHash>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QPointer>
+#include <QLineEdit>
+#include <future>
+#include "archiveCompareView.hpp"
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -432,6 +437,7 @@ namespace hc::compare
     void CompareWindow::start(bool Preserve, bool Reintegrate)
     {
         if (busy() || request_.file1_.isEmpty()) return;
+        if (Preserve && extensionView_ && extensionView_->Dirty()) { state_->setText(tr("수정한 작업본을 먼저 저장하거나 실행 취소하십시오.")); return; }
         if (Preserve) if (auto* large = dynamic_cast<LargeTextView*>(extensionView_); large && large->Dirty()) {
             state_->setText(tr("대용량 편집 내용을 보존했습니다. 양쪽 파일을 저장한 뒤 다시 비교하십시오.")); return;
         }
@@ -439,6 +445,18 @@ namespace hc::compare
         if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
         sourceEditing_ = false; bufferTimer_.stop(); ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         canceled_ = std::make_shared<std::atomic_bool>(false);
+        request_.archivePasswordPrompt_ = [owner = QPointer<CompareWindow>(this)](int Side, int Depth, const Budget& Limits) {
+            auto reply = std::make_shared<std::promise<QString>>(); auto future = reply->get_future(); auto aborted = std::make_shared<std::atomic_bool>(false);
+            if (!owner) return QString{};
+            QMetaObject::invokeMethod(owner.data(), [owner, Side, Depth, reply, aborted] {
+                if (!owner || aborted->load()) { reply->set_value(QString{}); return; }
+                QInputDialog dialog; dialog.setWindowModality(Qt::ApplicationModal); dialog.setWindowTitle(tr("압축 암호")); dialog.setLabelText(tr("%1 · 중첩 단계 %2 암호").arg(Side ? "RIGHT" : "LEFT").arg(Depth)); dialog.setTextEchoMode(QLineEdit::Password);
+                QTimer timer; QObject::connect(&timer, &QTimer::timeout, &dialog, [&] { if (!owner || aborted->load()) dialog.reject(); }); timer.start(30);
+                reply->set_value(dialog.exec() == QDialog::Accepted ? dialog.textValue() : QString{});
+            }, Qt::QueuedConnection);
+            while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) { if (!owner || (Limits.canceled_ && Limits.canceled_->load()) || std::chrono::steady_clock::now() >= Limits.deadline_) { aborted->store(true); return QString{}; } }
+            return future.get();
+        };
         request_.directoryProgress_ = std::make_shared<DirectoryProgressChannel>(); directoryStreaming_ = false; directoryTimer_.start();
         refreshing_ = Preserve && merge_;
         if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
@@ -585,7 +603,11 @@ namespace hc::compare
         {
             try
             {
-                extensionView_ = CreateExtensionView(result_.extension_, {request_.file1_, request_.file2_}, centralWidget());
+                if (result_.archive_) {
+                    auto* view = new ArchiveCompareView(request_, result_.archive_, centralWidget()); extensionView_ = view;
+                    view->stateChanged_ = [this, view] { dirty_ = view->Dirty(); request_ = view->Input(); exitCode_ = dirty_ ? 3 : result_.exitCode_; updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
+                    view->open_ = [](Request Input, QString Title) { auto* window = new CompareWindow(std::move(Input)); window->setWindowTitle(Title); window->setAttribute(Qt::WA_DeleteOnClose); window->show(); };
+                } else extensionView_ = CreateExtensionView(result_.extension_, {request_.file1_, request_.file2_}, centralWidget());
                 auto* layout = qobject_cast<QSplitter*>(centralWidget()); layout->addWidget(extensionView_);
                 sources_->hide(); details_->hide(); directory_->hide(); extensionView_->show();
                 layout->setSizes({0, 0, 0, 700}); state_->setText(tr("비교 — %1").arg(result_.outcome_));
@@ -852,6 +874,10 @@ namespace hc::compare
             undo_->setEnabled(large->CanUndo(false)); redo_->setEnabled(large->CanUndo(true));
             for (auto* action : blockActions_) action->setEnabled(false); for (auto* action : wholeActions_) action->setEnabled(false); return;
         }
+        if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) {
+            saveWork_->setEnabled(false); loadWork_->setEnabled(false); recoverWork_->setEnabled(false); reintegrate_->setEnabled(false); importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false); exportReport_->setEnabled(!archive->Busy());
+            save_->setVisible(true); save_->setText(tr("활성 압축 저장")); save_->setEnabled(archive->CanSave()); undo_->setEnabled(archive->CanUndo(false)); redo_->setEnabled(archive->CanUndo(true)); return;
+        }
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready); reintegrate_->setEnabled(ready);
         importDecisions_->setEnabled(ready && request_.takeAll_.isEmpty()); exportDecisions_->setEnabled(ready && request_.takeAll_.isEmpty());
@@ -930,6 +956,7 @@ namespace hc::compare
     }
     void CompareWindow::save()
     {
+        if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) { archive->SaveActive(); return; }
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SaveActive(); return; }
         if (sourceEditing_) { saveInput(activeInput_); return; }
         if (!output_ || busy()) return;
@@ -973,6 +1000,7 @@ namespace hc::compare
     }
     void CompareWindow::ExportReport(const QString& Path, bool ReplaceExisting)
     {
+        if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) { archive->ExportReport(Path, ReplaceExisting); return; }
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->ExportReport(Path, ReplaceExisting); return; }
         if (Path.isEmpty() || !exportReport_->isEnabled() || busy() || (sourceEditing_ && (sourcePending_ || !sourceValid_))) return;
         auto session = result_; QJsonArray workingInputs;
@@ -1080,8 +1108,8 @@ namespace hc::compare
         completed_ = std::move(Completed); openFiles_->setEnabled(false); openFolders_->setEnabled(false);
         setWindowTitle("HyperCompare — " + QFileInfo(request_.file1_).fileName() + " ↔ " + QFileInfo(request_.file2_).fileName());
     }
-    bool CompareWindow::busy() const { return (dynamic_cast<LargeTextView*>(extensionView_) && static_cast<LargeTextView*>(extensionView_)->Busy()) || (directory_ && directory_->Busy()) || watcher_.isRunning() || workWatcher_.isRunning() || reportWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
-    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->Cancel(); if (directory_) directory_->Cancel(); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
+    bool CompareWindow::busy() const { return (extensionView_ && extensionView_->Busy()) || (directory_ && directory_->Busy()) || watcher_.isRunning() || workWatcher_.isRunning() || reportWatcher_.isRunning() || inputSaveWatcher_.isRunning() || (directoryMerge_ && directoryMerge_->Busy()) || (recoveryDialog_ && recoveryDialog_->Busy()); }
+    void CompareWindow::CancelRemoteRequest() { canceled_->store(true); if (extensionView_) extensionView_->Cancel(); if (directory_) directory_->Cancel(); if (directoryMerge_) directoryMerge_->Cancel(); if (recoveryDialog_) recoveryDialog_->Cancel(); }
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
         if (busy()) { CancelRemoteRequest(); closing_ = true; Event->ignore(); return; }

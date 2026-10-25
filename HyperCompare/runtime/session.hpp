@@ -15,6 +15,7 @@
 namespace hc::compare
 {
     struct LargeTextComparison;
+    struct ArchiveSession;
     struct Request
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
@@ -34,6 +35,12 @@ namespace hc::compare
         bool failFast_ = false;
         QStringList protectedInputs_;
         std::array<QString, 3> inputEncodings_;
+        std::array<QString, 2> archivePasswordFiles_;
+        QString archiveEngine_ = "native";
+        std::array<QJsonArray, 2> archiveMembers_;
+        std::function<QString(int, int, const Budget&)> archivePasswordPrompt_;
+        bool readOnlyInputs_ = false;
+        std::shared_ptr<void> resourceLifetime_;
         QString applyPlan_, journal_, applyPlanDigest_;
         bool resume_ = false, allowDelete_ = false;
         bool mirror_ = false;
@@ -67,6 +74,7 @@ namespace hc::compare
     struct Result
     {
         std::shared_ptr<LargeTextComparison> largeText_;
+        std::shared_ptr<ArchiveSession> archive_;
         int exitCode_ = 2;
         QString operation_, error_, outcome_ = "Unknown", completion_ = "Failed";
         QString requestId_;

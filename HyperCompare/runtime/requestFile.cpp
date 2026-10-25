@@ -27,7 +27,7 @@ namespace hc::compare
         try
         {
             const auto path = CheckedDirectoryPath(QFileInfo(Path).absoluteFilePath()); const auto snapshot = ReadFileSnapshot(path, 1024 * 1024, Limits);
-            const auto json = ReadCompareJson(snapshot.raw_, Limits); keys(json, {"schemaVersion", "requestId", "mode", "inputs", "output", "policy", "limits", "options"});
+            const auto json = ReadCompareJson(snapshot.raw_, Limits); keys(json, {"schemaVersion", "requestId", "mode", "inputs", "output", "policy", "limits", "options", "archive"});
             if (json["schemaVersion"] != QJsonValue(1)) throw Failure("UnsupportedRequestSchema");
             const QDir parent(QFileInfo(path).absolutePath());
             const auto absolute = [&](const QJsonValue& Value) { return QDir::cleanPath(parent.absoluteFilePath(string(Value))); };
@@ -67,6 +67,14 @@ namespace hc::compare
             {
                 if (QStringList{"resume", "allowdelete", "mirror", "dryrun"}.contains(it.key())) { if (!it.value().isBool()) throw Failure("InvalidRequestBoolean"); if (it.value().toBool()) args << '-' + it.key(); }
                 else args << '-' + it.key() << (it.key() == "takeall" ? string(it.value()) : absolute(it.value()));
+            }
+            const auto archive = object(json, "archive"); keys(archive, {"engine", "passwordFiles", "members"});
+            if (archive.contains("engine")) args << "-archive-engine" << string(archive["engine"]);
+            const auto passwordFiles = object(archive, "passwordFiles"); keys(passwordFiles, {"left", "right"});
+            const auto members = object(archive, "members"); keys(members, {"left", "right"});
+            for (const auto& role : {QString("left"), QString("right")}) {
+                if (passwordFiles.contains(role)) args << (role == "left" ? "-archive-password1-file" : "-archive-password2-file") << absolute(passwordFiles[role]);
+                if (members.contains(role)) { if (!members[role].isArray()) throw Failure("InvalidRequestArchiveMembers"); args << (role == "left" ? "-archive-members1" : "-archive-members2") << QString::fromUtf8(QJsonDocument(members[role].toArray()).toJson(QJsonDocument::Compact)); }
             }
             args << Overrides; parsed = Parse(args, Console); if (!parsed.error_.isEmpty()) return parsed;
             auto& request = parsed.request_; request.inputEncodings_ = codecs; request.requestFile_ = path; request.protectedInputs_ << path;

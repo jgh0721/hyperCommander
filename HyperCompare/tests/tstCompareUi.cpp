@@ -55,6 +55,7 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QInputDialog>
+#include <QInputDialog>
 #include <QUuid>
 #include <fmstyle/ThemeManager.h>
 #include <ScintillaEditBase.h>
@@ -208,6 +209,31 @@ private slots:
         const auto a = left->send(SCI_GETSELECTIONSTART), b = left->send(SCI_GETSELECTIONEND); QCOMPARE(contents(left).mid(a, b - a), QByteArray("needle한글"));
         query->setText("does-not-exist"); view.findChild<QPushButton*>("largeFindNext")->click(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(left->send(SCI_GETSELECTIONSTART), a); QCOMPARE(left->send(SCI_GETSELECTIONEND), b);
         QCOMPARE(readBytes(request.file1_), text); QCOMPARE(readBytes(request.file2_), rightText);
+    }
+    void nativeArchiveGuiPasswordAndClose()
+    {
+        const auto root = qEnvironmentVariable("HC_COMPARE_ARCHIVE_CORPUS"); if (root.isEmpty()) QSKIP("Set HC_COMPARE_ARCHIVE_CORPUS for the encrypted archive GUI acceptance test");
+        Request input; input.file1_ = QDir(root).filePath("encrypted.7z"); input.file2_ = input.file1_; QVERIFY(QFileInfo::exists(input.file1_));
+        CompareWindow window(input); int prompts = 0; bool closeOnPrompt = false; QTimer driver;
+        connect(&driver, &QTimer::timeout, this, [&] { for (auto* widget : QApplication::topLevelWidgets()) if (auto* dialog = qobject_cast<QInputDialog*>(widget); dialog && dialog->isVisible()) { ++prompts; if (closeOnPrompt) { window.CancelRemoteRequest(); dialog->reject(); window.close(); } else { dialog->setTextValue("secret"); dialog->accept(); } } }); driver.start(10);
+        window.show(); QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QWidget*>("archiveCompareView"), 20000); QVERIFY(prompts >= 2);
+        closeOnPrompt = true; action(window, "다시 비교")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(!window.isVisible(), 10000);
+    }
+    void nativeArchiveCopyUndoSaveAndNestedOpen()
+    {
+        try {
+        QTemporaryDir dir; Request input; input.file1_ = dir.filePath("left.zip"); input.file2_ = dir.filePath("right.zip");
+        const auto left = test::StoredZip({{"a.txt", "LEFT"}}), rightBytes = test::StoredZip({{"a.txt", "RIGHT"}}); write(input.file1_, left); write(input.file2_, rightBytes);
+        const auto result = Execute(input, std::make_shared<std::atomic_bool>(false), false); QVERIFY2(result.archive_, qPrintable(result.error_));
+        ArchiveCompareView view(input, result.archive_); view.resize(1400, 700); view.show(); auto* table = view.findChild<QTableView*>("archiveTable"); table->selectRow(0);
+        view.CopySelected(0); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 20000); QVERIFY(view.Dirty()); QCOMPARE(readBytes(input.file2_), rightBytes);
+        QCOMPARE(table->model()->index(0, 0).data(Qt::UserRole).toJsonObject()["state"].toString(), QString("Equal"));
+        view.Undo(false); QVERIFY(!view.Dirty()); view.Undo(true); QVERIFY(view.Dirty());
+        view.Save(1); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 20000); QVERIFY(!view.Dirty()); QVERIFY(readBytes(input.file2_) != rightBytes);
+        bool opened = false; Request child; view.open_ = [&](Request value, QString title) { child = std::move(value); opened = true; QVERIFY(title.contains("읽기 전용")); }; table->selectRow(0); view.OpenCurrent(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy() && opened, 20000); QVERIFY(child.readOnlyInputs_); QCOMPARE(readBytes(child.file1_), QByteArray("LEFT")); QCOMPARE(readBytes(child.file2_), QByteArray("LEFT"));
+        table->selectRow(0); view.RemoveSelected(1); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 20000); QVERIFY(view.Dirty()); view.Undo(false); QVERIFY(!view.Dirty());
+        write(input.file2_, "external"); table->selectRow(0); view.CopySelected(0); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 20000); view.Save(1); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 20000); QCOMPARE(readBytes(input.file2_), QByteArray("external")); QVERIFY(view.findChild<QLabel*>("archiveSummary")->text().contains("ArchiveInputChanged"));
+        } catch (const std::exception& error) { QFAIL(error.what()); }
     }
     void largeSyntaxKeepsPageBoundaryContext()
     {
@@ -1039,7 +1065,7 @@ private slots:
         auto* table = window.findChild<QTableView*>("archiveTable"); QCOMPARE(table->model()->rowCount(), 4); QAbstractItemModelTester tester(table->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
         auto* status = window.findChild<QComboBox*>("archiveStatus"); status->setCurrentIndex(1); QCOMPARE(table->model()->rowCount(), 3);
         auto* query = window.findChild<QLineEdit*>("archiveQuery"); query->setText("main"); QCOMPARE(table->model()->rowCount(), 1); QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("내용 다름")); query->clear();
-        QVERIFY(!action(window, "결과 저장")->isEnabled()); QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty());
+        auto* save = action(window, "활성 압축 저장"); QVERIFY(save); QVERIFY(save->isEnabled()); QVERIFY(window.findChildren<ScintillaEditBase*>().isEmpty());
         action(window, "Dark")->setChecked(false); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/zip-light.png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/zip-dark.png"));
         window.close();

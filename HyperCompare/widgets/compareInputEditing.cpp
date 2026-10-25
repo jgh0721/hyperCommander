@@ -83,7 +83,7 @@ namespace hc::compare
     }
     void CompareWindow::bindInputEditors()
     {
-        sourceEditing_ = !merge_ && result_.extension_.isEmpty() && !result_.operation_.startsWith("directory") && result_.inputs_.size() >= 2;
+        sourceEditing_ = !request_.readOnlyInputs_ && !merge_ && result_.extension_.isEmpty() && !result_.operation_.startsWith("directory") && result_.inputs_.size() >= 2;
         sourcePending_ = false; sourceValid_ = true; activeInput_ = 0; inputError_.clear(); inputSaveError_.clear(); ++bufferGeneration_;
         if (!sourceEditing_) return;
         for (int i = 0; i < editors_.size(); ++i)
@@ -308,7 +308,7 @@ namespace hc::compare
     void CompareWindow::inputUndo(bool Redo)
     {
         if (busy()) return;
-        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->Undo(Redo); return; }
+        if (extensionView_) { extensionView_->Undo(Redo); return; }
         auto* editor = sourceEditing_ && !editors_.isEmpty() ? editors_[activeInput_] : output_;
         if (editor) editor->send(Redo ? SCI_REDO : SCI_UNDO);
     }

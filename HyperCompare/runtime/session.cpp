@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "session.hpp"
 #include "largeText.hpp"
+#include "nativeArchive.hpp"
 #include "controllerMemory.hpp"
 #include "saveRecovery.hpp"
 #include "requestFile.hpp"
@@ -183,9 +184,10 @@ namespace hc::compare
             {"guiBlockMerge", true}, {"guiResolutionUndo", true},
             {"largeTextSearch", QJsonObject{{"literal", true}, {"regex", "PCRE2-10.49"}, {"unicode", true}, {"multiline", true}, {"heapLimitKiB", 16384}, {"maxPatternBytes", 4096}}},
             {"largeTextSyntax", "disk-backed-prefix-context"}, {"largeTextAutoApply", "idle-navigation-save"},
+            {"archiveNative", QJsonObject{{"engine", "7-Zip-26.03"}, {"readFormats", QJsonArray{"zip", "7z", "rar"}}, {"writeFormats", QJsonArray{"zip", "7z"}}, {"passwordInput", "file-or-gui; per-input/per-depth"}, {"maxDepth", 4}, {"entryIdentity", "ordinal"}, {"decisionKind", "HyperCompareArchiveMerge"}, {"transactionalSave", true}}},
             {"largeText", QJsonObject{{"compareTwo", true}, {"compareThree", true}, {"pagedEditAndMergeTwo", true}, {"baseMerge", true}, {"resultOutput", true}, {"maxInputBytes", double(largeTextMaximum)}, {"maxDecodedBytes", double(largeTextMaximum)}, {"maxPageBytes", double(largeTextPageMaximum)}, {"maxCombinedLines", 2000000}, {"undoRevisions", 32}, {"encodings", QJsonArray{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949-explicit"}}}},
             {"guiRecomparePreservesResult", true}, {"guiRecomparePolicy", "retain-result-review-changed-inputs"},
-            {"directoryLevels", QJsonArray{"bytes", "text", "metadata"}}, {"directoryTextMaxBytes", 16 * 1024 * 1024}, {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 4}, {"directoryFileCopyOptions", QJsonArray{"metadata", "acl", "streams"}}, {"directoryRename", true}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-readonly"},
+            {"directoryLevels", QJsonArray{"bytes", "text", "metadata"}}, {"directoryTextMaxBytes", 16 * 1024 * 1024}, {"directoryMerge", "reviewed-plan"}, {"directoryApply", true}, {"directoryResume", true}, {"directoryPlans", true}, {"directoryPlanSchema", 4}, {"directoryFileCopyOptions", QJsonArray{"metadata", "acl", "streams"}}, {"directoryRename", true}, {"directoryTextMerge", "bounded-verified-text"}, {"sourceMovement", "c-cpp-syntactic"}, {"image", "png-readonly"}, {"office", "docx-main-body-readonly"}, {"archive", "zip-7z-rewrite-rar-readonly"},
             {"gitAdapter", QJsonObject{{"schemaVersion", 1}, {"config", "-git-tool config"}, {"diff", "files-and-explicit-dev-null"},
                 {"merge", "regular-same-mode-index-stages-123-or-23"}, {"writesConfig", false}, {"writesIndex", false}}},
             {"requestFiles", true}, {"requestSchema", 1}, {"maxRequestBytes", 1048576}, {"roleEncodings", true},
@@ -239,7 +241,7 @@ namespace hc::compare
             else
             {
                 if (!Input.directory_.include_.isEmpty() || !Input.directory_.exclude_.isEmpty() || Input.directory_.level_ != "bytes") throw Failure("DirectoryOptionsRequireDirectory");
-                if (!allowMissing && TryExtensionComparison(Input, result, limits)) { result.completion_ = "Complete"; return result; }
+                if (!allowMissing && TryExtensionComparison(Input, result, limits, Save)) { result.completion_ = "Complete"; return result; }
                 const auto extraPath = Input.base_.isEmpty() ? Input.file3_ : Input.base_;
                 const auto extra = extraPath.isEmpty() ? std::optional<storage::EntrySnapshot>{} : resolveInput(extraPath, false, limits);
                 if ((first && first->size_ > std::uint64_t(textLimit)) || (second && second->size_ > std::uint64_t(textLimit)) || (extra && extra->size_ > std::uint64_t(textLimit)))

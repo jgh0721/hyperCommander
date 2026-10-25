@@ -3,6 +3,7 @@
 #include "engineRegistry.hpp"
 #include "session.hpp"
 #include "workerHost.hpp"
+#include "nativeArchive.hpp"
 #include <QCryptographicHash>
 
 namespace hc::compare
@@ -58,15 +59,21 @@ namespace hc::compare
     }
     QJsonObject ProbeExtension(const QString& Format, const Snapshot& Input, const Budget& Limits)
     {
+        if (Format == "7z" || Format == "rar") { const auto result = RunArchiveWorker({Input}, {}, {}, Limits); return {{"validation", "all-archive-ordinal-streams-verified"}, {"document", result["documents"].toArray()[0]}}; }
         const auto* entry = extension(Format); if (!entry) throw Failure("NoRegisteredEngine");
         const auto result = run(*entry, {Input}, false, Limits);
         auto document = result["documents"].toArray()[0].toObject();
         if (entry->schema_ == "office.paragraphs.v1") { document["paragraphCount"] = document["paragraphs"].toArray().size(); document.remove("paragraphs"); }
         return {{"validation", entry->validation_}, {"document", document}};
     }
-    bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits)
+    bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits, bool Save)
     {
-        const auto format = InspectResourceFormat(Input.file1_, Limits); const auto* entry = extension(format); if (!entry) return false;
+        const auto format = InspectResourceFormat(Input.file1_, Limits);
+        if (QStringList{"zip", "7z", "rar"}.contains(format)) {
+            if (Input.archiveEngine_ != "zip") return TryArchiveComparison(Input, Value, Limits, Save, format);
+            if (format != "zip" || Input.mode_ == "merge" || !Input.archiveMembers_[0].isEmpty() || !Input.archiveMembers_[1].isEmpty() || !Input.archivePasswordFiles_[0].isEmpty() || !Input.archivePasswordFiles_[1].isEmpty()) throw Failure("ArchiveLegacyOptionsUnsupported");
+        }
+        const auto* entry = extension(format); if (!entry) return false;
         const auto* descriptor = FindComparisonEngine(format); if (!descriptor) throw Failure("NoRegisteredEngine");
         if (Input.mode_ == "merge" || !Input.output_.isEmpty()) throw Failure("ExtensionMergeUnsupported");
         if (!Input.base_.isEmpty() || !Input.file3_.isEmpty()) throw Failure("ExtensionThreeUnsupported");

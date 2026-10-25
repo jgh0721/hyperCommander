@@ -2,6 +2,7 @@
 #include "engineRegistry.hpp"
 #include "session.hpp"
 #include "largeText.hpp"
+#include "nativeArchive.hpp"
 #include "extensionEngine.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QDir>
@@ -27,6 +28,8 @@ namespace hc::compare
                 {{"maxPixels", 4 * 1024 * 1024}, {"maxDimension", 8192}, {"maxSampleBits", 8}, {"animation", false}}},
             {"container.zip", "miniz-3.1.2/1", "comparison", {"zip"}, "miniz-memory-isolated", {}, "archive-entries", "archive.entry.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
                 {{"maxEntries", 10000}, {"maxEntryBytes", 16 * 1024 * 1024}, {"maxExpandedBytes", 64 * 1024 * 1024}, {"encrypted", false}, {"duplicateNames", false}}},
+            {"container.7zip", "26.03/1", "comparison", {"zip", "7z", "rar"}, "7zip-ordinal-stream-isolated", "verified-archive-rewrite", "archive-entries", "archive.entry.v1", true, false, true, false, false, true, 16 * 1024 * 1024,
+                {{"maxEntries", 10000}, {"maxEntryBytes", 16 * 1024 * 1024}, {"maxExpandedBytes", 64 * 1024 * 1024}, {"maxNestingDepth", 4}, {"writeFormats", QJsonArray{"zip", "7z"}}, {"encrypted", true}, {"duplicateNames", "read-only-ordinal"}}},
             {"source.tree-sitter", "0.27.1/c-0.24.2/cpp-0.23.4/python-0.25.0", "annotation", {"c", "cpp", "python"}, "tree-sitter", {}, "function-relations", "text.bytes.v1", true, true, false, false, true, true, 16 * 1024 * 1024}
             ,{"office.docx", "1", "comparison", {"docx"}, "ooxml-main-body-isolated", {}, "office-paragraphs", "office.paragraph.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
                 {{"maxParagraphs", 50000}, {"maxTextUnits", 4 * 1024 * 1024}, {"maxXmlDepth", 256}, {"scopeComplete", false}, {"projection", "main-body-text-v1"}}}
@@ -41,6 +44,8 @@ namespace hc::compare
     QString DetectResourceFormat(const QString& Path, const QByteArray& Prefix)
     {
         if (Prefix.startsWith(QByteArray::fromHex("89504e470d0a1a0a"))) return "png";
+        if (Prefix.startsWith(QByteArray::fromHex("377abcaf271c"))) return "7z";
+        if (Prefix.startsWith("Rar!")) return "rar";
         if (Prefix.startsWith(QByteArray::fromHex("ffd8ff"))) return "jpeg";
         if (Prefix.startsWith("GIF87a") || Prefix.startsWith("GIF89a")) return "gif";
         if (Prefix.startsWith("RIFF") && Prefix.mid(8, 4) == "WEBP") return "webp";
@@ -141,6 +146,14 @@ namespace hc::compare
     }
     QJsonObject ProbeComparison(const Request& Input, const Budget& Limits)
     {
+        const auto firstFormat = InspectResourceFormat(Input.file1_, Limits);
+        if (Input.archiveEngine_ != "zip" && QStringList{"zip", "7z", "rar"}.contains(firstFormat)) {
+            if (!Input.base_.isEmpty() || !Input.file3_.isEmpty()) return {{"available", false}, {"reason", "ThreeUnsupported"}, {"compareAvailable", false}, {"mergeTwoAvailable", false}, {"mergeBaseAvailable", false}};
+            Result comparison; TryArchiveComparison(Input, comparison, Limits, false, firstFormat); auto documents = comparison.extension_["documents"].toArray();
+            QJsonArray inputs; for (const auto& value : documents) { auto document = value.toObject(); document["available"] = true; document["validation"] = "all-archive-ordinal-streams-verified"; inputs.append(document); }
+            const auto target = documents.size() == 2 ? documents[1].toObject()["format"].toString() : QString{};
+            return {{"schemaVersion", 1}, {"available", true}, {"inputs", inputs}, {"compareAvailable", true}, {"mergeTwoAvailable", target == "zip" || target == "7z"}, {"mergeBaseAvailable", false}, {"outputValidated", false}, {"engine", "container.7zip"}};
+        }
         QJsonArray inputs; QString format; bool compatible = true, large = false; int index = 0;
         for (const auto& path : {Input.file1_, Input.file2_, Input.base_.isEmpty() ? Input.file3_ : Input.base_})
         {
