@@ -12,7 +12,7 @@
 #include <atomic>
 #include <optional>
 #include <utility>
-class QToolButton;class QProcess;class QTreeWidget;
+class QScrollArea;class QEvent;class QToolButton;class QProcess;class QTreeWidget;
 class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;class QSplitter;class QStackedLayout;class QCheckBox;class QTemporaryDir;class QResizeEvent;
 namespace hc::document {
 class EpubProcessView;
@@ -44,7 +44,7 @@ public:
     bool RequestPreviewClose();
     bool IsPreviewClosed()const;
 signals:void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
-protected:void resizeEvent(QResizeEvent* Event)override;
+protected:bool eventFilter(QObject* Object,QEvent* Event)override;void resizeEvent(QResizeEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
     QMap<QString,QByteArray> draft()const;
@@ -83,7 +83,8 @@ private:
     std::shared_ptr<std::atomic_bool> cancel_;
     QComboBox* resources_=nullptr;QPlainTextEdit* text_=nullptr;QLabel *image_=nullptr,*status_=nullptr;
     QString current_,error_;QStringList protectedPaths_;QList<QByteArray> identities_;QByteArray baseToken_,reference_;
-    bool ready_=false,updating_=false;
+    bool ready_=false,updating_=false,sourceComposing_=false,commitRestore_=false,commitFocus_=false;
+    QString commitResource_;int commitPosition_=0,commitAnchor_=0,commitVertical_=0,commitHorizontal_=0;QScrollArea* sourceScroll_=nullptr;
     struct DraftSession {std::atomic_bool cancelled_=false,discard_=false;};
     std::shared_ptr<DraftSession> draftSession_=std::make_shared<DraftSession>();
     QFutureWatcher<epub::DraftWrite> draftWriter_;

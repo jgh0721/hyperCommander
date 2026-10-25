@@ -334,7 +334,7 @@ namespace hc::document
             });
         }
         auto* Restore = FileMenu->addAction(tr("복구 목록"));
-        auto* EpubRestore=FileMenu->addAction(tr("EPUB 편집 초안 복구…"));EpubRestore->setObjectName("epubDraftRecovery");EpubRestore->setVisible(!hosted_);
+        auto* EpubRestore=FileMenu->addAction(tr("EPUB 편집 초안 복구…"));EpubRestore->setObjectName("epubDraftRecovery");EpubRestore->setProperty("documentIconName","refresh");EpubRestore->setVisible(!hosted_);
         connect(EpubRestore,&QAction::triggered,this,&DocumentWorkspaceWidget::showEpubRecovery);
         Restore->setObjectName("documentRecovery"); Protection->setObjectName("documentCaptureProtection");
         connect(Restore, &QAction::triggered, this, [this] {

@@ -328,13 +328,13 @@ namespace
                         const auto Click=Result["annotationClicked"].toObject();if(Click["serial"].toInteger()>annotationClickSeen_){annotationClickSeen_=Click["serial"].toInteger();readAction("annotation-select",Click["id"]);}
                         while(!pendingBookmarks_.isEmpty())navigation_->Execute("bookmark-add",pendingBookmarks_.takeAt(0));
                     }
-                    const bool Fixed=Result["contentLayout"]=="pre-paginated";settings_->SetFixedLayout(Fixed);
+                    const bool Fixed=Result["contentLayout"]=="pre-paginated";settings_->SetFixedLayout(Fixed);const auto WritingModes=Result["writingModes"].toArray();const bool Vertical=WritingModes.contains("vertical-rl") || WritingModes.contains("vertical-lr");settings_->SetVerticalWriting(Vertical);
                     {QSignalBlocker Block(layoutChoice_);layoutChoice_->setCurrentIndex(Fixed || settings_->Profile()["layout"]=="paginated"?1:0);layoutChoice_->setEnabled(!Fixed);}
-                    {QSignalBlocker Block(columnsChoice_);columnsChoice_->setCurrentIndex(Fixed?1:settings_->Profile()["columns"].toInt());columnsChoice_->setEnabled(!Fixed && settings_->Profile()["layout"]=="paginated");}
+                    {QSignalBlocker Block(columnsChoice_);columnsChoice_->setCurrentIndex(Fixed || Vertical?1:settings_->Profile()["columns"].toInt());columnsChoice_->setEnabled(!Fixed && !Vertical && settings_->Profile()["layout"]=="paginated");}
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
-                            .arg(Result["chapterPage"].toInt(1)).arg(Result["chapterPages"].toInt(1)).arg(qRound(Result["progress"].toDouble()*100)));
+                            .arg((qMax(1,Result["chapterPage"].toInt(1))+qMax(1,Result["columnCount"].toInt(1))-1)/qMax(1,Result["columnCount"].toInt(1))).arg((qMax(1,Result["chapterPages"].toInt(1))+qMax(1,Result["columnCount"].toInt(1))-1)/qMax(1,Result["columnCount"].toInt(1))).arg(qRound(Result["progress"].toDouble()*100)));
                         findChild<QAction*>("epub.back")->setEnabled(Result["canBack"].toBool());
                         // Busy navigation is already bounded by the reader queue.
                         // Keep toolbar contrast stable between interior pages.
@@ -350,7 +350,7 @@ namespace
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
                     poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool()?250:33);
-                    statusBar()->showMessage(Status=="ready"?(Fixed?tr("원본 유지 · 고정 레이아웃 · 한 장씩 화면에 맞춤"):settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
+                    statusBar()->showMessage(Status=="ready"?(Fixed?tr("원본 유지 · 고정 레이아웃 · 한 장씩 화면에 맞춤"):Vertical?tr("원본 유지 · 세로쓰기 · 한 단으로 표시합니다."):settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
                         if(!Families.isEmpty()) {

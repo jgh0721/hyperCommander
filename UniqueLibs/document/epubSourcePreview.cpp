@@ -15,6 +15,7 @@
 #include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QStackedLayout>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
@@ -90,6 +91,7 @@ void EpubSourceEditor::suspendInactivePreview() {
     auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);previewPending_=true;previewTimer_.start();
 }
 void EpubSourceEditor::requestPreview(bool Force) {
+    if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     previewTimer_.stop();if(!previewRuntime_ || previewSettings_.isEmpty() || !ready_ || previewClosing_)return;
     if(!previewOwnerActive()){suspendInactivePreview();previewPending_=true;previewTimer_.start();return;}
     if(previewPreferredChapter_>=0){if(!text_->document()->isModified() && recoveredFrom_.isEmpty()){const auto Spine=model_.Publication()["spine"].toArray();if(previewPreferredChapter_<Spine.size()){const int Index=resources_->findText(Spine[previewPreferredChapter_].toObject()["path"].toString());if(Index>=0){const QSignalBlocker Block(resources_);resources_->setCurrentIndex(Index);select();}}}previewPreferredChapter_=-1;}
@@ -105,7 +107,7 @@ void EpubSourceEditor::retirePreview(EpubProcessView* View) {
     if(!View)return;previewRetiring_.append(View);View->hide();View->RequestClose();
 }
 void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
-    if(previewClosing_)return;
+    if(previewClosing_)return;if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     auto* Candidate=new EpubProcessView(*previewRuntime_,{12,1024ULL*1024*1024,20000},previewStack_->parentWidget());Candidate->setObjectName("epubDraftPreview");
     previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewStack_->addWidget(Candidate);
     if(previewView_)previewStack_->setCurrentWidget(previewView_);else previewStack_->setCurrentWidget(Candidate);
@@ -123,7 +125,7 @@ void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
     if(!Candidate->Load(Bytes,qint64(previewCandidateEpoch_+1),previewSettings_,false)){previewCandidate_=nullptr;previewError_="epub-preview-start";retirePreview(Candidate);}
 }
 void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
-    if(Candidate!=previewCandidate_ || !Candidate->IsLoaded())return;
+    if(sourceComposing_ || Candidate!=previewCandidate_ || !Candidate->IsLoaded())return;
     if(previewClosing_ || previewCandidateEpoch_!=previewEpoch_ || previewCandidateToken_!=Token()){previewCandidate_=nullptr;retirePreview(Candidate);if(!previewClosing_ && previewAutomatic_->isChecked())previewTimer_.start();return;}
     const auto State=Candidate->ViewState();if(State["status"]!="ready" || State["readerBusy"].toBool() || State["settingsBusy"].toBool() || !State["readingStateLoaded"].toBool() || !State["readingProfile"].toObject()["privateReading"].toBool())return;
     if(!State["annotationsTransient"].toBool()) {if(!Candidate->property("epubTransientRequested").toBool())Candidate->setProperty("epubTransientRequested",Candidate->ReaderAction("annotations-transient",true));return;}
@@ -165,7 +167,7 @@ bool EpubSourceEditor::RequestPreviewClose() {
     if(Closed && previewDirectory_)previewDirectory_->remove();return Closed;
 }
 bool EpubSourceEditor::IsPreviewClosed()const{return previewClosing_ && !previewWorker_.isRunning() && !previewView_ && !previewCandidate_ && std::all_of(previewRetiring_.begin(),previewRetiring_.end(),[](const auto& View){return !View || View->ViewState()["retired"].toBool();});}
-void EpubSourceEditor::SetSourceVisible(bool Visible){sourcePanel_->setVisible(Visible);setFocusProxy(Visible?static_cast<QWidget*>(text_):static_cast<QWidget*>(previewView_));if(Visible){text_->setFocus(Qt::OtherFocusReason);if(previewAutomatic_ && previewAutomatic_->isChecked())previewTimer_.start();}else if(previewView_)previewView_->FocusInput();emit StateChanged();}
-bool EpubSourceEditor::IsSourceVisible()const{return sourcePanel_ && !sourcePanel_->isHidden();}
+void EpubSourceEditor::SetSourceVisible(bool Visible){if(!Visible && sourceComposing_)return;sourceScroll_->setVisible(Visible);setFocusProxy(Visible?static_cast<QWidget*>(text_):static_cast<QWidget*>(previewView_));if(Visible){text_->setFocus(Qt::OtherFocusReason);if(previewAutomatic_ && previewAutomatic_->isChecked())previewTimer_.start();}else if(previewView_)previewView_->FocusInput();emit StateChanged();}
+bool EpubSourceEditor::IsSourceVisible()const{return sourceScroll_ && !sourceScroll_->isHidden();}
 void EpubSourceEditor::resizeEvent(QResizeEvent* Event){QWidget::resizeEvent(Event);if(previewSplitter_)previewSplitter_->setOrientation(width()<980?Qt::Vertical:Qt::Horizontal);}
 }

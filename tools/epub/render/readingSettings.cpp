@@ -172,7 +172,7 @@ namespace hc::epub::poc
         updating_ = true;
         const auto Values = Profile();
         mode_->setCurrentIndex(Values["override"].toBool() ? 0 : 1);
-        layout_->setCurrentIndex(Values["layout"]=="paginated"?1:0);columns_->setCurrentIndex(Values["columns"].toInt());columns_->setEnabled(Values["layout"]=="paginated");
+        layout_->setCurrentIndex(Values["layout"]=="paginated"?1:0);columns_->setCurrentIndex(fixedLayout_ || verticalWriting_?1:Values["columns"].toInt());columns_->setEnabled(Values["layout"]=="paginated");
         theme_->setCurrentIndex(QStringList{"light", "dark", "sepia", "green", "system"}.indexOf(Values["theme"].toString()));
         const auto Family = Values["font"].toString();
         auto FontIndex = font_->findData(Family);
@@ -203,7 +203,7 @@ namespace hc::epub::poc
         if(!CssValid()) status_->setText(tr("CSS 검사: %1").arg(cssError_.isEmpty()?tr("검사 중…"):cssError_));
         const bool Editable=!fixedLayout_;
         for(auto* Editor:QList<QWidget*>{mode_,font_,alignment_,layout_,css_,cssEnabled_,cssForce_,textColor_})Editor->setEnabled(Editable);
-        columns_->setEnabled(Editable && Values["layout"]=="paginated");
+        columns_->setEnabled(Editable && !verticalWriting_ && Values["layout"]=="paginated");columns_->setToolTip(verticalWriting_?tr("세로쓰기 본문은 한 단으로 표시합니다. 가로쓰기 본문의 단 수 설정은 보존됩니다."):tr("가로 페이지의 단 수를 선택합니다."));
         for(auto I=numbers_.begin();I!=numbers_.end();++I)I.value()->setEnabled(Editable || I.key()=="margin" || I.key()=="width");
         for(const auto& Key:QStringList{"override","font","align","layout","columns","size","weight","line","letter","word","before","after","indent","customCss","cssEnabled","cssForce","textColor"})if(resets_.contains(Key))resets_[Key]->setEnabled(Editable && draft_.contains(Key));
         for(int I=0;I<3;++I)if(auto* Button=findChild<QPushButton*>("preset"+QString::number(I)))Button->setEnabled(Editable);
@@ -218,6 +218,7 @@ namespace hc::epub::poc
         if(clearPositions_)clearPositions_->setEnabled(!Busy && !Dirty && !loadFailed_);
     }
     void ReadingSettings::SetFixedLayout(bool Fixed) {if(fixedLayout_==Fixed)return;fixedLayout_=Fixed;refresh();}
+    void ReadingSettings::SetVerticalWriting(bool Vertical) {if(verticalWriting_==Vertical)return;verticalWriting_=Vertical;refresh();}
     void ReadingSettings::acceptSnapshot(const ReadingSnapshot& Snapshot)
     {
         snapshot_ = Snapshot; base_ = scope_->currentIndex() == 1 ? Snapshot.global : Snapshot.book; draft_ = base_;

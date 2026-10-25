@@ -1,154 +1,226 @@
 {
   "schemaVersion": 1,
-  "status": "phase1-qualified-on-synthetic-corpus",
+  "status": "bounded-reader-editor-regression-verified",
   "releaseEligible": false,
+  "recordAuthority": "Evidence only; product admission requires the independent native inventory pin and valid signatures. This record does not assert full EPUB conformance.",
   "selectedReader": {
     "name": "epubjs",
     "version": "0.3.93",
-    "profile": "DRM-free passive reflowable EPUB2/3"
+    "host": "QtWebEngine / Qt 6.12",
+    "profile": "DRM-free passive XHTML EPUB2/3, reflowable/fixed/mixed layout"
   },
   "runtimeAdmission": {
     "currentKind": "EpubReadOnly",
-    "currentManifest": "epub-runtime-inventory.json",
-    "requiredAuthority": "independent native policy pin; never trust an adjacent manifest by itself",
-    "productDeployment": "isolated EPUB runtime directory; do not overwrite RHWP or shared Qt pins",
-    "productHelperCandidate": "HyperEpubWeb.exe",
-    "productAdmissionContractImplemented": true,
-    "productApprovedRuntimeAvailable": true,
-    "productKind": "EpubReadOnly",
     "productDirectory": "Libs/Epub",
     "productManifest": "epub-runtime-inventory.json",
     "productSchemaVersion": 3,
-    "productHelperBuilt": true,
-    "productCandidateStaged": true,
-    "productNativePinDeployed": true,
-    "productNativePolicyImplemented": true,
-    "productNativePinCompiledForQualification": true,
-    "productIsolatedPolicySnapshotVerified": true,
-    "productWorkspaceReadOnlyIntegrated": true,
-    "productWorkspaceCodeInstalled": true,
-    "productRuntimeInstalled": true,
-    "productSignedRuntimeVerified": true,
-    "productInventorySha256": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515"
+    "qualifiedCandidateInventorySha256": "ee658e4745a24fe2e3a752fef50d952c730c37dbed6480a6cb8f7eb7d26ad613",
+    "authority": "Independent native policy pin; never trust an adjacent manifest alone; preserve separately approved RHWP and Compare files"
   },
-  "resourceCandidate": {
-    "processLimitPerBook": 12,
-    "jobMemoryBytesPerBook": 1073741824,
-    "startupMs": 20000,
-    "concurrentBooksMeasured": 2,
-    "aggregateSchedulerImplemented": true,
-    "scope": "per user Windows session; 1 GiB/12 processes per book; bounded input/snapshot; synthetic large-book evidence only",
-    "aggregateActiveBooks": 2,
-    "aggregatePendingAndActiveBooks": 8
-  },
-  "pendingGates": [],
-  "startupReflow": {
-    "fixed": "initial resize can remove an iframe before display completion",
-    "strategy": "pixel viewport and serialized/coalesced reflow",
-    "visibilityRegression": "hidden tab, minimized window, five initial resize runs and final frame width",
-    "scope": "development and shared workspace; product viewer present path verified"
-  },
-  "deploymentPreflight": {
-    "qhcmodernBlocker": "resolved: stale comparison baseline; active approved runtime matches",
-    "codecDependencies": "four unsigned build copies restored through existing signing cache",
-    "installedImageCodecs": "five approved hashes and valid signatures verified; unchanged",
-    "evidence": "_build/qhcmodern-validation",
-    "rule": "resolve current runtime and independent pin from CMakeCache; compare after signing, never against a historical directory alone"
-  },
-  "workspaceQualification": {
-    "scenarios": "editor/viewer: ready, reload, cancel, invalid; PDF and dirty text preservation; 64 MiB input budget",
-    "passed": 20,
-    "evidence": "_build/epub-validation/workspace/tests-qualified.txt",
-    "actualF3F4EndToEnd": true,
-    "actualPluginHostEntry": true,
-    "installedEditorEpub2Epub3": true,
-    "installedProductHashesVerified": 263,
-    "protectedFilesPreserved": 18,
-    "productEvidence": "_build/epub-validation/final",
-    "portableMembersVerified": 264,
-    "hwpPdfDirtyTextCoexistence": true,
-    "watercolorAppearancePropagation": true,
-    "persistentGlobalAndBookSettings": true,
-    "settingsTestsPassed": 13,
-    "productKeyScenariosPassed": 4
-  },
-  "backgroundCssQualification": {
-    "evidence": "_build/epub-validation/background",
-    "workspaceTestsPassed": 13,
-    "settingsTestsPassed": 11,
-    "readerEnginesRegressionPassed": 2,
-    "parser": "css-tree 3.2.1",
-    "scope": "bounded display-only CSS subset and managed immutable backgrounds; publisher bytes preserved"
-  },
-  "readingToolsQualification": {
-    "evidence": "_build/epub-validation/reading",
-    "workspaceTestsPassed": 14,
-    "settingsTestsPassed": 12,
-    "scope": "EPUB.js bounded full-book literal search; SHA256-scoped persisted CFI and merge-safe bookmarks; passive footnote and original image zoom overlays"
-  },
-  "inputQualification": {
-    "evidence": "_build/epub-validation/input",
-    "workspaceTestsPassed": 15,
-    "settingsTestsPassedPerScale": 13,
-    "scales": [
-      1,
-      1.25,
-      1.5,
-      2
-    ],
-    "foreignHelperEscapeVerified": true,
-    "scope": "native IME composition/commit events, accessible search/field names, keyboard routes and layout; real TSF candidate UI and screen-reader acceptance still manual"
-  },
-  "resourceQualification": {
-    "evidence": "_build/epub-validation/resources",
-    "workspaceTestsPassed": 17,
-    "crossProcessTestsPassed": 4,
-    "largeBook": {
-      "chapters": 160,
-      "inputBytes": 11237262,
-      "observedStartupMs": 2953,
-      "observedPeakJobBytes": 430137344
-    },
-    "hiddenTabQueueRegressionFixed": true
-  },
-  "editingQualification": {
-    "evidence": "_build/epub-validation/editing",
-    "workspaceTestsPassed": 20,
-    "saveAsCases": [
-      "EPUB2",
-      "EPUB3",
-      "compressed EPUB3 with ZIP metadata"
-    ],
-    "untouchedZipRecordsPerCase": 5,
-    "sourceAndHardlinkOverwriteDenied": true,
-    "scope": "native HyperEditor XHTML/CSS/OPF and same-format image editing; background structural/XML/reference/image validation; source undo/redo and validated Save As plus reopen",
-    "limits": [
-      "source drafts have no crash recovery",
-      "CSS syntax and EPUBCheck acceptance are separate",
-      "DRM, signed, fixed layout and active EPUB remain unsupported"
+  "currentCapabilities": [
+    "Reader-first in HyperViewer and HyperEditor; explicit toolbar edit handoff",
+    "Separate typography, paragraph spacing, layout, background and restricted CSS controls",
+    "Passive reflowable/fixed/mixed XHTML, RTL, vertical-rl and Ruby regression coverage",
+    "Source/image/structure/TOC editing, validated Save As and crash draft recovery",
+    "Named style profile and exact managed PNG transfer without private reading state",
+    "Native-authoritative highlights/notes with conflict-safe persistence and bounded edition transfer",
+    "Viewport-based scroll navigation, stable frames, numeric keypad page keys, source caret restoration and deferred composition-time preview swap"
+  ],
+  "currentLimits": {
+    "inputBytes": 67108864,
+    "zipEntries": 4096,
+    "decompressedEntryBytes": 16777216,
+    "decompressedTotalBytes": 134217728,
+    "rendererSnapshotBytes": 33554432,
+    "processesPerBook": 12,
+    "jobMemoryBytes": 1073741824,
+    "notesPerBook": 32,
+    "quoteCharacters": 512,
+    "noteCharacters": 2048,
+    "namedProfiles": 32,
+    "unsupported": [
+      "DRM/encryption/font obfuscation and signed publications",
+      "Publisher active scripts and SVG spine documents",
+      "ZIP64 and inputs outside retained resource budgets"
     ]
   },
-  "reproducibilityQualification": {
-    "evidence": "_build/epub-validation/final",
-    "cleanTrackedCheckout": true,
-    "lockedNpmInstall": true,
-    "fullReleaseBuildPassed": true,
-    "finalFocusedBuildPassed": true,
-    "productKeyCasesPassed": 4,
-    "workspaceTestsPassed": 20,
-    "signedProductPEs": 86,
-    "productInventoryFiles": 263,
-    "portableMembersVerified": 264,
-    "protectedFilesPreserved": 18,
-    "nativePin": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515",
-    "approvedImagePluginPreserved": "5bc7fa0bb876c9347e8b5f4509b27ccba018858f7f99bd83f5a62a04c0130841",
-    "publisherIdCollisionRegressionVerified": true,
-    "sourceNonBreakingSpacesPreserved": true,
-    "actualSavedBookReopenActionVerified": true
+  "currentQualification": {
+    "evidence": "_build/epub-next/acceptance-* and _build/epub-interaction/acceptance*",
+    "tests": {
+      "readingSettings": 26,
+      "documentPreferences": 28,
+      "workspaceDpr100": 19,
+      "workspaceDpr150": 63
+    },
+    "observedDevicePixelRatios": [
+      1,
+      1.5
+    ],
+    "connectedMonitorCount": 1,
+    "monitor": "MSI MAG281URF",
+    "realKoreanIme": "Physical G K S R M F and Space input; composition observed across preview delay; committed Korean and focus verified at both scales",
+    "frameEvidence": "_build/epub-next/acceptance-frames150; same chapter, chapter boundaries and resize in light/dark",
+    "sourceIntegrity": "Owned fixtures and user EPUB originals preserved by read-only/byte comparison checks",
+    "saveCopy": "Resource, cursor, selection and focus restored after successful Save As reload"
   },
   "manualAcceptance": [
-    "Real third-party book compatibility beyond the bounded synthetic EPUB2/3 corpus",
-    "Windows TSF candidate windows and screen-reader user sessions",
-    "Full publication CSS syntax and EPUBCheck validation for authored output"
-  ]
+    "Physical movement between multiple monitors of different DPI: not tested; only one monitor is connected",
+    "Screen-reader continuous reading and candidate-window interaction with assistive tools: requires manual acceptance",
+    "Compatibility outside the measured corpus and retained resource budgets is not implied"
+  ],
+  "usage": "tools/epub/USAGE.rst",
+  "historicalPhase1": {
+    "schemaVersion": 1,
+    "status": "phase1-qualified-on-synthetic-corpus",
+    "releaseEligible": false,
+    "selectedReader": {
+      "name": "epubjs",
+      "version": "0.3.93",
+      "profile": "DRM-free passive reflowable EPUB2/3"
+    },
+    "runtimeAdmission": {
+      "currentKind": "EpubReadOnly",
+      "currentManifest": "epub-runtime-inventory.json",
+      "requiredAuthority": "independent native policy pin; never trust an adjacent manifest by itself",
+      "productDeployment": "isolated EPUB runtime directory; do not overwrite RHWP or shared Qt pins",
+      "productHelperCandidate": "HyperEpubWeb.exe",
+      "productAdmissionContractImplemented": true,
+      "productApprovedRuntimeAvailable": true,
+      "productKind": "EpubReadOnly",
+      "productDirectory": "Libs/Epub",
+      "productManifest": "epub-runtime-inventory.json",
+      "productSchemaVersion": 3,
+      "productHelperBuilt": true,
+      "productCandidateStaged": true,
+      "productNativePinDeployed": true,
+      "productNativePolicyImplemented": true,
+      "productNativePinCompiledForQualification": true,
+      "productIsolatedPolicySnapshotVerified": true,
+      "productWorkspaceReadOnlyIntegrated": true,
+      "productWorkspaceCodeInstalled": true,
+      "productRuntimeInstalled": true,
+      "productSignedRuntimeVerified": true,
+      "productInventorySha256": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515"
+    },
+    "resourceCandidate": {
+      "processLimitPerBook": 12,
+      "jobMemoryBytesPerBook": 1073741824,
+      "startupMs": 20000,
+      "concurrentBooksMeasured": 2,
+      "aggregateSchedulerImplemented": true,
+      "scope": "per user Windows session; 1 GiB/12 processes per book; bounded input/snapshot; synthetic large-book evidence only",
+      "aggregateActiveBooks": 2,
+      "aggregatePendingAndActiveBooks": 8
+    },
+    "pendingGates": [],
+    "startupReflow": {
+      "fixed": "initial resize can remove an iframe before display completion",
+      "strategy": "pixel viewport and serialized/coalesced reflow",
+      "visibilityRegression": "hidden tab, minimized window, five initial resize runs and final frame width",
+      "scope": "development and shared workspace; product viewer present path verified"
+    },
+    "deploymentPreflight": {
+      "qhcmodernBlocker": "resolved: stale comparison baseline; active approved runtime matches",
+      "codecDependencies": "four unsigned build copies restored through existing signing cache",
+      "installedImageCodecs": "five approved hashes and valid signatures verified; unchanged",
+      "evidence": "_build/qhcmodern-validation",
+      "rule": "resolve current runtime and independent pin from CMakeCache; compare after signing, never against a historical directory alone"
+    },
+    "workspaceQualification": {
+      "scenarios": "editor/viewer: ready, reload, cancel, invalid; PDF and dirty text preservation; 64 MiB input budget",
+      "passed": 20,
+      "evidence": "_build/epub-validation/workspace/tests-qualified.txt",
+      "actualF3F4EndToEnd": true,
+      "actualPluginHostEntry": true,
+      "installedEditorEpub2Epub3": true,
+      "installedProductHashesVerified": 263,
+      "protectedFilesPreserved": 18,
+      "productEvidence": "_build/epub-validation/final",
+      "portableMembersVerified": 264,
+      "hwpPdfDirtyTextCoexistence": true,
+      "watercolorAppearancePropagation": true,
+      "persistentGlobalAndBookSettings": true,
+      "settingsTestsPassed": 13,
+      "productKeyScenariosPassed": 4
+    },
+    "backgroundCssQualification": {
+      "evidence": "_build/epub-validation/background",
+      "workspaceTestsPassed": 13,
+      "settingsTestsPassed": 11,
+      "readerEnginesRegressionPassed": 2,
+      "parser": "css-tree 3.2.1",
+      "scope": "bounded display-only CSS subset and managed immutable backgrounds; publisher bytes preserved"
+    },
+    "readingToolsQualification": {
+      "evidence": "_build/epub-validation/reading",
+      "workspaceTestsPassed": 14,
+      "settingsTestsPassed": 12,
+      "scope": "EPUB.js bounded full-book literal search; SHA256-scoped persisted CFI and merge-safe bookmarks; passive footnote and original image zoom overlays"
+    },
+    "inputQualification": {
+      "evidence": "_build/epub-validation/input",
+      "workspaceTestsPassed": 15,
+      "settingsTestsPassedPerScale": 13,
+      "scales": [
+        1,
+        1.25,
+        1.5,
+        2
+      ],
+      "foreignHelperEscapeVerified": true,
+      "scope": "native IME composition/commit events, accessible search/field names, keyboard routes and layout; real TSF candidate UI and screen-reader acceptance still manual"
+    },
+    "resourceQualification": {
+      "evidence": "_build/epub-validation/resources",
+      "workspaceTestsPassed": 17,
+      "crossProcessTestsPassed": 4,
+      "largeBook": {
+        "chapters": 160,
+        "inputBytes": 11237262,
+        "observedStartupMs": 2953,
+        "observedPeakJobBytes": 430137344
+      },
+      "hiddenTabQueueRegressionFixed": true
+    },
+    "editingQualification": {
+      "evidence": "_build/epub-validation/editing",
+      "workspaceTestsPassed": 20,
+      "saveAsCases": [
+        "EPUB2",
+        "EPUB3",
+        "compressed EPUB3 with ZIP metadata"
+      ],
+      "untouchedZipRecordsPerCase": 5,
+      "sourceAndHardlinkOverwriteDenied": true,
+      "scope": "native HyperEditor XHTML/CSS/OPF and same-format image editing; background structural/XML/reference/image validation; source undo/redo and validated Save As plus reopen",
+      "limits": [
+        "source drafts have no crash recovery",
+        "CSS syntax and EPUBCheck acceptance are separate",
+        "DRM, signed, fixed layout and active EPUB remain unsupported"
+      ]
+    },
+    "reproducibilityQualification": {
+      "evidence": "_build/epub-validation/final",
+      "cleanTrackedCheckout": true,
+      "lockedNpmInstall": true,
+      "fullReleaseBuildPassed": true,
+      "finalFocusedBuildPassed": true,
+      "productKeyCasesPassed": 4,
+      "workspaceTestsPassed": 20,
+      "signedProductPEs": 86,
+      "productInventoryFiles": 263,
+      "portableMembersVerified": 264,
+      "protectedFilesPreserved": 18,
+      "nativePin": "aafe7c38c09aa7d7cb332a9532fb1a871d15db33da2c7b20737ec2dccc52d515",
+      "approvedImagePluginPreserved": "5bc7fa0bb876c9347e8b5f4509b27ccba018858f7f99bd83f5a62a04c0130841",
+      "publisherIdCollisionRegressionVerified": true,
+      "sourceNonBreakingSpacesPreserved": true,
+      "actualSavedBookReopenActionVerified": true
+    },
+    "manualAcceptance": [
+      "Real third-party book compatibility beyond the bounded synthetic EPUB2/3 corpus",
+      "Windows TSF candidate windows and screen-reader user sessions",
+      "Full publication CSS syntax and EPUBCheck validation for authored output"
+    ]
+  }
 }

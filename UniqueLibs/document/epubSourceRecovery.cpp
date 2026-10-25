@@ -110,7 +110,12 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
             emit Changed();
         }
     }
-    refreshRecovery();emit StateChanged();
+    if(ready_ && commitRestore_ && !Restoring) {
+        const int Index=resources_->findText(commitResource_);if(Index>=0){const QSignalBlocker Block(resources_);resources_->setCurrentIndex(Index);select();}
+        if(!text_->isHidden()){auto Cursor=text_->textCursor();const int Last=text_->document()->characterCount()-1;Cursor.setPosition(qBound(0,commitAnchor_,Last));Cursor.setPosition(qBound(0,commitPosition_,Last),QTextCursor::KeepAnchor);text_->setTextCursor(Cursor);}
+        QTimer::singleShot(0,this,[this]{text_->verticalScrollBar()->setValue(commitVertical_);text_->horizontalScrollBar()->setValue(commitHorizontal_);if(commitFocus_ && previewOwnerActive())text_->setFocus(Qt::OtherFocusReason);});
+    }
+    commitRestore_=false;refreshRecovery();emit StateChanged();
 }
 void EpubSourceEditor::refreshRecovery() {
     if(draftFinder_.isRunning())return;

@@ -314,6 +314,7 @@ function currentSnapshot() {
         ruby:docs.flatMap(doc=>[...doc.querySelectorAll("ruby")].slice(0,4).map(node=>({display:getComputedStyle(node).display,size:getComputedStyle(node).fontSize,annotations:[...node.querySelectorAll("rt")].map(rt=>({display:getComputedStyle(rt).display,size:getComputedStyle(rt).fontSize,text:rt.textContent}))}))),
         pageCanvasColors:docs.map(doc=>getComputedStyle(doc.defaultView.frameElement).backgroundColor),
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
+        scrollState:rendition?.manager?.scrollMetrics?.() || null,
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
         columnCount:rendition?._layout?.divisor || 1,
         frameId:docs[0]?.defaultView.frameElement?.id || "",

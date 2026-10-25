@@ -16,6 +16,10 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QInputMethodEvent>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTextCursor>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -34,11 +38,11 @@ void EpubSourceEditor::protectSourcePath(const QString& Path){protectedPaths_.ap
 EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget* Parent):QWidget(Parent) {
     protectSourcePath(Path);
     baseToken_=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256);sourceHashAtOpen_=baseToken_;sourcePath_=Path;
-    auto* Outer=new QVBoxLayout(this);Outer->setContentsMargins(0,0,0,0);previewSplitter_=new QSplitter(this);previewSplitter_->setChildrenCollapsible(false);Outer->addWidget(previewSplitter_);sourcePanel_=new QWidget(previewSplitter_);auto* Layout=new QVBoxLayout(sourcePanel_);Layout->setContentsMargins(4,4,4,4);
+    auto* Outer=new QVBoxLayout(this);Outer->setContentsMargins(0,0,0,0);previewSplitter_=new QSplitter(this);previewSplitter_->setChildrenCollapsible(false);Outer->addWidget(previewSplitter_);sourceScroll_=new QScrollArea(previewSplitter_);sourceScroll_->setObjectName("epubSourceScroll");sourceScroll_->setWidgetResizable(true);sourceScroll_->setMinimumSize(0,0);sourcePanel_=new QWidget;sourceScroll_->setWidget(sourcePanel_);auto* Layout=new QVBoxLayout(sourcePanel_);Layout->setContentsMargins(4,4,4,4);
     auto* Note=new QLabel(tr("EPUB 소스 편집 · XHTML / CSS / OPF 메타데이터 / 이미지\n편집 초안은 자동 복구 설정에 따라 보관됩니다. 미리보기는 마지막으로 검사를 통과한 편집 내용을 표시합니다. 저장은 다른 이름으로 진행합니다."),this);Note->setWordWrap(true);Layout->addWidget(Note);
     resources_=new QComboBox(this);resources_->setObjectName("epubEditResources");resources_->setAccessibleName(tr("편집할 EPUB 리소스"));resources_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);resources_->setMinimumContentsLength(24);Layout->addWidget(resources_);
     text_=new QPlainTextEdit(this);text_->setObjectName("epubEditSource");text_->setAccessibleName(tr("EPUB 리소스 소스"));text_->setLineWrapMode(QPlainTextEdit::NoWrap);text_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));DocumentThemeAdapter::Attach(text_);Layout->addWidget(text_,1);
-    text_->setAttribute(Qt::WA_NativeWindow);setFocusProxy(text_);
+    text_->installEventFilter(this);text_->setMinimumHeight(120);text_->setAttribute(Qt::WA_NativeWindow);setFocusProxy(text_);
     image_=new QLabel(this);image_->setAlignment(Qt::AlignCenter);image_->setMinimumHeight(100);image_->hide();Layout->addWidget(image_,1);
     auto* Actions=new QHBoxLayout;auto* Apply=new QPushButton(tr("리소스 변경 반영"),this);auto* Replace=new QPushButton(tr("선택 이미지 교체…"),this);auto* Save=new QPushButton(tr("검증 후 다른 이름으로 저장…"),this);Apply->setObjectName("epubApplyResource");Replace->setObjectName("epubReplaceImage");Save->setObjectName("epubSaveCopy");Actions->addWidget(Apply);Actions->addWidget(Replace);Actions->addWidget(Save);Layout->addLayout(Actions);
     status_=new QLabel(this);status_->setWordWrap(true);Layout->addWidget(status_);
@@ -63,7 +67,7 @@ void EpubSourceEditor::load(QByteArray Bytes) {
 }
 QMap<QString,QByteArray> EpubSourceEditor::draft()const {if(ready_ && !current_.isEmpty() && !text_->isHidden() && text_->document()->isModified())return {{current_,text_->document()->toRawText().replace(QChar(0x2029),QChar('\n')).toUtf8()}};return {};}
 QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
-bool EpubSourceEditor::flush(){if(!ready_)return false;const auto Draft=draft();for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){status_->setText(Error);return false;}}if(!Draft.isEmpty()){text_->document()->setModified(false);text_->document()->clearUndoRedoStacks();emit Changed();}return true;}
+bool EpubSourceEditor::flush(){if(!ready_ || sourceComposing_)return false;const auto Draft=draft();for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){status_->setText(Error);return false;}}if(!Draft.isEmpty()){text_->document()->setModified(false);text_->document()->clearUndoRedoStacks();emit Changed();}return true;}
 void EpubSourceEditor::select() {
     if(!ready_)return;current_=resources_->currentText();const auto Data=model_.Read(current_);const auto Media=resources_->currentData().toString();const bool Raster=QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Media);
     updating_=true;text_->setVisible(!Raster);image_->setVisible(Raster);
@@ -72,8 +76,8 @@ void EpubSourceEditor::select() {
 }
 void EpubSourceEditor::importImage() {
     if(structuring_)return;
-    if(!ready_ || !QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(resources_->currentData().toString())){status_->setText(tr("교체할 PNG·JPEG·GIF 리소스를 먼저 선택해 주세요. 경로와 형식은 유지합니다."));return;}
-    const auto Path=QFileDialog::getOpenFileName(this,tr("같은 형식의 이미지로 교체"),{},tr("이미지 (*.png *.jpg *.jpeg *.gif)"));if(Path.isEmpty())return;QFile File(Path);if(!File.open(QIODevice::ReadOnly) || File.size()>8*1024*1024){status_->setText(tr("이미지 입력 한도는 8 MiB입니다."));return;}
+    if(!ready_ || !QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(resources_->currentData().toString())){status_->setText(tr("교체할 PNG·JPEG·GIF·WebP 리소스를 먼저 선택해 주세요. 경로와 형식은 유지합니다."));return;}
+    const auto Path=QFileDialog::getOpenFileName(this,tr("같은 형식의 이미지로 교체"),{},tr("이미지 (*.png *.jpg *.jpeg *.gif *.webp)"));if(Path.isEmpty())return;QFile File(Path);if(!File.open(QIODevice::ReadOnly) || File.size()>8*1024*1024){status_->setText(tr("이미지 입력 한도는 8 MiB입니다."));return;}
     const auto Error=model_.Replace(current_,File.read(8*1024*1024+1));if(!Error.isEmpty()){status_->setText(Error);return;}select();emit Changed();
 }
 bool EpubSourceEditor::CanUndo()const{return ready_ && !structuring_ && ((!text_->isHidden() && text_->document()->isUndoAvailable()) || model_.CanUndo());}
@@ -110,8 +114,15 @@ storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination)
 }
 void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
     ReloadValidationSettings();
-    if(!ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || nativeValidating_ || checkerState_=="running" || structuring_)return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;status_->setText(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();auto Cancel=cancel_;
+    if(sourceComposing_ || !ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || nativeValidating_ || checkerState_=="running" || structuring_)return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;status_->setText(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();auto Cancel=cancel_;
     nativeValidating_=true;validation_.setFuture(QtConcurrent::run([Model=std::move(Model),Draft,Cancel]{return Model.Export(Draft,[Cancel]{return Cancel->load();});}));emit StateChanged();
 }
-void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){DiscardRecovery();resetRecoverySession();sourcePath_=Path;sourceHashAtOpen_=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256);baseToken_=Token();protectSourcePath(Path);load(Bytes);}
+bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
+    if(Object==text_ && Event->type()==QEvent::InputMethod) {
+        sourceComposing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();text_->setProperty("epubSourceComposing",sourceComposing_);
+        if(!sourceComposing_)QTimer::singleShot(0,this,[this]{if(sourceComposing_)return;if(previewCandidate_)admitPreview(previewCandidate_);if(previewAutomatic_ && previewAutomatic_->isChecked())previewTimer_.start();});
+    }
+    return QWidget::eventFilter(Object,Event);
+}
+void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){commitRestore_=true;commitResource_=current_;commitPosition_=text_->textCursor().position();commitAnchor_=text_->textCursor().anchor();commitVertical_=text_->verticalScrollBar()->value();commitHorizontal_=text_->horizontalScrollBar()->value();commitFocus_=text_->hasFocus();DiscardRecovery();resetRecoverySession();sourcePath_=Path;sourceHashAtOpen_=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256);baseToken_=Token();protectSourcePath(Path);load(Bytes);}
 }

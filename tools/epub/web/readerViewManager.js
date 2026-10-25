@@ -21,6 +21,50 @@ export class ReaderViewManager extends DefaultViewManager {
         this.layout.settings.spread=spread;this.layout.spread(spread,minSpreadWidth);
         this.updateFlow(flow);
     }
+    // The default scrolled-doc manager advances directly to another chapter.
+    // Page commands first move one viewport with overlap inside the current frame.
+    scrollMetrics() {
+        const vertical=this.settings.axis==="vertical",element=this.container;
+        const negative=!vertical && (this.writingMode==="vertical-rl" || getComputedStyle(element).direction==="rtl");
+        const extent=Math.max(0,vertical?element.scrollHeight-element.clientHeight:element.scrollWidth-element.clientWidth);
+        const offset=vertical?element.scrollTop:element.scrollLeft*(negative?-1:1);
+        return {vertical,negative,extent,offset:Math.max(0,offset),size:vertical?element.clientHeight:element.clientWidth};
+    }
+    stepScrolled(direction) {
+        if(this.isPaginated || !this.views?.length || this.layout.name==="pre-paginated")return false;
+        const m=this.scrollMetrics(),target=Math.max(0,Math.min(m.extent,m.offset+direction*Math.max(1,Math.floor(m.size*0.9))));
+        if(Math.abs(target-m.offset)<1)return false;
+        this.scrollTo(m.vertical?0:target*(m.negative?-1:1),m.vertical?target:0,true);return true;
+    }
+    next() {if(this.stepScrolled(1))return Promise.resolve();return super.next();}
+    prev() {
+        if(this.stepScrolled(-1))return Promise.resolve();
+        const index=this.views?.first()?.section.index;
+        return Promise.resolve(super.prev()).then(result=>{
+            if(!this.isPaginated && this.views?.first()?.section.index!==index && this.layout.name!=="pre-paginated") {
+                const m=this.scrollMetrics();this.scrollTo(m.vertical?0:m.extent*(m.negative?-1:1),m.vertical?m.extent:0,true);
+            }return result;
+        });
+    }
+    // EPUB.js uses overflow:auto for both axes after a flow change. Restrict the
+    // cross axis so centered frames/annotation SVGs cannot add a second scrollbar.
+    updateOverflowAxis() {
+        if(!this.container || this.isPaginated)return;
+        this.container.style.overflowX=this.settings.axis==="vertical"?"hidden":"auto";
+        this.container.style.overflowY=this.settings.axis==="vertical"?"auto":"hidden";
+    }
+    updateAxis(axis,force) {super.updateAxis(axis,force);this.updateOverflowAxis();}
+    updateFlow(flow,...args) {
+        super.updateFlow(flow,...args);
+        // Flow updates reset the default manager axis, including when an
+        // existing vertical-writing view has already reported its writing mode.
+        if(this.writingMode) {
+            const vertical=this.writingMode.startsWith("vertical");
+            const axis=(this.isPaginated?vertical:!vertical)?"vertical":"horizontal";
+            if(this.settings.axis!==axis){this.updateAxis(axis);this.updateLayout();}
+        }
+        this.updateOverflowAxis();
+    }
     beginTransition() { this.transitionDepth = (this.transitionDepth || 0) + 1; }
     clear() {
         if (!this.transitionDepth || !this.views?.length) return super.clear();
