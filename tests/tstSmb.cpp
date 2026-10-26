@@ -276,7 +276,7 @@ private slots:
         qInfo() << "Product UI DPR:" << main_->devicePixelRatioF();
         panels_ = main_->findChildren<CmpPanel*>();
         QCOMPARE(panels_.size(), 2);
-        QTRY_VERIFY_WITH_TIMEOUT(model(panels_.front())->GetRoot(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(model(panels_.front()) && model(panels_.front())->GetRoot(), 5000);
         for (auto* Panel : panels_) QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 15000);
     }
 
@@ -5650,8 +5650,8 @@ private slots:
         auto* Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000);
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
-        auto* Inactive = qobject_cast<CGridView*>(Panel->GetFocusView(1)); QVERIFY(Inactive);
-        QVERIFY(!Inactive->BaseModel()->GetRoot()); // Lazy restore does not launch inactive providers.
+        QVERIFY(!Panel->GetFocusView(1)); // A read-only lookup must not materialize an inactive tab.
+        QCOMPARE(Panel->findChildren<CGridView*>().size(), 1);
         hc::storage::EntrySnapshot Selected;
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
             const auto Item = Model->GetFileInfo(Model->index(Row, 0));
@@ -6036,7 +6036,7 @@ hc.events.unsubscribe(sub)
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0));
         QCOMPARE(View->CaptureSelection(), Saved.tabs_[0].selection_);
         QCOMPARE(View->ColumnWidths()->Policies()[View->ColumnWidths()->ColumnId(0)].value_, 35.0);
-        QVERIFY(!qobject_cast<CGridView*>(Panel->GetFocusView(1))->BaseModel()->GetRoot());
+        QVERIFY(!Panel->GetFocusView(1));
     }
 
     void isoPluginUi_data()

@@ -510,7 +510,6 @@ CViewT* CmpPanel::GetFocusView( int TabIndex ) const
     if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return {};
 
-    const_cast<CmpPanel*>(this)->materializeTab(TabIndex);
     const auto& State = vecTabStates.value( TabIndex );
     if( State->QuickView != nullptr )
         return State->QuickView;
@@ -779,7 +778,7 @@ void CmpPanel::ChangeVolume( const QString& Drive )
 void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter )
 {
     Q_UNUSED(Parameter);
-    const auto State = retrieveFocusState(); if (!State || Path.trimmed().isEmpty()) return;
+    const auto State = retrieveFocusState(); if (!State || !State->Model || Path.trimmed().isEmpty()) return;
     auto* Model = static_cast<CFSModel*>(State->Model);
     const bool WasSearch = Model->IsSearchResults();
     if (WasSearch) StopEverythingSearch(false);
@@ -1113,7 +1112,7 @@ void CmpPanel::SetSearch(const QString& Query, const QString& Match)
 }
 void CmpPanel::StartEverythingSearch(const QString& Query, const QString& Match, int Interval)
 {
-    const auto State = retrieveFocusState(); if (!State || Query.isEmpty()) return;
+    const auto State = retrieveFocusState(); if (!State || !State->Model || Query.isEmpty()) return;
     auto* Model = static_cast<CFSModel*>(State->Model);
     if (!State->searchOrigin_) {
         State->searchOrigin_ = CaptureWorkspace().tabs_[CurrentTabIndex()];
@@ -1154,7 +1153,7 @@ void CmpPanel::StopEverythingSearch(bool Restore)
 
 void CmpPanel::OpenSearchLocation()
 {
-    const auto State = retrieveFocusState(); if (!State || !static_cast<CFSModel*>(State->Model)->IsSearchResults()) return;
+    const auto State = retrieveFocusState(); if (!State || !State->Model || !static_cast<CFSModel*>(State->Model)->IsSearchResults()) return;
     auto* View = static_cast<CGridView*>(State->View);
     const auto Focus = View->CaptureFocus();
     for (int Row = 0; Row < State->Model->rowCount(); ++Row) {
@@ -1202,7 +1201,9 @@ void CmpPanel::syncPanelChrome()
     }
     Bar->setCurrentIndex(ui.tabWidget->currentIndex());
     Bar->setMaximumWidth(std::max(30, Bar->sizeHint().width()));
-    const auto* SearchModel = static_cast<CFSModel*>(retrieveFocusState()->Model);
+    const auto State = retrieveFocusState();
+    if (!State || !State->Model || !State->View) return;
+    const auto* SearchModel = static_cast<CFSModel*>(State->Model);
     const auto Kind = SearchModel->WorkspaceLocation().kind_;
     path_->SetBreadcrumbsEnabled(!SearchModel->IsSearchResults()
         && (Kind == hc::storage::LocatorKind::Local || Kind == hc::storage::LocatorKind::Smb));
@@ -1235,7 +1236,6 @@ CmpPanel::TySpTabState CmpPanel::retrieveFocusState()
 {
     const auto Index = ui.tabWidget->currentIndex();
     if (Index < 0 || Index >= vecTabStates.size()) return {};
-    materializeTab(Index);
     return vecTabStates[Index];
 }
 
@@ -1245,7 +1245,6 @@ CViewT* CmpPanel::retrieveFocusView() const
     if( Current < 0 || Current >= vecTabStates.size() )
         return {};
 
-    const_cast<CmpPanel*>(this)->materializeTab(Current);
     const auto& State = vecTabStates.value( Current );
     if( State->QuickView != nullptr )
         return State->QuickView;
@@ -1413,6 +1412,7 @@ void CmpPanel::processPanelStatusText()
 {
     if (ui.tabWidget->currentIndex() < 0 || ui.tabWidget->currentIndex() >= vecTabStates.size()) return;
     const auto& State = retrieveFocusState();
+    if (!State || !State->Model) return;
     const bool Automatic = State->automaticSnapshot_ || static_cast<CFSModel*>(State->Model)->IsAutomaticRefresh();
     const auto Refresh = hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject());
     if (!State->footerValid_ || !Automatic || Refresh.updateFooter) {
