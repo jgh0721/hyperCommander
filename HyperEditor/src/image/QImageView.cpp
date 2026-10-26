@@ -1,6 +1,7 @@
 ﻿#include "image/QImageView.h"
 
 #include "core/ThemeManager.h"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/document/imageBook.hpp"
 #include "UniqueLibs/document/imageDisplayColor.hpp"
 #include "UniqueLibs/document/imagePerformance.hpp"
@@ -1280,7 +1281,7 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
         }
         if (m_editTool == TextTool) {
             bool ok;
-            QString text = QInputDialog::getText(this, tr("텍스트 입력"), tr("텍스트:"),
+            QString text = hc::ui::InputDialog::getText(this, tr("텍스트 입력"), tr("텍스트:"),
                                                  QLineEdit::Normal, {}, &ok);
             if (ok && !text.isEmpty()) {
                 QImage before = m_displayImage;

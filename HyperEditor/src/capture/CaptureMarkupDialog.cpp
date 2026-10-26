@@ -3,6 +3,7 @@
 #include "capture/WindowsGraphicsCapture.h"
 
 #include <QApplication>
+#include <fmstyle/ThemeManager.h>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -71,15 +72,16 @@ void showPenPopup(QWidget* button, QColor current_color, int current_width, std:
     QString bgStr = QString("rgba(%1, %2, %3, 255)").arg(bgColor.red()).arg(bgColor.green()).arg(bgColor.blue());
     QString fgStr = QString("rgba(%1, %2, %3, 255)").arg(fgColor.red()).arg(fgColor.green()).arg(fgColor.blue());
     QString borderStr = QString("rgba(%1, %2, %3, %4)").arg(borderColor.red()).arg(borderColor.green()).arg(borderColor.blue()).arg(borderColor.alpha());
+    const auto& Tokens = fm::style::ThemeManager::instance().colors();
 
     popup->setStyleSheet(QString(
-        "QWidget { background: %1; color: %2; font-family: 'Segoe UI', sans-serif; border: 1px solid %3; border-radius: 8px; }"
+        "QWidget { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; }"
         "QLabel { border: none; font-weight: bold; background: none; color: %2; }"
         "QToolButton { border-radius: 12px; border: 2px solid transparent; background: none; }"
         "QToolButton:checked { border-color: %2; }"
         "QSlider::groove:horizontal { border: 1px solid %3; height: 4px; background: %3; margin: 2px 0; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #0078D7; border: 1px solid #005a9e; width: 14px; margin: -5px 0; border-radius: 7px; }"
-    ).arg(bgStr, fgStr, borderStr));
+        "QSlider::handle:horizontal { background: %4; border: 1px solid %5; width: 14px; margin: -5px 0; border-radius: 7px; }"
+    ).arg(bgStr, fgStr, borderStr, Tokens[fm::style::Token::Accent].name(), Tokens[fm::style::Token::Accent].darker(125).name()));
 
     auto* mainLayout = new QVBoxLayout(popup);
     mainLayout->setContentsMargins(16, 16, 16, 16);
@@ -107,8 +109,9 @@ void showPenPopup(QWidget* button, QColor current_color, int current_width, std:
         cb->setFixedSize(24, 24);
         cb->setCheckable(true);
         cb->setCursor(Qt::PointingHandCursor);
-        QString borderBase = (c == QColor(255,255,255)) ? "border: 1px solid #D1D1D1;" : "";
-        cb->setStyleSheet(QString("QToolButton { background-color: %1; %2 } QToolButton:checked { border: 2px solid #333333; }").arg(c.name(), borderBase));
+        // Light swatches get the theme line so they stay visible; the checked ring uses the text color of the theme.
+        QString borderBase = (c == QColor(255,255,255)) ? QString("border: 1px solid %1;").arg(Tokens[fm::style::Token::Line].name()) : QString();
+        cb->setStyleSheet(QString("QToolButton { background-color: %1; %2 } QToolButton:checked { border: 2px solid %3; }").arg(c.name(), borderBase, Tokens[fm::style::Token::Fg].name()));
 
         if (c == current_color) cb->setChecked(true);
         colorGroup->addButton(cb, i);
@@ -192,12 +195,13 @@ void showShapePopup(QWidget* button, Capture::MarkupShape current_shape, QColor 
     QString borderStr = QString("rgba(%1, %2, %3, %4)").arg(borderColor.red()).arg(borderColor.green()).arg(borderColor.blue()).arg(borderColor.alpha());
 
     QString styleHelper = QString(
-        "QWidget { background: %1; color: %2; font-family: 'Segoe UI', sans-serif; border: 1px solid %3; border-radius: 8px; }"
+        "QWidget { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; }"
         "QLabel { border: none; font-weight: bold; background: none; color: %2; }"
         "QToolButton, QPushButton { border-radius: 6px; border: 2px solid transparent; background: none; padding: 4px; }"
-        "QToolButton:checked, QPushButton:checked { border-color: %2; background: rgba(128, 128, 128, 50); }"
-        "QToolButton:hover, QPushButton:hover { background: rgba(128, 128, 128, 30); }"
-    ).arg(bgStr, fgStr, borderStr);
+        "QToolButton:checked, QPushButton:checked { border-color: %4; background: %5; }"
+        "QToolButton:hover, QPushButton:hover { background: %6; }"
+    ).arg(bgStr, fgStr, borderStr, fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent].name(),
+          fm::style::ThemeManager::instance().colors()[fm::style::Token::AccentSoft].name(), fm::style::ThemeManager::instance().colors()[fm::style::Token::Alt].name());
     popup->setStyleSheet(styleHelper);
 
     auto* mainLayout = new QVBoxLayout(popup);
@@ -737,7 +741,8 @@ void CaptureMarkupDialog::rebuildToolBar()
     QColor bgColor = themeManager.toolBarColor(); // Use toolbar color
     bgColor.setAlpha(235);
     QColor fgColor = themeManager.foregroundColor();
-    QColor highlight = themeManager.color("Theme/AccentColor");
+    // The legacy palette has no accent key (it answered magenta); checked tools use the product accent.
+    QColor highlight = fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent];
     if (!highlight.isValid()) highlight = QColor(68, 137, 255);
     QColor border = fgColor; border.setAlpha(70);
     QColor hover = fgColor; hover.setAlpha(35);
@@ -1102,9 +1107,9 @@ void CaptureMarkupDialog::updateColorButtonStatus()
 {
     if (m_colorButton) {
         m_colorButton->setStyleSheet(QString(
-            "QToolButton { background-color: %1; border: 1px solid #c0c0c0; border-radius: 4px; }"
+            "QToolButton { background-color: %1; border: 1px solid %3; border-radius: 4px; }"
             "QToolButton:hover { background-color: %2; }"
-        ).arg(m_color.name()).arg(m_color.lighter(110).name()));
+        ).arg(m_color.name()).arg(m_color.lighter(110).name()).arg(fm::style::ThemeManager::instance().colors()[fm::style::Token::Line].name()));
     }
 }
 

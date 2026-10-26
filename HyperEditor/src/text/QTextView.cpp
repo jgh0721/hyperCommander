@@ -1,5 +1,6 @@
 ﻿#include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <Scintilla.h>
 #include <QScopeGuard>
 #include <QSignalBlocker>
@@ -25,6 +26,8 @@
 #include <QFontDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include "UniqueLibs/qtDialogFrame.hpp"
+#include <fmstyle/ThemeManager.h>
 #include <QCheckBox>
 #include <QLabel>
 #include <QSpinBox>
@@ -300,7 +303,7 @@ bool QTextView::saveWithEncodingDialog(const QString& initialFilePath)
         return false;
 
     if (m_fileSession.isTruncated()) {
-        QMessageBox::information(this,
+        hc::ui::MessageDialog::information(this,
                                  tr("저장 불가"),
                                  tr("제한 모드로 연 파일은 현재 저장할 수 없습니다. 파일을 전체 로드로 다시 열어 주세요."));
         return false;
@@ -995,7 +998,7 @@ bool QTextView::promptOpenModeForFile(const QString& filePath, TextFileSession::
         return true;
     }
 
-    QMessageBox box(const_cast<QTextView*>(this));
+    hc::ui::MessageDialog box(const_cast<QTextView*>(this));
     box.setIcon(QMessageBox::Warning);
     box.setWindowTitle(tr("대용량 파일 열기"));
     box.setText(tr("이 파일은 %1 MB 입니다.").arg(QString::number(static_cast<double>(info.size()) / (1024.0 * 1024.0), 'f', 1)));
@@ -1212,6 +1215,9 @@ void QTextView::showGoToLineDialog()
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     updateOkButton();
+    // Product dialog frame: the instruction becomes the header subtitle, OK · Cancel the footer band.
+    label->hide();
+    hc::ui::ApplyDialogFrame(&dialog, buttons, {{}, label->text(), fm::ui::glyph::ArrowRight});
 
     if (dialog.exec() != QDialog::Accepted)
         return;
@@ -1582,11 +1588,11 @@ void QTextView::performExclude()
     m_excludedRanges.append({matchStart, len});
 
     // Indicator로 시각 마킹 (더 진한 배경 + 박스 + 취소선)
-    m_editor->setIndicatorStyle(kExcludeBackgroundIndicatorId, 8, QColor(128, 72, 72, 150)); // INDIC_STRAIGHTBOX
+    m_editor->setIndicatorStyle(kExcludeBackgroundIndicatorId, 8, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::DangerBg]; C.setAlpha(150); return C; }()); // INDIC_STRAIGHTBOX
     m_editor->applyIndicator(kExcludeBackgroundIndicatorId, matchStart, len);
-    m_editor->setIndicatorStyle(kExcludeBorderIndicatorId, 7, QColor(186, 110, 110, 170)); // INDIC_ROUNDBOX
+    m_editor->setIndicatorStyle(kExcludeBorderIndicatorId, 7, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::DangerLine]; C.setAlpha(170); return C; }()); // INDIC_ROUNDBOX
     m_editor->applyIndicator(kExcludeBorderIndicatorId, matchStart, len);
-    m_editor->setIndicatorStyle(kExcludeStrikeIndicatorId, 5, QColor(210, 210, 210, 255)); // INDIC_STRIKE
+    m_editor->setIndicatorStyle(kExcludeStrikeIndicatorId, 5, fm::style::ThemeManager::instance().colors()[fm::style::Token::Fg3]); // INDIC_STRIKE
     m_editor->applyIndicator(kExcludeStrikeIndicatorId, matchStart, len);
     m_searchResumePos = qMin(m_editor->documentLength(), matchStart + len);
     if (!searchInSelection)
@@ -1636,7 +1642,7 @@ void QTextView::setCurrentMatchHighlight(int startPos, int length, bool scrollTo
         return;
 
     clearCurrentMatchHighlight();
-    m_editor->setIndicatorStyle(kCurrentMatchIndicatorId, 7, QColor(255, 215, 0, 110)); // INDIC_ROUNDBOX
+    m_editor->setIndicatorStyle(kCurrentMatchIndicatorId, 7, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::Warn]; C.setAlpha(110); return C; }()); // theme warning tone, like the file list's match marks // INDIC_ROUNDBOX
     m_editor->applyIndicator(kCurrentMatchIndicatorId, startPos, length);
     m_currentMatchStart = startPos;
     m_currentMatchLength = length;

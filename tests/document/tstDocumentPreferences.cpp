@@ -588,7 +588,7 @@ private slots:
         Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7);
         Dialog.findChild<QFontComboBox*>("documentViews/textView/fontFamily")->setCurrentFont(QFont("Consolas"));
         Dialog.findChild<QSpinBox*>("documentViews/textView/fontSize")->setValue(15);
-        Dialog.findChild<QComboBox*>("appearance/documentWorkspace/themeMode")->setCurrentIndex(2);
+        { auto* Mode = Dialog.findChild<QComboBox*>("appearance/documentWorkspace/themeMode"); Mode->setCurrentIndex(Mode->findData("dark")); }
         QVERIFY(Dialog.Apply()); QTRY_COMPARE(Text->tabWidth(), 7); QCOMPARE(Text->Content(), Content); QVERIFY(static_cast<ScintillaQtDirectBackend*>(Text->Backend())->Send(SCI_CANUNDO));
         QCOMPARE(Text->editorFont().pointSize(), 15);
         QTRY_COMPARE(Window.ChromeSettings()["themeMode"].toString(), QString("dark"));

@@ -1,6 +1,7 @@
 ﻿#include "core/ToolbarIcons.h"
 
 #include "core/ThemeManager.h"
+#include <fmstyle/ThemeManager.h>
 
 #include <QDebug>
 #include <QFile>
@@ -158,25 +159,14 @@ void paintFallbackGlyph(QPainter& painter, const QSize& size, const QColor& colo
 
 IconPalette paletteForTheme(ThemeManager::Theme theme)
 {
-    if (theme == ThemeManager::Dark) {
-        return {
-            QColor(QStringLiteral("#d4d4d4")),
-            QColor(QStringLiteral("#ffffff")),
-            QColor(QStringLiteral("#6d6d6d")),
-            QColor(QStringLiteral("#5fb3ff")),
-            QColor(QStringLiteral("#8fd1ff")),
-            QColor(QStringLiteral("#54799b"))
-        };
-    }
-
-    return {
-        QColor(QStringLiteral("#2f2f2f")),
-        QColor(QStringLiteral("#111111")),
-        QColor(QStringLiteral("#9a9a9a")),
-        QColor(QStringLiteral("#0b6cff")),
-        QColor(QStringLiteral("#084db8")),
-        QColor(QStringLiteral("#7da7df"))
-    };
+    // Product tokens of the requested variant: muted glyphs, full text color on hover, accent when checked.
+    using fm::style::Token;
+    const auto& Manager = fm::style::ThemeManager::instance();
+    const bool Dark = theme == ThemeManager::Dark;
+    const auto& T = fm::style::isDarkVariant(Manager.effectiveVariant()) == Dark
+        ? Manager.colors() : Manager.colors(Dark ? fm::style::Variant::Dark : fm::style::Variant::Light);
+    QColor DisabledOn = T[Token::Accent]; DisabledOn.setAlphaF(0.45f);
+    return { T[Token::Fg2], T[Token::Fg], T[Token::Fg3], T[Token::Accent], T[Token::AccentFg], DisabledOn };
 }
 
 QColor colorFor(ThemeManager::Theme theme, QIcon::Mode mode, QIcon::State state)
@@ -242,8 +232,10 @@ QIcon buildIcon(const QString& iconName)
 {
     const QString effectiveName = iconName.isEmpty() ? QStringLiteral("missing-icon") : iconName;
     static QHash<QString, QIcon> cache;
-    const QString cacheKey = QStringLiteral("%1:%2")
-        .arg(static_cast<int>(ThemeManager::instance().currentTheme()))
+    const auto CurrentTheme = ThemeManager::instance().currentTheme();
+    const QString cacheKey = QStringLiteral("%1:%2:%3:%4")
+        .arg(static_cast<int>(CurrentTheme))
+        .arg(colorFor(CurrentTheme, QIcon::Normal, QIcon::Off).name(QColor::HexArgb), colorFor(CurrentTheme, QIcon::Normal, QIcon::On).name(QColor::HexArgb))
         .arg(effectiveName);
     if (cache.contains(cacheKey))
         return cache.value(cacheKey);

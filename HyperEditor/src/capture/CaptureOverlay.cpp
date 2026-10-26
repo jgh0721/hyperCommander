@@ -4,6 +4,7 @@
 #include "capture/WindowsGraphicsCapture.h"
 
 #include <QApplication>
+#include <fmstyle/ThemeManager.h>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCursor>
@@ -529,7 +530,8 @@ void CaptureOverlay::buildToolBar()
     QColor bgColor = themeManager.toolBarColor(); // Use toolbar color
     bgColor.setAlpha(235);
     QColor fgColor = themeManager.foregroundColor();
-    QColor highlight = themeManager.color("Theme/AccentColor");
+    // The legacy palette has no accent key (it answered magenta); checked tools use the product accent.
+    QColor highlight = fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent];
     if (!highlight.isValid()) highlight = QColor(68, 137, 255);
     QColor border = fgColor; border.setAlpha(70);
     QColor hover = fgColor; hover.setAlpha(35);

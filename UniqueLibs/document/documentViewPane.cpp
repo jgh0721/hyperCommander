@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/imagePerformance.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
 #include "epubSourceEditor.hpp"
@@ -226,7 +227,7 @@ namespace hc::document
             auto* Mode=new QComboBox(toolbar_);Mode->setObjectName("imageReadingMode");Mode->setAccessibleName(tr("이미지 보기 모드"));Mode->addItems({tr("일반 이미지"),tr("코믹"),tr("웹툰")});toolbar_->insertWidget(toolbar_->actions().value(0),Mode);
             const auto Book=Input.book_;const auto Path=Input.path_;const auto First=Input.image_;
             connect(Mode,&QComboBox::activated,this,[this,Book,Path,First,Mode](int Value){
-                if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);QMessageBox::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
+                if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);hc::ui::MessageDialog::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
                 auto* Edit=findChild<QAction*>("imageEditMode");
                 auto* EditBar=findChild<QToolBar*>("imageEditToolbar");
                 auto* Fit=findChild<QComboBox*>("imageReadingFit");
@@ -246,7 +247,7 @@ namespace hc::document
             auto* NextVolume=toolbar_->addAction(tr("다음 권"));connect(NextVolume,&QAction::triggered,reading_,[this]{reading_->OpenVolume(1);});
             auto* EditCurrent=toolbar_->addAction(tr("현재 이미지 사본 편집"));connect(EditCurrent,&QAction::triggered,reading_,[this]{const auto Image=!reading_->isHidden()?reading_->CurrentImage():image_->Content();if(!Image.isNull())emit EditImageRequested(Image);});
             for(const auto& Item:{std::pair{"grayscale",tr("회색조")},std::pair{"invert",tr("색 반전")}}){auto* A=toolbar_->addAction(Item.second);A->setCheckable(true);connect(A,&QAction::toggled,reading_,[this,Name=QString(Item.first)](bool On){reading_->SetAdjustment(Name,On?1:0);});}
-            for(const auto& Item:{std::pair{"brightness",tr("밝기")},std::pair{"contrast",tr("대비")},std::pair{"gamma",tr("감마")},std::pair{"sharpness",tr("선명화")}}){auto* A=toolbar_->addAction(Item.second);connect(A,&QAction::triggered,reading_,[this,Name=QString(Item.first),Label=Item.second]{bool Ok=false;const double V=QInputDialog::getDouble(this,Label,Label,Name=="contrast"||Name=="gamma"?1:0,Name=="brightness"?-1:Name=="gamma"||Name=="contrast"?.1:0,Name=="gamma"?5:3,2,&Ok);if(Ok)reading_->SetAdjustment(Name,V);});}
+            for(const auto& Item:{std::pair{"brightness",tr("밝기")},std::pair{"contrast",tr("대비")},std::pair{"gamma",tr("감마")},std::pair{"sharpness",tr("선명화")}}){auto* A=toolbar_->addAction(Item.second);connect(A,&QAction::triggered,reading_,[this,Name=QString(Item.first),Label=Item.second]{bool Ok=false;const double V=hc::ui::InputDialog::getDouble(this,Label,Label,Name=="contrast"||Name=="gamma"?1:0,Name=="brightness"?-1:Name=="gamma"||Name=="contrast"?.1:0,Name=="gamma"?5:3,2,&Ok);if(Ok)reading_->SetAdjustment(Name,V);});}
             auto* ReadingOptions=new QMenu(tr("읽기 설정"),toolbar_);ReadingOptions->setObjectName("imageReadingOptions");
             for(auto* A:toolbar_->actions())if(A->objectName().startsWith("imageFrame")){toolbar_->removeAction(A);ReadingOptions->addAction(A);}
             const auto AllActions=toolbar_->actions();for(int I=int(ReadingOptionsStart)-2;I<AllActions.size();++I){toolbar_->removeAction(AllActions[I]);ReadingOptions->addAction(AllActions[I]);}
@@ -273,7 +274,7 @@ namespace hc::document
             auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")});Fit->setCurrentIndex(1);toolbar_->addWidget(Fit);
             connect(Fit,&QComboBox::activated,this,[this](int Value){if(!reading_->isHidden())reading_->SetFit(Value);else image_->setFitMode(static_cast<QImageView::FitMode>(Value));});
             for(int Direction:{-1,1}){auto* Zoom=toolbar_->addAction(Direction>0?tr("확대"):tr("축소"));connect(Zoom,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Zoom(Direction>0?1.25:.8);else if(Direction>0)image_->setZoomLevel(image_->zoomLevel()*1.25);else image_->setZoomLevel(image_->zoomLevel()*.8);});}
-            auto* Gap=ReadingOptions->addAction(tr("페이지 간격"));connect(Gap,&QAction::triggered,this,[this]{bool Ok=false;const auto Value=QInputDialog::getInt(this,tr("페이지 간격"),tr("간격 (DIP)"),reading_->State()["gap"].toInt(),0,200,1,&Ok);if(Ok)reading_->SetGap(Value);});
+            auto* Gap=ReadingOptions->addAction(tr("페이지 간격"));connect(Gap,&QAction::triggered,this,[this]{bool Ok=false;const auto Value=hc::ui::InputDialog::getInt(this,tr("페이지 간격"),tr("간격 (DIP)"),reading_->State()["gap"].toInt(),0,200,1,&Ok);if(Ok)reading_->SetGap(Value);});
             auto* Bookmark=ReadingOptions->addAction(tr("책갈피 저장"));connect(Bookmark,&QAction::triggered,reading_,&ImageReadingView::Bookmark);
             auto* OpenBookmark=ReadingOptions->addAction(tr("책갈피 이동"));connect(OpenBookmark,&QAction::triggered,reading_,&ImageReadingView::OpenBookmark);
             auto* Private=ReadingOptions->addAction(tr("시크릿 읽기"));Private->setCheckable(true);connect(Private,&QAction::toggled,reading_,&ImageReadingView::SetPrivate);
@@ -286,8 +287,8 @@ namespace hc::document
             auto* Resize=EditToolbar->addAction(tr("출력 크기"));
             connect(Resize,&QAction::triggered,this,[this] {
                 bool Accepted=false;const auto Current=image_->Content().size();
-                const int Width=QInputDialog::getInt(this,tr("출력 크기"),tr("너비"),Current.width(),1,16384,1,&Accepted);if(!Accepted)return;
-                const int Height=QInputDialog::getInt(this,tr("출력 크기"),tr("높이"),Current.height(),1,16384,1,&Accepted);if(Accepted)image_->ApplyResize(QSize(Width,Height),image_->DisplayFilter());
+                const int Width=hc::ui::InputDialog::getInt(this,tr("출력 크기"),tr("너비"),Current.width(),1,16384,1,&Accepted);if(!Accepted)return;
+                const int Height=hc::ui::InputDialog::getInt(this,tr("출력 크기"),tr("높이"),Current.height(),1,16384,1,&Accepted);if(Accepted)image_->ApplyResize(QSize(Width,Height),image_->DisplayFilter());
             });
             toolbar_->insertWidget(toolbar_->actions().value(0),Filters);connect(Filters,&QComboBox::activated,image_,[this,Filters](int Index){image_->SetDisplayFilter(Filters->itemData(Index).toString());if(reading_)reading_->SetFilter(Filters->itemData(Index).toString());});
             connect(reading_,&ImageReadingView::Changed,this,[this,Mode,Rtl,Cover,Split,Auto,Filters,Fit]{

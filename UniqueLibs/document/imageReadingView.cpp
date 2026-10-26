@@ -1,5 +1,6 @@
 ﻿#include "imageReadingView.hpp"
 #include <QAction>
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
 #include "imageResampler.hpp"
 #include "imageDisplayColor.hpp"
@@ -823,7 +824,7 @@ void ImageReadingView::OpenVolume(int Direction)
                 if (Candidates.size() > 1)
                 {
                     bool Ok = false;
-                    Path = QInputDialog::getItem(this, tr("다음 권 선택"), tr("같은 권의 후보가 여러 개입니다."),
+                    Path = hc::ui::InputDialog::getItem(this, tr("다음 권 선택"), tr("같은 권의 후보가 여러 개입니다."),
                                                  Candidates, 0, false, &Ok);
                     if (!Ok)
                         return;

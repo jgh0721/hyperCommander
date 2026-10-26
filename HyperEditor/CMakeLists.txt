@@ -80,7 +80,7 @@ qt_add_library(hc_document_sdi STATIC
     ../UniqueLibs/document/hwpSdiWindow.cpp ../UniqueLibs/document/hwpSdiWindow.hpp
     ../UniqueLibs/document/hwpProcessBackend.cpp ../UniqueLibs/document/hwpProcessBackend.hpp
 )
-target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVATE hc_document_broker Qt6::Concurrent Qt6::PrintSupport)
+target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVATE hc_document_broker Qt6::Concurrent Qt6::PrintSupport Fm::widgets)
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 qt_add_library(hc_document_widgets STATIC
@@ -139,7 +139,7 @@ qt_add_executable(HyperEditor WIN32 main.cpp runtimeVerification.cpp runtimeVeri
 target_precompile_headers(HyperEditor PRIVATE stdafx.h)
 hc_add_version_resource(HyperEditor "HyperEditor" ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app/hypereditor.ico")
 target_include_directories(HyperEditor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(HyperEditor PRIVATE hc_document_widgets hc_document_sdi fmstyle Qt6::Network)
+target_link_libraries(HyperEditor PRIVATE hc_document_widgets hc_document_sdi fmstyle Fm::widgets Qt6::Network)
 target_compile_options(HyperEditor PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(HyperEditor PLUGINS)
 hc_deploy_document_engine(HyperEditor)

@@ -26,7 +26,7 @@ qt_add_library(hc_hypereditor STATIC ${MV_VIEWS} "${PROJECT_SOURCE_DIR}/HyperEdi
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/imageResampler.cpp"
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/imageResampler.hpp")
 target_include_directories(hc_hypereditor PUBLIC "${MV_ROOT}")
-target_link_libraries(hc_hypereditor PUBLIC hc_scintilla hc_lexilla hc_pdfium_runtime Qt6::PrintSupport Qt6::Svg Qt6::Concurrent PRIVATE fmstyle dwmapi runtimeobject)
+target_link_libraries(hc_hypereditor PUBLIC hc_scintilla hc_lexilla hc_pdfium_runtime Qt6::PrintSupport Qt6::Svg Qt6::Concurrent PRIVATE fmstyle Fm::widgets dwmapi runtimeobject)
 target_compile_definitions(hc_hypereditor PRIVATE MV_DIRECT_SCINTILLA_HAS_LEXILLA_LEXERS=1 NOMINMAX)
 target_compile_options(hc_hypereditor PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 

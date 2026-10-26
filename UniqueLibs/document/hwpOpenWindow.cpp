@@ -1,5 +1,6 @@
 ﻿#include "hwpStartupTrace.hpp"
 #include "hwpOpenWindow.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentFocusRestore.hpp"
 #include "hwpInputSender.hpp"
 #include "hwpInputInspection.hpp"
@@ -27,6 +28,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QVBoxLayout>
+#include <fmwidgets/WindowChrome.h>
 #include <QUuid>
 #include <QTimer>
 #include <QPointer>
@@ -75,6 +77,8 @@ namespace hc::document
         });
         setWindowTitle(QFileInfo(path_).fileName() + tr(" — 불러오는 중")); resize(1000, 760);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
+        // Same title bar as the product windows when this is a top-level window.
+        if (!parentWidget()) { setWindowFlag(Qt::FramelessWindowHint); Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
         status_ = new QLabel(tr("문서를 준비하고 있습니다…"), this);
         status_->setAlignment(Qt::AlignCenter); status_->setWordWrap(true); Layout->addWidget(status_);
         connect(&preparation_, &QFutureWatcherBase::finished, this, &HwpOpenWindow::prepared);
@@ -106,7 +110,7 @@ namespace hc::document
             if (document_ && closeFrozen_) { closeFrozen_ = false; document_->ResumeEditing(); }
             if (!Guard) return;
             if (!Committed) {
-                saveThenClose_ = false; quitPending_ = false; QMessageBox::warning(this, tr("저장 실패"), tr("저장하지 못했습니다. 원본 변경 또는 파일 접근 상태를 확인해 주세요. 편집 내용은 유지됩니다."));
+                saveThenClose_ = false; quitPending_ = false; hc::ui::MessageDialog::warning(this, tr("저장 실패"), tr("저장하지 못했습니다. 원본 변경 또는 파일 접근 상태를 확인해 주세요. 편집 내용은 유지됩니다."));
             }
         });
         connect(&destinationPreparation_, &QFutureWatcherBase::finished, this, [this] {
@@ -118,7 +122,7 @@ namespace hc::document
                 saveDestination_.reset(); saveThenClose_ = false; quitPending_ = false;
                 if (document_ && closeFrozen_) { closeFrozen_ = false; document_->ResumeEditing(); }
                 if (!Guard) return;
-                QMessageBox::warning(this, tr("저장 위치 확인 실패"), tr("저장 대상의 상태를 확인하지 못했습니다. 파일 접근 권한과 변경 여부를 확인해 주세요."));
+                hc::ui::MessageDialog::warning(this, tr("저장 위치 확인 실패"), tr("저장 대상의 상태를 확인하지 못했습니다. 파일 접근 권한과 변경 여부를 확인해 주세요."));
             } else {
                 const bool Started = document_ && document_->Save({SaveDisposition::SaveAs, saveDestination_->path_.toUtf8().toStdString()},
                     QFileInfo(saveDestination_->path_).suffix().toLower());
@@ -242,7 +246,10 @@ namespace hc::document
         }
         recovery_.reset();
         const bool HadFocus=hasFocus();
-        document_->setParent(this); layout()->addWidget(document_); status_->hide(); document_->show();
+        document_->setParent(this); layout()->addWidget(document_); status_->hide();
+        // Embedded in this window, which already has the title bar.
+        if (auto* Chrome = document_->findChild<QWidget*>("hwpWindowChrome", Qt::FindDirectChildrenOnly)) Chrome->hide();
+        document_->show();
         if(!editable_){setFocusProxy(document_);if(HadFocus)document_->setFocus(Qt::OtherFocusReason);}
         connect(document_, &HwpSdiWindow::StateChanged, this, &HwpOpenWindow::StateChanged);
         connect(document_, &HwpSdiWindow::Closed, this, [this] {
@@ -302,7 +309,7 @@ namespace hc::document
             saveThenClose_ = false; quitPending_ = false; saveDestination_.reset();
             if (document_ && closeFrozen_) { closeFrozen_ = false; document_->ResumeEditing(); }
             if (!Guard) return;
-            QMessageBox::warning(this, tr("저장 실패"), tr("문서를 안전하게 내보내지 못했습니다. 편집 내용은 유지됩니다. 내용 손실이 예상되거나 저장 중 문서가 변경된 경우 다시 확인해 주세요."));
+            hc::ui::MessageDialog::warning(this, tr("저장 실패"), tr("문서를 안전하게 내보내지 못했습니다. 편집 내용은 유지됩니다. 내용 손실이 예상되거나 저장 중 문서가 변경된 경우 다시 확인해 주세요."));
         });
         connect(document_, &HwpSdiWindow::SavePrepared, this, [this](SaveTicket Ticket) {
             if (saveTicket_) return;
@@ -406,7 +413,7 @@ namespace hc::document
         printJob_.reset();const QPointer<HwpOpenWindow> Guard(this);
         if(document_&&document_->IsPrinting())document_->CompletePrint(std::move(Result));
         if(!Guard)return;
-        if(Failed)QMessageBox::warning(this,tr("인쇄 실패"),tr("문서를 인쇄하지 못했습니다. 편집 내용과 원본은 유지됩니다."));
+        if(Failed)hc::ui::MessageDialog::warning(this,tr("인쇄 실패"),tr("문서를 인쇄하지 못했습니다. 편집 내용과 원본은 유지됩니다."));
         if(!Guard)return;
         emit StateChanged();
         if(Guard&&closeAfterPrint_){closeAfterPrint_=false;QTimer::singleShot(0,this,&HwpOpenWindow::RequestClose);}
@@ -470,7 +477,7 @@ namespace hc::document
         }
         if (!closed_ && !closePrompt_ && document_ && document_->ControlTimedOut()) {
             const QPointer<HwpOpenWindow> Guard(this); closePrompt_ = true;
-            const auto Answer = QMessageBox::warning(this, tr("편집기 응답 지연"),
+            const auto Answer = hc::ui::MessageDialog::warning(this, tr("편집기 응답 지연"),
                 tr("편집 작업의 완료를 확인하지 못했습니다. 다시 기다리거나 변경 내용을 버리고 닫을 수 있습니다."),
                 QMessageBox::Retry | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Retry);
             if (!Guard) return; closePrompt_ = false;
@@ -488,7 +495,7 @@ namespace hc::document
         auto Disposition = CloseDisposition::KeepChanges;
         if (document_ && document_->Snapshot().dirty_) {
             const QPointer<HwpOpenWindow> Guard(this); closePrompt_ = true;
-            const auto Answer = QMessageBox::question(this, tr("변경 내용 저장"), tr("변경 내용을 저장하시겠습니까?"),
+            const auto Answer = hc::ui::MessageDialog::question(this, tr("변경 내용 저장"), tr("변경 내용을 저장하시겠습니까?"),
                 QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
             if (!Guard) return; closePrompt_ = false;
             if (Answer == QMessageBox::Cancel) { quitPending_ = false; closeFrozen_ = false; document_->ResumeEditing(); return; }

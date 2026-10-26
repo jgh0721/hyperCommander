@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentWorkspaceWidget.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
 #include "documentFocusRestore.hpp"
 #ifndef NOMINMAX
@@ -16,6 +17,7 @@
 #include "documentThemeAdapter.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentSettingsDialog.hpp"
+#include <fmwidgets/WindowChrome.h>
 #include "documentShortcutRouter.hpp"
 #include "epubProcessView.hpp"
 #include "epubSourceEditor.hpp"
@@ -198,6 +200,11 @@ namespace hc::document
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
         status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setObjectName("documentStatus");status_->setTextFormat(Qt::PlainText);status_->setContentsMargins(8, 4, 8, 4);
+        // The standalone editor uses the product title bar; a hosted viewer keeps its host's frame.
+        if (!Hosted && !Parent) {
+            setWindowFlag(Qt::FramelessWindowHint);
+            auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("documentWindowChrome"); Layout->addWidget(Chrome);
+        }
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(status_);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
@@ -246,13 +253,13 @@ namespace hc::document
         });
         Add(tr("다시 읽기"), QKeySequence("Ctrl+R"), "reloadDocument", [this] {
             auto Tab = active(); if (!Tab) return;
-            if (Tab->Dirty() && QMessageBox::question(this, tr("다시 읽기"), tr("편집 내용을 폐기하고 원본을 다시 읽으시겠습니까?"),
+            if (Tab->Dirty() && hc::ui::MessageDialog::question(this, tr("다시 읽기"), tr("편집 내용을 폐기하고 원본을 다시 읽으시겠습니까?"),
                 QMessageBox::Discard | QMessageBox::Cancel) != QMessageBox::Discard) return;
             load(Tab, true);
         });
         Add(tr("저장 충돌 처리"), {}, "resolveDocumentConflict", [this] {
             auto Tab = active(); if (!Tab) return;
-            QMessageBox Dialog(QMessageBox::Warning, tr("원본 변경"), tr("원본이 변경되었습니다. 처리 방법을 선택하십시오."), QMessageBox::Cancel, this);
+            hc::ui::MessageDialog Dialog(QMessageBox::Warning, tr("원본 변경"), tr("원본이 변경되었습니다. 처리 방법을 선택하십시오."), QMessageBox::Cancel, this);
             auto* Overwrite = Dialog.addButton(tr("현재 내용으로 덮어쓰기"), QMessageBox::AcceptRole);
             auto* Reload = Dialog.addButton(tr("편집 폐기 후 다시 읽기"), QMessageBox::DestructiveRole);
             auto* SaveAs = Dialog.addButton(tr("다른 이름 저장"), QMessageBox::ActionRole);
@@ -321,8 +328,8 @@ namespace hc::document
         auto* Protection=ViewMenu->addAction(tr("화면 캡처 보호"));Protection->setCheckable(true);connect(Protection,&QAction::toggled,this,[this](bool Enabled){if(auto Tab=active()){auto Reply=Tab->pane_->Execute({{"action","captureProtection"},{"enabled",Enabled}});if(Reply.contains("error"))ShowShellError(tr("이 호스트에서는 화면 캡처 보호를 적용할 수 없습니다."));}});
         auto* Themes = ViewMenu->addMenu(tr("테마"));
         Themes->menuAction()->setProperty("documentIconName", "theme-toggle");
-        for (const auto& Mode : {QString("system"), QString("light"), QString("dark")}) {
-            auto* Action = Themes->addAction(Mode == "system" ? tr("시스템") : Mode == "light" ? tr("라이트") : tr("다크"));
+        for (const auto& Mode : {QString("product"), QString("system"), QString("light"), QString("dark")}) {
+            auto* Action = Themes->addAction(Mode == "product" ? tr("본체 따르기") : Mode == "system" ? tr("시스템") : Mode == "light" ? tr("라이트") : tr("다크"));
             Action->setProperty("documentIconName", "theme-toggle");
             connect(Action, &QAction::triggered, this, [this, Mode] {
                 DocumentThemeAdapter::SetMode(Mode); auto Settings = chrome_->Settings(); Settings["themeMode"] = Mode;
@@ -344,8 +351,8 @@ namespace hc::document
                     Labels.append(QString::fromStdString(Record.document_.source_.localPath_) + " · " + QString::number(Record.document_.revision_) + " · " + QString::fromStdString(Record.document_.id_).left(8));
                     Paths.append(QString::fromStdString(Record.snapshotPath_));
                 }
-                if (Paths.isEmpty()) { QMessageBox::information(this, tr("복구 목록"), tr("복구할 문서가 없습니다.")); return; }
-                bool Accepted = false; const auto Item = QInputDialog::getItem(this, tr("복구 목록"), tr("복구할 문서"), Labels, 0, false, &Accepted);
+                if (Paths.isEmpty()) { hc::ui::MessageDialog::information(this, tr("복구 목록"), tr("복구할 문서가 없습니다.")); return; }
+                bool Accepted = false; const auto Item = hc::ui::InputDialog::getItem(this, tr("복구 목록"), tr("복구할 문서"), Labels, 0, false, &Accepted);
                 if (Accepted) Handle({{"action", "recover"}, {"path", Paths.value(Labels.indexOf(Item))}});
             });
             auto Recovery = recovery_; Watcher->setFuture(QtConcurrent::run([Recovery] { return Recovery->List(); }));
@@ -476,7 +483,7 @@ namespace hc::document
             if (Missing || Tab->externalPrompt_) return;
             if (!Tab->Dirty() && externalWatcher_->action() == mrst::ExternalChangeWatcher::Action::Reload) { load(Tab); return; }
             // Nonblocking: an IPC request must not wait on a nested dialog loop.
-            auto* Dialog = new QMessageBox(QMessageBox::Warning, tr("원본 파일 변경"),
+            auto* Dialog = new hc::ui::MessageDialog(QMessageBox::Warning, tr("원본 파일 변경"),
                 tr("%1이 다른 프로그램에서 변경되었습니다. 다시 읽으면 현재 편집 내용이 대체됩니다.").arg(QFileInfo(Path).fileName()),
                 QMessageBox::Yes | QMessageBox::No, hosted_ ? nullptr : this);
             Tab->externalPrompt_ = Dialog;
@@ -497,6 +504,8 @@ namespace hc::document
         auto Directory = QFileInfo(settingsPath_).absolutePath();
         while (!QDir(Directory).exists()) { const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent; }
         if (QDir(Directory).exists() && !settingsWatcher_->directories().contains(Directory)) settingsWatcher_->addPath(Directory);
+        // The watcher sees HyperCommander.json in the same folder, so product theme edits reach open windows.
+        DocumentThemeAdapter::LoadProductTheme(QFileInfo(settingsPath_).absolutePath());
         QJsonObject Root; QString Error;
         if (!hc::settings::UnifiedConfig::Load(settingsPath_, Root, Error)) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(settingsPath_, Error)); return; }
         closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(true);
@@ -591,12 +600,12 @@ namespace hc::document
         if (Enabled == tabbed_) return true;
         auto* Layout = qobject_cast<QVBoxLayout*>(layout()); Layout->removeWidget(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
         tabs_->hide(); singlePane_->hide(); tabbed_ = Enabled;
-        Layout->insertWidget(2, tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_, 1);
+        Layout->insertWidget(Layout->indexOf(toolbar_) + 1, tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_, 1);
         (tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_)->show(); return true;
     }
     bool DocumentWorkspaceWidget::ApplyChromeSettings(const QJsonObject& Settings)
     {
-        if (Settings.contains("themeMode") && !QStringList{"system", "light", "dark"}.contains(Settings["themeMode"].toString())) return false;
+        if (Settings.contains("themeMode") && !QStringList{"product", "system", "light", "dark"}.contains(Settings["themeMode"].toString())) return false;
         if (!chrome_->ApplySettings(Settings)) return false;
         if (Settings.contains("themeMode")) DocumentThemeAdapter::SetMode(Settings["themeMode"].toString()); return true;
     }
@@ -694,7 +703,7 @@ namespace hc::document
         if(Tab->closed_||Tab->loading_||Tab->navigating_||Tab->choosingSavePath_||Tab->saving_||Tab->checkpointing_||!Tab->pendingToken_.isEmpty()
             ||Tab->pane_->IsEditing()||Tab->pane_->ViewId()!="image"||!QFileInfo(Path).isAbsolute())return;
         if(Tab->Dirty()){
-            const auto Choice=closePrompt_?closePrompt_(Tab->id_):int(QMessageBox::question(this,tr("변경 내용 저장"),
+            const auto Choice=closePrompt_?closePrompt_(Tab->id_):int(hc::ui::MessageDialog::question(this,tr("변경 내용 저장"),
                 tr("다음 이미지를 열기 전에 변경 내용을 저장하시겠습니까?"),QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel));
             if(Choice==QMessageBox::Save){
                 Tab->navigationAfterSave_=Path;activate(Tab);findChild<QAction*>("saveDocument")->trigger();
@@ -1335,7 +1344,7 @@ namespace hc::document
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
         if (Target->Dirty()) {
-            const int Choice = closePrompt_ ? closePrompt_(Target->id_) : int(QMessageBox::question(this, tr("변경 내용 저장"),
+            const int Choice = closePrompt_ ? closePrompt_(Target->id_) : int(hc::ui::MessageDialog::question(this, tr("변경 내용 저장"),
                 tr("변경 내용을 저장하시겠습니까?"), QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel));
             if (Choice != QMessageBox::Save && Choice != QMessageBox::Discard) { closingWorkspace_ = false; return; }
             if (Choice == QMessageBox::Save) {
@@ -1430,6 +1439,7 @@ namespace hc::document
         auto* Root=window();
         if(epubFullscreen_){epubFullscreen_=false;Root->showNormal();if(epubWasMaximized_)Root->showMaximized();else Root->setGeometry(epubWindowGeometry_);}
         else {const auto Tab=active();if(!Tab || !Tab->pane_->IsEpub())return;epubWasMaximized_=Root->isMaximized();epubWindowGeometry_=Root->geometry();epubFullscreen_=true;Root->showFullScreen();}
+        if(auto* Chrome=findChild<QWidget*>("documentWindowChrome",Qt::FindDirectChildrenOnly))Chrome->setVisible(!epubFullscreen_);
         if(auto Tab=active())Tab->pane_->Focus();
     }
     void DocumentWorkspaceWidget::escapeViewer()

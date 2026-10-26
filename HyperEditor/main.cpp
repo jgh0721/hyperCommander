@@ -1,9 +1,11 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtimeVerification.hpp"
 #include "editorInstance.hpp"
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
+#include "UniqueLibs/qtTranslation.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
@@ -46,7 +48,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Initialize("editor");
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
-    QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor");
+    QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
     InitializePortedViewResources(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     QCommandLineParser Parser; Parser.addHelpOption();
@@ -64,8 +66,10 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("theme", "system/light/dark", "mode"));
     Parser.addPositionalArgument("files", "PDF, text and image files", "[files...]"); Parser.process(App);
     const auto Config = hc::settings::DocumentPaths();
-    if (!Config.error_.isEmpty()) { QMessageBox::critical(nullptr, QObject::tr("설정 경로 오류"), Config.error_); return 11; }
+    if (!Config.error_.isEmpty()) { hc::ui::MessageDialog::critical(nullptr, QObject::tr("설정 경로 오류"), Config.error_); return 11; }
     hc::document::DocumentThemeAdapter::Install(App);
+    // Product tokens, accent and fonts first, so every entry point (HWP, EPUB, editor) opens in the product look.
+    hc::document::DocumentThemeAdapter::LoadProductTheme(Config.directory_);
     QJsonObject ParentAppearance;
     if(Parser.isSet("document-appearance")) {
         const auto Encoded=Parser.value("document-appearance").toLatin1(); if(Encoded.size()>16384)return 9;
@@ -119,17 +123,14 @@ int main(int Argc, char** Argv)
         const auto Scope=QJsonDocument(QJsonArray{Canonical(QCoreApplication::applicationFilePath()),Canonical(Config.directory_),Parser.value("theme"),Parser.value("document-appearance")}).toJson(QJsonDocument::Compact);
         const auto Started=Instance.Start(Scope,Parser.positionalArguments());
         if(Started==EditorInstance::Forwarded)return 0;
-        if(Started==EditorInstance::Failed){QMessageBox::warning(nullptr,QObject::tr("문서 열기"),QObject::tr("기존 HyperEditor에 열기 요청을 전달하지 못했습니다. 잠시 후 다시 시도하십시오."));return 12;}
+        if(Started==EditorInstance::Failed){hc::ui::MessageDialog::warning(nullptr,QObject::tr("문서 열기"),QObject::tr("기존 HyperEditor에 열기 요청을 전달하지 못했습니다. 잠시 후 다시 시도하십시오."));return 12;}
     }
     const auto RecoveryRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/editor";
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
     const auto Appearance = Settings.Object()["appearance"].toObject();
-    const auto General = Settings.Object()["general"].toObject();
-    auto& Theme = fm::style::ThemeManager::instance();
-    Theme.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
-    Theme.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
-    hc::document::DocumentThemeAdapter::SetMode(General["themeMode"].toString("system"));
+    // Light/dark follows the product unless the editor's own setting overrides it.
+    hc::document::DocumentThemeAdapter::SetMode(Appearance["documentWorkspace"].toObject()["themeMode"].toString("product"));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     std::vector<std::unique_ptr<Workspace>> Windows;
     const auto OpenFiles=[&](QStringList Files){

@@ -1,5 +1,6 @@
 ﻿#include "workspaceChromeController.hpp"
 #include <QMenuBar>
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <QMenu>
 #include <QToolBar>
 #include <QWidgetAction>
@@ -46,7 +47,7 @@ namespace
             SetMenuIcon(Item, "view-source");
             QObject::connect(Item, &QAction::triggered, Menu, [Spin, Label] {
                 bool Accepted = false;
-                const int Value = QInputDialog::getInt(Spin, Label, Label, Spin->value(), Spin->minimum(), Spin->maximum(), Spin->singleStep(), &Accepted);
+                const int Value = hc::ui::InputDialog::getInt(Spin, Label, Label, Spin->value(), Spin->minimum(), Spin->maximum(), Spin->singleStep(), &Accepted);
                 if (Accepted) Spin->setValue(Value);
             }); return;
         }

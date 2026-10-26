@@ -1,6 +1,7 @@
 ﻿#include "core/ThemeManager.h"
 
 #include "core/AppSettings.h"
+#include <fmstyle/ThemeManager.h>
 
 #include <QApplication>
 #include <QFile>
@@ -47,6 +48,8 @@ ThemeManager& ThemeManager::instance()
 ThemeManager::ThemeManager()
 {
     loadOverrides();
+    // Accent or token edits keep the light/dark choice; views still need to repaint with the new colors.
+    connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] { emit themeChanged(m_theme); });
 }
 
 ThemeManager::Theme ThemeManager::currentTheme() const { return m_theme; }
@@ -63,7 +66,9 @@ QColor ThemeManager::color(const QString& key) const
 {
     const auto defaults = defaultColors(m_theme);
     const auto& overrides = (m_theme == Dark) ? m_darkOverrides : m_lightOverrides;
-    return overrides.value(key, defaults.value(key, QColor(Qt::magenta)));
+    // Screen colors follow the product tokens; legacy overrides only tune the syntax palette.
+    if (key.startsWith(QStringLiteral("text.lexer.")) && overrides.contains(key)) return overrides.value(key);
+    return defaults.value(key);
 }
 
 bool ThemeManager::hasColor(const QString& key) const
@@ -214,76 +219,69 @@ QList<ThemeManager::ColorEntry> ThemeManager::editableColorEntries()
 
 QHash<QString, QColor> ThemeManager::defaultColors(Theme theme)
 {
+    // Screen and document colors come from the product's Paper Fluent tokens, so they follow the product's
+    // accent and token settings; only the syntax palette below is the editor's own. The requested variant may
+    // differ from the active one (a view still switching), so derive it rather than reading colors().
+    using fm::style::Token;
+    const auto& Manager = fm::style::ThemeManager::instance();
+    const bool WantDark = theme == Dark;
+    const auto& T = fm::style::isDarkVariant(Manager.effectiveVariant()) == WantDark
+        ? Manager.colors() : Manager.colors(WantDark ? fm::style::Variant::Dark : fm::style::Variant::Light);
+    const auto Alpha = [](QColor Color, int Value) { Color.setAlpha(Value); return Color; };
     QHash<QString, QColor> c;
-    if (theme == Dark) {
-        // Modern Windows 11 Dark 기반 공통 팔레트
-        c.insert(QStringLiteral("common.background"), QColor(QStringLiteral("#202020")));
-        c.insert(QStringLiteral("common.surface"), QColor(QStringLiteral("#2B2B2B")));
-        c.insert(QStringLiteral("common.surfaceAlt"), QColor(QStringLiteral("#323232")));
-        c.insert(QStringLiteral("common.foreground"), QColor(QStringLiteral("#F3F3F3")));
-        c.insert(QStringLiteral("common.foregroundMuted"), QColor(QStringLiteral("#CFCFCF")));
-        c.insert(QStringLiteral("common.accent"), QColor(QStringLiteral("#60CDFF")));
-        c.insert(QStringLiteral("common.border"), QColor(QStringLiteral("#3A3A3A")));
-        c.insert(QStringLiteral("common.toolbar"), QColor(QStringLiteral("#2B2B2B")));
-        c.insert(QStringLiteral("common.tabActive"), QColor(QStringLiteral("#202020")));
-        c.insert(QStringLiteral("common.tabInactive"), QColor(QStringLiteral("#323232")));
-        c.insert(QStringLiteral("common.canvas"), QColor(QStringLiteral("#1C1C1C")));
-    } else {
-        // Modern Windows 11 Light 기반 공통 팔레트
-        c.insert(QStringLiteral("common.background"), QColor(QStringLiteral("#F3F3F3")));
-        c.insert(QStringLiteral("common.surface"), QColor(QStringLiteral("#FFFFFF")));
-        c.insert(QStringLiteral("common.surfaceAlt"), QColor(QStringLiteral("#F9F9F9")));
-        c.insert(QStringLiteral("common.foreground"), QColor(QStringLiteral("#1A1A1A")));
-        c.insert(QStringLiteral("common.foregroundMuted"), QColor(QStringLiteral("#5C5C5C")));
-        c.insert(QStringLiteral("common.accent"), QColor(QStringLiteral("#0078D4")));
-        c.insert(QStringLiteral("common.border"), QColor(QStringLiteral("#E5E5E5")));
-        c.insert(QStringLiteral("common.toolbar"), QColor(QStringLiteral("#F9F9F9")));
-        c.insert(QStringLiteral("common.tabActive"), QColor(QStringLiteral("#FFFFFF")));
-        c.insert(QStringLiteral("common.tabInactive"), QColor(QStringLiteral("#F3F3F3")));
-        c.insert(QStringLiteral("common.canvas"), QColor(QStringLiteral("#F3F3F3")));
-    }
+    c.insert(QStringLiteral("common.background"), T[Token::Win]);
+    c.insert(QStringLiteral("common.surface"), T[Token::Surface]);
+    c.insert(QStringLiteral("common.surfaceAlt"), T[Token::Alt]);
+    c.insert(QStringLiteral("common.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("common.foregroundMuted"), T[Token::Fg2]);
+    c.insert(QStringLiteral("common.accent"), T[Token::Accent]);
+    c.insert(QStringLiteral("common.border"), T[Token::Line]);
+    c.insert(QStringLiteral("common.toolbar"), T[Token::Win]);
+    c.insert(QStringLiteral("common.tabActive"), T[Token::Surface]);
+    c.insert(QStringLiteral("common.tabInactive"), T[Token::Alt]);
+    c.insert(QStringLiteral("common.canvas"), T[Token::Alt]);
 
-    c.insert(QStringLiteral("pdf.canvas"), c.value(QStringLiteral("common.canvas")));
-    c.insert(QStringLiteral("pdf.pageGap"), theme == Dark ? QColor(QStringLiteral("#2B2B2B")) : QColor(QStringLiteral("#E5E5E5")));
-    c.insert(QStringLiteral("pdf.searchHighlight"), QColor(QStringLiteral("#5AFFEB3B")));
-    c.insert(QStringLiteral("pdf.searchCurrent"), QColor(QStringLiteral("#6EFF8C00")));
-    c.insert(QStringLiteral("pdf.textSelection"), QColor(QStringLiteral("#462196F3")));
-    c.insert(QStringLiteral("pdf.imageSelection"), QColor(QStringLiteral("#E62ECC71")));
-    c.insert(QStringLiteral("pdf.annotation"), QColor(QStringLiteral("#80FFEB3B")));
+    c.insert(QStringLiteral("pdf.canvas"), T[Token::Alt]);
+    c.insert(QStringLiteral("pdf.pageGap"), T[Token::Grid]);
+    c.insert(QStringLiteral("pdf.searchHighlight"), Alpha(T[Token::Warn], 0x5A));
+    c.insert(QStringLiteral("pdf.searchCurrent"), Alpha(T[Token::Accent], 0x6E));
+    c.insert(QStringLiteral("pdf.textSelection"), Alpha(T[Token::Accent], 0x46));
+    c.insert(QStringLiteral("pdf.imageSelection"), Alpha(T[Token::Ok], 0xE6));
+    c.insert(QStringLiteral("pdf.annotation"), Alpha(T[Token::Warn], 0x80));
 
-    c.insert(QStringLiteral("image.canvas"), c.value(QStringLiteral("common.canvas")));
-    c.insert(QStringLiteral("image.draw"), QColor(QStringLiteral("#D13438")));
-    c.insert(QStringLiteral("image.selection"), c.value(QStringLiteral("common.accent")));
-    c.insert(QStringLiteral("image.compositeOutline"), theme == Dark ? QColor(QStringLiteral("#F3F3F3")) : QColor(QStringLiteral("#FFFFFF")));
-    c.insert(QStringLiteral("image.handleFill"), QColor(QStringLiteral("#FFFFFF")));
-    c.insert(QStringLiteral("image.handleBorder"), QColor(QStringLiteral("#1A1A1A")));
-    c.insert(QStringLiteral("image.accept"), QColor(QStringLiteral("#107C10")));
-    c.insert(QStringLiteral("image.cancel"), QColor(QStringLiteral("#D13438")));
+    c.insert(QStringLiteral("image.canvas"), T[Token::Alt]);
+    c.insert(QStringLiteral("image.draw"), T[Token::Danger]);
+    c.insert(QStringLiteral("image.selection"), T[Token::Accent]);
+    c.insert(QStringLiteral("image.compositeOutline"), T[Token::Surface]);
+    c.insert(QStringLiteral("image.handleFill"), T[Token::Surface]);
+    c.insert(QStringLiteral("image.handleBorder"), T[Token::Fg]);
+    c.insert(QStringLiteral("image.accept"), T[Token::Ok]);
+    c.insert(QStringLiteral("image.cancel"), T[Token::Danger]);
 
-    c.insert(QStringLiteral("markdown.background"), theme == Dark ? QColor(QStringLiteral("#0D1117")) : QColor(QStringLiteral("#FFFFFF")));
-    c.insert(QStringLiteral("markdown.foreground"), theme == Dark ? QColor(QStringLiteral("#C9D1D9")) : QColor(QStringLiteral("#24292F")));
-    c.insert(QStringLiteral("markdown.link"), theme == Dark ? QColor(QStringLiteral("#58A6FF")) : QColor(QStringLiteral("#0969DA")));
-    c.insert(QStringLiteral("markdown.heading"), theme == Dark ? QColor(QStringLiteral("#E6EDF3")) : QColor(QStringLiteral("#24292F")));
-    c.insert(QStringLiteral("markdown.border"), theme == Dark ? QColor(QStringLiteral("#30363D")) : QColor(QStringLiteral("#D0D7DE")));
-    c.insert(QStringLiteral("markdown.codeBackground"), theme == Dark ? QColor(QStringLiteral("#161B22")) : QColor(QStringLiteral("#F6F8FA")));
-    c.insert(QStringLiteral("markdown.inlineCode"), theme == Dark ? QColor(QStringLiteral("#FF7B72")) : QColor(QStringLiteral("#CF222E")));
-    c.insert(QStringLiteral("markdown.blockquote"), theme == Dark ? QColor(QStringLiteral("#8B949E")) : QColor(QStringLiteral("#57606A")));
-    c.insert(QStringLiteral("markdown.taskChecked"), theme == Dark ? QColor(QStringLiteral("#238636")) : QColor(QStringLiteral("#2DA44E")));
+    c.insert(QStringLiteral("markdown.background"), T[Token::Surface]);
+    c.insert(QStringLiteral("markdown.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("markdown.link"), T[Token::AccentFg]);
+    c.insert(QStringLiteral("markdown.heading"), T[Token::Fg]);
+    c.insert(QStringLiteral("markdown.border"), T[Token::Line]);
+    c.insert(QStringLiteral("markdown.codeBackground"), T[Token::Alt]);
+    c.insert(QStringLiteral("markdown.inlineCode"), T[Token::Danger]);
+    c.insert(QStringLiteral("markdown.blockquote"), T[Token::Fg2]);
+    c.insert(QStringLiteral("markdown.taskChecked"), T[Token::Ok]);
 
-    if (theme == Dark) {
-        // Monokai 원형에 가까운 Dark 코드 팔레트
-        c.insert(QStringLiteral("text.background"), QColor(QStringLiteral("#272822")));
-        c.insert(QStringLiteral("text.foreground"), QColor(QStringLiteral("#F8F8F2")));
-        c.insert(QStringLiteral("text.currentLine"), QColor(QStringLiteral("#3E3D32")));
-        c.insert(QStringLiteral("text.selection"), QColor(QStringLiteral("#804A90E2")));
-        c.insert(QStringLiteral("text.selectionForeground"), QColor(QStringLiteral("#FFFFFFFF")));
-        c.insert(QStringLiteral("text.caret"), QColor(QStringLiteral("#F8F8F0")));
-        c.insert(QStringLiteral("text.marginBackground"), QColor(QStringLiteral("#1E1F1C")));
-        c.insert(QStringLiteral("text.marginForeground"), QColor(QStringLiteral("#90908A")));
-        c.insert(QStringLiteral("text.indentGuide"), QColor(QStringLiteral("#5A5A52")));
-        c.insert(QStringLiteral("text.foldMarker"), QColor(QStringLiteral("#75715E")));
-        c.insert(QStringLiteral("text.braceMatch"), QColor(QStringLiteral("#66D9EF")));
-        c.insert(QStringLiteral("text.braceMismatch"), QColor(QStringLiteral("#F92672")));
+    c.insert(QStringLiteral("text.background"), T[Token::Surface]);
+    c.insert(QStringLiteral("text.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.currentLine"), T[Token::Alt]);
+    c.insert(QStringLiteral("text.selection"), T[Token::AccentSoft]);
+    c.insert(QStringLiteral("text.selectionForeground"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.caret"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.marginBackground"), T[Token::Win]);
+    c.insert(QStringLiteral("text.marginForeground"), T[Token::Fg3]);
+    c.insert(QStringLiteral("text.indentGuide"), T[Token::Line]);
+    c.insert(QStringLiteral("text.foldMarker"), T[Token::Fg3]);
+    c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
+    c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
+
+    if (WantDark) {
         c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#75715E")));
         c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#AE81FF")));
         c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#F92672")));
@@ -295,19 +293,6 @@ QHash<QString, QColor> ThemeManager::defaultColors(Theme theme)
         c.insert(QStringLiteral("text.lexer.function"), QColor(QStringLiteral("#A6E22E")));
         c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#FD971F")));
     } else {
-        // Windows 11 Light 표면 위에서 Monokai 계열 강조색을 유지한 Light 코드 팔레트
-        c.insert(QStringLiteral("text.background"), QColor(QStringLiteral("#FFFFFF")));
-        c.insert(QStringLiteral("text.foreground"), QColor(QStringLiteral("#272822")));
-        c.insert(QStringLiteral("text.currentLine"), QColor(QStringLiteral("#FFF8D6")));
-        c.insert(QStringLiteral("text.selection"), QColor(QStringLiteral("#660078D4")));
-        c.insert(QStringLiteral("text.selectionForeground"), QColor(QStringLiteral("#FFFFFFFF")));
-        c.insert(QStringLiteral("text.caret"), QColor(QStringLiteral("#1A1A1A")));
-        c.insert(QStringLiteral("text.marginBackground"), QColor(QStringLiteral("#F3F3F3")));
-        c.insert(QStringLiteral("text.marginForeground"), QColor(QStringLiteral("#6E6E6E")));
-        c.insert(QStringLiteral("text.indentGuide"), QColor(QStringLiteral("#D0D0D0")));
-        c.insert(QStringLiteral("text.foldMarker"), QColor(QStringLiteral("#75715E")));
-        c.insert(QStringLiteral("text.braceMatch"), QColor(QStringLiteral("#0078D4")));
-        c.insert(QStringLiteral("text.braceMismatch"), QColor(QStringLiteral("#D13438")));
         c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#75715E")));
         c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#7C4DFF")));
         c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#D0005F")));

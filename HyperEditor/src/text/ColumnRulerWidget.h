@@ -6,6 +6,7 @@
 #include <QFontMetrics>
 #include <QAbstractScrollArea>
 #include <QScrollBar>
+#include <fmstyle/ThemeManager.h>
 
 /// 텍스트 에디터 상단에 표시되는 열 번호 눈금자
 class ColumnRulerWidget : public QWidget
@@ -54,10 +55,11 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing, false);
 
         // 배경
-        const bool dark = palette().window().color().lightnessF() < 0.5;
-        const QColor bgColor = dark ? QColor(0x2d, 0x2d, 0x2d) : QColor(0xf0, 0xf0, 0xf0);
-        const QColor fgColor = dark ? QColor(0x85, 0x85, 0x85) : QColor(0x6e, 0x6e, 0x6e);
-        const QColor tickColor = dark ? QColor(0x55, 0x55, 0x55) : QColor(0xc0, 0xc0, 0xc0);
+        // Product tokens: the ruler reads as the editor margin (Win) with muted numbers and grid ticks.
+        const auto& Colors = fm::style::themeColorsFor(this);
+        const QColor bgColor = Colors[fm::style::Token::Win];
+        const QColor fgColor = Colors[fm::style::Token::Fg3];
+        const QColor tickColor = Colors[fm::style::Token::Line];
 
         painter.fillRect(rect(), bgColor);
 

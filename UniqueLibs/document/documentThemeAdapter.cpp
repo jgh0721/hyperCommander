@@ -5,6 +5,10 @@
 #include <QFontDatabase>
 #include <QChildEvent>
 #include <QStyle>
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
 namespace hc::document
@@ -62,6 +66,42 @@ namespace hc::document
             QStyle* style_;
         };
     }
+    namespace
+    {
+        QString& RequestedMode() { static QString Mode = QStringLiteral("product"); return Mode; }
+        QString& ProductMode() { static QString Mode = QStringLiteral("system"); return Mode; }
+        QJsonObject& AppliedProduct() { static QJsonObject Value; return Value; }
+        void ApplyScheme(const QString& Mode)
+        {
+            fm::style::ThemeManager::instance().setScheme(Mode == "light" ? fm::style::ThemeManager::Scheme::Light : Mode == "dark"
+                ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::System);
+        }
+        QJsonObject ReadRoot(const QString& Path)
+        {
+            QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {};
+            return QJsonDocument::fromJson(File.readAll()).object();
+        }
+    }
+    bool DocumentThemeAdapter::LoadProductTheme(const QString& Directory)
+    {
+        auto Root = ReadRoot(QDir(Directory).filePath(QStringLiteral("HyperCommander.json")));
+        if (Root.isEmpty()) Root = ReadRoot(QDir(Directory).filePath(QStringLiteral("HyperEditor.json")));
+        if (Root.isEmpty()) return false;
+        const auto Appearance = Root["appearance"].toObject(); const auto General = Root["general"].toObject();
+        const QJsonObject Product{{"scheme", Appearance["watercolorTheme"]}, {"mode", General["themeMode"]}, {"mono", General["monoFontFamily"]},
+            {"monoPx", General["monoFontPx"]}, {"darkTitle", General["darkTitleBar"]}};
+        if (Product == AppliedProduct()) return true;
+        AppliedProduct() = Product;
+        const auto Mode = General["themeMode"].toString();
+        ProductMode() = Mode == "light" || Mode == "dark" ? Mode : QStringLiteral("system");
+        auto& Theme = fm::style::ThemeManager::instance();
+        fm::style::ThemeManager::Batch Batch(Theme);
+        Theme.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
+        Theme.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
+        Theme.setDarkTitleBar(General["darkTitleBar"].toBool(true));
+        if (RequestedMode() == "product") ApplyScheme(ProductMode());
+        return true;
+    }
     void DocumentThemeAdapter::Install(QApplication& App)
     {
         auto& Theme = fm::style::ThemeManager::instance();
@@ -81,10 +121,8 @@ namespace hc::document
     }
     bool DocumentThemeAdapter::SetMode(const QString& Mode)
     {
-        auto& Theme = fm::style::ThemeManager::instance();
-        if (Mode != "system" && Mode != "light" && Mode != "dark") return false;
-        Theme.setScheme(Mode == "light" ? fm::style::ThemeManager::Scheme::Light : Mode == "dark"
-            ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::System); return true;
+        if (Mode != "product" && Mode != "system" && Mode != "light" && Mode != "dark") return false;
+        RequestedMode() = Mode; ApplyScheme(Mode == "product" ? ProductMode() : Mode); return true;
     }
     void DocumentThemeAdapter::Attach(QPlainTextEdit* Editor)
     {

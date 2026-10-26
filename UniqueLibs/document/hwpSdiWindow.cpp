@@ -2,6 +2,7 @@
 #include <QCloseEvent>
 #include <QLabel>
 #include <QVBoxLayout>
+#include <fmwidgets/WindowChrome.h>
 #include <QTimer>
 #include <QPointer>
 #include <atomic>
@@ -51,12 +52,16 @@ namespace hc::document
             if (export_ && export_->CurrentState() == HwpExportTransfer::State::Failed) failExport(export_->Error());
         }); Deadline->start();
         auto* Layout = new QVBoxLayout(this);
+        // Product title bar; the content keeps its margins below it.
+        setWindowFlag(Qt::FramelessWindowHint);
+        Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0); { auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("hwpWindowChrome"); Layout->addWidget(Chrome); }
+        auto* Content = new QVBoxLayout; Content->setContentsMargins(9, 9, 9, 9); Layout->addLayout(Content, 1);
         Layout->setContentsMargins(0, 0, 0, 0);
         status_->setAlignment(Qt::AlignCenter);
         status_->setTextFormat(Qt::PlainText);
         status_->setWordWrap(true);
-        Layout->addWidget(status_);
-        Layout->addWidget(backend_, 1);
+        Content->addWidget(status_);
+        Content->addWidget(backend_, 1);
         Backend.release(); // QWidget parent now owns the GUI port.
         setFocusProxy(backend_);
         resize(960, 720);
