@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgMain.hpp"
+#include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 
 #include "colorSchemeMgr.hpp"
@@ -639,6 +640,7 @@ bool QMainUI::canRestartForUpdate() const
 
 void QMainUI::initialize()
 {
+    hc::startup::Span Trace("workspace.initialize");
     const auto StCommandMgr = TyStCommandMgr::GetInstance();
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     const auto StFavoriteDirMgr = TyStFavoriteDirMgr::GetInstance();

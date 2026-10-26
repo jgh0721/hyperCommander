@@ -17,6 +17,7 @@ class HyperCommanderApp : public QApplication
 public:
     HyperCommanderApp( int& argc, char** argv );
 
+    bool notify(QObject* Receiver,QEvent* Event) override;
     bool ShouldRun() const { return shouldRun_; }
     int StartupExitCode() const { return startupExitCode_; }
 

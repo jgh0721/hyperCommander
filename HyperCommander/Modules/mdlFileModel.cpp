@@ -278,19 +278,21 @@ void CFsModelT::SetColorScheme( const TyColorScheme& ColorScheme )
     fileColorCache_.clear();
     const auto Document = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileColorRules"].toObject();
     if (fileRuleDocument_ != Document) {
-        fileRuleDocument_ = Document; const auto Generation = ++fileRuleLoadGeneration_;
+        fileRuleDocument_ = Document; fileRulesLoading_ = false; fileRulesError_.clear(); const auto Generation = ++fileRuleLoadGeneration_;
         if (hc::settings::FileColorRules::HasRegex(Document)) {
+            fileRulesLoading_ = true;
             auto Previous = fileColorRules_;
+            auto Failure=std::make_shared<QString>();
             fileColorRules_.Load(hc::settings::FileColorRules::Empty());
             auto* Watcher = new QFutureWatcher<hc::settings::FileColorRules>(this);
-            connect(Watcher, &QFutureWatcher<hc::settings::FileColorRules>::finished, this, [this, Watcher, Generation] {
+            connect(Watcher, &QFutureWatcher<hc::settings::FileColorRules>::finished, this, [this, Watcher, Generation, Failure] {
                 auto Rules = Watcher->future().takeResult(); Watcher->deleteLater();
                 if (Generation != fileRuleLoadGeneration_) return;
-                fileColorRules_ = std::move(Rules); fileColorCache_.clear();
+                fileRulesError_=*Failure; fileRulesLoading_ = false; fileColorRules_ = std::move(Rules); fileColorCache_.clear();
                 if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
             });
-            Watcher->setFuture(QtConcurrent::run([Document, Previous]() mutable { Previous.Load(Document); return Previous; }));
-        } else fileColorRules_.Load(Document);
+            Watcher->setFuture(QtConcurrent::run([Document, Previous, Failure]() mutable { *Failure=Previous.Load(Document); return Previous; }));
+        } else fileRulesError_=fileColorRules_.Load(Document);
     }
     fileRuleClock_->stop(); fileRuleExpiry_.reset();
 

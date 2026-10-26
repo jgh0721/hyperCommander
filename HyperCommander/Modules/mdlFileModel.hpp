@@ -127,6 +127,8 @@ protected:
     hc::settings::FileColorRules fileColorRules_;
     QJsonObject fileRuleDocument_;
     quint64 fileRuleLoadGeneration_ = 0;
+    bool fileRulesLoading_ = false;
+    QString fileRulesError_;
     QTimer* fileRuleClock_ = nullptr;
     void scheduleFileRuleExpiry(qint64 Deadline) const;
     mutable std::optional<qint64> fileRuleExpiry_;

@@ -124,6 +124,10 @@ public:
     void RequestDirectorySizes(const QModelIndexList& Entries = {}, bool Automatic = false);
     void ApplyDirectorySizeSettings();
     int PendingDirectorySizes() const { return int(directorySizePending_.size()); }
+    // Read-only observation: never schedules evaluation or expires cache entries.
+    bool AreFileColorsReady(const QModelIndexList& Rows) const;
+    quint64 FileRuleGeneration() const { return fileRuleLoadGeneration_; }
+    bool FileRulesLoading() const { return fileRulesLoading_; }
     bool FileRuleCompletionIdle() const { return !fileRuleCompleting_ && !fileRuleCompleteTimer_.isActive(); }
 
     ////////////////////////////////////////////////////////////////////////////

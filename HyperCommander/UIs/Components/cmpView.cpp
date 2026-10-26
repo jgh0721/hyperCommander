@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpView.hpp"
+#include "startupTrace.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
 #include "commonLibs/view/listIconSize.hpp"
 #include <QtConcurrent/QtConcurrentRun>
@@ -80,6 +81,7 @@ public:
             ? Value.index.data(Qt::BackgroundRole).value<QColor>() : QColor{};
         paintRecordBackground(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(),
             State, Value.rowIndex % 2 != 0, owner_->RecordColors(), Group);
+        owner_->RecordStartupPaint(Value.index,1);
     }
     void paintOverlay(QPainter& Painter, const Record& Value, QWidget*) override
     {
@@ -99,6 +101,7 @@ public:
         paintRecordCursor(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(), State, owner_->RecordColors());
         Painter.save(); if (Effects["dim"].toBool()) Painter.setOpacity(Painter.opacity() * 0.55);
         hc::ui::PaintFileRuleBorder(&Painter, Value.rect, Value.index.data(Qt::ForegroundRole).value<QColor>(), Effects);
+        owner_->RecordStartupPaint(Value.index,4);
         Painter.restore();
     }
 private:
@@ -176,23 +179,25 @@ public:
             Painter->drawText(Rect, Alignment | Qt::AlignVCenter, Metrics.elidedText(Cell.data().toString(), Path ? Qt::ElideMiddle : Qt::ElideRight, Rect.width()));
         }
         Painter->restore();
+        if(Name)owner_->RecordStartupPaint(Cell,2);
     }
 private:
     CGridView* owner_;
 };
 class ProductThumbnailDelegate final : public QStyledItemDelegate {
 public:
-    ProductThumbnailDelegate(QAbstractItemDelegate* Base, QObject* Parent) : QStyledItemDelegate(Parent), base_(Base) {}
+    ProductThumbnailDelegate(QAbstractItemDelegate* Base, CGridView* Owner, QObject* Parent) : QStyledItemDelegate(Parent), base_(Base), owner_(Owner) {}
     QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override { return base_->sizeHint(Option, Index); }
     void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
         base_->paint(Painter, Option, Index);
         hc::ui::PaintFileRuleBorder(Painter, Option.rect, Index.data(Qt::ForegroundRole).value<QColor>(), Index.data(CFSModel::FileEffectsRole).toJsonObject());
+        owner_->RecordStartupPaint(owner_->Thumbnails()->SourceIndex(Index.row()),7);
     }
     bool editorEvent(QEvent* Event, QAbstractItemModel* Model, const QStyleOptionViewItem& Option, const QModelIndex& Index) override {
         return base_->editorEvent(Event, Model, Option, Index);
     }
 private:
-    QPointer<QAbstractItemDelegate> base_;
+    QPointer<QAbstractItemDelegate> base_; CGridView* owner_;
 };
 }
 
@@ -355,7 +360,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
     thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
     thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
-    auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), Tiles));
+    auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), this, Tiles));
     thumbnails_->listView()->installEventFilter(this);
     thumbnails_->listView()->viewport()->installEventFilter(this);
     presentationStack_->addWidget(grid_); presentationStack_->addWidget(thumbnails_);
@@ -614,6 +619,26 @@ void CGridView::requestIconViewport()
 {
     if (!iconViewportTimer_.isActive()) iconViewportTimer_.start();
 }
+QModelIndexList CGridView::VisibleSourceRows(int Overscan) const
+{
+    QModelIndexList Entries;if(!isVisible()||!view_||!model_)return Entries;
+    if(IsThumbnailMode()){
+        auto* List=thumbnails_->listView();const auto Area=List->viewport()->rect();
+        for(int Row=0;Row<thumbnailModel_->rowCount();++Row){
+            if(!List->visualRect(thumbnailModel_->index(Row,0)).intersects(Area))continue;
+            auto Index=thumbnailModel_->SourceIndex(Row);if(proxy_&&Index.model()==proxy_)Index=proxy_->mapToSource(Index);
+            if(Index.isValid())Entries.append(Index);
+        }
+        return Entries;
+    }
+    auto* Layout=static_cast<Qtitan::GridViewBase*>(view_)->layout();const int Count=view_->getRowCount();if(!Count)return Entries;
+    const int Scroll=view_->verticalScrollBar()->value(),Height=std::max(1,Layout->rowsPanel()->boundedRect().height());
+    const auto Position=[&](int Y){int Low=0,High=Count;while(Low+1<High){int Mid=(Low+High)/2;if(Layout->getRowScrollPos(Mid)<=Y)Low=Mid;else High=Mid;}return Low;};
+    const int First=Position(std::max(0,Scroll-Overscan*Height)),Last=Position(Scroll+(1+Overscan)*Height);
+    for(int At=First;At<=Last;++At){if(!Overscan&&Layout->getRowScrollPos(At)>=Scroll+Height)continue;const auto Row=view_->getRow(At);if(!Row.isValid()||Row.type()!=Qtitan::GridRow::DataRow)continue;
+        auto Index=Row.modelIndex(0);if(proxy_)Index=proxy_->mapToSource(Index);if(Index.isValid())Entries.append(Index);}
+    return Entries;
+}
 void CGridView::updateIconViewport()
 {
     auto* Model = qobject_cast<CFSModel*>(model_); if (!Model || !view_) return;
@@ -639,6 +664,36 @@ void CGridView::updateIconViewport()
     Append(First, Last); Append(Last + 1, std::min(Count - 1, Position(Scroll + 2 * Height)));
     Append(Position(std::max(0, Scroll - Height)), First - 1);
     Model->SetIconViewport(Entries, true);
+}
+void CGridView::RecordStartupPaint(const QModelIndex& Input,int Part)
+{
+    if(!hc::startup::Enabled()||hc::startup::Data().done_)return;
+    auto* Model=qobject_cast<CFSModel*>(model_);if(!Model)return;
+    auto Index=Input;if(proxy_&&Index.model()==proxy_)Index=proxy_->mapToSource(Index);
+    if(!Index.isValid()||Index.model()!=Model||!Model->AreFileColorsReady({Index}))return;
+    auto& Paint=startupPaints_[Index.row()];const auto Focus=CaptureFocus();
+    if(Paint.directory_!=Model->DirectoryGeneration()||Paint.rules_!=Model->FileRuleGeneration()
+        ||(Paint.focus_!=Focus&&(sourceSelectionKey(Index)==Focus||sourceSelectionKey(Index)==startupInputFocus_)))Paint={};
+    Paint.focus_=Focus;Paint.directory_=Model->DirectoryGeneration();Paint.rules_=Model->FileRuleGeneration();Paint.parts_|=Part;
+    if(hc::startup::Detail())hc::startup::Record("row.paint",{{"row",Index.row()},{"parts",Paint.parts_},{"focus",Focus},{"foreground",Index.data(Qt::ForegroundRole).value<QColor>().name()},{"background",Index.data(Qt::BackgroundRole).value<QColor>().name()}});
+}
+void CGridView::StartupPaintCompleted()
+{
+    if(!hc::startup::Enabled()||hc::startup::Data().done_){startupTraceTimer_.stop();return;}
+    auto* Model=qobject_cast<CFSModel*>(model_);const auto Focus=CaptureFocus();
+    if(!Model||!isVisible()||!panelActive_||Model->IsLoading()||Model->IsPageLoading()||Model->HasPlaceholder()||Model->LastNavigationError()
+        ||presentationTimer_.isActive()||groupingTimer_.isActive()||QApplication::activeModalWidget()||QApplication::activePopupWidget())return;
+    const auto Rows=VisibleSourceRows();if(Rows.isEmpty()||!Model->AreFileColorsReady(Rows))return;
+    for(const auto& Index:Rows){const auto Paint=startupPaints_.value(Index.row());
+        if(Paint.parts_!=7||Paint.directory_!=Model->DirectoryGeneration()||Paint.rules_!=Model->FileRuleGeneration())return;
+        // Only the previous and current cursor rows require repaint on navigation.
+        if((sourceSelectionKey(Index)==Focus||(startupInput_&&sourceSelectionKey(Index)==startupInputFocus_)) && Paint.focus_!=Focus)return;
+    }
+    hc::startup::Record("colors.uiPaint",{{"rows",Rows.size()},{"focus",Focus}});
+    auto* FocusWidget=QApplication::focusWidget();
+    if(GetForegroundWindow()!=reinterpret_cast<HWND>(window()->winId())||!FocusWidget||!(FocusWidget==this||isAncestorOf(FocusWidget)))return;
+    if(!hc::startup::Data().ready_)hc::startup::Ready({{"focus",Focus},{"rows",Rows.size()},{"hwnd",QString::number(quintptr(window()->winId()))}});
+    if(startupInput_&&Focus!=startupInputFocus_)hc::startup::Used({{"focus",Focus},{"rows",Rows.size()}});
 }
 void CGridView::requestPresentation()
 {
@@ -749,6 +804,14 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
 
     appliedDisplaySettings_ = {};
     if (model_ != Source) navigationScroll_.clear();
+    if(hc::startup::Enabled()){
+        connect(Source,&QAbstractItemModel::modelAboutToBeReset,this,[this]{startupPaints_.clear();});
+        connect(Source,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& A,const QModelIndex& B,const QList<int>& Roles){
+            if(Roles.isEmpty()||Roles.contains(Qt::ForegroundRole)||Roles.contains(Qt::BackgroundRole)||Roles.contains(Qt::FontRole)||Roles.contains(CFSModel::FileEffectsRole)||Roles.contains(CFSModel::FileColorOverrideRole)||Roles.contains(CFSModel::ClipboardCutRole))
+                for(int Row=A.row();Row<=B.row();++Row)startupPaints_.remove(Row);
+        });
+        startupTraceTimer_.setInterval(16);connect(&startupTraceTimer_,&QTimer::timeout,this,&CGridView::StartupPaintCompleted,Qt::UniqueConnection);startupTraceTimer_.start();
+    }
     model_ = Source;
     proxy_ = Proxy;
     thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
@@ -955,6 +1018,7 @@ void CGridView::ApplyDisplaySettings()
 
 void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 {
+    startupPaints_.clear();
     if( ColorScheme.Name.isEmpty() == true )
         return;
 
@@ -1800,6 +1864,12 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if(hc::startup::Enabled()&&Event->type()==QEvent::KeyPress){
+        const auto* Key=static_cast<QKeyEvent*>(Event);
+        if(hc::startup::Data().ready_&&!startupInput_&&(Key->key()==Qt::Key_Down||Key->key()==Qt::Key_Up)){
+            startupInput_=true;startupInputFocus_=CaptureFocus();hc::startup::Record("input.received",{{"key",Key->key()},{"focus",startupInputFocus_}});
+        }
+    }
     const bool GridViewport = Watched == grid_->viewport();
     const bool TileViewport = thumbnails_ && Watched == thumbnails_->listView()->viewport();
     if (GridViewport || TileViewport) {

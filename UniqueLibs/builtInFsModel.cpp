@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "startupTrace.hpp"
 #include "shellDriveSort.hpp"
 #include "fileIconService.hpp"
 #include "quickFindSettings.hpp"
@@ -726,6 +727,7 @@ void CFSModel::DismissNavigationError()
 
 void CFSModel::refreshProvider()
 {
+    hc::startup::Span Trace("listing.dispatch");
     automaticRefresh_ = std::exchange(autoRefreshRequested_, false);
     const bool Elevated = std::exchange(elevatedDirectoryRequest_, false);
     failedNavigationRetry_ = {};
@@ -861,6 +863,7 @@ void CFSModel::refreshProvider()
             }
             auto Page = View.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context); if (!Page.HasValue()) return Page.Failure();
             if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
+            hc::startup::Span Trace("listing.colors");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
             return Listing{Source.Value(), View.Value(), std::move(Page.Value()), std::move(ActiveSession), std::move(Styles)};
         }
@@ -990,6 +993,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
             }, Context, {}) : Result<std::shared_ptr<PagedEntryIndex>>(Current);
             if (!View.HasValue()) return View.Failure();
             auto Page = View.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context); if (!Page.HasValue()) return Page.Failure();
+            hc::startup::Span Trace("listing.colors");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
             return Listing{View.Value(), std::move(Page.Value()), std::move(Styles)};
         } catch (const std::exception&) { return Error{ErrorCategory::Internal, "page-worker-exception"}; }
@@ -1199,6 +1203,7 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
 
 void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles)
 {
+    hc::startup::Span Trace("listing.publish");
     const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
         return hc::workspace::SelectionKey(Entry) + ':' + QString::number(Entry.modifiedUtcMs_) + ':' + QString::number(Entry.size_) + ':' + QString::number(Entry.attributes_);
     };
@@ -2318,4 +2323,18 @@ void CFSModel::refreshColumnSortRanks(int First)
     columnQueries_->EndSnapshot();
     completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
+}
+
+bool CFSModel::AreFileColorsReady(const QModelIndexList& Rows) const
+{
+    if(fileRulesLoading_||!fileRulesError_.isEmpty())return false;
+    for(const auto& Index:Rows){
+        if(Index.model()!=this||Index.row()<0||Index.row()>=vecNode_.size())return false;
+        const auto& Item=vecNode_[Index.row()];
+        if(Item->Name_==".."||!fileColorRules_.HasRules())continue;
+        const auto Input=fileRuleInput(Item);const auto Key=hc::settings::FileRuleKey::From(Input);
+        const auto* Cached=fileColorCache_.object(Key);
+        if(!Cached||!Cached->style_.error_.isEmpty()||(Cached->style_.validUntilUtcMs_&&Input.referenceUtcMs_>=*Cached->style_.validUntilUtcMs_))return false;
+    }
+    return true;
 }

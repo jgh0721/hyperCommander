@@ -3,6 +3,8 @@
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QStandardPaths>
 #include "HyperCommander.hpp"
+#include "UniqueLibs/startupTrace.hpp"
+#include "UIs/Components/cmpView.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "dlgMain.hpp"
@@ -199,7 +201,9 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
             return;
         }
     }
+    hc::startup::Record("app.initialize.begin");
     initialize();
+    hc::startup::Record("app.initialize.end");
     const auto Colors = TyStColorSchemeMgr::GetInstance();
     Style->Apply(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
     connect(Colors, &CColorSchemeMgr::sigColorSchemeChanged, this, [Style](const TyColorScheme& Scheme) { Style->Apply(Scheme); });
@@ -212,6 +216,8 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
 
     mainUI = new QMainUI;
     mainUI->show();
+    hc::startup::Record("window.show");
+    if(hc::startup::Enabled()){auto* Timer=new QTimer(this);Timer->setSingleShot(true);connect(Timer,&QTimer::timeout,this,[]{hc::startup::Flush();});Timer->start(20000);}
     if (!QStandardPaths::isTestModeEnabled() && !StartupPaths.isEmpty())
         QTimer::singleShot(0, mainUI, [this, StartupPaths] { mainUI->OpenStartupPaths(StartupPaths); });
     if (!Settings.Error().isEmpty() || !Settings.Issues().isEmpty())
@@ -234,4 +240,14 @@ void HyperCommanderApp::initialize()
 
     StCommandMgr->Refresh();
     StColorSchemeMgr->Refresh();
+}
+
+bool HyperCommanderApp::notify(QObject* Receiver,QEvent* Event)
+{
+    if(!hc::startup::Enabled()||Event->type()!=QEvent::Paint)return QApplication::notify(Receiver,Event);
+    QPointer<CGridView> View;
+    for(auto* Object=Receiver;Object;Object=Object->parent())if((View=qobject_cast<CGridView*>(Object)))break;
+    const bool Result=QApplication::notify(Receiver,Event);
+    // Qt paint delivery has returned. This is not a DWM presentation fence.
+    if(View)View->StartupPaintCompleted();return Result;
 }

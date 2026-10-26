@@ -79,6 +79,9 @@ public:
     int ListIconSize() const;
     int TwoLineTextIndent() const;
     bool IsPanelActive() const { return panelActive_; }
+    QModelIndexList VisibleSourceRows(int Overscan = 0) const;
+    void RecordStartupPaint(const QModelIndex& Index,int Part);
+    void StartupPaintCompleted();
     bool IsTwoLine() const;
     bool IsThumbnailMode() const;
     QPoint ListContentTopLeft() const;
@@ -155,6 +158,9 @@ protected:
     bool                            nativeEvent( const QByteArray& eventType, void* message, qintptr* result ) override;
 
 private:
+    struct StartupPaint { int parts_=0; QString focus_; quint64 directory_=0, rules_=0; };
+    QHash<int,StartupPaint> startupPaints_;
+    bool startupInput_=false; QString startupInputFocus_; QTimer startupTraceTimer_;
     void initializeGrouping();
     void applyGrouping();
     void applyGroupExpansion();

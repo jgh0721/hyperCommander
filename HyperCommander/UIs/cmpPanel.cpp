@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "panelPathBar.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
@@ -70,6 +71,7 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
 
 void CmpPanel::RefreshVolumeList() const
 {
+    hc::startup::Span Trace("volumes.refresh");
     const auto Previous = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>();
     const auto PreviousRoot = Previous ? Previous->GetRoot() : QString{};
     const QSignalBlocker Blocker(ui.cbxVolume);
