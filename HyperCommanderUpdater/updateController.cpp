@@ -5,6 +5,7 @@
 #include "updateTransaction.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/solTypeDefs_Ver.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <QAction>
 #include <QApplication>
 #include <QDateTime>
@@ -19,7 +20,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
-#include <QProgressDialog>
+#include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -78,12 +80,26 @@ UpdateController::UpdateController(QWidget* Window, QMenu* Menu, std::function<b
         Watcher->setFuture(QtConcurrent::run([Root] { try { AcknowledgeTransaction(Native(Root)); } catch (...) {} }));
     });
 }
+UpdateProgressDialog::UpdateProgressDialog(const QString& Label, QWidget* Parent) : QDialog(Parent)
+{
+    setObjectName("hc.update.progress"); setWindowTitle(QObject::tr("HyperCommander 업데이트"));
+    auto* Layout = new QVBoxLayout(this);
+    label_ = new QLabel(Label, this); label_->setWordWrap(true); label_->setMinimumWidth(360); Layout->addWidget(label_);
+    bar_ = new QProgressBar(this); bar_->setRange(0, 0); bar_->setTextVisible(false); Layout->addWidget(bar_);
+    auto* Footer = hc::ui::ApplyDialogFrame(this, {{}, {}, fm::ui::glyph::Refresh});
+    auto* Cancel = new QPushButton(QObject::tr("취소"), this); hc::ui::MoveToFooter(Footer, Cancel);
+    connect(Cancel, &QPushButton::clicked, this, &UpdateProgressDialog::reject);
+}
+void UpdateProgressDialog::setLabelText(const QString& Text) { label_->setText(Text); }
+void UpdateProgressDialog::setRange(int Minimum, int Maximum) { bar_->setRange(Minimum, Maximum); }
+void UpdateProgressDialog::setValue(int Value) { bar_->setValue(Value); }
+// Like QProgressDialog::cancel: remember the request, hide, then tell the owner once per showing.
+void UpdateProgressDialog::reject() { const bool First = !canceled_; canceled_ = true; hide(); if (First && Canceled) Canceled(); }
+void UpdateProgressDialog::showEvent(QShowEvent* Event) { canceled_ = false; QDialog::showEvent(Event); }
 UpdateController::~UpdateController() { stop_.request_stop(); if (reply_) { reply_->disconnect(this); reply_->abort(); } }
 void UpdateController::showProgress(const QString& Message) {
     if (!progress_) {
-        progress_ = new QProgressDialog(window_); progress_->setWindowTitle(tr("HyperCommander 업데이트")); progress_->setCancelButtonText(tr("취소"));
-        progress_->setMinimumDuration(0); progress_->setAutoClose(false); progress_->setAutoReset(false);
-        connect(progress_, &QProgressDialog::canceled, this, &UpdateController::cancel);
+        progress_ = new UpdateProgressDialog({}, window_); progress_->Canceled = [this] { cancel(); };
     }
     progress_->setLabelText(Message); progress_->setRange(0, 0); if (!automatic_ || ready_) progress_->show();
 }
@@ -93,7 +109,7 @@ void UpdateController::fail(const QString& Error) {
     // Preserve check/download failures as well as native helper failures, so a
     // dismissed dialog still leaves the reason available for diagnosis.
     try { DurableWrite(Native(root_) / L".update/last-error.json", "{\"error\":" + QuoteJson(Error.toUtf8().toStdString()) + "}"); } catch (...) {}
-    if (!automatic_) QMessageBox::warning(window_, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Error));
+    if (!automatic_) hc::ui::MessageDialog(QMessageBox::Warning, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Error), QMessageBox::Ok, window_).exec();
 }
 void UpdateController::Check() {
     automatic_ = false;
@@ -166,7 +182,7 @@ void UpdateController::check(bool Automatic) {
                 run([Tx](std::stop_token) { return Result{ParseManifest(AuthenticateManifest(Native(Tx) / L"update-manifest.cat", Native(Tx) / L"update-manifest.json")), {}}; }, [this](Result Value) {
                     release_ = std::move(Value.release_); if (progress_) progress_->hide();
                     const auto Current = ParseVersion(currentVersion_), Version = ParseVersion(release_.version_);
-                    if (Version <= Current) { if (!automatic_) QMessageBox::information(window_, tr("업데이트"), tr("현재 버전 %1이 최신 버전입니다.").arg(nsHC::CLIENT_VERSION)); return; }
+                    if (Version <= Current) { if (!automatic_) hc::ui::MessageDialog(QMessageBox::Information, tr("업데이트"), tr("현재 버전 %1이 최신 버전입니다.").arg(nsHC::CLIENT_VERSION), QMessageBox::Ok, window_).exec(); return; }
                     if (Current < ParseVersion(release_.minimum_)) { fail(tr("이 버전에서는 Portable ZIP을 직접 설치해야 합니다.")); return; }
                     if (automatic_ && Options()["skippedVersion"].toString() == Text(release_.version_)) return; offer();
                 });
@@ -175,7 +191,7 @@ void UpdateController::check(bool Automatic) {
     });
 }
 void UpdateController::offer() {
-    QMessageBox Box(QMessageBox::Information, tr("HyperCommander 업데이트"), ready_ ? tr("버전 %1의 검증과 설치 준비가 완료되었습니다.<br/>다른 HyperCommander·편집기·플러그인 창을 닫은 뒤 ‘업데이트 후 재시작’을 누르면 적용됩니다.").arg(Text(release_.version_))
+    hc::ui::MessageDialog Box(QMessageBox::Information, tr("HyperCommander 업데이트"), ready_ ? tr("버전 %1의 검증과 설치 준비가 완료되었습니다.<br/>다른 HyperCommander·편집기·플러그인 창을 닫은 뒤 ‘업데이트 후 재시작’을 누르면 적용됩니다.").arg(Text(release_.version_))
         : tr("새 버전 %1을 사용할 수 있습니다.<br/>현재 버전: %2<br/>다운로드 크기: %3 MiB<br/><a href=\"%4\">변경 사항 보기</a>").arg(Text(release_.version_), nsHC::CLIENT_VERSION).arg(release_.zipBytes_ / 1048576).arg(Text(release_.notes_)), QMessageBox::NoButton, window_);
     Box.setTextFormat(Qt::RichText); Box.setTextInteractionFlags(Qt::TextBrowserInteraction);
     auto* Accept = Box.addButton(ready_ ? tr("업데이트 후 재시작") : tr("다운로드"), QMessageBox::AcceptRole);
@@ -185,7 +201,7 @@ void UpdateController::offer() {
         if (!ready_) { download(); return; }
         try {
             if (!canRestart_() || OtherProductProcesses(Native(root_), 0, ProductProcessCheck::BeforeRestart)) {
-                QMessageBox::information(window_, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 업데이트 메뉴에서 ‘업데이트 후 재시작’을 다시 선택하십시오.")); return;
+                hc::ui::MessageDialog(QMessageBox::Information, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 업데이트 메뉴에서 ‘업데이트 후 재시작’을 다시 선택하십시오."), QMessageBox::Ok, window_).exec(); return;
             }
         } catch (const std::exception& Error) { fail(Error.what()); return; }
         restartRequested_ = true; if (!window_->close()) restartRequested_ = false;
@@ -265,9 +281,8 @@ bool UpdateController::LaunchPending() {
         Process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(Pid));
         Require(Process, "update-helper-exited-before-handoff");
         const HANDLE Waits[]{Process, Ready};
-        QProgressDialog Waiting(tr("업데이트 도우미가 설치 준비를 확인하고 있습니다…"), tr("취소"), 0, 0, window_);
-        Waiting.setWindowTitle(tr("HyperCommander 업데이트")); Waiting.setWindowModality(Qt::WindowModal);
-        Waiting.setMinimumDuration(0); Waiting.setAutoClose(false); Waiting.show();
+        UpdateProgressDialog Waiting(tr("업데이트 도우미가 설치 준비를 확인하고 있습니다…"), window_);
+        Waiting.setWindowModality(Qt::WindowModal); Waiting.show();
         QEventLoop Loop; QTimer Poll; QElapsedTimer Elapsed; Elapsed.start(); DWORD Result = WAIT_TIMEOUT;
         connect(&Poll, &QTimer::timeout, &Loop, [&] {
             Result = WaitForMultipleObjects(DWORD(std::size(Waits)), Waits, FALSE, 0);

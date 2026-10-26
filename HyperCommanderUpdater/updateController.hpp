@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "updateProtocol.hpp"
+#include <QDialog>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -10,9 +11,28 @@ class QMenu;
 class QWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
-class QProgressDialog;
+class QLabel;
+class QProgressBar;
 namespace hc::update {
 class UpdateControllerTest;
+/// Update progress in the product dialog frame: header band, message and bar, footer band with Cancel.
+/// It keeps the QProgressDialog names the controller calls; Cancel, Esc and the close box all cancel.
+class UpdateProgressDialog final : public QDialog {
+public:
+    UpdateProgressDialog(const QString& Label, QWidget* Parent);
+    void setLabelText(const QString& Text);
+    void setRange(int Minimum, int Maximum);
+    void setValue(int Value);
+    bool wasCanceled() const { return canceled_; }
+    void reject() override;
+    std::function<void()> Canceled;
+protected:
+    void showEvent(QShowEvent* Event) override;
+private:
+    QLabel* label_ = nullptr;
+    QProgressBar* bar_ = nullptr;
+    bool canceled_ = false;
+};
 class UpdateController final : public QObject {
 public:
     UpdateController(QWidget* Window, QMenu* Menu, std::function<bool()> CanRestart);
@@ -36,7 +56,7 @@ private:
     std::function<bool()> canRestart_;
     QNetworkAccessManager* network_;
     QPointer<QNetworkReply> reply_;
-    QPointer<QProgressDialog> progress_;
+    QPointer<UpdateProgressDialog> progress_;
     QString root_, tx_;
     std::string currentVersion_;
     Manifest release_;
