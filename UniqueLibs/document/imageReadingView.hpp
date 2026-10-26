@@ -79,6 +79,7 @@ class ImageReadingView final : public QAbstractScrollArea
     void rebuild(bool KeepAnchor = true);
     void request(const Placement &Place, const QRect &Tile);
     void prefetch();
+    void expandSubpages();
     bool prefetching_ = false;
     int prefetchPage_ = -1;
     QSet<int> prefetched_;

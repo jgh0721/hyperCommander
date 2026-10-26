@@ -175,7 +175,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
         {
             storage::OperationContext Context;
             Context.stopToken_ = Stop->get_token();
-            auto Book = OpenImageBook(Path, Context);
+            auto Book = OpenImageBook(Path, Context, false);
             if (!Book.HasValue())
                 return Book.Failure();
             int Index = 0;
@@ -263,6 +263,28 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     rebuild(false);
     GoTo(qBound(0, index_, int(book_->pages_.size()) - 1), Restored ? Entry["relative"].toDouble() : 0);
     changed();
+    if(book_->subpagesPending_)expandSubpages();
+}
+void ImageReadingView::expandSubpages()
+{
+    const auto Path=book_->path_;const auto Generation=bookGeneration_;const auto Stop=bookStop_;
+    auto* Watcher=new QFutureWatcher<storage::Result<std::shared_ptr<ImageBook>>>(this);
+    connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Generation]{
+        auto Result=Watcher->result();DeleteCompletedImageWork(Watcher);
+        if(Generation!=bookGeneration_)return;
+        if(!Result.HasValue()){book_->subpagesPending_=false;book_->listingWarning_=QString::fromStdString(Result.Failure().code_);changed();return;}
+        const auto Name=CurrentName();const auto Image=CurrentImage();const auto Relative=State()["relative"].toDouble();
+        int Index=0;for(int I=0;I<Result.Value()->pages_.size();++I)if(Result.Value()->pages_[I].name_==Name){Index=I;break;}
+        // Replace the immutable catalog; outstanding readers retain the old one.
+        Cancel();book_=std::move(Result.Value());index_=Index;currentImage_=Image;
+        sources_.clear();tiles_.clear();pendingSourcePages_.clear();pageErrors_.clear();prefetched_.clear();
+        sizes_.fill(QSize(1000,1400),book_->pages_.size());
+        if(!Image.isNull()){sizes_[Index]=Image.size();sources_.insert(Index,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));}
+        rebuild(false);GoTo(Index,Relative);changed();
+    });
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Path,Stop]{
+        storage::OperationContext C;C.stopToken_=Stop->get_token();return OpenImageBook(Path,C,true);
+    }));
 }
 void ImageReadingView::invalidateRenders()
 {
@@ -589,6 +611,7 @@ void ImageReadingView::prefetch()
 void ImageReadingView::paintEvent(QPaintEvent *)
 {
     QTimer::singleShot(0,this,&ImageReadingView::prefetch);
+    setToolTip(book_ && !book_->listingWarning_.isEmpty()?tr("일부 목록만 확인했습니다: %1").arg(book_->listingWarning_):QString{});
     QPainter Painter(viewport());
     Painter.fillRect(viewport()->rect(), palette().brush(QPalette::Base));
     if (!book_)
@@ -950,6 +973,7 @@ QJsonObject ImageReadingView::State() const
     }
     return {{"page", index_},
             {"pageCount", book_ ? book_->pages_.size() : 0},
+            {"listingWarning",book_?book_->listingWarning_:QString{}},{"discoveringPages",book_&&book_->subpagesPending_},
             {"pageName", CurrentName()},
             {"pageError",pageErrors_.value(index_)},{"failedPages",pageErrors_.size()},
             {"book", book_ ? book_->path_ : QString{}},

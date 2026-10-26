@@ -17,7 +17,8 @@ struct ImagePage
 };
 struct ImageBook
 {
-    QString path_, revision_, title_;
+    QString path_, revision_, title_, listingWarning_;
+    bool subpagesPending_ = false;
     QList<ImagePage> pages_;
     std::shared_ptr<plugins::IArchiveBackend> archive_;
     // One consumer at a time retains decoder state across sequential pages.
@@ -35,7 +36,7 @@ struct ImagePageContent
 QStringList ImageExtensions();
 bool IsImageFile(const QString &Path);
 bool IsImageBook(const QString &Path);
-storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, storage::OperationContext Context = {});
+storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, storage::OperationContext Context = {}, bool ExpandTiff = true);
 storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook> &Book, int Index,
                                                 storage::OperationContext Context = {});
 QStringList NextImageBooks(const QString &Path, int Direction = 1, std::stop_token Stop = {});

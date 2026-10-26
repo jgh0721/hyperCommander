@@ -55,7 +55,7 @@ namespace hc::document
         ImageTraceSpan Trace("document.read",Path);
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
         if(IsImageBook(Path)||QFileInfo(Path).isDir()) {
-            auto Book=OpenImageBook(Path,Context);if(!Book.HasValue())return Book.Failure();
+            auto Book=OpenImageBook(Path,Context,false);if(!Book.HasValue())return Book.Failure();
             auto Page=ReadImagePage(Book.Value(),0,Context);if(auto Stop=Context.Check({"image-book"}))return *Stop;
             TextInput Input;Input.path_=QFileInfo(Path).absoluteFilePath();Input.viewId_="image";Input.book_=Book.Value();if(Page.HasValue()){Input.image_=Page.Value().image_;Input.bytes_=Page.Value().bytes_;}
             // Books are read-only page sources. A content hash of the complete

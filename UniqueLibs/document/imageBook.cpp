@@ -108,7 +108,7 @@ bool IsImageBook(const QString &Path)
 {
     return QStringList{"zip", "cbz", "rar", "cbr", "7z", "cb7"}.contains(QFileInfo(Path).suffix().toLower());
 }
-storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, storage::OperationContext Context)
+storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, storage::OperationContext Context, bool ExpandTiff)
 {
     if (!Context.passwordPrompt_)
         Context.passwordPrompt_ = plugins::PromptArchivePassword;
@@ -157,8 +157,11 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
         for (;;)
         {
             auto Batch = Listing.Value()->Next(128, Context);
-            if (!Batch.HasValue())
-                return Batch.Failure();
+            if (!Batch.HasValue()) {
+                if(auto Stop=Context.Check({"image-book"}))return *Stop;
+                if(Book->pages_.isEmpty())return Batch.Failure();
+                Book->listingWarning_=QString::fromStdString(Batch.Failure().code_);break;
+            }
             for (const auto &Entry : Batch.Value().entries_)
             {
                 const auto Name = QString::fromUtf8(Entry.name_).replace('\\', '/');
@@ -208,6 +211,7 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
             continue;
         if (auto Stop = Context.Check({"image-book"}))
             return *Stop;
+        if(!ExpandTiff){Book->subpagesPending_=true;continue;}
         int Count = 1;
         if (Book->archive_)
         {

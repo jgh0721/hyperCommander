@@ -395,6 +395,11 @@ class ImageReadingTests : public QObject
         QVERIFY(File.open(QIODevice::WriteOnly));
         File.write(TwoPageTiff());
         File.close();
+        auto Deferred=OpenImageBook(Root.path(),{},false);QVERIFY(Deferred.HasValue());
+        QCOMPARE(Deferred.Value()->pages_.size(),1);QVERIFY(Deferred.Value()->subpagesPending_);
+        ImageReadingView View;View.resize(350,400);View.Load(Deferred.Value());View.show();
+        QTRY_VERIFY(!View.State()["discoveringPages"].toBool());
+        QCOMPARE(View.State()["pageCount"].toInt(),2);
         auto Book = OpenImageBook(Root.path());
         QVERIFY(Book.HasValue());
         QCOMPARE(Book.Value()->pages_.size(), 2);
