@@ -181,7 +181,15 @@ private:
     void                            refreshProvider();
     void requestPage(std::uint64_t Offset, bool Rebuild);
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
-    void                            publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {});
+    struct PreparedFileRow {
+        QString name_, extension_;
+        QDateTime created_, modified_;
+        QByteArray pidl_;
+        quint32 flags_ = 0, reparseTag_ = 0;
+    };
+    static PreparedFileRow prepareFileRow(const hc::storage::EntrySnapshot& Entry);
+    static std::vector<PreparedFileRow> prepareFileRows(const std::vector<hc::storage::EntrySnapshot>& Entries, std::stop_token Token);
+    void publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles = {}, std::vector<PreparedFileRow> Prepared = {});
     void                            refreshDisplayIcons(int First = 0);
     void applyRequestedIcons();
     void invalidateDisplayIcons(bool All, int SettleMs = 0);

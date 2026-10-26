@@ -641,8 +641,16 @@ QModelIndexList CGridView::VisibleSourceRows(int Overscan) const
     QModelIndexList Entries;if(!isVisible()||!view_||!model_)return Entries;
     if(IsThumbnailMode()){
         auto* List=thumbnails_->listView();const auto Area=List->viewport()->rect();
-        for(int Row=0;Row<thumbnailModel_->rowCount();++Row){
-            if(!List->visualRect(thumbnailModel_->index(Row,0)).intersects(Area))continue;
+        int Low = 0, High = thumbnailModel_->rowCount();
+        while (Low < High) {
+            const int Middle = (Low + High) / 2;
+            if (List->visualRect(thumbnailModel_->index(Middle, 0)).bottom() < Area.top()) Low = Middle + 1;
+            else High = Middle;
+        }
+        for(int Row=Low;Row<thumbnailModel_->rowCount();++Row){
+            const auto Rect = List->visualRect(thumbnailModel_->index(Row, 0));
+            if (Rect.top() > Area.bottom()) break;
+            if(!Rect.intersects(Area))continue;
             auto Index=thumbnailModel_->SourceIndex(Row);if(proxy_&&Index.model()==proxy_)Index=proxy_->mapToSource(Index);
             if(Index.isValid())Entries.append(Index);
         }

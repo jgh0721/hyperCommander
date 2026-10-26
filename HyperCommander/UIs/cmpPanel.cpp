@@ -213,7 +213,7 @@ void CmpPanel::materializeTab(int Index)
         const auto Selection = static_cast<CGridView*>(State->View)->CaptureSelection();
         const QSet<QString> Keys(Selection.begin(), Selection.end());
         State->SelectedSize = 0; State->SelectedFileCount = State->SelectedDirectoryCount = 0;
-        for (int Row = 0; Row < State->Model->rowCount(); ++Row) {
+        for (int Row = 0; !Keys.isEmpty() && Row < State->Model->rowCount(); ++Row) {
             const auto Item = State->Model->GetFileInfo(State->Model->index(Row, 0));
             if (!Item || !Item->storageEntry_ || !Keys.contains(hc::workspace::SelectionKey(*Item->storageEntry_))) continue;
             if (Item->storageEntry_->directory_) { ++State->SelectedDirectoryCount; State->SelectedSize += Item->directorySize_.value_or(0); }
@@ -318,7 +318,7 @@ void CmpPanel::materializeTab(int Index)
             const auto Selection = static_cast<CGridView*>(Tab->View)->CaptureSelection();
             const QSet<QString> Keys(Selection.begin(), Selection.end());
             Tab->SelectedSize = 0; Tab->SelectedFileCount = Tab->SelectedDirectoryCount = 0;
-            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            for (int Row = 0; !Keys.isEmpty() && Row < Model->rowCount(); ++Row) {
                 const auto Item = Model->GetFileInfo(Model->index(Row, 0));
                 if (!Item || !Item->storageEntry_ || !Keys.contains(hc::workspace::SelectionKey(*Item->storageEntry_))) continue;
                 if (Item->storageEntry_->directory_) { ++Tab->SelectedDirectoryCount; Tab->SelectedSize += Item->directorySize_.value_or(0); }

@@ -762,7 +762,7 @@ void CFSModel::refreshProvider()
     Context.stopToken_ = navigationStop_.get_token();
     Context.freshEnumerationMetadata_ = true;
     Context.allowUnavailableChildMetadata_ = true;
-    struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; };
+    struct Listing { std::shared_ptr<PagedEntryIndex> source_, view_; EntryPage page_; std::shared_ptr<hc::permissions::DirectoryElevationSession> session_; std::vector<hc::settings::FileRuleResult> styles_; std::vector<PreparedFileRow> prepared_; };
     using ReadResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
     auto Compare = pageComparison(TargetFullPath); const bool Fallback = !Compare.HasValue();
@@ -784,7 +784,7 @@ void CFSModel::refreshProvider()
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
     connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark] {
-        auto Result = Watcher->result();
+        auto Result = Watcher->future().takeResult();
         Watcher->deleteLater();
         if (Generation != generation_) return;
         const auto EndAutomatic = qScopeGuard([this] { automaticRefresh_ = false; });
@@ -815,7 +815,7 @@ void CFSModel::refreshProvider()
         pageSorts_ = Sorts; completedSorts_ = Sorts;
         appendOrder_ = Append;
         if (UsesIndexedOrder() && Fallback) { columnSorts_.clear(); completedSorts_.clear(); pageSorts_.clear(); emit ColumnSortCancelled(); }
-        publishProvider(Result.Value().page_.entries_, fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{});
+        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_));
         setProperty("hc.snapshotLocation", hc::workspace::LocationKey(Location));
         SetWatchEnabled(watchEnabled_);
         emit PageChanged();
@@ -864,9 +864,10 @@ void CFSModel::refreshProvider()
             }
             auto Page = View.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context); if (!Page.HasValue()) return Page.Failure();
             if (const auto Failure = Context.Check(Provider->Id())) return *Failure;
-            hc::startup::Span Trace("listing.colors");
+            hc::startup::Span Trace("listing.prepare");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
-            return Listing{Source.Value(), View.Value(), std::move(Page.Value()), std::move(ActiveSession), std::move(Styles)};
+            auto Prepared = prepareFileRows(Page.Value().entries_, Context.stopToken_);
+            return Listing{Source.Value(), View.Value(), std::move(Page.Value()), std::move(ActiveSession), std::move(Styles), std::move(Prepared)};
         }
         catch (const std::exception&) { return Error{ErrorCategory::Internal, "provider-exception"}; }
     }));
@@ -970,13 +971,13 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_; const auto Metadata = index_;
     const auto Sorts = Rebuild ? columnSorts_ : pageSorts_;
     OperationContext Context; Context.stopToken_ = pageStop_.get_token();
-    struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; std::vector<hc::settings::FileRuleResult> styles_; };
+    struct Listing { std::shared_ptr<PagedEntryIndex> view_; EntryPage page_; std::vector<hc::settings::FileRuleResult> styles_; std::vector<PreparedFileRow> prepared_; };
     using PageResult = Result<Listing>;
     const auto Rules = fileColorRules_; const auto RuleGeneration = fileRuleLoadGeneration_; const bool Dark = colorScheme_.IsDarkMode;
     auto* Watcher = new QFutureWatcher<PageResult>(this);
     emit ColumnQueryStatus(tr("목록을 준비하고 있습니다…"));
     connect(Watcher, &QFutureWatcher<PageResult>::finished, this, [this, Watcher, Generation, Navigation, Offset, Sorts, RuleGeneration, Dark] {
-        auto Result = Watcher->result(); Watcher->deleteLater();
+        auto Result = Watcher->future().takeResult(); Watcher->deleteLater();
         if (Generation != pageGeneration_ || Navigation != generation_) return;
         pageBusy_ = false;
         if (!Result.HasValue()) {
@@ -984,7 +985,7 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
             emit ColumnQueryStatus(QString::fromStdString(Result.Failure().code_)); return;
         }
         pageView_ = Result.Value().view_; pageSorts_ = Sorts; completedSorts_ = Sorts;
-        publishProvider(Result.Value().page_.entries_, fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{});
+        publishProvider(std::move(Result.Value().page_.entries_), fileRuleSeedsUsable(RuleGeneration, Dark) ? std::move(Result.Value().styles_) : std::vector<hc::settings::FileRuleResult>{}, std::move(Result.Value().prepared_));
         emit PageChanged(); emit sigRefreshCompleted(); emit ColumnQueryStatus({});
     });
     Watcher->setFuture(QtConcurrent::run([Source, Current, Offset, Rebuild, Compare, Query, Match, ShowHidden, Metadata, Context, Rules, Dark]() -> PageResult {
@@ -994,9 +995,10 @@ void CFSModel::requestPage(std::uint64_t Offset, bool Rebuild)
             }, Context, {}) : Result<std::shared_ptr<PagedEntryIndex>>(Current);
             if (!View.HasValue()) return View.Failure();
             auto Page = View.Value()->Read(0, (std::numeric_limits<std::size_t>::max)(), Context); if (!Page.HasValue()) return Page.Failure();
-            hc::startup::Span Trace("listing.colors");
+            hc::startup::Span Trace("listing.prepare");
             auto Styles = seedFileRuleStyles(Rules, Page.Value().entries_, Dark, Context.stopToken_);
-            return Listing{View.Value(), std::move(Page.Value()), std::move(Styles)};
+            auto Prepared = prepareFileRows(Page.Value().entries_, Context.stopToken_);
+            return Listing{View.Value(), std::move(Page.Value()), std::move(Styles), std::move(Prepared)};
         } catch (const std::exception&) { return Error{ErrorCategory::Internal, "page-worker-exception"}; }
     }));
 }
@@ -1202,7 +1204,32 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
     emit ColumnValuesChanged(); emit SearchResultsChanged();
 }
 
-void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles)
+CFSModel::PreparedFileRow CFSModel::prepareFileRow(const hc::storage::EntrySnapshot& Entry)
+{
+    PreparedFileRow Row; Row.name_ = QString::fromStdString(Entry.name_);
+    Row.extension_ = nsCmn::nsCmnPath::GetFileExtension(Row.name_);
+    if (Entry.createdUtcMs_) Row.created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
+    if (Entry.modifiedUtcMs_) Row.modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
+    if (hc::settings::FileColorRules::HasDecomposedName(Row.name_)) Row.flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
+    if (Entry.hints_.contains("reparseTag")) Row.reparseTag_ = QString::fromStdString(Entry.hints_.at("reparseTag")).toUInt();
+    if (Entry.hints_.contains("shellPidl")) {
+        Row.pidl_ = QByteArray::fromBase64(QByteArray::fromStdString(Entry.hints_.at("shellPidl")));
+        Row.flags_ |= nsHC::CFileSourceT::FS_FLAG_PIDL;
+    }
+    return Row;
+}
+std::vector<CFSModel::PreparedFileRow> CFSModel::prepareFileRows(const std::vector<hc::storage::EntrySnapshot>& Entries, std::stop_token Token)
+{
+    hc::startup::Span Trace("listing.rowValues");
+    std::vector<PreparedFileRow> Rows; Rows.reserve(Entries.size());
+    for (const auto& Entry : Entries) {
+        if (Token.stop_requested()) return {};
+        Rows.push_back(prepareFileRow(Entry));
+    }
+    return Rows;
+}
+
+void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, std::vector<hc::settings::FileRuleResult> Styles, std::vector<PreparedFileRow> Prepared)
 {
     hc::startup::Span Trace("listing.publish");
     const auto IconIdentity = [](const hc::storage::EntrySnapshot& Entry) {
@@ -1225,7 +1252,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     // The whole listing fits beside the previous folder, up to the budget the
     // background pass may style.
     fileColorCache_.setMaxCost(int(qBound<qsizetype>(8192, qsizetype(Entries.size()) + 8192, qsizetype(FileRuleCompleteRows) + 8192)));
-    QVector<nsHC::TySpFileSource> Items;
+    QVector<nsHC::TySpFileSource> Items; Items.reserve(Entries.size() + 1);
     if (GetRoot()->ReadLocation(GetCurrentPathWithRoot()).kind_ != hc::storage::LocatorKind::Shell || GetRootCount() > 1)
     {
         auto Parent = std::make_shared<nsHC::CFileSourceT>();
@@ -1242,20 +1269,14 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     {
         const auto Seed = Seeded++;
         nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
-        Item->Name_ = QString::fromStdString(Entry.name_);
-        Item->Ext_ = nsCmn::nsCmnPath::GetFileExtension(Item->Name_);
-        Item->Attributes_ = Entry.attributes_;
-        Item->Size_ = Entry.size_;
-        if (Entry.createdUtcMs_) Item->Created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
-        if (Entry.modifiedUtcMs_) Item->Modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
-        if (hc::settings::FileColorRules::HasDecomposedName(Item->Name_)) Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_UNICODE_NFD;
-        if (Entry.hints_.contains("reparseTag")) Item->Reserved0_ = QString::fromStdString(Entry.hints_.at("reparseTag")).toUInt();
-        if (Entry.hints_.contains("shellPidl"))
-        {
-            const auto Bytes = QByteArray::fromBase64(QByteArray::fromStdString(Entry.hints_.at("shellPidl")));
-            Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Bytes.size()));
-            if (Item->PIDL) memcpy(Item->PIDL, Bytes.data(), Bytes.size());
-            Item->Flags_ |= nsHC::CFileSourceT::FS_FLAG_PIDL;
+        auto Row = Seed < Prepared.size() ? std::move(Prepared[Seed]) : prepareFileRow(Entry);
+        Item->Name_ = std::move(Row.name_); Item->Ext_ = std::move(Row.extension_);
+        Item->Attributes_ = Entry.attributes_; Item->Size_ = Entry.size_;
+        Item->Created_ = std::move(Row.created_); Item->Modified_ = std::move(Row.modified_);
+        Item->Flags_ = Row.flags_; Item->Reserved0_ = Row.reparseTag_;
+        if (Row.flags_ & nsHC::CFileSourceT::FS_FLAG_PIDL) {
+            Item->PIDL = static_cast<LPITEMIDLIST>(CoTaskMemAlloc(Row.pidl_.size()));
+            if (Item->PIDL) memcpy(Item->PIDL, Row.pidl_.data(), Row.pidl_.size());
         }
         // Generic icons avoid filesystem/network calls on the GUI thread.
         Item->Icon = PreviousIcons.value(IconIdentity(Entry), Entry.directory_ ? FolderIcon : FileIcon);
@@ -1276,8 +1297,8 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         }
         Items.push_back(std::move(Item));
     }
-    createBuiltFsValues(Items);
-    QVector<TyPrFGWithBG> Colors;
+    { hc::startup::Span Values("listing.values"); createBuiltFsValues(Items); }
+    QVector<TyPrFGWithBG> Colors; Colors.reserve(Items.size());
     int Files = 0, Directories = 0;
     std::uint64_t Size = 0;
     const auto ColorMgr = TyStColorSchemeMgr::GetInstance();
@@ -1309,7 +1330,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     RequestDirectorySizes({}, true);
     fileRuleCompleteLow_ = fileRuleCompleteNext_ = ParentRows + int(std::min(Styles.size(), std::size_t(Entries.size())));
     fileRuleCompleteBudget_ = FileRuleCompleteRows;
-    completeFileRuleStyles();
+    fileRuleCompleteTimer_.start(0);
 }
 
 void CFSModel::ApplyDisplaySettings()
@@ -1481,6 +1502,7 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
 
 void CFSModel::refreshNameSortRanks(int First)
 {
+    hc::startup::Span Trace("listing.nameRanks");
     // Supply numeric ranks to the grid so locale and natural-number options
     // remain independent, without relying on its locale-only numeric comparator.
     const bool Locale = displaySettings_["sortLocaleAware"].toBool(true);
@@ -1743,7 +1765,10 @@ void CFSModel::completeFileRuleStyles()
     if (fileRuleCompleteBudget_ <= 0 || fileRuleCompleteNext_ < 0 || fileRuleCompleteNext_ >= Count) return;
     // Inputs are gathered here because row metadata belongs to the GUI thread;
     // the worker sees immutable copies only.
-    const int First = fileRuleCompleteNext_, Last = std::min<int>(Count, First + int(FileRuleSeedRows));
+    // Keep input collection and cache publication bounded independently of
+    // the worker seed budget. Yield to paint/input between completion chunks.
+    const int First = fileRuleCompleteNext_, Last = std::min<int>(Count, First + 256);
+    hc::startup::Span Trace("colors.collect");
     QList<hc::settings::FileRuleInput> Inputs; Inputs.reserve(Last - First);
     for (int Row = First; Row < Last; ++Row) Inputs.append(fileRuleInput(vecNode_[Row]));
     fileRuleCompleteNext_ = Last; fileRuleCompleteBudget_ -= Last - First; fileRuleCompleting_ = true;
@@ -1760,7 +1785,7 @@ void CFSModel::completeFileRuleStyles()
                 fileColorCache_.insert(hc::settings::FileRuleKey::From(Inputs[I]), new CachedFileRule{std::move(Results[I])});
             }
         }
-        completeFileRuleStyles();
+        if (fileRuleCompleteBudget_ > 0 && fileRuleCompleteNext_ < rowCount()) fileRuleCompleteTimer_.start(0);
     });
     Watcher->setFuture(QtConcurrent::run([Rules, Inputs, Token, Context = fileRuleCompleteContext_] {
         Chunk Results; Results.reserve(Inputs.size());
@@ -1780,7 +1805,12 @@ void CFSModel::pumpFileRules()
     // The first batch after a listing covers every row the view asked for, so
     // unseeded rows change color in one repaint instead of a top-down wave.
     const int Limit = std::exchange(fileRuleFirstBatch_, false) ? 256 : 64;
-    while (!fileRuleQueue_.isEmpty() && Jobs.size() < Limit) Jobs.append(fileRuleQueue_.takeFirst());
+    const bool Visible = fileRuleVisibleRows_.contains(fileRuleQueue_.front().row_);
+    while (!fileRuleQueue_.isEmpty() && Jobs.size() < Limit) {
+        if (fileRuleVisibleRows_.contains(fileRuleQueue_.front().row_) != Visible) break;
+        Jobs.append(fileRuleQueue_.takeFirst());
+    }
+    const int Priority = Visible ? (fileRuleActiveViewport_ ? 3 : 2) : (fileRuleActiveViewport_ ? 1 : 0);
     fileRuleRunning_ = true;
     const auto Epoch = fileRuleEpoch_; const auto Token = fileRuleStop_.get_token();
     using Batch = QList<QPair<FileRuleJob, hc::settings::FileRuleResult>>;
@@ -1805,10 +1835,17 @@ void CFSModel::pumpFileRules()
                     {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole, FileEffectsRole});
             }
         }
+        // A full in-flight batch may have deferred newly visible rows.
+        // Admit those first when slots become available.
+        for (const int Row : fileRuleVisibleRows_) {
+            if (fileRulePending_.size() >= 256) break;
+            if (fileRuleDeferredRows_.remove(Row) && Row >= 0 && Row < rowCount()) fileRuleStyle(Row);
+        }
         while (!fileRuleDeferredRows_.isEmpty() && fileRulePending_.size() < 256) {
             const int Row = *fileRuleDeferredRows_.begin(); fileRuleDeferredRows_.remove(Row);
             if (Row >= 0 && Row < rowCount()) fileRuleStyle(Row);
         }
+        std::stable_partition(fileRuleQueue_.begin(), fileRuleQueue_.end(), [this](const auto& Job) { return fileRuleVisibleRows_.contains(Job.row_); });
         if (!fileRuleQueue_.isEmpty()) fileRulePump_.start(16);
     });
     const auto Rules = fileColorRules_;
@@ -1820,7 +1857,7 @@ void CFSModel::pumpFileRules()
             Results.append({Job, Rules.EvaluateStyle(Input, Context.get())});
         }
         return Results;
-    }).onThreadPool(*FileRulePool()).withPriority(fileRuleActiveViewport_ ? 1 : 0).spawn());
+    }).onThreadPool(*FileRulePool()).withPriority(Priority).spawn());
 }
 
 void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
@@ -1857,8 +1894,8 @@ void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
 {
     for (const auto& Item : Items)
     {
-        Item->VecContent.clear();
-        Item->columnValues_.clear();
+        Item->VecContent.clear(); Item->VecContent.reserve(columnView_.VecColumns.size());
+        Item->columnValues_.clear(); Item->columnValues_.reserve(columnView_.VecColumns.size());
         for (const auto& Column : columnView_.VecColumns)
         {
             const auto Value = evaluateColumn(Item, Column, false);
