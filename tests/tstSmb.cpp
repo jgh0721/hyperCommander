@@ -9121,8 +9121,12 @@ private slots:
         // once and the row is restyled in a later turn.
         Model->SetColorScheme(Scheme);
         const auto First = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == "note_000.txt") return Model->index(Row, 0); return QModelIndex{}; }();
-        QVERIFY(First.isValid()); QVERIFY(First.data(Qt::ForegroundRole).value<QColor>() != Expected);
+        QVERIFY(First.isValid());
+        QVERIFY(!Model->AreFileColorsReady({First}));
+        QVERIFY(!Model->AreFileColorsReady({First})); // Observation must not enqueue work.
+        QVERIFY(First.data(Qt::ForegroundRole).value<QColor>() != Expected);
         QTRY_COMPARE(First.data(Qt::ForegroundRole).value<QColor>(), Expected);
+        QVERIFY(Model->AreFileColorsReady({First}));
         QTRY_VERIFY(Painted());
     }
 
