@@ -171,7 +171,7 @@ Write-UpdateJson (Join-Path $ServiceRoot 'product-inventory.json') $Inventory
 $ServiceHashes=Original-Hashes $ServiceRoot
 $PreviousPlatform=$env:QT_QPA_PLATFORM;$env:QT_QPA_PLATFORM='offscreen'
 try{
-    foreach($Mode in @('success','restart','restore','redirect','http-error','cancel','blocked')){
+    foreach($Mode in @('success','restart','restore','redirect','http-error','cancel','blocked','launch-failure')){
         $ServiceConfig=Join-Path $Run ('service-config-'+$Mode);[IO.Directory]::CreateDirectory($ServiceConfig)|Out-Null
         $Command=(@($ServiceRoot,$CandidatePackage,$Mode,'--config-dir',$ServiceConfig)|ForEach-Object{'"'+$_+'"'}) -join ' '
         $Process=Start-Child $Service $Command;$Out=$Process.StandardOutput.ReadToEndAsync();$Err=$Process.StandardError.ReadToEndAsync()

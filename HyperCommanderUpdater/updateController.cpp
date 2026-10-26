@@ -9,6 +9,8 @@
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QMenu>
@@ -21,6 +23,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUuid>
@@ -231,12 +234,63 @@ bool UpdateController::LaunchPending() {
     try {
         Require(ready_ && restartRequested_ && canRestart_()
             && !OtherProductProcesses(Native(root_), 0, ProductProcessCheck::BeforeRestart), "update-work-still-running");
-        const auto Helper = Native(tx_) / L"HyperCommanderUpdater.exe"; VerifyProductSignature(Helper);
+        const auto Source = Native(root_) / L"HyperCommanderUpdater.exe";
+        const auto Helper = Native(tx_) / L"HyperCommanderUpdater.exe";
+        // A prepared update can outlive a local product upgrade. Use the
+        // installed helper so the shutdown handoff always uses this protocol.
+        VerifyProductSignature(Source); VerifyProductSignature(Helper);
+        if (HashFile(Source) != HashFile(Helper)) {
+            Require(CopyFileW(Source.c_str(), Helper.c_str(), FALSE), "update-helper-copy");
+            VerifyProductSignature(Helper); Require(HashFile(Source) == HashFile(Helper), "update-helper-copy-hash");
+        }
         const auto Config = hc::settings::Paths(); Require(Config.error_.isEmpty(), "update-config-directory");
         DurableWrite(Native(tx_) / L"restart.json", "{\"configDirectory\":" + QuoteJson(Config.directory_.toUtf8().toStdString()) + "}");
         FILETIME Created{}, Exit{}, Kernel{}, User{}; Require(GetProcessTimes(GetCurrentProcess(), &Created, &Exit, &Kernel, &User), "update-process-created");
         const auto Stamp = (std::uint64_t(Created.dwHighDateTime) << 32) | Created.dwLowDateTime;
-        Require(QProcess::startDetached(QString::fromStdWString(Helper.wstring()), {"--apply", root_, tx_, QString::number(GetCurrentProcessId()), QString::number(Stamp)}, tx_), "update-helper-launch"); return true;
+        const auto Handoff = QStringLiteral("Local\\HyperCommander.Update.") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const auto ReadyName = (Handoff + ".ready").toStdWString(), CancelName = (Handoff + ".cancel").toStdWString();
+        const auto Ready = CreateEventW(nullptr, TRUE, FALSE, ReadyName.c_str());
+        const auto Cancel = CreateEventW(nullptr, TRUE, FALSE, CancelName.c_str());
+        bool Accepted = false; HANDLE Process = nullptr;
+        const auto Cleanup = qScopeGuard([&] {
+            if (!Accepted && Cancel) SetEvent(Cancel);
+            if (Process) CloseHandle(Process);
+            if (Ready) CloseHandle(Ready);
+            if (Cancel) CloseHandle(Cancel);
+        });
+        Require(Ready && Cancel, "update-handoff-create");
+        qint64 Pid = 0;
+        Require(QProcess::startDetached(QString::fromStdWString(Helper.wstring()), {"--apply", root_, tx_,
+            QString::number(GetCurrentProcessId()), QString::number(Stamp), Handoff}, tx_, &Pid), "update-helper-launch");
+        Process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(Pid));
+        Require(Process, "update-helper-exited-before-handoff");
+        const HANDLE Waits[]{Process, Ready};
+        QProgressDialog Waiting(tr("업데이트 도우미가 설치 준비를 확인하고 있습니다…"), tr("취소"), 0, 0, window_);
+        Waiting.setWindowTitle(tr("HyperCommander 업데이트")); Waiting.setWindowModality(Qt::WindowModal);
+        Waiting.setMinimumDuration(0); Waiting.setAutoClose(false); Waiting.show();
+        QEventLoop Loop; QTimer Poll; QElapsedTimer Elapsed; Elapsed.start(); DWORD Result = WAIT_TIMEOUT;
+        connect(&Poll, &QTimer::timeout, &Loop, [&] {
+            Result = WaitForMultipleObjects(DWORD(std::size(Waits)), Waits, FALSE, 0);
+            if (Result != WAIT_TIMEOUT || Waiting.wasCanceled() || Elapsed.elapsed() >= 45000) Loop.quit();
+        });
+        Poll.start(25); Loop.exec(); Poll.stop(); Waiting.hide();
+        if (Waiting.wasCanceled()) { restartRequested_ = false; return false; }
+        if (Result != WAIT_OBJECT_0 + 1) {
+            std::string Details = Result == WAIT_TIMEOUT ? "update-helper-handoff-timeout" : "update-helper-exited-before-handoff";
+            DWORD ExitCode = 0;
+            if (GetExitCodeProcess(Process, &ExitCode) && ExitCode != STILL_ACTIVE)
+                Details += ": exit=0x" + QString::number(ExitCode, 16).toStdString();
+            try {
+                const auto Failure = ParseJson(ReadBounded(Native(root_) / L".update/last-error.json", 32768));
+                if (Failure.At("handoff", Json::Kind::String).text_ == Handoff.toUtf8().toStdString())
+                    Details += ": " + Failure.At("error", Json::Kind::String).text_;
+            } catch (...) {}
+            throw std::runtime_error(Details);
+        }
+        // The responsive wait can dispatch queued work. Recheck shutdown
+        // eligibility, allowing only this acknowledged updater process.
+        Require(canRestart_() && !OtherProductProcesses(Native(root_), unsigned(Pid), ProductProcessCheck::BeforeRestart), "update-work-still-running");
+        Accepted = true; return true;
     } catch (const std::exception& Error) { restartRequested_ = false; fail(Error.what()); return false; }
 }
 }

@@ -3,8 +3,10 @@
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
@@ -20,6 +22,15 @@
 #include <iostream>
 
 namespace {
+class RestartWindow final : public QWidget {
+public:
+    std::function<bool()> launch_;
+protected:
+    void closeEvent(QCloseEvent* Event) override {
+        if (launch_ && !launch_()) { Event->ignore(); return; }
+        QWidget::closeEvent(Event);
+    }
+};
 class FixtureReply final : public QNetworkReply {
 public:
     FixtureReply(const QNetworkRequest& Request, const QString& FileName, bool Redirect, bool Failure, QObject* Parent) : QNetworkReply(Parent), file_(FileName) {
@@ -90,7 +101,12 @@ public:
         return 0;
     }
     static int Run(const QString& Root, const QString& Package, const QString& Mode) {
-        QWidget Window; QMenu Menu; UpdateController Controller(&Window, &Menu, [&] { return Mode == "restart"; });
+        RestartWindow Window; QMenu Menu;
+        UpdateController Controller(&Window, &Menu, [&] { return Mode == "restart" || Mode == "launch-failure"; });
+        if (Mode == "launch-failure") {
+            Window.launch_ = [&] { return Controller.LaunchPending(); };
+            Window.show();
+        }
         Controller.root_ = Root; Controller.currentVersion_ = ParseInventory(ReadBounded(Path(Root.toStdWString()) / L"product-inventory.json", 1048576)).version_;
         delete Controller.network_; auto* Network = new FixtureNetwork(Package, Mode, &Controller); Controller.network_ = Network;
         // Reproduce a normal background plugin host using an isolated copy of
@@ -124,7 +140,16 @@ public:
                 else ++Offers;
                 if (Message->text().contains("파일 작업·명령 실행")) Blocked = true;
                 for (auto* Button : Message->buttons()) {
-                    const bool Accept = Offers == 1 && !Controller.ready_ || (Mode == "blocked" || Mode == "restart") && Offers == 2 || Blocked;
+                    if (Mode == "launch-failure" && Controller.ready_ && Offers == 2 && !Errors) {
+                        const Path Tx(Controller.tx_.toStdWString());
+                        // Restore a previously packaged helper, then invalidate
+                        // staging after preparation. Launch must refresh the
+                        // helper and report preflight failure without closing.
+                        if (!CopyFileW((Tx / L"staging/HyperCommanderUpdater.exe").c_str(), (Tx / L"HyperCommanderUpdater.exe").c_str(), FALSE))
+                            throw std::runtime_error("fixture-stale-helper-copy");
+                        DurableWrite(Tx / L"staging/product-inventory.json", "invalid-stage");
+                    }
+                    const bool Accept = Offers == 1 && !Controller.ready_ || (Mode == "blocked" || Mode == "restart" || Mode == "launch-failure") && Offers == 2 || Blocked;
                     if ((Accept && Message->buttonRole(Button) == QMessageBox::AcceptRole)
                         || ((!Accept || Errors) && Message->buttonRole(Button) == QMessageBox::RejectRole)
                         || Message->buttonRole(Button) == QMessageBox::AcceptRole && Errors) { Button->click(); break; }
@@ -133,11 +158,16 @@ public:
             if (!Controller.busy_ && !Controller.reply_ && (Controller.ready_ || Errors || Mode == "cancel" && Controller.stop_.stop_requested())) Finished = true;
         }); Timer.start(5); if (Mode == "restore") Controller.restore(); else Controller.Check();
         const auto Start = GetTickCount64(); while (!Finished && GetTickCount64() - Start < 120000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart";
+        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart" || Mode == "launch-failure";
         if (!Finished || (Prepared ? !Controller.ready_ || (Mode != "restore" && (Offers < 2 || Network->requests_ != 3 || Heartbeats < 5)) : Controller.ready_)) throw std::runtime_error("service-state-or-liveness");
         if (Mode == "restore" && (Network->requests_ != 0 || Offers != 1)
             || Mode == "blocked" && (!Blocked || Controller.restartRequested_)) throw std::runtime_error("service-restore-or-blocked-restart");
         if (Mode == "restart" && !Controller.restartRequested_) throw std::runtime_error("own-background-host-blocked-restart");
+        if (Mode == "launch-failure" && (Errors != 1 || Controller.restartRequested_ || !Window.isVisible()
+            || !QFileInfo::exists(QDir(Root).filePath(".update/ready.json"))
+            || QFileInfo::exists(QDir(Root).filePath(".update/active.json"))
+            || HashFile(Path(Root.toStdWString()) / L"HyperCommanderUpdater.exe") != HashFile(Path(Controller.tx_.toStdWString()) / L"HyperCommanderUpdater.exe")))
+            throw std::runtime_error("failed-helper-closed-parent-or-stale-helper");
         if (Mode == "redirect" && Network->requests_ != 1) throw std::runtime_error("redirect-was-followed");
         std::cout << "Service " << Mode.toStdString() << ": PASS, requests=" << Network->requests_ << ", heartbeats=" << Heartbeats << '\n'; return 0;
     }

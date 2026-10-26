@@ -104,22 +104,44 @@ void Rollback(const Path& Root, const Path& Tx, Journal& Journal) {
     Journal.state_ = "rolledBack"; Save(Tx, Journal);
     Require(DeleteFileW((Root / L".update/active.json").c_str()), "update-active-remove");
 }
-void WaitParent(const Path& Root, unsigned Pid, std::uint64_t Created) {
+void WaitParent(const Path& Root, unsigned Pid, std::uint64_t Created, std::wstring_view Handoff, bool* HandoffReady) {
     Require(Pid != 0 && Created != 0 && Pid != GetCurrentProcessId(), "update-parent-invalid");
     Handle Parent; Parent.value_ = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
-    if (!Parent.value_) { Require(GetLastError() == ERROR_INVALID_PARAMETER, "update-parent-open"); return; }
+    if (!Parent.value_) { Require(Handoff.empty() && GetLastError() == ERROR_INVALID_PARAMETER, "update-parent-open"); return; }
     // An exited process object can remain queryable while another handle is
     // retained, but its image path may already be unavailable.
-    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) return;
+    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) { Require(Handoff.empty(), "update-parent-exited-before-handoff"); return; }
     FILETIME Creation{}, Exit{}, Kernel{}, User{}; wchar_t Name[32768]{}; DWORD Length = DWORD(std::size(Name));
     Require(GetProcessTimes(Parent.value_, &Creation, &Exit, &Kernel, &User), "update-parent-query");
     // Verification can outlive the parent. Windows may already have reused
     // its PID; a different creation time proves that the original exited.
     // ApplyTransaction still checks every process under Root before writing.
-    if (((std::uint64_t(Creation.dwHighDateTime) << 32) | Creation.dwLowDateTime) != Created) return;
+    if (((std::uint64_t(Creation.dwHighDateTime) << 32) | Creation.dwLowDateTime) != Created) { Require(Handoff.empty(), "update-parent-changed-before-handoff"); return; }
     const bool Queried = QueryFullProcessImageNameW(Parent.value_, 0, Name, &Length);
-    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) return;
+    if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) { Require(Handoff.empty(), "update-parent-exited-before-handoff"); return; }
     Require(Queried && Same(Name, (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
+    if (!Handoff.empty()) {
+        constexpr std::wstring_view Prefix = L"Local\\HyperCommander.Update.";
+        Require(Handoff.starts_with(Prefix) && Handoff.size() == Prefix.size() + 36, "update-handoff-name");
+        for (std::size_t Index = Prefix.size(); Index < Handoff.size(); ++Index) {
+            const auto Ch = Handoff[Index];
+            Require(Ch == '-' || Ch >= '0' && Ch <= '9' || Ch >= 'a' && Ch <= 'f', "update-handoff-name");
+        }
+        Handle Ready, Cancel;
+        Ready.value_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, (std::wstring(Handoff) + L".ready").c_str());
+        Cancel.value_ = OpenEventW(SYNCHRONIZE, FALSE, (std::wstring(Handoff) + L".cancel").c_str());
+        Require(Ready.value_ && Cancel.value_, "update-handoff-open");
+        Require(WaitForSingleObject(Cancel.value_, 0) == WAIT_TIMEOUT, "update-handoff-cancelled");
+        // All signed update inputs and the live parent have been checked. The
+        // GUI may now close; cancellation must still prevent a delayed apply.
+        Require(SetEvent(Ready.value_), "update-handoff-ready");
+        if (HandoffReady) *HandoffReady = true;
+        const HANDLE Waits[]{Cancel.value_, Parent.value_};
+        const auto Result = WaitForMultipleObjects(DWORD(std::size(Waits)), Waits, FALSE, 30000);
+        Require(Result != WAIT_OBJECT_0, "update-handoff-cancelled");
+        Require(Result == WAIT_OBJECT_0 + 1, "update-parent-still-running");
+        return;
+    }
     Require(WaitForSingleObject(Parent.value_, 30000) == WAIT_OBJECT_0, "update-parent-still-running");
 }
 struct ProcessWindows { DWORD pid_; bool visible_ = false; };
@@ -237,7 +259,8 @@ bool OtherProductProcesses(const Path& Root, unsigned IgnorePid, ProductProcessC
         else if (Same(Entry.szExeFile, L"HyperCommander.exe") || Same(Entry.szExeFile, L"HyperCommanderAdmin.exe") || Same(Entry.szExeFile, L"HyperEditor.exe")) return true;
     } while (Process32NextW(Snapshot.value_, &Entry)); return false;
 }
-void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned ParentPid, std::uint64_t ParentCreated) {
+void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned ParentPid, std::uint64_t ParentCreated, std::wstring_view Handoff, bool* HandoffReady) {
+    if (HandoffReady) *HandoffReady = false;
     const auto Root = Canonical(InputRoot), Tx = Canonical(InputTx); CheckTransaction(Root, Tx); auto RootLock = Lock(Root);
     Require(!std::filesystem::exists(Root / L".update/active.json"), "update-recovery-required");
     const auto Manifest = ParseManifest(AuthenticateManifest(Tx / L"update-manifest.cat", Tx / L"update-manifest.json"));
@@ -250,7 +273,7 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
     Originals.emplace("product-inventory.json", ProductFile{"product-inventory.json", HashBytes(OriginalBytes), OriginalBytes.size()});
     const auto NextBytes = ReadBounded(Tx / L"staging/product-inventory.json", 1048576);
     Replacements.emplace("product-inventory.json", ProductFile{"product-inventory.json", Manifest.inventoryHash_, NextBytes.size()});
-    WaitParent(Root, ParentPid, ParentCreated); WaitProductExit(Root);
+    WaitParent(Root, ParentPid, ParentCreated, Handoff, HandoffReady); WaitProductExit(Root);
     std::map<std::string, int> Names;
     for (const auto& [Name, File] : Originals) Names.emplace(Name, 0);
     for (const auto& [Name, File] : Replacements) Names.emplace(Name, 0);

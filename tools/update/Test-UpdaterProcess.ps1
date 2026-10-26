@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$BaselinePackage,[Parameter(Mandatory=$true)][string]$CandidatePackage,[string]$BuildRoot,[switch]$UseBuiltHelper)
+param([Parameter(Mandatory=$true)][string]$BaselinePackage,[Parameter(Mandatory=$true)][string]$CandidatePackage,[string]$BuildRoot,[switch]$UseBuiltHelper,[switch]$Handoff,[switch]$CancelHandoff,[switch]$RejectBeforeHandoff)
 $ErrorActionPreference='Stop'
 $Repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if(-not $BuildRoot){$BuildRoot=Join-Path $Repo '_build/vc2026-qt612/Release'}
@@ -15,6 +15,7 @@ Copy-Item -LiteralPath (Join-Path $CandidatePackage 'update-manifest.json'),(Joi
 $Zip=Join-Path $CandidatePackage ([IO.Path]::GetFileName(([Uri]$New.asset.url).LocalPath))
 & (Join-Path $BuildRoot 'hc_update_tests.exe') stage $CandidatePackage $Zip $Stage $BuildRoot
 if($LASTEXITCODE -ne 0){throw 'Signed candidate staging failed.'}
+if($RejectBeforeHandoff){[IO.File]::WriteAllText((Join-Path $Stage 'product-inventory.json'),'invalid-stage')}
 $HelperSource=if($UseBuiltHelper){Join-Path $BuildRoot 'HyperCommanderUpdater.exe'}else{Join-Path $Root 'HyperCommanderUpdater.exe'}
 if(-not (Test-Path -LiteralPath $HelperSource)){$HelperSource=Join-Path $Root 'hc-updater.exe'}
 # Default to the actual installed helper; opt in to the fixed helper for regression.
@@ -40,14 +41,52 @@ $Parent=Start-Process -FilePath (Join-Path $Root 'HyperCommander.exe') -Argument
 Start-Sleep -Milliseconds 1500
 if($Parent.HasExited){throw 'Baseline product failed to start.'}
 $Created=$Parent.StartTime.ToUniversalTime().ToFileTimeUtc()
-$Arguments=@('--apply',$Root,$Tx,"$($Parent.Id)","$Created")|ForEach-Object{'"'+$_+'"'}
+$Arguments=@('--apply',$Root,$Tx,"$($Parent.Id)","$Created")
+$Ready=$null;$Cancel=$null
+if($Handoff -or $CancelHandoff -or $RejectBeforeHandoff){
+    $HandoffName='Local\HyperCommander.Update.'+[Guid]::NewGuid().ToString()
+    $Ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,$HandoffName+'.ready')
+    $Cancel=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,$HandoffName+'.cancel')
+    $Arguments+=@($HandoffName)
+}
+$Arguments=$Arguments|ForEach-Object{'"'+$_+'"'}
 $Process=Start-Process -FilePath $Helper -ArgumentList ($Arguments -join ' ') -WindowStyle Hidden -PassThru
+if($Ready){
+    $Deadline=[DateTime]::UtcNow.AddSeconds(45);$Accepted=$false
+    while([DateTime]::UtcNow -lt $Deadline -and -not $Process.HasExited){if($Ready.WaitOne(100)){$Accepted=$true;break}}
+    if($RejectBeforeHandoff){
+        if($Accepted -or -not $Process.WaitForExit(15000) -or $Process.ExitCode -eq 0 -or $Parent.HasExited){throw 'Failed preflight was accepted or closed its parent.'}
+        if(Test-Path -LiteralPath (Join-Path $Root '.update/active.json')){throw 'Failed handoff started file replacement.'}
+        [HcUpdaterProcessWindows]::Act($Parent.Id,$true)
+        if(-not $Parent.WaitForExit(15000)){throw 'Failed handoff parent declined normal close.'}
+        & (Join-Path $BuildRoot 'hc_update_tests.exe') verify $BaselinePackage $Root
+        if($LASTEXITCODE -ne 0){throw 'Failed preflight changed the baseline.'}
+        Write-UpdateJson (Join-Path $Run 'evidence.json') @{passed=$true;preflightRejected=$true;parentPreserved=$true;root=$Root;transaction=$Tx}
+        $Ready.Dispose();$Cancel.Dispose();$Parent.Dispose();$Process.Dispose()
+        Write-Output "Native handoff rejects failed preflight without closing parent: PASS ($Run/evidence.json)"
+        return
+    }
+    if(-not $Accepted){$null=$Cancel.Set();throw "Updater did not acknowledge shutdown handoff: $Tx"}
+    if($CancelHandoff){
+        $null=$Cancel.Set()
+        if(-not $Process.WaitForExit(15000) -or $Process.ExitCode -eq 0 -or $Parent.HasExited){throw 'Cancelled handoff did not preserve the parent.'}
+        [HcUpdaterProcessWindows]::Act($Parent.Id,$true)
+        if(-not $Parent.WaitForExit(15000)){throw 'Cancelled handoff parent declined normal close.'}
+        & (Join-Path $BuildRoot 'hc_update_tests.exe') verify $BaselinePackage $Root
+        if($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $Root '.update/active.json'))){throw 'Cancelled handoff changed the baseline.'}
+        Write-UpdateJson (Join-Path $Run 'evidence.json') @{passed=$true;handoffCancelled=$true;parentPreserved=$true;root=$Root;transaction=$Tx}
+        $Ready.Dispose();$Cancel.Dispose();$Parent.Dispose();$Process.Dispose()
+        Write-Output "Native handoff cancellation prevents delayed apply: PASS ($Run/evidence.json)"
+        return
+    }
+}
 Start-Sleep -Milliseconds 1000
 if($Process.HasExited -or (Test-Path -LiteralPath (Join-Path $Root '.update/active.json'))){throw 'Updater did not wait for the live parent.'}
 [HcUpdaterProcessWindows]::Act($Parent.Id,$true)
 if(-not $Parent.WaitForExit(15000)){throw 'Baseline product declined normal close.'};$Parent.Dispose()
 if(-not $Process.WaitForExit(60000)){throw "Native updater did not finish: $Tx"}
 if($Process.ExitCode -ne 0){throw "Native updater failed: $($Process.ExitCode)"};$Process.Dispose()
+if($Ready){$Ready.Dispose();$Cancel.Dispose()}
 $Expected=Join-Path $Root 'HyperCommander.exe';$Deadline=[DateTime]::UtcNow.AddSeconds(15);$Product=$null
 while([DateTime]::UtcNow -lt $Deadline -and -not $Product){$Product=Get-Process -Name HyperCommander -ErrorAction SilentlyContinue|Where-Object{$_.Path -eq $Expected}|Select-Object -First 1;Start-Sleep -Milliseconds 100}
 if(-not $Product){throw 'Updated product was not relaunched.'}
