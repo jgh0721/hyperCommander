@@ -20,6 +20,8 @@
 #include "core/PrintManager.h"
 #include <fmstyle/ThemeManager.h>
 #include <QApplication>
+#include <QPainter>
+#include <QResizeEvent>
 #include <QPushButton>
 #include <QLabel>
 #include <QClipboard>
@@ -50,6 +52,28 @@
 void InitializePortedViewResources();
 namespace hc::document
 {
+    namespace {
+        class LoadingImagePreview final : public QWidget {
+        public:
+            explicit LoadingImagePreview(QWidget* Parent):QWidget(Parent){setObjectName("documentLoadingPreview");}
+            QImage image_;
+        protected:
+            void paintEvent(QPaintEvent*) override {
+                QPainter Painter(this);Painter.fillRect(rect(),palette().brush(QPalette::Base));
+                const auto Size=image_.size().scaled(width(),qMax(1,height()-44),Qt::KeepAspectRatio);
+                Painter.drawImage(QRect(QPoint((width()-Size.width())/2,44+(height()-44-Size.height())/2),Size),image_);
+                Painter.setPen(palette().color(QPalette::Text));
+                Painter.drawText(QRect(8,0,qMax(1,width()-16),44),Qt::AlignCenter|Qt::TextWordWrap,tr("파일을 읽는 중입니다. 임시 미리보기이며 편집·저장은 완료 후 가능합니다."));
+            }
+        };
+    }
+    void DocumentViewPane::ShowLoadingPreview(const QImage& Image){
+        if(Image.isNull()){if(loadingPreview_)loadingPreview_->hide();return;}
+        if(!loadingPreview_)loadingPreview_=new LoadingImagePreview(this);
+        static_cast<LoadingImagePreview*>(loadingPreview_)->image_=Image;
+        loadingPreview_->setGeometry(rect());loadingPreview_->show();loadingPreview_->raise();loadingPreview_->update();
+    }
+    void DocumentViewPane::resizeEvent(QResizeEvent* Event){QWidget::resizeEvent(Event);if(loadingPreview_)loadingPreview_->setGeometry(rect());}
     DocumentViewPane::DocumentViewPane(QWidget* Parent):QWidget(Parent)
     {
         epubRuntime_ = MakeProductEpubRuntime(QCoreApplication::applicationDirPath());
@@ -67,6 +91,7 @@ namespace hc::document
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
+        ShowLoadingPreview({});
         ImageTraceSpan LoadTrace("document.attach-view",Input.path_);
         QString RetryLocator;
         if(epubEditor_ && !epubEditor_->IsModified() && Input.hash_==QCryptographicHash::hash(epubBytes_,QCryptographicHash::Sha256))RetryLocator=currentEpub()->ViewState()["locator"].toString();
@@ -554,7 +579,7 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
 }
 }
 
-namespace hc::document {void DocumentViewPane::Cancel(){if(epub_){epubClosing_=true;epub_->RequestClose();if(epubEditor_)epubEditor_->RequestPreviewClose();}if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
+namespace hc::document {void DocumentViewPane::Cancel(){ShowLoadingPreview({});if(epub_){epubClosing_=true;epub_->RequestClose();if(epubEditor_)epubEditor_->RequestPreviewClose();}if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
 
 namespace hc::document {
 DocumentViewPane::~DocumentViewPane(){

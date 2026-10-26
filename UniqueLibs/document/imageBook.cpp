@@ -1,4 +1,5 @@
 ﻿#include "imageBook.hpp"
+#include "imagePartialDecoder.hpp"
 #include "imageZipRecovery.hpp"
 #include "pluginHost/imageArchiveTransport.hpp"
 #include <QJsonDocument>
@@ -272,18 +273,9 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     QString Path = Page.file_;
     QTemporaryDir Temp;
     QByteArray StreamBytes;
-    // JPEG can produce an approximate image before EOF. Other codecs retain
-    // their normal complete-input decoder contract. Exponential checkpoints
-    // and a 1024px preview bound limit redundant work on slow remote reads.
-    qsizetype NextPreview=512*1024;
+    ImagePartialDecoder Progressive;
     const auto Publish=[&](const QByteArray& Bytes){
-        if(!Preview || Bytes.size()<NextPreview || NextPreview>32*1024*1024)return;
-        NextPreview=qMax(NextPreview*2,Bytes.size()*2);
-        if(!Bytes.startsWith(QByteArray("\xff\xd8",2)))return;
-        QBuffer Input;Input.setData(Bytes);Input.open(QIODevice::ReadOnly);QImageReader Decoder(&Input,"jpeg");Decoder.setAutoTransform(true);
-        const auto Size=Decoder.size();if(!Size.isValid())return;
-        Decoder.setScaledSize(Size.scaled(1024,1024,Qt::KeepAspectRatio));
-        auto Image=Decoder.read();if(!Image.isNull()&&!Context.stopToken_.stop_requested())Preview(std::move(Image));
+        if(!Context.stopToken_.stop_requested())Progressive.Update(Bytes,Preview);
     };
     bool Streamed = false;
     QString Warning;

@@ -26,7 +26,7 @@ namespace hc::document
         storage::EntrySnapshot source_;
         QByteArray hash_;
     };
-    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false);
+    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false, std::function<void(QImage)> Preview = {});
     storage::Result<TextInput> ReadTextFile(const QString& Path, storage::OperationContext Context = {});
     storage::Result<LocalSaveResult> SaveTextFile(const QString& Path, const QByteArray& Bytes,
         storage::DestinationExpectation Expected, const QByteArray& ExpectedHash,

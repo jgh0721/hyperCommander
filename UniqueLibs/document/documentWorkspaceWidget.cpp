@@ -29,6 +29,8 @@
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <mutex>
+#include <utility>
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QToolBar>
@@ -755,14 +757,23 @@ namespace hc::document
         Tab->reloadAfterClose_=false;
         auto Started = Tab->session_->BeginOpen(Discard); if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
         Tab->cancellation_->request_stop(); Tab->cancellation_ = std::make_shared<std::stop_source>();
-        Tab->loading_ = true; Tab->pane_->SetReadOnly(true); Tab->error_.clear();
+        Tab->loading_ = true; Tab->pane_->SetReadOnly(true);Tab->pane_->ShowLoadingPreview({}); Tab->error_.clear();
         const auto Generation = Started.Value(); auto Cancellation = Tab->cancellation_; const auto Path = Tab->path_;
         auto* Watcher = new QFutureWatcher<storage::Result<TextInput>>(this);
-        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Generation] {
+        struct PreviewState {std::mutex mutex_;QImage image_;};
+        const auto Progress=std::make_shared<PreviewState>();
+        auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
+        connect(PreviewTimer,&QTimer::timeout,this,[Tab,Generation,Cancellation,Progress]{
+            if(Tab->closed_ || !Tab->loading_ || Cancellation->stop_requested() || Generation!=Tab->session_->Snapshot().generation_)return;
+            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=std::exchange(Progress->image_,{});}
+            if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
+        });PreviewTimer->start();
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, PreviewTimer, Generation] {
+            PreviewTimer->stop();
             auto Result = Watcher->result();
             if(Result.HasValue()&&Result.Value().viewId_=="image")DeleteCompletedImageWork(Watcher);else Watcher->deleteLater();
             if (Tab->closed_ || Generation != Tab->session_->Snapshot().generation_) return;
-            Tab->loading_ = false;
+            Tab->loading_ = false;Tab->pane_->ShowLoadingPreview({});
             if (!Result.HasValue()) {
                 Tab->session_->CompleteOpen(Generation, Result.Failure()); Tab->error_ = QString::fromStdString(Result.Failure().code_);
             }
@@ -804,7 +815,7 @@ namespace hc::document
             update(); tryFinishClose();
         });
         auto Recovery = recovery_;
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Unlimited=hosted_] {
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             if (!RecoveryPath.isEmpty()) {
                 auto Record = Recovery->Read(RecoveryPath.toStdString()); if (!Record.HasValue()) return storage::Result<TextInput>{Record.Failure()};
@@ -813,7 +824,9 @@ namespace hc::document
                 auto Input = ReadDocumentFile(Path, Context, Unlimited); if (Input.HasValue()) Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
                 return Input;
             }
-            return ReadDocumentFile(Path, Context, Unlimited);
+            return ReadDocumentFile(Path, Context, Unlimited,[Progress](QImage Image){
+                std::lock_guard Lock(Progress->mutex_);Progress->image_=std::move(Image);
+            });
         })); update();
     }
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)

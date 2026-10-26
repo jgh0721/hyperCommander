@@ -22,6 +22,7 @@ namespace hc::document
     public:
         explicit DocumentViewPane(QWidget* Parent = nullptr);
         ~DocumentViewPane() override;
+        void ShowLoadingPreview(const QImage& Image);
         bool IsReadOnly() const { return readOnly_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
@@ -72,7 +73,10 @@ namespace hc::document
         void FullscreenRequested();
         void RetryRequested();
         void EditEpubRequested();
+    protected:
+        void resizeEvent(QResizeEvent* Event) override;
     private:
+        QWidget* loadingPreview_ = nullptr;
 
         bool editEpub(const QString& Locator={},int Chapter=-1);
         EpubProcessView* currentEpub()const;

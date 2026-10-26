@@ -2,6 +2,7 @@
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include "imagePerformance.hpp"
 #include "imageDecodeCache.hpp"
+#include "imagePartialDecoder.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "imageBook.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -33,7 +34,7 @@ namespace hc::document
             if(Native.startsWith("\\\\tsclient\\",Qt::CaseInsensitive)&&Source.id_.revision_)
                 Source.id_.revision_=native::MetadataRevision(*Source.id_.revision_);
         }
-        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr, qint64 Limit = DocumentByteLimit)
+        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr, qint64 Limit = DocumentByteLimit, const std::function<void(QImage)>& Preview = {})
         {
             ImageTraceSpan ReadTrace("file.read-and-hash",Path);
             if (auto Stop = Context.Check({"document"})) return *Stop;
@@ -42,15 +43,16 @@ namespace hc::document
             const auto FileSize=File.size();
             if (!Image && FileSize > Limit) return Error{ErrorCategory::BudgetExceeded, "p0-text-byte-limit"};
             const auto Before=Revision?ImageDecodeCache::Signature(File):QByteArray{};
+            ImagePartialDecoder Progressive;
             QByteArray Bytes;if(FileSize>=0&&FileSize<=64*1024*1024)Bytes.reserve(FileSize);
-            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};ReadTrace.AddBytes(Chunk.size());if(Digest)Digest->addData(Chunk);Bytes+=Chunk;if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
+            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};ReadTrace.AddBytes(Chunk.size());if(Digest)Digest->addData(Chunk);Bytes+=Chunk;Progressive.Update(Bytes,Preview);if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
             if (File.error() != QFileDevice::NoError || (!Image && Bytes.size() > Limit) || !File.atEnd())
                 return Error{ErrorCategory::Unavailable, "document-read-incomplete"};
             if(Revision){const auto After=ImageDecodeCache::Signature(File);if(!Before.isEmpty()&&Before!=After)return Error{ErrorCategory::StaleRevision,"document-changed-during-read"};*Revision=After;}
             return Bytes;
         }
     }
-    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited)
+    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited, std::function<void(QImage)> Preview)
     {
         ImageTraceSpan Trace("document.read",Path);
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
@@ -86,7 +88,7 @@ namespace hc::document
         // their exact version is rechecked by Stat and their bytes by SHA-256.
         const bool HasIdentity=Before.Value().id_.revision_&&Before.Value().id_.revision_->token_.find(":identity:")!=std::string::npos;
         const bool Epub=QFileInfo(Path).suffix().compare("epub",Qt::CaseInsensitive)==0;
-        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit);
+        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit,ImageContent?Preview:std::function<void(QImage)>{});
         if(!Bytes.HasValue()) {
             if(Epub&&Bytes.Failure().category_==ErrorCategory::BudgetExceeded)return Error{ErrorCategory::BudgetExceeded,"epub-input-budget"};
             return Bytes.Failure();
