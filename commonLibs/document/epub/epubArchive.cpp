@@ -66,32 +66,39 @@ namespace hc::document::epub::detail
     {
         Check(cancel_);
         if(Bytes.size() > InputLimit) Reject("input-limit");
-        qsizetype End = -1, ArchiveEnd = Bytes.size();
-        // Some EPUB exporters leave one PKCS#7 block's padding after EOCD.
-        // Accept only a complete 1..16 byte repeated padding value; arbitrary
-        // trailers and truncated comments must still fail. Check ZIP first so
-        // an actual archive comment ending in padding-like bytes is preserved.
-        const auto FindEnd = [&](qsizetype Size) -> qsizetype {
-            for(qsizetype At = Size - 22; At >= std::max<qsizetype>(0, Size - 65557); --At)
-                if(u32(Bytes, At) == 0x06054b50 && At + 22 + u16(Bytes, At + 20) == Size) return At;
-            return -1;
-        };
-        End = FindEnd(ArchiveEnd);
-        if(End < 0 && !Bytes.isEmpty()) {
-            const auto Padding = static_cast<unsigned char>(Bytes.back());
-            if(Padding >= 1 && Padding <= 16 && Bytes.size() >= Padding
-                && Bytes.right(Padding) == QByteArray(Padding, char(Padding))) {
-                ArchiveEnd -= Padding;
-                End = FindEnd(ArchiveEnd);
+        qsizetype End = -1, DiagnosticEnd = -1;
+        quint64 SearchHeaders = 0;
+        // Locate the archive by its complete EOCD and central directory, not
+        // by EOF or a list of padding patterns. Exporter trailers stay outside
+        // the logical ZIP; all entry bounds, sizes and CRCs are checked below.
+        const auto CentralMatches = [&](qsizetype Candidate) {
+            const auto Count = u16(Bytes, Candidate + 10);
+            qsizetype At = u32(Bytes, Candidate + 16);
+            if(!Count || Count > 4096 || At > Candidate || u32(Bytes, Candidate + 12) != Candidate - At) return false;
+            for(int Index = 0; Index < Count; ++Index) {
+                Check(cancel_);
+                // Bound aggregate work even if a trailer contains many forged
+                // EOCD signatures pointing at overlapping directory records.
+                if(++SearchHeaders > quint64(InputLimit / 46)) Reject("zip-end-search-limit");
+                if(Candidate - At < 46 || u32(Bytes, At) != 0x02014b50) return false;
+                const qsizetype Size = 46 + u16(Bytes, At + 28) + u16(Bytes, At + 30) + u16(Bytes, At + 32);
+                if(Size > Candidate - At) return false;
+                At += Size;
             }
+            return At == Candidate;
+        };
+        for(qsizetype At = Bytes.size() - 22; At >= 0; --At) {
+            if((At & 0xffff) == 0) Check(cancel_);
+            if(u32(Bytes, At) != 0x06054b50 || u16(Bytes, At + 20) > Bytes.size() - At - 22) continue;
+            if(DiagnosticEnd < 0) DiagnosticEnd = At;
+            if(CentralMatches(At)) { End = At; break; }
         }
-        // A single C-string terminator is also left by some legacy writers.
-        // Do not accept general zero padding or any arbitrary trailing bytes.
-        if(End < 0 && Bytes.endsWith(char(0))) {
-            const auto TerminatedEnd = FindEnd(Bytes.size() - 1);
-            if(TerminatedEnd >= 0) { End = TerminatedEnd; ArchiveEnd = Bytes.size() - 1; }
-        }
+        // Keep specific diagnostics for malformed archives that have a complete
+        // EOCD but no matching directory. Never recover a truncated ZIP comment.
+        if(End < 0) End = DiagnosticEnd;
         if(End < 0) Reject("zip-end-missing");
+        const auto ArchiveEnd = End + 22 + u16(Bytes, End + 20);
+        if(ArchiveEnd < Bytes.size()) warnings_.append("legacy-trailing-data");
         comment_=Bytes.mid(End+22, ArchiveEnd-End-22);
         const auto Count = u16(Bytes, End + 10);
         if(u16(Bytes, End + 4) || u16(Bytes, End + 6) || u16(Bytes, End + 8) != Count) Reject("zip-multidisk-unsupported");

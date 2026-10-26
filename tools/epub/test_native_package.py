@@ -128,19 +128,65 @@ class NativePackageTests(unittest.TestCase):
         struct.pack_into("<H", maximum, len(maximum) - 2, 65535)
         self.run_bytes(bytes(maximum) + b'c' * 65535 + b'\x10' * 16)
         for suffix in (b'x', b'\x04' * 3, b'\x11' * 17, b'\x00' * 4):
-            self.run_bytes(base + suffix, "zip-end-missing")
+            self.run_bytes(base + suffix)
         # CRC enforcement still applies to the compatibility layout.
         broken = bytearray(base)
         central = broken.index(b'PK\x01\x02')
         broken[central + 16] ^= 1
         self.run_bytes(bytes(broken), "zip-descriptor")
 
-    def test_single_nul_terminator(self):
-        data = archive(publication())
-        self.run_bytes(data + b'\x00')
-        for suffix in (b'\x00' * 2, b'\x00' * 16, b'x\x00'):
-            self.run_bytes(data + suffix, "zip-end-missing")
-        self.run_bytes(data[:-2] + b'\x00', "zip-end-missing")
+    def test_trailing_data_compatibility(self):
+        data = compressed(publication())
+        original = self.run_bytes(data)
+        suffixes = [b'\x00' * count for count in (1, 2, 15, 16, 17, 255, 4096, 65536, 1024 * 1024)]
+        suffixes += [b' ', b' ' * 32, b'\x00' * 15 + b'  ', b'\x00 \x00\t\r\n ',
+                     b'\x04' * 3, b'\x11' * 17, bytes(range(256)), b'exporter trailer']
+        for index, suffix in enumerate(suffixes):
+            with self.subTest(case=index, size=len(suffix)):
+                result = self.run_bytes(data + suffix)
+                self.assertIn("legacy-trailing-data", result["recovery"]["legacyZip"])
+                self.assertTrue(result["recovery"]["sourceUnchanged"])
+                for field in ("spine", "navigation", "resources", "images"):
+                    self.assertEqual(result[field], original[field])
+        self.run_bytes(data + b'\x00' * (1024 * 1024), "cancelled", cancel=3)
+
+    def test_end_record_discovery(self):
+        data = compressed(publication())
+        suffix = b'\x00' * 15 + b'  '
+        # A legitimate ZIP comment containing these bytes must remain a comment.
+        commented = bytearray(data)
+        struct.pack_into("<H", commented, len(commented) - 2, len(suffix))
+        result = self.run_bytes(bytes(commented) + suffix)
+        self.assertNotIn("legacy-trailing-data", result["recovery"]["legacyZip"])
+        self.run_bytes(bytes(commented) + suffix + suffix)
+        # False EOCD signatures in trailers or comments cannot hide the real ZIP.
+        fake = struct.pack("<4s4H2IH", b'PK\x05\x06', 0, 0, 0, 0, 0, 0, 0)
+        self.run_bytes(data + fake)
+        false_directory = bytearray(data[-22:])
+        central = struct.unpack_from("<I", false_directory, 16)[0]
+        struct.pack_into("<I", false_directory, 12, len(data) - central)
+        self.run_bytes(data + bytes(false_directory))
+        commented = bytearray(data)
+        struct.pack_into("<H", commented, len(commented) - 2, len(fake))
+        result = self.run_bytes(bytes(commented) + fake)
+        self.assertNotIn("legacy-trailing-data", result["recovery"]["legacyZip"])
+        maximum = bytearray(data)
+        struct.pack_into("<H", maximum, len(maximum) - 2, 65535)
+        self.run_bytes(bytes(maximum) + b'c' * 65535 + b'\x00' * 65536)
+        # Incomplete EOCD/comments and corrupt entries remain errors.
+        self.run_bytes(data[:-22] + suffix, "zip-end-missing")
+        self.run_bytes(bytes(maximum) + b'c' * 20 + suffix, "zip-end-missing")
+        broken = bytearray(data)
+        central = broken.index(b'PK\x01\x02')
+        broken[central + 16] ^= 1
+        self.run_bytes(bytes(broken) + suffix, "zip-local-size")
+        broken = bytearray(data)
+        central = broken.index(b'PK\x01\x02')
+        name_size, extra_size = struct.unpack_from("<HH", broken, 26)
+        broken[30 + name_size + extra_size] ^= 1
+        self.run_bytes(bytes(broken) + suffix, "zip-crc")
+        struct.pack_into("<H", broken, central + 8, 1)
+        self.run_bytes(bytes(broken) + suffix, "encrypted-zip-entry")
 
     def test_legacy_manifest_roles_and_utf8_meta(self):
         entries = publication("2.0")
