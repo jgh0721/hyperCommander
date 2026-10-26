@@ -324,15 +324,15 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 if (RuleStyle.matched_) { RoleWith.setData(RuleStyle.foreground_.isValid() ? RuleStyle.foreground_ : colorScheme_.FileList_FGColor); break; }
                 if( vecRowColors_[ Row ].first.isValid() == true )
                     RoleWith.setData( vecRowColors_[ Row ].first );
-                else
-                    RoleWith.setData( QColor( "#FFFFFF" ) );
+                else if( colorScheme_.FileList_FGColor.isValid() == true )
+                    RoleWith.setData( colorScheme_.FileList_FGColor );   // no fixed white: an unset scheme leaves the view palette
             } break;
             case Qt::BackgroundRole: {
                 if (RuleStyle.matched_) { RoleWith.setData(RuleStyle.background_.isValid() ? RuleStyle.background_ : colorScheme_.FileList_BGColor); break; }
                 if( vecRowColors_[ Row ].second.isValid() == true )
                     RoleWith.setData( vecRowColors_[ Row ].second );
-                else
-                    RoleWith.setData( QColor( 0, 0, 0 ) );
+                else if( colorScheme_.FileList_BGColor.isValid() == true )
+                    RoleWith.setData( colorScheme_.FileList_BGColor );
             } break;
             case Qt::FontRole: {
                 RoleWith.setData( RuleStyle.Font(colorScheme_.FileList_Font) );

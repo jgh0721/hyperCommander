@@ -1,5 +1,6 @@
 ﻿#include "qtViewerHost.hpp"
 #include "qtViewerProvider.hpp"
+#include "qtMessageDialog.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -111,7 +112,7 @@ QtViewerSurface* QtViewerHost::CreateSurface(QWidget* Parent)
     if (pluginViewer_) Surface->ConfigurePlugins(pluginViewer_.get(), choices_, selection_);
     connect(Surface, &QtViewerSurface::LinkRequested, Surface, [Surface](const QUrl& Url) {
         if (!Url.isValid() || (Url.scheme() != "https" && Url.scheme() != "http") || Url.host().isEmpty()) return;
-        auto* Prompt = new QMessageBox(QMessageBox::Question, tr("외부 링크 열기"), tr("브라우저에서 다음 주소를 여시겠습니까?"),
+        auto* Prompt = new hc::ui::MessageDialog(QMessageBox::Question, tr("외부 링크 열기"), tr("브라우저에서 다음 주소를 여시겠습니까?"),
             QMessageBox::Yes | QMessageBox::No, Surface);
         Prompt->setAttribute(Qt::WA_DeleteOnClose); Prompt->setTextFormat(Qt::PlainText);
         Prompt->setInformativeText(Url.toDisplayString()); Prompt->setDefaultButton(QMessageBox::No);

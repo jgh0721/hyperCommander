@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileAttributesDialog.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QGridLayout>
@@ -115,7 +116,7 @@ namespace hc::ui
         { std::lock_guard Lock(state_->mutex_); summary_->setText(state_->progress_); Question = std::exchange(state_->question_, {}); }
         if (!Question) return;
         asking_ = true;
-        QMessageBox Box(QMessageBox::Question, tr("관리자 권한 필요"),
+        hc::ui::MessageDialog Box(QMessageBox::Question, tr("관리자 권한 필요"),
             tr("%1\n\n%2\n관리자 도우미를 사용하시겠습니까? 권한·소유자는 변경하지 않습니다. Windows UAC 확인이 표시될 수 있습니다.")
                 .arg(QString::fromStdString(Question->first.locator_.root_), Question->second ? tr("하위 항목을 조회할 권한이 없습니다.") : tr("이 항목의 속성을 변경할 권한이 없습니다.")), QMessageBox::NoButton, this);
         Box.setTextFormat(Qt::PlainText);

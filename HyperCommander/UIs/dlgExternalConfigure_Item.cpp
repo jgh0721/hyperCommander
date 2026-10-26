@@ -1,12 +1,21 @@
 ﻿#include "stdafx.h"
 #include "dlgExternalConfigure_Item.hpp"
 
+#include "UniqueLibs/qtDialogFrame.hpp"
+
 #include <objbase.h>
 
 CExternalConfigureItem::CExternalConfigureItem( QWidget* parent, Qt::WindowFlags f )
     : QDialog( parent, f )
 {
     ui.setupUi( this );
+    // Same frame as the other dialogs: the legacy title frame goes, OK · Cancel move to the footer band.
+    ui.frmTitleBar->hide(); setWindowTitle( ui.lblTitleBar->text() );
+    auto* Footer = hc::ui::ApplyDialogFrame( this, { {}, tr( "편집기 실행 파일과 명령행, 이 편집기로 열 확장자를 지정합니다." ), fm::ui::glyph::Rename } );
+    ui.frame_3->setFrameShape( QFrame::NoFrame );
+    for( auto* Label : { ui.label_2, ui.label_7, ui.label_3, ui.label_4, ui.label_5, ui.label_6 } ) Label->setMinimumWidth( 64 );
+    hc::ui::MoveToFooter( Footer, ui.btnOK, true ); hc::ui::MoveToFooter( Footer, ui.btnCancel ); ui.btnOK->setDefault( true );
+    ui.frame->hide();
 }
 
 void CExternalConfigureItem::SetItem( const TyExternalEditor& Item )

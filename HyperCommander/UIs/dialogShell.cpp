@@ -11,6 +11,7 @@
 #include <fmwidgets/WrapLayout.h>
 #include <fmwidgets/Card.h>
 #include <fmwidgets/DialogFooter.h>
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/DialogWidgets.h>
 #include <QHBoxLayout>
@@ -49,6 +50,37 @@
 #include "../../UniqueLibs/settings/appSettings.hpp"
 
 namespace hc::ui {
+namespace {
+// Paper Fluent separates the dialog header as a surface band above the window-colored body.
+class DialogHeaderBand final : public QWidget {
+public:
+    explicit DialogHeaderBand(QWidget* Parent) : QWidget(Parent) {
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, qOverload<>(&QWidget::update));
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto& Colors = fm::style::themeColorsFor(this);
+        if (!Colors.isPaperFluent()) return;
+        QPainter Painter(this);
+        Painter.fillRect(rect(), Colors[fm::style::Token::Surface]);
+        Painter.fillRect(QRect(0, height() - 1, width(), 1), Colors[fm::style::Token::Line]);
+    }
+};
+// Neutral target-volume band below the fields for the compact probe text.
+void StyleSummaryBand(QLabel* Label)
+{
+    const auto Apply = [Label] {
+        const auto& Colors = fm::style::themeColorsFor(Label);
+        if (!Colors.isPaperFluent()) { Label->setStyleSheet({}); Label->setContentsMargins(0, 0, 0, 0); return; }
+        Label->setContentsMargins(0, 0, 0, 0);
+        Label->setStyleSheet(QString("QLabel { background:%1; color:%2; border-radius:6px; padding:6px 10px; }")
+            .arg(Colors[fm::style::Token::Alt].name(), Colors[fm::style::Token::Fg2].name()));
+    };
+    Apply();
+    QObject::connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, Label, Apply);
+}
+}
+
 class DialogMessage final : public hc::qt::ElidedLabel {
 public:
     explicit DialogMessage(QWidget* Parent) : ElidedLabel(Parent) {
@@ -91,7 +123,13 @@ DialogShell::DialogShell(const QString& Title, QWidget* Parent)
     header_->setTitle(Title);
     header_->setGlyph(fm::ui::glyph::Folder);
     header_->setSubtitleElide(Qt::ElideMiddle);
-    Layout->addWidget(header_);
+    // Board option B: the header band is the title bar (drag, Alt+Space, minimize · close), so the window title
+    // is not repeated by a Windows title bar above it.
+    headerContainer_ = new DialogHeaderBand(this);
+    auto* HeaderLayout = new QVBoxLayout(headerContainer_);
+    HeaderLayout->setContentsMargins(20, 14, 8 + DialogCaption::kButtonsWidth, 12);
+    HeaderLayout->addWidget(header_); Layout->addWidget(headerContainer_);
+    DialogCaption::Attach(this, headerContainer_);
     auto* Scroll = new QScrollArea(this);
     bodyScroll_ = Scroll;
     Scroll->setWidgetResizable(true);
@@ -145,13 +183,10 @@ void DialogShell::EnableCompactLayout(int Width)
 {
     if (compact_) return;
     compact_ = true;
-    auto* Layout = qobject_cast<QVBoxLayout*>(layout());
-    Layout->removeWidget(header_);
-    headerContainer_ = new QWidget(this);
-    auto* HeaderLayout = new QVBoxLayout(headerContainer_);
-    HeaderLayout->setContentsMargins(20, 16, 20, 8);
-    header_->setGlyph(fm::ui::glyph::None);
-    HeaderLayout->addWidget(header_); Layout->insertWidget(0, headerContainer_);
+    // Paper Fluent keeps the operation icon in the surface band; the other designs drop it in compact mode.
+    const bool Paper = fm::style::themeColorsFor(this).isPaperFluent();
+    headerContainer_->layout()->setContentsMargins(20, 14, 8 + DialogCaption::kButtonsWidth, Paper ? 12 : 8);
+    if (!Paper) header_->setGlyph(fm::ui::glyph::None);
     auto* Buttons = qobject_cast<QHBoxLayout*>(footer_->layout());
     Buttons->removeWidget(accept_); Buttons->removeWidget(cancel_);
     Buttons->addWidget(cancel_); Buttons->addWidget(accept_);
@@ -564,17 +599,23 @@ void FileOperationDialog::arrangeCompactOperation()
         BodyLayout()->addLayout(Row); Add(readonly_); BodyLayout()->addStretch(); FitToContents(); return;
     }
     auto* Caption = new QLabel(Rename ? tr("새 이름(&N)") : tr("대상 경로(&D)"), this); Caption->setBuddy(input_->lineEdit());
-    auto* PathRow = new QHBoxLayout; PathRow->addWidget(Caption, 1);
-    if (targetMode_) { PathRow->addWidget(targetMode_); targetMode_->show(); }
-    BodyLayout()->addLayout(PathRow); Add(input_); Add(preview_);
+    // Label column + field column (Paper Fluent board): path, its resolution hint, then the conflict policy.
+    auto* PathGrid = new QGridLayout; PathGrid->setHorizontalSpacing(12); PathGrid->setVerticalSpacing(6); PathGrid->setColumnStretch(1, 1);
+    Caption->setMinimumWidth(96);
+    PathGrid->addWidget(Caption, 0, 0, Qt::AlignLeft | Qt::AlignVCenter); PathGrid->addWidget(input_, 0, 1); input_->show();
+    if (targetMode_) { PathGrid->addWidget(targetMode_, 0, 2); targetMode_->show(); }
+    PathGrid->addWidget(preview_, 1, 1, 1, 2); preview_->show();
+    BodyLayout()->addLayout(PathGrid);
+    StyleSummaryBand(targetSummary_);
     if (Rename) {
         Add(extension_); Add(parents_); Add(targetSummary_);
         auto* Hint = new QLabel(tr("이름만 바꾸면 현재 폴더에 유지됩니다. 경로를 입력하면 이동 위치를 표시합니다."), this);
         Hint->setWordWrap(true); Hint->setTextFormat(Qt::PlainText); Add(Hint);
         AcceptButton()->setText(tr("이름 변경(&O)")); BodyLayout()->addStretch(); FitToContents(); return;
     }
-    auto* Policy = new QHBoxLayout; auto* PolicyLabel = new QLabel(tr("같은 이름이 있으면(&E)"), this); PolicyLabel->setBuddy(conflict_);
-    Policy->addWidget(PolicyLabel, 1); Policy->addWidget(conflict_, 1); conflict_->show(); BodyLayout()->addLayout(Policy); Add(targetSummary_);
+    auto* PolicyLabel = new QLabel(tr("같은 이름이 있으면(&E)"), this); PolicyLabel->setBuddy(conflict_);
+    PathGrid->addWidget(PolicyLabel, 2, 0, Qt::AlignLeft | Qt::AlignVCenter); PathGrid->addWidget(conflict_, 2, 1, 1, targetMode_ ? 2 : 1); conflict_->show();
+    Add(targetSummary_);
     for (const auto& Recent : findChildren<fm::ui::RecentTargetsBar*>()) Recent->hide();
     const auto Targets = RecentTargets(request_.providerKey_).mid(0, 3);
     for (int Index = 0; request_.nativeDestination_ && Index < Targets.size(); ++Index) {
@@ -633,7 +674,8 @@ void FileOperationDialog::toggleAdvancedOptions()
     Scroll->setWidget(advancedTabs_); Layout->addWidget(Scroll);
     auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Editor); Layout->addWidget(Buttons);
     connect(Buttons,&QDialogButtonBox::accepted,&Editor,&QDialog::accept); connect(Buttons,&QDialogButtonBox::rejected,&Editor,&QDialog::reject);
-    Editor.resize(width(), std::min(advancedTabs_->sizeHint().height()+80, Limit));
+    hc::ui::ApplyDialogFrame(&Editor, Buttons, {{}, tr("화면에 다 들어가지 않는 고급 옵션을 따로 엽니다. 취소하면 이전 값으로 돌아갑니다."), fm::ui::glyph::Copy});
+    Editor.resize(width(), std::min(advancedTabs_->sizeHint().height()+160, Limit));
     const bool Accepted=Editor.exec()==QDialog::Accepted;
     Scroll->takeWidget(); qobject_cast<QVBoxLayout*>(advanced_->layout())->addWidget(advancedTabs_);
     advancedTabs_->show();

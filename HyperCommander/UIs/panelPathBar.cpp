@@ -167,18 +167,26 @@ void PanelPathBar::paintEvent(QPaintEvent* Event)
     const auto& Colors = fm::style::themeColorsFor(this);
     using fm::style::Token;
     QPainter Painter(this);
+    // Paper Fluent keeps the bordered field and marks the active pane with its accent border,
+    // so the revealed crumbs sit on the field rather than on a full accent fill.
+    const bool Paper = Colors.isPaperFluent();
+    const bool Filled = IsPaneActive() && !Paper;
     Painter.setClipRect(rect().adjusted(4, 2, -4, -2));
-    Painter.fillRect(rect().adjusted(4, 2, -4, -2), IsPaneActive() ? Colors[Token::Accent] : Colors[Token::Field]);
+    if (!Paper) Painter.fillRect(rect().adjusted(4, 2, -4, -2), Filled ? Colors[Token::Accent] : Colors[Token::Field]);
+    else Painter.fillRect(rect().adjusted(4, 2, -4, -3), Colors[Token::Field]);
     Painter.setFont(fm::style::pixelFont(font(), 13));
     const auto Draw = [&](QRect Area, int Hit, const QString& Text, bool Arrow) {
         const bool Hot = Hit == hover_ || (hasFocus() && Hit == keyboard_);
-        if (Hot) {
-            auto Fill = IsPaneActive() ? Colors[Token::OnAccent] : Colors[Token::Accent]; Fill.setAlpha(55);
+        if (Hot && Paper) {
+            Painter.save(); Painter.setRenderHint(QPainter::Antialiasing); Painter.setPen(Qt::NoPen); Painter.setBrush(Colors[Token::AccentSoft]);
+            Painter.drawRoundedRect(QRectF(Area).adjusted(0, 1, 0, -1), 4, 4); Painter.restore();
+        } else if (Hot) {
+            auto Fill = Filled ? Colors[Token::OnAccent] : Colors[Token::Accent]; Fill.setAlpha(55);
             Painter.fillRect(Area, Fill);
-            Painter.setPen(IsPaneActive() ? Colors[Token::OnAccent] : Colors[Token::Accent]);
+            Painter.setPen(Filled ? Colors[Token::OnAccent] : Colors[Token::Accent]);
             Painter.drawRect(Area.adjusted(0, 0, -1, -1));
         }
-        const auto Foreground = IsPaneActive() ? Colors[Token::OnAccent] : Colors[Token::Fg];
+        const auto Foreground = Filled ? Colors[Token::OnAccent] : Paper && Hot ? Colors[Token::AccentFg] : Colors[Token::Fg];
         Painter.setPen(Foreground);
         if (Arrow) fm::style::paintGlyph(&Painter, fm::style::Glyph::ChevronRight, QRectF(Area.center().x() - 5, Area.center().y() - 5, 10, 10), Foreground);
         else Painter.drawText(Area.adjusted(6, 0, -6, 0), Qt::AlignVCenter, Painter.fontMetrics().elidedText(Text, Qt::ElideMiddle, qMax(0, Area.width() - 12)));

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileLockDialog.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 /// Project headers
 #include "UniqueLibs/permissionService.hpp"
@@ -78,7 +79,7 @@ FileLockDialog::FileLockDialog(FileLockDialogRequest Request, QWidget* Parent, C
     connect(stop_,&QPushButton::clicked,this,[this]{if(client_)client_->Cancel();});
     connect(close_,&QPushButton::clicked,this,[this]{act("close");});
     connect(terminate_,&QPushButton::clicked,this,[this]{act("terminate");});
-    connect(Explain,&QPushButton::clicked,this,[this]{QMessageBox::information(this,tr("직접 닫기 안내"),tr("해당 프로그램에서 파일을 저장하고 정상적으로 닫은 뒤 다시 시도를 선택하세요."));});
+    connect(Explain,&QPushButton::clicked,this,[this]{hc::ui::MessageDialog::information(this,tr("직접 닫기 안내"),tr("해당 프로그램에서 파일을 저장하고 정상적으로 닫은 뒤 다시 시도를 선택하세요."));});
     connect(Copy,&QPushButton::clicked,this,[this]{
         auto* Item=table_->currentItem();const int Index=Item?Item->data(0,Qt::UserRole+1).toInt():-1;
         QApplication::clipboard()->setText(Index>=0&&Index<rows_.size()?rows_[Index].toObject()["path"].toString():request_.source_);

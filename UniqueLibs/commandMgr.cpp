@@ -224,14 +224,12 @@ DEFINE_HC_COMMAND(CCommandMgr, ArchiveExtract) { if (bridge_) bridge_->PromptArc
 
 DEFINE_HC_COMMAND( CCommandMgr, FileMkdir )
 {
-    if (bridge_) { bridge_->PromptFileOperation("hc.file.mkdir", "shortcut", CursorIndex); return; }
-    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+    if (bridge_) bridge_->PromptFileOperation("hc.file.mkdir", "shortcut", CursorIndex);
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, FileDelete )
 {
-    if (bridge_) { bridge_->PromptFileOperation("hc.file.delete", "shortcut", CursorIndex); return; }
-    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+    if (bridge_) bridge_->PromptFileOperation("hc.file.delete", "shortcut", CursorIndex);
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, FileNormalize )

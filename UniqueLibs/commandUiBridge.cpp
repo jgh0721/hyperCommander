@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solTypeDefs_Ver.hpp"
+#include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
@@ -66,6 +67,7 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QDialogButtonBox>
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <QtitanGrid.h>
 
 using namespace hc::commands;
@@ -708,7 +710,7 @@ void CommandUiBridge::createActions()
                 {
                     bool Accepted = false;
                     const auto Context = Capture();
-                    const auto Path = QInputDialog::getText(main_, tr("폴더 이동"), tr("경로"), QLineEdit::Normal,
+                    const auto Path = hc::ui::InputDialog::getText(main_, tr("폴더 이동"), tr("경로"), QLineEdit::Normal,
                         QString::fromStdString(Context.location_.root_), &Accepted);
                     if (!Accepted) return;
                     Parameters["path"] = Path;
@@ -983,7 +985,7 @@ void CommandUiBridge::createCommandUi()
         if (userMenu_ && !QDesktopServices::openUrl(QUrl::fromLocalFile(userMenu_->FileName())))
             Window->statusBar()->showMessage(tr("메뉴 파일을 열 수 없습니다: %1").arg(userMenu_->FileName()));
     });
-    Add("hc.app.about", tr("HyperCommander 정보"), [Window] { QMessageBox::about(Window, QObject::tr("HyperCommander"), QObject::tr("HyperCommander\n버전 %1\n두 패널 파일 관리자 · Watercolor UI").arg(QString::fromLatin1(nsHC::CLIENT_VERSION))); });
+    Add("hc.app.about", tr("HyperCommander 정보"), [Window] { hc::ui::MessageDialog::about(Window, QObject::tr("HyperCommander"), QObject::tr("HyperCommander\n버전 %1\n두 패널 파일 관리자 · Watercolor UI").arg(QString::fromLatin1(nsHC::CLIENT_VERSION))); });
     Add("hc.app.update", tr("업데이트 확인"), [Window] { if (auto* Action = Window->findChild<QAction*>("hc.update.check")) Action->trigger(); });
     Add("hc.file.shellMenu", tr("탐색기 메뉴"), [this] { ShowShellMenu(commandIndex()); });
     Add("hc.file.folderSize", tr("하위 폴더 점유 공간 계산"), [this] {
@@ -1037,7 +1039,7 @@ void CommandUiBridge::createCommandUi()
         const auto& Colors = fm::style::themeColorsFor(Window);
         for (const auto& [Id, Glyph] : Tools)
             if (auto* Command = Action(Id)) Command->setIcon(fm::style::glyphIcon(Glyph,
-                Glyph == fm::style::Glyph::Trash ? QColor("#C42B1C") : Colors[fm::style::Token::Fg], 16,
+                Glyph == fm::style::Glyph::Trash ? Colors[fm::style::Token::Danger] : Colors[fm::style::Token::Fg], 16,
                 Glyph == fm::style::Glyph::NewFolder ? Colors[fm::style::Token::Folder] : QColor{}));
     };
     RefreshIcons(); connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, RefreshIcons);
@@ -1139,18 +1141,18 @@ void CommandUiBridge::extractArchive() {
     if (!Model || !Model->GetRoot() || !Model->ProviderEnabled() || Model->IsLoading()) return;
     const bool Inside = !Model->IsSearchResults() && Context.location_.kind_ == LocatorKind::Archive;
     if (!Model->IsSearchResults() && !Inside && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
-        QMessageBox::information(main_, tr("파일 압축 해제"), tr("로컬·SMB의 압축 파일 또는 열린 압축 파일 안의 항목을 선택하세요.")); return;
+        hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("로컬·SMB의 압축 파일 또는 열린 압축 파일 안의 항목을 선택하세요.")); return;
     }
     std::vector<hc::operations::OperationSource> Sources; QStringList Names; auto Reader = Model->SnapshotProvider();
     if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
         const auto Item = Model->GetFileInfo(Model->index(Row,0));
         if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end()) {
-            if (!Inside && Item->storageEntry_->directory_) { QMessageBox::information(main_, tr("파일 압축 해제"), tr("압축 파일만 선택하세요.")); return; }
+            if (!Inside && Item->storageEntry_->directory_) { hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("압축 파일만 선택하세요.")); return; }
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}}); Names.append(Item->Name_);
         }
     }
     if (Context.selectionManifest_) Names.append(tr("전체 선택 %1개").arg(Context.selectionManifest_->Count()));
-    if (Sources.empty() && !Context.selectionManifest_) { QMessageBox::information(main_, tr("파일 압축 해제"), tr("압축 파일이나 내부 항목을 먼저 선택하세요.")); return; }
+    if (Sources.empty() && !Context.selectionManifest_) { hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("압축 파일이나 내부 항목을 먼저 선택하세요.")); return; }
     auto Destination = QString::fromStdString(Context.location_.root_); if (Inside) Destination = QFileInfo(Destination).absolutePath();
     if (Model->IsSearchResults() && !Sources.empty()) Destination = QFileInfo(QString::fromStdString(Sources.front().entry_.locator_.root_)).absolutePath();
     const auto RelativeBase = Destination;
@@ -1206,11 +1208,11 @@ void CommandUiBridge::extractArchive() {
         };
         Prepared = hc::operations::PrepareExtract(std::move(Request), Operation);
     }
-    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Prepared.Failure().code_)); return; }
     Prepared.Value().request_.deferred_ = Dialog.Queued();
     Prepared.Value().request_.metadata_.source_ = Context.location_.root_; Prepared.Value().request_.metadata_.destination_ = Target.root_;
     auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("파일 압축 해제"));
-    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Submitted.Failure().code_)); return; }
     auto Parent = Target; Parent.root_ = QFileInfo(Path).absolutePath().toStdString();
     affectedLocations_[Submitted.Value().id_] = {Target, Parent};
 }
@@ -1228,7 +1230,7 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}});
     }
     const auto Count = Context.selectionManifest_ ? Context.selectionManifest_->Count() : Sources.size();
-    if (!Count) { QMessageBox::information(main_, tr("파일 압축"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
+    if (!Count) { hc::ui::MessageDialog::information(main_, tr("파일 압축"), tr("압축할 파일이나 폴더를 먼저 선택하십시오.")); return; }
     auto Directory = QString::fromStdString(Context.location_.root_);
     if (Context.location_.kind_ == LocatorKind::Archive) Directory = QFileInfo(Directory).absolutePath();
     else if (Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) Directory = QDir::homePath();
@@ -1243,10 +1245,10 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
     Request.sources_ = std::move(Sources); Request.selection_ = Context.selectionManifest_;
     for (const auto& Source : Request.sources_) Request.value_.sources_.push_back(Source.entry_);
     const auto Saved = Dialog.SavePreferences();
-    if (!Saved.HasValue()) QMessageBox::warning(main_, tr("압축 설정 저장"), QString::fromStdString(Saved.Failure().code_));
+    if (!Saved.HasValue()) hc::ui::MessageDialog::warning(main_, tr("압축 설정 저장"), QString::fromStdString(Saved.Failure().code_));
     OperationContext Operation; Operation.passwordPrompt_ = hc::plugins::AskArchivePassword;
     auto Prepared = hc::archive::PrepareCreation(Request, Operation);
-    if (!Prepared.HasValue()) { QMessageBox::warning(main_, tr("파일 압축"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), QString::fromStdString(Prepared.Failure().code_)); return; }
     auto Affected = Request.value_.output_; const auto Path = QString::fromStdString(Affected.root_);
     if (!Request.value_.composition_.separateArchives_) Affected.root_ = QFileInfo(Path).absolutePath().toStdString();
     const auto Label = Request.value_.composition_.separateArchives_ ? tr("압축 파일 개별 생성") : tr("압축 파일 생성 · %1").arg(QFileInfo(Path).fileName());
@@ -1255,7 +1257,7 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
             Request = hc::archive::RetryCreation(std::move(Request), Result);
             return hc::archive::PrepareCreation(Request, std::move(RetryContext));
         }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; });
-    if (!Submitted.HasValue()) { QMessageBox::warning(main_, tr("파일 압축"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), QString::fromStdString(Submitted.Failure().code_)); return; }
     affectedLocations_[Submitted.Value().id_] = {Affected};
 }
 
@@ -1303,7 +1305,9 @@ void CommandUiBridge::openIso(bool Inspect)
             });
             Watcher->setFuture(QtConcurrent::run([Path, Stop, Full] { OperationContext Operation; Operation.stopToken_ = Stop->get_token(); return hc::plugins::InspectBuiltinIso(Path, Full, Operation); }));
         };
-        connect(ReadAll, &QPushButton::clicked, Dialog, [Run] { Run(true); }); Dialog->show(); Run(false); return;
+        connect(ReadAll, &QPushButton::clicked, Dialog, [Run] { Run(true); });
+        FileLabel->hide(); hc::ui::ApplyDialogFrame(Dialog, Buttons, {{}, QDir::toNativeSeparators(Path), fm::ui::glyph::Drive});
+        Dialog->show(); Run(false); return;
     }
 }
 
@@ -1329,7 +1333,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
 {
     using namespace hc::plugins;
     const auto Choices = QPluginHostSettings::DataChoices(hc::settings::AppSettings(), Dopus ? (Metadata ? PluginFormat::DopusViewer : PluginFormat::DopusVfs) : (Metadata ? PluginFormat::Wdx : PluginFormat::Wfx));
-    if (Choices.empty()) { QMessageBox::information(main_, tr("플러그인"), tr("설정의 플러그인 관리에서 플러그인을 추가하고 실행을 승인해 주세요.")); return; }
+    if (Choices.empty()) { hc::ui::MessageDialog::information(main_, tr("플러그인"), tr("설정의 플러그인 관리에서 플러그인을 추가하고 실행을 승인해 주세요.")); return; }
     const auto Context = captureFiles({}, true);
     QPointer<CmpPanel> Panel = activePanel_;
     QPointer<CFSModel> Model = findModel(Context.tabId_);
@@ -1347,7 +1351,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
         if (!Source) return;
     }
     QStringList Names; for (const auto& Choice : Choices) Names << Choice.id_ + " — " + Choice.name_;
-    bool Accepted = false; const auto Name = QInputDialog::getItem(main_, tr("플러그인 선택"), tr("플러그인"), Names, 0, false, &Accepted);
+    bool Accepted = false; const auto Name = hc::ui::InputDialog::getItem(main_, tr("플러그인 선택"), tr("플러그인"), Names, 0, false, &Accepted);
     if (!Accepted || !Panel) return;
     const auto Options = Choices[Names.indexOf(Name)].options_;
     QString NativeRoot;
@@ -1362,7 +1366,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
                     && Entry->storageEntry_->locator_.kind_ == LocatorKind::Local && Entry->storageEntry_->locator_.nesting_.empty())
                     NativeRoot = QString::fromStdString(Entry->storageEntry_->locator_.root_);
             }
-        NativeRoot = QInputDialog::getText(main_, tr("DOpus 파일 시스템"), tr("열 파일 또는 폴더의 전체 경로"), QLineEdit::Normal, NativeRoot, &Accepted);
+        NativeRoot = hc::ui::InputDialog::getText(main_, tr("DOpus 파일 시스템"), tr("열 파일 또는 폴더의 전체 경로"), QLineEdit::Normal, NativeRoot, &Accepted);
         if (!Accepted || NativeRoot.isEmpty() || !Panel) return;
     }
     const auto Cache = QDir::tempPath().toStdString();
@@ -1372,6 +1376,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     auto* Table = new QTableWidget(0, 2, Dialog); Table->setHorizontalHeaderLabels({tr("항목"), tr("값")}); Table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     Table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); Layout->addWidget(Table); Table->setVisible(Metadata);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog); Layout->addWidget(Buttons); connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::close);
+    hc::ui::ApplyDialogFrame(Dialog, Buttons, {{}, Metadata ? tr("플러그인이 알려 준 파일 정보입니다.") : tr("플러그인 파일 시스템에 연결합니다."), fm::ui::glyph::Info});
     auto Stop = std::make_shared<std::stop_source>(); connect(Dialog, &QObject::destroyed, this, [Stop] { Stop->request_stop(); });
     struct OpenResult { HostedStorage storage_; std::vector<std::pair<QString, QString>> values_; std::shared_ptr<IMetadataProvider> metadata_; std::vector<int> fields_; QMap<QString, QString> searchable_; };
     auto* Watcher = new QFutureWatcher<Result<OpenResult>>(Dialog);
@@ -1699,7 +1704,7 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model || !Model->GetRoot()) return;
     if (Model->IsSearchResults() && Id == "hc.file.mkdir") {
-        QMessageBox::information(main_, tr("새 폴더"), tr("검색 결과에는 기본 목적지가 없습니다. 실제 폴더를 연 뒤 실행하세요.")); return;
+        hc::ui::MessageDialog::information(main_, tr("새 폴더"), tr("검색 결과에는 기본 목적지가 없습니다. 실제 폴더를 연 뒤 실행하세요.")); return;
     }
     if (Id == "hc.file.rename") {
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
@@ -2349,7 +2354,7 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
             // Never shell-open a new executable/script template. The explicit text
             // editor receives the successfully created filename as one argument.
             if (!QProcess::startDetached(Dialog.EditorProgram(), Dialog.EditorArguments(), QFileInfo(Dialog.CreatedPath()).absolutePath()))
-                QMessageBox::warning(main_, tr("편집기 열기 실패"), tr("파일은 생성되었으나 텍스트 편집기를 시작하지 못했습니다."));
+                hc::ui::MessageDialog::warning(main_, tr("편집기 열기 실패"), tr("파일은 생성되었으나 텍스트 편집기를 시작하지 못했습니다."));
         }
         return;
     }
@@ -2368,7 +2373,7 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->GetRoot() || Model->IsLoading()) return;
     if (!Model->IsSearchResults() && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
-        QMessageBox::information(main_, tr("속성 변경"), tr("이 저장소에서는 속성 변경을 지원하지 않습니다.")); return;
+        hc::ui::MessageDialog::information(main_, tr("속성 변경"), tr("이 저장소에서는 속성 변경을 지원하지 않습니다.")); return;
     }
     std::vector<EntrySnapshot> Entries;
     if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
@@ -2376,12 +2381,12 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
         if (!Entry || !Entry->storageEntry_ || Entry->Name_ == "..") continue;
         if (std::find(Context.selection_.begin(), Context.selection_.end(), Entry->storageEntry_->id_) != Context.selection_.end()) Entries.push_back(*Entry->storageEntry_);
     }
-    if (Entries.empty() && !Context.selectionManifest_) { QMessageBox::information(main_, tr("속성 변경"), tr("변경할 파일이나 폴더를 선택하세요.")); return; }
+    if (Entries.empty() && !Context.selectionManifest_) { hc::ui::MessageDialog::information(main_, tr("속성 변경"), tr("변경할 파일이나 폴더를 선택하세요.")); return; }
     auto Reader = Model->SnapshotProvider(); if (!Reader) Reader = MakeNativeReadProvider(Context.location_.kind_);
     if (Model->IsSearchResults() && !Entries.empty()) {
         Reader = Model->ProviderFor(Entries.front());
         for (const auto& Entry : Entries) if (Model->ProviderFor(Entry) != Reader) {
-            QMessageBox::information(main_, tr("속성 변경"), tr("로컬 파일과 네트워크 파일의 속성은 각각 선택하여 변경하세요.")); return;
+            hc::ui::MessageDialog::information(main_, tr("속성 변경"), tr("로컬 파일과 네트워크 파일의 속성은 각각 선택하여 변경하세요.")); return;
         }
     }
     const QPointer<CmpPanel> Panel = PanelOf(Model);

@@ -292,8 +292,10 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     BaseOpts.setFieldChooserEnabled( false );
     BaseOpts.setRubberBandSelection( false );
     BaseOpts.setTransparentBackground( true );
-    BaseOpts.setBackgroundColor( QColor( 0, 0, 0 ) );
-    BaseOpts.setSelectedBackgroundColor( QColor( 255, 112, 43 ) );
+    // Theme tokens until the color scheme arrives; the old black · orange · navy showed before the first scheme.
+    const auto& InitialColors = fm::style::ThemeManager::instance().colors();
+    BaseOpts.setBackgroundColor( InitialColors[ fm::style::Token::Surface ] );
+    BaseOpts.setSelectedBackgroundColor( InitialColors[ fm::style::Token::Sel ] );
     BaseOpts.setSelectedInverseColor( true );
     BaseOpts.setModelDecorationOpacityRole( CFsModelT::USR_ROLE_HIDDENOPACITY );
     BaseOpts.setRowAutoHeight( true );
@@ -306,12 +308,11 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     BaseOpts.setShowFocusDecoration( true );
     BaseOpts.setKeepFocusedRow( true );
     view_->setFileManagerMode(true);
-    BaseOpts.setRowFocusColor( QColor( 51, 79, 102 ) );
+    BaseOpts.setRowFocusColor( InitialColors[ fm::style::Token::InvCur ] );
     
     BaseOpts.setDragEnabled( false );
     BaseOpts.setDropEnabled( true );
     BaseOpts.setFieldChooserEnabled( false );
-    BaseOpts.setGroupsHeaderTextColor( "white" );
     
     TableOpts.setRowsQuickSelection( false );
     TableOpts.setRowFrozenButtonVisible( false );
@@ -2268,14 +2269,6 @@ void CQuickView::EnsureKeyboardFocusOnView() const { if (surface_) surface_->set
 ////
 
 
-////void CmpPanel::ViewOnLister( const QModelIndex& SrcIndex )
-////{
-////    auto DlgViewer = new QDlgViewer;
-////    DlgViewer->SetFileName( FileFullPath );
-////    DlgViewer->SetInternalViewer( Viewer );
-////    DlgViewer->show();
-////}
-////
 
 void CGridView::SetAutomaticColumns(bool Automatic)
 {

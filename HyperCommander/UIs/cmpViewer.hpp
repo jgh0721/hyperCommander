@@ -4,8 +4,6 @@
 
 #include "ui_cmpViewer.h"
 
-class QDlgViewer;
-
 class CmpViewer : public QWidget
 {
     Q_OBJECT
@@ -20,8 +18,6 @@ protected:
     void                                closeEvent( QCloseEvent* Ev ) override;
 
 private:
-    friend class QDlgViewer;
-
     Q_INVOKABLE void                    initialize();
     void                                cleanup();
 

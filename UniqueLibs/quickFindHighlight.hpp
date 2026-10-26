@@ -5,6 +5,7 @@
 #include <QTextLayout>
 #include <QStyledItemDelegate>
 #include <QApplication>
+#include <fmstyle/ThemeManager.h>
 
 namespace hc::quickfind {
 // Map normalized, case-folded matches back to complete source graphemes.
@@ -33,6 +34,9 @@ inline QList<QPair<int, int>> HighlightRanges(const QString& Text, const QString
     }
     return Ranges;
 }
+// Match marks follow the theme: the warning outline tone behind body text reads in light and dark.
+inline QColor HighlightBackground() { return fm::style::ThemeManager::instance().colors()[fm::style::Token::WarnLine]; }
+inline QColor HighlightForeground() { return fm::style::ThemeManager::instance().colors()[fm::style::Token::Fg]; }
 inline void PaintHighlightedText(QPainter* Painter, const QRect& Rect, const QString& Text,
     const QString& Query, Qt::Alignment Alignment = Qt::AlignLeft)
 {
@@ -40,7 +44,7 @@ inline void PaintHighlightedText(QPainter* Painter, const QRect& Rect, const QSt
     QList<QTextLayout::FormatRange> Formats;
     for (const auto& Range : HighlightRanges(Text, Query)) {
         QTextLayout::FormatRange Format; Format.start = Range.first; Format.length = Range.second;
-        Format.format.setBackground(QColor("#ffd86b")); Format.format.setForeground(QColor("#171717")); Formats.append(Format);
+        Format.format.setBackground(HighlightBackground()); Format.format.setForeground(HighlightForeground()); Formats.append(Format);
     }
     Layout.setFormats(Formats); Layout.beginLayout(); auto Line = Layout.createLine();
     if (Line.isValid()) Line.setLineWidth(qMax(0, Rect.width())); Layout.endLayout();

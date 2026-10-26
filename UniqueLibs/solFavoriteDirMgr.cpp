@@ -4,6 +4,10 @@
 #include "commandMgr.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
 
+#include <fmstyle/Glyphs.h>
+#include <fmstyle/ThemeManager.h>
+#include <QStorageInfo>
+
 DECLARE_CMNLIBSV2_NAMESPACE
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -110,12 +114,29 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
     if( Menu == nullptr )
         return;
 
+    const auto& Colors = fm::style::ThemeManager::instance().colors();
+    using fm::style::Token;
+    // Header row (board Prop-Fav-Menu): title only, never the active item.
+    const auto Header = Menu->addAction( fm::style::glyphIcon( fm::style::Glyph::Folder, Colors[ Token::Fg3 ] ), QObject::tr( "폴더 즐겨찾기" ) );
+    Header->setEnabled( false );
+    Menu->addSeparator();
+
     if( drivesOn_ == DRIVES_ON_TOP )
         createDrives( Menu );
 
+    // Items 1~9 get their number as the menu mnemonic; the target path is the right-hand tail.
+    const QFontMetrics Metrics( Menu->font() );
+    int Number = 0;
     for( const auto& Dir : vecItems_ )
     {
-        const auto Ac = Menu->addAction( Dir.Name );
+        ++Number;
+        auto Name = Dir.Name; Name.replace( '&', QStringLiteral( "&&" ) );
+        const auto Caption = Number <= 9 ? QStringLiteral( "&%1  %2" ).arg( Number ).arg( Name ) : QStringLiteral( "    %1" ).arg( Name );
+        const auto Tail = Metrics.elidedText( QDir::toNativeSeparators( Dir.Path ), Qt::ElideMiddle, 220 );
+        const bool Network = Dir.Path.startsWith( QStringLiteral( "\\\\" ) ) || Dir.Path.startsWith( QStringLiteral( "//" ) );
+        const auto Ac = Menu->addAction( fm::style::glyphIcon( Network ? fm::style::Glyph::Drive : fm::style::Glyph::Folder, Network ? Colors[ Token::KExe ] : Colors[ Token::Folder ] ),
+            Tail.isEmpty() ? Caption : Caption + '\t' + Tail );
+        Ac->setToolTip( QDir::toNativeSeparators( Dir.Path ) );
         connect( Ac, &QAction::triggered, [Dir]() {
             TyStCommandMgr::GetInstance()->ProcessFavoriteDir( Dir.Command, Dir.Path );
         } );
@@ -128,7 +149,7 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
 
     Menu->addSeparator();
 
-    Ac = Menu->addAction( QObject::tr( "현재 폴더 추가" ) );
+    Ac = Menu->addAction( fm::style::glyphIcon( fm::style::Glyph::PlusSmall, Colors[ Token::Fg2 ] ), QObject::tr( "현재 폴더 추가" ) );
     connect( Ac, &QAction::triggered, this, &CFavoriteDirMgr::NotifyAppendCurrentPath );
     Ac = Menu->addAction( QObject::tr( "환경설정(&C)" ) );
     connect( Ac, &QAction::triggered, this, &CFavoriteDirMgr::OnConfigure );
@@ -173,13 +194,21 @@ void CFavoriteDirMgr::createDrives( QMenu* Menu )
 
     if( GetLogicalDriveStringsW( MAX_PATH, wszBuffer ) != 0 )
     {
-        const auto Parent = Menu->addMenu( tr( "드라이브" ) );
+        const auto Parent = Menu->addMenu( fm::style::glyphIcon( fm::style::Glyph::Drive, fm::style::ThemeManager::instance().colors()[ fm::style::Token::Fg2 ] ), tr( "드라이브" ) );
 
         do
         {
             *wszDrive = *wszC;
 
-            const auto Ac = Parent->addAction( QString( "[%1]" ).arg( QString::fromWCharArray( wszDrive ) ) );
+            // Free space only for fixed drives: a disconnected network or empty removable drive must not block the menu.
+            QString Caption = QString( "[%1]" ).arg( QString::fromWCharArray( wszDrive ) );
+            const WCHAR Root[ 4 ] = { wszDrive[ 0 ], L':', L'\\', 0 };
+            if( GetDriveTypeW( Root ) == DRIVE_FIXED ) {
+                const QStorageInfo Storage( QString::fromWCharArray( Root ) );
+                if( Storage.isValid() && Storage.isReady() )
+                    Caption += tr( "\t여유 %1" ).arg( QLocale().formattedDataSize( Storage.bytesAvailable(), 1, QLocale::DataSizeTraditionalFormat ) );
+            }
+            const auto Ac = Parent->addAction( fm::style::glyphIcon( fm::style::Glyph::Drive, fm::style::ThemeManager::instance().colors()[ fm::style::Token::Fg2 ] ), Caption );
             connect( Ac, &QAction::triggered, [wszDrive]() {
                 TyStCommandMgr::GetInstance()->NavigateDrive( QModelIndex(), QString::fromWCharArray( wszDrive ) );
             } );

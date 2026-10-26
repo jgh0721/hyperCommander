@@ -1,11 +1,11 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/singleInstance.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <QStandardPaths>
 #include "HyperCommander.hpp"
 
 #include "cmnHCUtils.hpp"
 #include "dlgMain.hpp"
-#include "dlgMultiRename.hpp"
 
 #include "UniqueLibs/commandMgr.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
@@ -18,6 +18,7 @@
 #include "QtnPlatform.h"
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
+#include "UniqueLibs/qtTranslation.hpp"
 #include <QtitanGrid.h>
 #include "solFavoriteDirMgr.hpp"
 #include "solTCPluginMgr.hpp"
@@ -154,6 +155,7 @@ private:
 HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
+    hc::ui::InstallQtTranslation(*this);
     auto& Theme = fm::style::ThemeManager::instance();
     Theme.setDesign(hc::theme::ProductDesign);
     Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
@@ -180,7 +182,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     auto& Settings = hc::settings::AppSettings();
     Settings.SetErrorHandler([this](const QString& Error) {
         if (hc::settings::AppSettings().Editing()) return;
-        QTimer::singleShot(0, this, [this, Error] { QMessageBox::warning(mainUI, tr("설정 저장 실패"), Error); });
+        QTimer::singleShot(0, this, [this, Error] { hc::ui::MessageDialog::warning(mainUI, tr("설정 저장 실패"), Error); });
     });
     const auto StartupPaths = hc::settings::SingleInstance::Paths(QCoreApplication::arguments());
     if (!QStandardPaths::isTestModeEnabled() && Settings.Read(hc::settings::Section::General).toObject()["singleInstance"].toBool(false)) {
@@ -192,7 +194,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
             shouldRun_ = false;
             if (Result == hc::settings::SingleInstance::Result::Failed) {
                 startupExitCode_ = 1;
-                QMessageBox::warning(nullptr, tr("기존 창 연결 실패"), singleInstance_->Error());
+                hc::ui::MessageDialog::warning(nullptr, tr("기존 창 연결 실패"), singleInstance_->Error());
             }
             return;
         }
@@ -214,13 +216,6 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
         QTimer::singleShot(0, mainUI, [this, StartupPaths] { mainUI->OpenStartupPaths(StartupPaths); });
     if (!Settings.Error().isEmpty() || !Settings.Issues().isEmpty())
         mainUI->statusBar()->showMessage(tr("설정 확인 필요: %1 %2").arg(Settings.Error(), Settings.Issues().join(", ")));
-}
-
-void HyperCommanderApp::ShowMultiRename( const QVector< QString >& VecFiles )
-{
-    QMultiRenameUI MultiRename;
-    MultiRename.SetSourceFiles( VecFiles );
-    MultiRename.exec();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

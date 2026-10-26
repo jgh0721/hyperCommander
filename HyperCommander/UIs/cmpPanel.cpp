@@ -1,9 +1,9 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "panelPathBar.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
-#include "dlgGridStyle.hpp"
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmwidgets/BreadcrumbBar.h>
 #include <fmwidgets/DriveButton.h>
@@ -14,16 +14,11 @@
 #include <QtConcurrent>
 #include <QGridLayout>
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
-#include "dlgViewer.hpp"
 
 #include "Modules/mdlFileSystem.hpp"
 #include "Modules/mdlFileModel.hpp"
 #include "Components/cmpView.hpp"
 
-#include "Cate - FileOperation/dlgFileCopy.hpp"
-#include "Cate - FileOperation/dlgCreateDirectory.hpp"
-#include "Cate - FileOperation/dlgFileDelete.hpp"
-#include "Cate - FileOperation/dlgFileAttrib.hpp"
 
 #include "UniqueLibs/columnMgr.hpp"
 #include "UniqueLibs/commandMgr.hpp"
@@ -163,7 +158,7 @@ void CmpPanel::AddTab(bool Navigate)
         const auto Generation = Model->DirectoryGeneration();
         const bool Denied = Error->category_ == hc::storage::ErrorCategory::AccessDenied;
         const auto Presentation = hc::ui::DescribeNavigationError(*Error, Path);
-        auto* Dialog = new QMessageBox(QMessageBox::Warning, tr("폴더를 열 수 없습니다"),
+        auto* Dialog = new hc::ui::MessageDialog(QMessageBox::Warning, tr("폴더를 열 수 없습니다"),
             tr("%1\n\n%2").arg(Presentation.summary_, QDir::toNativeSeparators(Path)),
             QMessageBox::Retry | QMessageBox::Cancel, this);
         Dialog->setObjectName("hc.navigationError");
@@ -538,66 +533,6 @@ void CmpPanel::RefreshSource( int TabIndex )
 
     if (static_cast<CFSModel*>(vecTabStates[TabIndex]->Model)->HasPlaceholder()) restoreTab(TabIndex);
     else if (!static_cast<CFSModel*>(vecTabStates[TabIndex]->Model)->RetryFailedNavigation()) vecTabStates[TabIndex]->Model->Refresh();
-}
-
-void CmpPanel::NewFolderOnCurrentTab( const QModelIndex& SrcIndex )
-{
-    UNREFERENCED_PARAMETER( SrcIndex );
-
-    QDirectoryCreateUI Ui;
-    const auto Ret = Ui.exec();
-    if( Ret == QDialog::Rejected )
-        return;
-
-    const auto NewName = Ui.GetInputText();
-    if( NewName.isEmpty() == true )
-        return;
-
-    const auto FileEngine = TyStFileEngine::GetInstance();
-    const auto State = retrieveFocusState();
-
-    const auto TaskItem = nsHC::TySpFETaskItem( new nsHC::CFETaskItem );
-    TaskItem->Id;
-    TaskItem->Type = nsHC::FE_MODE_MKDIR;
-    TaskItem->Src = nsHC::TySpFETaskItemSource( new nsHC::CFETaskItemSource );
-    TaskItem->Src->Fs = State->Model->GetRoot();
-
-    const auto Src = nsHC::TySpFileSource( new nsHC::CFileSourceT );
-
-    Src->Flags_ = 0;
-    Src->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
-    Src->Name_ = State->Model->GetCurrentPath();
-
-    TaskItem->Src->Items.push_back( Src );
-
-    TaskItem->Input = NewName;
-
-    TyOsValue<nsHC::TyEnFEResult> Result;
-    if( FileEngine->ExecuteTask( TaskItem, Result ) == false )
-        return;
-
-    if( Result.Value.value_or( nsHC::FE_RESULT_FAILED ) == nsHC::FE_RESULT_SUCCEED )
-        ( ( CFSModel* )State->Model )->InsertChildItem( NewName );
-}
-
-void CmpPanel::FileDeleteOnCurrentTab( const QModelIndex& SrcIndex )
-{
-    UNREFERENCED_PARAMETER( SrcIndex );
-
-    const auto Src_State = retrieveFocusState();
-    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
-
-    if( SrcModel.isEmpty() == true )
-        return;
-
-    QFileDeleteUI Ui;
-    Ui.SetSourcePath( Src_State->Model->GetCurrentPathWithRoot() );
-    Ui.SetSourceModel( SrcModel );
-
-    if( Ui.exec() == QDialog::Accepted )
-        ;
-
-        //Src_State->View->deselectAll();
 }
 
 void CmpPanel::SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown )
@@ -1509,32 +1444,6 @@ void CmpPanel::processPanelStatusText()
 ////
 
 
-////void CmpPanel::FileCopyToOtherPanel( CmpPanel* Dst )
-////{
-////    Q_ASSERT( Dst != nullptr );
-////    if( Dst == nullptr )
-////        return;
-////
-////    const auto Src_State = retrieveFocusState();
-////    const auto Dst_State = Dst->retrieveFocusState();
-////
-////    // 선택된 항목들을 추가한다.
-////    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
-////
-////    if( SrcModel.isEmpty() == true )
-////    {
-////        // TODO: 메시지 출력, 복사할 파일 없음
-////        return;
-////    }
-////
-////    QFileCopyUI Ui;
-////    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
-////    Ui.SetSourceModel( SrcModel );
-////    Ui.SetDestinationPath( Dst_State->Model->GetFileFullPath( "" ) );
-////
-////    Ui.exec();
-////}
-////
 ////void CmpPanel::FileNormalization( const QModelIndex& SrcIndex )
 ////{
 ////    const auto State = retrieveFocusState();
@@ -1555,27 +1464,6 @@ void CmpPanel::processPanelStatusText()
 ////    State->Model->setData( ModelIndex, Node.Name.normalized( QString::NormalizationForm_C ), Qt::EditRole );
 ////}
 ////
-////void CmpPanel::FileSetAttrib( const QModelIndex& SrcIndex )
-////{
-////    UNREFERENCED_PARAMETER( SrcIndex );
-////
-////    const auto Src_State = retrieveFocusState();
-////    QVector< QModelIndex > SrcModel = makeSrcModel( Src_State );
-////
-////    QFileAttribUI Ui;
-////    Ui.SetSourcePath( Src_State->Model->GetFileFullPath( "" ) );
-////    Ui.SetSourceModel( SrcModel );
-////
-////    if( SrcModel.isEmpty() == true )
-////    {
-////        // TODO: 메시지 출력, 복사할 파일 없음
-////        return;
-////    }
-////
-////    if( Ui.exec() == QDialog::Accepted )
-////        Src_State->View->deselectAll();
-////}
-////
 ////void CmpPanel::RenameFileName( const QModelIndex& SrcIndex )
 ////{
 ////    UNREFERENCED_PARAMETER( SrcIndex );
@@ -1591,49 +1479,6 @@ void CmpPanel::processPanelStatusText()
 ////}
 ////
 
-////void CmpPanel::ViewOnLister( const QModelIndex& SrcIndex )
-////{
-////    const auto State = retrieveFocusState();
-////    const auto FileFullPath = State->Model->GetFileFullPath( State->ProxyModel->mapToSource( SrcIndex ) );
-////    const auto StPlugInMgr = TyStPlugInMgr::GetInstance();
-////
-////    auto Menu = new QMenu;
-////    Menu->setFocus( Qt::ActiveWindowFocusReason );
-////    Menu->setFocusPolicy( Qt::StrongFocus );
-////    Menu->setFont( QFont( "Sarasa Mono K Light", 14 ) );
-////    Menu->deleteLater();
-////
-////    const auto ViewerCount = StPlugInMgr->ConstructWLXMenu( Menu, FileFullPath );
-////    if( ViewerCount == 0 )
-////        return;
-////
-////    TySpWLX Viewer;
-////
-////    if( ViewerCount == 1 )
-////    {
-////        const auto ac = Menu->actions()[ 0 ];
-////        Viewer = ac->data().value< TySpWLX >();
-////    }
-////
-////    if( ViewerCount > 1 )
-////    {
-////        Menu->setActiveAction( Menu->actions()[ 0 ] );
-////        QMetaObject::invokeMethod( Menu, "setFocus", Qt::QueuedConnection );
-////        const auto ac = Menu->exec( retrieveMenuPoint( QCursor::pos(), SrcIndex ) );
-////
-////        // 취소하거나 등등
-////        if( ac == nullptr )
-////            return;
-////
-////        Viewer = ac->data().value< TySpWLX >();
-////    }
-////    
-////    auto DlgViewer = new QDlgViewer;
-////    DlgViewer->SetFileName( FileFullPath );
-////    DlgViewer->SetInternalViewer( Viewer );
-////    DlgViewer->show();
-////}
-////
 ////int CmpPanel::InitializeGrid()
 ////{
 ////    const auto Page = new QWidget;
@@ -1790,23 +1635,6 @@ void CmpPanel::processPanelStatusText()
 ////}
 ////
 //
-////void CmpPanel::on_btnGridStyle_clicked( bool checked )
-////{
-////    const auto View = retrieveFocusView();
-////    if( View == nullptr )
-////        return;
-////
-////    QDlgGridStyle Styler;
-////    //Styler.setStyleText( mapTabToStats[ currentIndex ].View->grid()->styleSheet() );
-////    Styler.setStyleText( qApp->styleSheet() );
-////    Styler.exec();
-////
-////    View->beginUpdate();
-////    qApp->setStyleSheet( Styler.styleText() );
-////    View->grid()->setStyleSheet( Styler.styleText() );
-////    View->endUpdate();
-////}
-////
 
 ////QModelIndex CmpPanel::retrieveFocusViewCursorIndex() const
 ////{

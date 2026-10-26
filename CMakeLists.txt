@@ -108,7 +108,7 @@ qt_add_library(hc_viewer_qt STATIC
     UniqueLibs/qtViewerHost.cpp
     UniqueLibs/qtViewerHost.hpp
 )
-target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core hc_plugin_viewer_qt Qt6::Widgets)
+target_link_libraries(hc_viewer_qt PUBLIC hc_viewer_core hc_plugin_viewer_qt Qt6::Widgets PRIVATE Fm::widgets)
 target_compile_options(hc_viewer_qt PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 add_subdirectory(pluginHost)

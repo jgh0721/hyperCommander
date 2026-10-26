@@ -10,6 +10,7 @@
 #include <fmwidgets/ReorderList.h>
 #include <fmwidgets/SettingsWidgets.h>
 #include <fmwidgets/DialogHeader.h>
+#include <fmstyle/StyleProps.h>
 #include <fmstyle/ThemeManager.h>
 #include "fileColorConditionRow.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
@@ -94,13 +95,15 @@ public:
         setObjectName("hc.settings.fileColors");
         auto* Layout = new QVBoxLayout(this);
         auto* Header = new fm::ui::DialogHeader(this); Header->setTitle(tr("파일 그룹 · 색상"));
-        Header->setSubtitle(tr("핸들을 끌어 우선순위를 바꿉니다. 위 그룹부터 적용하며, 빈 색·글꼴은 기본 표시를 따릅니다.")); Layout->addWidget(Header);
-        auto* Body = new QHBoxLayout; Layout->addLayout(Body, 1);
-        auto* GroupsCard = new fm::ui::Card(this); GroupsCard->setObjectName("hc.rules.groupsCard");
-        GroupsCard->setFixedWidth(280); Body->addWidget(GroupsCard);
-        auto* Left = new QVBoxLayout(GroupsCard);
-        Left->addWidget(new QLabel(tr("파일 그룹 · 위에서부터 적용"), GroupsCard));
-        auto* Actions = new QHBoxLayout; Left->addLayout(Actions);
+        Header->setSubtitle(tr("핸들을 끌어 우선순위를 바꿉니다. 위 그룹부터 적용하며, 빈 색·글꼴은 기본 표시를 따릅니다."));
+        // Board heading: import / export / legacy & examples beside the title.
+        auto* Heading = new QHBoxLayout; Heading->addWidget(Header, 1); Layout->addLayout(Heading);
+        auto* Body = new QHBoxLayout; Body->setSpacing(12); Layout->addLayout(Body, 1);
+        auto* GroupsCard = new fm::ui::Card(tr("그룹"), this); GroupsCard->setObjectName("hc.rules.groupsCard"); GroupsCard->setMeta(tr("위에서부터 적용"));
+        GroupsCard->setFixedWidth(300); Body->addWidget(GroupsCard);
+        auto* Left = new QVBoxLayout(GroupsCard); Left->setContentsMargins(8, 8, 8, 10);
+        // Compact icon actions live in the card header band.
+        auto* ActionBox = new QWidget(GroupsCard); auto* Actions = new QHBoxLayout(ActionBox); Actions->setContentsMargins(0, 0, 0, 0); Actions->setSpacing(4);
         const auto Button = [this](const QString& Text, QBoxLayout* Into, auto Action) {
             auto* Item = new fm::ui::Button(Text, this); Item->setCompact(true); Item->setAutoDefault(false); Into->addWidget(Item);
             connect(Item, &QPushButton::clicked, this, Action); return Item;
@@ -114,15 +117,17 @@ public:
         Up->setObjectName("hc.rules.moveUp"); Up->setAccessibleName(tr("그룹 위로 이동")); Up->setToolTip(tr("위로 이동 · Alt+↑"));
         auto* Down = Button(tr("↓"), Actions, [this] { list_->MoveRow(list_->currentRow(), list_->currentRow() + 1); });
         Down->setObjectName("hc.rules.moveDown"); Down->setAccessibleName(tr("그룹 아래로 이동")); Down->setToolTip(tr("아래로 이동 · Alt+↓"));
+        for (auto* Item : ActionBox->findChildren<fm::ui::Button*>()) { Item->setMinimumWidth(0); fm::style::setSizeVariant(Item, fm::style::SizeVariant::Mini); }
+        GroupsCard->setHeaderWidget(ActionBox);
         list_ = new fm::ui::ReorderListWidget(this); list_->setObjectName("hc.rules.groups"); list_->setAccessibleName(tr("파일 그룹 우선순위")); Left->addWidget(list_, 1);
         list_->setItemDelegate(new FileColorGroupDelegate(list_->itemDelegate(), list_)); list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         Left->addWidget(new QLabel(tr("여러 그룹에 해당할 때"), GroupsCard));
         mode_ = new QButtonGroup(this); mode_->setObjectName("hc.rules.mode");
-        auto* First = new QRadioButton(tr("위 그룹 하나만"), GroupsCard); First->setObjectName("hc.rules.first"); mode_->addButton(First, 0); Left->addWidget(First);
-        auto* Merge = new QRadioButton(tr("속성별로 합치기"), GroupsCard); Merge->setObjectName("hc.rules.merge"); mode_->addButton(Merge, 1); Left->addWidget(Merge);
-        auto* PolicyHelp = new QLabel(tr("위 그룹 하나만: 처음 일치한 그룹을 적용합니다.\n합치기: 각 속성을 지정한 첫 그룹의 값을 사용합니다."), GroupsCard);
-        PolicyHelp->setWordWrap(true); Left->addWidget(PolicyHelp);
-        auto* Files = new QHBoxLayout;
+        auto* ModeRow = new QHBoxLayout; ModeRow->setSpacing(16); Left->addLayout(ModeRow);
+        auto* First = new QRadioButton(tr("위 그룹 하나만"), GroupsCard); First->setObjectName("hc.rules.first"); mode_->addButton(First, 0); ModeRow->addWidget(First);
+        auto* Merge = new QRadioButton(tr("속성별로 합치기"), GroupsCard); Merge->setObjectName("hc.rules.merge"); mode_->addButton(Merge, 1); ModeRow->addWidget(Merge); ModeRow->addStretch();
+        First->setToolTip(tr("처음 일치한 그룹을 적용합니다.")); Merge->setToolTip(tr("각 속성을 지정한 첫 그룹의 값을 사용합니다."));
+        auto* Files = new QHBoxLayout; Files->setSpacing(6);
         Button(tr("가져오기"), Files, [this] {
             const auto Path = QFileDialog::getOpenFileName(this, tr("파일 색상 규칙 가져오기"), {}, "JSON (*.json)"); if (Path.isEmpty()) return;
             QFile File(Path); if (!File.open(QIODevice::ReadOnly) || File.size() > 1024 * 1024) { error_->setText(tr("1MB 이하 JSON 파일을 읽을 수 없습니다.")); return; }
@@ -138,10 +143,10 @@ public:
         })->setObjectName("hc.rules.export");
         auto* Scroll = new QScrollArea(this); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame); Body->addWidget(Scroll, 3);
         editor_ = new QWidget; Scroll->setWidget(editor_); auto* Right = new QVBoxLayout(editor_);
-        Right->setContentsMargins(0, 0, 0, 0);
+        Right->setContentsMargins(0, 0, 0, 0); Right->setSpacing(12);
         const auto Card = [this, Right](const QString& Title, const QString& ObjectName) {
-            auto* Widget = new fm::ui::Card(editor_); Widget->setObjectName(ObjectName); auto* Rows = new QVBoxLayout(Widget);
-            auto* Heading = new QLabel(Title, Widget); auto Font = Heading->font(); Font.setBold(true); Heading->setFont(Font); Rows->addWidget(Heading); Right->addWidget(Widget); return Rows;
+            auto* Widget = new fm::ui::Card(Title, editor_); Widget->setObjectName(ObjectName); auto* Rows = new QVBoxLayout(Widget);
+            Rows->setContentsMargins(14, 10, 14, 12); Right->addWidget(Widget); return Rows;
         };
         auto* Definition = Card(tr("그룹 정의"), "hc.rules.definitionCard");
         auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Definition->addLayout(Form);
@@ -227,7 +232,7 @@ public:
         error_ = new QLabel(this); error_->setTextFormat(Qt::PlainText); error_->setWordWrap(true); Layout->addWidget(error_);
         Button(tr("기존 규칙 가져오기"), Files, [this] { ImportLegacy(); });
         auto* Examples = Button(tr("기본 예제 그룹 추가"), Files, [this] { addExamples(); }); Examples->setObjectName("hc.rules.addExamples"); Examples->setToolTip(tr("10가지 예제 중 아직 없는 그룹을 뒤에 추가합니다. 기존 그룹과 우선순위는 유지합니다."));
-        Files->addStretch(); Layout->addLayout(Files);
+        Heading->addLayout(Files);
         setMinimumSize(580, 380);
         connect(list_->model(), &QAbstractItemModel::rowsAboutToBeMoved, this, [this] { loading_ = true; });
         connect(list_->model(), &QAbstractItemModel::rowsMoved, this, [this] {

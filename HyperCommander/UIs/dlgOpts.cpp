@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <fmfilelist/RecordPreview.h>
 #include "thumbnailSettingsPage.hpp"
 #include "menuBarSettingsPage.hpp"
@@ -16,8 +17,8 @@
 #include <fmstyle/ThemeManager.h>
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/WindowChrome.h>
+#include <fmstyle/StyleProps.h>
 
-#include "dlgDefaultCMD.hpp"
 #include "Components/cmpView.hpp"
 #include "cmpPanel.hpp"
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
@@ -36,6 +37,30 @@
 #include "UniqueLibs/qtPluginManagementPage.hpp"
 
 #include "cmnTypeDefs.hpp"
+
+namespace {
+// Footer status: one line with a leading state dot; the settings file path stays in the tooltip.
+class SettingsStatusLabel final : public QLabel {
+public:
+    explicit SettingsStatusLabel(QWidget* Parent) : QLabel(Parent) { setContentsMargins(16, 0, 0, 0); }
+protected:
+    void paintEvent(QPaintEvent* Event) override {
+        QLabel::paintEvent(Event);
+        QPainter Painter(this); Painter.setRenderHint(QPainter::Antialiasing);
+        Painter.setPen(Qt::NoPen); Painter.setBrush(fm::style::themeColorsFor(this)[fm::style::Token::Ok]);
+        Painter.drawEllipse(QPointF(4, height() / 2.0), 4, 4);
+    }
+};
+// A labelled switch row: caption at the left edge, switch at the right edge (Paper Fluent board).
+QWidget* SwitchRow(QCheckBox* Check, QWidget* Parent)
+{
+    auto* Row = new QWidget(Parent); auto* Layout = new QHBoxLayout(Row); Layout->setContentsMargins(0, 0, 0, 0);
+    auto* Caption = new QLabel(Check->text(), Row); Caption->setBuddy(Check); Caption->setWordWrap(true); Caption->setToolTip(Check->toolTip());
+    Check->setAccessibleName(QString(Check->text()).remove('&')); Check->setText({}); fm::style::setSwitch(Check);
+    Layout->addWidget(Caption, 1); Layout->addWidget(Check, 0, Qt::AlignRight | Qt::AlignVCenter);
+    return Row;
+}
+}
 #include "fileSetMgr.hpp"
 
 QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
@@ -64,7 +89,11 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     DisplayLayout->addWidget(PanelTabs);
     auto* DisplayScroll = new QScrollArea(PanelTabs); DisplayScroll->setWidgetResizable(true);
     DisplayScroll->setObjectName("hc.settings.filePanelGeneral");
-    DisplayScroll->setFrameShape(QFrame::NoFrame); PanelTabs->addTab(DisplayScroll, tr("공통"));
+    DisplayScroll->setFrameShape(QFrame::NoFrame); PanelTabs->addTab(DisplayScroll, tr("목록 보기"));
+    // Sizes, sorting and folder display move to their own tab so "목록 보기" fits one screen (board Set-02).
+    auto* SizeScroll = new QScrollArea(PanelTabs); SizeScroll->setWidgetResizable(true); SizeScroll->setFrameShape(QFrame::NoFrame);
+    SizeScroll->setObjectName("hc.settings.filePanelSizes"); PanelTabs->addTab(SizeScroll, tr("크기 · 정렬 · 폴더 표시"));
+    auto* SizeBody = new QWidget; auto* SizeRows = new QVBoxLayout(SizeBody); SizeScroll->setWidget(SizeBody); SizeRows->setSpacing(12);
     auto* IconScroll = new QScrollArea(PanelTabs); IconScroll->setWidgetResizable(true);
     IconScroll->setFrameShape(QFrame::NoFrame); PanelTabs->addTab(IconScroll, tr("아이콘"));
     auto* IconBody = new QWidget; auto* IconRows = new QVBoxLayout(IconBody); IconScroll->setWidget(IconBody);
@@ -98,16 +127,19 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
         const bool Enabled = iconModes_->checkedId() != 3;
         ShellOptions->setEnabled(Enabled); ui.chkIsDimmedIconWhenHidden->setEnabled(Enabled);
     });
-    auto* Sizes = new QFormLayout;
+    auto* SizeCard = new QGroupBox(tr("크기 표시"), SizeBody); auto* Sizes = new QFormLayout(SizeCard); Sizes->setContentsMargins(14, 12, 14, 14);
     Sizes->addRow(ui.lblHeaderSizeDisplay, ui.cbxHeaderSizeDisplay);
-    Sizes->addRow(ui.lblFooterSizeDisplay, ui.cbxFooterSizeDisplay); DisplayRows->addLayout(Sizes);
-    DisplayRows->addWidget(ui.lblSortMethod);
-    for (auto* Choice : {ui.chkSortCaseSensitive, ui.chkSortLocaleAware, ui.chkSortNumericAware}) DisplayRows->addWidget(Choice);
-    auto* DirectoryRows = new QVBoxLayout;
+    Sizes->addRow(ui.lblFooterSizeDisplay, ui.cbxFooterSizeDisplay); SizeRows->addWidget(SizeCard);
+    auto* SortCard = new QGroupBox(ui.lblSortMethod->text(), SizeBody); auto* SortRows = new QVBoxLayout(SortCard); SortRows->setContentsMargins(14, 12, 14, 14);
+    ui.lblSortMethod->hide();
+    for (auto* Choice : {ui.chkSortCaseSensitive, ui.chkSortLocaleAware, ui.chkSortNumericAware}) SortRows->addWidget(Choice);
+    SizeRows->addWidget(SortCard);
+    auto* DirectoryCard = new QGroupBox(ui.lblDirectory->text(), SizeBody); auto* DirectoryRows = new QVBoxLayout(DirectoryCard); DirectoryRows->setContentsMargins(14, 12, 14, 14);
+    ui.lblDirectory->hide();
     for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) DirectoryRows->addWidget(Choice);
-    DisplayRows->addWidget(ui.lblDirectory); DisplayRows->addLayout(DirectoryRows);
+    SizeRows->addWidget(DirectoryCard);
     ui.widget_4->hide();
-    DisplayRows->addStretch();
+    SizeRows->addStretch(); DisplayRows->addStretch();
     ui.lstOptCate->setStyleSheet({});
     // Removing the legacy stylesheet can leave an explicit light palette on
     // the item view. Refresh it with the same tokens as the product theme.
@@ -452,7 +484,7 @@ bool QMainOpts::SaveSettings()
         RefreshColorScheme(TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme());
     }
     if (!hc::settings::AppSettings().Commit()) {
-        QMessageBox Message(QMessageBox::Warning, tr("설정 저장 실패"),
+        hc::ui::MessageDialog Message(QMessageBox::Warning, tr("설정 저장 실패"),
             tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
         auto* Reload = Message.addButton(tr("디스크에서 다시 읽기"), QMessageBox::ResetRole);
         Message.exec();
@@ -461,14 +493,14 @@ bool QMainOpts::SaveSettings()
     }
     if (passwordSettings_ && !passwordSettings_->Apply()) {
         if (!hc::settings::AppSettings().Replace(PreviousSettings) || !hc::settings::AppSettings().Commit())
-            QMessageBox::warning(this, tr("설정 복구 실패"), tr("비밀번호 저장 실패 후 기존 설정을 복구하지 못했습니다. 디스크에서 다시 읽어 주세요."));
+            hc::ui::MessageDialog::warning(this, tr("설정 복구 실패"), tr("비밀번호 저장 실패 후 기존 설정을 복구하지 못했습니다. 디스크에서 다시 읽어 주세요."));
         return false;
     }
     if (ColumnsChanged) {
         for (int Index = 0; Index < Targets.size(); ++Index) if (!Targets[Index] || !Targets[Index]->ApplyColumnProfile(columnEditor_->Profile())) {
             for (int Restore = 0; Restore < Index; ++Restore) if (Targets[Restore]) Targets[Restore]->ApplyColumnProfile(PreviousProfiles[Restore]);
             const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
-            QMessageBox::warning(this, tr("컬럼 적용 실패"), Restored ? tr("기존 설정을 복구했습니다. 편집 내용을 확인한 후 다시 적용하세요.") : tr("패널 적용 및 설정 복구에 실패했습니다. 디스크 설정을 다시 읽어 주세요.")); return false;
+            hc::ui::MessageDialog::warning(this, tr("컬럼 적용 실패"), Restored ? tr("기존 설정을 복구했습니다. 편집 내용을 확인한 후 다시 적용하세요.") : tr("패널 적용 및 설정 복구에 실패했습니다. 디스크 설정을 다시 읽어 주세요.")); return false;
         }
         for (const auto& View : Targets) if (View) { View->SetAutomaticColumns(columnEditor_->AutomaticTab()); emit View->sigViewSettingsChanged(); }
 
@@ -476,7 +508,7 @@ bool QMainOpts::SaveSettings()
     if (menuSettings_ && !menuSettings_->CommitPrepared()) {
         for (int I = 0; I < Targets.size(); ++I) if (Targets[I]) Targets[I]->ApplyColumnProfile(PreviousProfiles[I]);
         const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
-        QMessageBox::warning(this, tr("메뉴 저장 실패"), Restored ? tr("기존 설정과 메뉴를 유지했습니다. 메뉴 페이지에서 오류를 확인하세요.") : tr("메뉴 저장 및 설정 복구에 실패했습니다. 디스크 설정을 확인하세요.")); return false;
+        hc::ui::MessageDialog::warning(this, tr("메뉴 저장 실패"), Restored ? tr("기존 설정과 메뉴를 유지했습니다. 메뉴 페이지에서 오류를 확인하세요.") : tr("메뉴 저장 및 설정 복구에 실패했습니다. 디스크 설정을 확인하세요.")); return false;
     }
     TyStFileSetMgr::GetInstance()->Refresh(); TyStPlugInMgr::GetInstance()->Refresh();
     TyStCommandMgr::GetInstance()->Refresh();
@@ -626,44 +658,6 @@ void QMainOpts::on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QLis
 /// Content
 
 /// Page = pdDisplay_ColorScheme
-void QMainOpts::on_btnAddShortcutCMD_clicked( bool checked )
-{
-    const auto StCommandMgr = TyStCommandMgr::GetInstance();
-    const auto Input = ui.keySequenceEdit->keySequence();
-    if( Input.isEmpty() == true )
-    {
-        QMessageBox::information(this, tr("단축키"), tr("먼저 단축키를 입력하세요."));
-        return;
-    }
-    if (Input.count() != 1) { QMessageBox::information(this, tr("단축키"), tr("한 번의 키 조합만 사용할 수 있습니다.")); return; }
-
-    QDefaultCMDUI Ui;
-
-    const auto Ret = Ui.exec();
-    if( Ret == Rejected )
-        return;
-
-    const auto Selected = Ui.GetSelectedCMD();
-    if( Selected.Name.isEmpty() == true )
-    {
-        // TODO: 안내 메시지
-        return;
-    }
-    const auto Existing = StCommandMgr->Retrieve().value(Input[0]);
-    if (!Existing.isEmpty() && Existing != Selected.Name && QMessageBox::question(this, tr("단축키 충돌"),
-        tr("%1은(는) 현재 '%2'에 연결되어 있습니다. '%3'으로 변경하시겠습니까?").arg(Input.toString(), StCommandMgr->GetDefaultCMD(Existing).Desc, Selected.Desc)) != QMessageBox::Yes) return;
-
-    StCommandMgr->SetShortcutWithCMD( Input[ 0 ], Selected.Name );
-    const auto Row = ui.tblShortCut->rowCount();
-    ui.tblShortCut->setRowCount( Row + 1 );
-    ui.tblShortCut->setItem( Row, 0, new QTableWidgetItem( Selected.Name ) );
-    ui.tblShortCut->setItem( Row, 1, new QTableWidgetItem( QKeySequence( Selected.Default ).toString() ) );
-    ui.tblShortCut->setItem( Row, 2, new QTableWidgetItem( Input.toString() ) );
-    ui.tblShortCut->setItem( Row, 3, new QTableWidgetItem( Selected.Desc ) );
-
-    RefreshShortcuts();
-}
-
 void QMainOpts::on_btnDelShortcutCMD_clicked( bool checked )
 {
     const auto StCommandMgr = TyStCommandMgr::GetInstance();
@@ -870,10 +864,12 @@ void QMainOpts::initializeDesignPages()
     themeSettings_ = new hc::ui::ThemeSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(themeSettings_);
     auto* General = Page(tr("일반 · 모양"), tr("테마·강조색·글꼴과 시작 동작을 설정합니다. 적용 전 변경은 초안에 유지됩니다."));
     auto* GeneralLayout = qobject_cast<QVBoxLayout*>(General->layout());
-    auto* GeneralScroll = new QScrollArea(General); GeneralScroll->setWidgetResizable(true); GeneralScroll->setFrameShape(QFrame::NoFrame); GeneralLayout->addWidget(GeneralScroll, 1);
+    auto* GeneralScroll = new QScrollArea(General); GeneralScroll->setWidgetResizable(true); GeneralScroll->setFrameShape(QFrame::NoFrame); GeneralScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); GeneralLayout->addWidget(GeneralScroll, 1);
     auto* GeneralBody = new QWidget; GeneralScroll->setWidget(GeneralBody); auto* GeneralGrid = new QGridLayout(GeneralBody); GeneralGrid->setColumnStretch(0, 1); GeneralGrid->setColumnStretch(1, 1);
-    auto* ThemeCard = new fm::ui::Card(GeneralBody); auto* ThemeForm = new QVBoxLayout(ThemeCard); GeneralGrid->addWidget(ThemeCard, 0, 0);
-    ThemeForm->addWidget(new QLabel(tr("테마"), ThemeCard)); auto* Modes = new QHBoxLayout; ThemeForm->addLayout(Modes);
+    GeneralGrid->setContentsMargins(0, 0, 0, 0); GeneralGrid->setSpacing(12);
+    auto* ThemeCard = new QGroupBox(tr("테마"), GeneralBody); auto* ThemeForm = new QVBoxLayout(ThemeCard); GeneralGrid->addWidget(ThemeCard, 0, 0);
+    ThemeForm->setContentsMargins(14, 12, 14, 14); ThemeForm->setSpacing(8);
+    auto* Modes = new QHBoxLayout; ThemeForm->addLayout(Modes);
     auto* Theme = new QComboBox(General); Theme->setObjectName("hc.settings.theme"); Theme->addItems({tr("라이트"), tr("다크"), tr("시스템")}); Theme->hide();
     auto* Group = new QButtonGroup(this); Group->setExclusive(true);
     for (int I : {2, 0, 1}) {
@@ -891,68 +887,94 @@ void QMainOpts::initializeDesignPages()
     });
     auto* Accent = new fm::ui::AccentPicker(ThemeCard); Accent->setObjectName("hc.settings.accent"); ThemeForm->addWidget(new QLabel(tr("강조색 · 버튼·진행·선택"), ThemeCard)); ThemeForm->addWidget(Accent);
     connect(Accent, &fm::ui::AccentPicker::accentChosen, this, [this](const auto& Color) { themeSettings_->SetAccent(Color); });
-    connect(Accent, &fm::ui::AccentPicker::customRequested, this, [this, Accent] { const auto Color = QColorDialog::getColor(Accent->current().value_or(QColor("#1F5FD1")), this); if (Color.isValid()) { Accent->setCurrent(Color); themeSettings_->SetAccent(Color); } });
+    connect(Accent, &fm::ui::AccentPicker::customRequested, this, [this, Accent] { const auto Color = QColorDialog::getColor(Accent->current().value_or(fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent]), this); if (Color.isValid()) { Accent->setCurrent(Color); themeSettings_->SetAccent(Color); } });
     auto* SystemAccent = new QCheckBox(tr("Windows 강조색 사용"), ThemeCard); SystemAccent->setObjectName("hc.settings.systemAccent"); ThemeForm->addWidget(SystemAccent);
     connect(SystemAccent, &QCheckBox::toggled, this, [this](bool On) { themeSettings_->SetSystemAccent(On); });
     themeSettings_->onChanged_ = [this, Accent, SystemAccent, Group] {
         Accent->setCurrent(themeSettings_->Scheme().seeds.accent); const QSignalBlocker Block(SystemAccent); SystemAccent->setChecked(themeSettings_->Scheme().seeds.useSystemAccent);
-        for (auto* B : Group->buttons()) static_cast<fm::ui::ThemeModeCard*>(B)->setAccent(themeSettings_->Scheme().seeds.accent.value_or(QColor("#1F5FD1")));
+        for (auto* B : Group->buttons()) static_cast<fm::ui::ThemeModeCard*>(B)->setAccent(themeSettings_->Scheme().seeds.accent.value_or(fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent]));
     };
     auto* DarkTitle = new QCheckBox(tr("다크 테마에서 제목 표시줄도 어둡게"), ThemeCard); DarkTitle->setObjectName("hc.settings.darkTitle"); ThemeForm->addWidget(DarkTitle);
-    auto* ColorEdit = new QPushButton(tr("색 편집(&T)..."), ThemeCard); ThemeForm->addWidget(ColorEdit); connect(ColorEdit, &QPushButton::clicked, this, [this] {
+    auto* ColorEdit = new QPushButton(tr("색 편집(&T)..."), ThemeCard); ThemeForm->addWidget(ColorEdit, 0, Qt::AlignLeft); ThemeForm->addStretch(); connect(ColorEdit, &QPushButton::clicked, this, [this] {
         for (int R = 0; R < ui.lstOptCate->count(); ++R) if (ui.lstOptCate->item(R)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(themeSettings_)) ui.lstOptCate->setCurrentRow(R);
     });
-    auto* Fonts = new fm::ui::Card(GeneralBody); auto* FontForm = new QFormLayout(Fonts); FontForm->setRowWrapPolicy(QFormLayout::WrapLongRows); GeneralGrid->addWidget(Fonts, 1, 0);
+    // Fonts span both columns as a two-pair grid: caption · family · size, so the page fits without scrolling.
+    auto* Fonts = new QGroupBox(tr("글꼴"), GeneralBody); auto* FontGrid = new QGridLayout(Fonts); GeneralGrid->addWidget(Fonts, 1, 0, 1, 2);
+    FontGrid->setContentsMargins(14, 12, 14, 14); FontGrid->setHorizontalSpacing(10); FontGrid->setVerticalSpacing(8);
+    FontGrid->setColumnStretch(1, 1); FontGrid->setColumnStretch(4, 1);
     const QStringList FontKeys{"list", "menu", "dialog"};
     const QStringList FontLabels{tr("목록 글꼴(&F)"), tr("메뉴 글꼴"), tr("대화상자 글꼴")};
+    const auto Place = [FontGrid, Fonts](int Index, const QString& Caption, QWidget* Field, QWidget* Size) {
+        const int Row = Index / 2, Column = (Index % 2) * 3;
+        auto* Label = new QLabel(Caption, Fonts); Label->setBuddy(Field);
+        // Font names can be long; let the columns share the card width instead of widening the page.
+        if (auto* Combo = qobject_cast<QComboBox*>(Field)) { Combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Combo->setMinimumContentsLength(10); }
+        FontGrid->addWidget(Label, Row, Column); FontGrid->addWidget(Field, Row, Column + 1);
+        if (Size) FontGrid->addWidget(Size, Row, Column + 2);
+    };
+    // Columns per pair: 0 caption · 1 family · 2 size | 3 caption · 4 family · 5 size.
     for (int I = 0; I < 3; ++I) {
-        auto* Row = new QWidget(Fonts); auto* Fields = new QHBoxLayout(Row); Fields->setContentsMargins(0, 0, 0, 0);
-        auto* Font = new QFontComboBox(Row); Font->setObjectName("hc.settings." + FontKeys[I] + "Font"); Fields->addWidget(Font, 1);
-        auto* Size = new QSpinBox(Row); Size->setObjectName("hc.settings." + FontKeys[I] + "FontSize"); Size->setRange(6, 72); Size->setSuffix(tr(" pt")); Fields->addWidget(Size);
-        FontForm->addRow(FontLabels[I], Row);
+        auto* Font = new QFontComboBox(Fonts); Font->setObjectName("hc.settings." + FontKeys[I] + "Font");
+        auto* Size = new QSpinBox(Fonts); Size->setObjectName("hc.settings." + FontKeys[I] + "FontSize"); Size->setRange(6, 72); Size->setSuffix(tr(" pt"));
+        Place(I == 2 ? 2 : I, FontLabels[I], Font, Size);
     }
-    auto* Mono = new QFontComboBox(Fonts); Mono->setObjectName("hc.settings.monoFont"); Mono->setFontFilters(QFontComboBox::MonospacedFonts); FontForm->addRow(tr("고정폭 글꼴(&C)"), Mono);
-    auto* MonoSize = new QSpinBox(Fonts); MonoSize->setObjectName("hc.settings.monoSize"); MonoSize->setRange(9, 36); FontForm->addRow(tr("고정폭 글자 크기 · px"), MonoSize);
-    DisabledCombo(FontForm, tr("화면 배율"), {tr("Windows 시스템 설정 따름")}, tr("화면 배율은 Windows 디스플레이 설정에서 변경합니다."));
-    auto* Startup = new fm::ui::Card(GeneralBody); auto* StartupForm = new QFormLayout(Startup); StartupForm->setRowWrapPolicy(QFormLayout::WrapLongRows); GeneralGrid->addWidget(Startup, 0, 1);
+    auto* Mono = new QFontComboBox(Fonts); Mono->setObjectName("hc.settings.monoFont"); Mono->setFontFilters(QFontComboBox::MonospacedFonts);
+    auto* MonoSize = new QSpinBox(Fonts); MonoSize->setObjectName("hc.settings.monoSize"); MonoSize->setRange(9, 36); MonoSize->setSuffix(tr(" px"));
+    Place(3, tr("고정폭 글꼴(&C)"), Mono, MonoSize);
+    auto* Scale = new QComboBox(Fonts); Scale->addItem(tr("Windows 시스템 설정 따름")); Scale->setEnabled(false);
+    Scale->setToolTip(tr("화면 배율은 Windows 디스플레이 설정에서 변경합니다.")); Scale->setAccessibleDescription(Scale->toolTip());
+    Place(4, tr("화면 배율"), Scale, nullptr);
+    auto* Startup = new QGroupBox(tr("시작과 창"), GeneralBody); auto* StartupForm = new QFormLayout(Startup); StartupForm->setRowWrapPolicy(QFormLayout::WrapLongRows); GeneralGrid->addWidget(Startup, 0, 1);
+    StartupForm->setContentsMargins(14, 12, 14, 14); StartupForm->setVerticalSpacing(8);
     auto* StartMode = new QComboBox(Startup); StartMode->setObjectName("hc.settings.startup"); StartMode->addItems({tr("마지막 탭과 폴더 복원"), tr("기본 작업공간으로 시작")}); StartupForm->addRow(tr("시작할 때"), StartMode);
-    auto* Line = new QCheckBox(tr("명령줄 표시"), Startup); Line->setObjectName("hc.settings.showCommandLine"); StartupForm->addRow(Line);
-    auto* FunctionBar = new QCheckBox(tr("기능 키 막대 표시"), Startup); FunctionBar->setObjectName("hc.settings.showFunctionBar"); StartupForm->addRow(FunctionBar);
-    auto* Single = new QCheckBox(tr("창 하나만 실행 · 기존 창에 새 탭"), Startup); Single->setObjectName("hc.settings.singleInstance"); Single->setToolTip(tr("다음 실행부터 적용합니다. 같은 사용자·설정 폴더의 기존 창에 경로를 새 탭으로 전달합니다.")); StartupForm->addRow(Single);
-    auto* Tabs = new fm::ui::Card(GeneralBody); auto* TabForm = new QFormLayout(Tabs); GeneralGrid->addWidget(Tabs, 1, 1);
+    auto* Line = new QCheckBox(tr("명령줄 표시"), Startup); Line->setObjectName("hc.settings.showCommandLine"); StartupForm->addRow(SwitchRow(Line, Startup));
+    auto* FunctionBar = new QCheckBox(tr("기능 키 막대 표시"), Startup); FunctionBar->setObjectName("hc.settings.showFunctionBar"); StartupForm->addRow(SwitchRow(FunctionBar, Startup));
+    auto* Single = new QCheckBox(tr("창 하나만 실행 · 기존 창에 새 탭"), Startup); Single->setObjectName("hc.settings.singleInstance"); Single->setToolTip(tr("다음 실행부터 적용합니다. 같은 사용자·설정 폴더의 기존 창에 경로를 새 탭으로 전달합니다.")); StartupForm->addRow(SwitchRow(Single, Startup));
+    // The new-tab position belongs to the same "시작과 창" card on the board.
+    auto* Tabs = Startup; auto* TabForm = StartupForm;
     auto* TabPosition = new QComboBox(Tabs); TabPosition->setObjectName("hc.settings.newTabPosition"); TabPosition->addItems({tr("마지막"), tr("현재 탭 오른쪽"), tr("현재 탭 왼쪽"), tr("처음")}); TabForm->addRow(tr("새 탭 위치"), TabPosition);
     auto* TabNote = new QLabel(tr("보기·열 설정은 탭별로 기억합니다. 전체 기본값과 현재 탭의 예외는 ‘파일 패널’에서 구분합니다."), Tabs); TabNote->setWordWrap(true); TabForm->addRow(TabNote);
     GeneralGrid->setRowStretch(2, 1);
     auto* DisplayBody = ui.pgDisplay->findChild<QScrollArea*>("hc.settings.filePanelGeneral")->widget();
     auto* DisplayRows = qobject_cast<QVBoxLayout*>(DisplayBody->layout());
-    listCard_ = new fm::ui::Card(DisplayBody); listCard_->setObjectName("hc.settings.listPresentation");
-    auto* ListColumns = new QHBoxLayout(listCard_); auto* ListControls = new QWidget(listCard_); ListColumns->addWidget(ListControls, 1);
-    auto* ListForm = new QFormLayout(ListControls); ListForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    auto* PreviewCard = new fm::ui::Card(listCard_); ListColumns->addWidget(PreviewCard, 1); auto* PreviewRows = new QVBoxLayout(PreviewCard);
-    PreviewRows->addWidget(new QLabel(tr("미리보기 · 적용 전 예제 · 1줄/2줄"), PreviewCard));
+    listCard_ = new QWidget(DisplayBody); listCard_->setObjectName("hc.settings.listPresentation");
+    auto* ListColumns = new QHBoxLayout(listCard_); ListColumns->setContentsMargins(0, 0, 0, 0); ListColumns->setSpacing(12);
+    auto* ListControls = new QWidget(listCard_); ListColumns->addWidget(ListControls, 1);
+    auto* ListCards = new QVBoxLayout(ListControls); ListCards->setContentsMargins(0, 0, 0, 0); ListCards->setSpacing(12);
+    const auto Section = [ListControls, ListCards](const QString& Caption) {
+        auto* Box = new QGroupBox(Caption, ListControls); auto* Form = new QFormLayout(Box); Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        Form->setContentsMargins(14, 12, 14, 14); Form->setVerticalSpacing(8); ListCards->addWidget(Box); return Form;
+    };
+    auto* ListForm = Section(tr("기본 보기"));
+    auto* PreviewCard = new QGroupBox(tr("미리보기 · 적용 전 예제 · 1줄/2줄"), listCard_); ListColumns->addWidget(PreviewCard, 1); auto* PreviewRows = new QVBoxLayout(PreviewCard);
+    PreviewRows->setContentsMargins(12, 10, 12, 12);
     auto* One = new fm::filelist::RecordPreview(PreviewCard); auto* Two = new fm::filelist::RecordPreview(PreviewCard); One->setObjectName("hc.settings.oneLinePreview"); Two->setObjectName("hc.settings.twoLinePreview");
     const QList<fm::filelist::RecordPreview::Row> PreviewFiles{{"Projects", tr("폴더")}, {tr("긴 파일 이름과 확장자를 보존하는 자료.tar.gz"), "7.2 MB", true}, {"MainWindow.cpp", "24.1 KB", false, true}};
     One->SetRows(PreviewFiles); Two->SetRows(PreviewFiles); PreviewRows->addWidget(One); PreviewRows->addWidget(Two); PreviewRows->addStretch();
-    auto* Header = new fm::ui::DialogHeader(ui.pgDisplay); Header->setTitle(tr("파일 패널")); Header->setSubtitle(tr("공통 탭에서 목록 표시를, 아이콘 탭에서 폴더·파일 아이콘을 설정합니다.")); qobject_cast<QVBoxLayout*>(ui.pgDisplay->layout())->insertWidget(0, Header);
-    auto* StateCard = new fm::ui::Card(PreviewCard); auto* StateRows = new QVBoxLayout(StateCard); PreviewRows->insertWidget(1, StateCard);
-    StateRows->addWidget(new QLabel(tr("커서 · 선택"), StateCard));
+    auto* Header = new fm::ui::DialogHeader(ui.pgDisplay); Header->setTitle(tr("파일 패널")); Header->setSubtitle(tr("목록 표시 · 크기와 정렬 · 아이콘을 탭으로 나눕니다. 미리보기는 목록 보기 탭에 있습니다.")); qobject_cast<QVBoxLayout*>(ui.pgDisplay->layout())->insertWidget(0, Header);
+    // Cursor and selection inversion sit on one line above the previews.
+    auto* StateCard = new QWidget(PreviewCard); auto* StateRows = new QHBoxLayout(StateCard); StateRows->setContentsMargins(0, 0, 0, 0); PreviewRows->insertWidget(0, StateCard);
     inverseCursor_ = new QCheckBox(StateCard); inverseCursor_->setObjectName("hc.settings.inverseCursor");
     inverseSelection_ = new QCheckBox(StateCard); inverseSelection_->setObjectName("hc.settings.inverseSelection");
-    inverseCursor_->setText(tr("커서 색상 반전")); inverseSelection_->setText(tr("선택 색상 반전")); StateRows->addWidget(inverseCursor_); StateRows->addWidget(inverseSelection_);
-    auto* Title = new QLabel(tr("목록 보기"), listCard_); ListForm->addRow(Title);
-    const auto Choice = [this, ListForm](const QString& Name, const QString& Label, const QStringList& Items) {
-        auto* Combo = new QComboBox(listCard_); Combo->setObjectName(Name); Combo->addItems(Items); ListForm->addRow(Label, Combo); return Combo;
+    inverseCursor_->setText(tr("커서 색상 반전")); inverseSelection_->setText(tr("선택 색상 반전")); StateRows->addWidget(inverseCursor_); StateRows->addWidget(inverseSelection_); StateRows->addStretch();
+    auto* ChoiceForm = ListForm;
+    const auto Choice = [this, &ChoiceForm](const QString& Name, const QString& Label, const QStringList& Items) {
+        auto* Combo = new QComboBox(listCard_); Combo->setObjectName(Name); Combo->addItems(Items); ChoiceForm->addRow(Label, Combo); return Combo;
     };
     listDefault_ = Choice("hc.settings.listDefault", tr("기본 보기"), {tr("1줄"), tr("2줄"), tr("자동"), tr("썸네일")});
     oneLineSeparator_ = Choice("hc.settings.oneLineSeparator", tr("1줄 레코드 구분"), {tr("없음"), tr("교차 배경"), tr("구분선"), tr("여백"), tr("메타데이터 틴트")});
     twoLineSeparator_ = Choice("hc.settings.twoLineSeparator", tr("2줄 레코드 구분"), {tr("없음"), tr("교차 배경"), tr("구분선"), tr("여백"), tr("메타데이터 틴트")});
     listDensity_ = Choice("hc.settings.listDensity", tr("행 밀도"), {tr("조밀"), tr("보통"), tr("여유")});
+    ChoiceForm = Section(tr("긴 이름")); ListForm = ChoiceForm;
     listElide_ = Choice("hc.settings.listElide", tr("긴 이름 표시"), {tr("확장자를 보존하는 가운데 줄임"), tr("끝 줄임"), tr("가운데 줄임")});
     listNameBelow_ = new QCheckBox(tr("2줄 보기에서 이름을 아래 줄에 표시"), listCard_); listNameBelow_->setObjectName("hc.settings.listNameBelow"); ListForm->addRow(listNameBelow_);
     listAutoWidth_ = new QSpinBox(listCard_); listAutoWidth_->setObjectName("hc.settings.listAutoWidth"); listAutoWidth_->setRange(100, 4000); listAutoWidth_->setSuffix(tr(" DIP"));
     listAutoPercent_ = new QSpinBox(listCard_); listAutoPercent_->setObjectName("hc.settings.listAutoPercent"); listAutoPercent_->setRange(5, 100); listAutoPercent_->setSuffix("%");
+    ListForm = Section(tr("자동 보기 전환"));
     ListForm->addRow(tr("자동: 이 폭보다 좁으면 2줄"), listAutoWidth_); ListForm->addRow(tr("자동: 잘린 이름 비율 이상이면 2줄"), listAutoPercent_);
-    auto* AutoHelp = new QLabel(tr("표시 중인 목록에서 최대 2,048개 이름을 고르게 측정합니다. 2줄에서 1줄로 복귀할 때는 폭 32 DIP·비율 5%의 안정 구간을 적용합니다."), listCard_); AutoHelp->setWordWrap(true); ListForm->addRow(AutoHelp);
+    // The measurement detail is a tooltip on the board; the card keeps one hint line.
+    const auto AutoDetail = tr("표시 중인 목록에서 최대 2,048개 이름을 고르게 측정합니다. 2줄에서 1줄로 복귀할 때는 폭 32 DIP·비율 5%의 안정 구간을 적용합니다.");
+    listAutoWidth_->setToolTip(AutoDetail); listAutoPercent_->setToolTip(AutoDetail);
     listScope_ = new QLabel(tr("기본값은 이를 따르는 탭과 새 탭에 적용합니다."), listCard_); listScope_->setWordWrap(true); ListForm->addRow(listScope_);
     useListDefault_ = new QPushButton(tr("현재 탭도 설정 기본값 따르기(&D)"), listCard_); useListDefault_->setObjectName("hc.settings.useListDefault"); useListDefault_->setEnabled(false); ListForm->addRow(useListDefault_);
     connect(useListDefault_, &QPushButton::clicked, this, [this] { resetListModeDraft_ = true; listScope_->setText(tr("적용/확인을 누르면 현재 탭이 설정 기본값을 따릅니다.")); ui.btnApply->setEnabled(true); });
@@ -964,7 +986,7 @@ void QMainOpts::initializeDesignPages()
     for (auto* C : {oneLineSeparator_, twoLineSeparator_, listDensity_, listElide_}) connect(C, &QComboBox::currentIndexChanged, this, UpdatePreview);
     connect(inverseCursor_, &QCheckBox::toggled, this, UpdatePreview); connect(inverseSelection_, &QCheckBox::toggled, this, UpdatePreview);
     connect(listNameBelow_, &QCheckBox::toggled, this, UpdatePreview); UpdatePreview();
-    DisplayRows->insertWidget(0, listCard_);
+    ListCards->addStretch(); DisplayRows->insertWidget(0, listCard_);
     thumbnailSettings_ = new hc::ui::ThumbnailSettingsPage(ui.stkOpts);
     auto* Thumbnails = thumbnailSettings_; ui.stkOpts->addWidget(Thumbnails);
     // Keep height-for-width changes in this page from increasing the dialog's minimum height.
@@ -985,15 +1007,16 @@ void QMainOpts::initializeDesignPages()
         Scroll->setWidget(Body); JobsTabs->addTab(Scroll, Title); return Rows;
     };
     const auto JobGroup = [](QVBoxLayout* Rows, const QString& Title) {
-        auto* Card = new fm::ui::Card(Rows->parentWidget()); auto* Form = new QFormLayout(Card);
-        Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-        Form->addRow(new QLabel(Title, Card)); Rows->addWidget(Card); return Form;
+        // Titled card (board Set-06): the title sits in the card header band.
+        auto* Card = new fm::ui::Card(Title, Rows->parentWidget()); auto* Form = new QFormLayout(Card);
+        Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Form->setContentsMargins(14, 10, 14, 12); Form->setVerticalSpacing(8);
+        Rows->setSpacing(12); Rows->addWidget(Card); return Form;
     };
     auto* CommonRows = JobTab(tr("공통"), "hc.settings.fileOperationsCommon");
     auto* FolderForm = JobGroup(CommonRows, tr("하위 폴더 점유 공간 계산"));
     const auto AddFolderCheck = [&](const QString& Text, const char* Key) {
         auto* Check = new QCheckBox(Text, FolderForm->parentWidget()); Check->setObjectName(QString("hc.settings.") + Key);
-        FolderForm->addRow(Check); return Check;
+        FolderForm->addRow(SwitchRow(Check, FolderForm->parentWidget())); return Check;
     };
     AddFolderCheck(tr("Space로 폴더를 선택할 때(&W)"), "folderSizeOnSpace");
     AddFolderCheck(tr("복사·이동·삭제를 시작하기 전에(&B)"), "folderSizeBeforeOperations")
@@ -1006,8 +1029,8 @@ void QMainOpts::initializeDesignPages()
     FolderHelp->setWordWrap(true); FolderForm->addRow(FolderHelp);
     auto* ProgressForm = JobGroup(CommonRows, tr("진행창 · 완료 알림"));
     auto* Progress = ProgressForm->parentWidget();
-    defaultDetailed_ = new QCheckBox(tr("처음 열 때 그래프 보이기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(defaultDetailed_);
-    defaultClose_ = new QCheckBox(tr("성공하면 진행창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(defaultClose_);
+    defaultDetailed_ = new QCheckBox(tr("처음 열 때 그래프 보이기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(SwitchRow(defaultDetailed_, Progress));
+    defaultClose_ = new QCheckBox(tr("성공하면 진행창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(SwitchRow(defaultClose_, Progress));
     auto* Notification = new QComboBox(Progress); Notification->setObjectName("hc.settings.jobNotification"); Notification->addItems({tr("알리지 않음"), tr("상태 표시줄"), tr("상태 표시줄 · 작업 표시줄"), tr("상태 표시줄 · 작업 표시줄 · 소리")}); ProgressForm->addRow(tr("백그라운드 작업 완료 알림"), Notification);
     auto* QueueForm = JobGroup(CommonRows, tr("대기열 · 동시 실행"));
     auto* Queue = QueueForm->parentWidget();
@@ -1088,7 +1111,7 @@ void QMainOpts::initializeDesignPages()
         hc::settings::AppSettings().Put(hc::settings::Section::General, General); RefreshShortcuts();
     });
     connect(ResetKeys, &QPushButton::clicked, this, [this] {
-        if (QMessageBox::question(this, tr("단축키 초기화"), tr("사용자 지정 단축키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return;
+        if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 지정 단축키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return;
         hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, QJsonObject{}); RefreshShortcuts();
     });
     keyboardSettings_ = new hc::ui::KeyboardSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(keyboardSettings_);
@@ -1103,8 +1126,15 @@ void QMainOpts::initializeDesignPages()
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
         {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
-    auto* SaveStatus = new QLabel(this); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText); SaveStatus->setWordWrap(true); SaveStatus->setContentsMargins(12, 4, 12, 4);
-    SaveStatus->setText(tr("초안 · 적용/확인으로 저장 · 취소로 이전 설정 유지\n%1").arg(hc::settings::AppSettings().FileName())); ui.verticalLayout->insertWidget(ui.verticalLayout->count() - 1, SaveStatus);
+    // One footer row: state dot + status at the left, OK · Cancel · Apply at the right; the file path is a tooltip.
+    auto* SaveStatus = new SettingsStatusLabel(ui.frmFooter); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText);
+    SaveStatus->setText(tr("초안 · 적용/확인으로 저장 · 취소로 이전 설정 유지")); SaveStatus->setToolTip(hc::settings::AppSettings().FileName());
+    if (auto* Spacer = ui.horizontalLayout->itemAt(0); Spacer && Spacer->spacerItem()) delete ui.horizontalLayout->takeAt(0);
+    ui.horizontalLayout->insertWidget(0, SaveStatus, 1); ui.horizontalLayout->setContentsMargins(16, 8, 16, 8); ui.horizontalLayout->setSpacing(8);
+    ui.frmFooter->setFrameShape(QFrame::StyledPanel); fm::style::setFooter(ui.frmFooter);
+    fm::style::setButtonRole(ui.btnOK, fm::style::ButtonRole::Primary);
+    ui.lstOptCate->setProperty(fm::style::props::kSoftSelection, true); ui.lstOptCate->setFrameShape(QFrame::NoFrame);
+    for (int Row = 0; Row < ui.lstOptCate->count(); ++Row) ui.lstOptCate->item(Row)->setSizeHint(QSize(0, 30));
     auto* Sidebar = new QWidget(this); auto* SidebarLayout = new QVBoxLayout(Sidebar); SidebarLayout->setContentsMargins(0, 0, 0, 0);
     Sidebar->setObjectName("hc.settings.sidebar");
     Sidebar->setFixedWidth(qBound(210, ui.lstOptCate->sizeHintForColumn(0) + 32, 260));

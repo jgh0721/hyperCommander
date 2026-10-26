@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
+#include "qtMessageDialog.hpp"
 #include "fileJobUi.hpp"
 #include "UniqueLibs/qtArchivePassword.hpp"
 #include "folderSize.hpp"
@@ -26,6 +27,8 @@
 #include <QStatusBar>
 #include <QSignalBlocker>
 #include <QGroupBox>
+#include <fmstyle/ThemeManager.h>
+#include "qtDialogFrame.hpp"
 #include <QScrollArea>
 #include <QScreen>
 #include <fmwidgets/Button.h>
@@ -233,6 +236,16 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     cancel_ = new fm::ui::Button(tr("작업 취소(&C)"), dialog_); cancel_->setObjectName("hc.jobs.cancel");
     Buttons->addWidget(pause_); Buttons->addWidget(cancel_);
     auto* Hide = new fm::ui::Button(tr("백그라운드로(&B)"), dialog_); Hide->setObjectName("hc.jobs.background"); Buttons->addWidget(Hide);
+    {
+        // Footer band (board Prop-Jobs): close-on-success at the left, pause · cancel · background at the right.
+        // Interaction answers stay in the body, next to the question they answer.
+        hc::ui::DialogFrameOptions Frame; Frame.header_ = false;
+        auto* Footer = hc::ui::ApplyDialogFrame(dialog_, Frame);
+        auto* Outer = qobject_cast<QVBoxLayout*>(dialog_->layout()); Outer->setVerticalSizeConstraint(QLayout::SetMinimumSize);
+        hc::ui::PlaceHeaderBand(dialog_, header_);   // the band is the title bar; minimize takes the main window down too
+        autoClose_->setParent(Footer->parentWidget()); Footer->insertWidget(0, autoClose_);
+        for (auto* Button : {static_cast<QWidget*>(pause_), static_cast<QWidget*>(cancel_), static_cast<QWidget*>(Hide)}) hc::ui::MoveToFooter(Footer, Button);
+    }
     manager_ = new QDialog(Main); manager_->setObjectName("hc.jobManager");
     manager_->setWindowTitle(tr("백그라운드 작업 관리자")); manager_->resize(920, 780); manager_->setMinimumSize(640, 380);
     if (const auto* Screen = Main->screen()) {
@@ -308,7 +321,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     managerRetry_->setToolTip(tr("현재 세션의 일반 파일 복사·이동에서 목적지 저장 전 실패한 항목을 재검증합니다. 중단 기록·폴더·압축·삭제는 상세 결과를 확인하세요."));
     connect(managerStart_, &QPushButton::clicked, this, [this] {
         auto Result = scheduler_.Control({selectedId()}, JobControl::Start);
-        if (!Result.HasValue()) QMessageBox::warning(manager_, tr("대기열 시작 실패"), ErrorText(Result.Failure()));
+        if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 시작 실패"), ErrorText(Result.Failure()));
         updateManager(); updateSelection();
     });
     connect(managerRetry_, &QPushButton::clicked, this, [this] { retrySelected(); });
@@ -326,6 +339,12 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     SelectedRows->addLayout(ManagerButtons);
     auto* ManagerFooter = new QHBoxLayout; ManagerFooter->addStretch(); ManagerFooter->addWidget(CloseManager);
     CloseManager->setAutoDefault(false); ManagerLayout->addLayout(ManagerFooter);
+    {
+        hc::ui::DialogFrameOptions Frame; Frame.header_ = false;
+        auto* Footer = hc::ui::ApplyDialogFrame(manager_, Frame);
+        hc::ui::PlaceHeaderBand(manager_, ManagerHeader);
+        hc::ui::MoveToFooter(Footer, CloseManager);
+    }
     std::vector<QWidget*> FocusOrder{filter_, search_, jobList_, managerOpen_, managerStart_, managerPause_, managerCancel_, managerRetry_,
         StartQueue, queueUp_, queueDown_, concurrency_};
     for (const auto Control : {JobControl::Pause, JobControl::Resume, JobControl::Cancel})
@@ -364,7 +383,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
                 const auto Row = jobs_->findData(QString::fromStdString(Id)); if (Row >= 0) jobs_->removeItem(Row);
             }
             updateSelection(); updateManager();
-            if (Result.second) QMessageBox::warning(dialog_, tr("이력 삭제 실패"), QString::fromStdString(Result.second->code_));
+            if (Result.second) hc::ui::MessageDialog::warning(dialog_, tr("이력 삭제 실패"), QString::fromStdString(Result.second->code_));
         });
         Watcher->setFuture(QtConcurrent::run([Journal = journal_, Ids = std::move(Ids)]() -> EraseResult {
             EraseResult Result;
@@ -572,7 +591,7 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
         std::vector<std::string> Ids; for (const auto& Value : Queue) Ids.push_back(Value.id_);
         if (!Ids.empty()) {
             const auto Reordered = scheduler_.ReorderQueued(Ids);
-            if (!Reordered.HasValue()) QMessageBox::warning(manager_, tr("대기열 순서 변경 실패"), tr("작업은 접수되었습니다. 대기열이 변경되어 기본 순서를 적용하지 못했습니다. 현재 순서를 확인하세요."));
+            if (!Reordered.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 순서 변경 실패"), tr("작업은 접수되었습니다. 대기열이 변경되어 기본 순서를 적용하지 못했습니다. 현재 순서를 확인하세요."));
         }
     }
     autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(true));
@@ -606,7 +625,7 @@ void FileJobUi::controlSelected(bool Pause)
     const auto Current = scheduler_.Snapshot(Id);
     if (!Current.HasValue()) return;
     const auto Result = Pause ? scheduler_.Pause(Id, !Current.Value().pauseRequested_) : scheduler_.Cancel(Id);
-    if (!Result.HasValue()) QMessageBox::warning(dialog_->isVisible() ? dialog_ : manager_, tr("작업 제어 실패"), ErrorText(Result.Failure()));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(dialog_->isVisible() ? dialog_ : manager_, tr("작업 제어 실패"), ErrorText(Result.Failure()));
     updateSelection(); updateManager();
 }
 std::string FileJobUi::selectedId() const { return jobs_->currentData().toString().toStdString(); }
@@ -618,7 +637,7 @@ void FileJobUi::controlAll(JobControl Control)
         if (acceptsControl(Snapshot, Control)) Ids.push_back(Snapshot.id_);
     if (Ids.empty()) return;
     auto Result = scheduler_.Control(Ids, Control);
-    if (!Result.HasValue()) QMessageBox::warning(manager_, tr("일괄 제어 실패"), tr("작업 상태가 변경되었습니다. 목록을 확인하고 다시 실행하세요: %1").arg(ErrorText(Result.Failure())));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("일괄 제어 실패"), tr("작업 상태가 변경되었습니다. 목록을 확인하고 다시 실행하세요: %1").arg(ErrorText(Result.Failure())));
     updateManager(); updateSelection();
 }
 void FileJobUi::reorderSelected(int Direction)
@@ -633,7 +652,7 @@ void FileJobUi::reorderSelected(int Direction)
     std::swap(Values[Index], Values[Next]); std::vector<std::string> Ids;
     for (const auto& Snapshot : Values) Ids.push_back(Snapshot.id_);
     auto Result = scheduler_.ReorderQueued(Ids);
-    if (!Result.HasValue()) QMessageBox::warning(manager_, tr("순서 변경 실패"), ErrorText(Result.Failure()));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("순서 변경 실패"), ErrorText(Result.Failure()));
     updateManager(); updateSelection();
 }
 bool FileJobUi::canRetry(const std::string& Id) const
@@ -653,11 +672,11 @@ void FileJobUi::retrySelected()
         auto Record = preparedRetries_.at(Id); auto Context = retryContexts_.at(Id); const auto Original = results_.at(Id);
         Context.stopToken_ = {}; Context.deadline_ = std::chrono::steady_clock::time_point::max();
         auto Prepared = Record.build_(Original, Context);
-        if (!Prepared.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); return; }
+        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); return; }
         Prepared.Value().request_.metadata_ = Original.snapshot_.metadata_; Prepared.Value().request_.metadata_.retryOf_ = Id;
         const auto Label = QString::fromStdString(Original.snapshot_.metadata_.label_);
         auto Submitted = Submit(std::move(Prepared.Value()), Label, Record.build_, Record.submitted_);
-        if (!Submitted.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); return; }
+        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); return; }
         if (Record.submitted_) Record.submitted_(Submitted.Value().id_);
         preparedRetries_.erase(Id); retryContexts_.erase(Id); updateManager(); updateSelection(); return;
     }
@@ -674,15 +693,15 @@ void FileJobUi::retrySelected()
     connect(Watcher, &QFutureWatcher<RetryResult>::finished, this, [this, Watcher, Id, Context] {
         auto Candidate = Watcher->result(); Watcher->deleteLater();
         preparingRetry_.clear();
-        if (!Candidate.HasValue()) { QMessageBox::warning(manager_, tr("재시도 검증 실패"), ErrorText(Candidate.Failure())); updateSelection(); return; }
+        if (!Candidate.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 검증 실패"), ErrorText(Candidate.Failure())); updateSelection(); return; }
         if (closing_) return;
         const auto Parent = scheduler_.Snapshot(Id); if (!Parent.HasValue() || !canRetry(Id)) { updateSelection(); return; }
         const auto Request = Candidate.Value(); auto Prepared = PrepareFileOperation(Request, Context);
-        if (!Prepared.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); updateSelection(); return; }
+        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); updateSelection(); return; }
         Prepared.Value().request_.metadata_ = Parent.Value().metadata_;
         Prepared.Value().request_.metadata_.retryOf_ = Id; Prepared.Value().request_.metadata_.options_ = tr("충돌: 다시 확인 · 재시도: 저장 전 실패한 항목만").toStdString();
         auto Submitted = track(scheduler_.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)), Request.operation_, Request.sources_.front().entry_.name_);
-        if (!Submitted.HasValue()) { QMessageBox::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); updateSelection(); return; }
+        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); updateSelection(); return; }
         const auto NewId = Submitted.Value().id_; retryRequests_[NewId] = Request; retryContexts_[NewId] = Context; endpoints_[NewId] = endpoints_[Id];
         if (onResubmitted_) onResubmitted_(NewId, Request);
         updateManager(); updateSelection();
@@ -793,7 +812,7 @@ void FileJobUi::updateJobs()
         }
         if (Stored->second.snapshot_.state_ == JobState::Failed && !closing_) {
             const auto& Snapshot = Stored->second.snapshot_;
-            auto* Message = new QMessageBox(QMessageBox::Warning, tr("파일 작업 실패"),
+            auto* Message = new hc::ui::MessageDialog(QMessageBox::Warning, tr("파일 작업 실패"),
                 tr("파일 작업을 완료하지 못했습니다. 완료 %1 / 건너뜀 %2 / 실패 %3")
                     .arg(Snapshot.completedItems_).arg(Snapshot.skippedItems_).arg(Snapshot.failedItems_),
                 QMessageBox::Ok, dialog_->isVisible() ? dialog_ : main_.data());
@@ -1094,7 +1113,17 @@ void FileJobUi::updateManager()
     summary_->setToolTip(tr("속도는 최근 2초의 실제 처리량입니다. 삭제는 파일 수, 복사·이동은 바이트로 집계합니다. 10초 이상 변화가 없으면 지연으로 표시하며, 실패를 뜻하지 않습니다. 그래프는 최근 600개 표본을 보관합니다."));
     auto Rates = fm::ui::TransferGraph::formatRate(TotalRate) + tr(" · 삭제 %1 파일/초").arg(QLocale().toString(DeleteRate, 'f', 1));
     if (DeleteItemRate > 0) Rates += tr(" · 삭제 %1 항목/초").arg(QLocale().toString(DeleteItemRate, 'f', 1));
-    summary_->setText(tr("미완료 %1 · 대기열 %2 · 응답 필요 %3 · 완료 %4 · 실패·취소 %5\n전체 속도 %6 · 10초 이상 진행 지연 %7").arg(Active).arg(Queued).arg(Waiting).arg(Finished).arg(Failed).arg(Rates).arg(Delayed));
+    // Status counts as colored chips (board Prop-Jobs): active · queue · waiting · done · failed, then the rates.
+    const auto& ChipColors = fm::style::themeColorsFor(summary_);
+    const auto Chip = [&ChipColors](const QString& Text, int Count, fm::style::Token Fg, fm::style::Token Bg) {
+        return QString("<span style=\"background:%1;color:%2;\">&nbsp;%3 <b>%4</b>&nbsp;</span>").arg(ChipColors[Bg].name(), ChipColors[Fg].name(), Text.toHtmlEscaped()).arg(Count);
+    };
+    using fm::style::Token;
+    summary_->setTextFormat(Qt::RichText);
+    summary_->setText(Chip(tr("미완료"), Active, Token::AccentFg, Token::AccentSoft) + "&nbsp; " + Chip(tr("대기열"), Queued, Token::Fg2, Token::Alt) + "&nbsp; "
+        + Chip(tr("응답 필요"), Waiting, Token::Warn, Token::WarnBg) + "&nbsp; " + Chip(tr("완료"), Finished, Token::Ok, Token::OkBg) + "&nbsp; "
+        + Chip(tr("실패·취소"), Failed, Token::Danger, Token::DangerBg)
+        + "<br><span style=\"color:" + ChipColors[Token::Fg2].name() + ";\">" + tr("전체 속도 %1 · 10초 이상 진행 지연 %2").arg(Rates).arg(Delayed).toHtmlEscaped() + "</span>");
     std::map<QTreeWidgetItem*, bool> Hidden;
     for (int Index = 0; Index < jobList_->topLevelItemCount(); ++Index) Hidden[jobList_->topLevelItem(Index)] = jobList_->topLevelItem(Index)->isHidden();
     std::vector<QTreeWidgetItem*> Ordered;

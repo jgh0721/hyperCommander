@@ -50,8 +50,6 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     DECLARE_HC_COMMAND( FileRename );
     DECLARE_HC_COMMAND( ViewerOpen );
     DECLARE_HC_COMMAND( NavigateOpen );
-    DECLARE_HC_COMMAND( FileMkdir );
-    DECLARE_HC_COMMAND( FileDelete );
     DECLARE_HC_COMMAND( FileNormalize );
     DECLARE_HC_COMMAND( FileAttributes );
 

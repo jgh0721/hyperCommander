@@ -53,7 +53,6 @@ protected slots:
 
     
     /// Page = pgShortcut
-    void                                on_btnAddShortcutCMD_clicked( bool checked = false );
     void                                on_btnDelShortcutCMD_clicked( bool checked = false );
 
     /// Page = pgPluginManage

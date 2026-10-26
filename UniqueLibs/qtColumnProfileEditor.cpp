@@ -2,6 +2,7 @@
 #include "columnAutoSelection.hpp"
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/Card.h>
+#include <fmstyle/StyleProps.h>
 #include "qtColumnProfileEditor.hpp"
 #include "cmnHCUtils.hpp"
 #include <QScrollArea>
@@ -106,9 +107,9 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     Header->setSubtitle(tr("열을 추가하고, 미리보기의 열 머리글을 선택해 표시 형식을 편집하세요."));
     Outer->addWidget(Header);
     auto* Body = new QHBoxLayout; Outer->addLayout(Body, 1);
-    auto* ProfileCard = new fm::ui::Card(this); ProfileCard->setMinimumWidth(135); ProfileCard->setMaximumWidth(190);
-    auto* ProfileRows = new QVBoxLayout(ProfileCard); Body->addWidget(ProfileCard);
-    ProfileRows->addWidget(new QLabel(tr("열 세트"), ProfileCard));
+    auto* ProfileCard = new fm::ui::Card(tr("열 세트"), this); ProfileCard->setMinimumWidth(150); ProfileCard->setMaximumWidth(200);
+    auto* ProfileRows = new QVBoxLayout(ProfileCard); ProfileRows->setContentsMargins(8, 8, 8, 10); Body->addWidget(ProfileCard);
+    Body->setSpacing(12);
     profileList_ = new QListWidget(ProfileCard); profileList_->setObjectName("hc.columns.profileList");
     profileList_->setTextElideMode(Qt::ElideRight); profileList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     ProfileRows->addWidget(profileList_, 1);
@@ -197,6 +198,8 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     });
     primary_ = new QCheckBox(tr("주 이름 열로 사용"), Content); primary_->setObjectName("hc.columns.primary");
     splitNameExtension_ = new QCheckBox(tr("한 줄 보기에서 확장자 분리"), Content); splitNameExtension_->setObjectName("hc.columns.splitNameExtension");
+    // Board: these two toggles are switches.
+    fm::style::setSwitch(primary_); fm::style::setSwitch(splitNameExtension_);
     Form->addRow(primary_); Form->addRow(splitNameExtension_);
     connect(splitNameExtension_, &QCheckBox::toggled, this, [this](bool Checked) { if (!loading_) { draft_.splitNameExtension_ = Checked; dirty_ = true; updatePreview(); } });
     sizeFormat_ = Choice(Content, "hc.columns.sizeFormat", {tr("바이트"), tr("자동 단위"), "KiB", "MiB", "GiB"});
@@ -352,6 +355,8 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     previewGrid_ = new Qtitan::Grid(PreviewPanel); previewGrid_->setObjectName("hc.columns.previewGrid"); previewGrid_->setProperty("hc.fileGrid", true); previewGrid_->setViewType(Qtitan::Grid::BandedTableView);
     auto* PreviewView = previewGrid_->view<Qtitan::GridBandedTableView>(); PreviewView->options().setAutoCreateColumns(false); PreviewView->options().setGroupsHeader(false);
     PreviewView->options().setColumnMovingEnabled(false); PreviewView->options().setFieldChooserEnabled(false); PreviewView->options().setGridLines(Qtitan::LinesNone);
+    // A sample table, not a file panel: no cursor or focus frame, the selected column is tinted instead.
+    PreviewView->options().setFocusFrameEnabled(false); PreviewView->options().setShowFocusDecoration(false);
     PreviewView->setFileManagerMode(true); PreviewView->options().setModelDecoration(true); PreviewView->options().setRowAutoHeight(true); PreviewView->tableOptions().setColumnsQuickCustomization(false);
     PreviewView->bandedOptions().setBandsHeader(false); PreviewView->bandedOptions().setBandsQuickCustomization(false); PreviewView->addBand("Preview");
     previewAdapter_ = new QtitanColumnAdapter(this, previewGrid_, PreviewView, true);
@@ -828,9 +833,9 @@ void QtColumnProfileEditor::updatePreview()
     for (const auto& Bound : Binding.VecColumns) {
         auto* Column = Native->addColumn(Bound.Index, Bound.definition_.title_); Column->setBandIndex(0); Column->setTextAlignment(Bound.definition_.alignment_);
         Column->setProperty("hc.columnId", Bound.definition_.id_);
-        const bool Selected = Bound.definition_.id_ == SelectedId;
-        Column->setBackgroundColor(palette().color(Selected ? QPalette::Highlight : QPalette::Button));
-        Column->setTextColor(palette().color(Selected ? QPalette::HighlightedText : QPalette::ButtonText));
+        // The grid paints a column's decoration over its header after the title, so an opaque fill hides
+        // the name. Only the selected column gets a translucent tint; the others keep the theme header.
+        if (Bound.definition_.id_ == SelectedId) Column->setDecorationColor(palette().color(QPalette::Highlight));
         Column->setSortEnabled(false); Column->setFilterButtonVisible(false); Column->editorRepository()->setEditorActivationPolicy(Qtitan::GridEditor::ActivationPolicy());
     }
     for (int Position = 0; Position < draft_.columns_.size(); ++Position) for (const auto& Bound : Binding.VecColumns)

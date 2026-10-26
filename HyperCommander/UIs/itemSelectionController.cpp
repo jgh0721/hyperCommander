@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "itemSelectionController.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 /// UIs
 #include "Components/cmpView.hpp"
@@ -104,13 +105,13 @@ public:
             if (Index > 0) Load(settings_["presets"].toArray().at(Index - 1).toObject()["criteria"].toObject());
         });
         connect(Save, &QPushButton::clicked, this, [this] {
-            bool Ok = false; const auto Name = QInputDialog::getText(this, Text("선택 조건 저장"), Text("조건 이름"), QLineEdit::Normal, {}, &Ok).trimmed();
+            bool Ok = false; const auto Name = hc::ui::InputDialog::getText(this, Text("선택 조건 저장"), Text("조건 이름"), QLineEdit::Normal, {}, &Ok).trimmed();
             if (!Ok || Name.isEmpty()) return;
             auto Items = settings_["presets"].toArray(); int Existing = -1;
             for (int I = 0; I < Items.size(); ++I) if (Items[I].toObject()["name"].toString() == Name) Existing = I;
             const QJsonObject Item{{"name", Name.left(80)}, {"criteria", Read().Save()}};
             if (Existing >= 0) {
-                if (QMessageBox::question(this, Text("선택 조건 저장"), Text("같은 이름의 조건을 교체하시겠습니까?")) != QMessageBox::Yes) return;
+                if (hc::ui::MessageDialog::question(this, Text("선택 조건 저장"), Text("같은 이름의 조건을 교체하시겠습니까?")) != QMessageBox::Yes) return;
                 Items[Existing] = Item;
             } else if (Items.size() < 64) Items.append(Item);
             else { SetMessage(Text("저장한 조건은 최대 64개입니다."), true); return; }

@@ -1,5 +1,7 @@
 ﻿#include "qtPluginManagementPage.hpp"
 #include "qtPluginHostSettings.hpp"
+#include "qtMessageDialog.hpp"
+#include "qtDialogFrame.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "pluginHost/wlxDetectionSettings.hpp"
 #include "tcPluginPackage.hpp"
@@ -48,6 +50,7 @@ public:
         auto* Progress = new QProgressBar(this); Progress->setRange(0, 0); Layout->addWidget(Progress);
         buttons_ = new QDialogButtonBox(QDialogButtonBox::Cancel, this); Layout->addWidget(buttons_);
         connect(buttons_, &QDialogButtonBox::rejected, this, [this] { reject(); });
+        hc::ui::ApplyDialogFrame(this, buttons_, {{}, {}, fm::ui::glyph::PlusSmall});
     }
     void reject() override {
         stop_.request_stop(); label_->setText(tr("설치를 취소하고 있습니다…")); buttons_->setEnabled(false);
@@ -339,7 +342,7 @@ bool QPluginManagementPage::State::validate(bool Show) {
             if (!Detect.HasValue() || QString::fromLocal8Bit(Bytes) != native_->toPlainText()) Message = QStringLiteral("탐지식 문법과 문자 인코딩을 확인하세요.");
         }
     }
-    if (!Message.isEmpty()) { ruleStatus_->setText(Message); if (Show) { tabs_->setCurrentIndex(0); QMessageBox::warning(owner_, QStringLiteral("플러그인 적용 조건"), Message); } return false; }
+    if (!Message.isEmpty()) { ruleStatus_->setText(Message); if (Show) { tabs_->setCurrentIndex(0); hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 적용 조건"), Message); } return false; }
     return true;
 }
 void QPluginManagementPage::State::add() {
@@ -350,6 +353,7 @@ void QPluginManagementPage::State::add() {
     Format.addItem(QStringLiteral("DOpus / 문서"), 2);
     Format.addItem(QStringLiteral("DOpus / 파일 시스템"), 4);
     Form->addRow(QStringLiteral("종류"), &Format); QDialogButtonBox Buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel); Form->addRow(&Buttons);
+    hc::ui::ApplyDialogFrame(&Dialog, &Buttons, {{}, QStringLiteral("추가할 플러그인의 종류를 고른 다음 파일을 선택합니다."), fm::ui::glyph::PlusSmall});
     QObject::connect(&Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); QObject::connect(&Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
     if (Dialog.exec() != QDialog::Accepted) return;
     const auto Index = Format.currentData().toInt();
@@ -363,7 +367,7 @@ bool QPluginManagementPage::State::registerFile(const QString& Path, int Index, 
     const auto& Kind = Formats[Index];
     auto Items = plugins_.value(Kind.group_).toArray();
     for (int At = 0; At < Items.size(); ++At) if (resolvedPath(Items[At].toObject().value("path").toString(), root_, Kind.group_).compare(Path, Qt::CaseInsensitive) == 0) { roles_->setCurrentRow(0); search_->clear(); rebuild(key(Index, At)); return true; }
-    if (Items.size() >= 1000) { QMessageBox::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("같은 종류의 플러그인은 최대 1000개까지 등록할 수 있습니다.")); return false; }
+    if (Items.size() >= 1000) { hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("같은 종류의 플러그인은 최대 1000개까지 등록할 수 있습니다.")); return false; }
     Items.append(QJsonObject{{"path", Path}, {"hostEnabled", true}, {"extensions", QJsonArray::fromStringList(Extensions)}}); plugins_[Kind.group_] = Items; loadHosts();
     roles_->setCurrentRow(Kind.role_); search_->clear(); rebuild(key(Index, Items.size() - 1));
     tabs_->setCurrentIndex(1);
@@ -377,7 +381,7 @@ bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
         auto Installed = installPackage(owner_, Path, root_);
         if (!Installed.HasValue()) {
             if (Installed.Failure().category_ != hc::storage::ErrorCategory::Cancelled)
-                QMessageBox::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(QString::fromStdString(Installed.Failure().code_)));
+                hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(QString::fromStdString(Installed.Failure().code_)));
             return false;
         }
         Path = Installed.Value().binary_; Group = Installed.Value().group_; Extensions = Installed.Value().extensions_;
@@ -385,7 +389,7 @@ bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
         Group = hc::plugins::TcPluginGroup(Path);
         if (!Group.isEmpty() && Path.endsWith('.' + Group, Qt::CaseInsensitive)) Path += "64";
         if (Group.isEmpty() || !hc::plugins::tcPackage::Binary64(Path)) {
-            QMessageBox::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("64비트 WCX·WLX·WFX·WDX 파일 또는 플러그인 ZIP 패키지를 선택하세요. 32비트 파일을 선택한 경우 같은 위치의 64비트 파일이 필요합니다.")); return false;
+            hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("64비트 WCX·WLX·WFX·WDX 파일 또는 플러그인 ZIP 패키지를 선택하세요. 32비트 파일을 선택한 경우 같은 위치의 64비트 파일이 필요합니다.")); return false;
         }
     }
     for (int Index = 0; Index < int(Formats.size()); ++Index)
@@ -395,7 +399,7 @@ bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
 void QPluginManagementPage::State::remove() {
     if (row_ < 0 || entries_[row_].builtin_) return;
     const auto Value = entries_[row_];
-    if (QMessageBox::question(owner_, QStringLiteral("등록 제거"), QStringLiteral("%1 등록을 제거하시겠습니까? 파일은 삭제하지 않습니다.").arg(Value.name_)) != QMessageBox::Yes) return;
+    if (hc::ui::MessageDialog::question(owner_, QStringLiteral("등록 제거"), QStringLiteral("%1 등록을 제거하시겠습니까? 파일은 삭제하지 않습니다.").arg(Value.name_)) != QMessageBox::Yes) return;
     storeHosts(); auto Items = plugins_.value(Value.group_).toArray(); Items.removeAt(Value.index_); plugins_[Value.group_] = Items; loadHosts(); rebuild();
 }
 void QPluginManagementPage::State::move(int Direction) {
@@ -408,7 +412,7 @@ void QPluginManagementPage::State::move(int Direction) {
 void QPluginManagementPage::State::testFiles() {
     if (!validate() || testWatcher_.isRunning()) return;
     const auto Files = QFileDialog::getOpenFileNames(owner_, QStringLiteral("조건을 확인할 파일 선택")); if (Files.isEmpty()) return;
-    if (Files.size() > 32) { QMessageBox::information(owner_, QStringLiteral("조건 확인"), QStringLiteral("한 번에 최대 32개 파일을 선택하세요.")); return; }
+    if (Files.size() > 32) { hc::ui::MessageDialog::information(owner_, QStringLiteral("조건 확인"), QStringLiteral("한 번에 최대 32개 파일을 선택하세요.")); return; }
     storeHosts(); catalog(); auto Entries = entries_; const auto Plugins = plugins_; const auto Role = testAction_->currentData().toInt();
     std::stable_sort(Entries.begin(), Entries.end(), [](const Entry& Left, const Entry& Right) { return Left.builtin_ < Right.builtin_; });
     results_->clear(); results_->show(); test_->setEnabled(false);

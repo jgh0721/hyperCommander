@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QtWidgets>
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <functional>
 #include <limits>
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -315,7 +316,7 @@ private:
         connect(schemes_, &QComboBox::currentTextChanged, this, [this](const QString& Name) { if (loading_) return; if (!storeGroupColors()) { const QSignalBlocker Block(schemes_); schemes_->setCurrentText(scheme_); return; } scheme_ = Name; showScheme(); });
         connect(Use, &QPushButton::clicked, this, [this] { useScheme_ = true; set(draft_, {"appearance", "selected"}, scheme_); set(draft_, {"general", "themeMode"}, QString()); mode_->setCurrentIndex(0); selected_->setText(tr("사용 중인 구성표: %1").arg(scheme_)); });
         const auto NameScheme = [this](bool Rename) {
-            if (!storeGroupColors()) return; bool Ok = false; const auto Name = QInputDialog::getText(this, Rename ? tr("구성표 이름 변경") : tr("구성표 복제"), tr("이름"), QLineEdit::Normal, Rename ? scheme_ : scheme_ + tr(" 복사"), &Ok).trimmed();
+            if (!storeGroupColors()) return; bool Ok = false; const auto Name = hc::ui::InputDialog::getText(this, Rename ? tr("구성표 이름 변경") : tr("구성표 복제"), tr("이름"), QLineEdit::Normal, Rename ? scheme_ : scheme_ + tr(" 복사"), &Ok).trimmed();
             if (!Ok || Name.isEmpty()) return; auto Schemes = draft_["appearance"].toObject()["schemes"].toObject();
             if (Schemes.contains(Name)) { fail(tr("이미 같은 이름의 구성표가 있습니다."), 0, schemes_); return; }
             Schemes[Name] = schemeRecord(); if (Rename) { Schemes.remove(scheme_); if (draft_["appearance"].toObject()["selected"] == scheme_) set(draft_, {"appearance", "selected"}, Name); }

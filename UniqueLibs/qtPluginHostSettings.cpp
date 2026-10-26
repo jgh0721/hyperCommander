@@ -1,5 +1,6 @@
 ﻿#include "qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
+#include "qtMessageDialog.hpp"
 #include "archive/creationSettings.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
 #include <QtWidgets>
@@ -173,10 +174,10 @@ void QPluginHostSettings::verifyCreation()
     const auto At = table_->currentRow(); if (At < 0) return;
     const auto& Row = rows_[At];
     if (Row.reviewed_.isEmpty() || table_->item(At, 2)->checkState() != Qt::Checked) {
-        QMessageBox::information(this, tr("압축 생성 지원 확인"), tr("먼저 플러그인을 검사하고 실행을 승인하십시오.")); return;
+        hc::ui::MessageDialog::information(this, tr("압축 생성 지원 확인"), tr("먼저 플러그인을 검사하고 실행을 승인하십시오.")); return;
     }
     bool Accepted = false;
-    const auto Text = QInputDialog::getText(this, tr("압축 생성 지원 확인"),
+    const auto Text = hc::ui::InputDialog::getText(this, tr("압축 생성 지원 확인"),
         tr("확인할 생성 형식의 확장자를 입력하십시오 (예: 7z, zip).\n임시 파일을 생성하고 다시 읽어 내용과 경로가 일치하는 형식만 등록합니다."), QLineEdit::Normal,
         table_->item(At, 1)->text().replace('|', ", "), &Accepted);
     if (!Accepted) return;
@@ -185,10 +186,10 @@ void QPluginHostSettings::verifyCreation()
     QJsonObject Record{{"path", Row.path_}, {"hostManifest", Row.manifest_}, {"hostReviewed", hc::settings::JsonObject(Row.reviewed_)}, {"hostEnabled", true}};
     auto Creator = hc::archive::ExternalCreator(Record, format_, settingsDirectory_);
     const auto Result = hc::archive::RunArchiveWorker(this, tr("압축 생성 지원 확인"), [Creator, Formats](hc::storage::OperationContext Context) { return hc::archive::VerifyCreationFormats(Creator, Formats, Context); });
-    if (!Result.HasValue()) { if (Result.Failure().category_ != hc::storage::ErrorCategory::Cancelled) QMessageBox::warning(this, tr("압축 생성 지원 확인"), QString::fromStdString(Result.Failure().code_)); return; }
+    if (!Result.HasValue()) { if (Result.Failure().category_ != hc::storage::ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("압축 생성 지원 확인"), QString::fromStdString(Result.Failure().code_)); return; }
     rows_[At].creation_ = Result.Value(); updateState(At);
     QStringList Verified; for (const auto& Format : Result.Value()["formats"].toArray()) Verified << Format.toString().toUpper();
-    QMessageBox::information(this, tr("압축 생성 지원 확인"), tr("생성 가능한 형식: %1").arg(Verified.join(", ")));
+    hc::ui::MessageDialog::information(this, tr("압축 생성 지원 확인"), tr("생성 가능한 형식: %1").arg(Verified.join(", ")));
 }
 QString QPluginHostSettings::resolvedBinary(const QString& Path) const
 {
@@ -241,12 +242,12 @@ void QPluginHostSettings::review()
     connect(Watcher, &QFutureWatcher<Result<InspectedPlugin>>::finished, this, [this, Watcher, At, Generation, Old, Binary] {
         const auto Checked = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_) return;
         const auto Reset = [this] { review_->setEnabled(true); review_->setText(tr("검사·재승인…")); };
-        if (!Checked.HasValue()) { Reset(); QMessageBox::warning(this, tr("플러그인 검사 실패"), tr("플러그인 파일을 검사하지 못했습니다. 파일과 함께 설치한 DLL을 확인하세요.\n%1").arg(QString::fromStdString(Checked.Failure().code_))); return; }
+        if (!Checked.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), tr("플러그인 파일을 검사하지 못했습니다. 파일과 함께 설치한 DLL을 확인하세요.\n%1").arg(QString::fromStdString(Checked.Failure().code_))); return; }
         auto Plugin = Checked.Value(); const auto& Manifest = Plugin.manifest_;
         PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
         HostProfile Profile; Profile.formats_ = {format_}; Profile.supportsIsolation_ = true; Profile.extensions_ = Manifest.extensions_;
         const auto Admitted = Admit(Manifest, Approval, Profile);
-        if (!Admitted.HasValue()) { Reset(); QMessageBox::warning(this, tr("플러그인 검사 실패"), QString::fromStdString(Admitted.Failure().code_)); return; }
+        if (!Admitted.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), QString::fromStdString(Admitted.Failure().code_)); return; }
         const bool Changed = Old.HasValue() && Old.Value() != Manifest;
         QStringList Permissions{tr("파일 읽기")};
         if (Manifest.permissions_.contains(Permission::WriteContent)) Permissions << tr("파일 변경");
@@ -267,7 +268,7 @@ void QPluginHostSettings::review()
             CompareFiles(Old.Value().dependencies_, Manifest.dependencies_); CompareFiles(Old.Value().helpers_, Manifest.helpers_);
             if (!Changes.isEmpty()) Message += tr("\n변경 파일: %1").arg(Changes.mid(0, 8).join(", ") + (Changes.size() > 8 ? tr(" 외 %1개").arg(Changes.size() - 8) : QString{}));
         }
-        QMessageBox Prompt(QMessageBox::Question, Changed ? tr("플러그인 변경 확인·재승인") : tr("플러그인 실행 승인"), Message, QMessageBox::Yes | QMessageBox::No, this);
+        hc::ui::MessageDialog Prompt(QMessageBox::Question, Changed ? tr("플러그인 변경 확인·재승인") : tr("플러그인 실행 승인"), Message, QMessageBox::Yes | QMessageBox::No, this);
         Prompt.button(QMessageBox::Yes)->setText(tr("승인(&A)")); Prompt.button(QMessageBox::No)->setText(tr("취소"));
         Prompt.setObjectName("hc.plugin.reviewApproval"); Prompt.setTextFormat(Qt::PlainText); Prompt.setDefaultButton(QMessageBox::No);
         Prompt.setDetailedText(QString::fromUtf8(EncodeManifest(Manifest)));
@@ -281,7 +282,7 @@ void QPluginHostSettings::review()
         auto* Save = new QFutureWatcher<Result<QString>>(this);
         connect(Save, &QFutureWatcher<Result<QString>>::finished, this, [this, Save, Plugin, At, Generation, Reset] {
             const auto Saved = Save->result(); Save->deleteLater(); if (Generation != generation_) return; Reset();
-            if (!Saved.HasValue()) { QMessageBox::warning(this, tr("승인 저장 실패"), tr("검사 중 파일이 바뀌었거나 승인 정보를 저장할 수 없습니다. 다시 검사해 주세요.\n%1").arg(QString::fromStdString(Saved.Failure().code_))); return; }
+            if (!Saved.HasValue()) { hc::ui::MessageDialog::warning(this, tr("승인 저장 실패"), tr("검사 중 파일이 바뀌었거나 승인 정보를 저장할 수 없습니다. 다시 검사해 주세요.\n%1").arg(QString::fromStdString(Saved.Failure().code_))); return; }
             rows_[At].manifest_ = Saved.Value(); rows_[At].reviewed_ = EncodeManifest(Plugin.manifest_); rows_[At].verification_ = tr("승인됨 · 파일 확인 완료");
             table_->item(At, 2)->setCheckState(Qt::Checked); updateState(At); checkFiles();
         });

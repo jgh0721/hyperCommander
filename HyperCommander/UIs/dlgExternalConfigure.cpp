@@ -4,11 +4,18 @@
 #include "UIs/dlgExternalConfigure_Item.hpp"
 
 #include "UniqueLibs/externalEditorMgr.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 
 CExternalConfigure::CExternalConfigure( QWidget* parent /* = nullptr*/, Qt::WindowFlags f /* = Qt::Dialog*/ )
     : QDialog( parent, f )
 {
     ui.setupUi( this );
+    // The native caption already closes the window; the legacy title frame under it doubled the title bar.
+    ui.frmTitleBar->hide();
+    auto* Footer = hc::ui::ApplyDialogFrame( this, { tr( "편집기 환경설정" ), tr( "F4로 여는 외부 편집기와 연결할 확장자를 관리합니다. 변경은 바로 저장됩니다." ), fm::ui::glyph::Rename } );
+    ui.frame->setFrameShape( QFrame::NoFrame );
+    ui.btnClose->setText( tr( "닫기" ) ); ui.btnClose->setMinimumSize( 0, 0 ); ui.btnClose->setMaximumSize( QWIDGETSIZE_MAX, QWIDGETSIZE_MAX );
+    hc::ui::MoveToFooter( Footer, ui.btnClose, true ); ui.btnClose->setDefault( true );
 
     ui.tblEditor->horizontalHeaderItem( 0 )->setSizeHint( QSize( 32, 32 ) );
     Refresh();

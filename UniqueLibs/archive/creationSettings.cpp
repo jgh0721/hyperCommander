@@ -3,6 +3,7 @@
 
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "commonLibs/Qt/elidedLabel.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include "pluginHost/archiveCodec.hpp"
 #include <QtConcurrent>
 
@@ -107,6 +108,7 @@ Result<QJsonObject> RunArchiveWorker(QWidget* Parent, const QString& Title, std:
     Dialog.setWindowTitle(Title); auto* Layout = new QVBoxLayout(&Dialog); Dialog.status_ = new QLabel(Title, &Dialog); Dialog.status_->setWordWrap(true); Layout->addWidget(Dialog.status_);
     auto* Busy = new QProgressBar(&Dialog); Busy->setRange(0, 0); Layout->addWidget(Busy); Dialog.cancel_ = new QPushButton(QObject::tr("취소"), &Dialog); Layout->addWidget(Dialog.cancel_);
     QObject::connect(Dialog.cancel_, &QPushButton::clicked, &Dialog, &QDialog::reject);
+    hc::ui::DialogFrameOptions Frame; Frame.header_ = false; hc::ui::MoveToFooter(hc::ui::ApplyDialogFrame(&Dialog, Frame), Dialog.cancel_);
     QFutureWatcher<Result<QJsonObject>> Watcher; Result<QJsonObject> Result = Error{ErrorCategory::Cancelled, "cancelled"};
     QObject::connect(&Watcher, &QFutureWatcher<hc::storage::Result<QJsonObject>>::finished, &Dialog, [&] { Result = Watcher.result(); Dialog.accept(); });
     Watcher.setFuture(QtConcurrent::run([Work = std::move(Work), Stop = Dialog.stop_] { OperationContext Context; Context.stopToken_ = Stop->get_token(); return Work(Context); }));
@@ -132,6 +134,10 @@ bool EditBuiltinCreationSettings(QWidget* Parent, const std::string& Format, Arc
     auto* ErrorLabel = new hc::qt::ElidedLabel(&Dialog); ErrorLabel->setObjectName("hc.archive.settings.error"); Footer->addWidget(ErrorLabel, 1);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &Dialog); Footer->addWidget(Buttons); Buttons->button(QDialogButtonBox::Ok)->setText(QObject::tr("확인")); Buttons->button(QDialogButtonBox::Cancel)->setText(QObject::tr("취소"));
     QObject::connect(Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
+    {
+        auto* Band = hc::ui::ApplyDialogFrame(&Dialog, {{}, QObject::tr("이 형식으로 새로 만드는 압축 파일에 적용합니다. 대기열의 작업은 시작할 때의 설정을 씁니다."), fm::ui::glyph::File});
+        ErrorLabel->setParent(Band->parentWidget()); Band->insertWidget(0, ErrorLabel, 1); hc::ui::MoveToFooter(Band, Buttons);
+    }
     ArchiveCreateSettings Draft = Settings;
     if (auto* S = std::get_if<SevenZipCreateSettings>(&Draft)) {
         auto* Level = new QComboBox(Content); Level->setObjectName("hc.archive.settings.level"); for (unsigned Value : {0u, 1u, 3u, 5u, 7u, 9u}) Level->addItem(QString::number(Value), Value); Level->setCurrentIndex(Level->findData(S->level_)); Form->addRow(QObject::tr("압축 수준(&L)"), Level);

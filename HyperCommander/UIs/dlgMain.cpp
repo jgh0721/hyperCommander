@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgMain.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 #include "colorSchemeMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
@@ -323,26 +324,6 @@ DEFINE_HC_COMMAND( QMainUI, NavigateOpen )
     Pane->ReturnOnCurrentTab( CursorIndex );
 }
 
-DEFINE_HC_COMMAND( QMainUI, FileMkdir )
-{
-    const auto Pane = retrieveSrcPanel();
-    Q_ASSERT( Pane != nullptr );
-    if( Pane == nullptr )
-        return;
-
-    Pane->NewFolderOnCurrentTab( CursorIndex );
-}
-
-DEFINE_HC_COMMAND( QMainUI, FileDelete )
-{
-    const auto Pane = retrieveSrcPanel();
-    Q_ASSERT( Pane != nullptr );
-    if( Pane == nullptr )
-        return;
-
-    Pane->FileDeleteOnCurrentTab( CursorIndex );
-}
-
 DEFINE_HC_COMMAND( QMainUI, FileNormalize )
 {
     const auto Pane = retrieveSrcPanel();
@@ -398,7 +379,6 @@ DEFINE_HC_COMMAND( QMainUI, FileBatchRename )
     //    VecFiles.push_back( FsModel->GetFileFullPath( ProxyModel->mapToSource( Item ) ) );
     //}
 
-    //QMetaObject::invokeMethod( qApp, "ShowMultiRename", Q_ARG( const QVector< QString >&, VecFiles ) );
 }
 
 DEFINE_HC_COMMAND( QMainUI, ViewHidden )
@@ -533,7 +513,7 @@ void QMainUI::OnAddCurrentDirToFavorite()
 
     const auto Current = Model->GetCurrentPathWithRoot();
 
-    QInputDialog Ui;
+    hc::ui::InputDialog Ui;
     Ui.setLabelText( tr( "항목의 이름을 지정해 주세요:" ) );
     Ui.setOkButtonText( tr( "확인(&O)" ) );
     Ui.setCancelButtonText( tr( "취소(&C)" ) );
@@ -639,7 +619,7 @@ void QMainUI::closeEvent( QCloseEvent* Event )
     if (Updating && !canRestartForUpdate()) { Event->ignore(); return; }
     if (workspaceLoaded_ && workspace_.writable_ && !SaveWorkspace())
     {
-        QMessageBox::warning(this, tr("작업공간 저장"), tr("작업공간을 저장하지 못했습니다. 기존 설정은 유지됩니다.\n%1").arg(workspace_.error_));
+        hc::ui::MessageDialog::warning(this, tr("작업공간 저장"), tr("작업공간을 저장하지 못했습니다. 기존 설정은 유지됩니다.\n%1").arg(workspace_.error_));
         if (Updating) { Event->ignore(); return; }
     }
 
@@ -705,7 +685,7 @@ void QMainUI::initialize()
     for (auto* Panel : {ui.cmpLeftPanel, ui.cmpRightPanel})
         connect(Panel, &CmpPanel::sigViewSettingsChanged, this, [this] {
             if (!SaveWorkspace())
-                QMessageBox::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
+                hc::ui::MessageDialog::warning(this, tr("목록 모양 저장 실패"), tr("현재 화면에는 적용했지만 작업공간 파일을 저장하지 못했습니다.\n%1").arg(hc::settings::WorkspaceSettings().Error()));
         });
 
     // Track input in all panel descendants, including the path/search controls

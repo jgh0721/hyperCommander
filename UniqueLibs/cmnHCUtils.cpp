@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmnHCUtils.hpp"
+#include "qtMessageDialog.hpp"
 #include <QAbstractNativeEventFilter>
 #include <QScopeGuard>
 #include <QDir>
@@ -119,81 +120,25 @@ QVariant ShowMSGBox( QWidget* parent, QMessageBox::Icon Icon, const QString& Con
 QVariant ShowMSGBoxWithDetail( QWidget* parent, QMessageBox::Icon Icon, const QString& Content, const QString& Detail,
                                const QString& Title /* = "" */, QMessageBox::StandardButtons Buttons /* = QMessageBox::Ok */, bool IsWait /* = true */, Qt::WindowFlags Flags /* = Qt::Dialog | Qt::MSWindowsFixedSizeDialogHint | Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint */ )
 {
-    const auto msgBox = new QMessageBox( Icon, Title, Content, Buttons, parent, Flags );
+    // Product message window (board Prop-*): header band with the title, the message, a footer band with the
+    // buttons. The legacy box was frameless, with fixed 80 x 36 checkable buttons and an old window icon.
+    const auto msgBox = new hc::ui::MessageDialog( Icon, Title, Content, Buttons, parent );
+    msgBox->setWindowFlags( ( Flags & ~Qt::FramelessWindowHint & ~Qt::WindowContextHelpButtonHint ) | Qt::Dialog );
+    msgBox->TranslateStandardButtons();
 
     msgBox->setProperty( "own", QVariant( true ) );
     msgBox->setAttribute( Qt::WA_DeleteOnClose, true );
 
-    // msgBox.setAttribute( Qt::WA_TranslucentBackground, true );
-    msgBox->setWindowIcon( QIcon( ":/titleBar/Resources/iMonFTS-Enable.ico" ) );
-
     if( Detail.isEmpty() == false )
         msgBox->setDetailedText( Detail );
 
-    // msgBox->setStyleSheet( QMSGBOX_BASE_CSS );
-
-    for( const auto btn : msgBox->buttons() )
-    {
-        btn->setFixedSize( 80, 36 );
-        // btn->setStyleSheet( QMSGBOX_BUTTON_CSS );
-
-        btn->setCheckable( true );
-    }
-
-    if( Buttons.testFlag( QMessageBox::Ok ) )
-        msgBox->button( QMessageBox::Ok )->setText( QObject::tr( "확인" ) );
-
-    if( Buttons.testFlag( QMessageBox::Save ) )
-        msgBox->button( QMessageBox::Save )->setText( QObject::tr( "저장" ) );
-
-    if( Buttons.testFlag( QMessageBox::SaveAll ) )
-        msgBox->button( QMessageBox::SaveAll )->setText( QObject::tr( "모두 저장" ) );
-
-    if( Buttons.testFlag( QMessageBox::Open ) )
-        msgBox->button( QMessageBox::Open )->setText( QObject::tr( "열기" ) );
-
-    if( Buttons.testFlag( QMessageBox::Yes ) )
-        msgBox->button( QMessageBox::Yes )->setText( QObject::tr( "예" ) );
-
-    if( Buttons.testFlag( QMessageBox::YesToAll ) )
-        msgBox->button( QMessageBox::YesToAll )->setText( QObject::tr( "모두 예" ) );
-
-    if( Buttons.testFlag( QMessageBox::No ) )
-        msgBox->button( QMessageBox::No )->setText( QObject::tr( "아니오" ) );
-
-    if( Buttons.testFlag( QMessageBox::NoToAll ) )
-        msgBox->button( QMessageBox::NoToAll )->setText( QObject::tr( "모두 아니오" ) );
-
-    if( Buttons.testFlag( QMessageBox::Abort ) )
-        msgBox->button( QMessageBox::Abort )->setText( QObject::tr( "중지" ) );
-
-    if( Buttons.testFlag( QMessageBox::Retry ) )
-        msgBox->button( QMessageBox::Retry )->setText( QObject::tr( "재시도" ) );
-
-    if( Buttons.testFlag( QMessageBox::Ignore ) )
-        msgBox->button( QMessageBox::Ignore )->setText( QObject::tr( "무시" ) );
-
-    if( Buttons.testFlag( QMessageBox::Close ) )
-        msgBox->button( QMessageBox::Close )->setText( QObject::tr( "닫기" ) );
-
-    if( Buttons.testFlag( QMessageBox::Cancel ) )
-        msgBox->button( QMessageBox::Cancel )->setText( QObject::tr( "취소" ) );
-
-    if( Buttons.testFlag( QMessageBox::Apply ) )
-        msgBox->button( QMessageBox::Apply )->setText( QObject::tr( "적용" ) );
-
-    const auto Screen = msgBox->screen();
-
-    if( Screen != nullptr )
+    // A parented window centers on its parent; only an unparented one is placed on the screen center.
+    if( const auto Screen = msgBox->screen(); parent == nullptr && Screen != nullptr )
     {
         const auto ScreenRect = Screen->availableGeometry();
         const auto MsgRect = msgBox->sizeHint();
-        msgBox->move( ScreenRect.width() / 2 - MsgRect.width() / 2,
-                      ScreenRect.height() / 2 - MsgRect.height() / 2 );
+        msgBox->move( ScreenRect.center() - QPoint( MsgRect.width() / 2, MsgRect.height() / 2 ) );
     }
-
-    if( IsWait == true )
-        msgBox->setModal( false );
 
     if( IsWait == true )
         return msgBox->exec();

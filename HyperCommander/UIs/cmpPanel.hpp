@@ -107,8 +107,6 @@ public:
     void                            CloseQuickView( int TabIndex );
 
     void                            RefreshSource( int TabIndex );
-    void                            NewFolderOnCurrentTab( const QModelIndex& SrcIndex );
-    void                            FileDeleteOnCurrentTab( const QModelIndex& SrcIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );

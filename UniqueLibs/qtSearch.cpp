@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include "qtSearch.hpp"
 #include "storageProviders.hpp"
+#include "qtDialogFrame.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -148,19 +149,23 @@ public:
         std::function<void(const EntrySnapshot&)> Activate) : QDialog(Parent), provider_(std::move(Provider)), root_(std::move(Root)), metadata_(std::move(Metadata)), activate_(std::move(Activate)) {
         setAttribute(Qt::WA_DeleteOnClose); setObjectName("hc.searchDialog"); setWindowTitle(tr("범위 검색")); resize(820, 500);
         auto* Layout = new QVBoxLayout(this);
-        Layout->addWidget(new QLabel(tr("검색 위치: %1").arg(QString::fromStdString(root_.root_)), this));
-        query_ = new QLineEdit(this); query_->setObjectName("hc.search.query"); query_->setPlaceholderText(tr("name:이름 ext:확장자 type:file · 공백으로 조건 조합")); Layout->addWidget(query_);
-        recursive_ = new QCheckBox(tr("하위 폴더 포함"), this); recursive_->setChecked(true); Layout->addWidget(recursive_);
+        // Query, engine and the sub-folder switch share one row; the search location is the header subtitle.
+        auto* QueryRow = new QHBoxLayout; QueryRow->setSpacing(8); Layout->addLayout(QueryRow);
+        query_ = new QLineEdit(this); query_->setObjectName("hc.search.query"); query_->setClearButtonEnabled(true); query_->setPlaceholderText(tr("name:이름 ext:확장자 type:file · 공백으로 조건 조합")); QueryRow->addWidget(query_, 1);
         engine_ = new QComboBox(this); engine_->addItem(tr("폴더 직접 검색"));
         if (root_.kind_ == LocatorKind::Local) engine_->addItem(tr("Everything 인덱스 검색"));
-        engine_->setObjectName("hc.search.engine"); Layout->addWidget(engine_);
+        engine_->setObjectName("hc.search.engine"); QueryRow->addWidget(engine_);
+        recursive_ = new QCheckBox(tr("하위 폴더 포함"), this); recursive_->setChecked(true); QueryRow->addWidget(recursive_);
         results_ = new QTreeWidget(this); results_->setObjectName("hc.search.results"); results_->setHeaderLabels({tr("이름"), tr("위치")}); results_->header()->setSectionResizeMode(QHeaderView::ResizeToContents); Layout->addWidget(results_);
-        status_ = new QLabel(this); status_->setObjectName("hc.search.status"); status_->setWordWrap(true); Layout->addWidget(status_);
-        auto* Buttons = new QDialogButtonBox(this); Layout->addWidget(Buttons);
+        status_ = new QLabel(this); status_->setObjectName("hc.search.status"); status_->setWordWrap(true);
+        auto* Buttons = new QDialogButtonBox(this);
         auto* Start = start_ = Buttons->addButton(tr("검색"), QDialogButtonBox::ActionRole); Start->setObjectName("hc.search.start");
         next_ = Buttons->addButton(tr("다음 결과"), QDialogButtonBox::ActionRole); next_->setObjectName("hc.search.next"); next_->setEnabled(false);
         auto* Stop = Buttons->addButton(tr("중지"), QDialogButtonBox::ActionRole); Stop->setObjectName("hc.search.stop");
         Buttons->addButton(QDialogButtonBox::Close);
+        auto* Footer = hc::ui::ApplyDialogFrame(this, {{}, tr("검색 위치: %1").arg(QString::fromStdString(root_.root_)), fm::ui::glyph::Search});
+        status_->setParent(Footer->parentWidget()); Footer->insertWidget(0, status_, 1); hc::ui::MoveToFooter(Footer, Buttons);
+        fm::style::setButtonRole(Start, fm::style::ButtonRole::Primary);
         connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
         connect(Start, &QPushButton::clicked, this, [this] { start(); }); connect(query_, &QLineEdit::returnPressed, this, [this] { start(); });
         connect(next_, &QPushButton::clicked, this, [this] { next(); });

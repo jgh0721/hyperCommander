@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "dialogShell.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/permissionService.hpp"
 #include "UniqueLibs/permissionJobController.hpp"
 #include <QtWidgets>
@@ -58,7 +59,7 @@ public:
             auto* Grant=new QCheckBox(tr("파일 읽기·쓰기·삭제 권한도 추가(&G)"),this);Grant->setObjectName("hc.permission.grantAccess");Grant->setEnabled(!QFileInfo(request_.source_).isDir());BodyLayout()->addWidget(Grant);
             auto* Take=Button(tr("소유권 가져오기(&T)"),"hc.permission.takeOwnership",permissions::Controller()&&filetools::LocalFolder(QFileInfo(request_.source_).absolutePath()),None);
             disconnect(Take,nullptr,this,nullptr);connect(Take,&QPushButton::clicked,this,[this,Grant] {
-                if(QMessageBox::question(this,tr("소유권 변경"),tr("%1\n원래 보안 정보를 백업한 뒤 현재 사용자를 소유자로 설정합니다. 기존 거부 규칙은 유지합니다. 계속하시겠습니까?").arg(request_.source_))!=QMessageBox::Yes)return;
+                if(hc::ui::MessageDialog::question(this,tr("소유권 변경"),tr("%1\n원래 보안 정보를 백업한 뒤 현재 사용자를 소유자로 설정합니다. 기존 거부 규칙은 유지합니다. 계속하시겠습니까?").arg(request_.source_))!=QMessageBox::Yes)return;
                 if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(request_.source_,Grant->isChecked());if(Error.isEmpty()){decision_=Succeeded;QDialog::accept();}else SetMessage(Error,true);}
             });
         }
@@ -110,19 +111,19 @@ inline QWidget* PermissionSettingsPage(QWidget* Parent) {
     auto* History=new QTableWidget(Page); History->setObjectName("hc.permissions.history"); History->setColumnCount(4); History->setHorizontalHeaderLabels({QObject::tr("시각"),QObject::tr("작업"),QObject::tr("대상"),QObject::tr("결과 코드")}); History->verticalHeader()->hide(); History->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); History->setEditTriggers(QAbstractItemView::NoEditTriggers); Layout->addWidget(History,1);
     const auto Reload=[History] { const auto Rows=permissions::History(); History->setRowCount(Rows.size()); for(int I=0;I<Rows.size();++I){const auto R=Rows[I].toObject();const QStringList Text{R["utc"].toString(),R["operation"].toString(),R["target"].toString(),R["error"].toString().isEmpty()?QString::number(R["code"].toInt()):R["error"].toString()}; for(int C=0;C<4;++C) History->setItem(I,C,new QTableWidgetItem(Text[C]));History->item(I,0)->setData(Qt::UserRole,R);} }; Reload();
     auto* Buttons=new QHBoxLayout; Layout->addLayout(Buttons); auto* Refresh=new fm::ui::Button(QObject::tr("이력 새로 고침"),Page); auto* Clear=new fm::ui::Button(QObject::tr("이력 지우기"),Page); Refresh->setAutoDefault(false); Clear->setAutoDefault(false); Buttons->addWidget(Refresh); Buttons->addWidget(Clear);
-    QObject::connect(Refresh,&QPushButton::clicked,Page,Reload); QObject::connect(Clear,&QPushButton::clicked,Page,[Page,Reload] { if(permissions::SaveHistory({})) Reload(); else QMessageBox::warning(Page,QObject::tr("저장 실패"),QObject::tr("이력을 지우지 못했습니다.")); });
+    QObject::connect(Refresh,&QPushButton::clicked,Page,Reload); QObject::connect(Clear,&QPushButton::clicked,Page,[Page,Reload] { if(permissions::SaveHistory({})) Reload(); else hc::ui::MessageDialog::warning(Page,QObject::tr("저장 실패"),QObject::tr("이력을 지우지 못했습니다.")); });
     auto* Restore=new fm::ui::Button(QObject::tr("선택 항목의 원래 권한 복원(&R)"),Page);Restore->setObjectName("hc.permissions.restore");Restore->setAutoDefault(false);Buttons->addWidget(Restore);
     QObject::connect(Restore,&QPushButton::clicked,Page,[Page,History] {
         if(History->currentRow()<0)return;const auto Record=History->item(History->currentRow(),0)->data(Qt::UserRole).toJsonObject();
         const auto Backup=QJsonDocument::fromJson(Record["detail"].toString().toUtf8()).object();
-        if(Backup["state"]!="applied"&&Backup["state"]!="rollback-failed"){QMessageBox::information(Page,QObject::tr("권한 복원"),QObject::tr("복원 가능한 보안 백업이 있는 이력을 선택하세요."));return;}
-        if(QMessageBox::question(Page,QObject::tr("원래 권한 복원"),QObject::tr("%1\n파일 ID와 현재 보안 정보가 백업 기록과 일치할 때만 복원합니다. 계속하시겠습니까?").arg(Backup["target"].toString()))!=QMessageBox::Yes)return;
-        if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(Backup["target"].toString(),false,Backup);if(!Error.isEmpty())QMessageBox::warning(Page,QObject::tr("복원 요청 실패"),Error);}
+        if(Backup["state"]!="applied"&&Backup["state"]!="rollback-failed"){hc::ui::MessageDialog::information(Page,QObject::tr("권한 복원"),QObject::tr("복원 가능한 보안 백업이 있는 이력을 선택하세요."));return;}
+        if(hc::ui::MessageDialog::question(Page,QObject::tr("원래 권한 복원"),QObject::tr("%1\n파일 ID와 현재 보안 정보가 백업 기록과 일치할 때만 복원합니다. 계속하시겠습니까?").arg(Backup["target"].toString()))!=QMessageBox::Yes)return;
+        if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(Backup["target"].toString(),false,Backup);if(!Error.isEmpty())hc::ui::MessageDialog::warning(Page,QObject::tr("복원 요청 실패"),Error);}
     });
     auto* Browse=new fm::ui::Button(QObject::tr("백업 파일에서 복원…"),Page);Browse->setObjectName("hc.permissions.restoreBackup");Browse->setAutoDefault(false);Buttons->addWidget(Browse);
     QObject::connect(Browse,&QPushButton::clicked,Page,[Page] {
         const auto Path=QFileDialog::getOpenFileName(Page,QObject::tr("원래 권한 백업 선택"),QDir(settings::Paths().directory_).filePath("security-backups"),"*.json");if(Path.isEmpty())return;
-        QFile File(Path);if(!File.open(QIODevice::ReadOnly)||File.size()>1024*1024){QMessageBox::warning(Page,QObject::tr("백업 읽기 실패"),QObject::tr("백업 파일을 읽지 못했습니다."));return;}
+        QFile File(Path);if(!File.open(QIODevice::ReadOnly)||File.size()>1024*1024){hc::ui::MessageDialog::warning(Page,QObject::tr("백업 읽기 실패"),QObject::tr("백업 파일을 읽지 못했습니다."));return;}
         auto Backup=QJsonDocument::fromJson(File.readAll()).object();
         // Original descriptors remain immutable. Resolve the latest independent
         // outcome file rather than requiring users to distinguish both records.
@@ -134,9 +135,9 @@ inline QWidget* PermissionSettingsPage(QWidget* Parent) {
                 if(Candidate["backupIdentity"]==Backup["backupIdentity"]&&Candidate["backupPath"]==Backup["backupPath"]){Backup=Candidate;break;}
             }
         }
-        if(Backup["state"]!="applied"&&Backup["state"]!="rollback-failed"&&Backup["state"]!="restore-failed"){QMessageBox::warning(Page,QObject::tr("백업 확인"),QObject::tr("복원 가능한 변경 기록이 아닙니다."));return;}
-        if(QMessageBox::question(Page,QObject::tr("원래 권한 복원"),QObject::tr("%1\n관리자 도우미가 백업 소유자·파일 ID·보안 정보의 일치를 확인한 뒤 복원합니다. 계속하시겠습니까?").arg(Backup["target"].toString()))!=QMessageBox::Yes)return;
-        if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(Backup["target"].toString(),false,Backup);if(!Error.isEmpty())QMessageBox::warning(Page,QObject::tr("복원 요청 실패"),Error);}
+        if(Backup["state"]!="applied"&&Backup["state"]!="rollback-failed"&&Backup["state"]!="restore-failed"){hc::ui::MessageDialog::warning(Page,QObject::tr("백업 확인"),QObject::tr("복원 가능한 변경 기록이 아닙니다."));return;}
+        if(hc::ui::MessageDialog::question(Page,QObject::tr("원래 권한 복원"),QObject::tr("%1\n관리자 도우미가 백업 소유자·파일 ID·보안 정보의 일치를 확인한 뒤 복원합니다. 계속하시겠습니까?").arg(Backup["target"].toString()))!=QMessageBox::Yes)return;
+        if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(Backup["target"].toString(),false,Backup);if(!Error.isEmpty())hc::ui::MessageDialog::warning(Page,QObject::tr("복원 요청 실패"),Error);}
     });
     auto* Note=new QLabel(QObject::tr("이력은 30일·최대 100건입니다. 지우기는 즉시 저장됩니다. 백업은 이력을 지워도 남습니다. 원래 권한 복원은 같은 파일 ID·보안 정보일 때만 수행합니다. 디렉터리 하위 권한·SACL 변경과 원격 대상의 승격은 지원하지 않습니다."),Page); Note->setWordWrap(true); Layout->addWidget(Note); return Page;
 }

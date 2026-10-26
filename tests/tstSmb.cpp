@@ -284,7 +284,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -1657,7 +1657,7 @@ private slots:
             Option.state = QStyle::State_Enabled | QStyle::State_Selected; Option.widget = &Tree;
             Delegate.paint(&Painter, Option, Tree.indexFromItem(Item)); Painter.end();
             int Count = 0; for (int Y = 0; Y < Image.height(); ++Y) for (int X = 0; X < Image.width(); ++X)
-                if (Image.pixelColor(X,Y) == QColor("#ffd86b")) ++Count;
+                if (Image.pixelColor(X,Y) == hc::quickfind::HighlightBackground()) ++Count;
             return Count;
         };
         QVERIFY(YellowPixels(true) > 20); QCOMPARE(YellowPixels(false), 0);
@@ -3196,10 +3196,10 @@ private slots:
         const auto Pages = Categories->findItems(QStringLiteral("파일 패널"), Qt::MatchExactly); QCOMPARE(Pages.size(), 1);
         Categories->setCurrentItem(Pages.front());
         auto* Tabs = Dialog.findChild<QTabWidget*>("hc.settings.filePanelTabs"); QVERIFY(Tabs);
-        QCOMPARE(Tabs->count(), 2); QCOMPARE(Tabs->tabText(0), QStringLiteral("공통")); QCOMPARE(Tabs->tabText(1), QStringLiteral("아이콘"));
+        QCOMPARE(Tabs->count(), 3); QCOMPARE(Tabs->tabText(0), QStringLiteral("목록 보기")); QCOMPARE(Tabs->tabText(2), QStringLiteral("아이콘"));
         const auto Check = [&](const char* Key) { return Dialog.findChild<QCheckBox*>("hc.settings." + QString::fromLatin1(Key)); };
         auto* Special = Check("specialFolderIcons"); QVERIFY(Special);
-        Tabs->setCurrentIndex(1); QTRY_VERIFY(Special->isVisible());
+        Tabs->setCurrentIndex(2); QTRY_VERIFY(Special->isVisible());
         QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_5")->isVisible());
         QVERIFY(Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->isVisible());
         QVERIFY(!Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
@@ -3226,7 +3226,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Image("custom").isNull() && Image("custom") != Image("plain"), 10000);
         const auto Artifacts = QDir(QCoreApplication::applicationDirPath());
         QVERIFY(Dialog.grab().save(Artifacts.filePath("file-panel-icons.png")));
-        Tabs->setCurrentIndex(0); QVERIFY(!Special->isVisible());
+        Tabs->setCurrentIndex(1); QVERIFY(!Special->isVisible());  // sorting lives on the sizes tab (board Set-02)
         QVERIFY(Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
         Dialog.resize(900, 650); QTest::qWait(80); QVERIFY(Dialog.grab().save(Artifacts.filePath("file-panel-common.png")));
         Dialog.reject(); Settings.Reload();
@@ -4879,6 +4879,8 @@ private slots:
                 QVERIFY(Dialog.SaveSettings());
                 auto* Pages = Dialog.findChild<QStackedWidget*>("stkOpts"); QVERIFY(Pages);
                 Pages->setCurrentWidget(Dialog.findChild<QWidget*>("pgDisplay"));
+                // Size display moved to its own panel tab (board Set-02).
+                Dialog.findChild<QTabWidget*>("hc.settings.filePanelTabs")->setCurrentIndex(1);
                 QCoreApplication::processEvents();
                 for (const auto& Id : {"cbxHeaderSizeDisplay", "cbxFooterSizeDisplay"}) {
                     auto* Combo = Dialog.findChild<QComboBox*>(Id); QVERIFY(Combo->isVisible());
@@ -9122,6 +9124,70 @@ private slots:
         QVERIFY(First.isValid()); QVERIFY(First.data(Qt::ForegroundRole).value<QColor>() != Expected);
         QTRY_COMPARE(First.data(Qt::ForegroundRole).value<QColor>(), Expected);
         QTRY_VERIFY(Painted());
+    }
+
+    void settingsPagesCaptureUi()
+    {
+        // Captures every options page in both schemes at the default dialog size
+        // and reports how far each page scrolls; input for the style review.
+        const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) QSKIP("HC_UI_ARTIFACT_DIR not set");
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
+        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
+        auto* Stack = Dialog.findChild<QStackedWidget*>("stkOpts"); QVERIFY(Stack);
+        for (const bool Dark : {false, true}) {
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QTest::qWait(80);
+            for (int Row = 0; Row < Categories->count(); ++Row) {
+                Categories->setCurrentRow(Row); QCoreApplication::processEvents(); QTest::qWait(40);
+                QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("settings-%1-%2.png").arg(Row, 2, 10, QChar('0')).arg(Dark ? "dark" : "light"))));
+                if (Dark) continue;
+                auto* Page = Stack->currentWidget(); int Content = Page ? Page->sizeHint().height() : 0, Viewport = Page ? Page->height() : 0;
+                auto* Area = qobject_cast<QScrollArea*>(Page); if (!Area && Page) for (auto* Candidate : Page->findChildren<QScrollArea*>()) if (Candidate->isVisible() && Candidate->widget()) { Area = Candidate; break; }
+                if (Area && Area->widget()) {
+                    Content = Area->widget()->sizeHint().height(); Viewport = Area->viewport()->height();
+                    // The whole scrolled content, so the review sees what the viewport cuts off.
+                    QVERIFY(Area->widget()->grab().save(QDir(Out).filePath(QString("settings-%1-light-full.png").arg(Row, 2, 10, QChar('0')))));
+                }
+                qWarning() << "settings-page" << Row << Categories->item(Row)->text() << "content" << Content << "viewport" << Viewport << "dialog" << Dialog.width() << Dialog.height();
+            }
+        }
+        Dialog.reject();
+    }
+
+    void favoritesCaptureUi()
+    {
+        // Captures the Ctrl+G folder hot list popup and its configuration dialog
+        // in both schemes with sample entries; input for the style review.
+        const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) QSKIP("HC_UI_ARTIFACT_DIR not set");
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); TyStFavoriteDirMgr::GetInstance()->Refresh(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const QJsonArray Items{QJsonObject{{"name", "프로젝트 · HyperCommander"}, {"command", "cd"}, {"path", "D:\\Dev\\HyperCommander"}},
+            QJsonObject{{"name", "다운로드"}, {"command", "cd"}, {"path", "C:\\Users\\jgh0721\\Downloads"}},
+            QJsonObject{{"name", "문서 · 보고서"}, {"command", "cd"}, {"path", "D:\\Documents\\Reports"}},
+            QJsonObject{{"name", "빌드 출력"}, {"command", "cd"}, {"path", "D:\\Dev\\HyperCommander\\_build\\vc2026-qt612\\Release"}},
+            QJsonObject{{"name", "NAS 공유"}, {"command", "cd"}, {"path", "\\\\DEVTESTER-QTS\\Public"}}};
+        QVERIFY(Settings.Put(Section::Favorites, QJsonObject{{"items", Items}, {"drivesOn", "bottom"}})); TyStFavoriteDirMgr::GetInstance()->Refresh();
+        auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated();
+        for (const bool Dark : {false, true}) {
+            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QTest::qWait(80);
+            bool Seen = false;
+            QTimer::singleShot(150, main_, [&] {
+                auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget()); if (!Menu) return;
+                const auto Close = qScopeGuard([&] { Menu->close(); });
+                QVERIFY(Menu->grab().save(QDir(Out).filePath(QString("favorites-menu-%1.png").arg(Dark ? "dark" : "light"))));
+                QVERIFY(main_->grab().save(QDir(Out).filePath(QString("favorites-main-%1.png").arg(Dark ? "dark" : "light"))));
+                Seen = true;
+            });
+            QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.navigate.favorites")); QTRY_VERIFY(Seen);
+            QFavoriteDirConfigure Dialog(main_); Dialog.show(); QTest::qWait(120);
+            if (auto* List = Dialog.findChild<QListWidget*>("lstDir"); List && List->count()) List->setCurrentRow(0);
+            QTest::qWait(60);
+            QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("favorites-config-%1.png").arg(Dark ? "dark" : "light"))));
+            qWarning() << "favorites-config size" << Dialog.width() << Dialog.height();
+            Dialog.reject();
+        }
     }
 
     void fileColorLargeFolderUi()

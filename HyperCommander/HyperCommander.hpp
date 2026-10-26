@@ -20,7 +20,6 @@ public:
     bool ShouldRun() const { return shouldRun_; }
     int StartupExitCode() const { return startupExitCode_; }
 
-    Q_INVOKABLE void                    ShowMultiRename( const QVector< QString >& VecFiles );
 
 private:
 

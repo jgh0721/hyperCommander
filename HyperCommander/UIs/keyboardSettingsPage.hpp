@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commandSelector.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <fmwidgets/Card.h>
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/SettingsWidgets.h>
@@ -26,7 +27,11 @@ public:
         table_ = new QTableWidget(Page); table_->setObjectName("hc.keys.commands"); table_->setColumnCount(ColumnCount); table_->setHorizontalHeaderLabels({tr("범위"), tr("명령"), tr("설명"), tr("현재 키"), tr("기본값")});
         table_->setItemDelegateForColumn(CurrentKeyColumn, new fm::ui::KeySequenceDelegate(false, table_)); table_->setItemDelegateForColumn(DefaultKeyColumn, new fm::ui::KeySequenceDelegate(true, table_));
         table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setEditTriggers(QAbstractItemView::NoEditTriggers); table_->verticalHeader()->hide();
-        auto* Columns = table_->horizontalHeader(); Columns->setSectionResizeMode(ScopeColumn, QHeaderView::ResizeToContents); Columns->setSectionResizeMode(CommandColumn, QHeaderView::Interactive); table_->setColumnWidth(CommandColumn, 230); Columns->setSectionResizeMode(DescriptionColumn, QHeaderView::Stretch); Columns->setSectionResizeMode(CurrentKeyColumn, QHeaderView::ResizeToContents); Columns->setSectionResizeMode(DefaultKeyColumn, QHeaderView::ResizeToContents); Rows->addWidget(table_, 1);
+        // Every column can be resized. The defaults keep the command, its description and the current key
+        // readable; the default-key column takes the remaining width. Multi-key rows no longer widen the table.
+        auto* Columns = table_->horizontalHeader(); Columns->setSectionResizeMode(QHeaderView::Interactive); Columns->setStretchLastSection(true); Columns->setMinimumSectionSize(48);
+        table_->setColumnWidth(ScopeColumn, 90); table_->setColumnWidth(CommandColumn, 200); table_->setColumnWidth(DescriptionColumn, 260); table_->setColumnWidth(CurrentKeyColumn, 170);
+        table_->setWordWrap(false); table_->setTextElideMode(Qt::ElideRight); Rows->addWidget(table_, 1);
         auto* Edit = new fm::ui::Card(Page); auto* EditRows = new QVBoxLayout(Edit); Rows->addWidget(Edit);
         selector_ = new CommandSelector(Edit); selector_->setObjectName("hc.keys.command"); EditRows->addWidget(selector_);
         auto* Capture = new QHBoxLayout; EditRows->addLayout(Capture);
@@ -59,7 +64,7 @@ public:
         connect(assign_, &QPushButton::clicked, this, [this] { assign(false); }); connect(reassign_, &QPushButton::clicked, this, [this] { assign(true); });
         connect(Clear, &QPushButton::clicked, this, [this] { auto* M = TyStCommandMgr::GetInstance(); const auto Id = selector_->Command(); for (const auto& K : CommandKeys(M->Retrieve(), Id)) M->DelShortcut(K[0]); Refresh(); });
         connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = I ? "prototype" : "legacy"; settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
-        connect(Reset, &QPushButton::clicked, this, [this] { if (QMessageBox::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
+        connect(Reset, &QPushButton::clicked, this, [this] { if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
         Load();
     }
     void Load() { loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject(); preset_->setCurrentIndex(G["shortcutPreset"] == "prototype" ? 1 : 0); const auto Ids = FunctionCommands(G); for (int I = 0; I < functions_.size(); ++I) { functions_[I]->SetCommand(Ids[I]); captions_[I]->setText((I < G["functionCaptions"].toArray().size() ? G["functionCaptions"].toArray()[I].toString() : QString{})); } loading_ = false; Refresh(); }

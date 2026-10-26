@@ -1,8 +1,10 @@
 ﻿#include "stdafx.h"
 #include "creationDialog.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "commonLibs/Qt/elidedLabel.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <QtConcurrent>
 
 namespace hc::archive {
@@ -56,6 +58,12 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
     error_ = new hc::qt::ElidedLabel(this); error_->setObjectName("hc.archive.create.error"); Footer->addWidget(error_, 1);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this); Footer->addWidget(Buttons);
     create_ = Buttons->button(QDialogButtonBox::Ok); create_->setObjectName("hc.archive.create.submit"); create_->setText(tr("생성(&S)")); create_->setDefault(true); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
+    // Header band carries the selection summary; queue · status · create · cancel share the footer band.
+    Selection->hide();
+    auto* Band = hc::ui::ApplyDialogFrame(this, {{}, Selection->text(), fm::ui::glyph::File});
+    queue_->setParent(Band->parentWidget()); Band->insertWidget(0, queue_);
+    error_->setParent(Band->parentWidget()); Band->insertWidget(1, error_, 1);
+    hc::ui::MoveToFooter(Band, Buttons);
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons, &QDialogButtonBox::accepted, this, [this] { validate(); if (create_->isEnabled()) { queued_ = false; remember(); accept(); } });
     connect(queue_, &QPushButton::clicked, this, [this] { validate(); if (queue_->isEnabled()) { queued_ = true; remember(); accept(); } });
@@ -154,7 +162,7 @@ void CreationDialog::configure()
         if (!value_) { if (format_ == "iso") value_ = IsoCreateSettings{}; else { SevenZipCreateSettings V; if (format_ == "zip") V.solid_ = ArchiveSolidMode::Off; value_ = V; } }
         auto Draft = *value_; if (EditBuiltinCreationSettings(this, format_, Draft)) { value_ = std::move(Draft); WriteCreatorSettings(preferences_, catalog_[creator_], format_, *value_); }
     } else {
-        auto Result = ConfigureCreator(this, catalog_[creator_]); if (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled) QMessageBox::warning(this, tr("플러그인 설정"), QString::fromStdString(Result.Failure().code_));
+        auto Result = ConfigureCreator(this, catalog_[creator_]); if (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("플러그인 설정"), QString::fromStdString(Result.Failure().code_));
     }
     validate();
 }

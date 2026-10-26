@@ -76,9 +76,6 @@ set(PROJECT_UI_SRC
         UIs/cmpViewer.cpp
         UIs/cmpViewer.hpp
         UIs/cmpViewer.ui
-        UIs/dlgDefaultCMD.cpp
-        UIs/dlgDefaultCMD.hpp
-        UIs/dlgDefaultCMD.ui
         UIs/dlgExternalConfigure.cpp
         UIs/dlgExternalConfigure.hpp
         UIs/dlgExternalConfigure.ui
@@ -88,41 +85,12 @@ set(PROJECT_UI_SRC
         UIs/dlgFavoriteDir.cpp
         UIs/dlgFavoriteDir.hpp
         UIs/dlgFavoriteDir.ui
-        UIs/dlgGridStyle.cpp
-        UIs/dlgGridStyle.hpp
-        UIs/dlgGridStyle.ui
         UIs/dlgMain.cpp
         UIs/dlgMain.hpp
         UIs/dlgMain.ui
-        UIs/dlgMultiRename.cpp
-        UIs/dlgMultiRename.hpp
-        UIs/dlgMultiRename.ui
-        UIs/dlgMultiRename_Model.cpp
-        UIs/dlgMultiRename_Model.hpp
         UIs/dlgOpts.cpp
         UIs/dlgOpts.hpp
         UIs/dlgOpts.ui
-        UIs/dlgViewer.cpp
-        UIs/dlgViewer.hpp
-        UIs/dlgViewer.ui
-        "UIs/Cate - FileOperation/dlgCreateDirectory.cpp"
-        "UIs/Cate - FileOperation/dlgCreateDirectory.hpp"
-        "UIs/Cate - FileOperation/dlgCreateDirectory.ui"
-        "UIs/Cate - FileOperation/dlgFileAttrib.cpp"
-        "UIs/Cate - FileOperation/dlgFileAttrib.hpp"
-        "UIs/Cate - FileOperation/dlgFileAttrib.ui"
-        "UIs/Cate - FileOperation/dlgFileCopy.cpp"
-        "UIs/Cate - FileOperation/dlgFileCopy.hpp"
-        "UIs/Cate - FileOperation/dlgFileCopy.ui"
-        "UIs/Cate - FileOperation/dlgFileDelete.cpp"
-        "UIs/Cate - FileOperation/dlgFileDelete.hpp"
-        "UIs/Cate - FileOperation/dlgFileDelete.ui"
-        "UIs/Cate - FileOperation/dlgFileMove.cpp"
-        "UIs/Cate - FileOperation/dlgFileMove.hpp"
-        "UIs/Cate - FileOperation/dlgFileMove.ui"
-        "UIs/Cate - FileOperation/dlgFileProgress.cpp"
-        "UIs/Cate - FileOperation/dlgFileProgress.hpp"
-        "UIs/Cate - FileOperation/dlgFileProgress.ui"
         UniqueLibs/uiComboBoxWidget.cpp
         UniqueLibs/uiComboBoxWidget.hpp
 )

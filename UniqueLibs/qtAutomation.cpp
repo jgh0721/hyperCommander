@@ -24,6 +24,7 @@
 #include <QMenuBar>
 #include <QPointer>
 #include "settings/appSettings.hpp"
+#include "qtDialogFrame.hpp"
 #include <QToolBar>
 
 namespace hc::automation {
@@ -64,6 +65,11 @@ public:
             if (!Loaded.HasValue()) { library_->setEnabled(false); status_->setText(QString::fromStdString(Loaded.Failure().code_)); }
             else { libraryWritable_ = true; scripts_ = std::move(Loaded.Value()); refill(Id); }
         }
+        // The note becomes the header subtitle; status · run · stop · close share the footer band.
+        Note->hide();
+        auto* Footer = hc::ui::ApplyDialogFrame(this, {{}, Note->text(), fm::ui::glyph::Play});
+        status_->setParent(Footer->parentWidget()); Footer->insertWidget(0, status_, 1); hc::ui::MoveToFooter(Footer, Buttons);
+        fm::style::setButtonRole(run_, fm::style::ButtonRole::Primary);
         if (Run && libraryWritable_ && choices_->currentData().toString() == Id && !Id.isEmpty()) QTimer::singleShot(0, this, [this] { run(); });
     }
 private:

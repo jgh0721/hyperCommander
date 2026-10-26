@@ -19,6 +19,8 @@ protected slots:
     void                            on_btnAdd_clicked( bool checked = false );
     void                            on_btnRemove_clicked( bool checked = false );
     void                            on_btnRename_clicked( bool checked = false );
+    void                            moveCurrent( int Offset );
+    void                            arrangeLayout();
 
     void                            on_edtCommand_editingFinished();
     void                            on_edtPath_editingFinished();
@@ -38,4 +40,9 @@ private:
     QVector<CFavoriteDirMgr::TyFavoriteDir> items_;
     CFavoriteDirMgr::TyEnDrivesOn     drivesOn_ = CFavoriteDirMgr::DRIVES_ON_NONE;
     Ui::dlgFavoriteDir              ui;
+    QLineEdit*                      nameView_ = nullptr;
+    QLabel*                         status_ = nullptr;
+    QPushButton*                    moveUp_ = nullptr;
+    QPushButton*                    moveDown_ = nullptr;
+    QPushButton*                    browse_ = nullptr;
 };
