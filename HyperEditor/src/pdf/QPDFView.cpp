@@ -139,12 +139,6 @@ void QPDFView::setupUI()
     m_thumbnailTimer->setSingleShot(false);
     connect(m_thumbnailTimer, &QTimer::timeout, this, &QPDFView::generateNextThumbnail);
 
-    connect(m_scrollArea->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]{
-        if (m_watermarkOverlay) m_watermarkOverlay->update();
-    });
-    connect(m_scrollArea->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{
-        if (m_watermarkOverlay) m_watermarkOverlay->update();
-    });
 
     m_splitter->addWidget(m_sidebarTabs);
     m_splitter->addWidget(m_scrollArea);
@@ -2397,15 +2391,6 @@ bool QPDFView::handleNavigationKey(QKeyEvent* event)
         case Qt::Key_Right: m_scrollArea->horizontalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
     }
     return true;
-}
-
-QList<QRectF> QPDFView::visiblePageRects(qreal& scaleRatio) const
-{
-    QList<QRectF> rects;
-    const QList<PageViewportInfo> pages = currentViewportPages(scaleRatio);
-    for (const PageViewportInfo& page : pages)
-        rects.append(page.rect);
-    return rects;
 }
 
 

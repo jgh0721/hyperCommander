@@ -266,43 +266,6 @@ bool QTextView::opensFileAsynchronously() const
     return true;
 }
 
-QList<QRectF> QTextView::visiblePageRects(qreal& scaleRatio) const
-{
-    scaleRatio = 1.0;
-    if (!m_editor) return {};
-
-    QList<QRectF> rects;
-
-    // 텍스트 편집기 백엔드의 뷰포트
-    QAbstractScrollArea* area = m_editor->scrollArea();
-    if (!area || !area->viewport())
-        return {};
-
-    QRect vpRect = area->viewport()->rect();
-    // 가상 A4 페이지 높이 (너비 * 1.414)
-    int pageHeight = static_cast<int>(vpRect.width() * 1.414);
-    if (pageHeight <= 0) return {};
-
-    // 현재 스크롤 위치를 line height 기준의 대략적인 픽셀 오프셋으로 계산
-    int firstVisibleLine = m_editor->firstVisibleLine();
-    int scrollY = firstVisibleLine * m_editor->textHeight(0);
-
-    // 표시되는 영역의 첫 가상 페이지 인덱스와 끝 인덱스
-    int startPage = scrollY / pageHeight;
-    int endPage = (scrollY + vpRect.height()) / pageHeight;
-
-    for (int i = startPage; i <= endPage; ++i) {
-        int pageY = i * pageHeight;
-        // 뷰포트 내의 상대 좌표
-        int yInView = pageY - scrollY;
-
-        QPoint viewPos = area->viewport()->mapTo(const_cast<QTextView*>(this), QPoint(0, yInView));
-        rects.append(QRectF(viewPos.x(), viewPos.y(), vpRect.width(), pageHeight));
-    }
-
-    return rects;
-}
-
 // ═══════════════════════════════════════════════════════════
 // 인코딩
 // ═══════════════════════════════════════════════════════════
@@ -1097,14 +1060,8 @@ bool QTextView::ensureEditorBackend()
     });
 
     if (QAbstractScrollArea* area = m_editor->scrollArea()) {
-        if (QScrollBar* verticalScrollBar = area->verticalScrollBar()) {
-            connect(verticalScrollBar, &QScrollBar::valueChanged, this, [this]{
-                if (m_watermarkOverlay) m_watermarkOverlay->update();
-            });
-        }
         if (QScrollBar* horizontalScrollBar = area->horizontalScrollBar()) {
             connect(horizontalScrollBar, &QScrollBar::valueChanged, this, [this, horizontalScrollBar]{
-                if (m_watermarkOverlay) m_watermarkOverlay->update();
                 if (m_ruler) {
                     m_ruler->setScrollOffset(horizontalScrollBar->value());
                     m_ruler->setLeftMarginWidth(m_editor->leftMarginWidth());

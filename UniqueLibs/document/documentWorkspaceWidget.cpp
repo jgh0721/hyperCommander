@@ -64,7 +64,6 @@
 #include "core/ThemeManager.h"
 #include <fmstyle/ThemeManager.h>
 #include "core/ExternalChangeWatcher.h"
-#include "core/WatermarkDialog.h"
 void InitializePortedViewResources();
 
 namespace hc::document
@@ -145,7 +144,7 @@ namespace hc::document
                 {"printDocument", "print"}, {"previewDocument", "print-preview"}, {"captureScreen", "screen-capture"},
                 {"editHwpDocument", "annotation-freetext"},
                 {"undoDocument", "undo"}, {"redoDocument", "redo"}, {"documentPreferences", "toc-toggle"},
-                {"workspaceDisplayOptions", "view-preview"}, {"documentWatermark", "watermark"},
+                {"workspaceDisplayOptions", "view-preview"},
                 {"documentCaptureProtection", "capture-exclude"}, {"documentRecovery", "refresh"},
                 {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"}, {"view.fullscreen", "fullscreen"},
                 {"edit.cut", "cut"}, {"edit.copy", "copy"}, {"edit.paste", "paste"}, {"edit.selectAll", "select-all"},
@@ -321,7 +320,6 @@ namespace hc::document
                 });
             }
         }
-        auto* Watermark=ViewMenu->addAction(tr("워터마크"));Watermark->setObjectName("documentWatermark");connect(Watermark,&QAction::triggered,this,[this]{if(auto Tab=active()){if(!Tab->pane_->View())return;WatermarkDialog Dialog(Tab->pane_->View()->watermark(),this);if(Dialog.exec()==QDialog::Accepted)Tab->pane_->View()->setWatermark(Dialog.result());}});
         auto* Protection=ViewMenu->addAction(tr("화면 캡처 보호"));Protection->setCheckable(true);connect(Protection,&QAction::toggled,this,[this](bool Enabled){if(auto Tab=active()){auto Reply=Tab->pane_->Execute({{"action","captureProtection"},{"enabled",Enabled}});if(Reply.contains("error"))ShowShellError(tr("이 호스트에서는 화면 캡처 보호를 적용할 수 없습니다."));}});
         auto* Themes = ViewMenu->addMenu(tr("테마"));
         Themes->menuAction()->setProperty("documentIconName", "theme-toggle");

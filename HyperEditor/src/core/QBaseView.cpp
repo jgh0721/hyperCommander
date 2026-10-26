@@ -7,34 +7,7 @@
 #include <QPrintPreviewDialog>
 #include <QPrinterInfo>
 #include <QFileInfo>
-#include <QMetaObject>
 #include <QVBoxLayout>
-#include <QResizeEvent>
-#include <QtMath>
-
-// ── 오버레이 위젯 ──
-class WatermarkOverlay : public QWidget {
-public:
-    explicit WatermarkOverlay(QBaseView* parent) : QWidget(parent), m_view(parent) {
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        setAttribute(Qt::WA_TranslucentBackground);
-        setAttribute(Qt::WA_NoSystemBackground);
-        hide();
-    }
-protected:
-    void paintEvent(QPaintEvent*) override {
-        if (!m_view || m_view->isShuttingDown()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        qreal scaleRatio = 1.0;
-        QList<QRectF> rects = m_view->visiblePageRects(scaleRatio);
-        for (const auto& r : rects) {
-            m_view->renderWatermark(&painter, r, scaleRatio);
-        }
-    }
-private:
-    QBaseView* m_view;
-};
 
 // ═══════════════════════════════════════════════════════════
 // 생성 / 소멸
@@ -49,7 +22,6 @@ QBaseView::QBaseView(QWidget* parent)
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
 
-    m_watermarkOverlay = new WatermarkOverlay(this);
 }
 
 QBaseView::~QBaseView()
@@ -57,15 +29,11 @@ QBaseView::~QBaseView()
     m_shuttingDown = true;
     for(auto* Child:findChildren<QObject*>())QObject::disconnect(Child,nullptr,this,nullptr);
 
-    // 대기 중인 QueuedConnection 호출(예: setWatermark 람다)이
+    // 대기 중인 QueuedConnection 호출이
     // 소멸 중에 실행되지 않도록 게시된 이벤트를 제거
     if (QCoreApplication::instance())
         QCoreApplication::removePostedEvents(this);
 
-    // m_watermarkOverlay는 this의 자식 위젯이므로
-    // QWidget::~QWidget()이 자동으로 삭제합니다.
-    // 소멸자에서 접근하지 않음 - QPointer 내부 weakref가 이미 무효화된
-    // 상태에서 접근 시 예외 발생 가능.
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -130,7 +98,6 @@ void QBaseView::print(QPrinter* printer, const PrintPageRange& range)
     for (int i = firstPageIndex; i <= lastPageIndex; ++i) {
         if (i > firstPageIndex) printer->newPage();
         renderPage(&painter, i, pageRect);
-        renderWatermark(&painter, pageRect);
 
         if (showProgress) {
             updateLoadingProgress({}, i - firstPageIndex + 1, pagesToPrint);
@@ -244,101 +211,7 @@ void QBaseView::updateCopyAvailability()
     emit copyAvailabilityChanged(available);
 }
 
-// ═══════════════════════════════════════════════════════════
-// 워터마크
-// ═══════════════════════════════════════════════════════════
-void QBaseView::setWatermark(const WatermarkConfig& cfg)
-{
-    if (m_shuttingDown) return;
-    // 강제 모드에서는 사용자가 해제할 수 없음
-    if (m_watermark.forced && !cfg.forced && !cfg.enabled) return;
-    m_watermark = cfg;
-
-    if (!m_watermarkOverlay) return;
-
-    QMetaObject::invokeMethod(this, [this] {
-        if (!m_watermarkOverlay) return;
-
-        m_watermarkOverlay->setGeometry(rect());
-        m_watermarkOverlay->setVisible(m_watermark.enabled);
-
-        if (m_watermark.enabled && isVisible()) {
-            m_watermarkOverlay->raise();
-            m_watermarkOverlay->update();
-        }
-    }, Qt::QueuedConnection);
-}
-QBaseView::WatermarkConfig QBaseView::watermark() const   { return m_watermark; }
-
-QList<QRectF> QBaseView::visiblePageRects(qreal& scaleRatio) const {
-    scaleRatio = 1.0;
-    return { rect() }; // 기본적으로 전체 영역 반환 (텍스트, 마크다운 등 미지원 뷰어 대비용)
-}
-
 bool QBaseView::isShuttingDown() const { return m_shuttingDown; }
-
-void QBaseView::renderWatermark(QPainter* painter, const QRectF& pageRect, qreal scaleRatio)
-{
-    if (m_shuttingDown || !m_watermark.enabled || !painter || !painter->isActive()) return;
-    if (!pageRect.isValid() || pageRect.isEmpty()) return;
-    if (!qIsFinite(scaleRatio) || scaleRatio <= 0.0) scaleRatio = 1.0;
-
-    painter->save();
-    painter->setOpacity(m_watermark.opacity);
-
-    const QPointF center(
-        pageRect.x() + pageRect.width()  * m_watermark.relativePos.x(),
-        pageRect.y() + pageRect.height() * m_watermark.relativePos.y()
-    );
-
-    painter->translate(center);
-    painter->rotate(m_watermark.rotation);
-
-    if (!m_watermark.image.isNull()) {
-        // 이미지 워터마크
-        const QSizeF sz(
-            pageRect.width()  * m_watermark.relativeSize.width(),
-            pageRect.height() * m_watermark.relativeSize.height()
-        );
-        if (sz.isEmpty() || sz.width() <= 0.0 || sz.height() <= 0.0) {
-            painter->restore();
-            return;
-        }
-        QRectF dst(-sz.width() / 2, -sz.height() / 2, sz.width(), sz.height());
-        painter->drawPixmap(dst.toRect(), m_watermark.image.scaled(sz.toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    } else if (!m_watermark.text.isEmpty()) {
-        // 문자열 워터마크 (바둑판, 여러 줄 배치)
-        QFont font = painter->font();
-        font.setPixelSize(qMax(1, int(pageRect.height() * m_watermark.relativeSize.height() * 0.1 * scaleRatio)));
-        painter->setFont(font);
-        painter->setPen(QColor(m_watermark.color.red(), m_watermark.color.green(), m_watermark.color.blue(), int(255 * m_watermark.opacity)));
-
-        QFontMetricsF fm(font);
-        QRectF textRect = fm.boundingRect(m_watermark.text);
-
-        // 충분한 여백을 포함하여 패턴 크기 계산
-        qreal stepX = textRect.width() * 1.5;
-        qreal stepY = textRect.height() * 3.0;
-
-        // 회전 등으로 인해 pageRect보다 더 큰 영역을 채워야 할 수 있음
-        qreal maxDim = qMax(pageRect.width(), pageRect.height()) * 3.0;
-
-        int countX = qCeil(maxDim / stepX);
-        int countY = qCeil(maxDim / stepY);
-
-        for (int i = -countX; i <= countX; ++i) {
-            for (int j = -countY; j <= countY; ++j) {
-                // 짝수/홀수 줄에 따라 X를 엇갈리게 배치 (벽돌 패턴)
-                qreal offsetX = i * stepX + (j % 2 != 0 ? stepX / 2.0 : 0);
-                qreal offsetY = j * stepY;
-                painter->drawText(QRectF(offsetX - textRect.width() / 2, offsetY - textRect.height() / 2, textRect.width(), textRect.height()),
-                                  Qt::AlignCenter, m_watermark.text);
-            }
-        }
-    }
-
-    painter->restore();
-}
 
 // ═══════════════════════════════════════════════════════════
 // 화면 캡처 방지
@@ -422,13 +295,4 @@ QBaseView::Theme QBaseView::currentTheme() const { return m_theme; }
 void QBaseView::applyThemeStyleSheet(Theme theme)
 {
     Q_UNUSED(theme);setStyleSheet({});setPalette(parentWidget() ? parentWidget()->palette() : QApplication::palette());
-}
-
-void QBaseView::resizeEvent(QResizeEvent* event)
-{
-    QWidget::resizeEvent(event);
-    if (m_shuttingDown) return;
-    if (m_watermarkOverlay) {
-        m_watermarkOverlay->resize(size());
-    }
 }

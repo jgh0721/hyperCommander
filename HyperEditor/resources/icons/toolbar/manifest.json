@@ -7,7 +7,6 @@
     { "key": "main.print", "iconName": "print", "toolTip": "인쇄", "checkable": false },
     { "key": "main.printPreview", "iconName": "print-preview", "toolTip": "인쇄 미리보기", "checkable": false },
     { "key": "main.capture", "iconName": "screen-capture", "toolTip": "화면 캡쳐 (Alt+Shift+S)", "checkable": false },
-    { "key": "main.watermark", "iconName": "watermark", "toolTip": "워터마크 설정", "checkable": false },
     { "key": "main.themeToggle", "iconName": "theme-toggle", "toolTip": "라이트/다크 테마 전환", "checkable": false },
 
     { "key": "image.previous", "iconName": "chevron-left", "toolTip": "이전 이미지", "checkable": false },
@@ -71,7 +70,7 @@
       "groups": [
         {
           "title": "File / Global",
-          "cards": ["main.new", "main.open", "main.save", "main.saveAs", "main.print", "main.printPreview", "main.capture", "main.watermark", "main.themeToggle"]
+          "cards": ["main.new", "main.open", "main.save", "main.saveAs", "main.print", "main.printPreview", "main.capture", "main.themeToggle"]
         }
       ]
     },

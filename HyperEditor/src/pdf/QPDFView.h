@@ -61,7 +61,6 @@ public:
     bool        isModified() const override;
     QStringList supportedExtensions() const override;
     bool        opensFileAsynchronously() const override;
-    QList<QRectF> visiblePageRects(qreal& scaleRatio) const override;
     void        setTheme(Theme theme) override;
 
     // ── 네비게이션 ──

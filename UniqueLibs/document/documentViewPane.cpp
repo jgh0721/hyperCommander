@@ -17,7 +17,6 @@
 #include "core/ThemeManager.h"
 #include "core/ToolbarIcons.h"
 #include "core/PrintManager.h"
-#include "core/WatermarkDialog.h"
 #include <fmstyle/ThemeManager.h>
 #include <QApplication>
 #include <QPushButton>
@@ -508,7 +507,6 @@ namespace hc::document
         }
         else if(Action=="print"&&view_){QTimer::singleShot(0,this,[this]{PrintManager Printer;QImageView Printed;if(reading_&&!reading_->isHidden()){if(reading_->CurrentImage().isNull())return;Printed.LoadContent(reading_->CurrentImage(),reading_->CurrentName(),false);Printer.showPrintDialog(&Printed,this);}else Printer.showPrintDialog(view_,this);});}
         else if(Action=="printPreview"&&view_)QTimer::singleShot(0,this,[this]{if(reading_&&!reading_->isHidden()){if(reading_->CurrentImage().isNull())return;QImageView Printed;Printed.LoadContent(reading_->CurrentImage(),reading_->CurrentName(),false);PrintManager Printer;Printer.showPreview(&Printed,this);}else view_->printPreview();});
-        else if(Action=="watermark"&&view_){auto Config=view_->watermark();Config.enabled=Request["enabled"].toBool();Config.text=Request["text"].toString();view_->setWatermark(Config);}
         else if(Action=="captureProtection"&&view_){view_->setScreenCaptureProtection(Request["enabled"].toBool());if(ScreenProtect::isProtected(view_)!=Request["enabled"].toBool())return Error("document-capture-protection-unavailable");}
         else return Error("document-view-command-unsupported");
         return {{"accepted",true}};

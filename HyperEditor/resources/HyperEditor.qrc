@@ -60,7 +60,6 @@
         <file>icons/toolbar/view-preview.svg</file>
         <file>icons/toolbar/view-source.svg</file>
         <file>icons/toolbar/view-split.svg</file>
-        <file>icons/toolbar/watermark.svg</file>
         <file>icons/toolbar/word-wrap.svg</file>
         <file>text/lexers.json</file>
     </qresource>

@@ -20,14 +20,6 @@
       "sha256": "1cfc2cd593be84f92310e2876a4c7b5fb337ce880d22b78e4e04d0e4680812a0"
     },
     {
-      "path": "src/core/Watermark.h",
-      "sha256": "bad58576ed0064c141589741ae212e30f5b8d4719fa15e3813c29374a252aeb6"
-    },
-    {
-      "path": "src/core/Watermark.cpp",
-      "sha256": "b41b4726705cc5bf2e80ce4fadd48bbfc0211154de861029e2a8f81033d948a0"
-    },
-    {
       "path": "src/core/PrintManager.h",
       "sha256": "2a9e0556b8cf59fb2ed0c1a5856a56658ba7a335f730e41694be0f81027115dc"
     },
@@ -42,14 +34,6 @@
     {
       "path": "src/core/ThemeManager.cpp",
       "sha256": "c6f8367b5486afb3cd178f00f66d786947c37665317b8e56bf57485f3d7c0d71"
-    },
-    {
-      "path": "src/core/WatermarkDialog.h",
-      "sha256": "e21b48fe3e1971f4379047249c0f91a84956bda5e8ee653e90416d64796d73d8"
-    },
-    {
-      "path": "src/core/WatermarkDialog.cpp",
-      "sha256": "7466ed997f9c6d4c744da7895fa976ad1d2aeeb86a82e4dfce6fad9e82a2b642"
     },
     {
       "path": "src/text/ITextEditorBackend.h",
@@ -286,7 +270,7 @@
     {
       "id": "P2-U01",
       "status": "ported",
-      "implementation": "per-pane toolbars, print/ranges/preview, watermark/capture/protection and shared waterColor chrome"
+      "implementation": "per-pane toolbars, print/ranges/preview, capture/protection and shared waterColor chrome"
     },
     {
       "id": "pdf.forms",

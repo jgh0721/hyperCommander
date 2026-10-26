@@ -150,12 +150,6 @@ QImageView::QImageView(QWidget* parent)
     m_scrollArea->setAlignment(Qt::AlignCenter);
     m_scrollArea->viewport()->installEventFilter(this);  // 스크롤 영역 이벤트도 처리
 
-    connect(m_scrollArea->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]{
-        if (m_watermarkOverlay) m_watermarkOverlay->update();
-    });
-    connect(m_scrollArea->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]{
-        if (m_watermarkOverlay) m_watermarkOverlay->update();
-    });
 
     layout()->addWidget(m_scrollArea);
 
@@ -270,52 +264,6 @@ void QImageView::setTheme(Theme theme)
 {
     QBaseView::setTheme(theme);
     updateDisplay();
-}
-
-QList<QRectF> QImageView::visiblePageRects(qreal& scaleRatio) const
-{
-    if (m_displayImage.isNull() || !m_imageLabel || !m_scrollArea || !isVisible() || !m_imageLabel->isVisible()) {
-        scaleRatio = 1.0;
-        return {};
-    }
-
-    const QPixmap pixmap = m_imageLabel->pixmap();
-    if (pixmap.isNull()) {
-        scaleRatio = 1.0;
-        return {};
-    }
-
-    QImage scaled = scaledImage();
-    if (scaled.isNull() || m_displayImage.isNull()) {
-        scaleRatio = 1.0;
-        return {};
-    }
-
-    if (m_displayImage.width() <= 0 || m_displayImage.height() <= 0) {
-        scaleRatio = 1.0;
-        return {};
-    }
-
-    scaleRatio = static_cast<qreal>(scaled.width()) / m_displayImage.width();
-
-    // 이미지 라벨의 표시 영역 (QPixmap이 중앙 정렬되므로 오프셋 필요)
-    QSize labelSize = m_imageLabel->size();
-    QSize pmSize = pixmap.deviceIndependentSize().toSize();
-    if (pmSize.isEmpty())
-        pmSize = pixmap.size() / qMax(1.0, pixmap.devicePixelRatio());
-    if (labelSize.isEmpty() || pmSize.isEmpty()) {
-        scaleRatio = 1.0;
-        return {};
-    }
-
-    int offsetX = (labelSize.width() - pmSize.width()) / 2;
-    int offsetY = (labelSize.height() - pmSize.height()) / 2;
-
-    QPoint globalPos = m_imageLabel->mapToGlobal(QPoint(offsetX, offsetY));
-    QPoint viewPos = mapFromGlobal(globalPos);
-
-    QRect rectInView(viewPos, pmSize);
-    return { rectInView };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -751,7 +699,6 @@ void QImageView::updateDisplay()
         m_imageLabel->setPixmap(pixmap);
     }
 
-    if (m_watermarkOverlay) m_watermarkOverlay->update();
     emit viewStateChanged();
 }
 

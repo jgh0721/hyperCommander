@@ -6,7 +6,7 @@
 
 class QBaseView;
 
-/// 인쇄 관리자 — 워터마크 적용, 프린터 필터링 등
+/// 인쇄 관리자 — 프린터 필터링 및 인쇄 미리보기
 class PrintManager : public QObject
 {
     Q_OBJECT
