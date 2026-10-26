@@ -969,7 +969,7 @@ add_test(NAME hc.document.lexilla_compatibility COMMAND hc_lexilla_compatibility
 set_tests_properties(hc.document.lexilla_compatibility PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 
 qt_add_executable(hc_document_preferences_tests document/tstDocumentPreferences.cpp)
-target_link_libraries(hc_document_preferences_tests PRIVATE hc_document_widgets Qt6::Test)
+target_link_libraries(hc_document_preferences_tests PRIVATE hc_document_widgets Qt6::Test Qt6::Network)
 target_compile_options(hc_document_preferences_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc_document_preferences_tests TEST PLUGINS)
 add_dependencies(hc_check hc_document_preferences_tests)

@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "runtimeVerification.hpp"
+#include "editorInstance.hpp"
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
 #include <QJsonArray>
@@ -32,8 +33,9 @@ namespace
     {
     public:
         using hc::document::DocumentWorkspaceWidget::DocumentWorkspaceWidget;
+        std::function<void()> closed_;
     protected:
-        void closeEvent(QCloseEvent* Event) override { if (RequestClose()) Event->accept(); else Event->ignore(); }
+        void closeEvent(QCloseEvent* Event) override { if (RequestClose()) {Event->accept();if(closed_)closed_();} else Event->ignore(); }
     };
 }
 int main(int Argc, char** Argv)
@@ -111,6 +113,14 @@ int main(int Argc, char** Argv)
         Window.show(); QTimer::singleShot(0, &Window, &hc::document::HwpOpenWindow::Open);
         return App.exec();
     }
+    EditorInstance Instance;
+    if(!EpubEdit){
+        const auto Canonical=[](const QString& Path){const QFileInfo Info(Path);const auto Name=Info.canonicalFilePath();return (Name.isEmpty()?Info.absoluteFilePath():Name).toCaseFolded();};
+        const auto Scope=QJsonDocument(QJsonArray{Canonical(QCoreApplication::applicationFilePath()),Canonical(Config.directory_),Parser.value("theme"),Parser.value("document-appearance")}).toJson(QJsonDocument::Compact);
+        const auto Started=Instance.Start(Scope,Parser.positionalArguments());
+        if(Started==EditorInstance::Forwarded)return 0;
+        if(Started==EditorInstance::Failed){QMessageBox::warning(nullptr,QObject::tr("문서 열기"),QObject::tr("기존 HyperEditor에 열기 요청을 전달하지 못했습니다. 잠시 후 다시 시도하십시오."));return 12;}
+    }
     const auto RecoveryRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/editor";
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
@@ -122,9 +132,9 @@ int main(int Argc, char** Argv)
     hc::document::DocumentThemeAdapter::SetMode(General["themeMode"].toString("system"));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     std::vector<std::unique_ptr<Workspace>> Windows;
-    auto Files = Parser.positionalArguments();
+    const auto OpenFiles=[&](QStringList Files){
     if (Files.isEmpty()) Files.append(QString{});
-    Windows.reserve(Files.size());
+    Windows.reserve(Windows.size()+Files.size());
     for (const auto& File : Files) {
         auto Window = std::make_unique<Workspace>(RecoveryRoot, false);
         Window->ConfigureHwp(hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
@@ -160,10 +170,16 @@ int main(int Argc, char** Argv)
             }
             Current->setWindowTitle("HyperEditor");
         });
-        Current->show();
+        Current->closed_=[&App,&Windows,Current]{QTimer::singleShot(0,&App,[&Windows,Current]{
+            std::erase_if(Windows,[Current](const auto& Window){return Window.get()==Current;});
+        });};
+        Current->show();Current->raise();Current->activateWindow();
         if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
     }
+    };
+    Instance.SetOpenHandler(OpenFiles);
+    OpenFiles(Parser.positionalArguments());
     return App.exec();
 }

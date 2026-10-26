@@ -1,4 +1,7 @@
 ﻿#include "UniqueLibs/settings/appSettings.hpp"
+#include "HyperEditor/editorInstance.hpp"
+#include <future>
+#include <QUuid>
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include "tools/epub/render/readingSettings.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
@@ -47,6 +50,17 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void editorInstanceForwardsAndIsolatesSettings() {
+        const auto Scope=QUuid::createUuid().toByteArray();EditorInstance Primary;QStringList Received;
+        QCOMPARE(Primary.Start(Scope,{}),EditorInstance::Primary);
+        Primary.SetOpenHandler([&](QStringList Files){Received=Files;});
+        const auto Path=QDir::temp().absoluteFilePath("editor-instance.txt");
+        auto Client=std::async(std::launch::async,[=]{EditorInstance Secondary;return Secondary.Start(Scope,{Path});});
+        QTRY_VERIFY_WITH_TIMEOUT(Client.wait_for(std::chrono::milliseconds(0))==std::future_status::ready,15000);
+        QCOMPARE(Client.get(),EditorInstance::Forwarded);QTRY_COMPARE(Received,QStringList{Path});
+        EditorInstance Other;QCOMPARE(Other.Start(Scope+"other-settings",{}),EditorInstance::Primary);
+    }
+
     void deferredCppStylingPreservesMultilineState() {
         const QByteArray Unit("/* comment\nstill comment */\nint value = 3;\n");
         const auto Bytes=Unit.repeated(2048);QTextView View;View.resize(700,400);
