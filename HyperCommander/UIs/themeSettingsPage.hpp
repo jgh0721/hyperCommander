@@ -6,6 +6,7 @@
 #include <fmstyle/ColorScheme.h>
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "UniqueLibs/productTheme.hpp"
 #include "themePreview.hpp"
 
 namespace hc::ui {
@@ -105,9 +106,9 @@ public:
         connect(source_, &QPushButton::clicked, this, [this] { const auto Role = roleOfToken(Token(selected())); if (Role) { all_->setChecked(false); list_->setCurrentRow(int(*Role)); } });
         connect(picker_, &fm::ui::AccentPicker::accentChosen, this, [this](const auto& Color) { editColor(Color); });
         connect(picker_, &fm::ui::AccentPicker::customRequested, this, [this] { const auto Color = QColorDialog::getColor(seedColor(SeedRole::Accent, deriveDraft().colors, effectiveSeeds()), this); if (Color.isValid()) editColor(Color); });
-        connect(follow_, &QCheckBox::toggled, this, [this](bool On) { if (loading_) return; auto& S = scheme_.seeds.variantSeeds(Design::Watercolor, variant()); if (selected() == int(SeedRole::Sel)) S.selFollowsAccent = On; else S.invSelFollowsAccent = On; refresh(selected()); });
+        connect(follow_, &QCheckBox::toggled, this, [this](bool On) { if (loading_) return; auto& S = scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()); if (selected() == int(SeedRole::Sel)) S.selFollowsAccent = On; else S.invSelFollowsAccent = On; refresh(selected()); });
         connect(fix_, &QCheckBox::toggled, this, [this](bool On) { if (loading_) return; scheme_.seeds.fixContrast = On; refresh(selected()); });
-        connect(Reset, &QPushButton::clicked, this, [this] { scheme_.seeds.variantSeeds(Design::Watercolor, variant()) = {}; scheme_.overridesFor(Design::Watercolor, variant()) = {}; refresh(); });
+        connect(Reset, &QPushButton::clicked, this, [this] { scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()) = {}; scheme_.overridesFor(hc::theme::ProductDesign, variant()) = {}; refresh(); });
         connect(ImportButton, &QPushButton::clicked, this, [this] { const auto Path = QFileDialog::getOpenFileName(this, tr("테마 가져오기"), {}, "JSON (*.json)"); if (!Path.isEmpty()) ImportFile(Path); });
         connect(ExportButton, &QPushButton::clicked, this, [this] { const auto Path = QFileDialog::getSaveFileName(this, tr("테마 내보내기"), {}, "JSON (*.json)"); if (!Path.isEmpty()) Export(Path); });
         Load({});
@@ -132,7 +133,7 @@ public:
     QJsonObject SaveLibrary() const { auto Library = library_; if (supported_ && scheme_.id != "builtin") Library[scheme_.id] = Save(); return Library; }
     void Load(const QJsonObject& Object) {
         original_ = Object; supported_ = Object.isEmpty() || (Object["format"] == "fm-color-scheme" && Object["version"] == QJsonValue(1));
-        scheme_ = supported_ ? fm::style::ColorScheme::fromJson(Object).value_or(fm::style::ColorScheme{}) : fm::style::ColorScheme{};
+        scheme_ = supported_ ? hc::theme::ReadProductScheme(Object) : fm::style::ColorScheme{};
         if (supported_ && scheme_.id == "builtin") builtinDraft_ = Object;
         setEnabled(supported_); status_->setText(supported_ ? tr("변경은 이 미리보기에만 반영됩니다. 적용/확인 후 제품 화면에 사용합니다.") : tr("지원하지 않는 테마 형식은 원본 그대로 보존합니다.")); refresh();
     }
@@ -154,7 +155,7 @@ public:
         if (!supported_) return original_; auto Result = original_; auto Designs = Result["designs"].toObject();
         // Remove known optional values before overlaying the new draft so Reset
         // really clears them, while unknown metadata remains round-trippable.
-        for (const auto& D : {QString("standard"), QString("watercolor")}) {
+        for (const auto& D : {QString("standard"), QString("watercolor"), QString("paperfluent")}) {
             auto Variants = Designs[D].toObject();
             for (const auto& V : {QString("light"), QString("dark"), QString("navy")}) { auto O = Variants[V].toObject(); auto Seeds = O["seeds"].toObject(); auto Overrides = O["overrides"].toObject();
                 for (const auto& R : fm::style::seedRoles()) Seeds.remove(QString::fromLatin1(R.id)); for (const auto& T : fm::style::allTokens()) Overrides.remove(fm::style::tokenCssName(T.token));
@@ -174,12 +175,12 @@ private:
         if (Seeds.useSystemAccent) if (const auto System = fm::style::ThemeManager::systemAccent()) Seeds.accent = *System;
         return Seeds;
     }
-    fm::style::DerivedTheme deriveDraft() const { return fm::style::deriveTheme(variant(), effectiveSeeds(), scheme_.overridesFor(fm::style::Design::Watercolor, variant()), fm::style::Design::Watercolor); }
+    fm::style::DerivedTheme deriveDraft() const { return fm::style::deriveTheme(variant(), effectiveSeeds(), scheme_.overridesFor(hc::theme::ProductDesign, variant()), hc::theme::ProductDesign); }
     void editColor(std::optional<QColor> Color) {
         using namespace fm::style;
-        if (all_->isChecked()) scheme_.overridesFor(Design::Watercolor, variant())[std::size_t(selected())] = Color;
+        if (all_->isChecked()) scheme_.overridesFor(hc::theme::ProductDesign, variant())[std::size_t(selected())] = Color;
         else {
-            auto& Seeds = scheme_.seeds.variantSeeds(Design::Watercolor, variant()); Seeds.seed[std::size_t(selected())] = Color;
+            auto& Seeds = scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()); Seeds.seed[std::size_t(selected())] = Color;
             // A selected seed is only used by the engine when accent following is off.
             if (selected() == int(SeedRole::Sel)) Seeds.selFollowsAccent = !Color.has_value();
             if (selected() == int(SeedRole::InvSel)) Seeds.invSelFollowsAccent = !Color.has_value();
@@ -207,7 +208,7 @@ private:
     }
     QIcon swatch(const QColor& Color) const { QPixmap Pixmap(22, 22); Pixmap.fill(Color); return QIcon(Pixmap); }
     QString seedState(fm::style::SeedRole Role) const {
-        using namespace fm::style; const auto& Seeds = scheme_.seeds.variantSeeds(Design::Watercolor, variant());
+        using namespace fm::style; const auto& Seeds = scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant());
         if ((Role == SeedRole::Sel && Seeds.selFollowsAccent) || (Role == SeedRole::InvSel && Seeds.invSelFollowsAccent)) return tr("강조 연동");
         if (Seeds.seed[std::size_t(Role)]) return tr("직접 지정");
         if (Role == SeedRole::Accent && scheme_.seeds.useSystemAccent) return tr("Windows 연동");
@@ -223,9 +224,9 @@ private:
         QSet<int> Warnings; for (const auto& Check : checkContrast(Colors)) if (!Check.passes) { Warnings.insert(int(Check.foreground)); Warnings.insert(int(Check.background)); }
         int Changed = 0;
         for (const auto& Info : allTokens()) {
-            const auto Role = roleOfToken(Info.token); const auto Override = scheme_.overridesFor(Design::Watercolor, variant())[indexOf(Info.token)];
-            const bool Modified = Override.has_value() || Colors[Info.token] != ThemeColors::builtin(variant(), Design::Watercolor)[Info.token] || (Role && scheme_.seeds.variantSeeds(Design::Watercolor, variant()).seed[std::size_t(*Role)].has_value());
-            const auto State = Override ? tr("직접 지정") : Role ? (tokenSource(Info.token, Design::Watercolor).isSeed ? seedState(*Role) : tr("자동 · ") + QString::fromUtf8(seedRoleInfo(*Role).label)) : tr("기본");
+            const auto Role = roleOfToken(Info.token); const auto Override = scheme_.overridesFor(hc::theme::ProductDesign, variant())[indexOf(Info.token)];
+            const bool Modified = Override.has_value() || Colors[Info.token] != ThemeColors::builtin(variant(), hc::theme::ProductDesign)[Info.token] || (Role && scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()).seed[std::size_t(*Role)].has_value());
+            const auto State = Override ? tr("직접 지정") : Role ? (tokenSource(Info.token, hc::theme::ProductDesign).isSeed ? seedState(*Role) : tr("자동 · ") + QString::fromUtf8(seedRoleInfo(*Role).label)) : tr("기본");
             auto* Item = new QTreeWidgetItem(Groups[int(Info.group)]); Item->setIcon(0, swatch(Colors[Info.token])); Item->setText(0, tokenLabel(Info.token) + " · " + State + "\n" + tokenCssName(Info.token) + "  " + tokenDisplayValue(Info.token, Colors[Info.token]));
             Item->setData(0, Qt::UserRole, int(Info.token)); Item->setData(0, Qt::UserRole + 1, tokenLabel(Info.token) + " " + tokenCssName(Info.token) + " " + tokenUsage(Info.token)); Item->setData(0, Qt::UserRole + 2, Modified); Item->setData(0, Qt::UserRole + 3, Warnings.contains(int(Info.token))); Item->setToolTip(0, Item->text(0) + "\n" + tokenUsage(Info.token));
             if (Modified) ++Changed;
@@ -257,11 +258,11 @@ private:
         editor_->setEnabled(!all_->isChecked() || (tree_->currentItem() && tree_->currentItem()->parent())); if (!editor_->isEnabled()) return;
         using namespace fm::style; loading_ = true; const auto Draft = deriveDraft(); const auto& Colors = Draft.colors;
         QList<Token> Related;
-        if (all_->isChecked()) { const auto T = Token(selected()); title_->setText(tokenLabel(T) + " · " + tokenUsage(T)); color_->setColor(scheme_.overridesFor(Design::Watercolor, variant())[std::size_t(T)]); derived_->setText(tokenCssName(T) + " · " + (tokenInfo(T).qtRole ? QString::fromLatin1(tokenInfo(T).qtRole) : tr("전용 그리기"))); Related.append(T); hex_->setText(colorHex(Colors[T])); }
-        else { const auto R = SeedRole(selected()); const auto& I = seedRoleInfo(R); title_->setText(QString::fromUtf8(I.label) + " · " + QString::fromUtf8(I.description)); color_->setColor(scheme_.seeds.variantSeeds(Design::Watercolor, variant()).seed[std::size_t(R)]); derived_->setText(tr("기준 색 변경을 따르는 색 · 직접 지정된 토큰은 유지합니다.")); for (int J = 0; J < I.tokenCount; ++J) Related.append(I.tokens[J]); hex_->setText(colorHex(color_->color().value_or(seedColor(R, Colors, effectiveSeeds())))); }
+        if (all_->isChecked()) { const auto T = Token(selected()); title_->setText(tokenLabel(T) + " · " + tokenUsage(T)); color_->setColor(scheme_.overridesFor(hc::theme::ProductDesign, variant())[std::size_t(T)]); derived_->setText(tokenCssName(T) + " · " + (tokenInfo(T).qtRole ? QString::fromLatin1(tokenInfo(T).qtRole) : tr("전용 그리기"))); Related.append(T); hex_->setText(colorHex(Colors[T])); }
+        else { const auto R = SeedRole(selected()); const auto& I = seedRoleInfo(R); title_->setText(QString::fromUtf8(I.label) + " · " + QString::fromUtf8(I.description)); color_->setColor(scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()).seed[std::size_t(R)]); derived_->setText(tr("기준 색 변경을 따르는 색 · 직접 지정된 토큰은 유지합니다.")); for (int J = 0; J < I.tokenCount; ++J) Related.append(I.tokens[J]); hex_->setText(colorHex(color_->color().value_or(seedColor(R, Colors, effectiveSeeds())))); }
         derivedTable_->setRowCount(Related.size());
         for (int Row = 0; Row < Related.size(); ++Row) { const auto T = Related[Row]; auto* Name = new QTableWidgetItem(swatch(Colors[T]), tokenLabel(T)); derivedTable_->setItem(Row, 0, Name); derivedTable_->setItem(Row, 1, new QTableWidgetItem(tokenDisplayValue(T, Colors[T])));
-            const auto Rule = scheme_.overridesFor(Design::Watercolor, variant())[indexOf(T)] ? tr("직접 지정 · 기준 색보다 우선") : tokenSource(T, Design::Watercolor).rule(variant());
+            const auto Rule = scheme_.overridesFor(hc::theme::ProductDesign, variant())[indexOf(T)] ? tr("직접 지정 · 기준 색보다 우선") : tokenSource(T, hc::theme::ProductDesign).rule(variant());
             auto* RuleItem = new QTableWidgetItem(Rule + (Draft.adjusted.test(indexOf(T)) ? tr(" · 대비 보정됨") : QString())); RuleItem->setToolTip(RuleItem->text()); derivedTable_->setItem(Row, 2, RuleItem);
         }
         derivedTable_->resizeRowsToContents(); int TableHeight = derivedTable_->horizontalHeader()->height() + 4; for (int Row = 0; Row < Related.size(); ++Row) TableHeight += derivedTable_->rowHeight(Row); derivedTable_->setFixedHeight(TableHeight);
@@ -271,7 +272,7 @@ private:
         scope_->setToolTip(AccentSeed ? tr("우선순위: 이 변형의 직접 지정 → Windows 강조색(사용 시) → 일반 · 모양의 공통 강조색 → 내장 색. 자동으로 되돌리면 공통 설정을 따릅니다.") : tr("토큰 직접 지정은 기준 색보다 우선합니다."));
         source_->setVisible(all_->isChecked() && roleOfToken(Token(selected())).has_value()); direct_->setEnabled(!color_->color().has_value());
         follow_->setVisible(!all_->isChecked() && (selected() == int(SeedRole::Sel) || selected() == int(SeedRole::InvSel)));
-        const auto& S = scheme_.seeds.variantSeeds(Design::Watercolor, variant()); follow_->setChecked(selected() == int(SeedRole::Sel) ? S.selFollowsAccent : S.invSelFollowsAccent);
+        const auto& S = scheme_.seeds.variantSeeds(hc::theme::ProductDesign, variant()); follow_->setChecked(selected() == int(SeedRole::Sel) ? S.selFollowsAccent : S.invSelFollowsAccent);
         editorForm_->setRowVisible(picker_, !all_->isChecked() && selected() == int(SeedRole::Accent)); picker_->setCurrent(seedColor(SeedRole::Accent, Colors, effectiveSeeds())); loading_ = false;
     }
     fm::style::ColorScheme scheme_; QJsonObject original_, library_, builtinDraft_; bool loading_ = false, supported_ = true;

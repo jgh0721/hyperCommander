@@ -7,6 +7,7 @@
 #include <QStyleHints>
 
 #include "cmnTypeDefs_Opts.hpp"
+#include "productTheme.hpp"
 #include "Modules/mdlFileSystem.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
@@ -30,10 +31,10 @@ const ColorBinding ColorBindings[] = {
 fm::style::ThemeColors defaultColors(bool Dark) {
     using namespace fm::style;
     const auto Object = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject()["watercolorTheme"].toObject();
-    auto Scheme = ColorScheme::fromJson(Object).value_or(ColorScheme{});
+    auto Scheme = hc::theme::ReadProductScheme(Object);
     if (Scheme.seeds.useSystemAccent) Scheme.seeds.accent = ThemeManager::systemAccent();
     const auto V = Dark ? Variant::Dark : Variant::Light;
-    return deriveTheme(V, Scheme.seeds, Scheme.overridesFor(Design::Watercolor, V), Design::Watercolor).colors;
+    return deriveTheme(V, Scheme.seeds, Scheme.overridesFor(hc::theme::ProductDesign, V), hc::theme::ProductDesign).colors;
 }
 }
 

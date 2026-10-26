@@ -6,6 +6,7 @@
 #include <QChildEvent>
 #include <QStyle>
 #include <fmstyle/ThemeManager.h>
+#include "UniqueLibs/productTheme.hpp"
 namespace hc::document
 {
     namespace
@@ -17,7 +18,7 @@ namespace hc::document
         {
         public:
             explicit LocalTheme(QWidget& Root) : QObject(&Root), root_(Root),
-                style_(fm::style::createStyle(fm::style::Design::Watercolor))
+                style_(fm::style::createStyle(hc::theme::ProductDesign))
             {
                 setObjectName("documentLocalTheme");
                 style_->setParent(this);
@@ -64,11 +65,11 @@ namespace hc::document
     void DocumentThemeAdapter::Install(QApplication& App)
     {
         auto& Theme = fm::style::ThemeManager::instance();
-        if (!Theme.isInstalled()) { Theme.setDesign(fm::style::Design::Watercolor); Theme.install(App); }
+        if (!Theme.isInstalled()) { Theme.setDesign(hc::theme::ProductDesign); Theme.install(App); }
     }
     void DocumentThemeAdapter::InstallLocal(QWidget& Widget)
     {
-        fm::style::ThemeManager::instance().setDesign(fm::style::Design::Watercolor);
+        fm::style::ThemeManager::instance().setDesign(hc::theme::ProductDesign);
         new LocalTheme(Widget);
     }
     void DocumentThemeAdapter::ReleaseLocal(QWidget& Widget)

@@ -17,7 +17,7 @@
 #include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
 #include <fmstyle/ThemeManager.h>
-#include <fmstyle/WatercolorStyle.h>
+#include "UniqueLibs/productTheme.hpp"
 #include <QtitanGrid.h>
 #include "solFavoriteDirMgr.hpp"
 #include "solTCPluginMgr.hpp"
@@ -26,13 +26,13 @@
 #include <QtnCommonStyle.h>
 
 namespace {
-// QApplication owns the proxy, which owns the installed WatercolorStyle.
+// QApplication owns the proxy, which owns the installed product style (PaperFluentStyle).
 // Live Light/Dark changes update tokens without replacing either style object.
 class ProductStyle final : public Qtitan::CommonStyle {
 public:
     explicit ProductStyle(QStyle* Base) : Qtitan::CommonStyle(Base) {}
     // CommonStyle paints some standard controls itself. Preserve its Qtitan
-    // extensions while routing ordinary Qt controls through WatercolorStyle.
+    // extensions while routing ordinary Qt controls through the product style.
     void drawPrimitive(PrimitiveElement Element, const QStyleOption* Option, QPainter* Painter, const QWidget* Widget = nullptr) const override {
         // Selection already identifies the current item; omit the dotted focus
         // frame while preserving keyboard focus and navigation.
@@ -68,7 +68,7 @@ public:
             Manager.clearOverrides();
             const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
             const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
-            Manager.setColorScheme(ColorScheme::fromJson(Appearance["watercolorTheme"].toObject()).value_or(ColorScheme{}));
+            Manager.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
             Manager.setDarkTitleBar(General["darkTitleBar"].toBool(true));
             Manager.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
             const auto VariantValue = Scheme.IsDarkMode ? Variant::Dark : Variant::Light;
@@ -155,7 +155,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
     auto& Theme = fm::style::ThemeManager::instance();
-    Theme.setDesign(fm::style::Design::Watercolor);
+    Theme.setDesign(hc::theme::ProductDesign);
     Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
     Theme.install(*this);
     auto* Style = new ProductStyle(QApplication::style());

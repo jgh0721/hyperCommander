@@ -2,6 +2,7 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "runtimeVerification.hpp"
 #include <fmstyle/ThemeManager.h>
+#include "UniqueLibs/productTheme.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
@@ -116,7 +117,7 @@ int main(int Argc, char** Argv)
     const auto Appearance = Settings.Object()["appearance"].toObject();
     const auto General = Settings.Object()["general"].toObject();
     auto& Theme = fm::style::ThemeManager::instance();
-    Theme.setColorScheme(fm::style::ColorScheme::fromJson(Appearance["watercolorTheme"].toObject()).value_or(fm::style::ColorScheme{}));
+    Theme.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
     Theme.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
     hc::document::DocumentThemeAdapter::SetMode(General["themeMode"].toString("system"));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;

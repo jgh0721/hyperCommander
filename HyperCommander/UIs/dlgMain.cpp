@@ -71,6 +71,9 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
 void QMainUI::updateWindowFrame()
 {
     const auto& Colors = fm::style::themeColorsFor(this);
+    // Only Watercolor draws the thick blue window frame. Paper Fluent keeps the
+    // Windows 11 border, which ThemeManager tints with the title wash.
+    if (!Colors.isWatercolor()) { setStyleSheet({}); return; }
     const auto& Chrome = fm::style::watercolorChrome(Colors.variant());
     // The custom frame is inside the client area, so Windows cannot clip it on maximize.
     const int BorderWidth = isMaximized() ? 0 : 3;

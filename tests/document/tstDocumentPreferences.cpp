@@ -15,7 +15,7 @@
 #include <QMenuBar>
 #include <QStyleOptionSlider>
 #include <fmstyle/ThemeManager.h>
-#include <fmstyle/WatercolorStyle.h>
+#include <fmstyle/PaperFluentStyle.h>
 #include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
 #include "core/ExternalChangeWatcher.h"
 #include "core/AppSettings.h"
@@ -98,8 +98,8 @@ private slots:
         Window.resize(800, 550); Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
         for (auto* Bar : {Area->horizontalScrollBar(), Area->verticalScrollBar()}) {
             QTRY_VERIFY(Bar->isVisible()); QVERIFY(Bar->maximum() > 0);
-            QVERIFY(qobject_cast<fm::style::WatercolorStyle*>(Bar->style()));
-            QCOMPARE(Bar->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, Bar), 17);
+            QVERIFY(qobject_cast<fm::style::PaperFluentStyle*>(Bar->style()));
+            QCOMPARE(Bar->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, Bar), 12);  // Paper Fluent 12 px 트랙
             QCOMPARE(Bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, Bar), 0);
             Bar->setValue(Bar->maximum() / 2); QVERIFY(Bar->value() > 0);
             QStyleOptionSlider Option; Option.initFrom(Bar); Option.rect = Bar->rect(); Option.orientation = Bar->orientation();

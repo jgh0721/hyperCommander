@@ -31,7 +31,7 @@ public:
         auto Styled = Option; initStyleOption(&Styled, Index); const bool Selected = Option.state & QStyle::State_Selected;
         const auto Colors = resolve_(Index.row(), Selected, Index.column() == 0);
         Painter->save(); Painter->fillRect(Option.rect, Colors.second); Painter->setPen(Colors.first);
-        if (Selected && fm::style::ThemeManager::instance().design() == fm::style::Design::Standard && Index.column() == 0) Styled.font.setBold(true);
+        if (Selected && fm::style::ThemeManager::instance().design() != fm::style::Design::Watercolor && Index.column() == 0) Styled.font.setBold(true);
         const auto Effects = effects_(Index.row());
         Painter->setFont(Styled.font); const auto Rect = Option.rect.adjusted(6, 0, -6, 0);
         if (Effects["dim"].toBool()) Painter->setOpacity(Painter->opacity() * 0.55);
@@ -415,7 +415,7 @@ private:
         ListAppearance Appearance; Appearance.invertSelection = Scheme.IsInverseSelect;
         if (const auto* Inverse = window()->findChild<QCheckBox*>("hc.settings.inverseSelection")) Appearance.invertSelection = Inverse->isChecked();
         RecordState State; State.active = true; State.marked = Selected;
-        const auto Geometry = RecordGeometry::make(Colors.isWatercolor(), false, Appearance);
+        const auto Geometry = RecordGeometry::make(Colors.design(), false, Appearance);
         QImage Image(32, 32, QImage::Format_ARGB32_Premultiplied); Image.fill(Colors[Token::Surface]);
         QPainter Painter(&Image); paintRecordBackground(&Painter, Image.rect(), Geometry, Appearance, State, false, Colors, Result.background_); Painter.end();
         const auto Background = Image.pixelColor(16, 16);

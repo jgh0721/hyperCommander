@@ -111,6 +111,8 @@
 #include "colorSchemeMgr.hpp"
 #include <fmstyle/ThemeManager.h>
 #include <fmstyle/WatercolorStyle.h>
+#include <fmstyle/PaperFluentStyle.h>
+#include "UniqueLibs/productTheme.hpp"
 #include <QProxyStyle>
 #ifdef _DEBUG
 #include <crtdbg.h>
@@ -1160,7 +1162,7 @@ private slots:
             auto* Search = Dialog.findChild<QLineEdit*>("hc.settings.search"); QVERIFY(Search); Search->setText("비밀번호"); QVERIFY(!Navigation->item(Row)->isHidden()); Search->clear();
             const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
             if (!Out.isEmpty()) {
-                QVERIFY(QDir().mkpath(Out)); Theme.setDesign(fm::style::Design::Watercolor);
+                QVERIFY(QDir().mkpath(Out)); Theme.setDesign(hc::theme::ProductDesign);
                 for (bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QTest::qWait(100);
                     QVERIFY(Dialog.grab().save(QDir(Out).filePath(Dark ? "product-settings-dark.png" : "product-settings-light.png"))); }
             }
@@ -1223,26 +1225,26 @@ private slots:
               auto* Swatches = Theme->findChild<fm::ui::AccentPicker*>(); VariantChoice->setCurrentIndex(0); ThemeList->setCurrentRow(int(SeedRole::Accent));
               Swatches->accentChosen(QColor("#AA2233"));
               QCOMPARE(Theme->Scheme().seeds.accent.value(), QColor("#123456"));
-              QCOMPARE(Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Light).seed[0].value(), QColor("#AA2233"));
-              QVERIFY(!Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).seed[0]);
+              QCOMPARE(Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Light).seed[0].value(), QColor("#AA2233"));
+              QVERIFY(!Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).seed[0]);
               VariantChoice->setCurrentIndex(1); Swatches->accentChosen(QColor("#3344BB"));
-              QCOMPARE(Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).seed[0].value(), QColor("#3344BB"));
+              QCOMPARE(Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).seed[0].value(), QColor("#3344BB"));
               auto* Color = Theme->findChild<fm::ui::ColorPickButton*>("hc.theme.color");
               ThemeList->setCurrentRow(int(SeedRole::Sel)); Color->colorChanged(QColor("#225522"));
-              QVERIFY(!Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).selFollowsAccent);
-              const auto Derived = deriveTheme(Variant::Dark, Theme->Scheme().seeds, {}, Design::Watercolor).colors;
+              QVERIFY(!Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).selFollowsAccent);
+              const auto Derived = deriveTheme(Variant::Dark, Theme->Scheme().seeds, {}, hc::theme::ProductDesign).colors;
               QCOMPARE(Derived[Token::Sel], QColor("#225522"));
-              Theme->findChild<QPushButton*>("hc.theme.resetColor")->click(); QVERIFY(Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).selFollowsAccent);
+              Theme->findChild<QPushButton*>("hc.theme.resetColor")->click(); QVERIFY(Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).selFollowsAccent);
               ThemeList->setCurrentRow(int(SeedRole::Accent)); Theme->findChild<QPushButton*>("hc.theme.resetColor")->click();
-              QVERIFY(!Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).seed[0]);
+              QVERIFY(!Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).seed[0]);
               Theme->SetSystemAccent(true); auto Effective = Theme->Scheme().seeds; if (auto System = ThemeManager::systemAccent()) Effective.accent = *System;
-              const auto Expected = seedColor(SeedRole::Accent, deriveTheme(Variant::Dark, Effective, {}, Design::Watercolor).colors, Effective);
+              const auto Expected = seedColor(SeedRole::Accent, deriveTheme(Variant::Dark, Effective, {}, hc::theme::ProductDesign).colors, Effective);
               QCOMPARE(Theme->findChild<QLineEdit*>("hc.theme.hex")->text(), colorHex(Expected));
               VariantChoice->setCurrentIndex(0); Theme->Load(Before);
           }
           const auto OriginalLibrary = Settings.Read(hc::settings::Section::Appearance).toObject()["watercolorPresets"].toObject();
           {
-              using namespace fm::style; ColorScheme Fixture; auto& Overrides = Fixture.overridesFor(Design::Watercolor, Variant::Light);
+              using namespace fm::style; ColorScheme Fixture; auto& Overrides = Fixture.overridesFor(hc::theme::ProductDesign, Variant::Light);
               Overrides[indexOf(Token::Surface)] = QColor(Qt::white); Overrides[indexOf(Token::Fg)] = QColor(Qt::white);
               Theme->Load(Fixture.toJson()); auto* Contrast = Theme->findChild<QTableWidget*>("hc.theme.contrastTable"); QVERIFY(Contrast); QCOMPARE(Contrast->rowCount(), 9);
               QCOMPARE(Contrast->item(0, 1)->text(), QString("1.0:1")); QVERIFY(Contrast->item(0, 2)->text().contains(QString::fromUtf8("낮음")));
@@ -1256,8 +1258,8 @@ private slots:
           }
           {
               using namespace fm::style; ColorScheme Fixture; Fixture.seeds.accent = QColor("#123456");
-              Fixture.seeds.variantSeeds(Design::Watercolor, Variant::Light).seed[std::size_t(SeedRole::Win)] = QColor("#EEEEEE");
-              Fixture.seeds.variantSeeds(Design::Watercolor, Variant::Dark).seed[std::size_t(SeedRole::Win)] = QColor("#222222");
+              Fixture.seeds.variantSeeds(hc::theme::ProductDesign, Variant::Light).seed[std::size_t(SeedRole::Win)] = QColor("#EEEEEE");
+              Fixture.seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).seed[std::size_t(SeedRole::Win)] = QColor("#222222");
               Theme->Load(Fixture.toJson()); QVERIFY(Theme->findChild<QComboBox*>("hc.theme.preset")->currentText().contains(QString::fromUtf8("수정됨")));
               const auto Name = QString("theme-test-") + QUuid::createUuid().toString(); QVERIFY(Theme->SavePresetAs(Name)); QVERIFY(!Theme->SavePresetAs(Name));
               const auto SavedId = Theme->Scheme().id; Theme->SetAccent(QColor("#654321")); auto* Presets = Theme->findChild<QComboBox*>("hc.theme.preset");
@@ -1269,8 +1271,8 @@ private slots:
               const auto Stable = Reload.Save(); QFile Invalid(Files.filePath("invalid.json")); QVERIFY(Invalid.open(QIODevice::WriteOnly)); Invalid.write("not json"); Invalid.close();
               QVERIFY(!Reload.ImportFile(Invalid.fileName())); QCOMPARE(Reload.Save(), Stable); QVERIFY(!Theme->Export(Settings.FileName()));
               Theme->findChild<QPushButton*>("hc.theme.reset")->click();
-              QVERIFY(!Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Light).seed[std::size_t(SeedRole::Win)]);
-              QCOMPARE(Theme->Scheme().seeds.variantSeeds(Design::Watercolor, Variant::Dark).seed[std::size_t(SeedRole::Win)].value(), QColor("#222222"));
+              QVERIFY(!Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Light).seed[std::size_t(SeedRole::Win)]);
+              QCOMPARE(Theme->Scheme().seeds.variantSeeds(hc::theme::ProductDesign, Variant::Dark).seed[std::size_t(SeedRole::Win)].value(), QColor("#222222"));
               QCOMPARE(Theme->Scheme().seeds.accent.value(), QColor("#654321")); Theme->LoadLibrary(OriginalLibrary); Theme->Load(Before);
           }
           auto PresetA = Before; PresetA["id"] = "hc.test.a"; PresetA["name"] = "테스트 A";
@@ -2368,7 +2370,7 @@ private slots:
         {
             auto& Theme = fm::style::ThemeManager::instance(); const auto OriginalDesign = Theme.design();
             const auto RestoreDesign = qScopeGuard([&] { Theme.setDesign(OriginalDesign); });
-            for (const auto Design : {fm::style::Design::Standard, fm::style::Design::Watercolor}) {
+            for (const auto Design : {fm::style::Design::Standard, fm::style::Design::Watercolor, fm::style::Design::PaperFluent}) {
                 Theme.setDesign(Design); QTest::qWait(80); Bar->setTextVisible(false);
                 const auto Before = Bar->grab().toImage(); QTest::qWait(180); const auto After = Bar->grab().toImage();
                 QVERIFY2(Before != After, "Indeterminate deletion progress must animate in both designs.");
@@ -3778,14 +3780,14 @@ private slots:
         auto* Proxy = qobject_cast<QProxyStyle*>(qApp->style());
         QVERIFY(Proxy);
         QPointer<QStyle> Style(qApp->style()), Base(Proxy->baseStyle());
-        QVERIFY(qobject_cast<WatercolorStyle*>(Base.data()));
+        QVERIFY(qobject_cast<PaperFluentStyle*>(Base.data()));
         QCOMPARE(Base->parent(), Style.data());
         QVERIFY(Settings.Put(Section::Appearance, BuiltInAppearance()));
         Colors->Refresh();
         for (const bool Dark : {false, true}) {
             const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
             auto Scheme = Colors->GetColorScheme(Name);
-            const ThemeColors Defaults(Dark ? Variant::Dark : Variant::Light, Design::Watercolor);
+            const ThemeColors Defaults(Dark ? Variant::Dark : Variant::Light, hc::theme::ProductDesign);
             QVERIFY(Scheme.explicitColors_.isEmpty());
             QCOMPARE(Scheme.Dialog_BGColor, Defaults[Token::Win]);
             QCOMPARE(Scheme.FileList_BGColor, Defaults[Token::Surface]);
@@ -3798,7 +3800,7 @@ private slots:
             QVERIFY(Scheme.explicitColors_.isEmpty());
             QCOMPARE(Scheme.Dialog_Font.pointSize(), 17);
             emit Colors->sigColorSchemeChanged(Scheme);
-            QCOMPARE(ThemeManager::instance().design(), Design::Watercolor);
+            QCOMPARE(ThemeManager::instance().design(), hc::theme::ProductDesign);
             QCOMPARE(ThemeManager::instance().effectiveVariant(), Dark ? Variant::Dark : Variant::Light);
             QCOMPARE(QApplication::palette().color(QPalette::Window), Defaults[Token::Win]);
         }
@@ -4799,9 +4801,11 @@ private slots:
             const auto Columns = View->BaseView();
             QCOMPARE(Columns->options().backgroundColor(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).FileList_BGColor);
             QTRY_VERIFY(Columns->getColumnByModelColumn(0)->width() >= 200);
-            QVERIFY(Columns->getColumnByModelColumn(1)->width() >= 88);
-            QVERIFY(Columns->getColumnByModelColumn(2)->width() >= 190);
-            QVERIFY(Columns->getColumnByModelColumn(3)->width() >= 56);
+            QVERIFY2(Columns->getColumnByModelColumn(1)->width() >= 88, qPrintable(QString::number(Columns->getColumnByModelColumn(1)->width())));
+            // The date column is sized to its measured content (170 px under Paper Fluent); require the
+            // reference minute-timestamp floor instead of the wider Watercolor result.
+            QVERIFY2(Columns->getColumnByModelColumn(2)->width() >= 164, qPrintable(QString::number(Columns->getColumnByModelColumn(2)->width())));
+            QVERIFY2(Columns->getColumnByModelColumn(3)->width() >= 56, qPrintable(QString::number(Columns->getColumnByModelColumn(3)->width())));
         }
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         { QFile File(Directory.filePath("first-run-example.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("first run"); }
@@ -4952,8 +4956,12 @@ private slots:
                 QPainter HeaderPainter(&ExpectedHeader);
                 qApp->style()->drawControl(QStyle::CE_HeaderSection, &HeaderOption, &HeaderPainter, Grid);
                 HeaderPainter.end();
-                QCOMPARE(Pixels.pixelColor(qRound((Header.left() + 5) * Dpr), qRound((Header.top() + 5) * Dpr)),
-                    ExpectedHeader.pixelColor(5, 5));
+                // Paper Fluent headers are a vertical wash, so the grid section and this
+                // standalone section may sample the gradient a step apart.
+                const auto ActualHeader = Pixels.pixelColor(qRound((Header.left() + 5) * Dpr), qRound((Header.top() + 5) * Dpr));
+                const auto WantedHeader = ExpectedHeader.pixelColor(5, 5);
+                QVERIFY2(qAbs(ActualHeader.red() - WantedHeader.red()) + qAbs(ActualHeader.green() - WantedHeader.green()) + qAbs(ActualHeader.blue() - WantedHeader.blue()) <= 6,
+                    qPrintable(ActualHeader.name() + " / " + WantedHeader.name()));
                 if (Mask == 3) main_->grab().save(Dark ? "appearance-dark.png" : "appearance-light.png");
             }
         }
@@ -5301,7 +5309,7 @@ private slots:
         const auto SavedDesign = Theme.design(); const auto SavedScheme = Theme.scheme();
         const auto SavedTone = Theme.darkTone();
         const auto RestoreTheme = qScopeGuard([&] { Theme.setDesign(SavedDesign); Theme.setScheme(SavedScheme); Theme.setDarkTone(SavedTone); });
-        Theme.setDesign(fm::style::Design::Watercolor); Theme.setScheme(fm::style::ThemeManager::Scheme::Dark);
+        Theme.setDesign(hc::theme::ProductDesign); Theme.setScheme(fm::style::ThemeManager::Scheme::Dark);
         QtColumnProfileEditor Editor;
         auto Profile = ReferenceProfile(); std::swap(Profile.columns_[1], Profile.columns_[3]);
         Editor.Load(Profile, {}); Editor.resize(1280, 760); Editor.show();
@@ -8799,7 +8807,7 @@ private slots:
             // Exercise the installed product style. Replacing QApplication style directly would destroy its Qtitan proxy.
             for (const bool Dark : {false, true}) {
                 emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); Page->findChild<QCheckBox*>("hc.rules.previewDark")->setChecked(Dark); QTest::qWait(30);
-                const auto Prefix = QString("review-%1-%2").arg(Design == fm::style::Design::Watercolor ? "watercolor" : "standard", Dark ? "dark" : "light");
+                const auto Prefix = QString("review-%1-%2").arg(fm::style::designKey(Design), Dark ? "dark" : "light");
                 for (auto* Scroll : Page->findChildren<QScrollArea*>()) Scroll->verticalScrollBar()->setValue(0); QCoreApplication::processEvents(); Capture(Prefix + "-top");
                 for (auto* Scroll : Page->findChildren<QScrollArea*>()) Scroll->verticalScrollBar()->setValue(Scroll->verticalScrollBar()->maximum()); QCoreApplication::processEvents(); Capture(Prefix + "-preview");
                 QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
@@ -9348,7 +9356,7 @@ private slots:
     void fileColorSettingsUi()
     {
         auto* ProductStyle = qobject_cast<QProxyStyle*>(qApp->style());
-        QVERIFY(ProductStyle && qobject_cast<fm::style::WatercolorStyle*>(ProductStyle->baseStyle()));
+        QVERIFY(ProductStyle && qobject_cast<fm::style::PaperFluentStyle*>(ProductStyle->baseStyle()));
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
@@ -9583,7 +9591,7 @@ private slots:
         { QFile Sample(Directory.filePath("sample.txt")); QVERIFY(Sample.open(QIODevice::WriteOnly)); QCOMPARE(Sample.write(QByteArray(262144, 'd')), qint64(262144)); }
         auto Options = Settings.Read(hc::settings::Section::Options).toObject(); Options["copyMetadata"] = true; Options["copyVerify"] = true; Options["copyAcl"] = true; Options["copyStreams"] = true; Options["copyPattern"] = "*.txt"; Options["copySpeedMiB"] = 1; QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
         const auto Save = [&](QWidget* Widget, const QString& Name) {
-            const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out); Theme.setDesign(fm::style::Design::Watercolor);
+            const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out); Theme.setDesign(hc::theme::ProductDesign);
             for (const bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QTest::qWait(100);
                 QVERIFY(Widget->grab().save(QDir(Out).filePath(Name + (Dark ? "-dark-" : "-light-") + QString::number(Widget->devicePixelRatioF()) + ".png"))); }
         };
@@ -9803,7 +9811,7 @@ private slots:
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         const auto Save = [&](QWidget* Widget, const QString& Name) {
             const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out);
-            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(fm::style::Design::Watercolor);
+            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(hc::theme::ProductDesign);
             for (const bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QCoreApplication::processEvents();
                 QVERIFY(Widget->grab().save(QDir(Out).filePath(Name + (Dark ? "-dark-" : "-light-") + QString::number(Widget->devicePixelRatioF()) + ".png"))); }
         };
@@ -9901,7 +9909,7 @@ private slots:
         QTRY_VERIFY(Details->toPlainText().contains("자동 실행하지 않습니다"));
         const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
         if (!Out.isEmpty()) {
-            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(fm::style::Design::Watercolor);
+            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(hc::theme::ProductDesign);
             for (const bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QCoreApplication::processEvents();
                 auto* Manager = main_->findChild<QDialog*>("hc.jobManager"); QVERIFY(Manager);
                 QVERIFY(Manager->grab().save(QDir(Out).filePath(QString("r7-restarted-history-") + (Dark ? "dark-" : "light-") + QString::number(Manager->devicePixelRatioF()) + ".png")));
@@ -10193,7 +10201,7 @@ private slots:
         const auto Save = [&](QWidget* Widget, const QString& Name) {
             if (Directory.isEmpty()) return;
             QDir().mkpath(Directory);
-            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(fm::style::Design::Watercolor);
+            auto& Theme = fm::style::ThemeManager::instance(); Theme.setDesign(hc::theme::ProductDesign);
             for (const bool Dark : {true, false}) {
                 Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
                 QCoreApplication::processEvents();

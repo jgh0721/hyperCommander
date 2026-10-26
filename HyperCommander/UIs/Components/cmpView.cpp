@@ -684,7 +684,7 @@ void CGridView::applyPresentation()
         Two = IsTwoLine(); Appearance.nameBelow = columnAdapter_->LayoutMode() == "name-last";
     }
     const auto NewMode = Two ? (Appearance.nameBelow ? "name-last" : "name-first") : "details";
-    const auto NewGeometry = fm::filelist::detail::RecordGeometry::make(recordColors_.isWatercolor(), Two, Appearance);
+    const auto NewGeometry = fm::filelist::detail::RecordGeometry::make(recordColors_.design(), Two, Appearance);
     const bool Changed = columnAdapter_->LayoutMode() != NewMode || recordGeometry_.pitch != NewGeometry.pitch ||
         recordGeometry_.nameBelow != NewGeometry.nameBelow;
     const auto Anchor = Changed ? columnAdapter_->CaptureViewport() : QtitanColumnAdapter::ViewportAnchor{};
