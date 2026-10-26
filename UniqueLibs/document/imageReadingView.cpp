@@ -32,6 +32,7 @@ namespace
 {
 constexpr int ScrollRange = 1000000;
 constexpr int TileHeight = 1024;
+struct ImageProgress { std::mutex mutex_;QImage image_; };
 struct Rendered
 {
     QImage source_, tile_;
@@ -292,7 +293,7 @@ void ImageReadingView::invalidateRenders()
         previousTiles_.clear();
     stop_->request_stop();
     stop_ = std::make_shared<std::stop_source>();
-    ++generation_;
+    ++generation_;previews_.clear();
     pending_.clear();
 }
 void ImageReadingView::RetryPage()
@@ -508,10 +509,18 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
     const auto ExpectedSize = sizes_[P.page_];
     const auto Bright = brightness_, Contrast = contrast_, Gamma = gamma_, Sharp = sharpness_;
     const auto Gray = grayscale_, Invert = invert_;
+    const auto Progress=std::make_shared<ImageProgress>();
     auto *Watcher = new QFutureWatcher<Rendered>(this);
+    auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
+    connect(PreviewTimer,&QTimer::timeout,this,[this,Progress,Generation,Page=P.page_]{
+        if(Generation!=generation_ || Page!=index_)return;
+        QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=std::exchange(Progress->image_,{});}
+        if(!Image.isNull()){previews_.clear();previews_[Page]=std::move(Image);viewport()->update();}
+    });PreviewTimer->start();
     connect(Watcher, &QFutureWatcherBase::finished, this,
-            [this, Watcher, CacheKey, Generation, SourceGeneration, Page = P.page_]
+            [this, Watcher, PreviewTimer, CacheKey, Generation, SourceGeneration, Page = P.page_]
             {
+                PreviewTimer->stop();
                 auto Result = Watcher->result();
                 DeleteCompletedImageWork(Watcher);
                 --workers_;
@@ -531,6 +540,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
                     return;
                 }
                 if(!Result.warning_.isEmpty())pageWarnings_[Page]=Result.warning_;
+                previews_.remove(Page);
                 const bool Resize = sizes_[Page] != Result.source_.size();
                 sizes_[Page] = Result.source_.size();
                 if (Page == index_)
@@ -556,7 +566,9 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
             {
                 storage::OperationContext Context;
                 Context.stopToken_ = Stop->get_token();
-                auto Loaded = ReadImagePage(Book, P.page_, Context);
+                auto Loaded = ReadImagePage(Book, P.page_, Context,[Progress](QImage Image){
+                    std::lock_guard Lock(Progress->mutex_);Progress->image_=std::move(Image);
+                });
                 if (!Loaded.HasValue())
                     return Rendered{{}, {}, QString::fromStdString(Loaded.Failure().code_)};
                 Original = Loaded.Value().image_;Warning=Loaded.Value().warning_;
@@ -651,6 +663,9 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                         Painter.drawImage(QRectF(P.rect_.left() + Tile.x() / Dpr, P.rect_.top() + Tile.y() / Dpr,
                                                  Tile.width() / Dpr, Tile.height() / Dpr),
                                           *Previous);
+                    else if(previews_.contains(P.page_)){
+                        Painter.save();Painter.setClipRect(Visible);Painter.drawImage(P.rect_,previews_.value(P.page_));Painter.restore();
+                    }
                     else
                     {
                         Painter.setPen(palette().color(QPalette::Text));
@@ -660,10 +675,10 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                 }
             }
     }
-    if(!book_->listingWarning_.isEmpty() || !pageWarnings_.value(index_).isEmpty()){
+    if(!previews_.isEmpty() || !book_->listingWarning_.isEmpty() || !pageWarnings_.value(index_).isEmpty()){
         const QRect Banner(0,0,viewport()->width(),44);Painter.fillRect(Banner,palette().brush(QPalette::Base));
         Painter.setPen(palette().color(QPalette::Text));Painter.drawText(Banner.adjusted(8,2,-8,-2),Qt::AlignLeft|Qt::AlignVCenter|Qt::TextWordWrap,
-            tr("손상되거나 불완전한 파일에서 읽을 수 있는 내용만 표시하고 있습니다."));
+            !previews_.isEmpty()?tr("파일을 읽는 중입니다. 임시 미리보기를 표시합니다."):tr("손상되거나 불완전한 파일에서 읽을 수 있는 내용만 표시하고 있습니다."));
     }
 }
 bool ImageReadingView::event(QEvent *E)

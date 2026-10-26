@@ -125,5 +125,6 @@ class ImageReadingView final : public QAbstractScrollArea
     QPoint dragPoint_;
     QJsonObject bookmark_;
     QImage currentImage_;
+    QHash<int,QImage> previews_;
 };
 } // namespace hc::document

@@ -258,7 +258,7 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
     return Book;
 }
 storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook> &Book, int Index,
-                                                storage::OperationContext Context)
+                                                storage::OperationContext Context, std::function<void(QImage)> Preview)
 {
     if (!Context.passwordPrompt_)
         Context.passwordPrompt_ = plugins::PromptArchivePassword;
@@ -272,6 +272,19 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     QString Path = Page.file_;
     QTemporaryDir Temp;
     QByteArray StreamBytes;
+    // JPEG can produce an approximate image before EOF. Other codecs retain
+    // their normal complete-input decoder contract. Exponential checkpoints
+    // and a 1024px preview bound limit redundant work on slow remote reads.
+    qsizetype NextPreview=512*1024;
+    const auto Publish=[&](const QByteArray& Bytes){
+        if(!Preview || Bytes.size()<NextPreview || NextPreview>32*1024*1024)return;
+        NextPreview=qMax(NextPreview*2,Bytes.size()*2);
+        if(!Bytes.startsWith(QByteArray("\xff\xd8",2)))return;
+        QBuffer Input;Input.setData(Bytes);Input.open(QIODevice::ReadOnly);QImageReader Decoder(&Input,"jpeg");Decoder.setAutoTransform(true);
+        const auto Size=Decoder.size();if(!Size.isValid())return;
+        Decoder.setScaledSize(Size.scaled(1024,1024,Qt::KeepAspectRatio));
+        auto Image=Decoder.read();if(!Image.isNull()&&!Context.stopToken_.stop_requested())Preview(std::move(Image));
+    };
     bool Streamed = false;
     QString Warning;
     if(Page.recoveredMethod_>=0){
@@ -304,9 +317,15 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
             for (;;)
             {
                 auto Chunk = Book->stream_->Read(Page.ordinal_, 192 * 1024, Context);
-                if (!Chunk.HasValue()){Book->stream_.reset();Book->nextStreamPage_=-1;return Chunk.Failure();}
+                if (!Chunk.HasValue()){
+                    Book->stream_.reset();Book->nextStreamPage_=-1;
+                    if(auto Stop=Context.Check({"image-book"}))return *Stop;
+                    if(StreamBytes.isEmpty() || Chunk.Failure().category_!=storage::ErrorCategory::Unavailable)return Chunk.Failure();
+                    Warning=QString::fromStdString(Chunk.Failure().code_);break;
+                }
                 const auto &Data = Chunk.Value().bytes_;
                 StreamBytes.append(reinterpret_cast<const char *>(Data.data()), Data.size());
+                Publish(StreamBytes);
                 if (Chunk.Value().eof_)
                     break;
                 if (Data.empty())
@@ -341,7 +360,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
         const auto Chunk = File.read(256 * 1024);
         if (Chunk.isEmpty() && !File.atEnd())
             return Error("image-page-read");
-        Content.bytes_ += Chunk;
+        Content.bytes_ += Chunk;Publish(Content.bytes_);
     }
     if (File.error() != QFileDevice::NoError)
         return Error("image-page-read");
@@ -353,6 +372,8 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
         return Error("image-subpage");
     Content.image_ = Reader.read();
     Content.format_ = QString::fromLatin1(Reader.format());
+    if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !Content.bytes_.right(64).contains(QByteArray("\xff\xd9",2)))
+        Content.warning_="image-jpeg-incomplete";
     if (Content.image_.isNull())
         return Error("image-page-decode");
     if (auto Stop = Context.Check({"image-book"}))

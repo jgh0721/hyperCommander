@@ -56,11 +56,11 @@ namespace hc::document
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
         if(IsImageBook(Path)||QFileInfo(Path).isDir()) {
             auto Book=OpenImageBook(Path,Context,false);if(!Book.HasValue())return Book.Failure();
-            auto Page=ReadImagePage(Book.Value(),0,Context);if(auto Stop=Context.Check({"image-book"}))return *Stop;
-            TextInput Input;Input.path_=QFileInfo(Path).absoluteFilePath();Input.viewId_="image";Input.book_=Book.Value();if(Page.HasValue()){Input.image_=Page.Value().image_;Input.bytes_=Page.Value().bytes_;}
+            if(auto Stop=Context.Check({"image-book"}))return *Stop;
+            TextInput Input;Input.path_=QFileInfo(Path).absoluteFilePath();Input.viewId_="image";Input.book_=Book.Value();
             // Books are read-only page sources. A content hash of the complete
             // archive must not force an SMB download before its first page.
-            Input.hash_=QCryptographicHash::hash(Input.bytes_,QCryptographicHash::Sha256);
+            Input.hash_=QCryptographicHash::hash((Input.path_+Book.Value()->revision_).toUtf8(),QCryptographicHash::Sha256);
             return Input;
         }
         const auto Canonical=QFileInfo(Path).canonicalFilePath();if(Canonical.isEmpty())return Error{ErrorCategory::NotFound,"document-file-missing"};

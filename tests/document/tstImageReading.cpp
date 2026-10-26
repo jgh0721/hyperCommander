@@ -388,6 +388,27 @@ class ImageReadingTests : public QObject
         QCOMPARE(View.State()["page"].toInt(), 8);
         View.Cancel();
     }
+    void jpegPublishesBoundedPreviewBeforeCompletion()
+    {
+        QTemporaryDir Root;QImage Image(1400,1400,QImage::Format_RGB32);quint32 Seed=1;
+        for(int Y=0;Y<Image.height();++Y){auto* Row=reinterpret_cast<QRgb*>(Image.scanLine(Y));
+            for(int X=0;X<Image.width();++X){Seed=Seed*1664525U+1013904223U;Row[X]=0xff000000U|(Seed>>8);}}
+        const auto Path=Root.filePath("large.jpg");QVERIFY(Image.save(Path,"JPEG",98));QVERIFY(QFileInfo(Path).size()>1024*1024);
+        auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());int Count=0;QSize PreviewSize;
+        auto Page=ReadImagePage(Book.Value(),0,{},[&](QImage Preview){++Count;PreviewSize=Preview.size();});
+        QVERIFY(Page.HasValue());QVERIFY(Count>0);QVERIFY(PreviewSize.width()<=1024&&PreviewSize.height()<=1024);
+        QCOMPARE(Page.Value().image_.size(),Image.size());QVERIFY(Page.Value().warning_.isEmpty());
+    }
+    void truncatedJpegRemainsViewableWithWarning()
+    {
+        QTemporaryDir Root;QImage Image(120,160,QImage::Format_RGB32);Image.fill(Qt::red);
+        QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QVERIFY(Image.save(&Buffer,"JPEG"));
+        QVERIFY(Bytes.endsWith(QByteArray("\xff\xd9",2)));Bytes.chop(2);
+        QFile File(Root.filePath("page.jpg"));QVERIFY(File.open(QIODevice::WriteOnly));File.write(Bytes);File.close();
+        auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());auto Page=ReadImagePage(Book.Value(),0);
+        QVERIFY(Page.HasValue());QVERIFY(!Page.Value().image_.isNull());QCOMPARE(Page.Value().warning_,QString("image-jpeg-incomplete"));
+        QCOMPARE(QFileInfo(File).size(),qint64(Bytes.size()));
+    }
     void missingZipDirectoryRetainsReadablePages()
     {
         QTemporaryDir Root;const auto Path=Root.filePath("damaged.cbz");
