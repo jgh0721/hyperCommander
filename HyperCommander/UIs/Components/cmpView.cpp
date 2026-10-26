@@ -642,6 +642,7 @@ QModelIndexList CGridView::VisibleSourceRows(int Overscan) const
 void CGridView::updateIconViewport()
 {
     auto* Model = qobject_cast<CFSModel*>(model_); if (!Model || !view_) return;
+    Model->SetFileColorViewport(VisibleSourceRows(), isVisible() && panelActive_);
     if (!isVisible() || IsThumbnailMode()) { Model->SetIconViewport({}, false); return; }
     auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); const int Count = view_->getRowCount();
     if (!Count) { Model->SetIconViewport({}, true); return; }

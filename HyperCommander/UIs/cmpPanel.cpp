@@ -130,6 +130,9 @@ void CmpPanel::AddTab(bool Navigate)
     };
     connect(View, &CGridView::sigThumbnailSelectionChanged, this, UpdateSelectionSizes);
     connect(Model, &CFSModel::DirectorySizesChanged, this, UpdateSelectionSizes);
+    connect(Model, &QAbstractItemModel::dataChanged, this, [this, Model] {
+        if (const auto Current = retrieveFocusState(); Current && Current->Model == Model) updateNavigationProgress();
+    });
     connect(Model, &CFSModel::SearchResultsChanged, this, [this, Model] {
         if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
             processPanelStatusText();
@@ -924,11 +927,14 @@ void CmpPanel::updateNavigationProgress()
 {
     if (!navigationProgress_ || !path_) return;
     const auto State = vecTabStates.value(ui.tabWidget->currentIndex());
-    const bool Busy = State && State->Model->IsLoading();
+    const auto Model = State ? static_cast<CFSModel*>(State->Model) : nullptr;
+    const auto View = State ? static_cast<CGridView*>(State->View) : nullptr;
+    const bool ColorsPending = Model && View && !Model->AreFileColorsReady(View->VisibleSourceRows());
+    const bool Busy = Model && (Model->IsLoading() || ColorsPending);
     navigationProgress_->setGeometry(2, qMax(0, path_->height() - 4), qMax(0, path_->width() - 4), 3);
     navigationProgress_->setVisible(Busy);
     if (Busy) {
-        navigationProgress_->setAccessibleName(State->navigationStatus_);
+        navigationProgress_->setAccessibleName(ColorsPending && !Model->IsLoading() ? tr("파일 색상 적용 중…") : State->navigationStatus_);
         navigationProgress_->setToolTip(State->navigationStatus_ + "\n" + QDir::toNativeSeparators(State->navigationTarget_));
         navigationProgress_->raise();
     }

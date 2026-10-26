@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
 #include "startupTrace.hpp"
+#include <QtConcurrent/QtConcurrentTask>
 #include "shellDriveSort.hpp"
 #include "fileIconService.hpp"
 #include "quickFindSettings.hpp"
@@ -1693,6 +1694,24 @@ hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
     return {};
 }
 
+void CFSModel::SetFileColorViewport(const QModelIndexList& Rows, bool Active)
+{
+    fileRuleActiveViewport_ = Active;
+    fileRuleVisibleRows_.clear();
+    for (const auto& Index : Rows)
+        if (Index.model() == this && Index.row() >= 0 && Index.row() < rowCount()) fileRuleVisibleRows_.insert(Index.row());
+    // Make room for the current viewport without canceling a running batch.
+    // Evicted queued rows remain deferred and retain any existing cache entry.
+    for (qsizetype At = fileRuleQueue_.size(); At-- > 0; ) {
+        if (fileRuleVisibleRows_.contains(fileRuleQueue_[At].row_)) continue;
+        auto Job = fileRuleQueue_.takeAt(At);
+        fileRulePending_.remove(Job.key_); fileRuleDeferredRows_.insert(Job.row_);
+    }
+    for (const auto& Index : Rows)
+        if (fileRuleVisibleRows_.contains(Index.row())) fileRuleStyle(Index.row());
+    std::stable_partition(fileRuleQueue_.begin(), fileRuleQueue_.end(), [this](const auto& Job) { return fileRuleVisibleRows_.contains(Job.row_); });
+}
+
 void CFSModel::resetFileRules()
 {
     // Listing changes drop queued work only. Cached styles are keyed by file
@@ -1700,7 +1719,7 @@ void CFSModel::resetFileRules()
     // rule and palette changes clear the cache in SetColorScheme.
     fileRuleStop_.request_stop(); fileRuleStop_ = std::stop_source{}; ++fileRuleEpoch_;
     fileRuleQueue_.clear(); fileRulePending_.clear(); fileRuleDeferredRows_.clear(); fileRulePump_.stop();
-    fileRuleFirstBatch_ = true;
+    fileRuleFirstBatch_ = true; fileRuleVisibleRows_.clear();
     // An in-flight completion chunk reports to the old epoch and is dropped.
     fileRuleCompleteTimer_.stop(); fileRuleCompleteLow_ = fileRuleCompleteNext_ = 0; fileRuleCompleteBudget_ = 0;
 }
@@ -1793,7 +1812,7 @@ void CFSModel::pumpFileRules()
         if (!fileRuleQueue_.isEmpty()) fileRulePump_.start(16);
     });
     const auto Rules = fileColorRules_;
-    Watcher->setFuture(QtConcurrent::run(FileRulePool(), [Rules, Jobs = std::move(Jobs), Token, Context = fileRuleContext_] {
+    Watcher->setFuture(QtConcurrent::task([Rules, Jobs = std::move(Jobs), Token, Context = fileRuleContext_] {
         Batch Results;
         for (const auto& Job : Jobs) {
             if (Token.stop_requested()) break;
@@ -1801,7 +1820,7 @@ void CFSModel::pumpFileRules()
             Results.append({Job, Rules.EvaluateStyle(Input, Context.get())});
         }
         return Results;
-    }));
+    }).onThreadPool(*FileRulePool()).withPriority(fileRuleActiveViewport_ ? 1 : 0).spawn());
 }
 
 void CFSModel::SetColorScheme(const TyColorScheme& Scheme)

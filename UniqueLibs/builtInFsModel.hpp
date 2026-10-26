@@ -125,6 +125,7 @@ public:
     void ApplyDirectorySizeSettings();
     int PendingDirectorySizes() const { return int(directorySizePending_.size()); }
     // Read-only observation: never schedules evaluation or expires cache entries.
+    void SetFileColorViewport(const QModelIndexList& Rows, bool Active);
     bool AreFileColorsReady(const QModelIndexList& Rows) const;
     quint64 FileRuleGeneration() const { return fileRuleLoadGeneration_; }
     bool FileRulesLoading() const { return fileRulesLoading_; }
@@ -217,6 +218,8 @@ private:
     std::shared_ptr<hc::settings::FileColorRules::EvaluationContext> fileRuleCompleteContext_ = std::make_shared<hc::settings::FileColorRules::EvaluationContext>();
     struct FileRuleJob { hc::settings::FileRuleKey key_; hc::settings::FileRuleInput input_; int row_; nsHC::TySpFileSource item_; };
     mutable QList<FileRuleJob> fileRuleQueue_;
+    QSet<int> fileRuleVisibleRows_;
+    bool fileRuleActiveViewport_ = false;
     mutable QSet<hc::settings::FileRuleKey> fileRulePending_;
     mutable QSet<int> fileRuleDeferredRows_;
     std::shared_ptr<hc::settings::FileColorRules::EvaluationContext> fileRuleContext_ = std::make_shared<hc::settings::FileColorRules::EvaluationContext>();
