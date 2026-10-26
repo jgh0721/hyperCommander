@@ -35,7 +35,7 @@ constexpr int TileHeight = 1024;
 struct Rendered
 {
     QImage source_, tile_;
-    QString error_;
+    QString error_, warning_;
 };
 QString Key(int Page, const QRect &Tile, std::uint64_t Generation)
 {
@@ -203,7 +203,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     sources_.clear();
     pendingSourcePages_.clear();
     pending_.clear();
-    pageErrors_.clear();prefetched_.clear();
+    pageErrors_.clear();pageWarnings_.clear();prefetched_.clear();
     error_.clear();
     index_ = Start;
     bookmark_ = {};
@@ -277,7 +277,7 @@ void ImageReadingView::expandSubpages()
         int Index=0;for(int I=0;I<Result.Value()->pages_.size();++I)if(Result.Value()->pages_[I].name_==Name){Index=I;break;}
         // Replace the immutable catalog; outstanding readers retain the old one.
         Cancel();book_=std::move(Result.Value());index_=Index;currentImage_=Image;
-        sources_.clear();tiles_.clear();pendingSourcePages_.clear();pageErrors_.clear();prefetched_.clear();
+        sources_.clear();tiles_.clear();pendingSourcePages_.clear();pageErrors_.clear();pageWarnings_.clear();prefetched_.clear();
         sizes_.fill(QSize(1000,1400),book_->pages_.size());
         if(!Image.isNull()){sizes_[Index]=Image.size();sources_.insert(Index,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));}
         rebuild(false);GoTo(Index,Relative);changed();
@@ -530,6 +530,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
                     emit Changed();
                     return;
                 }
+                if(!Result.warning_.isEmpty())pageWarnings_[Page]=Result.warning_;
                 const bool Resize = sizes_[Page] != Result.source_.size();
                 sizes_[Page] = Result.source_.size();
                 if (Page == index_)
@@ -550,7 +551,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
     Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
         [=]
         {
-            QImage Original = Source;
+            QImage Original = Source;QString Warning;
             if (Original.isNull())
             {
                 storage::OperationContext Context;
@@ -558,10 +559,10 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
                 auto Loaded = ReadImagePage(Book, P.page_, Context);
                 if (!Loaded.HasValue())
                     return Rendered{{}, {}, QString::fromStdString(Loaded.Failure().code_)};
-                Original = Loaded.Value().image_;
+                Original = Loaded.Value().image_;Warning=Loaded.Value().warning_;
             }
             if (Original.size() != ExpectedSize)
-                return Rendered{Original, {}, {}};
+                return Rendered{Original, {}, {},Warning};
             QImage Input = P.crop_.size() == Original.size() ? Original : Original.copy(P.crop_);
             ImageRenderRequest Request;
             Request.source_ = Input;
@@ -580,7 +581,7 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
                 if (Request.tile_ != Tile)
                     Result.image_ = Result.image_.copy(QRect(Tile.topLeft() - Request.tile_.topLeft(), Tile.size()));
             }
-            return Rendered{Original, Result.image_, Result.error_};
+            return Rendered{Original, Result.image_, Result.error_,Warning};
         }));
 }
 void ImageReadingView::prefetch()
@@ -598,6 +599,7 @@ void ImageReadingView::prefetch()
         if(Generation!=bookGeneration_)return;
         pendingSourcePages_.remove(Page);
         if(!Stop->stop_requested() && Result.HasValue()) {
+            if(!Result.Value().warning_.isEmpty())pageWarnings_[Page]=Result.Value().warning_;
             const auto& Image=Result.Value().image_;
             sources_.insert(Page,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));
         }
@@ -657,6 +659,11 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                     request(P, Tile);
                 }
             }
+    }
+    if(!book_->listingWarning_.isEmpty() || !pageWarnings_.value(index_).isEmpty()){
+        const QRect Banner(0,0,viewport()->width(),44);Painter.fillRect(Banner,palette().brush(QPalette::Base));
+        Painter.setPen(palette().color(QPalette::Text));Painter.drawText(Banner.adjusted(8,2,-8,-2),Qt::AlignLeft|Qt::AlignVCenter|Qt::TextWordWrap,
+            tr("손상되거나 불완전한 파일에서 읽을 수 있는 내용만 표시하고 있습니다."));
     }
 }
 bool ImageReadingView::event(QEvent *E)
@@ -975,7 +982,7 @@ QJsonObject ImageReadingView::State() const
             {"pageCount", book_ ? book_->pages_.size() : 0},
             {"listingWarning",book_?book_->listingWarning_:QString{}},{"discoveringPages",book_&&book_->subpagesPending_},
             {"pageName", CurrentName()},
-            {"pageError",pageErrors_.value(index_)},{"failedPages",pageErrors_.size()},
+            {"pageWarning",pageWarnings_.value(index_)},{"pageError",pageErrors_.value(index_)},{"failedPages",pageErrors_.size()},
             {"book", book_ ? book_->path_ : QString{}},
             {"mode", int(mode_)},
             {"relative", mode_ == Webtoon ? relative_ : Relative},

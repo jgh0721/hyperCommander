@@ -14,6 +14,9 @@ struct ImagePage
     plugins::ArchiveHeader entry_;
     std::uint32_t ordinal_ = 0;
     int subpage_ = 0;
+    quint64 recoveredOffset_=0,recoveredPacked_=0,recoveredSize_=0;
+    quint32 recoveredCrc_=0;
+    int recoveredMethod_=-1;
 };
 struct ImageBook
 {
@@ -31,7 +34,7 @@ struct ImagePageContent
 {
     QImage image_;
     QByteArray bytes_;
-    QString format_;
+    QString format_, warning_;
 };
 QStringList ImageExtensions();
 bool IsImageFile(const QString &Path);

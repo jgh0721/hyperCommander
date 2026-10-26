@@ -1,4 +1,5 @@
 ﻿#include "imageBook.hpp"
+#include "imageZipRecovery.hpp"
 #include "pluginHost/imageArchiveTransport.hpp"
 #include <QJsonDocument>
 #include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
@@ -151,8 +152,18 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
             Book->archive_=plugins::MakeImageArchiveClient(Endpoint.object());
         }else Book->archive_ = plugins::MakeApprovedWcxBackend(std::move(Options));
         auto Listing = Book->archive_->Enumerate(Book->path_.toUtf8().toStdString(), false, Context);
-        if (!Listing.HasValue())
-            return Listing.Failure();
+        if (!Listing.HasValue()) {
+            if(auto Stop=Context.Check({"image-book"}))return *Stop;
+            if(!QStringList{"zip","cbz"}.contains(Info.suffix().toLower()) || Listing.Failure().category_==storage::ErrorCategory::AccessDenied)return Listing.Failure();
+            auto Recovered=zipRecovery::Scan(Book->path_,Context);if(!Recovered.HasValue())return Listing.Failure();
+            for(const auto& E:Recovered.Value())if(IsImageFile(E.name_)&&!Ignored(E.name_)){
+                ImagePage Page;Page.name_=E.name_;Page.ordinal_=Book->pages_.size();Page.id_=Book->revision_+":recovered:"+QString::number(E.offset_);
+                Page.recoveredOffset_=E.offset_;Page.recoveredPacked_=E.compressed_;Page.recoveredSize_=E.size_;Page.recoveredCrc_=E.crc_;Page.recoveredMethod_=E.method_;
+                Book->pages_.append(Page);
+            }
+            if(Book->pages_.isEmpty())return Listing.Failure();
+            Book->listingWarning_="image-recovery-partial-directory";
+        }else {
         std::uint32_t Ordinal = 0;
         for (;;)
         {
@@ -180,6 +191,7 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
             }
             if (Batch.Value().end_)
                 break;
+        }
         }
     }
     QCollator Sort;
@@ -261,7 +273,14 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     QTemporaryDir Temp;
     QByteArray StreamBytes;
     bool Streamed = false;
-    if (Book->archive_)
+    QString Warning;
+    if(Page.recoveredMethod_>=0){
+        if(Revision(Book->path_)!=Book->revision_)return Error("image-book-changed");
+        auto Recovered=zipRecovery::Read(Book->path_,{Page.name_,Page.recoveredOffset_,Page.recoveredPacked_,Page.recoveredSize_,Page.recoveredCrc_,quint16(Page.recoveredMethod_)},Context);
+        if(!Recovered.HasValue())return Recovered.Failure();
+        StreamBytes=std::move(Recovered.Value().bytes_);Warning=Recovered.Value().warning_;Streamed=true;
+    }
+    if (Book->archive_ && !Streamed)
     {
         std::unique_lock<std::timed_mutex> Lock(Book->streamMutex_,std::defer_lock);
         while(!Lock.try_lock_for(std::chrono::milliseconds(10)))if(auto Stop=Context.Check({"image-book"}))return *Stop;
@@ -314,7 +333,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     if (!Streamed && !File.open(QIODevice::ReadOnly))
         return Error("image-page-open");
     ImagePageContent Content;
-    Content.bytes_ = std::move(StreamBytes);
+    Content.bytes_ = std::move(StreamBytes);Content.warning_=Warning;
     while (!Streamed && !File.atEnd())
     {
         if (auto Stop = Context.Check({"image-book"}))

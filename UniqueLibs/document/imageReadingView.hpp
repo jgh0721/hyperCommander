@@ -100,7 +100,7 @@ class ImageReadingView final : public QAbstractScrollArea
     bool animationUpdate_ = false;
     QSet<QString> pending_;
     QSet<int> pendingSourcePages_;
-    QHash<int, QString> pageErrors_;
+    QHash<int, QString> pageErrors_, pageWarnings_;
     std::shared_ptr<std::stop_source> stop_ = std::make_shared<std::stop_source>();
     std::uint64_t generation_ = 0;
     std::uint64_t bookGeneration_ = 0;

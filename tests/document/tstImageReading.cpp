@@ -388,6 +388,21 @@ class ImageReadingTests : public QObject
         QCOMPARE(View.State()["page"].toInt(), 8);
         View.Cancel();
     }
+    void missingZipDirectoryRetainsReadablePages()
+    {
+        QTemporaryDir Root;const auto Path=Root.filePath("damaged.cbz");
+        {QZipWriter Zip(Path);Zip.addFile("1.png",Png(Qt::red));Zip.addFile("2.png",Png(Qt::green));Zip.close();}
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadWrite));const auto Bytes=File.readAll();
+        const auto Directory=Bytes.indexOf(QByteArray("PK\x01\x02",4));QVERIFY(Directory>0);
+        QVERIFY(File.resize(Directory));File.close();
+        auto Book=OpenImageBook(Path);QVERIFY2(Book.HasValue(),Book.HasValue()?"":Book.Failure().code_.c_str());
+        QCOMPARE(Book.Value()->pages_.size(),2);
+        auto First=ReadImagePage(Book.Value(),0),Second=ReadImagePage(Book.Value(),1);
+        QVERIFY(First.HasValue());QVERIFY(Second.HasValue());
+        QCOMPARE(First.Value().image_.pixelColor(0,0),QColor(Qt::red));
+        QCOMPARE(Second.Value().image_.pixelColor(0,0),QColor(Qt::green));
+        QCOMPARE(QFileInfo(Path).size(),qint64(Directory));
+    }
     void tiffPagesAndChangedSources()
     {
         QTemporaryDir Root;
