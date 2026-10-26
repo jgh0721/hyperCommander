@@ -904,6 +904,15 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                 if (Row.isValid() && !Visible) view_->scrollToIndex(Row.modelIndex(0), false);
             }
         }
+        // A model reset moves the cursor to the first row, but Qtitan keeps
+        // the old pixel scroll offset. Only a different published location
+        // starts at the top; refreshes retain their viewport and parent
+        // navigation restores its saved anchor below.
+        const auto NativeModel = qobject_cast<CFSModel*>(model_);
+        if (!Path.isEmpty() && Path != resetPath_ && (!NativeModel || !NativeModel->LastNavigationError())) {
+            if (view_->getRowCount()) view_->setFocusedRowIndex(0);
+            view_->verticalScrollBar()->setValue(0);
+        }
         resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear(); resetFocusFallback_.clear();
         const auto Previous = model_->property("hc.parentFocusName").toString();
         const bool ParentNavigation = model_->property("hc.parentNavigation").toBool();
