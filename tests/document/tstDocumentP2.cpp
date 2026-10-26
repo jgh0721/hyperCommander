@@ -34,9 +34,9 @@ bool Put(const QString& Path,const QByteArray& Bytes){QFile File(Path);return Fi
 QByteArray Read(const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};}
 QJsonObject Doc(const DocumentWorkspaceWidget& Workspace,const QString& Id){for(auto Item:Workspace.Snapshot()["documents"].toArray())if(Item.toObject()["documentId"]==Id)return Item.toObject();return {};}
 bool Ready(const DocumentWorkspaceWidget& Workspace,const QString& Id){return Doc(Workspace,Id)["lifecycle"]=="ready";}
-QByteArray PdfFixture(int Pages=2){
+QByteArray PdfFixture(int Pages=2,double Height=400){
     InitializeDocumentPdfium();auto Document=FPDF_CreateNewDocument();
-    for(int At=0;At<Pages;++At){auto Page=FPDFPage_New(Document,At,300,400);FPDFPage_SetRotation(Page,At?2:0);
+    for(int At=0;At<Pages;++At){auto Page=FPDFPage_New(Document,At,300,Height);FPDFPage_SetRotation(Page,At?2:0);
         auto Text=FPDFPageObj_NewTextObj(Document,"Helvetica",18);const unsigned short Message[]={'P','2',' ','s','e','a','r','c','h',0};
         FPDFText_SetText(Text,Message);FPDFPageObj_Transform(Text,1,0,0,1,30,250);FPDFPage_InsertObject(Page,Text);FPDFPage_GenerateContent(Page);FPDF_ClosePage(Page);}
     struct Writer:FPDF_FILEWRITE {QByteArray bytes_;static int Write(FPDF_FILEWRITE* Self,const void* Data,unsigned long Size){static_cast<Writer*>(Self)->bytes_.append(static_cast<const char*>(Data),Size);return 1;}} Writer;
@@ -49,6 +49,19 @@ QJsonObject Native(HWND Viewer,HMODULE Module,const QJsonObject& Request){using 
 class DocumentP2Tests final:public QObject {
 Q_OBJECT
 private slots:
+void continuousPdfBeyondWidgetLimitReachesLastPage(){
+    QPDFView View;View.resize(800,600);View.setSidebarPosition(QPDFView::SidebarHidden);
+    QVERIFY(View.LoadContent(PdfFixture(1800,14400),"very-tall.pdf"));
+    View.setViewMode(QPDFView::ContinuousScroll);View.setZoomMode(QPDFView::CustomZoom);View.setZoomLevel(100);
+    View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
+    View.goToPage(1799);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);QCOMPARE(View.currentPage(),1799);
+    auto* Scroll=View.findChild<QScrollArea*>();QVERIFY(Scroll);QVERIFY(Scroll->widget()->height()<=QWIDGETSIZE_MAX);
+    QTRY_VERIFY(Scroll->viewport()->grab().toImage().pixelColor(Scroll->viewport()->rect().center()).lightness()>230);
+    Scroll->verticalScrollBar()->setValue(0);QTRY_COMPARE(View.currentPage(),0);
+    Scroll->verticalScrollBar()->setValue(Scroll->verticalScrollBar()->maximum());QTRY_COMPARE(View.currentPage(),1799);
+    View.goToPage(900);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);QCOMPARE(View.currentPage(),900);
+}
+
 void continuousPdfShowsLastPageWithoutWholeBookBitmap(){
     QPDFView View;View.resize(800,600);View.setSidebarPosition(QPDFView::SidebarHidden);
     QVERIFY(View.LoadContent(PdfFixture(120),"many.pdf"));

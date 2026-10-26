@@ -192,7 +192,12 @@ private:
     void layoutContinuousPages(qreal scale);
     void paintContinuousPages(const QRect& region);
     QVector<QRectF> continuousPages_;
-    qreal continuousScale_ = 0;
+    qreal continuousScale_ = 0, continuousHeight_ = 0, continuousTop_ = 0;
+    int continuousRotation_ = -1;
+    bool continuousScrolling_ = false;
+    void setContinuousOffset(qreal offset);
+    QRectF continuousDisplayRect(int page) const;
+    void continuousScrollChanged();
     QList<PageViewportInfo> currentViewportPages(qreal& scaleRatio) const;
     QPair<int, int> spreadPagePair(int firstPageIndex) const;
     QRectF mapPdfRectToImageRect(const PdfRect& rect, int pageIndex, qreal scale) const;

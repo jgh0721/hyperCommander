@@ -1,5 +1,6 @@
 ﻿#include "pdf/QPDFView.h"
 #include "UniqueLibs/document/imagePerformance.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 #include "core/ThemeManager.h"
 #include "core/ToolbarIcons.h"
@@ -100,7 +101,7 @@ QPDFView::QPDFView(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     connect(m_formManager, &PDFFormManager::unsupportedFieldClicked, this,
             [this](const PDFFormManager::FieldInfo&) {
-                QMessageBox::information(this, tr("미지원 필드"),
+                hc::ui::MessageDialog::information(this, tr("미지원 필드"),
                     tr("이 폼 필드 유형은 지원하지 않습니다 (서명/XFA 등)."));
             });
 }
@@ -127,6 +128,12 @@ void QPDFView::setupUI()
     m_scrollArea->verticalScrollBar()->installEventFilter(this);
     m_scrollArea->horizontalScrollBar()->installEventFilter(this);
     m_pageLabel   = new QLabel(this);
+    connect(m_scrollArea->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{
+        if(m_viewMode!=ContinuousScroll || continuousScrolling_ || continuousPages_.isEmpty())return;
+        auto* bar=m_scrollArea->verticalScrollBar();
+        continuousTop_=bar->maximum()>0?double(bar->value())/bar->maximum()*qMax(0.,continuousHeight_-m_scrollArea->viewport()->height()):0;
+        continuousScrollChanged();
+    });
 
     // 사이드바 탭 (썸네일 + 목차)
     m_thumbList->setIconSize(QSize(120, 160));
@@ -238,7 +245,7 @@ void QPDFView::closeFileInternal(bool emitSignals)
     m_annotationManager.setDocument(nullptr);
     if (m_document) { FPDF_CloseDocument(m_document); m_document = nullptr; }
     m_fileData.clear();
-    continuousPages_.clear();continuousScale_=0;
+    continuousPages_.clear();continuousScale_=0;continuousHeight_=continuousTop_=0;continuousRotation_=-1;
     m_pageCount = 0; m_currentPage = 0;bookmarksLoaded_=false;thumbnailsDone_.clear();renderSnapshot_.clear();renderHasEdits_=false; setModifiedState(false);
     m_searchPage = 0; m_searchMatchStart = -1; m_searchMatchCount = 0;
     m_searchResultIndex = -1; m_searchResultTotal = 0;
@@ -350,7 +357,7 @@ void QPDFView::goToPage(int page)
     m_currentPage = page;
     if(m_viewMode==ContinuousScroll && page<continuousPages_.size()){
         cancelPageRender();requestPageImage(page,continuousScale_);
-        m_scrollArea->verticalScrollBar()->setValue(qRound(continuousPages_[page].top()));
+        setContinuousOffset(continuousPages_[page].top());
         emit pageChanged(page+1,m_pageCount);emit viewStateChanged();return;
     }
     m_pageCache.clear();
@@ -518,7 +525,7 @@ bool QPDFView::addFreeTextAnnotationFromRect(int pageIndex, const PdfRect& rect)
         return false;
 
     bool ok = false;
-    const QString text = QInputDialog::getMultiLineText(this,
+    const QString text = hc::ui::InputDialog::getMultiLineText(this,
                                                         tr("자유 텍스트"),
                                                         tr("PDF에 추가할 텍스트를 입력하세요."),
                                                         {},
@@ -537,7 +544,7 @@ bool QPDFView::addFreeTextAnnotationFromRect(int pageIndex, const PdfRect& rect)
 bool QPDFView::addNoteAnnotationAt(int pageIndex, const QPointF& pdfPoint)
 {
     bool ok = false;
-    const QString text = QInputDialog::getMultiLineText(this,
+    const QString text = hc::ui::InputDialog::getMultiLineText(this,
                                                         tr("팝업 노트"),
                                                         tr("노트 내용을 입력하세요."),
                                                         {},
@@ -803,7 +810,8 @@ QList<QPDFView::PageViewportInfo> QPDFView::currentViewportPages(qreal& scaleRat
     if (m_viewMode == ContinuousScroll) {
         scaleRatio=continuousScale_;
         for(int i=0;i<continuousPages_.size();++i)
-            pages.append({i,mapLabelRectToView(continuousPages_[i])});
+            if(continuousPages_[i].bottom()>=continuousTop_ && continuousPages_[i].top()<=continuousTop_+m_scrollArea->viewport()->height())
+                pages.append({i,mapLabelRectToView(continuousDisplayRect(i))});
         return pages;
     }
 
@@ -886,19 +894,51 @@ QImage QPDFView::renderSpreadImage(int firstPageIndex, qreal scale)
     return canvas;
 }
 
+QRectF QPDFView::continuousDisplayRect(int page) const
+{
+    return continuousPages_[page].translated(0,m_scrollArea->verticalScrollBar()->value()-continuousTop_);
+}
+void QPDFView::setContinuousOffset(qreal offset)
+{
+    const auto span=qMax(0.,continuousHeight_-m_scrollArea->viewport()->height());
+    continuousTop_=qBound(0.,offset,span);
+    auto* bar=m_scrollArea->verticalScrollBar();
+    const bool previous=continuousScrolling_;continuousScrolling_=true;
+    bar->setValue(span>0?qRound(continuousTop_/span*bar->maximum()):0);
+    continuousScrolling_=previous;
+    m_pageLabel->update();
+}
+void QPDFView::continuousScrollChanged()
+{
+    auto it=std::lower_bound(continuousPages_.cbegin(),continuousPages_.cend(),continuousTop_,
+        [](const QRectF& rect,qreal top){return rect.bottom()<top;});
+    if(it!=continuousPages_.cend()){
+        const int page=int(it-continuousPages_.cbegin());
+        if(page!=m_currentPage){cancelPageRender();m_currentPage=page;emit pageChanged(page+1,m_pageCount);}
+        requestPageImage(page,continuousScale_);
+    }
+    m_pageLabel->update();emit viewStateChanged();
+}
 void QPDFView::layoutContinuousPages(qreal scale)
 {
-    if(!qFuzzyCompare(continuousScale_,scale))m_pageCache.clear();
-    continuousScale_=scale;continuousPages_.clear();
-    qreal width=1,y=0;
-    for(int i=0;i<m_pageCount;++i){
-        const auto size=rotatedPageSize(i)*scale;
-        continuousPages_.append(QRectF(0,y,qMax(1.,size.width()),qMax(1.,size.height())));
-        width=qMax(width,size.width());y+=qMax(1.,size.height())+24;
+    const bool rebuild=!qFuzzyCompare(continuousScale_,scale)||continuousPages_.size()!=m_pageCount||continuousRotation_!=int(m_rotationAngle);
+    const qreal oldScale=continuousScale_;
+    if(rebuild){
+        m_pageCache.clear();continuousScale_=scale;continuousRotation_=int(m_rotationAngle);continuousPages_.clear();
+        qreal width=1,y=0;
+        for(int i=0;i<m_pageCount;++i){
+            const auto size=rotatedPageSize(i)*scale;
+            continuousPages_.append(QRectF(0,y,qMax(1.,size.width()),qMax(1.,size.height())));
+            width=qMax(width,size.width());y+=qMax(1.,size.height())+24;
+        }
+        for(auto& rect:continuousPages_)rect.moveLeft((width-rect.width())/2);
+        continuousHeight_=qMax(1.,y-24);
+        if(oldScale>0)continuousTop_*=scale/oldScale;else if(m_currentPage<continuousPages_.size())continuousTop_=continuousPages_[m_currentPage].top();
     }
-    for(auto& rect:continuousPages_)rect.moveLeft((width-rect.width())/2);
-    m_pageLabel->clear();
-    m_pageLabel->resize(qBound(1,qCeil(width),QWIDGETSIZE_MAX),qBound(1,int(qMin(qreal(QWIDGETSIZE_MAX),y-24)),QWIDGETSIZE_MAX));
+    qreal width=1;for(const auto& rect:continuousPages_)width=qMax(width,rect.right());
+    continuousScrolling_=true;m_pageLabel->clear();
+    m_pageLabel->resize(qBound(1,qCeil(width),QWIDGETSIZE_MAX),qMax(1,int(qMin(qreal(QWIDGETSIZE_MAX),continuousHeight_))));
+    setContinuousOffset(continuousTop_);continuousScrolling_=false;
     m_pageLabel->update();
 }
 void QPDFView::paintContinuousPages(const QRect& region)
@@ -907,7 +947,7 @@ void QPDFView::paintContinuousPages(const QRect& region)
     painter.fillRect(region,ThemeManager::instance().color(QStringLiteral("pdf.pageGap")));
     // Geometry is cheap; pixels are allocated only for intersecting pages.
     for(int i=0;i<continuousPages_.size();++i){
-        const auto rect=continuousPages_[i];if(!rect.intersects(region))continue;
+        const auto rect=continuousDisplayRect(i);if(!rect.intersects(region))continue;
         auto* cached=m_pageCache.object(i);
         QImage page=cached?*cached:requestPageImage(i,continuousScale_);
         if(page.isNull())continue;
@@ -1104,7 +1144,7 @@ void QPDFView::searchNext()
         m_pageCache.clear();
         renderCurrentPage();
         emit viewStateChanged();
-        QMessageBox::information(this, tr("검색"), tr("'%1'을(를) 찾을 수 없습니다.").arg(m_searchText));
+        hc::ui::MessageDialog::information(this, tr("검색"), tr("'%1'을(를) 찾을 수 없습니다.").arg(m_searchText));
         return;
     }
 
@@ -1141,7 +1181,7 @@ void QPDFView::searchPrev()
         m_pageCache.clear();
         renderCurrentPage();
         emit viewStateChanged();
-        QMessageBox::information(this, tr("검색"), tr("'%1'을(를) 찾을 수 없습니다.").arg(m_searchText));
+        hc::ui::MessageDialog::information(this, tr("검색"), tr("'%1'을(를) 찾을 수 없습니다.").arg(m_searchText));
         return;
     }
 
@@ -1844,6 +1884,9 @@ void QPDFView::wheelEvent(QWheelEvent* event)
             scrollDelta = (steps != 0 ? steps : (angleY > 0 ? 1 : -1)) * qMax(24, vbar->singleStep() * 3);
         }
 
+        if(m_viewMode==ContinuousScroll){
+            const auto previous=continuousTop_;setContinuousOffset(continuousTop_-scrollDelta);continuousScrollChanged();return previous!=continuousTop_;
+        }
         const int oldValue = vbar->value();
         const int newValue = qBound(vbar->minimum(), oldValue - scrollDelta, vbar->maximum());
         if (newValue == oldValue)
@@ -1940,6 +1983,9 @@ bool QPDFView::copySelection()
 
 bool QPDFView::eventFilter(QObject* watched, QEvent* event)
 {
+    if(m_viewMode==ContinuousScroll && m_scrollArea && watched==m_scrollArea->viewport() && event->type()==QEvent::Wheel){
+        wheelEvent(static_cast<QWheelEvent*>(event));return event->isAccepted();
+    }
     if(watched==m_pageLabel && event->type()==QEvent::Paint && m_viewMode==ContinuousScroll && m_document){
         paintContinuousPages(static_cast<QPaintEvent*>(event)->rect());return true;
     }
@@ -2351,8 +2397,8 @@ bool QPDFView::handleNavigationKey(QKeyEvent* event)
         case Qt::Key_PageUp:   previousPage(); break;
         case Qt::Key_Home:     goToPage(0); break;
         case Qt::Key_End:      goToPage(m_pageCount - 1); break;
-        case Qt::Key_Up: m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepSub); break;
-        case Qt::Key_Down: m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
+        case Qt::Key_Up: if(m_viewMode==ContinuousScroll){setContinuousOffset(continuousTop_-24);continuousScrollChanged();}else m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepSub); break;
+        case Qt::Key_Down: if(m_viewMode==ContinuousScroll){setContinuousOffset(continuousTop_+24);continuousScrollChanged();}else m_scrollArea->verticalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
         case Qt::Key_Left: m_scrollArea->horizontalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepSub); break;
         case Qt::Key_Right: m_scrollArea->horizontalScrollBar()->triggerAction(QAbstractSlider::SliderSingleStepAdd); break;
     }
