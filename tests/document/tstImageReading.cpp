@@ -398,6 +398,12 @@ class ImageReadingTests : public QObject
         auto Page=ReadImagePage(Book.Value(),0,{},[&](QImage Preview){++Count;PreviewSize=Preview.size();});
         QVERIFY(Page.HasValue());QVERIFY(Count>0);QVERIFY(PreviewSize.width()<=1024&&PreviewSize.height()<=1024);
         QCOMPARE(Page.Value().image_.size(),Image.size());QVERIFY(Page.Value().warning_.isEmpty());
+        ImageDecodeCache::Clear();int StandalonePreviews=0;
+        auto Single=ReadDocumentFile(Path,{},false,[&](QImage Preview){++StandalonePreviews;QVERIFY(Preview.width()<=1024);});
+        QVERIFY(Single.HasValue());QVERIFY(StandalonePreviews>0);QCOMPARE(Single.Value().image_.size(),Image.size());
+        ImageDecodeCache::Clear();std::stop_source Stop;hc::storage::OperationContext Context;Context.stopToken_=Stop.get_token();
+        auto Cancelled=ReadDocumentFile(Path,Context,false,[&](QImage){Stop.request_stop();});
+        QVERIFY(!Cancelled.HasValue());QCOMPARE(Cancelled.Failure().category_,hc::storage::ErrorCategory::Cancelled);
     }
     void truncatedJpegRemainsViewableWithWarning()
     {

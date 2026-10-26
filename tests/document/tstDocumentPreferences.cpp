@@ -50,6 +50,17 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void loadingImagePreviewPreservesDocumentAndClearsOnLoad() {
+        DocumentViewPane Pane;TextInput Text;Text.path_="preview.txt";Text.text_="keep me";Text.bytes_="keep me";
+        QVERIFY(Pane.Load(Text,false));Pane.SetReadOnly(true);const auto Before=Pane.Content();
+        Pane.resize(400,300);Pane.show();QImage Image(100,120,QImage::Format_RGB32);Image.fill(Qt::red);
+        Pane.ShowLoadingPreview(Image);auto* Preview=Pane.findChild<QWidget*>("documentLoadingPreview");
+        QVERIFY(Preview);QVERIFY(!Preview->isHidden());QVERIFY(Pane.IsReadOnly());QCOMPARE(Pane.Content(),Before);
+        Pane.resize(500,350);QCOMPARE(Preview->size(),Pane.size());
+        Pane.Cancel();QVERIFY(Preview->isHidden());Pane.ShowLoadingPreview(Image);
+        QVERIFY(Pane.Load(Text,false));QVERIFY(Preview->isHidden());QCOMPARE(Pane.Content(),Before);
+    }
+
     void editorInstanceForwardsAndIsolatesSettings() {
         const auto Scope=QUuid::createUuid().toByteArray();EditorInstance Primary;QStringList Received;
         QCOMPARE(Primary.Start(Scope,{}),EditorInstance::Primary);
