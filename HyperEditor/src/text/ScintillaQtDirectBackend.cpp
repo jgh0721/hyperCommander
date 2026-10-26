@@ -275,8 +275,8 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 	updateBraceHighlight();
 	updateLineNumberMargin(m_lineNumberMarginDigits);
 
-	// 설정 변경 후 전체 화면 갱신 (탭 폭 등 즉시 반영)
-	m_editor->send(sciMessage(SCI_COLOURISE), 0, -1);
+	// Display settings do not change lexical state. Preserve idle styling instead
+	// of synchronously recolouring the entire document on every settings update.
 	m_editor->update();
 }
 
