@@ -27,6 +27,7 @@ public:
 
 	void applySettings(const ScintillaEditorSettings& settings) override;
 	void setText(const QString& text) override;
+    void SetTextUtf8(const QByteArray& Bytes);
 	QString text() const override;
 	void clear() override;
     int CharacterCount() const override;

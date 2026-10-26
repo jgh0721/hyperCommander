@@ -282,6 +282,10 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 
 void ScintillaQtDirectBackend::setText(const QString& text)
 {
+    SetTextUtf8(text.toUtf8());
+}
+void ScintillaQtDirectBackend::SetTextUtf8(const QByteArray& utf8)
+{
 	if (!m_editor)
 		return;
 
@@ -290,7 +294,6 @@ void ScintillaQtDirectBackend::setText(const QString& text)
 		m_editor->send(sciMessage(SCI_SETCHANGEHISTORY), SC_CHANGE_HISTORY_DISABLED);
 
 	characterCount_ = -1;
-	const QByteArray utf8 = text.toUtf8();
 	m_editor->sends(sciMessage(SCI_SETTEXT), 0, utf8.constData());
 	m_editor->send(sciMessage(SCI_EMPTYUNDOBUFFER));
 	m_editor->send(sciMessage(SCI_SETSAVEPOINT));

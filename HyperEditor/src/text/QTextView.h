@@ -19,7 +19,7 @@ class QTextView : public QBaseView
     Q_OBJECT
 
 public:
-    void LoadContent(const QString& Text, const QString& Path, const QString& Encoding);
+    void LoadContent(const QString& Text, const QString& Path, const QString& Encoding, const QByteArray& Utf8 = {}, const QString& Eol = {});
     QString Content() const;
     ITextEditorBackend* Backend() const;
     void ReplaceContent(const QString& Text);

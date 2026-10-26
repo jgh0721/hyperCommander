@@ -158,7 +158,7 @@ namespace hc::document
         bool Success=true;
         if(viewId_=="pdf") {pdf_=new QPDFView(this);view_=pdf_;Success=pdf_->LoadContent(Input.bytes_,Input.path_);}
         else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);if(readingEntry_.isEmpty()&&!readingPath_.isEmpty())image_->SetNavigationSource(readingPath_);}
-        else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_);readOnly_=false;}
+        else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_,Input.encoding_=="UTF-8"?(Input.bom_?Input.bytes_.mid(3):Input.bytes_):QByteArray{},Input.eol_);readOnly_=false;}
         if(!Success)return false;
         toolbar_=view_->createToolBar();
         if(!toolbar_)toolbar_=new QToolBar(this);

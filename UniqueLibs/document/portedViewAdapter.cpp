@@ -18,18 +18,18 @@ qintptr ScintillaQtDirectBackend::Send(unsigned int Message, quintptr W, qintptr
 { return m_editor ? m_editor->send(Message,W,L) : 0; }
 ITextEditorBackend* QTextView::Backend() const { return m_editor; }
 QString QTextView::Content() const { return m_editor ? m_editor->text() : QString{}; }
-void QTextView::LoadContent(const QString& Text, const QString& Path, const QString& Encoding)
+void QTextView::LoadContent(const QString& Text, const QString& Path, const QString& Encoding, const QByteArray& Utf8, const QString& Eol)
 {
     hc::document::ImageTraceSpan LoadTrace("text.attach",Path);
     closeFile(); m_hotExitEnabled=false; m_filePath=Path; m_encoding=m_detectedEncoding=Encoding;
     m_document.setPreviewOnly(false);m_document.setTruncated(false);
-    auto Ending = detectLineEnding(Text);
+    auto Ending = Eol=="CRLF"?CRLF:Eol=="CR"?CR:Eol=="LF"?LF:detectLineEnding(Text);
     if (!Text.contains('\r') && !Text.contains('\n')) {
         const auto Default = AppSettings().value("textView/defaultLineEnding", "CRLF").toString();
         Ending = Default == "LF" ? LineEnding::LF : Default == "CR" ? LineEnding::CR : LineEnding::CRLF;
     }
     m_document.setLineEnding(toDocumentLineEnding(Ending));
-    ensureEditorBackend();m_editor->setReadOnly(false);m_editor->setText(Text);m_editor->setLineEnding(m_document.lineEnding(),false);m_editor->setModified(false);
+    ensureEditorBackend();m_editor->setReadOnly(false);if(!Utf8.isEmpty()){if(auto* Direct=dynamic_cast<ScintillaQtDirectBackend*>(m_editor.data()))Direct->SetTextUtf8(Utf8);else m_editor->setText(Text);}else m_editor->setText(Text);m_editor->setLineEnding(m_document.lineEnding(),false);m_editor->setModified(false);
     autoDetectLanguage(); updateMetrics();emit encodingChanged(Encoding);
 }
 void QTextView::ReplaceContent(const QString& Text)
