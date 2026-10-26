@@ -233,7 +233,7 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
     Panel->ChangeCurrentPath(Images, {}); QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 3);
     QVERIFY(View->SetListMode("one-line"));
     QVERIFY(View->SetGrouping({true, GroupColumnId(View, "file.extension"), "value", Qt::AscendingOrder})); View->SetGroupsExpanded(false);
-    ThumbnailModel* Tiles = nullptr; for (auto* Child : View->children()) if (auto* Candidate = dynamic_cast<ThumbnailModel*>(Child)) Tiles = Candidate; QVERIFY(Tiles); Tiles->Rebuild(); QCOMPARE(Tiles->TargetPercent(), 100.0);
+    auto* Tiles = View->Thumbnails(); QVERIFY(Tiles); Tiles->Rebuild(); QCOMPARE(Tiles->TargetPercent(), 100.0);
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     auto Thumbnail = General["thumbnails"].toObject(); Thumbnail["autoSwitch"] = true; Thumbnail["autoPercent"] = 70;
     General["thumbnails"] = Thumbnail; hc::settings::AppSettings().Put(hc::settings::Section::General, General);
@@ -393,7 +393,7 @@ inline void FilePanelGroupingInputUi(QMainUI* Main, CmpPanel* Panel)
                 const auto* Key = static_cast<QKeyEvent*>(Event); if (Key->key() == Qt::Key_Space && !Key->isAutoRepeat()) held_ = false;
             }
             if (active_ && Event->type() == QEvent::KeyPress) {
-                const auto* Key = static_cast<QKeyEvent*>(Event); ++presses_; characters_ += Key->count();
+                const auto* Key = static_cast<QKeyEvent*>(Event); if (Key->key() != Qt::Key_Space) return false; ++presses_; characters_ += Key->count();
                 qInfo() << "Native Space key" << Key->key() << "count" << Key->count() << "repeat" << Key->isAutoRepeat()
                     << "native" << Key->nativeVirtualKey() << "focus" << view_->BaseView()->focusedRowIndex()
                     << view_->CaptureFocus() << "marks" << view_->CaptureSelection().size();
