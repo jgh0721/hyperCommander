@@ -389,10 +389,14 @@ private slots:
         QVERIFY(!Widget.Handle({{"action","saveAs"},{"documentId",NewId},{"path",Copy}}).contains("error")); QTRY_VERIFY(Widget.IsIdle());
         QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("renamed.txt")); QCOMPARE(Bytes(Copy),Original);
     }
-    void helperUsesP1SessionAndConflictFlow()
+    void helperNativeKeyboardRoute()
     {
         QTemporaryDir Root; auto Path = Root.filePath("helper.txt"); QVERIFY(Put(Path, "base\n"));
         QWidget Parent; Parent.resize(800, 500); Parent.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Parent));
+        Parent.raise();Parent.activateWindow();SetForegroundWindow(reinterpret_cast<HWND>(Parent.winId()));
+        if(!QTest::qWaitFor([&]{return GetForegroundWindow()==reinterpret_cast<HWND>(Parent.winId());},2000))
+            QSKIP("Interactive foreground activation unavailable before viewer creation; run native keyboard coverage on an active desktop");
         auto Dll = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll";
         auto Module = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Dll.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); QVERIFY(Module);
         using Create = HWND (*)(HWND, LPRECT, DWORD);
@@ -420,6 +424,22 @@ private slots:
         Native(Viewer,Module,{{"action","saveAs"},{"documentId",Id},{"path",KeyboardCopy}});
         QTRY_VERIFY(!Native(Viewer,Module,{{"action","state"}})["documents"].toArray()[0].toObject()["saving"].toBool());
         QTRY_VERIFY(QFile::exists(KeyboardCopy)); QVERIFY2(Bytes(KeyboardCopy).toLower().contains('z'),"native character did not reach the editor");
+    }
+    void helperUsesP1SessionAndConflictFlow()
+    {
+        QTemporaryDir Root; auto Path = Root.filePath("helper.txt"); QVERIFY(Put(Path, "base\n"));
+        QWidget Parent; Parent.resize(800, 500); Parent.show();
+        auto Dll = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll";
+        auto Module = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Dll.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); QVERIFY(Module);
+        using Create = HWND (*)(HWND, LPRECT, DWORD);
+        RECT Rect{0, 0, 800, 500}; auto Viewer = reinterpret_cast<Create>(GetProcAddress(Module, "DVP_CreateViewer"))(reinterpret_cast<HWND>(Parent.winId()), &Rect, 0); QVERIFY(Viewer);
+        auto Cleanup = qScopeGuard([&] { DestroyWindow(Viewer); FreeLibrary(Module); });
+        auto Name = Path.toStdWString(); QVERIFY(SendMessageW(Viewer, WM_APP + 0xf02, 0, reinterpret_cast<LPARAM>(Name.c_str())));
+        QJsonObject State; QTRY_VERIFY_WITH_TIMEOUT((State = Native(Viewer, Module, {{"action", "state"}}))["documents"].toArray().size() == 1, 15000);
+        QVERIFY(qAbs(State["dpr"].toDouble() - Parent.devicePixelRatioF()) < 0.01);
+        auto Id = State["documents"].toArray()[0].toObject()["documentId"].toString();
+        QTRY_COMPARE(Native(Viewer, Module, {{"action", "state"}})["documents"].toArray()[0].toObject()["lifecycle"].toString(), QString("ready"));
+        QVERIFY(Native(Viewer,Module,{{"action","present"}})["accepted"].toBool());
         Native(Viewer, Module, {{"action", "replaceText"}, {"documentId", Id}, {"text", "helper revision one\n"}});
         auto Copy = Root.filePath("copy.txt"); Native(Viewer, Module, {{"action", "saveAs"}, {"documentId", Id}, {"path", Copy}});
         QTRY_VERIFY(QFile::exists(Copy)); QCOMPARE(Bytes(Copy), QByteArray("helper revision one\n"));
