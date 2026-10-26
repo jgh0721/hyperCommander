@@ -27,6 +27,11 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFontDialog>
+#include <QFormLayout>
+#include <QCheckBox>
+#include <QStyle>
+#include <QFontInfo>
+#include <QToolButton>
 #include <QLabel>
 #include <QJsonDocument>
 #include <QDateTime>
@@ -122,10 +127,11 @@ namespace hc::compare
         changes_->setObjectName("compareChanges");
         changes_->setRootIsDecorated(false); changes_->setUniformRowHeights(true);
         layout->setStretchFactor(0, 4); layout->setStretchFactor(1, 1); layout->setSizes({560, 140}); setCentralWidget(layout);
-        auto* tools = addToolBar(tr("비교"));
+        auto* tools = addToolBar(tr("비교")); tools->setObjectName("comparisonToolbar");
+        tools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         openFiles_ = tools->addAction(tr("파일 열기"), this, &CompareWindow::openInputs);
         openFolders_ = tools->addAction(tr("디렉터리 열기"), this, &CompareWindow::openDirectories);
-        tools->addAction(tr("다시 비교"), this, [this] { start(true); });
+        auto* compareAgain = tools->addAction(tr("다시 비교"), this, [this] { start(true); });
         reintegrate_ = tools->addAction(tr("원본 변경 재통합"), this, [this] { if (merge_ && !busy()) start(true, true); });
         reintegrate_->setObjectName("reintegrateResult"); reintegrate_->setEnabled(false);
         reintegrate_->setToolTip(tr("수동 RESULT와 새 원본의 변경을 재통합합니다. 겹치는 수정은 적용하지 않으며, 성공 후 전체 재검토가 필요합니다. 실행 취소할 수 있습니다."));
@@ -150,7 +156,8 @@ namespace hc::compare
             catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
         }));
         for (auto* action : wholeActions_) action->setEnabled(false);
-        addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합"));
+        addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합")); mergeTools->setObjectName("mergeToolbar");
+        mergeTools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         auto* previous = mergeTools->addAction(tr("이전 차이"), this, [this] { navigateBlock(-1); });
         auto* next = mergeTools->addAction(tr("다음 차이"), this, [this] { navigateBlock(1); });
         previous->setShortcut(QKeySequence("Shift+F7")); next->setShortcut(QKeySequence("F7"));
@@ -163,6 +170,7 @@ namespace hc::compare
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
         auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        fileMenu->addActions({openFiles_, openFolders_, save_}); fileMenu->addSeparator();
         auto* threeFolders = fileMenu->addAction(tr("독립 3폴더 열기…"), this, [this] { openDirectories(true); }); threeFolders->setObjectName("openThreeDirectories");
         connect(openFolders_, &QAction::changed, threeFolders, [this, threeFolders] { threeFolders->setEnabled(openFolders_->isEnabled()); });
         exportReport_ = fileMenu->addAction(tr("비교 보고서 내보내기…"), this, [this] {
@@ -305,10 +313,34 @@ namespace hc::compare
             if (!Enabled && overview_->hasFocus()) overview_->FocusSource();
             QSettings{}.setValue("view/overview", Enabled); overview_->setVisible(Enabled && scroll_);
         });
-        auto* dark = viewMenu->addAction(tr("Dark")); dark->setCheckable(true); dark->setChecked(dark_);
+        auto* dark = viewMenu->addAction(tr("Dark")); dark->setObjectName("darkTheme"); dark->setCheckable(true); dark->setChecked(dark_);
         connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
         for (const auto& role : {QString("ui"), QString("list"), QString("text")})
             viewMenu->addAction(role.toUpper() + tr(" 글꼴"), this, [this, role] { chooseFont(role); });
+        auto* settingsAction = viewMenu->addAction(tr("설정…"), this, &CompareWindow::showSettings);
+        settingsAction->setObjectName("openCompareSettings"); settingsAction->setShortcut(QKeySequence("Ctrl+,"));
+        tools->addSeparator(); tools->addAction(settingsAction);
+        const auto icon = [this](QAction* Action, QStyle::StandardPixmap Symbol) {
+            Action->setProperty("compareIcon", int(Symbol));
+            Action->setIcon(style()->standardIcon(Symbol)); Action->setIconVisibleInMenu(true);
+        };
+        icon(openFiles_, QStyle::SP_FileIcon); icon(openFolders_, QStyle::SP_DirOpenIcon);
+        icon(threeFolders, QStyle::SP_DirOpenIcon); icon(compareAgain, QStyle::SP_BrowserReload);
+        icon(reintegrate_, QStyle::SP_BrowserReload); icon(cancel_, QStyle::SP_BrowserStop);
+        for (auto* action : {save_, saveWork_, exportDecisions_, exportReport_}) icon(action, QStyle::SP_DialogSaveButton);
+        for (auto* action : {loadWork_, importDecisions_}) icon(action, QStyle::SP_DialogOpenButton);
+        for (auto* action : {recoveryAction_, recoverWork_}) icon(action, QStyle::SP_DialogResetButton);
+        icon(gitSetup, QStyle::SP_FileLinkIcon); icon(settingsAction, QStyle::SP_FileDialogDetailedView);
+        icon(undo_, QStyle::SP_ArrowBack); icon(redo_, QStyle::SP_ArrowForward);
+        icon(previous, QStyle::SP_ArrowUp); icon(next, QStyle::SP_ArrowDown);
+        icon(wholeActions_[0], QStyle::SP_ArrowLeft); icon(wholeActions_[1], QStyle::SP_ArrowRight);
+        icon(wholeActions_[2], QStyle::SP_DialogApplyButton);
+        const QStyle::StandardPixmap blockIcons[]{QStyle::SP_ArrowLeft, QStyle::SP_ArrowRight, QStyle::SP_ArrowUp,
+            QStyle::SP_ArrowForward, QStyle::SP_ArrowBack, QStyle::SP_TrashIcon, QStyle::SP_DialogApplyButton};
+        for (qsizetype i = 0; i < blockActions_.size(); ++i) icon(blockActions_[i], blockIcons[i]);
+        for (auto* action : findActions_) icon(action, QStyle::SP_FileDialogContentsView);
+        for (auto* action : viewMenu->actions()) if (!action->isSeparator() && action->icon().isNull()) icon(action, QStyle::SP_FileDialogDetailedView);
+        for (auto* action : encodingActions_) icon(action, QStyle::SP_FileDialogInfoView);
         state_ = new QLabel(this); statusBar()->addWidget(state_, 1);
         state_->setObjectName("compareStatus");
         inlineStatus_ = new QLabel(this); inlineStatus_->setObjectName("compareInlineStatus");
@@ -416,6 +448,12 @@ namespace hc::compare
         });
         applyAppearance();
         setupInputEditing();
+        for (auto* action : inputSaveActions_) icon(action, QStyle::SP_DialogSaveButton);
+        for (const auto& entry : {std::pair{"compareFindPrevious", QStyle::SP_ArrowUp},
+            std::pair{"compareFindNext", QStyle::SP_ArrowDown}, std::pair{"compareFindAll", QStyle::SP_FileDialogContentsView},
+            std::pair{"compareFindClose", QStyle::SP_DialogCloseButton}})
+            if (auto* button = find_->findChild<QToolButton*>(entry.first))
+            { button->setIcon(style()->standardIcon(entry.second)); button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); }
         if (!request_.file1_.isEmpty()) QTimer::singleShot(0, this, [this] { if (!canceled_->load()) start(); });
         else state_->setText(tr("파일 열기 또는 -file1/-file2로 비교를 시작하십시오."));
     }
@@ -1074,6 +1112,8 @@ namespace hc::compare
     void CompareWindow::applyAppearance()
     {
         auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+        for (auto* action : findChildren<QAction*>()) if (action->property("compareIcon").isValid())
+            action->setIcon(style()->standardIcon(QStyle::StandardPixmap(action->property("compareIcon").toInt())));
         qApp->setFont(uiFont_); changes_->setFont(listFont_); find_->SetListFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
         if (extensionView_) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->SetDark(dark_); extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
         const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
@@ -1103,6 +1143,59 @@ namespace hc::compare
         applyInlineHighlights(); overview_->SetDark(dark_);
         QSettings settings; settings.setValue("theme/dark", dark_); settings.setValue("fonts/ui", uiFont_.toString());
         settings.setValue("fonts/list", listFont_.toString()); settings.setValue("fonts/text", textFont_.toString());
+    }
+    void CompareWindow::showSettings()
+    {
+        QDialog dialog(this); dialog.setObjectName("compareSettingsDialog");
+        dialog.setWindowTitle(tr("HyperCompare 설정")); dialog.resize(560, 460);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* tabs = new QTabWidget(&dialog); layout->addWidget(tabs);
+        auto* appearance = new QWidget(tabs); auto* form = new QFormLayout(appearance);
+        auto* theme = new QComboBox(appearance); theme->setObjectName("settingsTheme");
+        theme->addItems({tr("밝게"), tr("어둡게")}); theme->setCurrentIndex(dark_ ? 1 : 0);
+        form->addRow(tr("테마(&T)"), theme);
+        QFont fonts[]{uiFont_, listFont_, textFont_};
+        const QString labels[]{tr("화면 글꼴"), tr("목록 글꼴"), tr("본문 글꼴")};
+        for (int i = 0; i < 3; ++i)
+        {
+            auto* button = new QPushButton(appearance); button->setObjectName(QString("settingsFont%1").arg(i));
+            const auto describe = [button](const QFont& Font) { button->setText(QString("%1 · %2 pt").arg(Font.family()).arg(QFontInfo(Font).pointSizeF())); };
+            describe(fonts[i]); form->addRow(labels[i], button); button->setAccessibleName(labels[i]);
+            connect(button, &QPushButton::clicked, &dialog, [&, i, describe] {
+                bool ok = false; const auto selected = QFontDialog::getFont(&ok, fonts[i], &dialog, labels[i]);
+                if (ok) { fonts[i] = selected; describe(selected); }
+            });
+        }
+        tabs->addTab(appearance, tr("화면과 글꼴"));
+        auto* comparison = new QWidget(tabs); auto* options = new QVBoxLayout(comparison);
+        const QList<QAction*> actions{alignAll_, alignRows_, syncScroll_, inlineHighlights_, showOverview_};
+        QList<QCheckBox*> checks;
+        for (qsizetype i = 0; i < actions.size(); ++i)
+        {
+            auto* check = new QCheckBox(actions[i]->text(), comparison); check->setObjectName(QString("settingsView%1").arg(i));
+            check->setChecked(actions[i]->isChecked()); check->setToolTip(actions[i]->toolTip()); options->addWidget(check); checks.append(check);
+        }
+        auto* hint = new QLabel(tr("표시 옵션은 현재 비교에 적용되며 다음에 여는 비교에도 유지됩니다."), comparison);
+        hint->setWordWrap(true); options->addWidget(hint); options->addStretch(); tabs->addTab(comparison, tr("비교 표시"));
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, &dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(tr("확인")); buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
+        buttons->button(QDialogButtonBox::Apply)->setText(tr("적용")); layout->addWidget(buttons);
+        const auto apply = [&] {
+            // Apply through the existing actions so the menu and rendered view agree.
+            for (auto* widget : QApplication::topLevelWidgets()) if (auto* window = dynamic_cast<CompareWindow*>(widget))
+            {
+                window->dark_ = theme->currentIndex() == 1;
+                window->uiFont_ = fonts[0]; window->listFont_ = fonts[1]; window->textFont_ = fonts[2];
+                const QList<QAction*> targets{window->alignAll_, window->alignRows_, window->syncScroll_, window->inlineHighlights_, window->showOverview_};
+                for (qsizetype i = 0; i < targets.size(); ++i) targets[i]->setChecked(checks[i]->isChecked());
+                if (auto* dark = window->findChild<QAction*>("darkTheme")) { QSignalBlocker block(dark); dark->setChecked(window->dark_); }
+                window->applyAppearance();
+            }
+        };
+        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, apply);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] { apply(); dialog.accept(); });
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        dialog.exec();
     }
     void CompareWindow::chooseFont(const QString& Role)
     {

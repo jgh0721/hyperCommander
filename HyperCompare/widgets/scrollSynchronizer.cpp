@@ -66,11 +66,22 @@ namespace hc::compare
     {
         if (aligned_ == Aligned) return;
         std::array<std::size_t, 2> lines{};
+        std::array<bool, 2> atTop{};
         for (unsigned side = 0; side < 2; ++side)
-            lines[side] = std::size_t(editors_[side]->send(SCI_DOCLINEFROMVISIBLE, uptr_t(view(side).top_)));
+        {
+            const auto top = view(side).top_; atTop[side] = top == 0;
+            lines[side] = std::size_t(editors_[side]->send(SCI_DOCLINEFROMVISIBLE, uptr_t(top)));
+        }
         ClearPadding(); applying_ = true; aligned_ = Aligned;
         if (aligned_) applyPadding();
-        for (unsigned side = 0; side < 2; ++side) move(side, lines[side]);
+        for (unsigned side = 0; side < 2; ++side)
+        {
+            // The first document line may follow leading alignment padding.
+            // Preserve the viewport origin so synchronizing an empty source
+            // does not scroll the other source's first insertion out of view.
+            if (atTop[side]) editors_[side]->send(SCI_SETFIRSTVISIBLELINE, 0);
+            else move(side, lines[side]);
+        }
         remember(); applying_ = false;
         if (enabled_) Synchronize(0);
     }

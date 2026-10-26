@@ -82,6 +82,7 @@ namespace hc::compare
         void updateGutters();
         void chooseGutter(std::uint64_t Id, std::uint64_t Revision, Resolution Choice);
         void applyInlineHighlights();
+        void showSettings();
         void chooseFont(const QString& Role);
         void save();
         void chooseSide(int Index);

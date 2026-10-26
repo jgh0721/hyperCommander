@@ -43,6 +43,9 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QSettings>
+#include <QDialogButtonBox>
+#include <QToolBar>
+#include <QWidgetAction>
 #include <QLabel>
 #include <QTreeWidget>
 #include <QAction>
@@ -738,10 +741,16 @@ private slots:
             CompareWindow window(r); window.show();
             QTRY_VERIFY(window.findChild<ScintillaEditBase*>("RESULT")); auto* output = window.findChild<ScintillaEditBase*>("RESULT");
             action(window, QString::fromUtf8("왼쪽·오른쪽 표시 줄 정렬"))->setChecked(true);
+            if (scenario == 0)
+            {
+                auto* rightEditor = window.findChild<ScintillaEditBase*>("RIGHT"); QVERIFY(rightEditor);
+                QCOMPARE(rightEditor->send(SCI_GETFIRSTVISIBLELINE), sptr_t(0));
+            }
             auto gutters = window.findChildren<ChunkGutter*>(); QCOMPARE(gutters.size(), 2);
             std::sort(gutters.begin(), gutters.end(), [](auto* A, auto* B) { return A->SourceSide() < B->SourceSide(); });
             QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action0"));
-            auto* take = gutters[1]->findChild<QToolButton*>("chunk1_action0"); QTRY_VERIFY(take->isVisible());
+            auto* take = gutters[1]->findChild<QToolButton*>("chunk1_action0");
+            QTRY_VERIFY(take->isVisible());
             take->setFocus(); QTest::keyClick(take, Qt::Key_Space); QCOMPARE(contents(output), right);
             QTRY_VERIFY(gutters[1]->findChild<QToolButton*>("chunk1_action1")->isVisible());
             QTest::mouseClick(gutters[1]->findChild<QToolButton*>("chunk1_action1"), Qt::LeftButton);
@@ -1071,6 +1080,66 @@ private slots:
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void settingsApplyCancelAndIcons()
+    {
+        QSettings settings; settings.setValue("theme/dark", false);
+        CompareWindow window(Request{}); window.show();
+        CompareWindow other(Request{});
+        auto* open = window.findChild<QAction*>("openCompareSettings"); QVERIFY(open); QVERIFY(!open->icon().isNull());
+        for (const auto& name : {"comparisonToolbar", "mergeToolbar"})
+        {
+            auto* toolbar = window.findChild<QToolBar*>(name); QVERIFY(toolbar);
+            for (auto* item : toolbar->actions()) if (!item->isSeparator() && !qobject_cast<QWidgetAction*>(item)) QVERIFY2(!item->icon().isNull(), qPrintable(item->text()));
+        }
+        bool canceled = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>("compareSettingsDialog"); if (!dialog) return;
+            auto* theme = dialog->findChild<QComboBox*>("settingsTheme");
+            auto* highlight = dialog->findChild<QCheckBox*>("settingsView3");
+            const auto capture = qEnvironmentVariable("HC_COMPARE_SETTINGS_CAPTURE");
+            if (!capture.isEmpty())
+            {
+                QTest::qWait(150); dialog->grab().save(capture + "/settings-light.png");
+                window.grab().save(capture + "/toolbar-light.png");
+                dialog->findChild<QTabWidget*>()->setCurrentIndex(1);
+                dialog->grab().save(capture + "/settings-options.png");
+            }
+            if (theme && highlight) { theme->setCurrentIndex(1); highlight->setChecked(false); canceled = true; }
+            dialog->reject();
+        });
+        open->trigger(); QVERIFY(canceled);
+        QVERIFY(!settings.value("theme/dark").toBool()); QVERIFY(settings.value("view/inlineHighlights").toBool());
+        bool applied = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>("compareSettingsDialog"); if (!dialog) return;
+            auto* theme = dialog->findChild<QComboBox*>("settingsTheme");
+            auto* highlight = dialog->findChild<QCheckBox*>("settingsView3");
+            auto* buttons = dialog->findChild<QDialogButtonBox*>();
+            if (theme && highlight && buttons)
+            {
+                theme->setCurrentIndex(1); highlight->setChecked(false);
+                buttons->button(QDialogButtonBox::Apply)->click();
+                applied = settings.value("theme/dark").toBool() && !settings.value("view/inlineHighlights").toBool()
+                    && other.findChild<QAction*>("darkTheme")->isChecked();
+                QTest::qWait(150);
+                const auto capture = qEnvironmentVariable("HC_COMPARE_SETTINGS_CAPTURE");
+                if (!capture.isEmpty()) { dialog->grab().save(capture + "/settings-dark.png"); window.grab().save(capture + "/toolbar-dark.png"); }
+                theme->setCurrentIndex(0); highlight->setChecked(true);
+            }
+            dialog->reject();
+        });
+        open->trigger(); QVERIFY(applied); QVERIFY(settings.value("theme/dark").toBool()); QVERIFY(!settings.value("view/inlineHighlights").toBool());
+        CompareWindow restored(Request{}); QVERIFY(restored.findChild<QAction*>("darkTheme")->isChecked());
+        bool accepted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>("compareSettingsDialog"); if (!dialog) return;
+            auto* theme = dialog->findChild<QComboBox*>("settingsTheme"); auto* buttons = dialog->findChild<QDialogButtonBox*>();
+            if (theme && buttons) { theme->setCurrentIndex(0); accepted = true; buttons->button(QDialogButtonBox::Ok)->click(); }
+            else dialog->reject();
+        });
+        open->trigger(); QVERIFY(accepted); QVERIFY(!settings.value("theme/dark").toBool());
+        QVERIFY(!other.findChild<QAction*>("darkTheme")->isChecked());
     }
     void largeEmptySourceAlignment()
     {
