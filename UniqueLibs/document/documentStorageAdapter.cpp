@@ -43,7 +43,7 @@ namespace hc::document
             if (!Image && FileSize > Limit) return Error{ErrorCategory::BudgetExceeded, "p0-text-byte-limit"};
             const auto Before=Revision?ImageDecodeCache::Signature(File):QByteArray{};
             QByteArray Bytes;if(FileSize>=0&&FileSize<=64*1024*1024)Bytes.reserve(FileSize);
-            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};if(Digest)Digest->addData(Chunk);Bytes+=Chunk;if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
+            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};ReadTrace.AddBytes(Chunk.size());if(Digest)Digest->addData(Chunk);Bytes+=Chunk;if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
             if (File.error() != QFileDevice::NoError || (!Image && Bytes.size() > Limit) || !File.atEnd())
                 return Error{ErrorCategory::Unavailable, "document-read-incomplete"};
             if(Revision){const auto After=ImageDecodeCache::Signature(File);if(!Before.isEmpty()&&Before!=After)return Error{ErrorCategory::StaleRevision,"document-changed-during-read"};*Revision=After;}

@@ -1,4 +1,5 @@
 ﻿#include "pdf/QPDFView.h"
+#include "UniqueLibs/document/imagePerformance.hpp"
 
 #include "core/ThemeManager.h"
 #include "core/ToolbarIcons.h"
@@ -922,6 +923,7 @@ QImage QPDFView::renderContinuousImage(qreal scale)
 
 void QPDFView::renderCurrentPageNow()
 {
+    hc::document::ImageTraceSpan RenderTrace("pdf.render",m_filePath);
     if (!m_document || m_pageCount <= 0 || m_currentPage < 0 || m_currentPage >= m_pageCount)
         return;
 

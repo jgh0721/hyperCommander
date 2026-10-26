@@ -1,4 +1,5 @@
 ﻿#include "text/QTextView.h"
+#include "UniqueLibs/document/imagePerformance.hpp"
 #include "text/ITextEditorBackend.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include "pdf/QPDFView.h"
@@ -19,6 +20,7 @@ ITextEditorBackend* QTextView::Backend() const { return m_editor; }
 QString QTextView::Content() const { return m_editor ? m_editor->text() : QString{}; }
 void QTextView::LoadContent(const QString& Text, const QString& Path, const QString& Encoding)
 {
+    hc::document::ImageTraceSpan LoadTrace("text.attach",Path);
     closeFile(); m_hotExitEnabled=false; m_filePath=Path; m_encoding=m_detectedEncoding=Encoding;
     m_document.setPreviewOnly(false);m_document.setTruncated(false);
     auto Ending = detectLineEnding(Text);
@@ -38,6 +40,7 @@ void QTextView::ReplaceContent(const QString& Text)
 void QTextView::CommitContent() { if(m_editor)m_editor->setModified(false); }
 bool QPDFView::LoadContent(const QByteArray& Bytes, const QString& Path)
 {
+    hc::document::ImageTraceSpan LoadTrace("pdf.open",Path);
     closeFile();m_fileData=Bytes;m_filePath=Path;
     m_document=FPDF_LoadMemDocument64(m_fileData.constData(),m_fileData.size(),nullptr);
     if(!m_document) { m_fileData.clear();return false; }

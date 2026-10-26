@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "UniqueLibs/document/imagePerformance.hpp"
 #include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
 #include "epubSourceEditor.hpp"
@@ -81,6 +82,7 @@ namespace hc::document
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
+        ImageTraceSpan LoadTrace("document.attach-view",Input.path_);
         QString RetryLocator;
         if(epubEditor_ && !epubEditor_->IsModified() && Input.hash_==QCryptographicHash::hash(epubBytes_,QCryptographicHash::Sha256))RetryLocator=currentEpub()->ViewState()["locator"].toString();
         else if(epub_ && epubSourceHash_==Input.hash_) {
