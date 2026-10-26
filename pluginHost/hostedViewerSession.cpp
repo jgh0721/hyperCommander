@@ -30,6 +30,35 @@ namespace hc::plugins
             if(Entry.locator_.kind_==LocatorKind::Archive&&Entry.locator_.nesting_.size()==1)return {{"path",QString::fromUtf8(Entry.locator_.root_)},{"entry",QString::fromUtf8(Entry.locator_.nesting_.front().entry_)}};
             return {};
         }
+        bool IsDirectBook(const EntrySnapshot& Entry)
+        {
+            return Entry.locator_.kind_==LocatorKind::Local && !Entry.directory_
+                && QStringList{"zip","cbz","rar","cbr","7z","cb7"}.contains(QFileInfo(QString::fromUtf8(Entry.locator_.root_)).suffix().toLower());
+        }
+        // Only the approved built-in reader may borrow the original archive.
+        // Keep a read-only handle without write/delete sharing for the complete
+        // viewer lifetime; neither a copy nor a full archive hash is needed.
+        class BookLease final : public IMaterializedFileLease
+        {
+        public:
+            BookLease(EntrySnapshot Entry,HANDLE Pin):entry_(std::move(Entry)),pin_(Pin){}
+            ~BookLease()override{CloseHandle(pin_);}
+            std::string LocalPath()const override{return entry_.locator_.root_;}
+            EntrySnapshot Describe()const override{return entry_;}
+            std::size_t Depth()const override{return 0;}
+        private:
+            EntrySnapshot entry_;HANDLE pin_;
+        };
+        Result<std::shared_ptr<IMaterializedFileLease>> BorrowBook(const std::shared_ptr<IContentSource>& Source,OperationContext Context)
+        {
+            const auto Entry=Source->Describe();const auto Path=QString::fromUtf8(Entry.locator_.root_);
+            if(!IsDirectBook(Entry)||!QFileInfo(Path).isAbsolute())return Invalid("viewer-book-path");
+            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+            if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-book-pin:"+std::to_string(GetLastError())};
+            std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<BookLease>(Entry,Pin);
+            auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
+            return Lease;
+        }
         Result<QByteArray> ExtensionBytes(const EntrySnapshot& Entry)
         {
             QStringDecoder Decoder(QStringDecoder::Utf8); const QString Name = Decoder(Entry.name_);
@@ -219,6 +248,7 @@ namespace hc::plugins
         std::unique_ptr<PluginProcess> Host;
         std::unique_ptr<DocumentViewerClient> Document;
         bool NoMatch = false;
+        bool DirectBookAllowed=false;
         const auto CloseHost = [&] {
             if (!Host) { ArchiveBroker.reset(); return; }
             Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
@@ -236,6 +266,12 @@ namespace hc::plugins
             WlxDetectionInput Detection; bool PrefixReady = false, ExtensionReady = false, FatalContent = false;
             const auto Materialize = [&]() -> Result<Unit> {
                 if (Lease) return Unit{};
+                if(DirectBookAllowed && IsDirectBook(Source->Describe())){
+                    auto Borrowed=BorrowBook(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
+                    Lease=std::move(Borrowed.Value());
+                    if(ArchiveBroker)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
+                    return Unit{};
+                }
                 auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
                 if (!Materializer) return Invalid("viewer-materializer-required");
                 auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
@@ -279,6 +315,8 @@ namespace hc::plugins
                 auto Applies = Application.Value().Matches(QString::fromStdString(Entry->name_), Entry->size_, ApplicationPrefix);
                 if (!Applies.HasValue()) return Applies.Failure();
                 if (!Applies.Value()) return false;
+                DirectBookAllowed=Inspected.Value().manifest_.compatibility_=="hyperviewer-v1" && Inspected.Value().manifest_.id_=="builtin.hyperviewer";
+                if(!DirectBookAllowed && dynamic_cast<BookLease*>(Lease.get()))Lease.reset();
                 if (!Policy)
                 {
                     auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
@@ -371,15 +409,16 @@ namespace hc::plugins
                         if (std::chrono::steady_clock::now() >= Deadline) return Error{ErrorCategory::Unavailable, "document-initial-slot-timeout"};
                         std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     }
-                    auto Writer = Options.writer_;
-                    if (!Writer && Entry->locator_.kind_ == LocatorKind::Local && !(Entry->attributes_ & 1u))
+                    const bool DirectBook=DirectBookAllowed && IsDirectBook(*Entry);
+                    auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Options.writer_;
+                    if (!DirectBook && !Writer && Entry->locator_.kind_ == LocatorKind::Local && !(Entry->attributes_ & 1u))
                         Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
                     QFile Input(QString::fromStdString(Lease->LocalPath())); QByteArray Hash;
-                    if (Input.open(QIODevice::ReadOnly)) { QCryptographicHash Digest(QCryptographicHash::Sha256); if (Digest.addData(&Input)) Hash = Digest.result(); }
+                    if (!DirectBook && Input.open(QIODevice::ReadOnly)) { QCryptographicHash Digest(QCryptographicHash::Sha256); if (Digest.addData(&Input)) Hash = Digest.result(); }
                     const auto Token = Document->Bind(*Entry, Writer, Lease, Hash);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
                     auto Bound = Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -439,12 +478,14 @@ namespace hc::plugins
                     else {
                         QJsonArray Inputs;
                         for (const auto& Input : Command->inputs_) {
-                            auto Materialized = Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
+                            const bool DirectBook=bool(ArchiveBroker) && IsDirectBook(Input.source_->Describe());
+                            if(!DirectBook && !Materializer){auto Created=Factory();if(!Created.HasValue()){Result=Created.Failure();break;}Materializer=std::move(Created.Value());}
+                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
                             if (!Materialized.HasValue()) { Result = Materialized.Failure(); break; }
                             const auto Entry = Input.source_->Describe();
                             if(ArchiveBroker){ArchiveBroker->Allow(QString::fromStdString(Materialized.Value()->LocalPath()));const auto Origin=ReadingSource(Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());}
-                            auto Writer = Input.writer_;
-                            if (!Writer && Entry.locator_.kind_ == LocatorKind::Local && !(Entry.attributes_ & 1u))
+                            auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Input.writer_;
+                            if (!DirectBook && !Writer && Entry.locator_.kind_ == LocatorKind::Local && !(Entry.attributes_ & 1u))
                                 Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
                             const auto Token = Document->Bind(Entry, Writer, Materialized.Value());
                             if (Token.isEmpty()) { Result = Invalid("document-source-binding"); break; }

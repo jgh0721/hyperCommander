@@ -1035,7 +1035,8 @@ namespace hc::document
                     for(const auto& Tab:documents_) if(Tab->hostSlot_ && Tab->sourceToken_.isEmpty() && !Tab->loading_ && !Tab->saving_
                         && !Tab->closeRequested_ && !closingWorkspace_ && !Tab->Dirty() && (!Tab->pane_->IsBusy() || Tab->pane_->IsEpub()) && Tab->session_->Snapshot().lifecycle_==DocumentLifecycle::Ready
                         && QFileInfo(Tab->path_).absoluteFilePath().compare(QFileInfo(Item["path"].toString()).absoluteFilePath(),Qt::CaseInsensitive)==0
-                        && QString::fromLatin1(Tab->input_.hash_.toHex())==Item["sha256"].toString()) {
+                        && ((Item["readOnlyBook"].toBool() && Tab->input_.book_ && !Item["broker"].toBool())
+                            || QString::fromLatin1(Tab->input_.hash_.toHex())==Item["sha256"].toString())) {
                         // The SDK already decoded this exact snapshot. Transfer its
                         // original-provider binding without decoding/creating a second view.
                         const auto Begun=Tab->session_->BeginOpen(true);
