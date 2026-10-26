@@ -1127,7 +1127,9 @@ private slots:
         QTRY_VERIFY(!Model->IsLoading() && Panel->CurrentPath().endsWith("folder"));
         QTest::keyClick(List, Qt::Key_Backspace); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains("photo01.png"));
         List->verticalScrollBar()->setValue(List->verticalScrollBar()->maximum()); QCoreApplication::processEvents();
+        const auto PreviousPath = Panel->CurrentPath();
         Panel->AddTab(true); QTRY_COMPARE(TileModel->Provider()->PendingCount(), 0); QCOMPARE(TileModel->Provider()->CacheCostKb(), 0);
+        QTRY_COMPARE(Panel->CurrentPath(), PreviousPath);
         Panel->CloseTab(); QTRY_VERIFY(View->isVisible()); QVERIFY(View->IsThumbnailMode());
         auto Options = General["thumbnails"].toObject(); Options["autoSwitch"] = true; Options["autoPercent"] = 70; General["thumbnails"] = Options;
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); View->ApplyDisplaySettings(); QVERIFY(View->SetListMode("auto")); QTRY_VERIFY(View->IsThumbnailMode());

@@ -189,7 +189,7 @@ void CmpPanel::AddTab(bool Navigate)
             ui.tabWidget->setCurrentIndex(Target);
         }
     }
-    if (Navigate) on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
+    on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
     View->AdjustSizeToContents();
 }
 
@@ -1139,8 +1139,10 @@ QString CmpPanel::CurrentPath() const
     const int Index = ui.tabWidget->currentIndex();
     if (Index < 0 || Index >= vecTabStates.size()) return {};
     const auto State = vecTabStates[Index];
-    const auto Location = State->pending_ ? State->workspace_.location_ : static_cast<CFSModel*>(State->Model)->WorkspaceLocation();
     const auto* Model = static_cast<CFSModel*>(State->Model);
+    // Tab activation can reenter through focus events before materialization.
+    if (!Model) return QString::fromStdString(State->workspace_.location_.root_);
+    const auto Location = State->pending_ ? State->workspace_.location_ : Model->WorkspaceLocation();
     return State->pending_ || Model->HasPlaceholder() ? QString::fromStdString(Location.root_) : Model->GetCurrentPathWithRoot();
 }
 QString CmpPanel::Search() const
