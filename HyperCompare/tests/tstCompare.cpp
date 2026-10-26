@@ -892,18 +892,47 @@ private slots:
         write(request.file1_, "text\n"); result = Execute(request, cancel, false);
         QVERIFY(result.engineProbe_["pagedEditAndMergeTwo"].toBool());
     }
+    void engineProbeDirectoryModesAndConsole_data()
+    {
+        QTest::addColumn<QString>("ThirdRole");
+        QTest::newRow("two-folders") << QString{};
+        QTest::newRow("independent-three-folders") << QString("file3");
+        QTest::newRow("base-three-folders") << QString("base");
+    }
     void engineProbeDirectoryModesAndConsole()
     {
-        QTemporaryDir dir; Request request; request.mode_ = "probe"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right"); request.file3_ = dir.filePath("third");
-        QVERIFY(QDir().mkpath(request.file1_)); QVERIFY(QDir().mkpath(request.file2_)); QVERIFY(QDir().mkpath(request.file3_));
-        auto result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
-        QCOMPARE(result.engineProbe_["reason"].toString(), "IndependentThreeUnsupported");
-        request.base_ = request.file3_; request.file3_.clear(); result = Execute(request, std::make_shared<std::atomic_bool>(false), false);
-        QCOMPARE(result.exitCode_, 0); QVERIFY(result.engineProbe_["mergeBaseAvailable"].toBool());
-        QCOMPARE(result.engineProbe_["inputs"].toArray()[0].toObject()["validation"].toString(), "root-only");
-        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-mode", "probe", "-file1", request.file1_, "-file2", request.file2_, "-format", "json"});
+        QFETCH(QString, ThirdRole);
+        QTemporaryDir dir; Request request; request.mode_ = "probe"; request.file1_ = dir.filePath("left"); request.file2_ = dir.filePath("right");
+        const auto third = dir.filePath("third");
+        QVERIFY(QDir().mkpath(request.file1_)); QVERIFY(QDir().mkpath(request.file2_)); QVERIFY(QDir().mkpath(third));
+        write(request.file1_ + "/file.txt", "left\n"); write(request.file2_ + "/file.txt", "right\n"); write(third + "/file.txt", "third\n");
+        if (ThirdRole == "file3") request.file3_ = third;
+        if (ThirdRole == "base") request.base_ = third;
+        const auto canceled = std::make_shared<std::atomic_bool>(false);
+        const auto result = Execute(request, canceled, false);
+        QCOMPARE(result.exitCode_, 0); QVERIFY(result.error_.isEmpty());
+        const auto& probe = result.engineProbe_;
+        QVERIFY(probe["available"].toBool()); QVERIFY(probe["compareAvailable"].toBool()); QVERIFY(probe["reason"].toString().isEmpty());
+        QCOMPARE(probe["mergeTwoAvailable"].toBool(), ThirdRole.isEmpty());
+        QCOMPARE(probe["mergeBaseAvailable"].toBool(), ThirdRole == "base");
+        QVERIFY(!probe["outputValidated"].toBool()); QVERIFY(result.inputs_.isEmpty()); QCOMPARE(result.commit_, "NotRequested");
+        QCOMPARE(probe["inputs"].toArray().size(), ThirdRole.isEmpty() ? 2 : 3);
+        QCOMPARE(probe["inputs"].toArray()[0].toObject()["validation"].toString(), "root-only");
+        const auto directory = probe["engine"].toObject();
+        QCOMPARE(directory["id"].toString(), "directory.native");
+        QCOMPARE(directory["compare"].toObject()["independentThree"], Capabilities()["directoryIndependentThree"]);
+        QVERIFY(directory["compare"].toObject()["independentThree"].toBool());
+        auto comparison = request; comparison.mode_ = "directory";
+        const auto compared = Execute(comparison, canceled, false);
+        QCOMPARE(compared.exitCode_, 1); QVERIFY(compared.error_.isEmpty()); QCOMPARE(compared.completion_, "Complete");
+        QCOMPARE(compared.operation_, ThirdRole.isEmpty() ? QString("directory2") : ThirdRole == "base" ? QString("directory3") : QString("directory-compare3"));
+        QStringList args{"-mode", "probe", "-file1", request.file1_, "-file2", request.file2_, "-format", "json"};
+        if (!ThirdRole.isEmpty()) args << "-" + ThirdRole << third;
+        QProcess process; process.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", args);
         QVERIFY(process.waitForFinished(10000)); QCOMPARE(process.exitCode(), 0);
-        const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object(); QCOMPARE(report["engineProbe"].toObject()["engine"].toObject()["id"].toString(), "directory.native");
+        const auto report = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+        QCOMPARE(report["engineProbe"].toObject(), probe);
+        QCOMPARE(read(request.file1_ + "/file.txt"), QByteArray("left\n")); QCOMPARE(read(request.file2_ + "/file.txt"), QByteArray("right\n")); QCOMPARE(read(third + "/file.txt"), QByteArray("third\n"));
         QVERIFY(!Parse({"hc", "-mode", "probe", "-file1", request.file1_, "-file2", request.file2_}, false).error_.isEmpty());
     }
     void functionRelationsMovementAndModification()
