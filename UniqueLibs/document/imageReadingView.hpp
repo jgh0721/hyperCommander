@@ -77,6 +77,11 @@ class ImageReadingView final : public QAbstractScrollArea
     QList<Placement> placements() const;
     void rebuild(bool KeepAnchor = true);
     void request(const Placement &Place, const QRect &Tile);
+    void prefetch();
+    bool prefetching_ = false;
+    int prefetchPage_ = -1;
+    QSet<int> prefetched_;
+    std::shared_ptr<std::stop_source> prefetchStop_ = std::make_shared<std::stop_source>();
     void changed();
     void persist();
     void invalidateRenders();

@@ -121,6 +121,7 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                 }
                 if (Previous != index_)
                 {
+                    if(prefetchPage_!=index_)prefetchStop_->request_stop();
                     resetAnimation();
                     currentImage_ = {};
                 }
@@ -196,7 +197,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     sources_.clear();
     pendingSourcePages_.clear();
     pending_.clear();
-    pageErrors_.clear();
+    pageErrors_.clear();prefetched_.clear();
     error_.clear();
     index_ = Start;
     bookmark_ = {};
@@ -268,6 +269,7 @@ void ImageReadingView::invalidateRenders()
 }
 void ImageReadingView::Cancel()
 {
+    prefetchStop_->request_stop();
     invalidateRenders();
     bookStop_->request_stop();
     bookStop_ = std::make_shared<std::stop_source>();
@@ -545,8 +547,34 @@ void ImageReadingView::request(const Placement &P, const QRect &Tile)
             return Rendered{Original, Result.image_, Result.error_};
         }));
 }
+void ImageReadingView::prefetch()
+{
+    if(suspended_ || !book_ || prefetching_ || workers_ || CurrentImage().isNull())return;
+    int Page=index_+1;
+    while(Page<book_->pages_.size() && Page<=index_+2 && (sources_.contains(Page)||pageErrors_.contains(Page)||prefetched_.contains(Page)))++Page;
+    if(Page>=book_->pages_.size() || Page>index_+2 || pendingSourcePages_.contains(Page))return;
+    prefetching_=true;prefetchPage_=Page;pendingSourcePages_.insert(Page);prefetched_.insert(Page);
+    prefetchStop_->request_stop();prefetchStop_=std::make_shared<std::stop_source>();
+    const auto Stop=prefetchStop_;const auto Book=book_;const auto Generation=bookGeneration_;
+    auto* Watcher=new QFutureWatcher<storage::Result<ImagePageContent>>(this);
+    connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Page,Generation,Stop]{
+        auto Result=Watcher->result();DeleteCompletedImageWork(Watcher);prefetching_=false;prefetchPage_=-1;
+        if(Generation!=bookGeneration_)return;
+        pendingSourcePages_.remove(Page);
+        if(!Stop->stop_requested() && Result.HasValue()) {
+            const auto& Image=Result.Value().image_;
+            sources_.insert(Page,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));
+        }
+        viewport()->update();
+    });
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Book,Page,Stop]{
+        storage::OperationContext Context;Context.stopToken_=Stop->get_token();
+        return ReadImagePage(Book,Page,Context);
+    }));
+}
 void ImageReadingView::paintEvent(QPaintEvent *)
 {
+    QTimer::singleShot(0,this,&ImageReadingView::prefetch);
     QPainter Painter(viewport());
     Painter.fillRect(viewport()->rect(), palette().brush(QPalette::Base));
     if (!book_)
@@ -616,6 +644,7 @@ void ImageReadingView::GoTo(int Index, double Relative)
         resetAnimation();
         currentImage_ = {};
     }
+    if(prefetchPage_!=Index)prefetchStop_->request_stop();
     const bool NewPage = index_ != Index;
     index_ = Index;
     if (NewPage && mode_ != Webtoon)
