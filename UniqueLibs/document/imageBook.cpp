@@ -364,7 +364,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
         return Error("image-subpage");
     Content.image_ = Reader.read();
     Content.format_ = QString::fromLatin1(Reader.format());
-    if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !Content.bytes_.right(64).contains(QByteArray("\xff\xd9",2)))
+    if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !ImagePartialDecoder::HasCompleteJpeg(Content.bytes_))
         Content.warning_="image-jpeg-incomplete";
     if(Content.image_.isNull()){
         Content.image_=ImagePartialDecoder::Decode(Content.bytes_);

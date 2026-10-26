@@ -464,15 +464,38 @@ class ImageReadingTests : public QObject
             if(!Preview.isNull()&&Preview.pixelColor(0,Preview.height()-1).alpha()==0){QVERIFY(Preview.text("PreviewRows").toInt()>0);Found=true;break;}}
         QVERIFY2(Found,"grid AVIF must expose completed rows before the remaining tiles arrive");
     }
+    void jpegTrailingPayloadRemainsComplete_data()
+    {
+        QTest::addColumn<int>("TrailingBytes");
+        QTest::newRow("plain") << 0;
+        QTest::newRow("camera-footer") << 256;
+        QTest::newRow("motion-payload") << 1024 * 1024;
+    }
+    void jpegTrailingPayloadRemainsComplete()
+    {
+        QFETCH(int, TrailingBytes);
+        QTemporaryDir Root; QImage Image(120, 160, QImage::Format_RGB32); Image.fill(Qt::red);
+        QByteArray Bytes; QBuffer Buffer(&Bytes); Buffer.open(QIODevice::WriteOnly); QVERIFY(Image.save(&Buffer, "JPEG")); Buffer.close();
+        Bytes.insert(2, QByteArray::fromHex("ffe1000641ffd942"));
+        Bytes.append(QByteArray(TrailingBytes, 'p'));
+        QFile File(Root.filePath("page.jpg")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); File.close();
+        auto Book = OpenImageBook(Root.path()); QVERIFY(Book.HasValue()); auto Page = ReadImagePage(Book.Value(), 0);
+        QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().image_.size(), Image.size()); QVERIFY(Page.Value().warning_.isEmpty());
+        auto Single = ReadDocumentFile(File.fileName()); QVERIFY(Single.HasValue());
+        QCOMPARE(Single.Value().image_.size(), Image.size()); QCOMPARE(Single.Value().bytes_, Bytes);
+    }
     void truncatedJpegRemainsViewableWithWarning()
     {
         QTemporaryDir Root;QImage Image(120,160,QImage::Format_RGB32);Image.fill(Qt::red);
         QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QVERIFY(Image.save(&Buffer,"JPEG"));
         QVERIFY(Bytes.endsWith(QByteArray("\xff\xd9",2)));Bytes.chop(2);
+        Bytes.insert(2, QByteArray::fromHex("ffe1000641ffd942"));
         QFile File(Root.filePath("page.jpg"));QVERIFY(File.open(QIODevice::WriteOnly));File.write(Bytes);File.close();
         auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());auto Page=ReadImagePage(Book.Value(),0);
         QVERIFY(Page.HasValue());QVERIFY(!Page.Value().image_.isNull());QCOMPARE(Page.Value().warning_,QString("image-jpeg-incomplete"));
         QCOMPARE(QFileInfo(File).size(),qint64(Bytes.size()));
+        auto Single=ReadDocumentFile(File.fileName());QVERIFY(!Single.HasValue());
+        QCOMPARE(Single.Failure().code_,std::string("document-image-incomplete"));
     }
     void zip64AndDescriptorRecovery_data()
     {

@@ -118,7 +118,7 @@ namespace hc::document
                 // Qt and the OS report allocation failure; image dimensions are not a product quota.
                 QImageReader::setAllocationLimit(0);
                 ImageReader.setAutoTransform(true);{ImageTraceSpan DecodeTrace("image.decode",Path);Input.image_=ImageReader.read();}
-                const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!Input.bytes_.right(64).contains(QByteArray("\xff\xd9",2));
+                const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!ImagePartialDecoder::HasCompleteJpeg(Input.bytes_);
                 if(Input.image_.isNull() || IncompleteJpeg){
                     if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
                     return Invalid("document-image-incomplete");

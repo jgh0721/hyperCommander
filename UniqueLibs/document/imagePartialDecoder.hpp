@@ -12,6 +12,35 @@ namespace hc::document
     class ImagePartialDecoder
     {
     public:
+        static bool HasCompleteJpeg(const QByteArray& Bytes)
+        {
+            if (!Bytes.startsWith(QByteArray("\xff\xd8", 2))) return false;
+            qsizetype Offset = 2;
+            bool Scan = false;
+            while (Offset < Bytes.size()) {
+                if (Scan) {
+                    Offset = Bytes.indexOf(char(0xff), Offset);
+                    if (Offset < 0) return false;
+                } else if (static_cast<unsigned char>(Bytes[Offset]) != 0xff) return false;
+                while (Offset < Bytes.size() && static_cast<unsigned char>(Bytes[Offset]) == 0xff) ++Offset;
+                if (Offset == Bytes.size()) return false;
+                const auto Marker = static_cast<unsigned char>(Bytes[Offset++]);
+                if (Marker == 0x00) { if (!Scan) return false; continue; }
+                if (Marker == 0xd9) return true;
+                if (Marker == 0xd8) return false;
+                if (Marker >= 0xd0 && Marker <= 0xd7) { if (!Scan) return false; continue; }
+                if (Marker == 0x01) continue;
+                if (Bytes.size() - Offset < 2) return false;
+                const auto Length = (int(static_cast<unsigned char>(Bytes[Offset])) << 8)
+                    | int(static_cast<unsigned char>(Bytes[Offset + 1]));
+                if (Length < 2 || Length > Bytes.size() - Offset) return false;
+                // Skip metadata, including embedded thumbnails and their EOI.
+                // After the real EOI, cameras may append motion-photo payloads.
+                Offset += Length;
+                Scan = Marker == 0xda || (Scan && Marker == 0xdc);
+            }
+            return false;
+        }
         static QImage Decode(const QByteArray& Bytes)
         {
             if(Bytes.startsWith(QByteArray("\x89PNG\r\n\x1a\n",8)))return DecodePngPreview(Bytes);
