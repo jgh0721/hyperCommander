@@ -5,7 +5,7 @@ $Root = [IO.Path]::GetFullPath($Root)
 if (-not $CacheRoot) { $CacheRoot = Join-Path $PSScriptRoot '../../_build/signing-cache' }
 Assert-UpdatePlainPath $Root
 $Names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($Name in @('HyperCommander.exe','HyperCommanderAdmin.exe','HyperEditor.exe','HyperEditorWeb.exe','QtWebEngineProcess.exe','hc-plugin-host-x64.exe','hc-plugin-inspect.exe','hc-search-index.exe','HyperCommanderUpdater.exe','Everything64.dll')) {
+foreach ($Name in @('HyperCommander.exe','HyperCommanderAdmin.exe','HyperEditor.exe','HyperCompare.exe','HyperCompareCli.exe','HyperEditorWeb.exe','QtWebEngineProcess.exe','hc-plugin-host-x64.exe','hc-plugin-inspect.exe','hc-search-index.exe','HyperCommanderUpdater.exe','Everything64.dll')) {
     if (Test-Path -LiteralPath (Join-Path $Root $Name) -PathType Leaf) { [void]$Names.Add($Name) }
 }
 foreach ($File in Get-ChildItem -LiteralPath $Root -File) {

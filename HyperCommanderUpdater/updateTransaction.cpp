@@ -183,7 +183,7 @@ void CleanAcknowledged(const Path& Root, const Path& Tx, bool Retire) {
 void CheckProductRelative(std::string_view Relative) {
     CheckRelative(Relative);
     const bool Root = Relative.find('/') == std::string_view::npos;
-    const std::set<std::string_view> Names{"HyperCommander.exe", "HyperCommanderAdmin.exe", "HyperEditor.exe", "HyperEditorWeb.exe", "QtWebEngineProcess.exe",
+    const std::set<std::string_view> Names{"HyperCommander.exe", "HyperCommanderAdmin.exe", "HyperEditor.exe", "HyperCompare.exe", "HyperCompareCli.exe", "HyperEditorWeb.exe", "QtWebEngineProcess.exe",
         "hc-plugin-host-x64.exe", "hc-plugin-inspect.exe", "hc-search-index.exe", "HyperCommanderUpdater.exe", "hc-updater.exe", "Everything64.dll", "pdfium.dll", "runtime-inventory.json", "product-inventory.json"};
     Require((Root && (Names.contains(Relative) || ((Relative.starts_with("Qt6") || Relative.starts_with("vcruntime") || Relative.starts_with("msvcp")
         || Relative.starts_with("concrt") || Relative.starts_with("d3dcompiler_") || Relative == "opengl32sw.dll") && Relative.ends_with(".dll"))))

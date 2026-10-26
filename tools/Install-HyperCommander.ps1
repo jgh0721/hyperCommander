@@ -52,7 +52,7 @@ $Hashes = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]:
 foreach ($Entry in $Product.files) {
     $Relative = [string]$Entry.path
     if ($Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\') -or
-        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|Everything64\.dll|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
+        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|HyperCompare(?:Cli)?\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|Everything64\.dll|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
         $Relative -match '(^|/)Qt6Test' -or $Entry.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $Hashes.ContainsKey($Relative)) {
         throw "Invalid product inventory entry: $Relative"
     }
@@ -63,7 +63,7 @@ foreach ($Entry in $Product.files) {
     $Files.Add($Relative); $Hashes.Add($Relative, $Entry.sha256)
 }
 $ViewerPackage = 'Addons/WLX/HyperViewer/'
-foreach ($Required in @('HyperCommander.exe','HyperEditor.exe','Libs/platforms/qwindows.dll','pdfium.dll',($ViewerPackage + 'hyperviewer.json'),($ViewerPackage + 'source-lock.json'))) {
+foreach ($Required in @('HyperCommander.exe','HyperEditor.exe','HyperCompare.exe','HyperCompareCli.exe','Libs/platforms/qwindows.dll','pdfium.dll',($ViewerPackage + 'hyperviewer.json'),($ViewerPackage + 'source-lock.json'))) {
     if (-not $Hashes.ContainsKey($Required)) { throw "Required product input is absent: $Required" }
 }
 foreach ($Name in $RhwpPins.Keys) {

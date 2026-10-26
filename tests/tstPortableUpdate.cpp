@@ -85,8 +85,8 @@ int main(int Count, char** Arguments) {
             Reject([&] { ParseJson(std::string(25, '[') + "0" + std::string(25, ']')); });
             Reject([&] { Value.At("missing", Json::Kind::String); });
             for (const auto Text : {"../a", "C:/a", "a\\b", "a/file:stream", "a/NUL.txt", "a/CONIN$", "a/COM1", "a/file.", "a//b", "a/"}) Reject([&] { CheckRelative(Text); });
-            for (const auto Text : {"HyperCommander.json", "config/settings.json", "Addons/WCX/User/a.dll", ".update/active.json", "Plugins/User/a.dll"}) Reject([&] { CheckProductRelative(Text); });
-            CheckProductRelative("Addons/WCX/IsoImage/hc_isoimage_wcx.wcx64"); ++Passed;
+            for (const auto Text : {"HyperCommander.json", "config/settings.json", "Addons/WCX/User/a.dll", ".update/active.json", "Plugins/User/a.dll", "HyperCompareOther.exe", "HyperCompareCli.exe.bak"}) Reject([&] { CheckProductRelative(Text); });
+            for (const auto Text : {"Addons/WCX/IsoImage/hc_isoimage_wcx.wcx64", "HyperCompare.exe", "HyperCompareCli.exe"}) { CheckProductRelative(Text); ++Passed; }
             if (ParseVersion("2026.10.18.1") != std::array<unsigned, 4>{2026, 10, 18, 1}) throw std::runtime_error("valid-version"); ++Passed;
             for (const auto Text : {"2026.10.18", "2026.10.18.1a", "2026.10.18.65536", "2026.10.18.1.2"}) Reject([&] { ParseVersion(Text); });
             std::cout << "Contract: " << Passed << " passed, 0 failed\n";

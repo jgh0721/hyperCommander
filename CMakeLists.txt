@@ -229,7 +229,7 @@ add_custom_target(hc_portable_package
     DEPENDS hc_product_inventory USES_TERMINAL VERBATIM)
 if(MSVC)
     set(HC_SYMBOL_FILES "")
-    foreach(HC_SYMBOL_TARGET IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor HyperViewer
+    foreach(HC_SYMBOL_TARGET IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor HyperViewer HyperCompare HyperCompareCli
             hc-plugin-host-x64 hc-plugin-inspect hc-search-index HyperCommanderUpdater hc_iso_core hc_isoimage_wcx hc_sevenzip_core)
         string(APPEND HC_SYMBOL_FILES "$<TARGET_PDB_FILE:${HC_SYMBOL_TARGET}>\n")
     endforeach()

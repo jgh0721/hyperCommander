@@ -78,7 +78,7 @@ try {
         $Files.Add(@{path=$Relative; source=$Path; sha256=$Hash})
     }
     $Platform = if ($Configuration -eq 'Debug') { 'Libs/platforms/qwindowsd.dll' } else { 'Libs/platforms/qwindows.dll' }
-    foreach ($Required in @('HyperCommander.exe', 'HyperEditor.exe', 'hc-plugin-host-x64.exe', $Platform)) {
+    foreach ($Required in @('HyperCommander.exe', 'HyperEditor.exe', 'HyperCompare.exe', 'HyperCompareCli.exe', 'hc-plugin-host-x64.exe', $Platform)) {
         if (-not $Seen.Contains($Required)) { throw "Required product input is absent: $Required" }
     }
     $InventoryHash = [BitConverter]::ToString($Sha.ComputeHash($InventoryBytes)).Replace('-', '')
