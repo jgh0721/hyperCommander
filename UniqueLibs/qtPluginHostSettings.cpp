@@ -313,6 +313,8 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::ViewerChoi
         QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         Choice.extensions_ = hc::settings::Strings(Record.value("extensions"));
         auto& Options = Choice.options_; Options.binaryPath_ = Record["path"].toString(); Options.applicationRule_ = Record.value("application");
+        if (Record["detectOverride"].toBool() || (!Record.contains("detectOverride") && !Record["detect"].toString().isEmpty()))
+            Options.detectionOverride_ = Record["detect"].toString();
         Options.binaryPath_.replace("%COMMANDER_PATH%", QCoreApplication::applicationDirPath(), Qt::CaseInsensitive);
         Choice.name_ = QFileInfo(Options.binaryPath_).fileName();
         if (Options.binaryPath_.endsWith(".wlx", Qt::CaseInsensitive)) Options.binaryPath_ += "64";

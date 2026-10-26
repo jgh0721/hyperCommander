@@ -13,6 +13,7 @@ namespace hc::plugins
         PluginApproval approval_;
         HostLimits limits_;
         QJsonValue applicationRule_;
+        std::optional<QString> detectionOverride_;
         std::shared_ptr<storage::IWritableStorage> writer_;
         int flags_ = 0;
         viewer::ViewerPurpose purpose_ = viewer::ViewerPurpose::FullViewer;

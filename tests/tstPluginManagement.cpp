@@ -1,5 +1,7 @@
 ﻿#include "UniqueLibs/qtPluginManagementPage.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
+#include "UniqueLibs/builtinPluginCatalog.hpp"
+#include "UniqueLibs/archive/creatorRegistry.hpp"
 #include "UniqueLibs/qtPluginHostSettings.hpp"
 #include "pluginHost/manifestFile.hpp"
 #include "UniqueLibs/tcPluginPackage.hpp"
@@ -39,6 +41,106 @@ auto install(const QString& Source, const QString& Root) {
 class PluginManagementTests : public QObject {
     Q_OBJECT
 private slots:
+    void wlxNativeDetectionLoadsAndRestores() {
+        using namespace hc::plugins;
+        QTemporaryDir Temp; const auto Root = QCoreApplication::applicationDirPath();
+        const auto Binary = Temp.filePath("fixture.wlx64"); QVERIFY(QFile::copy(Root + "/hc_wlx_sdk_fixture.wlx64", Binary));
+        const auto Inspected = std::async(std::launch::async, [&] { return InspectPluginBinary(Binary, PluginFormat::Wlx); }).get();
+        QVERIFY(Inspected.HasValue());
+        const auto Saved = std::async(std::launch::async, [&] { return SavePluginManifest(Inspected.Value(), Temp.path()); }).get();
+        QVERIFY(Saved.HasValue());
+        QFile Ini(Temp.filePath("lsplugin.ini")); QVERIFY(Ini.open(QIODevice::WriteOnly));
+        Ini.write("[fixture]\r\nvalue=123\r\nmode=normal\r\nexpression=EXT=\"EXE\" | EXT=\"DLL\"\r\n"); Ini.close();
+        const QJsonObject Record{{"path", Binary}, {"hostEnabled", true}, {"hostManifest", Saved.Value()}, {"hostReviewed", hc::settings::JsonObject(EncodeManifest(Inspected.Value().manifest_))}};
+        hc::settings::Repository Settings(Temp.path()); QVERIFY(Settings.Put(hc::settings::Section::Plugins, QJsonObject{{"wlx", QJsonArray{Record}}}));
+        QPluginManagementPage Page; Page.Load(Settings); Page.resize(1160, 760); Page.show();
+        auto* Tree = Page.findChild<QTreeWidget*>("pluginCatalog");
+        for (int I = 0; I < Tree->topLevelItemCount(); ++I)
+            for (int J = 0; J < Tree->topLevelItem(I)->childCount(); ++J)
+                if (Tree->topLevelItem(I)->child(J)->data(0, Qt::UserRole + 1) == "1:0") Tree->setCurrentItem(Tree->topLevelItem(I)->child(J));
+        auto* Detect = Page.findChild<QPlainTextEdit*>("pluginNativeDetect");
+        const QString Original = "EXT=\"EXE\" | EXT=\"DLL\"";
+        QTRY_COMPARE_WITH_TIMEOUT(Detect->toPlainText(), Original, 10000);
+        QVERIFY(!Page.Document()["wlx"].toArray()[0].toObject()["detectOverride"].toBool());
+        Detect->setPlainText("EXT=\"TXT\""); QVERIFY(Page.Validate());
+        QVERIFY(Page.Document()["wlx"].toArray()[0].toObject()["detectOverride"].toBool());
+        Page.findChild<QPushButton*>("pluginReadNativeDetect")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(Detect->toPlainText(), Original, 10000);
+        QVERIFY(!Page.Document()["wlx"].toArray()[0].toObject()["detectOverride"].toBool());
+        const auto Capture = qEnvironmentVariable("HC_WLX_DETECT_CAPTURE");
+        if (!Capture.isEmpty()) { QTest::qWait(100); QVERIFY(Page.grab().save(Capture)); }
+    }
+    void wlxDetectionCanBeEditedAndSaved() {
+        const QJsonObject Record{{"path", "sample.wlx64"}, {"hostEnabled", false}, {"detect", "EXT=\"EXE\""}, {"nativeDetect", "EXT=\"EXE\""}, {"detectOverride", false}};
+        QPluginManagementPage Page; Page.LoadDocument({{"wlx", QJsonArray{Record}}});
+        auto* Tree = Page.findChild<QTreeWidget*>("pluginCatalog");
+        for (int I = 0; I < Tree->topLevelItemCount(); ++I)
+            for (int J = 0; J < Tree->topLevelItem(I)->childCount(); ++J)
+                if (Tree->topLevelItem(I)->child(J)->data(0, Qt::UserRole + 1) == "1:0") Tree->setCurrentItem(Tree->topLevelItem(I)->child(J));
+        auto* Detect = Page.findChild<QPlainTextEdit*>("pluginNativeDetect"); QVERIFY(!Detect->isReadOnly());
+        QCOMPARE(Detect->toPlainText(), QString("EXT=\"EXE\""));
+        Detect->setPlainText("EXT=\"EXE\" | EXT=\"DLL\""); QVERIFY(Page.Validate());
+        auto Saved = Page.Document()["wlx"].toArray()[0].toObject();
+        QCOMPARE(Saved["detect"].toString(), Detect->toPlainText()); QVERIFY(Saved["detectOverride"].toBool());
+        QCOMPARE(Saved["nativeDetect"], Record["nativeDetect"]);
+        Detect->clear(); QVERIFY(Page.Validate());
+        Saved = Page.Document()["wlx"].toArray()[0].toObject(); QVERIFY(Saved["detectOverride"].toBool()); QVERIFY(Saved["detect"].toString().isEmpty());
+    }
+    void builtinArchiveExclusions() {
+        const QJsonObject RuleObject{{"version", 1}, {"mode", "excludeExtensions"}, {"extensions", QJsonArray{"zip", "7z", "001"}}};
+        const auto Rule = PluginApplicationRule::Parse(RuleObject); QVERIFY(Rule.HasValue());
+        for (const auto* Name : {"a.zip", "a.z01", "a.7z.002", "a.002"}) QVERIFY(!hc::plugins::BuiltinArchiveAllowed(Rule.Value(), Name));
+        QVERIFY(hc::plugins::BuiltinArchiveAllowed(Rule.Value(), "a.rar"));
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
+        auto Plugins = Settings.Read(hc::settings::Section::Plugins).toObject();
+        Plugins["builtin"] = QJsonObject{{"builtin.sevenzip", QJsonObject{{"application", RuleObject}}}, {"builtin.iso", QJsonObject{{"application", QJsonObject{{"version", 1}, {"enabled", false}}}}}};
+        QVERIFY(Settings.Put(hc::settings::Section::Plugins, Plugins));
+        const auto Catalog = hc::archive::CreatorCatalog(Settings);
+        for (const auto& Creator : Catalog)
+            if (Creator.descriptor_.id_.starts_with("builtin.")) { QVERIFY(!Creator.available_); QVERIFY(Creator.descriptor_.formats_.empty()); }
+    }
+    void builtinExclusionsAndPersistence() {
+        QPluginManagementPage Page; Page.LoadDocument({});
+        auto* Tree = Page.findChild<QTreeWidget*>("pluginCatalog");
+        QTreeWidgetItem* Viewer = nullptr; QTreeWidgetItem* Editor = nullptr;
+        for (int I = 0; I < Tree->topLevelItem(0)->childCount(); ++I) {
+            auto* Item = Tree->topLevelItem(0)->child(I);
+            if (Item->data(0, Qt::UserRole + 1) == "builtin.hyperviewer") Viewer = Item;
+            if (Item->data(0, Qt::UserRole + 1) == "builtin.hypereditor") Editor = Item;
+        }
+        QVERIFY(Viewer); QVERIFY(Editor); QVERIFY(Viewer->text(0).contains("EPUB"));
+        Tree->setCurrentItem(Editor);
+        auto* Extensions = Page.findChild<QListWidget*>("builtinApplicationExtensions");
+        QVERIFY(Extensions->count() > 50);
+        for (const auto* Name : {"epub", "cbz", "avif", "pdf"}) QVERIFY(!Extensions->findItems(Name, Qt::MatchExactly).isEmpty());
+        Extensions->findItems("pdf", Qt::MatchExactly).front()->setCheckState(Qt::Unchecked);
+        Page.findChild<QLineEdit*>("builtinExcludedExtensions")->setText("*.FOO; .tar.gz");
+        QVERIFY(Page.Validate()); const auto Saved = Page.Document();
+        const auto Rule = PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(Saved, "builtin.hypereditor"));
+        QVERIFY(Rule.HasValue()); QVERIFY(!Rule.Value().Matches("a.PDF").Value());
+        QVERIFY(!Rule.Value().Matches("unknown.foo").Value()); QVERIFY(!Rule.Value().Matches("a.tar.gz").Value());
+        QVERIFY(Rule.Value().Matches("unknown.newformat").Value()); QVERIFY(Rule.Value().Matches("README").Value());
+        QVERIFY(Rule.Value().Matches("book.epub").Value());
+        Tree->setCurrentItem(Viewer); QVERIFY(Page.findChild<QCheckBox*>("pluginApplicationEnabled")->isEnabled());
+        Page.findChild<QCheckBox*>("pluginApplicationEnabled")->setChecked(false);
+        const auto Disabled = Page.Document();
+        QVERIFY(!PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(Disabled, "builtin.hyperviewer")).Value().Matches("any.txt").Value());
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
+        QVERIFY(Settings.Put(hc::settings::Section::Plugins, Disabled)); QVERIFY(Settings.Commit());
+        hc::settings::Repository Reload(Temp.path());
+        QCOMPARE(Reload.Read(hc::settings::Section::Plugins).toObject()["builtin"], Disabled["builtin"]);
+        const auto Capture = qEnvironmentVariable("HC_BUILTIN_PLUGIN_CAPTURE");
+        if (!Capture.isEmpty()) { Page.resize(1160, 760); Page.show(); QVERIFY(QTest::qWaitForWindowExposed(&Page)); QTest::qWait(100); QVERIFY(Page.grab().save(Capture)); }
+    }
+    void builtinUnknownRulePreserved() {
+        const QJsonObject Future{{"application", QJsonObject{{"version", 99}, {"mode", "future"}}}, {"opaque", 42}};
+        QPluginManagementPage Page; Page.LoadDocument({{"builtin", QJsonObject{{"builtin.hyperviewer", Future}}}});
+        auto* Tree = Page.findChild<QTreeWidget*>("pluginCatalog");
+        for (int I = 0; I < Tree->topLevelItem(0)->childCount(); ++I)
+            if (Tree->topLevelItem(0)->child(I)->data(0, Qt::UserRole + 1) == "builtin.hyperviewer") Tree->setCurrentItem(Tree->topLevelItem(0)->child(I));
+        QVERIFY(!Page.findChild<QCheckBox*>("pluginApplicationEnabled")->isEnabled());
+        QCOMPARE(Page.Document()["builtin"].toObject()["builtin.hyperviewer"].toObject(), Future);
+    }
     void addTypesAreUnified() {
         QPluginManagementPage Page; Page.LoadDocument({}); Page.show(); bool Seen = false;
         QTimer Driver; Driver.setInterval(10);

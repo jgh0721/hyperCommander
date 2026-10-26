@@ -292,7 +292,7 @@ namespace hc::plugins
                 const auto StartedState = Host->Snapshot();if(ArchiveBroker)ArchiveBroker->BindClient(StartedState.processId_);
                 { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
                 auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
-                if (Policy && !Dopus)
+                if ((Policy || Options.detectionOverride_) && !Dopus)
                 {
                     if (Probe.Value()["ansiCodePage"].toInt(-1) != static_cast<int>(GetACP()))
                         return Error{ErrorCategory::Unsupported, "wlx-detect-code-page", {"wlx"}};
@@ -304,9 +304,12 @@ namespace hc::plugins
                     // ListLoad's SDK contract tries plugins with no definition,
                     // and proceeds to the next plugin if ListLoad returns NULL.
                     WlxDetectionMatch Match{true, false};
-                    if (Probe.Value()["detectAvailable"].toBool() && !Decoded.decoded.trimmed().isEmpty())
+                    const auto Definition = Options.detectionOverride_ ? Options.detectionOverride_->toLocal8Bit() : Decoded.decoded;
+                    if (Options.detectionOverride_ && QString::fromLocal8Bit(Definition) != *Options.detectionOverride_)
+                        return Invalid("wlx-detect-encoding");
+                    if ((Options.detectionOverride_ || Probe.Value()["detectAvailable"].toBool()) && !Definition.trimmed().isEmpty())
                     {
-                        auto Expression = WlxDetectionExpression::Parse(Decoded.decoded); if (!Expression.HasValue()) return Expression.Failure();
+                        auto Expression = WlxDetectionExpression::Parse(Definition); if (!Expression.HasValue()) return Expression.Failure();
                         if (Expression.Value().NeedsExtension() && !ExtensionReady)
                         {
                             auto Extension = ExtensionBytes(*Entry); if (!Extension.HasValue()) return Extension.Failure();
@@ -321,10 +324,10 @@ namespace hc::plugins
                         auto Evaluated = Expression.Value().Evaluate(Detection); if (!Evaluated.HasValue()) return Evaluated.Failure();
                         Match = Evaluated.Value();
                     }
-                    if (Match.matches_ != true || (Policy->builtinMultimedia_ && !Policy->force_ && !Match.multimedia_)) return false;
+                    if (Match.matches_ != true || (Policy && Policy->builtinMultimedia_ && !Policy->force_ && !Match.multimedia_)) return false;
                     auto Prepared = Materialize();
                     if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
-                    Options.flags_ = (Options.flags_ & ~lcp_forceshow) | (Policy->force_ ? lcp_forceshow : 0);
+                    if (Policy) Options.flags_ = (Options.flags_ & ~lcp_forceshow) | (Policy->force_ ? lcp_forceshow : 0);
                 }
                 if (Policy && Dopus)
                 {

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solTypeDefs_Ver.hpp"
+#include "builtinPluginCatalog.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
@@ -1198,6 +1199,7 @@ void CommandUiBridge::extractArchive() {
                 if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
                 const auto Match = Rule.Value().Matches(QString::fromStdString(Entry.name_));
                 if (!Match.HasValue() || !Match.Value()) continue;
+                if (Choice.sevenZip_ && !hc::plugins::BuiltinArchiveAllowed(Rule.Value(), Name)) continue;
                 Readers.push_back(MakeWcxReadProvider(Choice.path_.toStdString(), {LocatorKind::Archive, Entry.locator_.root_, {{"wcx", "/"}}}, Temporary, Choice.backend_, {}, true));
             }
             return Readers;

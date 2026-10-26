@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "pluginHost/pluginApplicationRule.hpp"
+#include "builtinPluginCatalog.hpp"
 #include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
 #include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
@@ -806,6 +807,7 @@ void CTCPlugInMgr::Refresh()
         Plugin.FileFullPath = BuiltinIso.binaryPath_;
         Plugin.PackerCaps = PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_MULTIPLE | PK_CAPS_DELETE | PK_CAPS_BY_CONTENT;
         Plugin.Exts = {QStringLiteral("iso")}; Plugin.IsContain64Bit = true;
+        Plugin.applicationRule_ = hc::plugins::BuiltinApplication(hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(), "builtin.iso");
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = BuiltinIso.manifestPath_; Plugin.hostApproval_ = BuiltinIso.approval_;
         VecWCX.push_back(std::move(Plugin));
     }
@@ -814,7 +816,8 @@ void CTCPlugInMgr::Refresh()
     if (SevenZip.approval_.approved_) {
         TyPlugInWCX Plugin;
         Plugin.FileFullPath = SevenZip.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT | PK_CAPS_NEW | PK_CAPS_MODIFY | PK_CAPS_DELETE;
-        Plugin.Exts = {QStringLiteral("7z"), QStringLiteral("zip"), QStringLiteral("zipx"), QStringLiteral("rar"), QStringLiteral("001")}; Plugin.IsContain64Bit = true;
+        Plugin.Exts = hc::plugins::BuiltinExtensions("builtin.sevenzip"); Plugin.IsContain64Bit = true;
+        Plugin.applicationRule_ = hc::plugins::BuiltinApplication(hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(), "builtin.sevenzip");
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = SevenZip.manifestPath_; Plugin.hostApproval_ = SevenZip.approval_;
         VecWCX.push_back(std::move(Plugin));
     }
@@ -823,6 +826,7 @@ void CTCPlugInMgr::Refresh()
         TyPlugInWCX Plugin;
         Plugin.FileFullPath = UnEgg.binaryPath_; Plugin.PackerCaps = PK_CAPS_MULTIPLE | PK_CAPS_BY_CONTENT;
         Plugin.Exts = {QStringLiteral("alz"), QStringLiteral("egg")}; Plugin.IsContain64Bit = true;
+        Plugin.applicationRule_ = hc::plugins::BuiltinApplication(hc::settings::AppSettings().Read(hc::settings::Section::Plugins).toObject(), "builtin.alzegg");
         Plugin.hostEnabled_ = true; Plugin.hostManifest_ = UnEgg.manifestPath_; Plugin.hostApproval_ = UnEgg.approval_;
         VecWCX.push_back(std::move(Plugin));
     }
@@ -950,6 +954,8 @@ QVector<TyPlugInWCX> CTCPlugInMgr::RetrieveWCXByExts( const QString& Ext, const 
         if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
         auto Match = Rule.Value().Matches(FileName.isEmpty() ? "file." + Ext : FileName);
         if (!Match.HasValue() || !Match.Value()) continue;
+        if (WCX.hostEnabled_ && WCX.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip
+            && !hc::plugins::BuiltinArchiveAllowed(Rule.Value(), FileName.isEmpty() ? "file." + Ext : FileName)) continue;
         Ret.push_back( WCX );
     }
 

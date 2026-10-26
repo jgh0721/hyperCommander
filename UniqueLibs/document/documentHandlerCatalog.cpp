@@ -1,5 +1,6 @@
 ﻿#include "documentOpenController.hpp"
 #include "pluginHost/manifestFile.hpp"
+#include "UniqueLibs/builtinPluginCatalog.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QFile>
@@ -38,8 +39,30 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     for(auto It=Result.overrides_.begin();It!=Result.overrides_.end();++It){auto Override=It.value().toObject();
         if(Override["view"]=="builtin.rhwp-viewer"){Override["view"]="builtin.hyperviewer";It.value()=Override;}}
     const bool Compatible = Config["schemaVersion"].toInt() == 1;
+    const auto PluginConfig = Settings.Read(hc::settings::Section::Plugins).toObject();
     const auto Add = [&](DocumentHandlerTarget Target) {
         auto& Descriptor = Target.descriptor_;
+        if (Descriptor.stableId_.starts_with("builtin.")) {
+            const auto Apply = [&](const QString& Id) {
+                const auto Rule = hc::plugins::PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(PluginConfig, Id));
+                if (!Rule.HasValue() || !Rule.Value().Enabled()) {
+                    Descriptor.available_ = false; Descriptor.unavailableReason_ = "builtin-application-disabled"; return;
+                }
+                for (const auto& Ext : Rule.Value().ExcludedExtensions()) Descriptor.excludedExtensions_.push_back(Ext.toStdString());
+            };
+            Apply(Descriptor.stableId_ == "builtin.rhwp-editor" ? QStringLiteral("builtin.hypereditor") : QString::fromStdString(Descriptor.stableId_));
+            if (Descriptor.stableId_ == "builtin.rhwp-editor") Apply("builtin.rhwp");
+            if (Descriptor.stableId_ == "builtin.hyperviewer") {
+                const auto Rhwp = hc::plugins::PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(PluginConfig, "builtin.rhwp"));
+                for (const auto* Ext : {"hwp", "hwpx"}) {
+                    if (!Rhwp.HasValue()) { Descriptor.excludedExtensions_.push_back(Ext); continue; }
+                    const auto Allowed = Rhwp.Value().Matches(QStringLiteral("file.") + Ext);
+                    if (!Allowed.HasValue() || !Allowed.Value()) Descriptor.excludedExtensions_.push_back(Ext);
+                }
+            }
+            QJsonArray Excluded; for (const auto& Ext : Descriptor.excludedExtensions_) Excluded.append(QString::fromStdString(Ext));
+            Target.plugin_.applicationRule_ = QJsonObject{{"version", 1}, {"enabled", Descriptor.available_}, {"mode", "excludeExtensions"}, {"extensions", Excluded}};
+        }
         QSet<QString> Seen;
         for (const auto& Value : Config["handlers"].toArray()) {
             const auto Item = Value.toObject(); const auto Id = Item["stableId"].toString();

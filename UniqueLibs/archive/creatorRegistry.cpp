@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "creatorRegistry.hpp"
+#include "UniqueLibs/builtinPluginCatalog.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
@@ -129,6 +130,17 @@ std::vector<CreatorRuntime> CreatorCatalog(settings::Repository& Settings)
     CreatorRuntime Iso; Iso.options_ = BuiltinIsoOptions(); Iso.descriptor_ = {"builtin.iso", "ISO", ArchiveCreatorKind::BuiltinIso,
         {IsoHash(Iso.options_.approval_.reviewed_), {}}, ArchiveConfigurationKind::BuiltinDialog,
         {{"iso", "iso", ArchiveSettingsKind::Iso, ArchiveCreationEvidence::BuiltinAdapter, 1}}}; Out.push_back(Iso);
+    for (auto& Creator : Out) {
+        const auto Id = Creator.descriptor_.kind_ == ArchiveCreatorKind::BuiltinSevenZip ? "builtin.sevenzip" : "builtin.iso";
+        const auto Rule = PluginApplicationRule::Parse(BuiltinApplication(Settings.Read(settings::Section::Plugins).toObject(), Id));
+        auto& Formats = Creator.descriptor_.formats_;
+        std::erase_if(Formats, [&](const auto& Format) {
+            if (!Rule.HasValue()) return true;
+            const auto Allowed = Rule.Value().Matches(QStringLiteral("file.") + QString::fromStdString(Format.extension_));
+            return !Allowed.HasValue() || !Allowed.Value();
+        });
+        if (Formats.empty()) { Creator.available_ = false; Creator.status_ = QObject::tr("플러그인 관리의 적용 조건에서 제외되었습니다."); }
+    }
     for (const auto& [Group, Format] : {std::pair{"wcx", PluginFormat::Wcx}, {"dopusVfs", PluginFormat::DopusVfs}})
         for (const auto Value : Settings.Plugins(Group)) { auto Creator = ExternalCreator(Value.toObject(), Format, QFileInfo(Settings.FileName()).absolutePath()); if (!Creator.descriptor_.formats_.empty()) Out.push_back(std::move(Creator)); }
     return Out;

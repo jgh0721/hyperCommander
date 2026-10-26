@@ -28,7 +28,7 @@ bool DocumentHandlerResolver::Supports(const HandlerDescriptor& Handler, Documen
     return std::all_of(Names.begin(), Names.end(), [&](const auto& Name) {
         const auto Index = std::size_t(&Name - Names.data());
         const auto Ext = Extension(Name);
-        if (std::any_of(Handler.excludedExtensions_.begin(), Handler.excludedExtensions_.end(), [&](const auto& Value) { return Lower(Value) == Ext; })) return false;
+        if (std::any_of(Handler.excludedExtensions_.begin(), Handler.excludedExtensions_.end(), [&](const auto& Value) { return Lower(Name).ends_with('.' + Lower(Value)); })) return false;
         const auto Matches = [&](const std::vector<std::string>& Patterns) {
             return std::any_of(Patterns.begin(), Patterns.end(), [&](auto Pattern) {
                 Pattern = Lower(Pattern); if (Pattern.starts_with("*.")) Pattern.erase(0, 2); else if (Pattern.starts_with('.')) Pattern.erase(0, 1);

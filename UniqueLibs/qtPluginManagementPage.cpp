@@ -1,5 +1,7 @@
 ﻿#include "qtPluginManagementPage.hpp"
 #include "qtPluginHostSettings.hpp"
+#include "builtinPluginCatalog.hpp"
+#include "pluginHost/wlxDetectionSettings.hpp"
 #include "tcPluginPackage.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
@@ -75,7 +77,7 @@ struct QPluginManagementPage::State {
         bool builtin_ = false;
     };
     QPluginManagementPage* owner_;
-    QString root_, selectedId_;
+    QString root_, selectedId_, settingsDirectory_;
     QJsonObject plugins_;
     QVector<Entry> entries_;
     int row_ = -1, role_ = 0;
@@ -87,9 +89,16 @@ struct QPluginManagementPage::State {
     QCheckBox* enabled_ = nullptr;
     QComboBox *mode_ = nullptr, *dialect_ = nullptr, *selection_ = nullptr, *processMode_ = nullptr, *testAction_ = nullptr;
     QListWidget* extensions_ = nullptr;
+    QListWidget* builtinExtensions_ = nullptr;
+    QLineEdit* builtinExcluded_ = nullptr;
+    QWidget* builtinPanel_ = nullptr;
     QPlainTextEdit* expression_ = nullptr;
     QLineEdit* registered_ = nullptr;
     QPlainTextEdit* native_ = nullptr;
+    QLabel* nativeLabel_ = nullptr;
+    QPushButton* readDetection_ = nullptr;
+    bool detectionBusy_ = false;
+    QSet<QString> detectionAttempts_;
     QCheckBox* hosted_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     QStackedWidget *conditionPages_ = nullptr, *hostPages_ = nullptr;
@@ -101,10 +110,57 @@ struct QPluginManagementPage::State {
     quint64 testGeneration_ = 0;
     explicit State(QPluginManagementPage* Owner, QString Root) : owner_(Owner), root_(std::move(Root)) {}
     QString key(int Format, int Index) const { return QString::number(Format) + ':' + QString::number(Index); }
-    QJsonObject record(const Entry& Value) const { const auto Items = plugins_.value(Value.group_).toArray(); return Value.index_ >= 0 && Value.index_ < Items.size() ? Items[Value.index_].toObject() : QJsonObject{}; }
+    QJsonObject record(const Entry& Value) const { if (Value.builtin_) return plugins_["builtin"].toObject()[Value.id_].toObject(); const auto Items = plugins_.value(Value.group_).toArray(); return Value.index_ >= 0 && Value.index_ < Items.size() ? Items[Value.index_].toObject() : QJsonObject{}; }
     void setRecord(const Entry& Value, const QJsonObject& Record) {
+        if (Value.builtin_) { auto Items = plugins_["builtin"].toObject(); Items[Value.id_] = Record; plugins_["builtin"] = Items; return; }
         auto Items = plugins_.value(Value.group_).toArray();
         if (Value.index_ >= 0 && Value.index_ < Items.size()) { Items[Value.index_] = Record; plugins_[Value.group_] = Items; }
+    }
+    void requestDetection(bool Reset = false) {
+        if (loading_ || detectionBusy_ || row_ < 0 || entries_[row_].builtin_ || entries_[row_].group_ != "wlx") return;
+        const auto Value = entries_[row_]; const auto Record = record(Value);
+        if (!Reset && !Record["hostEnabled"].toBool()) return;
+        const auto Reviewed = hc::plugins::ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
+        if (!Reviewed.HasValue() || Record["hostManifest"].toString().isEmpty()) {
+            if (Reset) hosts_[Value.format_]->ReviewPlugin(Value.index_);
+            return;
+        }
+        const auto Hash = QString::fromStdString(Reviewed.Value().sha256_);
+        const auto Key = Value.id_ + ':' + Value.path_ + ':' + Hash;
+        if (!Reset && ((Record.contains("nativeDetect") && Record["nativeDetectSha256"] == Hash) || detectionAttempts_.contains(Key))) return;
+        detectionAttempts_.insert(Key); detectionBusy_ = true; readDetection_->setEnabled(false);
+        hc::plugins::PluginViewerOptions Options; Options.binaryPath_ = Value.path_;
+        Options.executable_ = QDir(root_).filePath("hc-plugin-host-x64.exe"); Options.manifestPath_ = Record["hostManifest"].toString();
+        Options.defaultIniPath_ = QDir(settingsDirectory_.isEmpty() ? root_ : settingsDirectory_).filePath("lsplugin.ini");
+        Options.approval_ = {Reviewed.Value(), true, false, Reviewed.Value().permissions_};
+        auto* Watcher = new QFutureWatcher<hc::storage::Result<QString>>(owner_);
+        QObject::connect(Watcher, &QFutureWatcherBase::finished, owner_, [this, Watcher, Value, Record, Hash, Reset] {
+            const auto Result = Watcher->result(); Watcher->deleteLater(); detectionBusy_ = false; readDetection_->setEnabled(true);
+            auto Found = std::find_if(entries_.cbegin(), entries_.cend(), [&](const Entry& Entry) { return Entry.id_ == Value.id_ && Entry.path_ == Value.path_; });
+            if (Found == entries_.cend() || record(*Found)["hostReviewed"] != Record["hostReviewed"]) return;
+            const bool Selected = row_ >= 0 && entries_[row_].id_ == Value.id_;
+            if (!Result.HasValue()) {
+                if (Selected) ruleStatus_->setText(QStringLiteral("탐지식을 읽지 못했습니다: ") + QString::fromStdString(Result.Failure().code_));
+            } else {
+                auto Updated = record(*Found);
+                const bool LegacyOverride = !Updated.contains("detectOverride") && !Updated["detect"].toString().isEmpty() && Updated["detect"].toString() != Result.Value();
+                const bool ChangedDuringRead = Updated["detect"] != Record["detect"] || Updated["detectOverride"] != Record["detectOverride"];
+                const bool KeepOverride = (!Reset || ChangedDuringRead) && (Updated["detectOverride"].toBool() || LegacyOverride);
+                Updated["nativeDetect"] = Result.Value(); Updated["nativeDetectSha256"] = Hash; Updated["detectOverride"] = KeepOverride;
+                if (!KeepOverride) Updated["detect"] = Result.Value();
+                setRecord(*Found, Updated);
+                if (Selected) {
+                    const QSignalBlocker Block(native_); native_->setPlainText(Updated["detect"].toString());
+                    native_->document()->setModified(false);
+                    ruleStatus_->setText(KeepOverride ? QStringLiteral("플러그인 원본을 확인했습니다. 사용자 탐지식은 유지합니다.") : QStringLiteral("플러그인 탐지식을 읽었습니다. 수정하면 사용자 탐지식으로 적용합니다."));
+                }
+            }
+            if (!Selected) QTimer::singleShot(0, owner_, [this] { requestDetection(); });
+        });
+        Watcher->setFuture(QtConcurrent::run([Options] {
+            hc::storage::OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            return hc::plugins::ReadWlxDetection(Options, Context);
+        }));
     }
     void storeHosts() { for (auto* Host : hosts_) Host->SavePlugins(plugins_); }
     void loadHosts() { for (auto* Host : hosts_) Host->LoadPlugins(plugins_); }
@@ -115,13 +171,13 @@ struct QPluginManagementPage::State {
         entries_.clear();
         // Product catalog identity does not depend on an external plugin list or
         // file existence. Missing package components remain diagnosable rows.
-        addBuiltin("builtin.sevenzip", "7-Zip", 1, {"7z", "zip", "rar", "001"}, "7z · zip · rar · 001", "열기 · 해제 · 생성(7z/ZIP)", QString(hc::layout::SevenZipPackage) + "/7z.dll");
+        addBuiltin("builtin.sevenzip", "7-Zip", 1, hc::plugins::BuiltinExtensions("builtin.sevenzip"), "7z · zip · zipx · rar · 분할 압축", "열기 · 해제 · 생성(7z/ZIP)", QString(hc::layout::SevenZipPackage) + "/7z.dll");
         addBuiltin("builtin.iso", "ISO 이미지", 1, {"iso"}, "iso", "디스크 이미지 열기 · 생성", QString(hc::layout::IsoImagePackage) + "/hc_isoimage_wcx.wcx64");
         addBuiltin("builtin.alzegg", "ALZ · EGG", 1, {"alz", "egg"}, "alz · egg", "압축 열기 · 압축 해제", QString(hc::layout::AlzEggPackage) + "/UnEGG64.dll");
-        QStringList Documents; for (const auto Ext : hc::document::DocumentExtensions) Documents.append(QString::fromUtf8(Ext.data(), qsizetype(Ext.size())));
+        const auto Documents = hc::plugins::BuiltinExtensions("builtin.hyperviewer");
 
-        addBuiltin("builtin.hyperviewer", "HyperViewer", 2, Documents, "텍스트 · PDF · 이미지", "보기", QString(hc::layout::HyperViewerPackage) + "/HyperViewer.dll");
-        addBuiltin("builtin.hypereditor", "HyperEditor", 2, {"*"}, "텍스트 · PDF · 이미지", "편집", "HyperEditor.exe");
+        addBuiltin("builtin.hyperviewer", "HyperViewer", 2, Documents, hc::plugins::BuiltinDocumentSupport(), "보기", QString(hc::layout::HyperViewerPackage) + "/HyperViewer.dll");
+        addBuiltin("builtin.hypereditor", "HyperEditor", 2, Documents, hc::plugins::BuiltinDocumentSupport(), "편집", "HyperEditor.exe");
         addBuiltin("builtin.rhwp", "한글 문서", 2, {"hwp", "hwpx"}, "hwp · hwpx", "보기 · 편집", QDir::cleanPath(QDir(hc::layout::RhwpRuntime).filePath("runtime-inventory.json")));
         for (int Format = 0; Format < int(Formats.size()); ++Format) {
             const auto& Kind = Formats[Format]; const auto Items = plugins_.value(Kind.group_).toArray();
@@ -141,8 +197,8 @@ struct QPluginManagementPage::State {
         }
     }
     QString stateText(const Entry& Value) const {
-        if (!Value.builtin_) {
-            auto Rule = PluginApplicationRule::Parse(record(Value).value("application"));
+        {
+            auto Rule = PluginApplicationRule::Parse(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : record(Value).value("application"));
             if (!Rule.HasValue()) return QStringLiteral("조건 확인 필요");
             if (!Rule.Value().Enabled()) return QStringLiteral("사용 안 함");
         }
@@ -158,10 +214,10 @@ struct QPluginManagementPage::State {
         const auto Needle = search_->text().trimmed(); const auto Role = roles_->currentRow(); role_ = Role;
         for (int Index = 0; Index < entries_.size(); ++Index) {
             const auto& Value = entries_[Index];
-            if ((Role > 0 && Value.role_ != Role && !(Role == 4 && Value.actions_.contains(QStringLiteral("파일 정보")))) || (!Needle.isEmpty() && !(Value.name_ + ' ' + Value.support_ + ' ' + Value.actions_).contains(Needle, Qt::CaseInsensitive))) continue;
+            if ((Role > 0 && Value.role_ != Role && !(Role == 4 && Value.actions_.contains(QStringLiteral("파일 정보")))) || (!Needle.isEmpty() && !(Value.name_ + ' ' + Value.support_ + ' ' + Value.actions_ + ' ' + Value.extensions_.join(' ')).contains(Needle, Qt::CaseInsensitive))) continue;
             auto*& Group = Value.builtin_ ? Builtin : External;
             if (!Group) { Group = new QTreeWidgetItem(list_, {Value.builtin_ ? QStringLiteral("제품 내장") : QStringLiteral("추가한 플러그인")}); Group->setFlags(Qt::ItemIsEnabled); auto Font = Group->font(0); Font.setBold(true); Group->setFont(0, Font); }
-            auto* Item = new QTreeWidgetItem(Group, {Value.name_ + "\n" + Value.support_ + (Value.builtin_ ? QString{} : "\n적용: " + PluginApplicationRule::Describe(record(Value).value("application"))), Value.actions_}); Item->setData(0, Qt::UserRole, Index); Item->setData(0, Qt::UserRole + 1, Value.id_);
+            auto* Item = new QTreeWidgetItem(Group, {Value.name_ + "\n" + Value.support_ + "\n적용: " + PluginApplicationRule::Describe(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : record(Value).value("application")), Value.actions_}); Item->setData(0, Qt::UserRole, Index); Item->setData(0, Qt::UserRole + 1, Value.id_);
             Item->setToolTip(0, Value.path_ + '\n' + stateText(Value));
             Item->setIcon(0, owner_->style()->standardIcon(Value.role_ == 1 ? QStyle::SP_DriveHDIcon : QStyle::SP_FileIcon));
             if (Value.id_ == (Select.isEmpty() ? selectedId_ : Select)) Selected = Item;
@@ -195,28 +251,59 @@ void QPluginManagementPage::State::loadItem() {
     actions_->setText(QStringLiteral("지원 작업: ") + Value.actions_); status_->setText(QStringLiteral("상태: ") + stateText(Value));
     info_->setText(QStringLiteral("%1\n\n%2\n\n%3").arg(Value.builtin_ ? QStringLiteral("제품 내장 구성 요소") : QString::fromLatin1(Formats[Value.format_].token_), Value.path_ + "\n\n지원 형식: " + (Value.extensions_.isEmpty() ? Value.support_ : Value.extensions_.join("; ")),
         Value.builtin_ ? QStringLiteral("제품에 포함된 처리기입니다. 별도 플러그인을 등록하지 않아도 표시됩니다. 지원 형식은 제품 구성에 따릅니다.") : QStringLiteral("등록 형식은 설정에 기재한 지원 범위입니다. 실제 지원 여부는 플러그인의 감지·열기 결과로 확인합니다.")));
-    auto Rule = Record.value("application").toObject(); const auto Parsed = PluginApplicationRule::Parse(Record.value("application"));
+    auto Rule = Record.value("application").toObject(); const auto Parsed = PluginApplicationRule::Parse(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : Record.value("application"));
     enabled_->setChecked(Rule.value("enabled").toBool(true));
     auto Mode = Rule.value("mode").toString("all"); mode_->setCurrentIndex(Mode == "extensions" ? 1 : Mode == "tc" || Mode == "pattern" ? 2 : 0);
     dialect_->setCurrentIndex(Mode == "pattern" ? 1 : 0); expression_->setPlainText(Rule.value("expression").toString());
     registered_->setText(Value.extensions_.join("; ")); native_->setPlainText(Record.value("detect").toString());
+    native_->setPlaceholderText(Record.contains("nativeDetect") && Record["nativeDetect"].toString().isEmpty()
+        ? QStringLiteral("플러그인이 탐지식을 제공하지 않습니다. 필요하면 직접 입력하세요.")
+        : QStringLiteral("WLX 탐지식 — 검사·승인된 플러그인에서 자동으로 읽습니다."));
     extensions_->clear(); auto Available = Value.extensions_;
     for (const auto& Ext : strings(Rule.value("extensions"))) if (!Available.contains(Ext, Qt::CaseInsensitive)) Available.append(Ext);
     for (const auto& Ext : Available) { auto* Item = new QListWidgetItem(Ext, extensions_); Item->setFlags(Item->flags() | Qt::ItemIsUserCheckable); Item->setCheckState(Mode != "extensions" || strings(Rule.value("extensions")).contains(Ext, Qt::CaseInsensitive) ? Qt::Checked : Qt::Unchecked); }
-    editable_->setEnabled(!Value.builtin_ && Parsed.HasValue()); enabled_->setEnabled(!Value.builtin_ && Parsed.HasValue());
+    editable_->setVisible(!Value.builtin_); editable_->setEnabled(!Value.builtin_ && Parsed.HasValue());
+    enabled_->setEnabled(Parsed.HasValue());
+    builtinPanel_->setVisible(Value.builtin_); builtinPanel_->setEnabled(Parsed.HasValue());
+    builtinExtensions_->clear();
+    QStringList Excluded = Parsed.HasValue() ? Parsed.Value().ExcludedExtensions() : QStringList{};
+    if (Value.builtin_) {
+        for (const auto& Ext : Value.extensions_) {
+            auto* Item = new QListWidgetItem(Ext, builtinExtensions_);
+            Item->setFlags(Item->flags() | Qt::ItemIsUserCheckable);
+            Item->setCheckState(Excluded.contains(Ext, Qt::CaseInsensitive) ? Qt::Unchecked : Qt::Checked);
+            Excluded.removeAll(Ext);
+        }
+        builtinExcluded_->setText(Excluded.join("; "));
+    }
     // WFX is selected by connection, not by filename; only its enabled state applies.
     mode_->setEnabled(!Value.builtin_ && Value.role_ != 3 && Parsed.HasValue());
     conditionPages_->setCurrentIndex(mode_->currentIndex());
     registered_->setVisible(!Value.builtin_); native_->setVisible(!Value.builtin_ && Value.group_ == "wlx");
-    ruleStatus_->setText(Value.builtin_ ? QStringLiteral("내장 처리기의 지원 형식입니다. 외부 플러그인의 적용 범위를 줄여 함께 사용할 수 있습니다.") : !Parsed.HasValue() ? QStringLiteral("지원하지 않는 조건입니다. 기존 값을 보존하며 실행 대상에서 제외합니다.") : Value.role_ == 3 ? QStringLiteral("파일 시스템은 연결 대상으로 선택합니다. 파일명 조건은 사용하지 않습니다.") : QStringLiteral("사용자 조건과 플러그인 고유 감지를 모두 통과해야 적용됩니다."));
+    readDetection_->setVisible(!Value.builtin_ && Value.group_ == "wlx");
+    nativeLabel_->setVisible(!Value.builtin_ && Value.group_ == "wlx");
+    ruleStatus_->setText(!Parsed.HasValue() ? QStringLiteral("지원하지 않는 조건입니다. 기존 값을 보존하며 실행 대상에서 제외합니다.") : Value.builtin_ ? QStringLiteral("목록은 알려진 지원 형식입니다. 체크 해제한 확장자는 감지 전에 제외하고 다른 처리기 후보를 사용합니다. 그 외 확장자는 기존 동적 감지를 유지합니다.") : Value.role_ == 3 ? QStringLiteral("파일 시스템은 연결 대상으로 선택합니다. 파일명 조건은 사용하지 않습니다.") : QStringLiteral("사용자 조건과 플러그인 고유 감지를 모두 통과해야 적용됩니다."));
     hosted_->setChecked(Record.value("hostEnabled").toBool()); hosted_->setEnabled(!Value.builtin_);
     hostPages_->setCurrentIndex(Value.builtin_ ? 0 : Value.format_ + 1);
     if (!Value.builtin_) hosts_[Value.format_]->SelectPlugin(Value.index_);
     loading_ = false;
+    QTimer::singleShot(0, owner_, [this] { requestDetection(); });
 }
 void QPluginManagementPage::State::storeItem() {
-    if (loading_ || row_ < 0 || row_ >= entries_.size() || entries_[row_].builtin_) return;
+    if (loading_ || row_ < 0 || row_ >= entries_.size()) return;
     const auto Value = entries_[row_]; auto Record = record(Value);
+    if (Value.builtin_) {
+        if (!builtinPanel_->isEnabled()) return;
+        QStringList Excluded = builtinExcluded_->text().split(QRegularExpression("[;,|\\s]+"), Qt::SkipEmptyParts);
+        for (auto& Ext : Excluded) { Ext = Ext.toLower(); if (Ext.startsWith("*.")) Ext.remove(0, 2); else if (Ext.startsWith('.')) Ext.remove(0, 1); }
+        for (int I = 0; I < builtinExtensions_->count(); ++I)
+            if (builtinExtensions_->item(I)->checkState() == Qt::Unchecked) Excluded.append(builtinExtensions_->item(I)->text());
+        Excluded.removeDuplicates();
+        auto Rule = Record["application"].toObject();
+        Rule["version"] = 1; Rule["mode"] = "excludeExtensions"; Rule["enabled"] = enabled_->isChecked();
+        Rule["extensions"] = QJsonArray::fromStringList(Excluded); Record["application"] = Rule;
+        setRecord(Value, Record); return;
+    }
     // Future or malformed schemas stay intact until a compatible editor is used.
     if (editable_->isEnabled()) {
         QStringList Chosen; for (int Index = 0; Index < extensions_->count(); ++Index) if (extensions_->item(Index)->checkState() == Qt::Checked) Chosen.append(extensions_->item(Index)->text());
@@ -226,11 +313,17 @@ void QPluginManagementPage::State::storeItem() {
         for (auto& Ext : Exts) { Ext = Ext.toLower(); if (Ext.startsWith("*.")) Ext.remove(0, 2); else if (Ext.startsWith('.')) Ext.remove(0, 1); }
         Exts.removeDuplicates(); Record["extensions"] = QJsonArray::fromStringList(Exts);
     }
-    // Legacy detect strings remain unchanged; host detection comes from the SDK.
+    if (Value.group_ == "wlx" && native_->toPlainText() != Record["detect"].toString()) {
+        Record["detect"] = native_->toPlainText(); Record["detectOverride"] = true;
+    }
     setRecord(Value, Record);
 }
 bool QPluginManagementPage::State::validate(bool Show) {
     storeItem(); QString Message;
+    if (row_ >= 0 && entries_[row_].builtin_ && builtinPanel_->isEnabled()) {
+        const auto Parsed = PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(plugins_, entries_[row_].id_));
+        if (!Parsed.HasValue()) Message = QStringLiteral("제외 확장자는 pdf; epub처럼 ; 로 구분해 입력하세요.");
+    }
     if (row_ >= 0 && !entries_[row_].builtin_) {
         const auto& Value = entries_[row_]; const auto Record = record(Value);
         auto Parsed = PluginApplicationRule::Parse(Record.value("application"));
@@ -240,7 +333,11 @@ bool QPluginManagementPage::State::validate(bool Show) {
         auto Exts = PluginApplicationRule::Parse(ruleObject(true, "extensions", strings(Record.value("extensions")), {}));
         if (!Exts.HasValue()) Message = QStringLiteral("등록 형식은 확장자를 ; 로 구분해 입력하세요.");
         if (Value.group_ == "wcx" && strings(Record.value("extensions")).isEmpty()) Message = QStringLiteral("압축 플러그인의 등록 형식을 입력하세요. 예: 7z; rar; lha");
-        if (Value.group_ == "wlx" && !native_->toPlainText().trimmed().isEmpty()) { auto Detect = hc::plugins::WlxDetectionExpression::Parse(native_->toPlainText().toLocal8Bit()); if (!Detect.HasValue()) Message = QStringLiteral("고유 감지식 문법을 확인하세요."); }
+        if (Value.group_ == "wlx" && Record["detectOverride"].toBool() && !native_->toPlainText().trimmed().isEmpty()) {
+            const auto Bytes = native_->toPlainText().toLocal8Bit();
+            auto Detect = hc::plugins::WlxDetectionExpression::Parse(Bytes);
+            if (!Detect.HasValue() || QString::fromLocal8Bit(Bytes) != native_->toPlainText()) Message = QStringLiteral("탐지식 문법과 문자 인코딩을 확인하세요.");
+        }
     }
     if (!Message.isEmpty()) { ruleStatus_->setText(Message); if (Show) { tabs_->setCurrentIndex(0); QMessageBox::warning(owner_, QStringLiteral("플러그인 적용 조건"), Message); } return false; }
     return true;
@@ -324,14 +421,24 @@ void QPluginManagementPage::State::testFiles() {
                 if (Role == 2 && !Value.actions_.contains(QStringLiteral("보기"))) continue;
                 if (Role == 5 && !Value.actions_.contains(QStringLiteral("편집"))) continue;
                 if (Value.builtin_) {
+                    const auto Rule = PluginApplicationRule::Parse(hc::plugins::BuiltinApplication(Plugins, Value.id_));
+                    if (!Rule.HasValue()) continue;
+                    const auto Allowed = Rule.Value().Matches(File.fileName());
+                    if (!Allowed.HasValue() || !Allowed.Value()) continue;
                     if (Value.id_ == "builtin.hypereditor" && (File.suffix().compare("hwp", Qt::CaseInsensitive) == 0 || File.suffix().compare("hwpx", Qt::CaseInsensitive) == 0)) continue;
-                    if (Value.extensions_.contains("*") || Value.extensions_.contains(File.suffix(), Qt::CaseInsensitive)) Candidates.append(Value.name_ + QStringLiteral(" (내장)")); continue;
+                    if ((Value.id_ == "builtin.hyperviewer" || Value.id_ == "builtin.hypereditor") || Value.extensions_.contains(File.suffix(), Qt::CaseInsensitive)) Candidates.append(Value.name_ + QStringLiteral(" (내장)")); continue;
                 }
                 const auto Record = Plugins.value(Value.group_).toArray()[Value.index_].toObject(); auto Rule = PluginApplicationRule::Parse(Record.value("application")); if (!Rule.HasValue()) continue;
                 if (!Value.extensions_.isEmpty() && !Value.extensions_.contains(File.suffix(), Qt::CaseInsensitive)) continue;
                 std::optional<QByteArray> Prefix;
                 if (Rule.Value().NeedsPrefix()) { QFile Input(Path); if (!Input.open(QIODevice::ReadOnly)) continue; Prefix = Input.read(8192); }
                 auto Match = Rule.Value().Matches(File.fileName(), quint64(File.size()), Prefix);
+                if (Match.HasValue() && Match.Value() && Value.group_ == "wlx" && !Record["detect"].toString().trimmed().isEmpty()) {
+                    const auto Detection = PluginApplicationRule::Parse(ruleObject(true, "tc", {}, Record["detect"].toString()));
+                    if (!Detection.HasValue()) continue;
+                    if (Detection.Value().NeedsPrefix() && !Prefix) { QFile Input(Path); if (!Input.open(QIODevice::ReadOnly)) continue; Prefix = Input.read(8192); }
+                    Match = Detection.Value().Matches(File.fileName(), quint64(File.size()), Prefix);
+                }
                 if (Match.HasValue() && Match.Value()) Candidates.append(Value.name_);
             }
             Rows.append({File.fileName(), Candidates.isEmpty() ? QStringLiteral("조건 후보 없음") : Candidates.join(", "), QStringLiteral("고유 감지·승인은 실행 시 확인")});
@@ -354,6 +461,10 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
     S.status_->setObjectName("pluginStatus"); S.status_->setWordWrap(true);
     auto* Conditions = new QWidget; S.tabs_->addTab(Conditions, tr("적용 조건")); auto* ConditionLayout = new QVBoxLayout(Conditions); S.enabled_ = new QCheckBox(tr("이 플러그인 사용")); S.enabled_->setObjectName("pluginApplicationEnabled"); ConditionLayout->addWidget(S.enabled_);
     S.editable_ = new QWidget; auto* EditLayout = new QVBoxLayout(S.editable_); EditLayout->setContentsMargins(0, 0, 0, 0); ConditionLayout->addWidget(S.editable_, 1);
+    S.builtinPanel_ = new QWidget; auto* BuiltinLayout = new QVBoxLayout(S.builtinPanel_); BuiltinLayout->setContentsMargins(0, 0, 0, 0); ConditionLayout->addWidget(S.builtinPanel_, 1);
+    auto* BuiltinHint = new QLabel(tr("알려진 지원 확장자 — 사용하지 않을 항목의 체크를 해제하세요.")); BuiltinHint->setWordWrap(true); BuiltinLayout->addWidget(BuiltinHint);
+    S.builtinExtensions_ = new QListWidget; S.builtinExtensions_->setObjectName("builtinApplicationExtensions"); S.builtinExtensions_->setAccessibleName(tr("내장 처리기에 적용할 알려진 확장자")); BuiltinLayout->addWidget(S.builtinExtensions_, 1);
+    S.builtinExcluded_ = new QLineEdit; S.builtinExcluded_->setObjectName("builtinExcludedExtensions"); S.builtinExcluded_->setPlaceholderText(tr("추가 제외 확장자: foo; bar; tar.gz")); S.builtinExcluded_->setAccessibleName(tr("추가 제외 확장자")); BuiltinLayout->addWidget(S.builtinExcluded_);
     S.registered_ = new QLineEdit; S.registered_->setObjectName("pluginRegisteredExtensions"); S.registered_->setPlaceholderText(tr("등록 형식: 7z; rar; lha (감지형은 비워 두기)")); S.registered_->setToolTip(tr("플러그인이 지원한다고 등록한 확장자입니다. 아래 적용 범위와 구분됩니다.")); EditLayout->addWidget(S.registered_);
     S.mode_ = new QComboBox; S.mode_->setObjectName("pluginRuleMode"); S.mode_->addItems({tr("기본 감지 범위"), tr("선택한 확장자만"), tr("고급 조건식")}); EditLayout->addWidget(S.mode_); S.conditionPages_ = new QStackedWidget; EditLayout->addWidget(S.conditionPages_, 1);
     auto* Default = new QLabel(tr("등록된 지원 범위에서 플러그인 고유 감지 결과에 따라 적용합니다.")); Default->setWordWrap(true); Default->setAlignment(Qt::AlignTop); S.conditionPages_->addWidget(Default);
@@ -363,7 +474,22 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
     connect(CheckSyntax, &QPushButton::clicked, this, [this] { if (state_->validate(false)) state_->ruleStatus_->setText(tr("구문 정상 · 플러그인 고유 감지와 함께 적용합니다.")); });
     connect(Example, &QPushButton::clicked, this, [this] { state_->expression_->setPlainText(state_->dialect_->currentIndex() == 0 ? QStringLiteral("EXT=\"RAR\" | EXT=\"LHA\"") : QStringLiteral("*.(rar|lha)")); });
     auto* Syntax = new QLabel(tr("TC: EXT=\"RAR\" | EXT=\"LHA\"\n패턴: *.(rar|lha) · *, ?, (a|b), |, ~")); Syntax->setToolTip(tr("문서 보기와 파일 정보의 별도 프로세스 실행에서는 SIZE, FIND 및 바이트 조건도 사용할 수 있습니다. 압축과 기존 실행 방식에서는 파일명 조건을 사용하세요.")); Syntax->setWordWrap(true); AdvancedLayout->addWidget(Syntax); S.conditionPages_->addWidget(Advanced);
-    S.native_ = new QPlainTextEdit; S.native_->setObjectName("pluginNativeDetect"); S.native_->setMaximumHeight(54); S.native_->setReadOnly(true); S.native_->setToolTip(tr("기존 실행 방식의 감지식입니다. 별도 프로세스에서는 플러그인이 제공한 감지와 위 적용 조건을 사용합니다.")); S.native_->setPlaceholderText(tr("기존 WLX 고유 감지식")); EditLayout->addWidget(S.native_);
+    S.nativeLabel_ = new QLabel(tr("WLX 탐지식 — 수정·저장 가능")); EditLayout->addWidget(S.nativeLabel_);
+    S.native_ = new QPlainTextEdit; S.native_->setObjectName("pluginNativeDetect"); S.native_->setAccessibleName(tr("WLX 탐지식")); S.native_->setMaximumHeight(110); S.native_->setMinimumHeight(60); S.native_->setToolTip(tr("WLX 탐지식입니다. 수정한 식은 플러그인 원본 대신 사용하며 위 추가 적용 조건도 함께 적용합니다. 비우면 탐지식으로 제한하지 않습니다.")); S.native_->setPlaceholderText(tr("WLX 탐지식 — 검사·승인된 플러그인에서 자동으로 읽습니다.")); EditLayout->addWidget(S.native_);
+    S.readDetection_ = new QPushButton(tr("플러그인 원본 읽기")); S.readDetection_->setObjectName("pluginReadNativeDetect"); EditLayout->addWidget(S.readDetection_);
+    connect(S.readDetection_, &QPushButton::clicked, this, [this] { state_->storeItem(); state_->requestDetection(true); });
+    connect(S.native_, &QPlainTextEdit::textChanged, this, [this] { state_->storeItem(); });
+    const auto RefreshBuiltinRule = [this] {
+        auto& S = *state_;
+        if (S.loading_ || S.row_ < 0 || !S.entries_[S.row_].builtin_) return;
+        S.storeItem(); const auto& Value = S.entries_[S.row_];
+        S.status_->setText(tr("상태: ") + S.stateText(Value));
+        if (auto* Item = S.list_->currentItem())
+            Item->setText(0, Value.name_ + "\n" + Value.support_ + "\n적용: " + PluginApplicationRule::Describe(hc::plugins::BuiltinApplication(S.plugins_, Value.id_)));
+    };
+    connect(S.enabled_, &QCheckBox::toggled, this, RefreshBuiltinRule);
+    connect(S.builtinExtensions_, &QListWidget::itemChanged, this, RefreshBuiltinRule);
+    connect(S.builtinExcluded_, &QLineEdit::textEdited, this, RefreshBuiltinRule);
     S.ruleStatus_ = new QLabel; S.ruleStatus_->setWordWrap(true); ConditionLayout->addWidget(S.ruleStatus_);
     auto* Execution = new QWidget; S.tabs_->addTab(Execution, tr("실행·승인")); auto* ExecutionLayout = new QVBoxLayout(Execution); S.hosted_ = new QCheckBox(tr("별도 프로세스로 실행")); ExecutionLayout->addWidget(S.hosted_); S.hostPages_ = new QStackedWidget; ExecutionLayout->addWidget(S.hostPages_); auto* NativeInfo = new QLabel(tr("내장 구성은 제품 실행 경로에서 검증합니다.")); NativeInfo->setWordWrap(true); S.hostPages_->addWidget(NativeInfo);
     for (int Index = 0; Index < int(Formats.size()); ++Index) { S.hosts_[Index] = new QPluginHostSettings(Formats[Index].format_, S.hostPages_); S.hosts_[Index]->SetCompactMode(); S.hostPages_->addWidget(S.hosts_[Index]); }
@@ -374,7 +500,7 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
     connect(S.roles_, &QListWidget::currentRowChanged, this, [this](int) { auto& S = *state_; if (S.loading_) return; if (!S.validate()) { const QSignalBlocker Block(S.roles_); S.roles_->setCurrentRow(S.role_); return; } S.storeHosts(); S.rebuild(); });
     connect(S.search_, &QLineEdit::textChanged, this, [this] { auto& S = *state_; if (S.loading_ || !S.validate(false)) return; S.storeHosts(); S.rebuild(); });
     connect(S.hosted_, &QCheckBox::toggled, this, [this](bool Checked) { auto& S = *state_; if (!S.loading_ && S.row_ >= 0 && !S.entries_[S.row_].builtin_) S.hosts_[S.entries_[S.row_].format_]->SetHostEnabled(S.entries_[S.row_].index_, Checked); });
-    for (auto* Host : S.hosts_) Host->onChanged_ = [this] { auto& S = *state_; if (S.loading_ || S.row_ < 0 || S.entries_[S.row_].builtin_) return; S.storeHosts(); const QSignalBlocker Block(S.hosted_); S.hosted_->setChecked(S.record(S.entries_[S.row_]).value("hostEnabled").toBool()); S.status_->setText(S.stateText(S.entries_[S.row_])); };
+    for (auto* Host : S.hosts_) Host->onChanged_ = [this] { auto& S = *state_; if (S.loading_ || S.row_ < 0 || S.entries_[S.row_].builtin_) return; S.storeHosts(); const QSignalBlocker Block(S.hosted_); S.hosted_->setChecked(S.record(S.entries_[S.row_]).value("hostEnabled").toBool()); S.status_->setText(S.stateText(S.entries_[S.row_])); QTimer::singleShot(0, this, [this] { state_->requestDetection(); }); };
     connect(S.mode_, &QComboBox::currentIndexChanged, S.conditionPages_, &QStackedWidget::setCurrentIndex);
     connect(S.registered_, &QLineEdit::editingFinished, this, [this] { auto& S = *state_; if (S.loading_) return; S.storeItem(); if (S.validate(false)) S.loadItem(); });
     connect(Add, &QPushButton::clicked, this, [this] { state_->add(); }); connect(S.remove_, &QPushButton::clicked, this, [this] { state_->remove(); }); connect(S.up_, &QPushButton::clicked, this, [this] { state_->move(-1); }); connect(S.down_, &QPushButton::clicked, this, [this] { state_->move(1); }); connect(S.test_, &QPushButton::clicked, this, [this] { state_->testFiles(); });
@@ -387,6 +513,7 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
 }
 QPluginManagementPage::~QPluginManagementPage() = default;
 void QPluginManagementPage::Load(hc::settings::Repository& Settings) {
+    state_->settingsDirectory_ = QFileInfo(Settings.FileName()).absolutePath();
     LoadDocument(Settings.Read(hc::settings::Section::Plugins).toObject());
     for (auto* Host : state_->hosts_) Host->Load(Settings);
 }

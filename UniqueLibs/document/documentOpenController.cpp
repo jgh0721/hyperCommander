@@ -138,6 +138,8 @@ void DocumentOpenController::prepare(const QString& Token, DocumentOpenRequest R
         if (At == Fresh.targets_.end() || !DocumentHandlerResolver::Supports(At->second.descriptor_, Request.intent_, Names, Selection.textContent_)
             || At->second.executable_ != Target.executable_ || At->second.arguments_ != Target.arguments_ || At->second.rhwpEditor_ != Target.rhwpEditor_
             || At->second.plugin_.binaryPath_ != Target.plugin_.binaryPath_
+            || At->second.plugin_.applicationRule_ != Target.plugin_.applicationRule_
+            || At->second.plugin_.detectionOverride_ != Target.plugin_.detectionOverride_
             || At->second.plugin_.approval_.reviewed_ != Target.plugin_.approval_.reviewed_) {
             report(Token, "rejected", "document-handler-changed"); return;
         }

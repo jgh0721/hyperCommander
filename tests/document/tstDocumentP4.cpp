@@ -54,6 +54,23 @@ QMenu* Menu() { return qobject_cast<QMenu*>(QApplication::activePopupWidget()); 
 class DocumentP4Tests final : public QObject {
     Q_OBJECT
 private slots:
+    void builtinExclusionFallsThrough() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
+        const QJsonObject Rule{{"version", 1}, {"enabled", true}, {"mode", "excludeExtensions"}, {"extensions", QJsonArray{"PDF", "foo", "tar.gz"}}};
+        auto Plugins = Settings.Read(hc::settings::Section::Plugins).toObject();
+        Plugins["builtin"] = QJsonObject{{"builtin.hyperviewer", QJsonObject{{"application", Rule}}}, {"builtin.hypereditor", QJsonObject{{"application", Rule}}}};
+        QVERIFY(Settings.Put(hc::settings::Section::Plugins, Plugins));
+        hc::plugins::PluginViewerOptions Options; Options.binaryPath_ = QCoreApplication::applicationFilePath(); Options.executable_ = Options.binaryPath_; Options.approval_.approved_ = true;
+        auto External = BuildPluginViewerTarget("external", Options, {"pdf", "foo"});
+        auto Result = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {External});
+        QCOMPARE(DocumentHandlerResolver::Resolve(Result.registry_, DocumentIntent::View, {{"sample.PDF"}}, "builtin.hyperviewer").candidates_, std::vector<std::string>{External.descriptor_.stableId_});
+        // Content-text fallback must not reintroduce an explicitly excluded type.
+        QCOMPARE(DocumentHandlerResolver::Resolve(Result.registry_, DocumentIntent::View, {{"sample.foo"}, false, true, {true}}, "builtin.hyperviewer").candidates_, std::vector<std::string>{External.descriptor_.stableId_});
+        QVERIFY(!DocumentHandlerResolver::Supports(*Result.registry_.Find("builtin.hypereditor"), DocumentIntent::Edit, {"a.tar.gz"}));
+        QVERIFY(DocumentHandlerResolver::Supports(*Result.registry_.Find("builtin.hypereditor"), DocumentIntent::Edit, {"a.newformat"}));
+        QVERIFY(DocumentHandlerResolver::Supports(*Result.registry_.Find("builtin.hyperviewer"), DocumentIntent::View, {"a.newformat"}, {true}));
+        QVERIFY(DocumentHandlerResolver::Supports(*Result.registry_.Find("builtin.hyperviewer"), DocumentIntent::View, {"book.epub"}));
+    }
     void candidatesAndMixedSelection() {
         DocumentHandlerRegistry Registry; QVERIFY(Registry.Register(Handler("text", {"*.TXT", "c?"}))); QVERIFY(!Registry.Register(Handler("text")));
         QVERIFY(Registry.Register(Handler("pdf", {"pdf"}))); QVERIFY(Registry.Register(Handler("all")));

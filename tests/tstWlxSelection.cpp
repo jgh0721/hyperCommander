@@ -9,7 +9,9 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
+#include <future>
 #include "pluginHost/hostedViewerSession.hpp"
+#include "pluginHost/wlxDetectionSettings.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "memoryStorage.hpp"
 
@@ -105,6 +107,27 @@ private:
         return Ini.open(QIODevice::WriteOnly) && Ini.write("[fixture]\r\nvalue=123\r\nmode=" + Mode + "\r\nexpression=" + Expression + "\r\n") > 0;
     }
 private slots:
+    void detectionReadAndOverride() {
+        QTemporaryDir Directory; PluginViewerOptions Options;
+        QVERIFY(candidate(Directory.filePath("plugin"), Options, "EXT=\"EXE\""));
+        const auto Original = std::async(std::launch::async, [&] { return ReadWlxDetection(Options); }).get();
+        QVERIFY2(Original.HasValue(), Original.HasValue() ? "" : Original.Failure().code_.c_str());
+        QCOMPARE(Original.Value(), QString("EXT=\"EXE\""));
+        Options.detectionOverride_ = "EXT=\"TXT\"";
+        QWidget Parent; Parent.resize(320, 200); Parent.show();
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Observation = std::make_shared<struct Observation>();
+        auto Opened = Service.OpenAutomatic({Options}, std::make_shared<ObservedContent>(Observation), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Opened.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Opened.Value()->Snapshot().status_ == ViewerStatus::Ready || Opened.Value()->Details().idle_, 5000);
+        QCOMPARE(Opened.Value()->Snapshot().status_, ViewerStatus::Ready);
+        Opened.Value()->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 5000);
+        Options.detectionOverride_ = "EXT=\"EXE\"";
+        auto Rejected = Service.Open(Options, std::make_shared<ObservedContent>(Observation), QString::number(Parent.winId(), 16), 320, 200);
+        QVERIFY(Rejected.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Rejected.Value()->Details().idle_, 5000);
+        QVERIFY(Rejected.Value()->Details().noMatch_);
+    }
     void builtinProbeRunsOnWorker()
     {
         QTemporaryDir Directory; PluginViewerOptions Options;

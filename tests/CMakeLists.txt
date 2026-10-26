@@ -27,7 +27,7 @@ target_include_directories(hc_plugin_management_tests PRIVATE "${PROJECT_SOURCE_
 target_link_libraries(hc_plugin_management_tests PRIVATE hc_plugin_viewer_qt hc_archive_creation Qt6::Widgets Qt6::Concurrent Qt6::Test Qt6::CorePrivate)
 target_compile_options(hc_plugin_management_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_test(NAME hc.plugin_management COMMAND hc_plugin_management_tests)
-add_dependencies(hc_plugin_management_tests hc_wcx_fixture hc_wlx_fixture hc_sevenzip_package hc-plugin-host-x64)
+add_dependencies(hc_plugin_management_tests hc_wcx_fixture hc_wlx_fixture hc_wlx_sdk_fixture hc_sevenzip_package hc-plugin-host-x64)
 set_tests_properties(hc.plugin_management PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 hc_enable_qt_deployment(hc_plugin_management_tests TEST PLUGINS)
 qt_add_executable(hc_batch_rename_tests tstBatchRename.cpp)

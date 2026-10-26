@@ -24,7 +24,7 @@ public:
         Rule.enabled_ = Object.value("enabled").toBool(true);
         Rule.mode_ = Object.value("mode").toString("all");
         if (Rule.mode_ == "all") return Rule;
-        if (Rule.mode_ == "extensions") {
+        if (Rule.mode_ == "extensions" || Rule.mode_ == "excludeExtensions") {
             if (!Object.value("extensions").isArray() || Object.value("extensions").toArray().size() > 256) return invalid("plugin-rule-extensions");
             for (const auto& Item : Object.value("extensions").toArray()) {
                 if (!Item.isString()) return invalid("plugin-rule-extensions");
@@ -69,6 +69,7 @@ public:
         return Rule;
     }
     bool Enabled() const { return enabled_; }
+    QStringList ExcludedExtensions() const { return mode_ == "excludeExtensions" ? extensions_ : QStringList{}; }
     bool NeedsPrefix() const { return tc_ && tc_->NeedsPrefix(); }
     bool NeedsSize() const { return needsSize_; }
     bool NameOnly() const { return !NeedsPrefix() && !NeedsSize(); }
@@ -77,9 +78,10 @@ public:
         if (mode_ == "all") return true;
         if (Name.size() > 4096 || Name.contains(QChar::Null)) return invalid("plugin-rule-name");
         const auto FileName = QFileInfo(Name).fileName();
-        if (mode_ == "extensions") {
-            for (const auto& Ext : extensions_) if (FileName.endsWith('.' + Ext, Qt::CaseInsensitive)) return true;
-            return false;
+        if (mode_ == "extensions" || mode_ == "excludeExtensions") {
+            const bool Exclude = mode_ == "excludeExtensions";
+            for (const auto& Ext : extensions_) if (FileName.endsWith('.' + Ext, Qt::CaseInsensitive)) return !Exclude;
+            return Exclude;
         }
         if (mode_ == "pattern") return pattern_.match(FileName).hasMatch() != negate_;
         if ((NeedsPrefix() && !Prefix) || (needsSize_ && !Size)) return invalid("plugin-rule-metadata-required");
@@ -93,6 +95,7 @@ public:
         const auto& Rule = Parsed.Value();
         if (!Rule.enabled_) return QStringLiteral("사용 안 함");
         if (Rule.mode_ == "all") return QStringLiteral("기본 감지 범위");
+        if (Rule.mode_ == "excludeExtensions") return Rule.extensions_.isEmpty() ? QStringLiteral("기본 감지 범위") : QStringLiteral("제외: ") + Rule.extensions_.join(" · ");
         if (Rule.mode_ == "extensions") return Rule.extensions_.isEmpty() ? QStringLiteral("적용 형식 없음") : Rule.extensions_.join(" · ");
         return Rule.expression_;
     }
