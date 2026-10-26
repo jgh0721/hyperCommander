@@ -47,6 +47,19 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void deferredCppStylingPreservesMultilineState() {
+        const QByteArray Unit("/* comment\nstill comment */\nint value = 3;\n");
+        const auto Bytes=Unit.repeated(2048);QTextView View;View.resize(700,400);
+        View.LoadContent(QString::fromUtf8(Bytes),"large.cpp","UTF-8",Bytes,"LF");View.show();
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(View.Backend());QVERIFY(Backend);
+        QTRY_COMPARE(Backend->Send(SCI_GETSTYLEAT,Bytes.indexOf("still")),qintptr(1));
+        Backend->setCursorPosition(6143,0);Backend->scrollRangeToView(Bytes.size()-2,Bytes.size()-2);
+        QTRY_COMPARE_WITH_TIMEOUT(Backend->Send(SCI_GETSTYLEAT,Bytes.lastIndexOf("int")),qintptr(5),10000);
+        auto Settings=ScintillaEditorSettings::standard();Settings.tabWidth=7;Backend->applySettings(Settings);
+        QCOMPARE(Backend->Send(SCI_GETSTYLEAT,Bytes.lastIndexOf("int")),qintptr(5));
+        QCOMPARE(View.Content().toUtf8(),Bytes);QVERIFY(!View.isModified());
+    }
+
     void epubGlobalSettingsApplyAndCancel() {
         QTemporaryDir Temp;const auto Path=Temp.filePath("HyperEditor.json");
         using hc::epub::poc::ReadingSettings;using hc::epub::poc::ReadingStore;

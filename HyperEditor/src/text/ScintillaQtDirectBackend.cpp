@@ -787,7 +787,10 @@ bool ScintillaQtDirectBackend::applyLanguage(const QString& displayName)
 	setKeywordsForLexer(lexerKey);
 	applySyntaxStyles(m_darkTheme);
 
-	m_editor->send(sciMessage(SCI_COLOURISE), 0, -1);
+	// Lexer replacement invalidates styling. Paint the visible range first;
+	// SC_IDLESTYLING_ALL completes the rest without a synchronous full pass.
+	m_editor->send(sciMessage(SCI_STARTSTYLING), 0);
+	m_editor->update();
 	const bool applied = m_editor->send(sciMessage(SCI_GETLEXER)) != SCLEX_NULL;
 	writeLexerTrace(displayName, lexerKey, applied);
 	return applied;
