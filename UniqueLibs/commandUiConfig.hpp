@@ -110,4 +110,37 @@ inline bool InvokeShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& 
     const auto Command = ShortcutCommand(Event, Values);
     return !Command.isEmpty() && Invoke(Command);
 }
+
+// Command-edit bindings are contextual: panel Enter/Shift+Enter keep their
+// existing actions. Explicit user overrides (including null) take precedence.
+inline QString CommandLineShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& Values,
+    const QJsonObject& Overrides)
+{
+    if (Event.matches(QKeySequence::Copy) || Event.matches(QKeySequence::Cut)
+        || Event.matches(QKeySequence::Paste) || Event.matches(QKeySequence::SelectAll)
+        || Event.matches(QKeySequence::Undo) || Event.matches(QKeySequence::Redo)) return {};
+    auto Key = Event.keyCombination();
+    const auto OriginalName = QKeySequence(Key).toString(QKeySequence::PortableText);
+    if (Event.key() == Qt::Key_Enter && !Overrides.contains(OriginalName))
+        Key = QKeyCombination(Event.modifiers() & ~Qt::KeypadModifier, Qt::Key_Return);
+    auto Id = CommandId(Values.value(Key));
+    if (!Overrides.contains(QKeySequence(Key).toString(QKeySequence::PortableText))) {
+        if (Key == QKeyCombination(Qt::Key_Return)) Id = "hc.commandLine.execute";
+        if (Key == QKeyCombination(Qt::ShiftModifier, Qt::Key_Return)) Id = "hc.commandLine.keepOpen";
+    }
+    return Id == "hc.commandLine.execute" || Id == "hc.commandLine.keepOpen" ? Id : QString{};
+}
+
+inline QString CommandLinePrompt(const QString& Path, int MaxCharacters = 36)
+{
+    const auto Full = Path.endsWith(u'>') ? Path : Path + u'>';
+    const auto Characters = Full.toUcs4();
+    MaxCharacters = qMax(8, MaxCharacters);
+    if (Characters.size() <= MaxCharacters) return Full;
+    const auto Prefix = qMin(12, (MaxCharacters - 3) / 2);
+    const auto Suffix = MaxCharacters - 3 - Prefix;
+    // Count Unicode code points so an emoji/supplementary character is intact.
+    return QString::fromUcs4(Characters.constData(), Prefix) + "..."
+        + QString::fromUcs4(Characters.constData() + Characters.size() - Suffix, Suffix);
+}
 } // namespace hc::ui

@@ -989,6 +989,12 @@ void CommandUiBridge::createCommandUi()
         if (auto* Model = PanelModel(activePanel_)) Model->RequestDirectorySizes();
     });
     Add("hc.file.context", tr("상황메뉴"), [this] { ShowShellMenu(commandIndex()); });
+    Add("hc.commandLine.execute", tr("명령행 실행"), [Window] {
+        QMetaObject::invokeMethod(Window, "SubmitCommandLine", Qt::DirectConnection, Q_ARG(bool, false));
+    });
+    Add("hc.commandLine.keepOpen", tr("명령행 실행 후 창 유지"), [Window] {
+        QMetaObject::invokeMethod(Window, "SubmitCommandLine", Qt::DirectConnection, Q_ARG(bool, true));
+    });
     for (const auto& Command : GlobalBuiltInCMDs) {
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;

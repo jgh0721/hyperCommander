@@ -12,7 +12,10 @@
 #include <fmstyle/WatercolorChrome.h>
 #include <QEvent>
 #include <QFocusEvent>
-#include <QProcess>
+#include <QLineEdit>
+#include <QLabel>
+#include "UniqueLibs/commandLineExecution.hpp"
+#include "UniqueLibs/commandUiConfig.hpp"
 #include <QToolButton>
 #include "Components/cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
@@ -52,7 +55,29 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     commandLine_ = new fm::ui::CommandLine(ui.centralwidget); commandLine_->setObjectName("hc.commandLine");
     ui.verticalLayout->addWidget(commandLine_);
     commandLine_->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showCommandLine"].toBool(true));
-    connect(commandLine_, &fm::ui::CommandLine::commandEntered, this, &QMainUI::executeCommandLine);
+    connect(commandLine_, &fm::ui::CommandLine::commandEntered, this, [this](const QString& Command) { executeCommandLine(Command, false); });
+    const auto RefreshCommandHelp = [this] {
+        const auto Keys = TyStCommandMgr::GetInstance()->Retrieve();
+        const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+        auto Candidates = Keys.keys();
+        Candidates.append(QKeyCombination(Qt::Key_Return));
+        Candidates.append(QKeyCombination(Qt::ShiftModifier, Qt::Key_Return));
+        QStringList Run, Keep;
+        for (const auto Key : Candidates) {
+            const QKeyEvent Event(QEvent::KeyPress, Key.key(), Key.keyboardModifiers());
+            const auto Id = hc::ui::CommandLineShortcut(Event, Keys, Overrides);
+            const auto Label = QKeySequence(Key).toString(QKeySequence::NativeText);
+            if (Id == "hc.commandLine.execute") Run.append(Label);
+            if (Id == "hc.commandLine.keepOpen") Keep.append(Label);
+        }
+        Run.removeDuplicates(); Keep.removeDuplicates(); Run.sort(); Keep.sort();
+        const auto None = tr("단축키 없음");
+        commandLine_->lineEdit()->setPlaceholderText(tr("명령 입력 — %1 실행 · %2 창 유지 · Ctrl+↓ 기록")
+            .arg(Run.isEmpty() ? None : Run.join(", "), Keep.isEmpty() ? None : Keep.join(", ")));
+        commandLine_->setToolTip(tr("외부 명령은 별도 창에서 독립 실행합니다. cmd는 셸 하나를 열고 명시한 /C·/K 옵션을 따릅니다. Ctrl+C는 입력 텍스트를 복사합니다."));
+    };
+    connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, this, RefreshCommandHelp);
+    RefreshCommandHelp();
     updateWindowFrame();
     connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, &QMainUI::updateWindowFrame);
     ui.verticalLayout_2->setContentsMargins(0, 0, 0, 0);
@@ -538,7 +563,7 @@ void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
 {
     const auto* Panel = qobject_cast<CmpPanel*>(sender());
     if (Panel && Panel != retrieveSrcPanel()) return;
-    commandLine_->setPrompt(CurrentPath);
+    updateCommandLinePrompt(CurrentPath);
     setWindowTitle(CurrentPath.isEmpty() ? QCoreApplication::applicationName() : CurrentPath + " — " + QCoreApplication::applicationName());
 }
 
@@ -548,7 +573,7 @@ void QMainUI::setActivePanel(int Index)
     ui.cmpLeftPanel->setActivePanel(currentPanelIndex == 0);
     ui.cmpRightPanel->setActivePanel(currentPanelIndex == 1);
     auto* Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
-    commandLine_->setPrompt(Panel->CurrentPath());
+    updateCommandLinePrompt(Panel->CurrentPath());
     setWindowTitle(Panel->CurrentPath().isEmpty() ? QCoreApplication::applicationName() : Panel->CurrentPath() + " — " + QCoreApplication::applicationName());
     emit sigActivePanelChanged(Panel);
 }
@@ -571,6 +596,19 @@ void QMainUI::oo_notifyPanelActivated()
 
 bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
 {
+    if (commandLine_ && Object == commandLine_->lineEdit()
+        && (Event->type() == QEvent::ShortcutOverride || Event->type() == QEvent::KeyPress)) {
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+        const auto Id = hc::ui::CommandLineShortcut(*Key, TyStCommandMgr::GetInstance()->Retrieve(), Overrides);
+        const bool Execute = Id == "hc.commandLine.execute" || Id == "hc.commandLine.keepOpen";
+        if (Event->type() == QEvent::ShortcutOverride) {
+            // Keep editing shortcuts (especially Ctrl+C) inside the line edit.
+            Event->accept(); return true;
+        }
+        if (Execute) { SubmitCommandLine(Id == "hc.commandLine.keepOpen"); return true; }
+        if (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter) return true;
+    }
     // QWidget dispatches activation/unblocking through event(), not changeEvent().
     if (Object == this && (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowUnblocked)) {
         if (Event->type() == QEvent::WindowActivate) activationFocusRestorePending_ = true;
@@ -605,17 +643,12 @@ void QMainUI::closeEvent( QCloseEvent* Event )
         if (Updating) { Event->ignore(); return; }
     }
 
-    if (commandProcess_ && commandProcess_->state() != QProcess::NotRunning) {
-        if (QMessageBox::question(this, tr("명령 실행 중"), tr("실행 중인 명령을 종료하고 창을 닫으시겠습니까?")) != QMessageBox::Yes) { Event->ignore(); return; }
-        commandProcess_->kill(); commandProcess_->waitForFinished(1000);
-    }
     if (Updating && !update_->LaunchPending()) { Event->ignore(); return; }
     QMainWindow::closeEvent( Event );
 }
 
 bool QMainUI::canRestartForUpdate() const
 {
-    if (commandProcess_ && commandProcess_->state() != QProcess::NotRunning) return false;
     if (const auto Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge && Bridge->FileJobs())
         for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) {
             using hc::operations::JobState;
@@ -737,7 +770,32 @@ CmpPanel* QMainUI::retrieveDstPanel() const
     return nullptr;
 }
 
-void QMainUI::executeCommandLine(const QString& Command)
+void QMainUI::updateCommandLinePrompt(const QString& Path)
+{
+    commandLine_->setPrompt(Path);
+    auto* Prompt = commandLine_->findChild<QLabel*>();
+    if (!Prompt) return;
+    constexpr int MaximumWidth = 240;
+    auto Text = hc::ui::CommandLinePrompt(Path);
+    for (int Limit = 35; Limit >= 8 && Prompt->fontMetrics().horizontalAdvance(Text) > MaximumWidth; --Limit)
+        Text = hc::ui::CommandLinePrompt(Path, Limit);
+    Prompt->setMaximumWidth(MaximumWidth);
+    Prompt->setText(Text);
+    Prompt->setAccessibleName(Path);
+    // setPrompt() keeps the original full path in the label tooltip.
+}
+
+void QMainUI::SubmitCommandLine(bool KeepOpen)
+{
+    const auto Command = commandLine_->lineEdit()->text().trimmed();
+    if (Command.isEmpty()) return;
+    auto History = commandLine_->history(); History.removeAll(Command); History.prepend(Command);
+    commandLine_->SetHistory(History);
+    commandLine_->lineEdit()->clear();
+    executeCommandLine(Command, KeepOpen);
+}
+
+void QMainUI::executeCommandLine(const QString& Command, bool KeepOpen)
 {
     auto* Panel = retrieveSrcPanel(); if (!Panel) return;
     if (Command.startsWith("hc.") || Command.startsWith("cm_")) {
@@ -749,46 +807,20 @@ void QMainUI::executeCommandLine(const QString& Command)
     if (State.tabs_.isEmpty()) return;
     const auto Location = State.tabs_[State.active_].location_;
     if (Command.compare("cd", Qt::CaseInsensitive) == 0) { statusBar()->showMessage(Panel->CurrentPath()); return; }
-    if (Command.startsWith("cd ", Qt::CaseInsensitive)) {
+    if (Command.startsWith("cd ", Qt::CaseInsensitive) && !hc::ui::commandLine::HasShellSyntax(Command)) {
         auto Path = Command.mid(3).trimmed();
+        if (Path.startsWith("/d ", Qt::CaseInsensitive)) Path = Path.mid(3).trimmed();
         if (Path.startsWith('"') && Path.endsWith('"')) Path = Path.mid(1, Path.size() - 2);
         if (Path.isEmpty()) { statusBar()->showMessage(tr("이동할 경로를 입력하십시오.")); return; }
-        if (Location.kind_ == hc::storage::LocatorKind::Local && QDir::isRelativePath(Path)) Path = QDir(Panel->CurrentPath()).absoluteFilePath(Path);
+        if ((Location.kind_ == hc::storage::LocatorKind::Local || Location.kind_ == hc::storage::LocatorKind::Smb) && QDir::isRelativePath(Path)) Path = QDir(Panel->CurrentPath()).absoluteFilePath(Path);
         Panel->ChangeCurrentPath(Path, {}); return;
     }
-    if (Location.kind_ != hc::storage::LocatorKind::Local) {
+    if (Location.kind_ != hc::storage::LocatorKind::Local && Location.kind_ != hc::storage::LocatorKind::Smb) {
         statusBar()->showMessage(tr("외부 명령은 로컬 폴더에서 실행할 수 있습니다. 현재 위치: %1").arg(Panel->CurrentPath())); return;
     }
-    if (commandProcess_ && commandProcess_->state() != QProcess::NotRunning) {
-        statusBar()->showMessage(tr("앞서 실행한 명령이 진행 중입니다.")); return;
-    }
-    auto* Process = new QProcess(this); commandProcess_ = Process;
-    Process->setWorkingDirectory(Panel->CurrentPath());
-    Process->setProgram(qEnvironmentVariable("COMSPEC", "cmd.exe"));
-    // cmd owns quoting, pipes and redirection. QProcess's argument quoting would
-    // escape those a second time, so pass the entered command as a native tail.
-    Process->setNativeArguments("/D /S /C " + Command);
-    Process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* Arguments) { Arguments->flags |= CREATE_NO_WINDOW; });
-    Process->setProcessChannelMode(QProcess::MergedChannels);
-    commandLine_->SetRunning(true);
-    statusBar()->showMessage(tr("실행 중 · %1 · %2").arg(Panel->CurrentPath(), Command));
-    connect(Process, &QProcess::readyReadStandardOutput, Process, [Process] {
-        auto Output = Process->property("hc.output").toByteArray(); Output += Process->readAllStandardOutput();
-        Process->setProperty("hc.output", Output.right(65536));
-    });
-    const auto Complete = [this, Process](const QString& Message) {
-        commandLine_->SetRunning(false); statusBar()->showMessage(Message);
-        commandLine_->setToolTip(Message + "\n" + QString::fromLocal8Bit(Process->property("hc.output").toByteArray()));
-        if (commandProcess_ == Process) commandProcess_ = nullptr;
-        Process->deleteLater();
-    };
-    connect(Process, &QProcess::errorOccurred, this, [Process, Complete](QProcess::ProcessError Error) {
-        if (Error == QProcess::FailedToStart) Complete(QObject::tr("명령 시작 실패: %1").arg(Process->errorString()));
-    });
-    connect(Process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [Command, Complete](int Code, QProcess::ExitStatus Status) {
-        Complete(Status == QProcess::NormalExit && Code == 0 ? QObject::tr("명령 완료 · %1").arg(Command) : QObject::tr("명령 실패 (종료 코드 %1) · %2").arg(Code).arg(Command));
-    });
-    Process->start();
+    const auto Directory = Panel->CurrentPath();
+    const auto Error = hc::ui::commandLine::Launch(hc::ui::commandLine::Plan(Command, Directory, KeepOpen), Directory);
+    statusBar()->showMessage(Error.isEmpty() ? tr("외부 실행 · %1 · %2").arg(Directory, Command) : Error, 10000);
 }
 
 // Launching a second process opens folders; it never executes arbitrary commands.

@@ -1,4 +1,5 @@
 ﻿#include <QtTest>
+#include "UniqueLibs/commandLineExecution.hpp"
 #include <QTemporaryDir>
 #include <QLineEdit>
 #include "UniqueLibs/renameSelection.hpp"
@@ -26,6 +27,80 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void commandLinePromptElision()
+    {
+        QCOMPARE(CommandLinePrompt("C:\\work"), QString("C:\\work>"));
+        QCOMPARE(CommandLinePrompt("C:\\work>"), QString("C:\\work>"));
+        const auto Path = QStringLiteral("D:\\작업 폴더\\매우 긴 상위 디렉터리\\추가 경로\\현재 작업 폴더");
+        const auto Short = CommandLinePrompt(Path);
+        QCOMPARE(Short.toUcs4().size(), 36);
+        QVERIFY(Short.startsWith("D:\\"));
+        QVERIFY(Short.contains("..."));
+        QVERIFY(Short.endsWith("현재 작업 폴더>"));
+        const auto Unicode = QString::fromUcs4(U"D:\\😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀");
+        const auto Elided = CommandLinePrompt(Unicode);
+        QCOMPARE(Elided.toUcs4().size(), 36);
+        QVERIFY(!Elided.contains(QChar::ReplacementCharacter));
+        QCOMPARE(QString::fromUtf8(Elided.toUtf8()), Elided);
+    }
+    void commandLineContextualKeys()
+    {
+        const auto Keys = EffectiveShortcuts({}, {});
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Keys, {}), QString("hc.commandLine.execute"));
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Enter, Qt::ShiftModifier | Qt::KeypadModifier), Keys, {}), QString("hc.commandLine.keepOpen"));
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier), Keys, {}).isEmpty());
+        const QJsonObject Overrides{{"Return", QJsonValue::Null}, {"Ctrl+R", "hc.commandLine.keepOpen"}};
+        const auto Custom = EffectiveShortcuts({}, Overrides);
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Custom, Overrides).isEmpty());
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier), Custom, Overrides), QString("hc.commandLine.keepOpen"));
+        QCOMPARE(ShortcutCommand(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Keys), QString("hc.navigate.open"));
+    }
+    void commandLineLaunchPlans()
+    {
+        using namespace hc::ui::commandLine;
+        const auto Cwd = QDir::tempPath();
+        for (const bool Keep : {false, true}) {
+            const auto Bare = Plan("cmd", Cwd, Keep);
+            QVERIFY(Bare.program_.endsWith("cmd.exe", Qt::CaseInsensitive));
+            QVERIFY(Bare.arguments_.isEmpty());
+            QCOMPARE(Plan("cmd /C echo done", Cwd, Keep).arguments_, QString("/C echo done"));
+            QCOMPARE(Plan("cmd /K echo done", Cwd, Keep).arguments_, QString("/K echo done"));
+            QCOMPARE(Plan("cmd /K echo done > result.txt", Cwd, Keep).arguments_, QString("/K echo done > result.txt"));
+        }
+        QCOMPARE(Plan("echo hello | findstr hello > out.txt", Cwd, false).arguments_,
+            QString("/D /S /C \"echo hello | findstr hello > out.txt\""));
+        QCOMPARE(Plan("copy con xxx.bat", Cwd, true).arguments_, QString("/D /S /K \"copy con xxx.bat\""));
+        QVERIFY(HasShellSyntax("cd sub && dir"));
+        QVERIFY(HasShellSyntax("cd %TEMP%"));
+        QVERIFY(!HasShellSyntax("cd \"한글 & 공백\""));
+        const auto Quoted = QString("\"%1\" /C echo done").arg(qEnvironmentVariable("COMSPEC"));
+        QCOMPARE(Plan(Quoted, Cwd, true).arguments_, QString("/C echo done"));
+        QVERIFY(!Launch(Plan("cmd", Cwd, false), "\\\\server\\share").isEmpty());
+        QVERIFY(!Launch(Plan("cmd", Cwd, false), Cwd + "/hc-no-such-directory").isEmpty());
+    }
+    void commandLineDetachedRedirection()
+    {
+        using namespace hc::ui::commandLine;
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        const auto Cwd = Root.path() + "/한글 공백";
+        QVERIFY(QDir().mkpath(Cwd));
+        const auto Command = QStringLiteral("(echo first&echo second) | findstr second > \"결과 파일.txt\"");
+        QVERIFY2(Launch(Plan(Command, Cwd, false), Cwd).isEmpty(), "detached launch failed");
+        const auto Path = Cwd + "/결과 파일.txt";
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(Path).size() > 0, 5000);
+        QFile Result(Path); QVERIFY(Result.open(QIODevice::ReadOnly));
+        QCOMPARE(Result.readAll().trimmed(), QByteArray("second"));
+        const auto Program = Cwd + "/한글 도구.exe";
+        QVERIFY(QFile::copy(qEnvironmentVariable("COMSPEC"), Program));
+        const auto Direct = QString("\"%1\" /D /C \"echo quoted>direct.txt\"").arg(Program);
+        const auto DirectPlan = Plan(Direct, Cwd, false);
+        QCOMPARE(QDir::fromNativeSeparators(DirectPlan.program_), Program);
+        QVERIFY(Launch(DirectPlan, Cwd).isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(Cwd + "/direct.txt").size() > 0, 5000);
+        QVERIFY(Launch(Plan("cd .. && cd > cwd.txt", Cwd, false), Cwd).isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(Root.path() + "/cwd.txt").size() > 0, 5000);
+    }
+
     void compareCommandShortcut()
     {
         for (const auto& Preset : {"legacy", "prototype"}) {

@@ -12,7 +12,6 @@ namespace fm::ui
     class CommandLine;
 }
 class QSHChangeNotify;
-class QProcess;
 namespace hc::update { class UpdateController; }
 
 class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
@@ -29,6 +28,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     void sigActivePanelChanged( CmpPanel* Panel );
 
   public slots:
+    void SubmitCommandLine(bool KeepOpen);
 
     void OnDriveAdd( const QString& Root );
     void OnDriveRemoved( const QString& Root );
@@ -91,7 +91,8 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     void             restoreInputFocus();
     Q_INVOKABLE void initialize();
     void             setActivePanel( int Index );
-    void             executeCommandLine( const QString& Command );
+    void             updateCommandLinePrompt(const QString& Path);
+    void             executeCommandLine( const QString& Command, bool KeepOpen );
 
     CmpPanel* retrieveSrcPanel() const;
     CmpPanel* retrieveDstPanel() const;
@@ -100,7 +101,6 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     int              currentPanelIndex = 0; // 0 = Left, 1 = Right
 
     fm::ui::CommandLine*  commandLine_    = nullptr;
-    QProcess*             commandProcess_ = nullptr;
     QPointer<QWidget>     lastInputFocus_;
     bool                  inputFocusRestorePending_ = false;
     bool                  activationFocusRestorePending_ = false;

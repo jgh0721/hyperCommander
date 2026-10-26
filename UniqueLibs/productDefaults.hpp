@@ -25,6 +25,12 @@ using TyMapShortcutToCMDStr = QHash<QKeyCombination, QLatin1String>;
 #define DECLARE_CMD( Var, Cate, Name, Shortcut, Desc ) \
     inline const TyHC_COMMAND Var = { Cate, QLatin1String( Name ), QKeyCombination::fromCombined( Shortcut ), Desc };
 
+// Enter/Shift+Enter are command-edit defaults, independent of panel shortcuts.
+DECLARE_CMD( BuiltInCMD_CommandLine_Execute, QObject::tr("명령행"), "hc.commandLine.execute",
+             Qt::Key_unknown, QObject::tr("명령행 입력 실행 (입력 칸 기본 Enter)") );
+DECLARE_CMD( BuiltInCMD_CommandLine_KeepOpen, QObject::tr("명령행"), "hc.commandLine.keepOpen",
+             Qt::Key_unknown, QObject::tr("명령행 입력 실행 후 창 유지 (입력 칸 기본 Shift+Enter)") );
+
 DECLARE_CMD( BuiltInCMD_Tab_New,                  QObject::tr( "탭" ),     "hc.tab.new",
              Qt::ControlModifier | Qt::Key_T,                           QObject::tr( "새 탭" ) );
 DECLARE_CMD( BuiltInCMD_Tab_Prev,                 QObject::tr( "탭" ),     "hc.tab.previous",
@@ -323,6 +329,8 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_OPs_ShellMenu,
     BuiltInCMD_OPs_ShellMenuOnKeypad,
     BuiltInCMD_File_Compare,
+    BuiltInCMD_CommandLine_Execute,
+    BuiltInCMD_CommandLine_KeepOpen,
     BuiltInCMD_Etc_ExternalMenu,
     BuiltInCMD_OPs_Move,
     BuiltInCMD_Jobs,
