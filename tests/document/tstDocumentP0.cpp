@@ -132,7 +132,11 @@ private slots:
         const auto Two = Workspace.Handle({{"action", "open"}, {"path", Root.filePath("two.txt")}})["documentId"].toString();
         QTRY_VERIFY(Ready(Workspace.Snapshot(), One) && Ready(Workspace.Snapshot(), Two));
         auto* Layout = qobject_cast<QVBoxLayout*>(Workspace.layout()); QVERIFY(Layout);
-        QCOMPARE(Layout->itemAt(1)->widget()->objectName(), QString("mainToolbar")); QCOMPARE(Layout->itemAt(2)->widget()->objectName(), QString("documentTabs"));
+        auto* Menu = Workspace.findChild<QWidget*>("mainMenu"); QVERIFY(Menu);
+        auto* Toolbar = Workspace.findChild<QToolBar*>("mainToolbar"); QVERIFY(Toolbar);
+        const int MenuIndex = Layout->indexOf(Menu); QVERIFY(MenuIndex >= 0);
+        QCOMPARE(Layout->indexOf(Toolbar), MenuIndex + 1);
+        QCOMPARE(Layout->indexOf(Workspace.findChild<QWidget*>("documentTabs")), MenuIndex + 2);
         QCOMPARE(Workspace.findChildren<QToolBar*>("viewToolbar").size(), 2);
         Workspace.activateWindow(); Workspace.raise();
         auto* Tabs = Workspace.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
