@@ -82,7 +82,8 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
             Options.passwordPrompt_ = PromptArchivePassword;
             auto Backend = MakeApprovedWcxBackend(std::move(Options));
             std::map<QString, std::unique_ptr<IArchiveListing>> Listings;
-            std::map<QString, std::unique_ptr<IArchiveReadSession>> Streams;
+            struct PageStream {std::unique_ptr<IArchiveReadSession> session_;std::uint32_t last_;};
+            std::map<QString,PageStream> Streams;
             std::map<QString, std::chrono::steady_clock::time_point> Expiry;
             while (!Stop.stop_requested())
             {
@@ -179,19 +180,25 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
                     }
                     else
                     {
-                        auto Ordinal = WireUnsigned(Request["ordinal"]);
-                        if (!Ordinal.HasValue() || Ordinal.Value() > UINT32_MAX)
+                        auto Indices=Request["ordinals"].toArray();
+                        if(Indices.isEmpty() && Request.contains("ordinal"))Indices.append(Request["ordinal"]);
+                        std::vector<std::uint32_t> Ordinals;bool Valid=!Indices.isEmpty() && Indices.size()<=128;
+                        for(const auto& Item:Indices){auto Ordinal=WireUnsigned(Item);
+                            if(!Ordinal.HasValue() || Ordinal.Value()>UINT32_MAX || (!Ordinals.empty() && Ordinal.Value()<=Ordinals.back())){Valid=false;break;}
+                            Ordinals.push_back(std::uint32_t(Ordinal.Value()));}
+                        if (!Valid)
                             Reply = {{"error", "image-archive-ordinal"}};
                         else
                         {
+                            const auto Last=Ordinals.back();
                             auto Value = Backend->OpenReadSession(Path.toUtf8().toStdString(),
-                                                                  {std::uint32_t(Ordinal.Value())}, C);
+                                                                  std::move(Ordinals), C);
                             if (!Value.HasValue())
                                 Fail(Value.Failure());
                             else
                             {
                                 const auto Key = QUuid::createUuid().toString(QUuid::Id128);
-                                Streams.emplace(Key, std::move(Value.Value()));
+                                Streams.emplace(Key,PageStream{std::move(Value.Value()),Last});
                                 Resource = Key;
                                 Reply["id"] = Key;
                             }
@@ -226,7 +233,7 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
                         Reply = {{"error", "image-archive-ordinal"}};
                     else
                     {
-                        auto Value = Streams[Id]->Read(std::uint32_t(Ordinal.Value()),
+                        auto Value = Streams[Id].session_->Read(std::uint32_t(Ordinal.Value()),
                                                        size_t(std::clamp(Request["count"].toInt(), 1, 192 * 1024)), C);
                         if (!Value.HasValue())
                         {
@@ -238,7 +245,7 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
                             Reply["eof"] = Value.Value().eof_;
                             const auto &Raw = Value.Value().bytes_;
                             Bytes = QByteArray(reinterpret_cast<const char *>(Raw.data()), qsizetype(Raw.size()));
-                            if (Value.Value().eof_)
+                            if (Value.Value().eof_ && Ordinal.Value()==Streams[Id].last_)
                                 Streams.erase(Id);
                         }
                     }

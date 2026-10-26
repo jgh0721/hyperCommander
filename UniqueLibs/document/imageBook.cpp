@@ -259,16 +259,29 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     bool Streamed = false;
     if (Book->archive_)
     {
+        std::unique_lock<std::timed_mutex> Lock(Book->streamMutex_,std::defer_lock);
+        while(!Lock.try_lock_for(std::chrono::milliseconds(10)))if(auto Stop=Context.Check({"image-book"}))return *Stop;
         if (Revision(Book->path_) != Book->revision_)
             return Error("image-book-changed");
-        auto Session = Book->archive_->OpenReadSession(Book->path_.toUtf8().toStdString(), {Page.ordinal_}, Context);
+        storage::Result<storage::Unit> Session=storage::Unit{};
+        if(!Book->stream_ || Book->nextStreamPage_!=Index || Book->streamAge_.elapsed()>5000){
+            Book->stream_.reset();Book->nextStreamPage_=-1;
+            std::vector<std::uint32_t> Ordinals{Page.ordinal_};Book->lastStreamPage_=Index;
+            // Natural reading order may differ from archive order. Stop at an
+            // inversion (or TIFF subpage); never skip an unread selected member.
+            for(int I=Index+1;I<Book->pages_.size() && !Page.entry_.encrypted_ && Ordinals.size()<128;++I){
+                if(Book->pages_[I].entry_.encrypted_ || Book->pages_[I].ordinal_<=Ordinals.back())break;
+                Ordinals.push_back(Book->pages_[I].ordinal_);Book->lastStreamPage_=I;
+            }
+            auto Opened=Book->archive_->OpenReadSession(Book->path_.toUtf8().toStdString(),std::move(Ordinals),Context);
+            if(Opened.HasValue()){Book->stream_=std::move(Opened.Value());Book->streamAge_.start();}else Session=Opened.Failure();
+        }
         if (Session.HasValue())
         {
             for (;;)
             {
-                auto Chunk = Session.Value()->Read(Page.ordinal_, 192 * 1024, Context);
-                if (!Chunk.HasValue())
-                    return Chunk.Failure();
+                auto Chunk = Book->stream_->Read(Page.ordinal_, 192 * 1024, Context);
+                if (!Chunk.HasValue()){Book->stream_.reset();Book->nextStreamPage_=-1;return Chunk.Failure();}
                 const auto &Data = Chunk.Value().bytes_;
                 StreamBytes.append(reinterpret_cast<const char *>(Data.data()), Data.size());
                 if (Chunk.Value().eof_)
@@ -276,6 +289,8 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
                 if (Data.empty())
                     return Error("image-page-incomplete");
             }
+            Book->nextStreamPage_=Index+1;
+            if(Index>=Book->lastStreamPage_){Book->stream_.reset();Book->nextStreamPage_=-1;}
             Streamed = true;
         }
         else

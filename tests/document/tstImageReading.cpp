@@ -134,6 +134,19 @@ class ImageReadingTests : public QObject
             QCOMPARE(Out.image_.pixelColor(20, 30), Input.pixelColor(0, 0));
         }
     }
+    void archiveBrokerStreamsOrderedPageBatch()
+    {
+        QTemporaryDir Root;const auto Path=Root.filePath("batch.cbz");
+        {QZipWriter Zip(Path);for(int I=0;I<3;++I)Zip.addFile(QString::number(I)+".png",Png(I==1?Qt::green:Qt::red));Zip.close();}
+        auto Started=hc::plugins::ImageArchiveBroker::Start();QVERIFY(Started.HasValue());auto Broker=std::move(Started.Value());
+        Broker->Allow(Path);Broker->BindClient(std::uint32_t(QCoreApplication::applicationPid()));
+        auto Client=hc::plugins::MakeImageArchiveClient(Broker->Endpoint());
+        auto Stream=Client->OpenReadSession(Path.toStdString(),{0,1,2},{});QVERIFY(Stream.HasValue());
+        for(std::uint32_t I=0;I<3;++I){QByteArray Bytes;bool End=false;while(!End){auto Chunk=Stream.Value()->Read(I,192*1024,{});QVERIFY(Chunk.HasValue());
+            Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()),qsizetype(Chunk.Value().bytes_.size()));End=Chunk.Value().eof_;}
+            QCOMPARE(Bytes,Png(I==1?Qt::green:Qt::red));}
+        QVERIFY(!Client->OpenReadSession(Path.toStdString(),{2,1},{}).HasValue());
+    }
     void archiveBrokerAuthenticatesAndReclaimsCancelledReplies()
     {
         QTemporaryDir Root, Outside;

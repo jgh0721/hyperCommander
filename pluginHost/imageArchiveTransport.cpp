@@ -120,11 +120,12 @@ class Backend final : public IArchiveBackend
     Result<std::unique_ptr<IArchiveReadSession>> OpenReadSession(std::string Path, std::vector<std::uint32_t> Ordinals,
                                                                  OperationContext C) override
     {
-        if (Ordinals.size() != 1)
+        if (Ordinals.empty() || Ordinals.size()>128)
             return Failure("image-archive-single-entry");
+        QJsonArray Indices;for(const auto Ordinal:Ordinals)Indices.append(QString::number(Ordinal));
         auto Reply = CallImageArchive(
             endpoint_,
-            {{"op", "stream"}, {"path", QString::fromStdString(Path)}, {"ordinal", QString::number(Ordinals.front())}},
+            {{"op", "stream"}, {"path", QString::fromStdString(Path)}, {"ordinals",Indices}},
             C);
         if (!Reply.HasValue())
             return Reply.Failure();

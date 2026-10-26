@@ -3,6 +3,8 @@
 #include <QImage>
 #include <QStringList>
 #include <memory>
+#include <mutex>
+#include <QElapsedTimer>
 
 namespace hc::document
 {
@@ -18,6 +20,11 @@ struct ImageBook
     QString path_, revision_, title_;
     QList<ImagePage> pages_;
     std::shared_ptr<plugins::IArchiveBackend> archive_;
+    // One consumer at a time retains decoder state across sequential pages.
+    std::timed_mutex streamMutex_;
+    QElapsedTimer streamAge_;
+    std::unique_ptr<plugins::IArchiveReadSession> stream_;
+    int nextStreamPage_ = -1, lastStreamPage_ = -1;
 };
 struct ImagePageContent
 {
